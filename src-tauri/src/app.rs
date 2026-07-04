@@ -1803,6 +1803,10 @@ impl App {
                 col: cols - 1,
             },
             mode: crate::selection::SelectionMode::Character,
+            origin: crate::selection::Pos {
+                row: anchor_row,
+                col: 0,
+            },
         });
         self.needs_full_redraw = true;
     }
@@ -4777,6 +4781,7 @@ mod tests {
             anchor: Pos { row: 1, col: 0 },
             extent: Pos { row: 3, col: 0 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 1, col: 0 },
         });
         let set = app.dirty_rows_this_frame(&core);
         // 0 = cursor, 1..=3 = selection.
@@ -4794,6 +4799,7 @@ mod tests {
             anchor: Pos { row: 1, col: 0 },
             extent: Pos { row: 3, col: 0 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 1, col: 0 },
         });
         let _ = app.dirty_rows_this_frame(&core);
         app.record_render_state(&mut core);
@@ -4802,6 +4808,7 @@ mod tests {
             anchor: Pos { row: 1, col: 0 },
             extent: Pos { row: 1, col: 0 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 1, col: 0 },
         });
         let set = app.dirty_rows_this_frame(&core);
         assert!(set.contains(&1));
@@ -6619,6 +6626,7 @@ mod tests {
             anchor: Pos { row: 20, col: 0 },
             extent: Pos { row: 24, col: 3 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 20, col: 0 },
         });
         // Drive an eviction of 5 rows through the prompt-mark backfill, which
         // is what `pump` calls in production. This populates the tab's
@@ -6640,6 +6648,7 @@ mod tests {
             anchor: Pos { row: 2, col: 0 },
             extent: Pos { row: 6, col: 3 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 2, col: 0 },
         });
         app.tabs[0].test_backfill_eviction(10);
         app.pump_all();
@@ -6663,6 +6672,7 @@ mod tests {
             anchor: Pos { row: 4, col: 0 },
             extent: Pos { row: 9, col: 3 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 4, col: 0 },
         });
         // Counter goes backwards → frame reset latch.
         app.tabs[0].test_backfill_eviction(0);
@@ -6710,6 +6720,7 @@ mod tests {
             anchor: Pos { row: 2, col: 0 },
             extent: Pos { row: 6, col: 3 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 2, col: 0 },
         });
         app.needs_full_redraw = false;
 
@@ -6752,6 +6763,7 @@ mod tests {
             anchor: Pos { row: 0, col: 0 },
             extent: Pos { row: 2, col: 3 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 0 },
         });
         app.switch_to_tab(0);
         assert!(
@@ -6773,6 +6785,7 @@ mod tests {
             anchor: Pos { row: 1, col: 0 },
             extent: Pos { row: 3, col: 4 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 1, col: 0 },
         });
         app.pending_selection_anchor = Some(Pos { row: 2, col: 1 });
         app.tabs[0]
@@ -6858,6 +6871,7 @@ mod tests {
             anchor: Pos { row: 1, col: 0 },
             extent: Pos { row: 2, col: 3 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 1, col: 0 },
         });
         app.pending_selection_anchor = Some(Pos { row: 1, col: 1 });
         app.set_alt_screen(true);
@@ -7003,6 +7017,10 @@ mod tests {
                 col: 5,
             },
             mode: SelectionMode::Character,
+            origin: Pos {
+                row: visible_start + 3,
+                col: 0,
+            },
         });
         let set = {
             let core = core_arc.lock();

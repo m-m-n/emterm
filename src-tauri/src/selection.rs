@@ -56,6 +56,12 @@ pub struct Selection {
     pub anchor: Pos,
     pub extent: Pos,
     pub mode: SelectionMode,
+    /// Immutable press position (the pivot) in absolute-row coordinates.
+    /// Word / line extensions recompute both endpoints from `(origin, pointer)`
+    /// so the originally clicked word / line always stays inside the range no
+    /// matter how many motion events fire. Only scrollback eviction
+    /// ([`shift_rows_down`]) ever moves it; `extend` never does.
+    pub origin: Pos,
 }
 
 impl Selection {
@@ -64,6 +70,7 @@ impl Selection {
             anchor,
             extent: anchor,
             mode: SelectionMode::Character,
+            origin: anchor,
         }
     }
 
@@ -72,6 +79,7 @@ impl Selection {
             anchor,
             extent: anchor,
             mode,
+            origin: anchor,
         }
     }
 
@@ -87,35 +95,33 @@ impl Selection {
         }
     }
 
-    /// Move the moving endpoint (the one that is not the anchor) to `pos`.
-    /// For `Word` / `Line` modes the endpoint snaps to the relevant
-    /// boundary against `core`.
+    /// Extend the selection so it spans the pointer at `pos`.
+    ///
+    /// `Character` mode moves only the free endpoint (`extent`), leaving the
+    /// `anchor` pinned at the origin press cell. `Word` / `Line` modes
+    /// recompute *both* endpoints from the pair `(origin, pointer)` against
+    /// `core`, so the range is a pure function of the immutable origin and the
+    /// latest pointer position — repeated extensions never drift the origin
+    /// word / line out of the selection.
     pub fn extend(&mut self, pos: Pos, core: &TerminalCore) {
-        self.extent = pos;
         match self.mode {
-            SelectionMode::Character => {}
+            SelectionMode::Character => {
+                self.extent = pos;
+            }
             SelectionMode::Word => {
-                let (anchor_word_start, anchor_word_end) =
-                    word_boundary(core, self.anchor.row, self.anchor.col);
-                let (extent_word_start, extent_word_end) =
-                    word_boundary(core, self.extent.row, self.extent.col);
-                // Pick the outermost edges so the range covers both words.
-                let (start_row, start_col, end_row, end_col) =
-                    if (self.anchor.row, self.anchor.col) <= (self.extent.row, self.extent.col) {
-                        (
-                            self.anchor.row,
-                            anchor_word_start,
-                            self.extent.row,
-                            extent_word_end,
-                        )
-                    } else {
-                        (
-                            self.extent.row,
-                            extent_word_start,
-                            self.anchor.row,
-                            anchor_word_end,
-                        )
-                    };
+                // Word boundaries for both the immutable origin and the live
+                // pointer, looked up against the current core each time.
+                let (origin_start_col, origin_end_col) =
+                    word_boundary(core, self.origin.row, self.origin.col);
+                let (pointer_start_col, pointer_end_col) = word_boundary(core, pos.row, pos.col);
+                // Union of the two words in reading order: the earliest start
+                // and the latest end (tuple ordering compares row then col).
+                // When the pointer sits inside the origin word both pairs are
+                // equal, so the range collapses to exactly the origin word.
+                let (start_row, start_col) =
+                    (self.origin.row, origin_start_col).min((pos.row, pointer_start_col));
+                let (end_row, end_col) =
+                    (self.origin.row, origin_end_col).max((pos.row, pointer_end_col));
                 self.anchor = Pos {
                     row: start_row,
                     col: start_col,
@@ -126,16 +132,21 @@ impl Selection {
                 };
             }
             SelectionMode::Line => {
-                let cols = core.cols().saturating_sub(1);
-                let (a_row, e_row) = if self.anchor.row <= self.extent.row {
-                    (self.anchor.row, self.extent.row)
+                let last_col = core.cols().saturating_sub(1);
+                // Full rows from the lower of (origin row, pointer row) to the
+                // higher; the origin row is always inside the covered span.
+                let (top_row, bottom_row) = if self.origin.row <= pos.row {
+                    (self.origin.row, pos.row)
                 } else {
-                    (self.extent.row, self.anchor.row)
+                    (pos.row, self.origin.row)
                 };
-                self.anchor = Pos { row: a_row, col: 0 };
+                self.anchor = Pos {
+                    row: top_row,
+                    col: 0,
+                };
                 self.extent = Pos {
-                    row: e_row,
-                    col: cols,
+                    row: bottom_row,
+                    col: last_col,
                 };
             }
         }
@@ -160,13 +171,14 @@ impl Selection {
         true
     }
 
-    /// Shift both endpoints down by `delta` rows after a scrollback
-    /// eviction. Returns `false` when the whole selection fell off the
-    /// top of the frame (caller should drop it). An endpoint that
-    /// underflows alone clamps to row 0 col 0.
+    /// Shift both endpoints (and the origin pivot) down by `delta` rows
+    /// after a scrollback eviction. Returns `false` when the whole
+    /// selection fell off the top of the frame (caller should drop it). An
+    /// endpoint that underflows alone clamps to row 0 col 0.
     pub fn shift_rows_down(&mut self, delta: u32) -> bool {
         // Both endpoints scrolled off the top of scrollback: the entire
-        // selection is gone.
+        // selection is gone. (The origin pivot sits between the endpoints,
+        // so this drop rule stays keyed on the endpoints alone.)
         if self.anchor.row < delta && self.extent.row < delta {
             return false;
         }
@@ -182,6 +194,9 @@ impl Selection {
         };
         shift(&mut self.anchor);
         shift(&mut self.extent);
+        // The origin follows the same row delta / clamp as the endpoints so a
+        // later word / line extension still pivots on the correct cell.
+        shift(&mut self.origin);
         true
     }
 
@@ -471,6 +486,7 @@ mod tests {
             anchor: Pos { row: 0, col: 0 },
             extent: Pos { row: 0, col: 4 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 0 },
         };
         assert_eq!(sel.resolve(&core, None), "hello");
     }
@@ -482,6 +498,7 @@ mod tests {
             anchor: Pos { row: 0, col: 0 },
             extent: Pos { row: 2, col: 1 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 0 },
         };
         assert_eq!(sel.resolve(&core, None), "ab\ncd\nef");
     }
@@ -493,6 +510,7 @@ mod tests {
             anchor: Pos { row: 0, col: 4 },
             extent: Pos { row: 0, col: 0 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 4 },
         };
         assert_eq!(sel.resolve(&core, None), "hello");
     }
@@ -505,6 +523,7 @@ mod tests {
             anchor: Pos { row: 0, col: 0 },
             extent: Pos { row: 0, col: 9 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 0 },
         };
         assert_eq!(sel.resolve(&core, None), "hi");
     }
@@ -515,6 +534,7 @@ mod tests {
             anchor: Pos { row: 0, col: 2 },
             extent: Pos { row: 1, col: 3 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 2 },
         };
         assert!(sel.contains(0, 2));
         assert!(sel.contains(1, 3));
@@ -532,6 +552,7 @@ mod tests {
             anchor: Pos { row: 100, col: 0 },
             extent: Pos { row: 102, col: 4 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 100, col: 0 },
         };
         assert!(sel.contains(100, 0));
         assert!(sel.contains(101, 9));
@@ -639,6 +660,7 @@ mod tests {
             anchor: Pos { row: 2, col: 0 },
             extent: Pos { row: 3, col: 4 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 2, col: 0 },
         };
         assert_eq!(sel.resolve(&core, None), "sb2\nlive0");
     }
@@ -651,6 +673,7 @@ mod tests {
             anchor: Pos { row: 0, col: 0 },
             extent: Pos { row: 5, col: 4 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 0 },
         };
         assert_eq!(
             sel.resolve(&core, None),
@@ -680,6 +703,7 @@ mod tests {
             anchor: Pos { row: 10, col: 2 },
             extent: Pos { row: 14, col: 5 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 10, col: 2 },
         };
         assert!(sel.shift_rows_down(3));
         assert_eq!(sel.anchor, Pos { row: 7, col: 2 });
@@ -694,6 +718,7 @@ mod tests {
             anchor: Pos { row: 2, col: 4 },
             extent: Pos { row: 8, col: 6 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 2, col: 4 },
         };
         assert!(sel.shift_rows_down(5));
         assert_eq!(sel.anchor, Pos { row: 0, col: 0 });
@@ -707,6 +732,7 @@ mod tests {
             anchor: Pos { row: 1, col: 0 },
             extent: Pos { row: 4, col: 0 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 1, col: 0 },
         };
         assert!(!sel.shift_rows_down(5));
     }
@@ -763,6 +789,7 @@ mod tests {
             anchor: Pos { row: 0, col: 0 },
             extent: Pos { row: 4, col: 1 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 0 },
         };
         assert_eq!(sel.resolve(&core, None), "r0\nr1\nr2\nr3\nr4");
     }
@@ -778,6 +805,7 @@ mod tests {
             anchor: Pos { row: 0, col: 0 },
             extent: Pos { row: 4, col: 1 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 0 },
         };
         // Body rows r2/r3 dropped; summary row r1 and the outside rows kept.
         assert_eq!(sel.resolve(&core, Some(&layout)), "r0\nr1\nr4");
@@ -793,7 +821,202 @@ mod tests {
             anchor: Pos { row: 1, col: 0 },
             extent: Pos { row: 1, col: 1 },
             mode: SelectionMode::Character,
+            origin: Pos { row: 1, col: 0 },
         };
         assert_eq!(sel.resolve(&core, Some(&layout)), "r1");
+    }
+
+    // --- Pivot-anchored multi-extension (task0001) ---------------------------
+    //
+    // The pre-fix `extend` overwrote the anchor with the snapped range start,
+    // so on the *second* extension the origin word / line was already gone and
+    // could no longer be kept in range. Every test below extends at least
+    // twice (or drags away and back) — the exact shape that let the bug slip
+    // past the single-extend tests above.
+
+    /// AC-1: two consecutive word extensions onto a word on the row above keep
+    /// the range spanning that upper word's start through the origin word's end.
+    #[test]
+    fn word_mode_repeated_extend_above_keeps_origin_word_end() {
+        // Row 0 = "top" (cols 0..=2); row 1 = "bottomword" (cols 0..=9).
+        let core = build_wide_core(20, &[b"top\r\nbottomword"]);
+        // Origin pressed inside the row-1 word.
+        let mut sel = Selection::new_with_mode(Pos { row: 1, col: 3 }, SelectionMode::Word);
+        // Two extensions onto "top" on the row above.
+        sel.extend(Pos { row: 0, col: 1 }, &core);
+        sel.extend(Pos { row: 0, col: 2 }, &core);
+        // Upper word's start (row 0, col 0) → origin word's end (row 1, col 9).
+        assert_eq!(
+            sel.ordered(),
+            (Pos { row: 0, col: 0 }, Pos { row: 1, col: 9 })
+        );
+    }
+
+    /// AC-2: dragging away and back inside the origin word collapses the range
+    /// to exactly the origin word.
+    #[test]
+    fn word_mode_extend_away_then_back_yields_origin_word() {
+        // "foo bar baz": bar = cols 4..=6, baz = cols 8..=10.
+        let core = build_wide_core(20, &[b"foo bar baz"]);
+        let mut sel = Selection::new_with_mode(Pos { row: 0, col: 5 }, SelectionMode::Word);
+        // Away to "baz", then back inside "bar".
+        sel.extend(Pos { row: 0, col: 9 }, &core);
+        sel.extend(Pos { row: 0, col: 5 }, &core);
+        // Exactly the origin word "bar".
+        assert_eq!(
+            sel.ordered(),
+            (Pos { row: 0, col: 4 }, Pos { row: 0, col: 6 })
+        );
+    }
+
+    /// AC-3: extending above then below the origin word yields the origin
+    /// word's start through the lower word's end.
+    #[test]
+    fn word_mode_extend_above_then_below_spans_origin_start_to_lower_end() {
+        // Row 0 "up" (0..=1), row 1 "middle" (0..=5, origin), row 2 "downword"
+        // (0..=7).
+        let core = build_wide_core(20, &[b"up\r\nmiddle\r\ndownword"]);
+        let mut sel = Selection::new_with_mode(Pos { row: 1, col: 2 }, SelectionMode::Word);
+        sel.extend(Pos { row: 0, col: 0 }, &core); // above
+        sel.extend(Pos { row: 2, col: 3 }, &core); // below, past the origin word
+        // Origin word start (row 1, col 0) → lower word end (row 2, col 7).
+        assert_eq!(
+            sel.ordered(),
+            (Pos { row: 1, col: 0 }, Pos { row: 2, col: 7 })
+        );
+    }
+
+    /// AC-4: extending to an earlier word on the same row yields that word's
+    /// start through the origin word's end.
+    #[test]
+    fn word_mode_extend_to_earlier_word_keeps_origin_word_end() {
+        let core = build_wide_core(20, &[b"foo bar baz"]);
+        // Origin in "bar" (cols 4..=6); drag back to "foo" (cols 0..=2).
+        let mut sel = Selection::new_with_mode(Pos { row: 0, col: 5 }, SelectionMode::Word);
+        sel.extend(Pos { row: 0, col: 1 }, &core);
+        // "foo" start (0) → origin word "bar" end (6).
+        assert_eq!(
+            sel.ordered(),
+            (Pos { row: 0, col: 0 }, Pos { row: 0, col: 6 })
+        );
+    }
+
+    /// Test-note edge case: a word extension onto a whitespace cell collapses
+    /// that endpoint to the cell while the origin word's edge is kept.
+    #[test]
+    fn word_mode_extend_onto_whitespace_keeps_origin_edge() {
+        // "foo bar": foo = cols 0..=2, space at col 3.
+        let core = build_wide_core(20, &[b"foo bar"]);
+        let mut sel = Selection::new_with_mode(Pos { row: 0, col: 1 }, SelectionMode::Word);
+        sel.extend(Pos { row: 0, col: 3 }, &core); // onto the space
+        // Origin word "foo" start (0) kept; far endpoint collapses to the space.
+        assert_eq!(
+            sel.ordered(),
+            (Pos { row: 0, col: 0 }, Pos { row: 0, col: 3 })
+        );
+    }
+
+    /// Test-note edge case: origin sitting in scrollback with the pointer in
+    /// the live viewport still pivots on the scrollback word.
+    #[test]
+    fn word_mode_origin_in_scrollback_pointer_in_viewport() {
+        // sb rows 0..=2 = "sb0".."sb2"; live rows 3..=5 = "live0".."live2".
+        let core = build_scrollback_core();
+        assert_eq!(core.get_scrollback_length(), 3);
+        // Origin inside "sb0" (scrollback abs row 0, cols 0..=2).
+        let mut sel = Selection::new_with_mode(Pos { row: 0, col: 1 }, SelectionMode::Word);
+        // Extend into "live0" in the viewport (abs row 3, cols 0..=4).
+        sel.extend(Pos { row: 3, col: 2 }, &core);
+        assert_eq!(
+            sel.ordered(),
+            (Pos { row: 0, col: 0 }, Pos { row: 3, col: 4 })
+        );
+    }
+
+    /// AC-5: repeated line extensions up / down / back always cover full rows
+    /// including the origin row; returning to the origin row yields it alone.
+    #[test]
+    fn line_mode_repeated_extend_always_covers_origin_row() {
+        let core = build_core(&[b"row0\r\nrow1\r\nrow2"]);
+        let last = core.cols() - 1;
+        // Origin pressed on row 1.
+        let mut sel = Selection::new_with_mode(Pos { row: 1, col: 2 }, SelectionMode::Line);
+        // Up to row 0: full rows 0..=1 (origin row 1 included).
+        sel.extend(Pos { row: 0, col: 3 }, &core);
+        assert_eq!(
+            sel.ordered(),
+            (Pos { row: 0, col: 0 }, Pos { row: 1, col: last })
+        );
+        // Down to row 2: full rows 1..=2 (origin row 1 included).
+        sel.extend(Pos { row: 2, col: 1 }, &core);
+        assert_eq!(
+            sel.ordered(),
+            (Pos { row: 1, col: 0 }, Pos { row: 2, col: last })
+        );
+        // Back onto the origin row: the origin row alone.
+        sel.extend(Pos { row: 1, col: 4 }, &core);
+        assert_eq!(
+            sel.ordered(),
+            (Pos { row: 1, col: 0 }, Pos { row: 1, col: last })
+        );
+    }
+
+    /// NFR1 regression: character mode never mutates the anchor across
+    /// repeated extensions — only the free endpoint moves.
+    #[test]
+    fn character_mode_repeated_extend_keeps_anchor() {
+        let core = build_core(&[b"hello world"]);
+        let mut sel = Selection::new(Pos { row: 0, col: 2 });
+        sel.extend(Pos { row: 0, col: 6 }, &core);
+        sel.extend(Pos { row: 0, col: 8 }, &core);
+        assert_eq!(sel.anchor, Pos { row: 0, col: 2 });
+        assert_eq!(sel.extent, Pos { row: 0, col: 8 });
+        assert_eq!(sel.origin, Pos { row: 0, col: 2 });
+    }
+
+    /// AC-6: scrollback eviction shifts the origin pivot along with both
+    /// endpoints (same row delta / clamp), and a fully evicted selection is
+    /// still dropped.
+    #[test]
+    fn shift_rows_down_shifts_origin_with_endpoints() {
+        let mut sel = Selection {
+            anchor: Pos { row: 5, col: 0 },
+            extent: Pos { row: 9, col: 9 },
+            mode: SelectionMode::Word,
+            origin: Pos { row: 7, col: 3 },
+        };
+        assert!(sel.shift_rows_down(4));
+        assert_eq!(sel.anchor, Pos { row: 1, col: 0 });
+        assert_eq!(sel.extent, Pos { row: 5, col: 9 });
+        assert_eq!(sel.origin, Pos { row: 3, col: 3 });
+    }
+
+    /// AC-6 (clamp): when the top endpoint and the origin both fall below the
+    /// eviction boundary they clamp to (0, 0) together.
+    #[test]
+    fn shift_rows_down_clamps_origin_with_partial_eviction() {
+        let mut sel = Selection {
+            anchor: Pos { row: 2, col: 1 },
+            extent: Pos { row: 10, col: 4 },
+            mode: SelectionMode::Word,
+            origin: Pos { row: 3, col: 2 },
+        };
+        assert!(sel.shift_rows_down(5));
+        assert_eq!(sel.anchor, Pos { row: 0, col: 0 });
+        assert_eq!(sel.origin, Pos { row: 0, col: 0 });
+        assert_eq!(sel.extent, Pos { row: 5, col: 4 });
+    }
+
+    /// AC-6 (drop): a fully evicted word selection (origin included) is
+    /// dropped exactly as a character selection is.
+    #[test]
+    fn shift_rows_down_drops_fully_evicted_word_selection() {
+        let mut sel = Selection {
+            anchor: Pos { row: 1, col: 0 },
+            extent: Pos { row: 3, col: 0 },
+            mode: SelectionMode::Word,
+            origin: Pos { row: 2, col: 0 },
+        };
+        assert!(!sel.shift_rows_down(5));
     }
 }
