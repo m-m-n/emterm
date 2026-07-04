@@ -9,6 +9,7 @@
 import DOMPurify from "dompurify";
 import hljs from "highlight.js";
 import { marked } from "marked";
+import { extractFrontMatter } from "./frontmatter/extractor.ts";
 import type { MarkdownFormat } from "./types.ts";
 
 /**
@@ -197,13 +198,20 @@ export class MarkdownRenderer {
     // Configure marked for the format
     configureMarked(format);
 
+    // Strip any leading YAML/TOML/JSON front matter block so marked never sees
+    // the delimiter lines (they would otherwise surface as spurious hr/heading
+    // artifacts). When there is no front matter the extractor returns the source
+    // reference-identical, so the front-matter-less pipeline stays byte-identical
+    // (FR7 / NFR4). The block itself is mounted separately by the viewer entry.
+    const body = extractFrontMatter(markdown).body;
+
     // Parse Markdown to HTML
     let rawHtml: string;
     try {
-      rawHtml = marked.parse(markdown) as string;
+      rawHtml = marked.parse(body) as string;
     } catch {
       // Fallback to escaped text on parse error
-      rawHtml = `<pre>${escapeHtml(markdown)}</pre>`;
+      rawHtml = `<pre>${escapeHtml(body)}</pre>`;
     }
 
     // Sanitize HTML

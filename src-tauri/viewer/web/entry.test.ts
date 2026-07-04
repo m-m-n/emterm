@@ -127,3 +127,80 @@ describe("viewer entry", () => {
     expect(content.querySelector("h1")?.textContent).toContain("Hi");
   });
 });
+
+describe("viewer entry — front matter (task0005)", () => {
+  test("AC-1: mounts the front matter block above the rendered body", () => {
+    const root = document.createElement("div");
+    const content = renderPayload(
+      root,
+      payload({ markdown: "---\ntitle: My Post\n---\n\nBody paragraph." }),
+    );
+
+    const block = content.querySelector(".fm-block");
+    expect(block).not.toBeNull();
+    expect(block?.querySelector(".fm-badge")?.textContent).toBe("YAML");
+
+    // The block is the first child of the scroll container, directly above the
+    // rendered markdown body.
+    expect(content.firstElementChild).toBe(block);
+    expect(
+      block?.nextElementSibling?.classList.contains("markdown-content"),
+    ).toBe(true);
+
+    // Front matter text does not leak into the body; the real body survives.
+    expect(content.querySelector(".markdown-content")?.innerHTML).not.toContain(
+      "My Post",
+    );
+    expect(content.innerHTML).toContain("Body paragraph.");
+  });
+
+  test("AC-4: no front matter — no block mounted, body rendered normally", () => {
+    const root = document.createElement("div");
+    const content = renderPayload(
+      root,
+      payload({
+        markdown: "# Doc\n\nPlain body.\n\n---\n\nAfter a real break.",
+      }),
+    );
+
+    expect(content.querySelector(".fm-block")).toBeNull();
+    const body = content.querySelector(".markdown-content");
+    expect(body).not.toBeNull();
+    // The mid-body thematic break stays a normal <hr> (not treated as front matter).
+    expect(body?.innerHTML).toContain("<hr");
+    expect(content.innerHTML).toContain("Plain body.");
+    expect(content.innerHTML).toContain("After a real break.");
+  });
+
+  test("AC-3: broken front matter — error-state block mounted, body clean", () => {
+    const root = document.createElement("div");
+    const content = renderPayload(
+      root,
+      payload({ markdown: "{ \"title\": 'oops', }\n\nBody paragraph." }),
+    );
+
+    const block = content.querySelector(".fm-block");
+    expect(block).not.toBeNull();
+    expect(block?.classList.contains("fm-block-error")).toBe(true);
+    expect(content.querySelector(".markdown-content")?.innerHTML).not.toContain(
+      "oops",
+    );
+    expect(content.innerHTML).toContain("Body paragraph.");
+  });
+
+  test("AC-5: document that is only front matter — block mounted, empty body", () => {
+    const root = document.createElement("div");
+    const content = renderPayload(
+      root,
+      payload({ markdown: "---\ntitle: Only\n---\n" }),
+    );
+
+    const block = content.querySelector(".fm-block");
+    expect(block).not.toBeNull();
+    expect(block?.querySelector(".fm-badge")?.textContent).toBe("YAML");
+    const body = content.querySelector(".markdown-content");
+    expect(body).not.toBeNull();
+    // Empty body: no leaked front matter text.
+    expect(body?.textContent?.trim()).toBe("");
+  });
+});
