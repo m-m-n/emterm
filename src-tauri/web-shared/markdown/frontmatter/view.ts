@@ -12,14 +12,15 @@
  * logic outputs (the extraction/parse contracts and the tree builder). Every
  * front-matter-derived string enters the DOM via text nodes, built
  * element-by-element with no HTML-string assembly (NFR1). Colors live entirely
- * in `frontmatter.css` on `--md-sys-*` tokens (NFR2).
+ * in `frontmatter.css`, drawn from the viewer's theme-aware `--markdown-*`
+ * variables so the block follows the effective light/dark theme (NFR2).
  *
  * @module markdown/frontmatter/view
  */
 
 import { t } from "../../i18n/index.ts";
 import type { FrontMatterExtracted, FrontMatterParseResult } from "./types.ts";
-import { buildTree, type TreeNode } from "./tree-builder.ts";
+import { MAX_NODES, buildTree, type TreeNode } from "./tree-builder.ts";
 
 /** Monotonic id source so each block's content gets a unique aria-controls id. */
 let contentIdCounter = 0;
@@ -49,11 +50,17 @@ export function buildFrontMatterBlock(
   content.className = "fm-content";
   content.id = contentId;
   content.setAttribute("hidden", "");
-  content.appendChild(
-    parse.ok
-      ? buildTreeView(buildTree(parse.value))
-      : buildErrorView(parse.error, extraction.raw),
-  );
+  if (parse.ok) {
+    const { nodes, truncated } = buildTree(parse.value);
+    content.appendChild(buildTreeView(nodes));
+    // Hostile front matter can exceed the node budget; when the tree is only
+    // partial, tell the user so the omission is visible rather than silent.
+    if (truncated) {
+      content.appendChild(buildTruncatedNotice());
+    }
+  } else {
+    content.appendChild(buildErrorView(parse.error, extraction.raw));
+  }
   section.appendChild(content);
 
   const setOpen = (open: boolean): void => {
@@ -118,6 +125,17 @@ function buildTreeView(nodes: TreeNode[]): HTMLElement {
     tree.appendChild(buildRow(node));
   }
   return tree;
+}
+
+/** Build the localized partial-tree notice shown when the node budget was hit. */
+function buildTruncatedNotice(): HTMLElement {
+  const notice = document.createElement("p");
+  notice.className = "fm-truncated";
+  notice.setAttribute("role", "status");
+  notice.textContent = t("markdown.frontMatter.truncatedNotice", {
+    count: MAX_NODES,
+  });
+  return notice;
 }
 
 /** Build one tree row: key (+ scalar value for leaf nodes). */

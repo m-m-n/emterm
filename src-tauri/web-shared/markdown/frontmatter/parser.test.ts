@@ -215,3 +215,45 @@ describe("AC-5: empty content yields a defined, non-throwing success", () => {
     expect(r.value).toBe(null);
   });
 });
+
+describe("AC-5 (task0006): cyclic YAML aliases complete with a defined, safe result", () => {
+  test("a self-referential alias parses to a defined result without hang or throw", () => {
+    // `yaml` resolves this anchor/alias into a genuinely cyclic JS object
+    // (v.a.b === v.a). Normalization must not chase the cycle into stack
+    // exhaustion; it must terminate with a defined, non-throwing result.
+    const src = "a: &x\n  b: *x\n";
+    let r: ReturnType<typeof parseFrontMatter> | undefined;
+    const start = Date.now();
+    expect(() => {
+      r = parseFrontMatter(src, "yaml");
+    }).not.toThrow();
+    expect(Date.now() - start).toBeLessThan(2000);
+    // A defined result: success with a safe placeholder, or a failure — never
+    // undefined and never a hang.
+    expect(r).toBeDefined();
+    expect(typeof r!.ok).toBe("boolean");
+  });
+
+  test("the cycle is replaced by a safe placeholder, not infinite structure", () => {
+    const src = "a: &x\n  b: *x\n";
+    const r = parseFrontMatter(src, "yaml");
+    const ok = expectOk(r);
+    const a = (ok.value as { [k: string]: FrontMatterValue }).a as {
+      [k: string]: FrontMatterValue;
+    };
+    // The back-reference to an ancestor becomes a bounded placeholder string.
+    expect(a.b).toBe("[Circular]");
+  });
+
+  test("shared but acyclic aliases are preserved, not collapsed to a placeholder", () => {
+    // `b`/`c` alias the same array as `a`, but nothing references an ancestor,
+    // so the ancestor-only cycle guard must keep every copy intact.
+    const src = "a: &x [1, 2, 3]\nb: *x\nc: *x\n";
+    const r = parseFrontMatter(src, "yaml");
+    const ok = expectOk(r);
+    const v = ok.value as { [k: string]: FrontMatterValue };
+    expect(v.a).toEqual([1, 2, 3]);
+    expect(v.b).toEqual([1, 2, 3]);
+    expect(v.c).toEqual([1, 2, 3]);
+  });
+});
