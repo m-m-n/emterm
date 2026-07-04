@@ -1,0 +1,175 @@
+/* Front Matter block styles.
+ *
+ * A collapsed-by-default panel mounted above the rendered Markdown body. The
+ * open state shows an always-fully-expanded key/value tree (modeled on the
+ * native data viewer) or, on parse failure, an error notice plus the raw text.
+ *
+ * All color values reference --md-sys-* Material Design 3 system tokens only
+ * (NFR2 / AC-7): no hex, rgb(), or hsl() literals appear here, so the block
+ * follows the active light/dark theme through the token layer.
+ */
+
+.fm-block {
+  margin: 0 0 1rem 0;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface-container-low);
+  overflow: hidden;
+}
+
+/* ── Header ── */
+
+.fm-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.fm-header:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.fm-header:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+.fm-toggle-icon {
+  display: inline-flex;
+  justify-content: center;
+  width: 1em;
+  flex-shrink: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  transition: transform var(--md-motion-duration-short2, 120ms)
+    var(--md-motion-easing-standard, ease);
+}
+
+.fm-toggle-icon::before {
+  content: "\25B8"; /* right-pointing triangle */
+}
+
+.fm-block.is-open .fm-toggle-icon {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-toggle-icon {
+    transition: none;
+  }
+}
+
+.fm-label {
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface);
+}
+
+.fm-badge {
+  padding: 0.05em 0.5em;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-size: 0.75em;
+  letter-spacing: 0.05em;
+}
+
+.fm-error-indicator {
+  margin-inline-start: auto;
+  color: var(--md-sys-color-error);
+  font-size: 0.85em;
+}
+
+/* ── Content ── */
+
+.fm-content {
+  padding: 0.5rem 0.75rem;
+  background: var(--md-sys-color-surface-container-low);
+  color: var(--md-sys-color-on-surface);
+  overflow-x: auto;
+}
+
+.fm-content[hidden] {
+  display: none;
+}
+
+/* ── Tree ── */
+
+.fm-tree {
+  display: flex;
+  flex-direction: column;
+  font-family: monospace;
+  font-size: 0.9em;
+  line-height: 1.6;
+}
+
+.fm-row {
+  display: flex;
+  gap: 0.35em;
+  padding-inline-start: calc(var(--fm-depth, 0) * 1.25em);
+  white-space: pre;
+}
+
+.fm-key {
+  color: var(--md-sys-color-primary);
+  flex-shrink: 0;
+}
+
+.fm-sep {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.fm-value {
+  color: var(--md-sys-color-on-surface);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fm-value[data-type="number"] {
+  color: var(--md-sys-color-secondary);
+}
+
+.fm-value[data-type="boolean"],
+.fm-value[data-type="null"] {
+  color: var(--md-sys-color-on-surface-variant);
+  font-style: italic;
+}
+
+/* ── Parse-failure fallback ── */
+
+.fm-error {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.fm-error-notice {
+  color: var(--md-sys-color-error);
+  font-weight: 600;
+}
+
+.fm-error-message {
+  color: var(--md-sys-color-on-surface-variant);
+  font-family: monospace;
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fm-raw {
+  margin: 0;
+  padding: 0.5rem;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  font-family: monospace;
+  font-size: 0.9em;
+  white-space: pre;
+  overflow-x: auto;
+}
