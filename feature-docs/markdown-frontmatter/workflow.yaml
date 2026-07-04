@@ -31,7 +31,7 @@ workflow:
   - id: implement
     status: completed
     base_commit: 22372999bf946f4c015b07342b7992cb4fcddb17
-    completed_at_commit: e6c84039a7803127622662280b8dc426eafdf68e
+    completed_at_commit: 0d1628d1ac9e3976410cdaa7c64b916784251101
   - id: review
     status: in_progress
   - id: verify
@@ -209,10 +209,25 @@ tasks:
     status: merged
     notes: "Round-4 finding resolved: MAX_RAW_BYTES (1 MiB) in limits.ts + byte-oriented pre-parse guard in parseFrontMatter (FR6 failure without invoking any parser). 155 pass / 2 known pre-existing fails."
     branch: em-workflow/markdown-frontmatter/task0009
+  task0010:
+    title: "Rework 5: clamp error-state raw display"
+    plan: tasks/task0010.md
+    files:
+      - src-tauri/web-shared/markdown/frontmatter/limits.ts
+      - src-tauri/web-shared/markdown/frontmatter/view.ts
+      - src-tauri/web-shared/markdown/frontmatter/view.test.ts
+    wave: 8
+    skills: []
+    domains: [ui, input-handling]
+    complexity: low
+    requirements: [NFR1]
+    status: merged
+    notes: "Round-5 finding resolved: error-state raw clamped to MAX_ERROR_RAW_DISPLAY_CHARS (64 KiB) + truncation marker before entering the DOM. 158 pass / 2 known pre-existing fails."
+    branch: em-workflow/markdown-frontmatter/task0010
 
 review:
   status: in_progress
-  rounds_completed: 4
+  rounds_completed: 5
   plan:
     floor: [comprehensive, spec, security]
     discretionary:
