@@ -53,9 +53,11 @@ export function buildFrontMatterBlock(
   if (parse.ok) {
     const { nodes, truncated } = buildTree(parse.value);
     content.appendChild(buildTreeView(nodes));
-    // Hostile front matter can exceed the node budget; when the tree is only
-    // partial, tell the user so the omission is visible rather than silent.
-    if (truncated) {
+    // Hostile front matter can exceed the node budget at either stage: the
+    // parser bounds normalization (parse.truncated) and the tree builder bounds
+    // row emission (truncated). When either partial-copies the data, surface the
+    // same notice so the omission is visible rather than silent.
+    if (truncated || parse.truncated) {
       content.appendChild(buildTruncatedNotice());
     }
   } else {
