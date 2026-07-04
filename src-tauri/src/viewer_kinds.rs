@@ -16,6 +16,7 @@
 //!   not re-launched.
 
 /// The viewer kinds that an OSC 777 `emterm` launch sequence can dispatch
-/// to a child viewer (Markdown / image / JSON / YAML). See the module-level
-/// doc for the drift contract with the dispatch and the stripper.
-pub const REPLAYABLE_VIEWER_KINDS: &[&str] = &["markdown", "image", "json", "yaml"];
+/// to a child viewer (Markdown / image / JSON / YAML / HTML). See the
+/// module-level doc for the drift contract with the dispatch and the
+/// stripper.
+pub const REPLAYABLE_VIEWER_KINDS: &[&str] = &["markdown", "image", "json", "yaml", "html"];

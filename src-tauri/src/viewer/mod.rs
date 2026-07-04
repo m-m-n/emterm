@@ -12,6 +12,7 @@ pub mod data;
 pub mod data_model;
 pub mod data_payload;
 pub mod data_window;
+pub mod html;
 pub mod image;
 pub mod image_payload;
 pub mod image_resolver;
@@ -166,6 +167,9 @@ pub trait ViewerSink {
     /// Consume one completed JSON/YAML data-viewer request.
     fn emit_data(&mut self, request: data::DataRenderRequest);
 
+    /// Consume one completed HTML viewer render request.
+    fn emit_html(&mut self, request: html::HtmlRenderRequest);
+
     /// Periodic maintenance hook, called once per drain pass (M1). Default
     /// is a no-op; [`ProcessViewerSink`] overrides it to reap exited child
     /// viewers so a closed window does not linger as a zombie until the
@@ -182,6 +186,8 @@ pub struct CapturingSink {
     pub requests: Vec<RenderRequest>,
     /// JSON/YAML requests in emission order.
     pub data_requests: Vec<data::DataRenderRequest>,
+    /// HTML requests in emission order.
+    pub html_requests: Vec<html::HtmlRenderRequest>,
 }
 
 #[cfg(test)]
@@ -192,6 +198,10 @@ impl ViewerSink for CapturingSink {
 
     fn emit_data(&mut self, request: data::DataRenderRequest) {
         self.data_requests.push(request);
+    }
+
+    fn emit_html(&mut self, request: html::HtmlRenderRequest) {
+        self.html_requests.push(request);
     }
 }
 
@@ -314,6 +324,21 @@ impl ViewerSink for ProcessViewerSink {
         };
         self.spawn_child("--data-viewer", &path);
     }
+
+    fn emit_html(&mut self, request: html::HtmlRenderRequest) {
+        self.reap();
+        // No appearance data — the raw document renders with its own
+        // styles only (IMPLEMENTATION.md shared-component contract).
+        let payload = html::HtmlPayload::from_request(request);
+        let path = match html::write_payload(&payload) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("viewer: failed to write html payload ({e}); skipping viewer");
+                return;
+            }
+        };
+        self.spawn_child(html::HTML_VIEWER_FLAG, &path);
+    }
 }
 
 /// Drains the OSC queue, routes payloads by viewer kind, and accumulates
@@ -323,6 +348,7 @@ impl ViewerSink for ProcessViewerSink {
 pub struct ViewerSpawner {
     markdown: MarkdownViewerSessions,
     data: data::DataViewerSessions,
+    html: html::HtmlViewerSessions,
 }
 
 impl ViewerSpawner {
@@ -331,6 +357,7 @@ impl ViewerSpawner {
         Self {
             markdown: MarkdownViewerSessions::new(),
             data: data::DataViewerSessions::new(),
+            html: html::HtmlViewerSessions::new(),
         }
     }
 
@@ -355,6 +382,7 @@ impl ViewerSpawner {
         // Opportunistic timeout sweep on each pass (ERR_TIMEOUT).
         self.markdown.evict_expired(now);
         self.data.evict_expired(now);
+        self.html.evict_expired(now);
         // Reap exited child viewers each pass (M1). Default no-op for
         // capturing/test sinks; ProcessViewerSink reaps zombies here.
         sink.maintain();
@@ -376,6 +404,7 @@ impl ViewerSpawner {
                     self.data.handle(format, cmd, now, sink);
                 }
             }
+            "html" => self.html.handle(cmd, now, sink),
             // Reserved for future features — no-op + debug log (FR1).
             "image" => {
                 log::debug!(
@@ -466,7 +495,7 @@ mod tests {
     fn drift_route_dispatch_kinds_match_replayable_viewer_kinds_ssot() {
         // The kinds `ViewerRouter::route` has an explicit (non-wildcard) arm
         // for. Mirror them here; the assertion ties the two together.
-        let route_kinds = ["markdown", "json", "yaml", "image"];
+        let route_kinds = ["markdown", "json", "yaml", "image", "html"];
         let mut a = route_kinds.to_vec();
         a.sort_unstable();
         let mut b = REPLAYABLE_VIEWER_KINDS.to_vec();
@@ -497,6 +526,28 @@ mod tests {
         assert_eq!(sink.requests.len(), 1);
         assert_eq!(sink.requests[0].markdown, "# Title");
         assert_eq!(sink.requests[0].format, MarkdownFormat::Gfm);
+    }
+
+    #[test]
+    fn html_payloads_round_trip_to_one_request() {
+        let mut spawner = ViewerSpawner::new();
+        let mut sink = CapturingSink::default();
+        let now = Instant::now();
+        spawner.drain(
+            vec![
+                req("html;begin;id=x;basedir=/tmp/docs"),
+                req(&format!(
+                    "html;chunk;id=x;seq=0;data={}",
+                    b64("<h1>Title</h1>")
+                )),
+                req("html;end;id=x"),
+            ],
+            now,
+            &mut sink,
+        );
+        assert_eq!(sink.html_requests.len(), 1);
+        assert_eq!(sink.html_requests[0].html, "<h1>Title</h1>");
+        assert_eq!(sink.html_requests[0].basedir.as_deref(), Some("/tmp/docs"));
     }
 
     #[test]
