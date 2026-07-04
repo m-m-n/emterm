@@ -154,13 +154,23 @@ fn serve_resource(rel: &str, basedir: Option<&str>) -> Response<Cow<'static, [u8
 /// must still run — D3 enforces isolation at the network/navigation/
 /// filesystem layers, not by stripping the document), and `data:` URIs.
 /// `connect-src 'none'` blocks fetch/XHR/WebSocket outright.
+///
+/// `form-action` and `base-uri` do NOT fall back to `default-src` in the
+/// CSP spec, so they are listed explicitly: `form-action` is confined to
+/// the viewer scheme (a document cannot submit a form to a remote origin)
+/// and `base-uri 'none'` forbids a `<base>` tag from re-pointing relative
+/// URLs off-origin. Without these, the document's own (enabled) JavaScript
+/// could exfiltrate data via an auto-submitted cross-origin form despite
+/// `connect-src 'none'`.
 fn build_csp(scheme: &str) -> String {
     let sources = format!("{scheme}: http://{scheme}.localhost https://{scheme}.localhost");
     format!(
         "default-src {sources} data:; \
          script-src {sources} data: 'unsafe-inline'; \
          style-src {sources} data: 'unsafe-inline'; \
-         connect-src 'none'"
+         connect-src 'none'; \
+         form-action {sources}; \
+         base-uri 'none'"
     )
 }
 
@@ -333,6 +343,22 @@ mod tests {
         assert!(csp.contains("'unsafe-inline'"));
         assert!(csp.contains("data:"));
         assert!(csp.contains("connect-src 'none'"));
+    }
+
+    #[test]
+    fn csp_confines_form_action_and_forbids_base_uri() {
+        // form-action / base-uri do not fall back to default-src, so they
+        // must be present explicitly to block cross-origin form exfiltration
+        // and <base> re-pointing.
+        let csp = build_csp(SCHEME);
+        assert!(csp.contains("base-uri 'none'"));
+        let form_action = csp
+            .split(';')
+            .map(str::trim)
+            .find(|d| d.starts_with("form-action"))
+            .expect("form-action directive present");
+        assert!(form_action.contains(&format!("{SCHEME}:")));
+        assert!(!form_action.contains('*'));
     }
 
     #[test]
