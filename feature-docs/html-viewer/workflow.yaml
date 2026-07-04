@@ -1,0 +1,172 @@
+schema_version: 1
+feature: html-viewer
+created: 2026-07-05
+base_branch: main
+parent_branch: em-workflow/html-viewer/integration
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run build:viewer"
+      test_command: "bun run typecheck && bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: da3448ca438cb5f7c0351b6e26492135fefe2c4d
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: da3448ca438cb5f7c0351b6e26492135fefe2c4d
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: "`emterm html` CLI subcommand"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/cli/html.rs
+      - src-tauri/src/cli/mod.rs
+      - src-tauri/src/cli/encoding/osc.rs
+      - src-tauri/src/cli/messages.rs
+      - src-tauri/src/cli/validation/file.rs
+      - src-tauri/tests/cli_subcommands.rs
+      - src-tauri/tests/fixtures/html/sample.html
+    wave: 1
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR1, NFR2]
+    status: pending
+    notes: null
+  task0002:
+    title: "GUI ingest: route, accumulate, spawn"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/viewer_kinds.rs
+      - src-tauri/src/viewer/mod.rs
+      - src-tauri/src/viewer/html.rs
+    wave: 1
+    skills: [backend-impl]
+    domains: [input-handling, external-io]
+    complexity: medium
+    requirements: [FR2]
+    status: pending
+    notes: null
+  task0003:
+    title: "basedir resource resolver"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/viewer/html_resolver.rs
+    wave: 1
+    skills: [backend-impl]
+    domains: [input-handling, external-io]
+    complexity: high
+    requirements: [FR5, NFR1]
+    status: pending
+    notes: null
+  task0004:
+    title: "child HTML viewer window (serving + security policy)"
+    plan: tasks/task0004.md
+    files:
+      - src-tauri/src/main.rs
+      - src-tauri/src/viewer/html_window.rs
+      - src-tauri/src/viewer/mod.rs
+      - src-tauri/src/webview_host/mod.rs
+      - src-tauri/src/webview_host/linux.rs
+      - src-tauri/src/webview_host/windows.rs
+    wave: 2
+    skills: [backend-impl]
+    domains: [ui, external-io, input-handling]
+    complexity: high
+    requirements: [FR2, FR3, FR4, FR6, NFR1, NFR2]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "`emterm html <file>` CLI subcommand (validation + OSC 777 emission)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-6]
+  FR2:
+    title: "GUI-side HTML viewer window (raw rendering, REPLAYABLE_VIEWER_KINDS entry)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002, task0004]
+    tests: [TS-5, TS-7, TS-11, M-1]
+  FR3:
+    title: "JavaScript execution enabled in the viewer"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0004]
+    tests: [M-2]
+  FR4:
+    title: "Network isolation via CSP / request interception"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0004]
+    tests: [TS-10, M-3]
+  FR5:
+    title: "Basedir-relative local resource loading (basedir subtree only)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0003, task0004]
+    tests: [TS-8, M-4]
+  FR6:
+    title: "http(s) links open in external browser; no in-WebView navigation"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0004]
+    tests: [TS-9, M-5]
+  NFR1:
+    title: "Security: no network / no external navigation / basedir-limited file access"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0003, task0004]
+    tests: [TS-8, TS-9, TS-10, M-3, M-5]
+  NFR2:
+    title: "Compatibility: Linux WebKitGTK + Windows WebView2; CLI-only build works"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0004]
+    tests: [TS-6, M-1]
