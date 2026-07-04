@@ -1,0 +1,95 @@
+round: 2
+executed_at: "2026-07-04T20:24:16+09:00"
+scope:
+  review_mode: diff
+  base_commit: 22372999bf946f4c015b07342b7992cb4fcddb17
+  head_commit: 2e531f06f961d5226ff3690bcb6bb99f66d86820
+  changed_files:
+    - package.json
+    - src-tauri/viewer/web/entry.test.ts
+    - src-tauri/viewer/web/entry.ts
+    - src-tauri/viewer/web/index.html
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/markdown/frontmatter/extractor.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/extractor.ts
+    - src-tauri/web-shared/markdown/frontmatter/frontmatter.css
+    - src-tauri/web-shared/markdown/frontmatter/integration.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/parser.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/parser.ts
+    - src-tauri/web-shared/markdown/frontmatter/tree-builder.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/tree-builder.ts
+    - src-tauri/web-shared/markdown/frontmatter/types.ts
+    - src-tauri/web-shared/markdown/frontmatter/view.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/view.ts
+    - src-tauri/web-shared/markdown/renderer.ts
+plan:
+  floor: [comprehensive, spec, security]
+  discretionary:
+    - perspective: architecture
+      reason: "round 1 と同一構成で再レビュー（rework task0006 の回帰確認）"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+round1_fix_verification: "全7レビュアーが round 1 の6 findings (fixed) の維持を独立確認。regression の再指摘なし。"
+findings:
+  - stable_id: 81b291471a3f5f56
+    severity: medium
+    category: architecture
+    file: src-tauri/viewer/web/entry.ts
+    line: 107
+    title: "data-theme に3つ目の並行 system 解決コピー — 共有applierのライブリスナー規約から乖離"
+    description: "task0006 のテーマ修正で entry.ts applyAppearance が data-theme を書くようになったが、これは settings-applier.ts が既に2箇所持つ「system → matchMedia 解決」ロジックの3つ目のコピーで、共有側と違い change リスナーを登録しない一度きりの解決。system モード表示中に OS テーマが切り替わると、applyMarkdownColorTheme のリスナーが --markdown-* を live 更新する一方 data-theme は stale のまま残り、:root[data-theme] にキーされた --fm-error(パースエラーアクセント)だけ旧テーマ色に取り残される。影響条件は狭い(system モード+パース失敗ブロック表示中+ライブ切替)が、system 解決の重複自体がリグレッション源。"
+    suggestion: "data-theme の解決/書き込み/リスナーを単一所有者に集約する。推奨: applyMarkdownColorTheme(またはその applyPalette)に data-theme 書き込みを持たせ、パレットと同一リスナーで同期し、entry.ts の手書きコピーを削除する。"
+    sources: [claude:architecture, codex:architecture]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: 8ab3bdd88c02ef95
+    severity: medium
+    category: comprehensive
+    file: src-tauri/viewer/web/entry.ts
+    line: 108
+    title: "data-theme の system 解決が二重化し、OS ライブ切替で --fm-error だけ取り残される"
+    description: "applyMarkdownColorTheme は system を解決し matchMedia change リスナーで --markdown-* を live 更新するが、entry.ts:108-113 は同じ system 判定を独自再実装し data-theme を一度だけ設定してライブ更新しない。data-theme をキーにする唯一のトークンは frontmatter.css の --fm-error。system テーマ時に OS が実行中に切り替わると、ブロックの surface/border/text は追従するのにパースエラーアクセントだけ旧テーマ値に取り残される(NFR2 不変条件の綻び)。"
+    suggestion: "解決ロジックの一本化(applier 側に data-theme 書き込みを移すのが推奨)。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: 8eb0ba20be5f10f1
+    severity: medium
+    category: spec
+    file: src-tauri/web-shared/markdown/frontmatter/tree-builder.ts
+    line: 41
+    title: "Tree builder omits valid front matter rows beyond 2000 nodes"
+    description: "SPEC FR5 は「always-fully-expanded tree, one row per key at every nesting level」で、上限は MAX_DEPTH=128 のみ明記。実装は round-1 の DoS finding 対応として MAX_NODES=2000 の総行数上限を追加しており、深さ制限内でも 2000 エントリ超の浅いオブジェクトは全展開されない。SPEC 側の明文化が必要(claude:spec は defensible security bound と判定しており、仕様更新で解決する類の齟齬)。"
+    suggestion: "SPEC.md に bounded partial tree(ノード予算+truncation notice)を明記する(意図した挙動のため仕様側を更新)。"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: "SPEC.md FR5/Security に MAX_NODES 予算と truncation notice を明文化(意図した挙動の仕様化)。REQUIREMENTS.md 5.2 も更新"
+  - stable_id: fe872dd20b807f37
+    severity: medium
+    category: security
+    file: src-tauri/web-shared/markdown/frontmatter/parser.ts
+    line: 130
+    title: "Front matter node budget is applied only after unbounded normalization"
+    description: "normalizeValue は parse 後の値全体を上限なしで再帰コピーする。MAX_NODES=2000 は tree-builder の描画行数のみを制限し、parser が既に行った正規化の仕事量は制限しない。数十万の浅いスカラーキーを持つフロントマターは truncation の前に同サイズのオブジェクトへ完全コピーされ、WebView に CPU/メモリ負荷を強制できる。yaml ライブラリの alias 上限(billion-laughs 防御は確認済み)は alias なしの wide/flat オブジェクトには効かない。"
+    suggestion: "MAX_NODES 相当の残予算カウンタを normalizeValue に通し、尽きたら再帰/コピーを停止して truncation マーカーを返す(tree-builder と同じパターンを parse 時にも適用)。"
+    sources: [codex:security]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: null
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
