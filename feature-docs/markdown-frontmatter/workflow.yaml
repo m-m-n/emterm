@@ -1,0 +1,199 @@
+schema_version: 1
+feature: markdown-frontmatter
+created: 2026-07-04
+base_branch: main
+parent_branch: em-workflow/markdown-frontmatter/integration
+
+project:
+  components:
+    webview-ts:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: "bunx biome format --write src-tauri/web-shared/markdown/frontmatter"
+      e2e_test_command: ""
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 22372999bf946f4c015b07342b7992cb4fcddb17
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 22372999bf946f4c015b07342b7992cb4fcddb17
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: "Front matter extractor + shared types"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/web-shared/markdown/frontmatter/types.ts
+      - src-tauri/web-shared/markdown/frontmatter/extractor.ts
+      - src-tauri/web-shared/markdown/frontmatter/extractor.test.ts
+    wave: 1
+    skills: []
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR1, FR2, NFR4]
+    status: pending
+    notes: null
+  task0002:
+    title: "Format parsers + library selection"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/web-shared/markdown/frontmatter/parser.ts
+      - src-tauri/web-shared/markdown/frontmatter/parser.test.ts
+      - package.json
+      - bun.lock
+    wave: 2
+    skills: []
+    domains: [input-handling, config-infra]
+    complexity: medium
+    requirements: [FR3]
+    status: pending
+    notes: null
+  task0003:
+    title: "Tree builder (legacy port)"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/web-shared/markdown/frontmatter/tree-builder.ts
+      - src-tauri/web-shared/markdown/frontmatter/tree-builder.test.ts
+    wave: 1
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR5]
+    status: pending
+    notes: null
+  task0004:
+    title: "Collapsible block view + styles + i18n"
+    plan: tasks/task0004.md
+    files:
+      - src-tauri/web-shared/markdown/frontmatter/view.ts
+      - src-tauri/web-shared/markdown/frontmatter/view.test.ts
+      - src-tauri/web-shared/markdown/frontmatter/frontmatter.css
+      - src-tauri/web-shared/i18n/locales/en.json
+      - src-tauri/web-shared/i18n/locales/ja.json
+    wave: 2
+    skills: [design-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR4, FR5, FR6, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+  task0005:
+    title: "Renderer/viewer integration + regression"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/web-shared/markdown/renderer.ts
+      - src-tauri/web-shared/markdown/frontmatter/integration.test.ts
+      - src-tauri/viewer/web/entry.ts
+      - src-tauri/viewer/web/entry.test.ts
+    wave: 3
+    skills: [frontend-impl]
+    domains: [ui, input-handling]
+    complexity: medium
+    requirements: [FR7, NFR4]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "Detection & extraction of YAML/TOML/JSON front matter at document start"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0005]
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-5]
+  FR2:
+    title: "Body stripping — delimiters and content never reach marked"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0005]
+    tests: [TS-1, TS-6, TS-11]
+  FR3:
+    title: "Parsing into a plain JS value tree (JSON.parse / YAML / TOML libs)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS-1, TS-2, TS-3, TS-6, TS-10]
+  FR4:
+    title: "Collapsed-by-default block UI with Front Matter label + format badge"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0004]
+    tests: [TS-8, MT-1]
+  FR5:
+    title: "Always-fully-expanded tree view (legacy tree-builder port, MAX_DEPTH cap)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0003, task0004]
+    tests: [TS-7, TS-8, MT-2]
+  FR6:
+    title: "Parse-failure fallback — strip from body, error notice + raw text"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0004, task0005]
+    tests: [TS-6, TS-8, TS-11]
+  FR7:
+    title: "No-front-matter passthrough — unchanged rendering, no block UI"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0005]
+    tests: [TS-4, TS-12]
+  NFR1:
+    title: "Security (XSS) — escaped DOM insertion for all front-matter strings"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0004]
+    tests: [TS-9]
+  NFR2:
+    title: "UI conformance — MD3 tokens, light/dark theme"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0004]
+    tests: [TS-8, MT-1]
+  NFR3:
+    title: "i18n — user-visible strings via web-shared i18n locales"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0004]
+    tests: [TS-8]
+  NFR4:
+    title: "Performance — no perceptible rendering delay"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0005]
+    tests: [TS-12, PT-1]
