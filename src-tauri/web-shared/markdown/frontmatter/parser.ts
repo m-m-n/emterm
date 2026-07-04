@@ -72,6 +72,9 @@ function parseByFormat(content: string, format: FrontMatterFormat): unknown {
   }
 }
 
+/** Placeholder substituted for a value that points back to one of its ancestors. */
+const CIRCULAR_PLACEHOLDER = "[Circular]";
+
 /**
  * Recursively convert a parsed value into a plain JS value tree.
  *
@@ -80,8 +83,18 @@ function parseByFormat(content: string, format: FrontMatterFormat): unknown {
  * — become their ISO string. `bigint` values become numbers. Plain objects and
  * arrays are rebuilt element-by-element so no library-specific prototype leaks
  * into the tree.
+ *
+ * The YAML parser resolves anchors/aliases and can hand back a genuinely cyclic
+ * object graph (`v.a.b === v.a`). `ancestors` tracks the objects/arrays on the
+ * current path so a reference back to an ancestor is replaced by
+ * {@link CIRCULAR_PLACEHOLDER} instead of being chased into stack exhaustion.
+ * Nodes are removed from the set on the way out, so a value that is merely
+ * *shared* between siblings (an acyclic alias) is still fully expanded.
  */
-function normalizeValue(value: unknown): FrontMatterValue {
+function normalizeValue(
+  value: unknown,
+  ancestors: WeakSet<object> = new WeakSet(),
+): FrontMatterValue {
   if (value === null || value === undefined) {
     return null;
   }
@@ -101,15 +114,28 @@ function normalizeValue(value: unknown): FrontMatterValue {
     // for date-only / time-only / date-time TOML values.
     return value.toISOString();
   }
-  if (Array.isArray(value)) {
-    return value.map(normalizeValue);
-  }
-  if (t === "object") {
-    const out: { [key: string]: FrontMatterValue } = {};
-    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = normalizeValue(v);
+
+  if (Array.isArray(value) || t === "object") {
+    const container = value as object;
+    // A reference back to an ancestor closes a cycle — stop before recursing.
+    if (ancestors.has(container)) {
+      return CIRCULAR_PLACEHOLDER;
     }
-    return out;
+    ancestors.add(container);
+    try {
+      if (Array.isArray(value)) {
+        return value.map((v) => normalizeValue(v, ancestors));
+      }
+      const out: { [key: string]: FrontMatterValue } = {};
+      for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+        out[key] = normalizeValue(v, ancestors);
+      }
+      return out;
+    } finally {
+      // Leaving this node: a sibling may legitimately reference the same value
+      // without it being a cycle, so it must not stay "seen".
+      ancestors.delete(container);
+    }
   }
 
   // Functions, symbols, and any other exotic value: coerce to a string so the

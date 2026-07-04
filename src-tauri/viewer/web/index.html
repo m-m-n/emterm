@@ -5,22 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>eMterm Markdown Viewer</title>
     <style>
-      /* The viewer page does not load web-shared/styles.css, so the MD3 system
-         tokens the front matter block (frontmatter.css, no color fallbacks)
-         references are provided here. Values mirror the dark-theme --md-sys-*
-         tokens in web-shared/styles.css :root. */
+      /* The viewer page does not load web-shared/styles.css, so the few
+         theme-INDEPENDENT MD3 tokens the child WebView CSS references (shape
+         and motion, shared by fullscreen.css and the front matter block) are
+         mirrored here. Values must match web-shared/styles.css :root — an
+         automated drift test (viewer/web/entry.test.ts) pins them to it.
+         Color tokens are intentionally NOT copied: the front matter block draws
+         its colors from the theme-aware --markdown-* variables the viewer sets
+         per effective theme, so it follows light/dark instead of being locked
+         to a hardcoded dark palette. */
       :root {
-        --md-sys-color-primary: #d0bcff;
-        --md-sys-color-secondary: #ccc2dc;
-        --md-sys-color-secondary-container: #4a4458;
-        --md-sys-color-on-secondary-container: #e8def8;
-        --md-sys-color-surface-container: #211f26;
-        --md-sys-color-surface-container-low: #1d1b20;
-        --md-sys-color-surface-container-high: #2b2930;
-        --md-sys-color-on-surface: #e6e0e9;
-        --md-sys-color-on-surface-variant: #cac4d0;
-        --md-sys-color-outline-variant: #49454f;
-        --md-sys-color-error: #f2b8b5;
         --md-sys-shape-corner-small: 8px;
         --md-sys-shape-corner-medium: 12px;
         --md-sys-shape-corner-full: 9999px;

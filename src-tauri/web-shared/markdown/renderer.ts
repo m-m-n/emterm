@@ -9,7 +9,6 @@
 import DOMPurify from "dompurify";
 import hljs from "highlight.js";
 import { marked } from "marked";
-import { extractFrontMatter } from "./frontmatter/extractor.ts";
 import type { MarkdownFormat } from "./types.ts";
 
 /**
@@ -190,7 +189,13 @@ export class MarkdownRenderer {
   /**
    * Render Markdown text to sanitized HTML.
    *
-   * @param markdown - Raw Markdown text
+   * This is a pure Markdown renderer: it renders exactly the string it is
+   * given and strips nothing. Front matter detection/removal is the caller's
+   * responsibility — the viewer entry extracts once at the boundary and passes
+   * the already-stripped body here (IMPLEMENTATION.md D3), so this method never
+   * silently drops leading `---` / `+++` / `{…}` content from any snippet.
+   *
+   * @param markdown - Raw Markdown text (already free of any front matter block)
    * @param format - Markdown format to use
    * @returns Sanitized HTML string
    */
@@ -198,20 +203,13 @@ export class MarkdownRenderer {
     // Configure marked for the format
     configureMarked(format);
 
-    // Strip any leading YAML/TOML/JSON front matter block so marked never sees
-    // the delimiter lines (they would otherwise surface as spurious hr/heading
-    // artifacts). When there is no front matter the extractor returns the source
-    // reference-identical, so the front-matter-less pipeline stays byte-identical
-    // (FR7 / NFR4). The block itself is mounted separately by the viewer entry.
-    const body = extractFrontMatter(markdown).body;
-
     // Parse Markdown to HTML
     let rawHtml: string;
     try {
-      rawHtml = marked.parse(body) as string;
+      rawHtml = marked.parse(markdown) as string;
     } catch {
       // Fallback to escaped text on parse error
-      rawHtml = `<pre>${escapeHtml(body)}</pre>`;
+      rawHtml = `<pre>${escapeHtml(markdown)}</pre>`;
     }
 
     // Sanitize HTML

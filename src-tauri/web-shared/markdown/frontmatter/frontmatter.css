@@ -4,17 +4,30 @@
  * open state shows an always-fully-expanded key/value tree (modeled on the
  * native data viewer) or, on parse failure, an error notice plus the raw text.
  *
- * All color values reference --md-sys-* Material Design 3 system tokens only
- * (NFR2 / AC-7): no hex, rgb(), or hsl() literals appear here, so the block
- * follows the active light/dark theme through the token layer.
+ * Colors follow the viewer's effective light/dark theme (NFR2). The block draws
+ * every surface/text/accent color from the theme-aware --markdown-* variables
+ * the viewer writes via applyMarkdownColorTheme (settings-applier), so it flips
+ * with the body instead of being pinned to one palette. The only exception is
+ * the parse-error accent (--fm-error), which the markdown palette has no token
+ * for; it is defined per theme below, keyed on the viewer's data-theme
+ * attribute. Shape/motion use the theme-independent MD3 --md-sys-shape-* /
+ * --md-motion-* tokens the viewer page provides (shared with fullscreen.css).
  */
 
 .fm-block {
+  /* MD3 error accent, per effective theme (light default; dark override below).
+     The theme-aware --markdown-* palette carries no error color, so this is the
+     one place the block names a color literal, and it still follows the theme. */
+  --fm-error: #ba1a1a;
   margin: 0 0 1rem 0;
-  border: 1px solid var(--md-sys-color-outline-variant);
+  border: 1px solid var(--markdown-border);
   border-radius: var(--md-sys-shape-corner-medium);
-  background: var(--md-sys-color-surface-container-low);
+  background: var(--markdown-pre-bg);
   overflow: hidden;
+}
+
+:root[data-theme="dark"] .fm-block {
+  --fm-error: #f2b8b5;
 }
 
 /* ── Header ── */
@@ -26,19 +39,19 @@
   width: 100%;
   padding: 0.5rem 0.75rem;
   border: none;
-  background: var(--md-sys-color-surface-container);
-  color: var(--md-sys-color-on-surface);
+  background: var(--markdown-code-bg);
+  color: var(--markdown-fg);
   font: inherit;
   text-align: start;
   cursor: pointer;
 }
 
 .fm-header:hover {
-  background: var(--md-sys-color-surface-container-high);
+  background: var(--markdown-table-stripe);
 }
 
 .fm-header:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
+  outline: 2px solid var(--markdown-link);
   outline-offset: -2px;
 }
 
@@ -47,7 +60,7 @@
   justify-content: center;
   width: 1em;
   flex-shrink: 0;
-  color: var(--md-sys-color-on-surface-variant);
+  color: var(--markdown-blockquote);
   transition: transform var(--md-motion-duration-short2, 120ms)
     var(--md-motion-easing-standard, ease);
 }
@@ -68,21 +81,21 @@
 
 .fm-label {
   font-weight: 600;
-  color: var(--md-sys-color-on-surface);
+  color: var(--markdown-heading);
 }
 
 .fm-badge {
   padding: 0.05em 0.5em;
   border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
+  background: var(--markdown-code-bg);
+  color: var(--markdown-link);
   font-size: 0.75em;
   letter-spacing: 0.05em;
 }
 
 .fm-error-indicator {
   margin-inline-start: auto;
-  color: var(--md-sys-color-error);
+  color: var(--fm-error);
   font-size: 0.85em;
 }
 
@@ -90,8 +103,8 @@
 
 .fm-content {
   padding: 0.5rem 0.75rem;
-  background: var(--md-sys-color-surface-container-low);
-  color: var(--md-sys-color-on-surface);
+  background: var(--markdown-pre-bg);
+  color: var(--markdown-fg);
   overflow-x: auto;
 }
 
@@ -117,27 +130,36 @@
 }
 
 .fm-key {
-  color: var(--md-sys-color-primary);
+  color: var(--markdown-link);
   flex-shrink: 0;
 }
 
 .fm-sep {
-  color: var(--md-sys-color-on-surface-variant);
+  color: var(--markdown-blockquote);
 }
 
 .fm-value {
-  color: var(--md-sys-color-on-surface);
+  color: var(--markdown-fg);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .fm-value[data-type="number"] {
-  color: var(--md-sys-color-secondary);
+  color: var(--markdown-heading);
 }
 
 .fm-value[data-type="boolean"],
 .fm-value[data-type="null"] {
-  color: var(--md-sys-color-on-surface-variant);
+  color: var(--markdown-blockquote);
+  font-style: italic;
+}
+
+/* ── Partial-tree (node-budget) notice ── */
+
+.fm-truncated {
+  margin: 0.5rem 0 0 0;
+  color: var(--markdown-blockquote);
+  font-size: 0.85em;
   font-style: italic;
 }
 
@@ -150,12 +172,12 @@
 }
 
 .fm-error-notice {
-  color: var(--md-sys-color-error);
+  color: var(--fm-error);
   font-weight: 600;
 }
 
 .fm-error-message {
-  color: var(--md-sys-color-on-surface-variant);
+  color: var(--markdown-blockquote);
   font-family: monospace;
   font-size: 0.9em;
   white-space: pre-wrap;
@@ -166,8 +188,8 @@
   margin: 0;
   padding: 0.5rem;
   border-radius: var(--md-sys-shape-corner-small);
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
+  background: var(--markdown-code-bg);
+  color: var(--markdown-fg);
   font-family: monospace;
   font-size: 0.9em;
   white-space: pre;

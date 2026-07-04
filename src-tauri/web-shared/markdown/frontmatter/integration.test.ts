@@ -19,15 +19,16 @@ import { buildFrontMatterBlock } from "./view.ts";
 
 /**
  * Run the same front matter pipeline the viewer entry performs: extract from
- * the original source, render it (the renderer strips the block internally),
- * and — when a block was found — parse it and build the mounted block element.
+ * the original source exactly once, hand the stripped body to the (pure)
+ * renderer, and — when a block was found — parse it and build the mounted block
+ * element from the same extraction result.
  */
 function pipeline(
   source: string,
   format: MarkdownFormat = "gfm",
 ): { html: string; block: HTMLElement | null } {
   const extraction = extractFrontMatter(source);
-  const html = new MarkdownRenderer().render(source, format);
+  const html = new MarkdownRenderer().render(extraction.body, format);
   const block = extraction.found
     ? buildFrontMatterBlock(
         extraction,
@@ -131,6 +132,32 @@ describe("front matter pipeline — passthrough (AC-4 / TS-12)", () => {
     expect(html).toContain("<hr");
     expect(html).toContain("Plain body.");
     expect(html).toContain("After a real thematic break.");
+  });
+});
+
+describe("front matter pipeline — pure renderer (task0006 AC-3)", () => {
+  test("AC-3: MarkdownRenderer.render strips nothing — a leading --- block renders as markdown", () => {
+    // Handed a string that starts with a YAML delimiter, the renderer must NOT
+    // extract or drop it (that responsibility moved to the entry boundary); the
+    // front matter text stays in the rendered output.
+    const src = "---\ntitle: Kept In Body\n---\n\nAfter.";
+    const html = new MarkdownRenderer().render(src, "gfm");
+    expect(html).toContain("Kept In Body");
+    expect(html).toContain("After.");
+  });
+
+  test("AC-3: the entry-style boundary strips exactly once — render sees only the body", () => {
+    // Mirror the real wiring: extract once, then render the stripped body. The
+    // body the renderer sees carries no front matter, and (proven above) the
+    // renderer adds no stripping of its own — so the block content appears
+    // exactly once (in the mounted block), never leaked into the rendered body.
+    const src = "---\ntitle: Once\n---\n\nBody text.";
+    const extraction = extractFrontMatter(src);
+    expect(extraction.found).toBe(true);
+    const html = new MarkdownRenderer().render(extraction.body, "gfm");
+    expect(html).not.toContain("Once");
+    expect(html).not.toContain("title:");
+    expect(html).toContain("Body text.");
   });
 });
 

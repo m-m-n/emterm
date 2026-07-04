@@ -4,19 +4,20 @@
  * Pure-function unit tests (no DOM). Covers SPEC.md TS-7 and task0003
  * Acceptance Criteria AC-1..AC-5. Ported from legacy/webview
  * `src/data-viewer/tree-builder.test.ts` and extended with the scalar-root
- * and depth-cap cases (AC-4, AC-5).
+ * and depth-cap cases (AC-4, AC-5). task0006 adds the total node-budget cases
+ * (AC-6) and adapts the callers to the `{ nodes, truncated }` result.
  */
 
 import { describe, expect, test } from "bun:test";
 
-import { buildTree } from "./tree-builder.ts";
+import { MAX_NODES, buildTree } from "./tree-builder.ts";
 
 describe("buildTree", () => {
   // AC-1: a nested object produces one node per key at every level, in
   // source order, with correct depth and path values.
   test("AC-1: flat object yields one node per key in source order", () => {
     const data = { name: "John", age: 30 };
-    const nodes = buildTree(data);
+    const { nodes } = buildTree(data);
     expect(nodes.length).toBe(2);
     expect(nodes[0]!.key).toBe("name");
     expect(nodes[0]!.depth).toBe(0);
@@ -28,7 +29,7 @@ describe("buildTree", () => {
 
   test("AC-1: nested object increments depth and dot-joins paths", () => {
     const data = { server: { host: "localhost", port: 8080 } };
-    const nodes = buildTree(data);
+    const { nodes } = buildTree(data);
     expect(nodes.length).toBe(3);
     expect(nodes[0]!.key).toBe("server");
     expect(nodes[0]!.depth).toBe(0);
@@ -45,7 +46,7 @@ describe("buildTree", () => {
   // recurse with incremented depth.
   test("AC-2: array elements are keyed [i] with bracket paths", () => {
     const data = [1, 2, 3];
-    const nodes = buildTree(data);
+    const { nodes } = buildTree(data);
     expect(nodes.length).toBe(3);
     expect(nodes[0]!.key).toBe("[0]");
     expect(nodes[0]!.path).toBe("[0]");
@@ -56,7 +57,7 @@ describe("buildTree", () => {
 
   test("AC-2: containers inside arrays recurse with incremented depth", () => {
     const data = { items: [{ name: "a" }, { name: "b" }] };
-    const nodes = buildTree(data);
+    const { nodes } = buildTree(data);
     // items (0), [0] (1), name (2), [1] (3), name (4)
     expect(nodes.length).toBe(5);
     expect(nodes[0]!.key).toBe("items");
@@ -80,7 +81,7 @@ describe("buildTree", () => {
   // AC-3: leaf nodes report has-children false; container nodes true.
   test("AC-3: leaves report hasChildren false, containers true", () => {
     const data = { scalar: 1, obj: { a: 1 }, arr: [1], nil: null };
-    const nodes = buildTree(data);
+    const { nodes } = buildTree(data);
     // scalar(0) obj(0) a(1) arr(0) [0](1) nil(0)
     expect(nodes.length).toBe(6);
     expect(nodes[0]!.path).toBe("scalar");
@@ -107,9 +108,9 @@ describe("buildTree", () => {
     for (let i = 0; i < 200; i++) {
       data = { [`level${i}`]: data };
     }
-    let nodes: ReturnType<typeof buildTree> = [];
+    let nodes: ReturnType<typeof buildTree>["nodes"] = [];
     expect(() => {
-      nodes = buildTree(data);
+      nodes = buildTree(data).nodes;
     }).not.toThrow();
     // Nodes are emitted at depths 0..127 only: exactly 128, capped.
     expect(nodes.length).toBe(128);
@@ -124,7 +125,7 @@ describe("buildTree", () => {
     for (let i = 0; i < 10; i++) {
       data = { [`level${i}`]: data };
     }
-    const nodes = buildTree(data);
+    const { nodes } = buildTree(data);
     expect(nodes.length).toBe(11);
     expect(nodes[0]!.depth).toBe(0);
     expect(nodes[10]!.depth).toBe(10);
@@ -134,24 +135,67 @@ describe("buildTree", () => {
   // AC-5: scalar / null / empty-object roots yield the documented result
   // (an empty node list) without throwing.
   test("AC-5: scalar string root yields an empty list", () => {
-    expect(buildTree("hello")).toEqual([]);
+    expect(buildTree("hello").nodes).toEqual([]);
   });
 
   test("AC-5: number and boolean roots yield an empty list", () => {
-    expect(buildTree(42)).toEqual([]);
-    expect(buildTree(true)).toEqual([]);
+    expect(buildTree(42).nodes).toEqual([]);
+    expect(buildTree(true).nodes).toEqual([]);
   });
 
   test("AC-5: null root yields an empty list", () => {
-    expect(buildTree(null)).toEqual([]);
+    expect(buildTree(null).nodes).toEqual([]);
   });
 
   test("AC-5: undefined root yields an empty list", () => {
-    expect(buildTree(undefined)).toEqual([]);
+    expect(buildTree(undefined).nodes).toEqual([]);
   });
 
   test("AC-5: empty object and empty array roots yield an empty list", () => {
-    expect(buildTree({})).toEqual([]);
-    expect(buildTree([])).toEqual([]);
+    expect(buildTree({}).nodes).toEqual([]);
+    expect(buildTree([]).nodes).toEqual([]);
+  });
+});
+
+describe("buildTree — total node budget (task0006 AC-6)", () => {
+  test("within-budget input is not truncated", () => {
+    const { nodes, truncated } = buildTree({ a: 1, b: 2, c: 3 });
+    expect(nodes.length).toBe(3);
+    expect(truncated).toBe(false);
+  });
+
+  test("a hostile wide object stops at MAX_NODES and flags truncation", () => {
+    // A shallow but very wide object — the depth cap never fires, only the
+    // total node budget can bound the work.
+    const data: Record<string, number> = {};
+    for (let i = 0; i < MAX_NODES + 500; i++) {
+      data[`k${i}`] = i;
+    }
+    const { nodes, truncated } = buildTree(data);
+    // Emission stops exactly at the budget; never more rows than the cap.
+    expect(nodes.length).toBe(MAX_NODES);
+    expect(truncated).toBe(true);
+  });
+
+  test("an exactly-at-budget input is complete, not truncated", () => {
+    const data: Record<string, number> = {};
+    for (let i = 0; i < MAX_NODES; i++) {
+      data[`k${i}`] = i;
+    }
+    const { nodes, truncated } = buildTree(data);
+    expect(nodes.length).toBe(MAX_NODES);
+    expect(truncated).toBe(false);
+  });
+
+  test("the budget bounds nested breadth too, not just top-level keys", () => {
+    // Half the budget at the top level, each with a child object — total
+    // emitted nodes still stop at MAX_NODES.
+    const data: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_NODES; i++) {
+      data[`k${i}`] = { child: i };
+    }
+    const { nodes, truncated } = buildTree(data);
+    expect(nodes.length).toBe(MAX_NODES);
+    expect(truncated).toBe(true);
   });
 });

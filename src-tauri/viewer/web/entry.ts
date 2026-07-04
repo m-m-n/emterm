@@ -99,6 +99,19 @@ export function applyAppearance(appearance: ViewerAppearance): void {
     uiTheme: appearance.theme,
     uiPreset: appearance.preset,
   });
+
+  // Expose the resolved light/dark theme on the root so theme-scoped styles
+  // that the theme-aware --markdown-* palette cannot express (the front matter
+  // block's parse-error accent) can follow the effective theme. "system" is
+  // resolved against the OS preference, mirroring the shared applier.
+  const root = document.documentElement;
+  const resolvedTheme =
+    appearance.theme === "system"
+      ? window.matchMedia?.("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light"
+      : appearance.theme;
+  root.setAttribute("data-theme", resolvedTheme);
 }
 
 /**
@@ -113,14 +126,16 @@ export function renderPayload(
 ): HTMLElement {
   applyAppearance(payload.appearance);
 
-  // Detect front matter on the original source (the renderer strips the same
-  // block from the body internally). The block DOM is mounted here, above the
-  // rendered body, so the renderer keeps its string-in/string-out API
-  // (IMPLEMENTATION.md D3).
+  // Extract front matter exactly once here at the boundary. The stripped body
+  // is what reaches the renderer (which is a pure markdown renderer and strips
+  // nothing itself), and the same extraction result builds the mounted block —
+  // so the source is never run through the extractor twice (IMPLEMENTATION.md
+  // D3). With no front matter, `frontMatter.body` is the original source, so
+  // the front-matter-less pipeline stays byte-identical (FR7 / NFR4).
   const frontMatter = extractFrontMatter(payload.markdown);
 
   const renderer = new MarkdownRenderer();
-  const html = renderer.render(payload.markdown, payload.format);
+  const html = renderer.render(frontMatter.body, payload.format);
 
   // Mirror the WebView fullscreen overlay structure so the reused
   // fullscreen.css selectors (`.markdown-fullscreen-content …`) match.

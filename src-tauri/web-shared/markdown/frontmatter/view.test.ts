@@ -15,6 +15,7 @@ import type {
   FrontMatterParseResult,
   FrontMatterValue,
 } from "./types.ts";
+import { MAX_NODES } from "./tree-builder.ts";
 import { buildFrontMatterBlock } from "./view.ts";
 
 /** Build a "found" extraction result for the given format + raw text. */
@@ -265,18 +266,72 @@ describe("front matter block — empty tree (AC-6)", () => {
   });
 });
 
-describe("front matter stylesheet — MD3 tokens only (AC-7)", () => {
-  test("AC-7: frontmatter.css references only --md-sys-* custom properties for colors", async () => {
+describe("front matter block — truncated node budget (task0006 AC-6)", () => {
+  /** A "found" object with `count` shallow keys — enough to overrun the budget. */
+  function wideValue(count: number): FrontMatterValue {
+    const value: { [k: string]: FrontMatterValue } = {};
+    for (let i = 0; i < count; i++) {
+      value[`k${i}`] = i;
+    }
+    return value;
+  }
+
+  test("AC-6: over-budget front matter renders a bounded tree plus a localized notice", () => {
+    const block = buildFrontMatterBlock(
+      extracted("json", "{...}"),
+      ok(wideValue(MAX_NODES + 50)),
+    );
+    header(block).click();
+
+    // The DOM row count is bounded by the budget — no eager unbounded build.
+    expect(block.querySelectorAll(".fm-row").length).toBe(MAX_NODES);
+
+    // A localized (en via test-setup) partial-tree notice is shown.
+    const notice = block.querySelector(".fm-truncated");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain(String(MAX_NODES));
+    expect(notice?.textContent).toContain("omitted");
+  });
+
+  test("AC-6: a within-budget tree shows no truncated notice", () => {
+    const block = buildFrontMatterBlock(
+      extracted("yaml", "a: 1"),
+      ok({ a: 1, b: 2 }),
+    );
+    header(block).click();
+    expect(block.querySelector(".fm-truncated")).toBeNull();
+    expect(block.querySelectorAll(".fm-row").length).toBe(2);
+  });
+
+  test("AC-6: the truncated notice is localized in ja", () => {
+    setLocale("ja");
+    const block = buildFrontMatterBlock(
+      extracted("json", "{...}"),
+      ok(wideValue(MAX_NODES + 5)),
+    );
+    header(block).click();
+    expect(block.querySelector(".fm-truncated")?.textContent).toContain("省略");
+  });
+});
+
+describe("front matter stylesheet — theme-following tokens (task0006 AC-1/AC-2)", () => {
+  test("AC-2: block colors are drawn from the theme-aware --markdown-* variables", async () => {
     const cssUrl = new URL("./frontmatter.css", import.meta.url);
     const raw = await Bun.file(cssUrl).text();
     // Drop comments so example text inside them cannot trip the scan.
     const css = raw.replace(/\/\*[\s\S]*?\*\//g, "");
 
-    // No hard-coded hex colors.
-    expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
-    // No rgb()/rgba()/hsl()/hsla() function colors.
-    expect(css).not.toMatch(/\b(?:rgb|rgba|hsl|hsla)\s*\(/i);
-    // Sanity: colors are supplied via MD3 system tokens.
-    expect(css).toMatch(/var\(--md-sys-color-/);
+    // The block surface/border/text follow the viewer theme via the
+    // applier-written --markdown-* variables (which switch light/dark).
+    expect(css).toMatch(/var\(--markdown-pre-bg/);
+    expect(css).toMatch(/var\(--markdown-border/);
+    expect(css).toMatch(/var\(--markdown-fg/);
+
+    // The dark-only MD3 surface/on-surface/primary color coupling is gone: the
+    // block no longer hardcodes a single theme's palette.
+    expect(css).not.toContain("--md-sys-color-surface");
+    expect(css).not.toContain("--md-sys-color-on-surface");
+    expect(css).not.toContain("--md-sys-color-primary");
+    expect(css).not.toContain("--md-sys-color-secondary");
   });
 });

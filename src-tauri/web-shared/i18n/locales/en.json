@@ -435,7 +435,8 @@
     "mermaidPopupReset": "Reset zoom",
     "frontMatter": {
       "parseError": "Parse error",
-      "parseErrorNotice": "Failed to parse front matter"
+      "parseErrorNotice": "Failed to parse front matter",
+      "truncatedNotice": "Showing the first {count} entries; the rest were omitted."
     }
   },
   "zoom": {
