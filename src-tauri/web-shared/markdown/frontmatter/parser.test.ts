@@ -9,6 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { MAX_RAW_BYTES } from "./limits.ts";
 import { parseFrontMatter } from "./parser.ts";
 import { MAX_NODES } from "./tree-builder.ts";
 import type {
@@ -350,5 +351,78 @@ describe("AC-2 (task0008): the parse layer no longer depends on the view tree-bu
 
   test("AC-2: the budget value is unchanged (2000)", () => {
     expect(MAX_NODES).toBe(2000);
+  });
+});
+
+describe("task0009: oversized raw content is rejected before any parser runs", () => {
+  // The size-limit failure message carries this marker. No YAML/TOML/JSON
+  // parser error contains it, so its presence proves the failure came from the
+  // pre-parse size guard and not from a parser library (AC-1 structural
+  // guarantee, per the task plan's Test Notes).
+  const SIZE_LIMIT_MARKER = "size limit";
+
+  test("AC-1: over-limit content that is itself valid YAML still fails — the parser was never invoked", () => {
+    // A bare plain scalar is a valid YAML document that parses to the string
+    // itself. One ASCII byte over the limit. If the guard were absent the parser
+    // would return ok:true with the string value, so a failure here can ONLY be
+    // produced by the pre-parse size guard.
+    const oversized = "a".repeat(MAX_RAW_BYTES + 1);
+    const fail = expectFail(parseFrontMatter(oversized, "yaml"));
+    expect(fail.error.length).toBeGreaterThan(0);
+    expect(fail.error).toContain(SIZE_LIMIT_MARKER);
+  });
+
+  test("AC-1: the bound is measured in UTF-8 bytes, not UTF-16 code units", () => {
+    // ~0.5 MiB CJK characters: the UTF-16 code-unit count is within the limit,
+    // but each character is 3 UTF-8 bytes so the byte length (~1.5 MiB) is over.
+    // A code-unit measure would wrongly admit this; the byte measure must reject
+    // it. The content is also valid YAML (a plain scalar).
+    const multibyte = "あ".repeat(Math.floor(MAX_RAW_BYTES / 2));
+    expect(multibyte.length).toBeLessThanOrEqual(MAX_RAW_BYTES);
+    expect(new TextEncoder().encode(multibyte).length).toBeGreaterThan(
+      MAX_RAW_BYTES,
+    );
+    const fail = expectFail(parseFrontMatter(multibyte, "yaml"));
+    expect(fail.error).toContain(SIZE_LIMIT_MARKER);
+  });
+
+  test("AC-3: the size failure has the FR6 shape (ok:false + non-empty error) the error UI consumes", () => {
+    // Same discriminated-union failure the broken-parse tests assert, so it
+    // flows through the existing FR6 error path unchanged (no view change).
+    const fail = expectFail(
+      parseFrontMatter("x".repeat(MAX_RAW_BYTES + 100), "json"),
+    );
+    expect(fail.ok).toBe(false);
+    expect(typeof fail.error).toBe("string");
+    expect(fail.error.length).toBeGreaterThan(0);
+  });
+
+  test("AC-2: content exactly at the byte limit is parsed normally", () => {
+    // Exactly MAX_RAW_BYTES ASCII bytes → a valid YAML plain scalar. The guard
+    // rejects strictly-over, so at-limit content reaches the parser as before.
+    const atLimit = "a".repeat(MAX_RAW_BYTES);
+    expect(new TextEncoder().encode(atLimit).length).toBe(MAX_RAW_BYTES);
+    const ok = expectOk(parseFrontMatter(atLimit, "yaml"));
+    expect(ok.value).toBe(atLimit);
+  });
+
+  test("AC-2: small, well-under-limit content parses exactly as before", () => {
+    const ok = expectOk(parseFrontMatter("title: Hello\ncount: 3", "yaml"));
+    expect(ok.value).toEqual({ title: "Hello", count: 3 });
+  });
+});
+
+describe("AC-4 (task0009): the raw-size bound lives in the neutral limits module", () => {
+  test("AC-4: MAX_RAW_BYTES is exported from limits.ts on the order of 1 MiB", () => {
+    expect(MAX_RAW_BYTES).toBe(1024 * 1024);
+  });
+
+  test("AC-4: parser.ts sources the raw-size bound from limits.ts (no duplicated literal)", async () => {
+    const src = await Bun.file(new URL("./parser.ts", import.meta.url)).text();
+    // The bound is imported from the neutral limits module...
+    expect(src).toMatch(/MAX_RAW_BYTES/);
+    expect(src).toMatch(/from "\.\/limits\.ts"/);
+    // ...and the 1 MiB literal is not re-declared inside parser.ts.
+    expect(src).not.toMatch(/1024 \* 1024/);
   });
 });

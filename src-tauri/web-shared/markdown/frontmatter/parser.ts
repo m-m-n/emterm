@@ -25,7 +25,7 @@
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 
-import { MAX_NODES } from "./limits.ts";
+import { MAX_NODES, MAX_RAW_BYTES } from "./limits.ts";
 import type {
   FrontMatterFormat,
   FrontMatterParseResult,
@@ -47,6 +47,20 @@ export function parseFrontMatter(
   content: string,
   format: FrontMatterFormat,
 ): FrontMatterParseResult {
+  // Reject oversized raw content BEFORE any parser library — or even the
+  // emptiness `trim()` below — touches it. Both a full parse and `trim()` scan
+  // (and allocate over) the whole string, so terminal-controlled front matter
+  // that far exceeds MAX_RAW_BYTES could otherwise force a long synchronous
+  // parse that blocks the WebView (SPEC.md Security Considerations). The
+  // oversized block is treated as a bounded parse failure and flows through the
+  // existing FR6 error path.
+  if (exceedsRawByteLimit(content)) {
+    return {
+      ok: false,
+      error: `Front matter exceeds the ${MAX_RAW_BYTES}-byte size limit and was not parsed.`,
+    };
+  }
+
   // An empty or whitespace-only block is a valid empty tree, not an error.
   // (The extractor can yield empty raw content, e.g. a `---`/`---` YAML block.)
   if (content.trim() === "") {
@@ -63,6 +77,25 @@ export function parseFrontMatter(
   } catch (err) {
     return { ok: false, error: toErrorMessage(err) };
   }
+}
+
+/**
+ * Whether `content` exceeds {@link MAX_RAW_BYTES} measured in UTF-8 bytes.
+ *
+ * A UTF-16 code-unit count (`String.length`) is always <= the UTF-8 byte length
+ * — every code unit encodes to at least one byte — so a string whose `.length`
+ * already exceeds the limit is rejected without materializing its byte
+ * encoding. This bounds the work on a huge (e.g. multi-megabyte) hostile input:
+ * `TextEncoder` only runs once the cheap unit count is within the limit, so the
+ * transient byte array it allocates is at most a small multiple of
+ * {@link MAX_RAW_BYTES}. The byte length is authoritative because a code-unit
+ * measure would under-count multibyte (e.g. CJK) content.
+ */
+function exceedsRawByteLimit(content: string): boolean {
+  if (content.length > MAX_RAW_BYTES) {
+    return true;
+  }
+  return new TextEncoder().encode(content).length > MAX_RAW_BYTES;
 }
 
 /** Dispatch to the concrete parser for `format`. May throw; the caller catches. */
