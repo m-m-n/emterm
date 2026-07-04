@@ -1,0 +1,119 @@
+round: 1
+executed_at: "2026-07-04T19:16:34+09:00"
+scope:
+  review_mode: diff
+  base_commit: 22372999bf946f4c015b07342b7992cb4fcddb17
+  head_commit: 5bc48935fb69412eeb13a232ae60d71530e9ca64
+  changed_files:
+    - package.json
+    - src-tauri/viewer/web/entry.test.ts
+    - src-tauri/viewer/web/entry.ts
+    - src-tauri/viewer/web/index.html
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/markdown/frontmatter/extractor.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/extractor.ts
+    - src-tauri/web-shared/markdown/frontmatter/frontmatter.css
+    - src-tauri/web-shared/markdown/frontmatter/integration.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/parser.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/parser.ts
+    - src-tauri/web-shared/markdown/frontmatter/tree-builder.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/tree-builder.ts
+    - src-tauri/web-shared/markdown/frontmatter/types.ts
+    - src-tauri/web-shared/markdown/frontmatter/view.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/view.ts
+    - src-tauri/web-shared/markdown/renderer.ts
+plan:
+  floor: [comprehensive, spec, security]
+  discretionary:
+    - perspective: architecture
+      reason: "共有 renderer.render() の挙動変更が全呼び出し元(fullscreen overlay 等)に波及するため"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+findings:
+  - stable_id: b6c3c6a098d5f811
+    severity: medium
+    category: spec
+    file: src-tauri/viewer/web/index.html
+    line: 12
+    title: "Front matter block ignores light theme (NFR2: 'follows the viewer's theme (light/dark)')"
+    description: "SPEC.md NFR2 requires the collapsible block to use MD3 --md-sys-* tokens AND follow the viewer's light/dark theme. frontmatter.css draws every color from --md-sys-* tokens, but those tokens are supplied only by the hardcoded :root block in index.html whose values mirror the dark theme. The viewer resolves light/dark via applyMarkdownColorTheme, which writes only --markdown-*/--terminal-* variables and never --md-sys-*. In light theme the body renders light while the front matter block stays dark. The token-usage half of NFR2 is satisfied; the theme-following half is unmet."
+    suggestion: "Make the --md-sys-* tokens theme-aware: (a) have applyMarkdownColorTheme also write light/dark --md-sys-* values, (b) define both token sets in index.html gated on a theme class/attribute, or (c) restyle frontmatter.css onto the existing theme-aware --markdown-* variables."
+    sources: [claude:spec]
+    confidence: 75
+    resolution: fixed
+    resolution_reason: "task0006 rework (2e531f06) で修正"
+  - stable_id: edbac6878f16083c
+    severity: medium
+    category: architecture
+    file: src-tauri/viewer/web/index.html
+    line: 12
+    title: "MD3 design tokens duplicated into index.html — contract drift from the token SSOT"
+    description: "index.html hardcodes a private dark-only copy of the --md-sys-* token values because the viewer page does not load web-shared/styles.css. That copy is a fourth hand-maintained instance of tokens whose SSOT is doc/UI-DESIGN-GUIDELINES.yaml (mirrored by web-shared/styles.css and src/ui/md3.rs). Costs: (1) silent drift — no test guards index.html's values against the SSOT; (2) the block is locked to the dark palette."
+    suggestion: "Avoid re-copying the token layer: import the shared --md-sys-* definitions, or drive frontmatter.css from the theme-aware --markdown-* variables, or add a drift check failing when index.html diverges from styles.css."
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: fixed
+    resolution_reason: "task0006 rework (2e531f06) で修正"
+  - stable_id: 95a9b4dbf25b1a4b
+    severity: medium
+    category: comprehensive
+    file: src-tauri/viewer/web/index.html
+    line: 12
+    title: "Front matter block ignores light theme (hardcoded dark --md-sys-* tokens)"
+    description: "frontmatter.css references --md-sys-* tokens without fallbacks; the only definitions the viewer sees are the hardcoded dark values in index.html (no light override, no prefers-color-scheme switch). applyMarkdownColorTheme flips the page background light via --markdown-bg but never updates --md-sys-*, so in light theme the block renders as a dark box on a light page — contradicting frontmatter.css's own docstring and NFR2. The AC-7 test is a static grep and never exercises theme switching, giving false assurance."
+    suggestion: "Make the tokens follow the resolved theme (applier writes --md-sys-*, or data-theme-gated token sets in index.html) and extend the AC-7-style test to verify resolved colors/token switching after applying the light theme."
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: "task0006 rework (2e531f06) で修正"
+  - stable_id: a150c4341971d1b4
+    severity: medium
+    category: architecture
+    file: src-tauri/web-shared/markdown/renderer.ts
+    line: 206
+    title: "Front-matter extraction duplicated across the shared renderer and the viewer entry"
+    description: "The same source is run through extractFrontMatter twice: once in entry.ts (to build the block) and again inside MarkdownRenderer.render() (to strip the body). The caller cannot obtain the body the renderer actually used, so it re-derives it independently, and the shared renderer now silently strips leading ---/+++/{...} from ANY markdown it is handed. The two call sites must stay in agreement; future reuse of MarkdownRenderer on a snippet legitimately starting with '{' or '---' would lose leading content with no signal."
+    suggestion: "Extract once at the boundary: call extractFrontMatter in entry.ts and pass the stripped body to render(), keeping MarkdownRenderer a pure markdown renderer; or have render() accept/return the extraction so the caller reuses the same result."
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: "task0006 rework (2e531f06) で修正"
+  - stable_id: c04fd0d740767b2a
+    severity: medium
+    category: architecture
+    file: src-tauri/web-shared/markdown/frontmatter/parser.ts
+    line: 104
+    title: "Untrusted YAML aliases can drive recursive normalization into a UI-thread DoS"
+    description: "normalizeValue recursively walks parsed YAML/TOML values with no seen-set, memoization, alias rejection, or node budget. The yaml parser accepts anchors/aliases and can return cyclic or heavily shared object graphs; normalization follows those references until stack exhaustion or duplicates aliased subtrees before rendering. Runs synchronously during viewer rendering. Note: claude:security assessed that a RangeError from deep recursion is caught by the parser's try/catch and degrades to a parse failure, and the yaml library's default maxAliasCount bounds alias amplification — so exploitability may be limited; flagged for a bounded-normalization hardening decision."
+    suggestion: "Reject YAML aliases/anchors for front matter, or add a WeakSet cycle guard in normalization and enforce a maximum normalized node count before building the tree."
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: "task0006 rework (2e531f06) で修正"
+  - stable_id: 8cab75d1f97687ce
+    severity: medium
+    category: security
+    file: src-tauri/web-shared/markdown/frontmatter/view.ts
+    line: 54
+    title: "Untrusted frontmatter can force eager unbounded DOM construction"
+    description: "On a successful parse, buildFrontMatterBlock immediately calls buildTree and buildTreeView while the block is still hidden, appending a row for every parsed node. tree-builder.ts caps only recursion depth (MAX_DEPTH=128), not total node/entry count, so hostile front matter with a very large number of shallow entries forces the child WebView to allocate a matching number of DOM rows before the user ever expands the block — a renderer-side DoS path from terminal-controlled content."
+    suggestion: "Cap parsed node count / entry count in tree-builder.ts and render a truncated state past the cap; or defer buildTree/buildTreeView until the block is actually expanded (lazy construction)."
+    sources: [codex:security]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: "task0006 rework (2e531f06) で修正"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+notes: "codex:architecture の finding は Codex が security と自己分類したものを codex-reviewer agent がプロトコルに従い assigned perspective (architecture) に正規化して報告したもの。"
