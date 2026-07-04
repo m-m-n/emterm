@@ -41,6 +41,13 @@ fn yaml_subcommand_with_fixture_returns_zero() {
 }
 
 #[test]
+fn html_subcommand_with_fixture_returns_zero() {
+    let path = "tests/fixtures/html/sample.html";
+    let code = cli::run(&args(&["html", path]));
+    assert_eq!(code, 0, "html subcommand should succeed on a real fixture");
+}
+
+#[test]
 fn image_subcommand_default_kitty_returns_zero() {
     // Create a small valid PNG in a temp file (we cannot ship one
     // as a binary asset without committing it; tempfile keeps the test
@@ -110,9 +117,32 @@ fn image_subcommand_missing_file_returns_two() {
 }
 
 #[test]
+fn html_subcommand_missing_file_returns_two() {
+    let code = cli::run(&args(&["html", "/nonexistent/path/file.html"]));
+    assert_eq!(code, 2, "missing file should map to exit code 2");
+}
+
+#[test]
 fn markdown_subcommand_directory_path_returns_two() {
     let code = cli::run(&args(&["markdown", "/tmp"]));
     assert_eq!(code, 2, "directory path should map to exit code 2");
+}
+
+#[test]
+fn html_subcommand_directory_path_returns_two() {
+    let code = cli::run(&args(&["html", "/tmp"]));
+    assert_eq!(code, 2, "directory path should map to exit code 2");
+}
+
+#[test]
+fn html_subcommand_unsupported_extension_returns_one() {
+    let mut tmp = NamedTempFile::with_suffix(".txt").unwrap();
+    tmp.write_all(b"<html></html>").unwrap();
+    tmp.flush().unwrap();
+
+    let path = tmp.path().to_string_lossy().to_string();
+    let code = cli::run(&args(&["html", &path]));
+    assert_eq!(code, 1, "unsupported extension should map to exit code 1");
 }
 
 #[test]

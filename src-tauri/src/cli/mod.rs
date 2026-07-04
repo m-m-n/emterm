@@ -3,12 +3,13 @@
 //! Entry point: [`run`] takes the post-binary-name slice of argv (so
 //! `args[0]` is the subcommand) and returns an exit code suitable for
 //! `std::process::exit`. Subcommands are bare words (`markdown`, `json`,
-//! `yaml`, `image`); the dispatch arm in `main.rs` only delegates here
-//! when one of these matches, so `--`-prefixed child-process flags
+//! `yaml`, `image`, `html`); the dispatch arm in `main.rs` only delegates
+//! here when one of these matches, so `--`-prefixed child-process flags
 //! retain their existing hand-rolled path.
 
 pub mod encoding;
 pub mod error;
+pub mod html;
 pub mod image;
 pub mod json;
 pub mod markdown;
@@ -110,6 +111,10 @@ pub fn run(args: &[String]) -> i32 {
             let file: &std::path::PathBuf = sub.get_one("file").expect("required by clap");
             yaml::execute_yaml_command(file)
         }
+        Some(("html", sub)) => {
+            let file: &std::path::PathBuf = sub.get_one("file").expect("required by clap");
+            html::execute_html_command(file)
+        }
         Some(("image", sub)) => {
             let file: &std::path::PathBuf = sub.get_one("file").expect("required by clap");
             let protocol: &String = sub
@@ -176,6 +181,16 @@ fn build_command(loc: Locale) -> clap::Command {
                 ),
         )
         .subcommand(
+            Command::new("html")
+                .about(messages::cli_html_about(loc))
+                .arg(
+                    Arg::new("file")
+                        .help(messages::cli_html_file(loc))
+                        .required(true)
+                        .value_parser(clap::value_parser!(std::path::PathBuf)),
+                ),
+        )
+        .subcommand(
             Command::new("image")
                 .about(messages::cli_image_about(loc))
                 .arg(
@@ -204,6 +219,14 @@ mod tests {
             .try_get_matches_from(["emterm", "markdown", "foo.md"])
             .expect("parse should succeed");
         assert_eq!(m.subcommand_name(), Some("markdown"));
+    }
+
+    #[test]
+    fn build_command_accepts_html_subcommand() {
+        let m = build_command(Locale::En)
+            .try_get_matches_from(["emterm", "html", "foo.html"])
+            .expect("parse should succeed");
+        assert_eq!(m.subcommand_name(), Some("html"));
     }
 
     #[test]

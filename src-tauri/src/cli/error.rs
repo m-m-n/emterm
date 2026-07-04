@@ -17,7 +17,10 @@ pub enum CommandError {
 
     FileReadError(std::io::Error),
 
-    FileTooLarge { size: u64, max_size: u64 },
+    FileTooLarge {
+        size: u64,
+        max_size: u64,
+    },
 
     UnsupportedImageFormat(image::ImageFormat),
 
@@ -30,6 +33,11 @@ pub enum CommandError {
     NameRequired,
 
     PermissionDenied(PathBuf),
+
+    UnsupportedExtension {
+        path: PathBuf,
+        allowed: &'static [&'static str],
+    },
 }
 
 impl fmt::Display for CommandError {
@@ -52,6 +60,9 @@ impl fmt::Display for CommandError {
             CommandError::EncodingError(msg) => messages::err_encoding_error(loc, msg),
             CommandError::NameRequired => messages::err_name_required(loc),
             CommandError::PermissionDenied(path) => messages::err_permission_denied(loc, path),
+            CommandError::UnsupportedExtension { path, allowed } => {
+                messages::err_unsupported_extension(loc, path, allowed)
+            }
         };
         f.write_str(&s)
     }
@@ -96,6 +107,7 @@ impl CommandError {
             CommandError::EncodingError(_) => 1,
             CommandError::NameRequired => 2,
             CommandError::PermissionDenied(_) => 2,
+            CommandError::UnsupportedExtension { .. } => 1,
         }
     }
 }
@@ -155,6 +167,28 @@ mod tests {
     fn test_encoding_error_exit_code() {
         let err = CommandError::EncodingError("dimensions exceed".to_string());
         assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn test_unsupported_extension_exit_code() {
+        let err = CommandError::UnsupportedExtension {
+            path: PathBuf::from("file.txt"),
+            allowed: &["html", "htm"],
+        };
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn test_unsupported_extension_display_includes_path_and_allowed() {
+        set_active_locale_for_test(Locale::En);
+        let err = CommandError::UnsupportedExtension {
+            path: PathBuf::from("file.txt"),
+            allowed: &["html", "htm"],
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("file.txt"));
+        assert!(msg.contains("html"));
+        assert!(msg.contains("htm"));
     }
 
     // Single test exercises both locales sequentially; the test helper
