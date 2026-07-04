@@ -29,14 +29,17 @@ workflow:
     status: completed
     completed_at_commit: 22372999bf946f4c015b07342b7992cb4fcddb17
   - id: implement
-    status: pending
-    base_commit: null
+    status: in_progress
+    base_commit: 22372999bf946f4c015b07342b7992cb4fcddb17
   - id: review
     status: pending
   - id: verify
     status: pending
     result: null
     failed_items: []
+    # verify run 1 (2026-07-04): result fail — MT-1 light-theme non-following
+    # (NFR2). Routed to implement rework as task0006 (user chose: fix all
+    # review-round-1 mediums). Kept for retrospect: verification_failures.
   - id: retrospect
     status: pending
 
@@ -53,8 +56,9 @@ tasks:
     domains: [input-handling]
     complexity: medium
     requirements: [FR1, FR2, NFR4]
-    status: pending
-    notes: null
+    status: merged
+    notes: "27 extractor tests (AC-1..8) pass; types.ts SSOT established (FrontMatterFormat/Extraction/ParseResult/Value)."
+    branch: em-workflow/markdown-frontmatter/task0001
   task0002:
     title: "Format parsers + library selection"
     plan: tasks/task0002.md
@@ -68,8 +72,9 @@ tasks:
     domains: [input-handling, config-infra]
     complexity: medium
     requirements: [FR3]
-    status: pending
-    notes: null
+    status: merged
+    notes: "11 parser tests (AC-1..5) pass; libs: YAML=yaml (existing dep), TOML=smol-toml. Deviation: bun.lock is gitignored so only package.json carries the dep."
+    branch: em-workflow/markdown-frontmatter/task0002
   task0003:
     title: "Tree builder (legacy port)"
     plan: tasks/task0003.md
@@ -81,8 +86,9 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR5]
-    status: pending
-    notes: null
+    status: merged
+    notes: "12 tests pass (AC-1..5). Non-container root -> empty node list (open decision resolved). Pre-existing entry.test.ts failures (2, querySelector('h1') null) proven independent."
+    branch: em-workflow/markdown-frontmatter/task0003
   task0004:
     title: "Collapsible block view + styles + i18n"
     plan: tasks/task0004.md
@@ -97,8 +103,9 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR4, FR5, FR6, NFR1, NFR2, NFR3]
-    status: pending
-    notes: null
+    status: merged
+    notes: "12 view tests (AC-1..7) pass; textContent-only DOM, --md-sys-* only CSS, en/ja locale keys added. task0005 must wire css import + mount and ensure --md-sys-* tokens on the viewer page."
+    branch: em-workflow/markdown-frontmatter/task0004
   task0005:
     title: "Renderer/viewer integration + regression"
     plan: tasks/task0005.md
@@ -112,12 +119,75 @@ tasks:
     domains: [ui, input-handling]
     complexity: medium
     requirements: [FR7, NFR4]
-    status: pending
-    notes: null
+    status: merged
+    notes: "Integration + regression tests pass (114 pass / 2 pre-existing fails unchanged). DEVIATION: viewer/web/index.html (outside expected_files) gained a :root --md-sys-* token block (dark-theme values) because the viewer page never loads styles.css; review should check light-theme correctness."
+    branch: em-workflow/markdown-frontmatter/task0005
+  task0006:
+    title: "Rework: theme-following tokens, single extraction, resource caps"
+    plan: tasks/task0006.md
+    files:
+      - src-tauri/viewer/web/index.html
+      - src-tauri/viewer/web/entry.ts
+      - src-tauri/viewer/web/entry.test.ts
+      - src-tauri/web-shared/markdown/renderer.ts
+      - src-tauri/web-shared/markdown/frontmatter/integration.test.ts
+      - src-tauri/web-shared/markdown/frontmatter/parser.ts
+      - src-tauri/web-shared/markdown/frontmatter/parser.test.ts
+      - src-tauri/web-shared/markdown/frontmatter/tree-builder.ts
+      - src-tauri/web-shared/markdown/frontmatter/tree-builder.test.ts
+      - src-tauri/web-shared/markdown/frontmatter/view.ts
+      - src-tauri/web-shared/markdown/frontmatter/view.test.ts
+      - src-tauri/web-shared/markdown/frontmatter/frontmatter.css
+      - src-tauri/web-shared/settings/settings-applier.ts
+      - src-tauri/web-shared/i18n/locales/en.json
+      - src-tauri/web-shared/i18n/locales/ja.json
+    wave: 4
+    skills: [design-impl, frontend-impl]
+    domains: [ui, input-handling]
+    complexity: medium
+    requirements: [NFR1, NFR2, NFR4]
+    status: merged
+    notes: "All 6 round-1 findings resolved: frontmatter.css restyled onto theme-aware --markdown-* vars (styles.css --md-sys-* is dark-only), index.html color-token copy removed + shape/motion drift-pinned, renderer made pure (extraction once in entry), parser WeakSet cycle guard, tree MAX_NODES=2000 + localized truncated notice. 129 pass / 2 known pre-existing fails."
+    branch: em-workflow/markdown-frontmatter/task0006
+  task0007:
+    title: "Rework 2: single theme owner, parse-time node budget"
+    plan: tasks/task0007.md
+    files:
+      - src-tauri/web-shared/settings/settings-applier.ts
+      - src-tauri/viewer/web/entry.ts
+      - src-tauri/viewer/web/entry.test.ts
+      - src-tauri/web-shared/markdown/frontmatter/parser.ts
+      - src-tauri/web-shared/markdown/frontmatter/parser.test.ts
+      - src-tauri/web-shared/markdown/frontmatter/types.ts
+      - src-tauri/web-shared/markdown/frontmatter/tree-builder.ts
+      - src-tauri/web-shared/markdown/frontmatter/tree-builder.test.ts
+      - src-tauri/web-shared/markdown/frontmatter/view.ts
+      - src-tauri/web-shared/markdown/frontmatter/view.test.ts
+    wave: 5
+    skills: [frontend-impl]
+    domains: [ui, input-handling]
+    complexity: medium
+    requirements: [NFR1, NFR2]
+    status: in_progress
+    notes: "Rework task from review round 2 code findings (81b29147/8ab3bdd8 data-theme single owner, fe872dd2 parse-time node budget); user-approved."
+    branch: em-workflow/markdown-frontmatter/task0007
 
 review:
-  status: pending
-  rounds_completed: 0
+  status: in_progress
+  rounds_completed: 2
+  plan:
+    floor: [comprehensive, spec, security]
+    discretionary:
+      - perspective: architecture
+        reason: "共有 renderer.render() の挙動変更が全呼び出し元(fullscreen overlay 等)に波及するため"
+    codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    security: completed
+    architecture: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
@@ -174,14 +244,14 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0004]
+    tasks: [task0004, task0006]
     tests: [TS-9]
   NFR2:
     title: "UI conformance — MD3 tokens, light/dark theme"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0004]
+    tasks: [task0004, task0006]
     tests: [TS-8, MT-1]
   NFR3:
     title: "i18n — user-visible strings via web-shared i18n locales"
@@ -195,5 +265,5 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0005]
+    tasks: [task0001, task0005, task0006]
     tests: [TS-12, PT-1]

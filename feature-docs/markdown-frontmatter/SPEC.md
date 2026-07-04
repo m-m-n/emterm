@@ -88,7 +88,10 @@ as before, so that existing behavior does not regress.
   tree-building logic is a TS re-implementation ported from the
   `legacy/webview` branch (`src/data-viewer/tree-builder.ts`); the visual
   style follows the native JSON/YAML data viewer's look. Recursion depth is
-  capped (`MAX_DEPTH = 128`).
+  capped (`MAX_DEPTH = 128`) and total tree size is capped by a node budget
+  (`MAX_NODES = 2000`, applied to normalization at parse time as well as to
+  tree building); past either cap the tree is truncated and a localized
+  notice marks it as partial.
 - **FR6: Parse-failure fallback.** If a properly delimited block fails to
   parse, it is still stripped from the body; the header shows a parse-error
   indication instead of the normal state, and the expanded content shows
@@ -103,9 +106,11 @@ as before, so that existing behavior does not regress.
   messages are inserted into the DOM only via escaping/`textContent`-safe
   paths, consistent with the viewer's existing DOMPurify-based XSS policy.
   Front matter can never inject active HTML.
-- **NFR2 - UI conformance:** The collapsible block uses MD3 design tokens
-  (`--md-sys-*` CSS variables per `doc/UI-DESIGN-GUIDELINES.yaml`) and
-  follows the viewer's theme (light/dark).
+- **NFR2 - UI conformance:** The collapsible block follows the viewer's
+  effective theme (light/dark). Shape/motion use MD3 design tokens
+  (`--md-sys-*` CSS variables per `doc/UI-DESIGN-GUIDELINES.yaml`); colors
+  are drawn from the viewer's theme-aware palette variables
+  (`--markdown-*`).
 - **NFR3 - i18n:** User-visible strings (e.g. the parse-error notice) are
   provided via the shared WebView i18n mechanism
   (`src-tauri/web-shared/i18n/locales/{en,ja}.json`). The "Front Matter"
@@ -237,7 +242,9 @@ end-to-end behavior is validated manually per `test/README.md`).
 ## Security Considerations
 
 - **Input Validation:** Delimiter scanning is bounded; parse errors are
-  contained to the fallback path (FR6). Recursion depth capped at 128.
+  contained to the fallback path (FR6). Recursion depth capped at 128;
+  normalization and tree building bounded by the `MAX_NODES` budget;
+  cyclic parse results (YAML aliases) are guarded.
 - **XSS Prevention:** All front-matter-derived strings enter the DOM via
   escaped/`textContent` paths (NFR1); the block DOM is built
   programmatically, never via unsanitized `innerHTML`.
