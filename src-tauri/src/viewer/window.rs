@@ -82,6 +82,9 @@ pub fn run(payload_path: &str) -> Result<(), String> {
         init_script: Some(init_script),
         request_handler: Box::new(move |request| handle_request(request, basedir.as_deref())),
         navigation_handler: Box::new(|uri| handle_navigation(uri)),
+        // The Markdown viewer doesn't open popups; the HTML viewer
+        // (`viewer::html_window`) is the first caller of this hook.
+        new_window_handler: None,
         ipc: None,
         // FR9: Esc / q exit the read-only viewer.
         close_on_esc_q: true,

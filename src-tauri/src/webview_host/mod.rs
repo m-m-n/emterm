@@ -33,6 +33,15 @@ pub type RequestHandler =
 /// performed as a side effect inside the closure).
 pub type NavigationHandler = Box<dyn Fn(&str) -> bool + Send + Sync + 'static>;
 
+/// Closure type for the new-window (popup) hook. Called with the requested
+/// URL; the host layer ALWAYS denies the in-WebView popup (there is no
+/// allow path), so the closure's only job is any safe external-open side
+/// effect (e.g. handing an `http(s)` target to the OS browser). Kept
+/// minimal per IMPLEMENTATION.md's risk mitigation (WebKitGTK vs WebView2
+/// new-window semantics differ; the shared contract stays "URL in, deny +
+/// optional external open").
+pub type NewWindowHandler = Box<dyn Fn(&str) + Send + Sync + 'static>;
+
 /// IPC dispatcher closure type. Called on the main thread once per
 /// `invoke()` body received from the WebView. Returns an optional
 /// `evaluate_script` body to send back as the reply.
@@ -97,6 +106,12 @@ pub struct WebViewHost {
     /// navigation in-window and route safe URIs to the OS handler from
     /// inside the closure.
     pub navigation_handler: NavigationHandler,
+    /// Optional new-window (popup / `window.open` / `target=_blank`) hook.
+    /// `None` for windows that don't need popup interception (the settings
+    /// panel, the Markdown viewer) — additive so they are unaffected. The
+    /// HTML viewer sets this so popups never open a WebView window while
+    /// still delegating `http(s)` targets to the OS browser.
+    pub new_window_handler: Option<NewWindowHandler>,
     /// Optional bidirectional IPC bridge. `Some` for the settings panel
     /// (`__EMTERM_SETTINGS_IPC__.resolve(...)`); `None` for the
     /// read-only viewer.

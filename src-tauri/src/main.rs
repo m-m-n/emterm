@@ -130,6 +130,15 @@ fn run_gui(args: Vec<String>) {
         run_data_viewer(payload_path);
         return;
     }
+    // `--html-viewer <payload-path>` runs the Wry HTML viewer child window
+    // (Decision D1 in IMPLEMENTATION.md — its own flag/window module,
+    // distinct from the Markdown `--viewer`, since the document is served
+    // verbatim rather than injected into the bundled renderer).
+    if let Some(pos) = args.iter().position(|a| a == "--html-viewer") {
+        let payload_path = args.get(pos + 1).cloned();
+        run_html_viewer(payload_path);
+        return;
+    }
     // `--settings` runs the child settings window (GTK/Wry, reused WebView
     // settings panel). No payload: the child reads settings.json itself.
     if args.iter().any(|a| a == "--settings") {
@@ -237,6 +246,26 @@ fn run_data_viewer(payload_path: Option<String>) {
     };
     match viewer::data_window::run(&path) {
         Ok(()) => log::info!("data viewer: window closed"),
+        Err(e) => {
+            log::error!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Entry for the child `--html-viewer <payload-path>` process. Runs the Wry
+/// HTML viewer window (GTK/WebKitGTK on Linux, WebView2 on Windows) and
+/// blocks until it closes. A missing payload path is a usage error; a
+/// missing/unreadable payload file logs an error and exits non-zero without
+/// panicking (AC-1).
+#[cfg(feature = "gui")]
+fn run_html_viewer(payload_path: Option<String>) {
+    let Some(path) = payload_path else {
+        log::error!("--html-viewer requires a payload file path");
+        std::process::exit(2);
+    };
+    match viewer::html_window::run(&path) {
+        Ok(()) => log::info!("html viewer: window closed"),
         Err(e) => {
             log::error!("{e}");
             std::process::exit(1);

@@ -101,6 +101,9 @@ fn build_host() -> crate::webview_host::WebViewHost {
         init_script: None,
         request_handler: Box::new(|request| handle_request(request)),
         navigation_handler: Box::new(|uri| handle_navigation(uri)),
+        // The settings panel doesn't open popups; the HTML viewer
+        // (`viewer::html_window`) is the first caller of this hook.
+        new_window_handler: None,
         ipc: Some(IpcConfig {
             on_invoke: Box::new(|body| {
                 let msg = parse_invoke(&body)?;

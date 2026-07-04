@@ -13,6 +13,8 @@ pub mod data_model;
 pub mod data_payload;
 pub mod data_window;
 pub mod html;
+pub mod html_resolver;
+pub mod html_window;
 pub mod image;
 pub mod image_payload;
 pub mod image_resolver;

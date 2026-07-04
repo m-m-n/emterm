@@ -61,6 +61,7 @@ pub fn run(host: WebViewHost) -> Result<(), String> {
     let scheme = host.scheme.clone();
     let request_handler = host.request_handler;
     let navigation_handler = host.navigation_handler;
+    let new_window_handler = host.new_window_handler;
     let init_script = host.init_script;
 
     let url = format!("{}://{}/{}", host.scheme, host.host, host.initial_url_path);
@@ -69,6 +70,15 @@ pub fn run(host: WebViewHost) -> Result<(), String> {
         .with_url(url)
         .with_custom_protocol(scheme, move |_id, request| request_handler(&request))
         .with_navigation_handler(move |uri| navigation_handler(&uri));
+
+    if let Some(handler) = new_window_handler {
+        // The popup is always denied in-WebView; the handler's only job is
+        // any safe external-open side effect (see `NewWindowHandler`).
+        builder = builder.with_new_window_req_handler(move |uri, _features| {
+            handler(&uri);
+            wry::NewWindowResponse::Deny
+        });
+    }
 
     if let Some(script) = init_script.as_deref() {
         builder = builder.with_initialization_script(script);
