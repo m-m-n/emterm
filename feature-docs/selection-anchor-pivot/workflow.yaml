@@ -23,15 +23,27 @@ workflow:
     status: completed
     completed_at_commit: f0491dd901e06cb0e70b3f796abd394960032330
   - id: implement
-    status: pending
+    status: completed
+    base_commit: f0491dd901e06cb0e70b3f796abd394960032330
+    completed_at_commit: f0ec9d98b182b345e7656d20eeb7ae49bce6df23
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: f0ec9d98b182b345e7656d20eeb7ae49bce6df23
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: f0ec9d98b182b345e7656d20eeb7ae49bce6df23
+    result: pass
     failed_items: []
+    # verify run 1 (2026-07-05): pass — cargo check clean; cargo test --lib
+    # 2059 passed / 11 failed, ALL 11 in tabs::tests (10x off-thread replay
+    # worker timeout = documented parallel flakiness + welcome_without_windows
+    # _leaves_group_none, proven failing identically on untouched base by the
+    # implementer). selection::tests 37/37 pass incl. new TS-1..TS-6 tests;
+    # TS-7 regression green. MT-1/MT-2 are manual items deferred to the user
+    # post-merge. No excluded requirements.
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: f0ec9d98b182b345e7656d20eeb7ae49bce6df23
 
 tasks:
   task0001:
@@ -45,12 +57,22 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR1, FR2, FR3, NFR1]
-    status: pending
-    notes: null
+    status: merged
+    notes: "37 selection tests pass (AC-1..6 multi-extend + edge cases). DEVIATION: src-tauri/src/app.rs (outside expected_files) — new public origin field forced 12 Selection literal updates (1 production select_all + 11 tests). window_host.rs verified, unchanged. tabs::tests failures proven pre-existing/flaky on untouched base."
+    branch: em-workflow/selection-anchor-pivot/task0001
 
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, spec]
+    discretionary: []
+    codex_cross_validation: false
+  perspectives:
+    comprehensive: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:

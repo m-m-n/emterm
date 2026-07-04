@@ -1,0 +1,23 @@
+round: 1
+executed_at: "2026-07-05T00:12:34+09:00"
+scope:
+  review_mode: diff
+  base_commit: f0491dd901e06cb0e70b3f796abd394960032330
+  head_commit: f0ec9d98b182b345e7656d20eeb7ae49bce6df23
+  changed_files:
+    - src-tauri/src/app.rs
+    - src-tauri/src/selection.rs
+plan:
+  floor: [comprehensive, spec]
+  discretionary: []
+  codex_cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+findings: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
