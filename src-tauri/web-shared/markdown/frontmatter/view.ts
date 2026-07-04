@@ -20,7 +20,15 @@
 
 import { t } from "../../i18n/index.ts";
 import type { FrontMatterExtracted, FrontMatterParseResult } from "./types.ts";
+import { MAX_ERROR_RAW_DISPLAY_CHARS } from "./limits.ts";
 import { MAX_NODES, buildTree, type TreeNode } from "./tree-builder.ts";
+
+/**
+ * Marker appended to the error-state raw text when it is clamped for display.
+ * A fixed literal (never front-matter-derived), so it carries no escaping
+ * concern and its presence unambiguously signals truncation.
+ */
+export const ERROR_RAW_TRUNCATION_MARKER = "\n…[truncated]";
 
 /** Monotonic id source so each block's content gets a unique aria-controls id. */
 let contentIdCounter = 0;
@@ -191,10 +199,26 @@ function buildErrorView(error: string, raw: string): HTMLElement {
 
   const pre = document.createElement("pre");
   pre.className = "fm-raw";
-  pre.textContent = raw;
+  // Never assign the unbounded raw to the DOM: oversized front matter reaches
+  // this error path (task0009 routes raw over MAX_RAW_BYTES here) and can be as
+  // large as the Rust-side 100 MiB session cap. Clamp to the display bound with
+  // a marker so the <pre> layout cost stays bounded (SPEC.md Security
+  // Considerations).
+  pre.textContent = clampErrorRaw(raw);
   wrap.appendChild(pre);
 
   return wrap;
+}
+
+/**
+ * Clamp the error-state raw text to the display bound, appending a truncation
+ * marker when it was cut. Raw at or below the bound is returned verbatim.
+ */
+function clampErrorRaw(raw: string): string {
+  if (raw.length <= MAX_ERROR_RAW_DISPLAY_CHARS) return raw;
+  return (
+    raw.slice(0, MAX_ERROR_RAW_DISPLAY_CHARS) + ERROR_RAW_TRUNCATION_MARKER
+  );
 }
 
 /** Display string for a scalar leaf value. */

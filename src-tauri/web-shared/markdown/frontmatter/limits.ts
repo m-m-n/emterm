@@ -47,3 +47,26 @@ export const MAX_NODES = 2000;
  * same byte ceiling as an ASCII one).
  */
 export const MAX_RAW_BYTES = 1024 * 1024;
+
+/**
+ * Maximum length, in UTF-16 code units, of raw front matter text rendered into
+ * the error-state `<pre>`.
+ *
+ * This is a UI/display bound, distinct from the pre-parse bound `MAX_RAW_BYTES`:
+ * `MAX_RAW_BYTES` keeps a parser from being handed an oversized block, whereas
+ * this bound keeps the DOM from being handed one. task0009 routes raw larger
+ * than `MAX_RAW_BYTES` to the FR6 error path, where the view would otherwise
+ * assign the entire raw string (up to the Rust-side 100 MiB session cap) to a
+ * text node — a very large `<pre>` can freeze or OOM the WebView through layout
+ * even though no parser ran, so the DoS vector would merely have moved from
+ * parsing to DOM layout (SPEC.md Security Considerations). The view clamps the
+ * raw to this length with a truncation marker before it enters the DOM, so
+ * terminal-controlled front matter can never stream unbounded text into layout.
+ *
+ * Measured in code units (what `String.slice`/`String.length` and the DOM text
+ * node operate on) rather than bytes; the bound only needs to keep the `<pre>`
+ * small enough that its layout is cheap. Chosen well above any raw a human would
+ * read to diagnose a parse error (64 KiB) so real errors still show full
+ * context, yet far below anything that stalls layout.
+ */
+export const MAX_ERROR_RAW_DISPLAY_CHARS = 64 * 1024;

@@ -15,8 +15,9 @@ import type {
   FrontMatterParseResult,
   FrontMatterValue,
 } from "./types.ts";
+import { MAX_ERROR_RAW_DISPLAY_CHARS } from "./limits.ts";
 import { MAX_NODES } from "./tree-builder.ts";
-import { buildFrontMatterBlock } from "./view.ts";
+import { ERROR_RAW_TRUNCATION_MARKER, buildFrontMatterBlock } from "./view.ts";
 
 /** Build a "found" extraction result for the given format + raw text. */
 function extracted(
@@ -198,6 +199,54 @@ describe("front matter block — parse failure (AC-4)", () => {
     expect(block.querySelector(".fm-error-notice")?.textContent).toContain(
       "フロントマターの解析に失敗しました",
     );
+  });
+});
+
+describe("front matter block — error raw display clamp (task0010 AC-1/AC-2)", () => {
+  test("AC-1: error raw over the display bound is clamped with a marker", () => {
+    // Oversized raw (task0009 routes raw over MAX_RAW_BYTES to this error path;
+    // it can reach the Rust-side 100 MiB session cap). Build it well over the
+    // display bound so clamping is exercised.
+    const raw = "x".repeat(MAX_ERROR_RAW_DISPLAY_CHARS + 5000);
+    const block = buildFrontMatterBlock(extracted("yaml", raw), fail("boom"));
+    header(block).click();
+
+    const text = block.querySelector(".fm-raw")?.textContent ?? "";
+    // The DOM text node is bounded by the display bound plus the marker — the
+    // full unbounded raw never reaches the DOM.
+    expect(text.length).toBe(
+      MAX_ERROR_RAW_DISPLAY_CHARS + ERROR_RAW_TRUNCATION_MARKER.length,
+    );
+    expect(text.length).toBeLessThan(raw.length);
+    // The truncation marker is present.
+    expect(text.endsWith(ERROR_RAW_TRUNCATION_MARKER)).toBe(true);
+    // The rendered prefix is the head of the raw, unaltered.
+    expect(text.slice(0, MAX_ERROR_RAW_DISPLAY_CHARS)).toBe(
+      raw.slice(0, MAX_ERROR_RAW_DISPLAY_CHARS),
+    );
+  });
+
+  test("AC-2: error raw at the display bound renders verbatim with no marker", () => {
+    const raw = "y".repeat(MAX_ERROR_RAW_DISPLAY_CHARS);
+    const block = buildFrontMatterBlock(extracted("yaml", raw), fail("boom"));
+    header(block).click();
+
+    const text = block.querySelector(".fm-raw")?.textContent ?? "";
+    expect(text).toBe(raw);
+    expect(text.endsWith(ERROR_RAW_TRUNCATION_MARKER)).toBe(false);
+  });
+
+  test("AC-2: a small error raw renders verbatim (no marker)", () => {
+    const raw = "title: : broken";
+    const block = buildFrontMatterBlock(extracted("yaml", raw), fail("boom"));
+    header(block).click();
+
+    expect(block.querySelector(".fm-raw")?.textContent).toBe(raw);
+    expect(
+      (block.querySelector(".fm-raw")?.textContent ?? "").endsWith(
+        ERROR_RAW_TRUNCATION_MARKER,
+      ),
+    ).toBe(false);
   });
 });
 
