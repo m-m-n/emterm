@@ -49,8 +49,8 @@ findings:
     suggestion: "data-theme の解決/書き込み/リスナーを単一所有者に集約する。推奨: applyMarkdownColorTheme(またはその applyPalette)に data-theme 書き込みを持たせ、パレットと同一リスナーで同期し、entry.ts の手書きコピーを削除する。"
     sources: [claude:architecture, codex:architecture]
     confidence: 100
-    resolution: unresolved
-    resolution_reason: null
+    resolution: fixed
+    resolution_reason: "task0007 rework (8d617093) で修正"
   - stable_id: 8ab3bdd88c02ef95
     severity: medium
     category: comprehensive
@@ -61,8 +61,8 @@ findings:
     suggestion: "解決ロジックの一本化(applier 側に data-theme 書き込みを移すのが推奨)。"
     sources: [claude:comprehensive]
     confidence: 80
-    resolution: unresolved
-    resolution_reason: null
+    resolution: fixed
+    resolution_reason: "task0007 rework (8d617093) で修正"
   - stable_id: 8eb0ba20be5f10f1
     severity: medium
     category: spec
@@ -85,8 +85,8 @@ findings:
     suggestion: "MAX_NODES 相当の残予算カウンタを normalizeValue に通し、尽きたら再帰/コピーを停止して truncation マーカーを返す(tree-builder と同じパターンを parse 時にも適用)。"
     sources: [codex:security]
     confidence: 50
-    resolution: unresolved
-    resolution_reason: null
+    resolution: fixed
+    resolution_reason: "task0007 rework (8d617093) で修正"
 auto_fix:
   loops_run: 0
   applied_total: 0

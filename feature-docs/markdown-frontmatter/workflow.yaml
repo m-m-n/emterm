@@ -29,10 +29,11 @@ workflow:
     status: completed
     completed_at_commit: 22372999bf946f4c015b07342b7992cb4fcddb17
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 22372999bf946f4c015b07342b7992cb4fcddb17
+    completed_at_commit: e6c84039a7803127622662280b8dc426eafdf68e
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -168,13 +169,50 @@ tasks:
     domains: [ui, input-handling]
     complexity: medium
     requirements: [NFR1, NFR2]
-    status: in_progress
-    notes: "Rework task from review round 2 code findings (81b29147/8ab3bdd8 data-theme single owner, fe872dd2 parse-time node budget); user-approved."
+    status: merged
+    notes: "Both round-2 code findings resolved: data-theme write consolidated into applyMarkdownColorTheme behind opt-in writeDataTheme flag (viewer-only, avoids clobbering settings panel's UI-theme-owned data-theme); parse-time node budget threaded through normalizeValue with shared MAX_NODES import + truncated flag surfaced in partial-tree notice. 139 pass / 2 known pre-existing fails."
     branch: em-workflow/markdown-frontmatter/task0007
+  task0008:
+    title: "Rework 3: depth-cap notice, neutral limits module, themed error accent"
+    plan: tasks/task0008.md
+    files:
+      - src-tauri/web-shared/markdown/frontmatter/limits.ts
+      - src-tauri/web-shared/markdown/frontmatter/tree-builder.ts
+      - src-tauri/web-shared/markdown/frontmatter/tree-builder.test.ts
+      - src-tauri/web-shared/markdown/frontmatter/parser.ts
+      - src-tauri/web-shared/markdown/frontmatter/parser.test.ts
+      - src-tauri/web-shared/markdown/frontmatter/frontmatter.css
+      - src-tauri/web-shared/markdown/frontmatter/view.test.ts
+      - src-tauri/web-shared/settings/settings-applier.ts
+      - src-tauri/viewer/web/entry.ts
+      - src-tauri/viewer/web/entry.test.ts
+    wave: 6
+    skills: [frontend-impl]
+    domains: [ui, input-handling]
+    complexity: medium
+    requirements: [FR5, NFR1, NFR2]
+    status: merged
+    notes: "All 3 round-3 findings resolved: depth-cap sets truncated (notice fires for either cap), neutral limits.ts owns MAX_NODES/MAX_DEPTH (parser no longer imports tree-builder), error accent via theme-aware --markdown-error (no color literals; orphaned writeDataTheme mechanism removed end-to-end). 148 pass / 2 known pre-existing fails."
+    branch: em-workflow/markdown-frontmatter/task0008
+  task0009:
+    title: "Rework 4: pre-parse raw size guard"
+    plan: tasks/task0009.md
+    files:
+      - src-tauri/web-shared/markdown/frontmatter/limits.ts
+      - src-tauri/web-shared/markdown/frontmatter/parser.ts
+      - src-tauri/web-shared/markdown/frontmatter/parser.test.ts
+    wave: 7
+    skills: []
+    domains: [input-handling]
+    complexity: low
+    requirements: [NFR1]
+    status: merged
+    notes: "Round-4 finding resolved: MAX_RAW_BYTES (1 MiB) in limits.ts + byte-oriented pre-parse guard in parseFrontMatter (FR6 failure without invoking any parser). 155 pass / 2 known pre-existing fails."
+    branch: em-workflow/markdown-frontmatter/task0009
 
 review:
   status: in_progress
-  rounds_completed: 2
+  rounds_completed: 4
   plan:
     floor: [comprehensive, spec, security]
     discretionary:
