@@ -1,0 +1,34 @@
+feature: markdown-frontmatter
+collected_at: "2026-07-04T22:05:11+09:00"
+session_ids: [88f4e279-a097-4cc3-ad01-a5b9a26652d8]
+signals:
+  review_critical_high:
+    - stable_id: 880d136e3a1cc6c4
+      category: spec
+      file: src-tauri/web-shared/markdown/frontmatter/tree-builder.ts
+      title: "Depth truncation is silent and does not surface the required notice"
+      resolution: fixed
+    - stable_id: 51c277a78d8df50e
+      category: comprehensive
+      file: src-tauri/web-shared/markdown/frontmatter/view.ts
+      title: "buildErrorView renders unbounded raw front matter into the DOM"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0002
+      files: ["bun.lock (predicted but gitignored — cannot be committed)"]
+    - task: task0005
+      files: ["src-tauri/viewer/web/index.html (needed outside expected_files: viewer page never loads styles.css, --md-sys-* tokens missing)"]
+  verification_failures:
+    - "verify run 1: MT-1 fail — front matter block did not follow the light theme (NFR2). Root cause: task0005 deviation hardcoded dark-only --md-sys-* tokens in index.html; theme applier never writes those tokens. Resolved by task0006 (restyle onto theme-aware --markdown-* vars)."
+  discretionary_perspectives:
+    - perspective: architecture
+      reason: "共有 renderer.render() の挙動変更が全呼び出し元(fullscreen overlay 等)に波及するため"
+  declined_findings: []
+lessons_candidates:
+  - "防御を追加する rework が新しい穴を作る連鎖が2回起きた(parse guard 追加→oversized raw が error 経路へ→error 表示が無制限描画)。資源制限系の修正は、リジェクトされた入力が流れ込む下流経路の資源特性まで含めてレビュー観点に入れるべき"
+  - "planner の files 予測に gitignored ファイル(bun.lock)を含めてしまった。予測時に .gitignore を確認する"
+  - "task0005 の deviation の根: 子 WebView ページごとのデザイントークン供給経路(viewer は styles.css をロードしない)が計画時に未調査だった。UI 系タスクの計画時はトークン/テーマ変数の供給経路を先に確認する"
+  - "並列 codex レビュアーが共有 scratchpad の汎用ファイル名 (codex_output.txt 等) を相互に clobber する事故が round 4 で実際に発生(レビュアー自身が内容不一致で検出・リカバリ)。run_codex_exec.sh またはレビュアー指示で出力ファイル名の一意化(PID+乱数)を標準化すべき"
+  - "レビュー6ラウンド・rework 5回はコストが高い。round 1 の時点で『防御の完全性(上限・通知・下流経路)』を1タスクに束ねて設計させると収束が速かった可能性"
+  - "毎ラウンドのフル7体レビューに対し、delta が3ファイル程度の確認ラウンドでは対象を絞る軽量モードがあると効率的"
