@@ -242,9 +242,11 @@ end-to-end behavior is validated manually per `test/README.md`).
 ## Security Considerations
 
 - **Input Validation:** Delimiter scanning is bounded; parse errors are
-  contained to the fallback path (FR6). Recursion depth capped at 128;
-  normalization and tree building bounded by the `MAX_NODES` budget;
-  cyclic parse results (YAML aliases) are guarded.
+  contained to the fallback path (FR6). Raw front matter content larger
+  than `MAX_RAW_BYTES` is not parsed and is treated as a parse failure
+  (FR6 path). Recursion depth capped at 128; normalization and tree
+  building bounded by the `MAX_NODES` budget; cyclic parse results (YAML
+  aliases) are guarded.
 - **XSS Prevention:** All front-matter-derived strings enter the DOM via
   escaped/`textContent` paths (NFR1); the block DOM is built
   programmatically, never via unsanitized `innerHTML`.

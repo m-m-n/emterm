@@ -1,0 +1,85 @@
+round: 3
+executed_at: "2026-07-04T20:49:25+09:00"
+scope:
+  review_mode: diff
+  base_commit: 22372999bf946f4c015b07342b7992cb4fcddb17
+  head_commit: a90f771186ba784492980a35b6c218769d4f6f4a7
+  changed_files:
+    - package.json
+    - src-tauri/viewer/web/entry.test.ts
+    - src-tauri/viewer/web/entry.ts
+    - src-tauri/viewer/web/index.html
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/markdown/frontmatter/extractor.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/extractor.ts
+    - src-tauri/web-shared/markdown/frontmatter/frontmatter.css
+    - src-tauri/web-shared/markdown/frontmatter/integration.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/parser.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/parser.ts
+    - src-tauri/web-shared/markdown/frontmatter/tree-builder.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/tree-builder.ts
+    - src-tauri/web-shared/markdown/frontmatter/types.ts
+    - src-tauri/web-shared/markdown/frontmatter/view.test.ts
+    - src-tauri/web-shared/markdown/frontmatter/view.ts
+    - src-tauri/web-shared/markdown/renderer.ts
+    - src-tauri/web-shared/settings/settings-applier.ts
+plan:
+  floor: [comprehensive, spec, security]
+  discretionary:
+    - perspective: architecture
+      reason: "round 1/2 と同一構成で再レビュー（rework task0007 の回帰確認）"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+round_fix_verification: "全レビュアーが round1+round2 の10 findings (fixed) の維持を確認。regression の再指摘なし。"
+findings:
+  - stable_id: 880d136e3a1cc6c4
+    severity: high
+    category: spec
+    file: src-tauri/web-shared/markdown/frontmatter/tree-builder.ts
+    line: 90
+    title: "Depth truncation is silent and does not surface the required notice"
+    description: "SPEC FR5 は「past either cap the tree is truncated and a localized notice marks it as partial」を要求するが、addChildren は depth >= MAX_DEPTH で state.truncated を立てずに early return する。深さ128超の値は子孫が欠落するのに buildTree() は truncated: false を返し、view.ts の notice 条件 (truncated || parse.truncated) が発火しない — 深さ切り詰めがユーザーに不可視。tree-builder.test.ts の AC-4 depth テストも truncated === true を assert していない(codex がコード+テストを実読して確認)。"
+    suggestion: "tree-builder.ts の depth cap の early return 前に state.truncated = true を設定し、既存の notice ロジックを深さ切り詰めでも発火させる。テストに truncated assert を追加。"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: "task0008 rework (e2647e08) で修正"
+  - stable_id: 0be39be5e0edf384
+    severity: medium
+    category: spec
+    file: src-tauri/web-shared/markdown/frontmatter/frontmatter.css
+    line: 21
+    title: "Error accent colors bypass the required --markdown-* palette"
+    description: "更新後 NFR2 は「colors are drawn from the viewer's theme-aware palette variables (--markdown-*)」とするが、--fm-error はハードコード hex literal (#ba1a1a light / #f2b8b5 dark via :root[data-theme=\"dark\"]) で定義されている。実装コメント自身が意図的例外と認めているが、現行 SPEC 文言に例外の記載がない。"
+    suggestion: "エラーアクセントを --markdown-* 系のテーマ変数から取るよう変更するか、SPEC に例外(パースエラーアクセントは data-theme 切替の専用 light/dark 値)を明記する。"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: "task0008 rework (e2647e08) で修正"
+  - stable_id: 31b07c8b3e873cce
+    severity: medium
+    category: architecture
+    file: src-tauri/web-shared/markdown/frontmatter/parser.ts
+    line: 28
+    title: "Parser now depends on the view tree-builder's display budget"
+    description: "parser.ts が tree-builder.ts から MAX_NODES を import しており、parse/正規化層が表示ツリー層に依存する一方向結合(循環はなし)。parseFrontMatter() は表示側が所有する行数上限に従って部分コピーを返すため、非表示系の消費者が UI 予算を暗黙に継承する。claude:architecture は同点を検討し「parse-time budget 修正の受容された帰結・維持コストなし」と対立判定(findings 0)。"
+    suggestion: "共有ノード予算を中立の limits/config モジュールに移すか、統合層が渡す明示的な parse オプションにして、parser と tree-builder が共通ポリシーに依存する形にする。"
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: "task0008 rework (e2647e08) で修正"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 1
+rework_required: false
+notes: "high 1件は category spec のため auto-fix 候補ゲート対象外(仕様/実装どちらを正すかの判断が必要)。claude:spec は同一 diff で findings 0 — codex:spec の精査が depth-cap silent truncation を検出した。"
