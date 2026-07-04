@@ -7,27 +7,20 @@
  * Colors follow the viewer's effective light/dark theme (NFR2). The block draws
  * every surface/text/accent color from the theme-aware --markdown-* variables
  * the viewer writes via applyMarkdownColorTheme (settings-applier), so it flips
- * with the body instead of being pinned to one palette. The only exception is
- * the parse-error accent (--fm-error), which the markdown palette has no token
- * for; it is defined per theme below, keyed on the viewer's data-theme
- * attribute. Shape/motion use the theme-independent MD3 --md-sys-shape-* /
- * --md-motion-* tokens the viewer page provides (shared with fullscreen.css).
+ * with the body instead of being pinned to one palette. The parse-error accent
+ * comes from --markdown-error, which that same applier writes per effective
+ * theme (light/dark, including on live OS theme flips), so this file carries no
+ * color literal at all. Shape/motion use the theme-independent MD3
+ * --md-sys-shape-* / --md-motion-* tokens the viewer page provides (shared with
+ * fullscreen.css).
  */
 
 .fm-block {
-  /* MD3 error accent, per effective theme (light default; dark override below).
-     The theme-aware --markdown-* palette carries no error color, so this is the
-     one place the block names a color literal, and it still follows the theme. */
-  --fm-error: #ba1a1a;
   margin: 0 0 1rem 0;
   border: 1px solid var(--markdown-border);
   border-radius: var(--md-sys-shape-corner-medium);
   background: var(--markdown-pre-bg);
   overflow: hidden;
-}
-
-:root[data-theme="dark"] .fm-block {
-  --fm-error: #f2b8b5;
 }
 
 /* ── Header ── */
@@ -95,7 +88,7 @@
 
 .fm-error-indicator {
   margin-inline-start: auto;
-  color: var(--fm-error);
+  color: var(--markdown-error);
   font-size: 0.85em;
 }
 
@@ -172,7 +165,7 @@
 }
 
 .fm-error-notice {
-  color: var(--fm-error);
+  color: var(--markdown-error);
   font-weight: 600;
 }
 

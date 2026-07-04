@@ -231,12 +231,12 @@ describe("viewer entry — front matter theme-following (task0006 AC-1)", () => 
       codeFontFamily: "",
       fontSize: 14,
     });
-    // The resolved theme is exposed for theme-scoped styles.
-    expect(root.getAttribute("data-theme")).toBe("light");
     // The variables the front matter block consumes (--markdown-pre-bg for its
-    // surface, --markdown-border for its outline) resolve to light values.
+    // surface, --markdown-border for its outline, --markdown-error for the
+    // parse-error accent) resolve to light values.
     const lightBg = root.style.getPropertyValue("--markdown-pre-bg");
     const lightBorder = root.style.getPropertyValue("--markdown-border");
+    const lightError = root.style.getPropertyValue("--markdown-error");
 
     applyAppearance({
       theme: "dark",
@@ -245,14 +245,19 @@ describe("viewer entry — front matter theme-following (task0006 AC-1)", () => 
       codeFontFamily: "",
       fontSize: 14,
     });
-    expect(root.getAttribute("data-theme")).toBe("dark");
     const darkBg = root.style.getPropertyValue("--markdown-pre-bg");
     const darkBorder = root.style.getPropertyValue("--markdown-border");
+    const darkError = root.style.getPropertyValue("--markdown-error");
 
     // Asserted on the resolved/active token values (not a static grep): the
     // block genuinely follows the theme rather than staying dark.
     expect(lightBg).not.toBe(darkBg);
     expect(lightBorder).not.toBe(darkBorder);
+    // task0008 AC-3: the parse-error accent is theme-aware too — drawn from the
+    // --markdown-* palette path — resolving to different light/dark values.
+    expect(lightError).not.toBe(darkError);
+    expect(lightError.length).toBeGreaterThan(0);
+    expect(darkError.length).toBeGreaterThan(0);
     // Dark values are unchanged from the purple preset (no dark regression);
     // light values are the light palette.
     expect(darkBg.toUpperCase()).toBe("#1D1B20");
@@ -260,7 +265,7 @@ describe("viewer entry — front matter theme-following (task0006 AC-1)", () => 
   });
 });
 
-describe("viewer entry — single theme owner (task0007 AC-1/AC-2)", () => {
+describe("viewer entry — single system-theme resolver (task0007 AC-2 / task0008 AC-3)", () => {
   const realMatchMedia = window.matchMedia;
 
   /**
@@ -307,7 +312,7 @@ describe("viewer entry — single theme owner (task0007 AC-1/AC-2)", () => {
     (window as unknown as { matchMedia: unknown }).matchMedia = realMatchMedia;
   });
 
-  test("AC-1: system theme writes data-theme and a live OS flip updates palette + data-theme together", () => {
+  test("AC-3: a live OS theme flip updates the palette and the error accent together", () => {
     const root = document.documentElement;
     const mm = installMatchMedia(false); // OS currently light
 
@@ -319,20 +324,23 @@ describe("viewer entry — single theme owner (task0007 AC-1/AC-2)", () => {
       fontSize: 14,
     });
 
-    // Initial resolution against the OS preference: light palette + attribute.
-    expect(root.getAttribute("data-theme")).toBe("light");
+    // Initial resolution against the OS preference: light palette + accent.
     const lightBg = root.style.getPropertyValue("--markdown-pre-bg");
+    const lightError = root.style.getPropertyValue("--markdown-error");
     expect(lightBg.toUpperCase()).toBe("#F3EDF7");
+    expect(lightError.length).toBeGreaterThan(0);
 
     // The OS switches to dark while the viewer is open.
     mm.flip(true);
 
-    // BOTH the --markdown-* palette AND data-theme follow the flip in the same
-    // listener — so the data-theme-keyed --fm-error accent is not left stale.
-    expect(root.getAttribute("data-theme")).toBe("dark");
+    // task0008 AC-3: the same listener updates BOTH the --markdown-* palette AND
+    // the theme-aware --markdown-error accent, so the parse-error styling is not
+    // left stale on a live flip.
     const darkBg = root.style.getPropertyValue("--markdown-pre-bg");
+    const darkError = root.style.getPropertyValue("--markdown-error");
     expect(darkBg.toUpperCase()).toBe("#1D1B20");
     expect(darkBg).not.toBe(lightBg);
+    expect(darkError).not.toBe(lightError);
 
     // Return to a fixed theme so the module-level system listener is torn down
     // before the fake media query is restored.
@@ -343,7 +351,7 @@ describe("viewer entry — single theme owner (task0007 AC-1/AC-2)", () => {
       codeFontFamily: "",
       fontSize: 14,
     });
-    expect(root.getAttribute("data-theme")).toBe("light");
+    expect(root.style.getPropertyValue("--markdown-error")).toBe(lightError);
   });
 
   test("AC-2: entry.ts holds no hand-rolled system-theme resolution", async () => {

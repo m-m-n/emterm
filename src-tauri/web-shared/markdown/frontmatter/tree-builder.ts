@@ -10,6 +10,12 @@
  * @module markdown/frontmatter/tree-builder
  */
 
+import { MAX_DEPTH, MAX_NODES } from "./limits.ts";
+
+// Re-exported so existing consumers (view.ts, tests) keep a stable import site;
+// the value itself lives in the neutral limits module (finding 31b07c8b).
+export { MAX_NODES } from "./limits.ts";
+
 /** A single row of the always-fully-expanded front matter tree. */
 export interface TreeNode {
   /** Object key, or `[i]` for an array element. */
@@ -27,25 +33,16 @@ export interface TreeNode {
   hasChildren: boolean;
 }
 
-/** Maximum recursion depth; bounds adversarially deep input. */
-const MAX_DEPTH = 128;
-
-/**
- * Maximum total number of rows emitted for one document. The depth cap alone
- * cannot bound a shallow-but-very-wide document (millions of top-level keys),
- * so the total node count is capped as well to keep terminal-controlled front
- * matter from forcing unbounded eager DOM construction (security hardening).
- * Chosen well above any realistic hand-written front matter so legitimate
- * documents are never truncated in practice.
- */
-export const MAX_NODES = 2000;
-
-/** The outcome of building a tree: the (possibly capped) rows plus whether the
- * total node budget stopped emission before the whole value was walked. */
+/** The outcome of building a tree: the (possibly capped) rows plus whether
+ * either cap stopped the walk before the whole value was emitted. */
 export interface TreeBuildResult {
   /** Flat node array in display order (at most {@link MAX_NODES} entries). */
   nodes: TreeNode[];
-  /** True when the node budget stopped emission (the tree is partial). */
+  /**
+   * True when either the node budget ({@link MAX_NODES}) or the depth cap
+   * ({@link MAX_DEPTH}) dropped part of the value (the tree is partial), so the
+   * view surfaces the same partial-tree notice for either cap (SPEC.md FR5).
+   */
   truncated: boolean;
 }
 
@@ -77,8 +74,9 @@ export function buildTree(data: unknown): TreeBuildResult {
  *
  * Recursion stops once `depth` reaches {@link MAX_DEPTH}, so nodes are only
  * ever emitted at depths `0..MAX_DEPTH - 1`. Emission also stops once
- * {@link MAX_NODES} rows have been produced, recording the truncation in
- * `state` so the caller can render a partial-tree notice.
+ * {@link MAX_NODES} rows have been produced. Either cap records the truncation
+ * in `state` so the caller can render the same partial-tree notice (SPEC.md
+ * FR5) — a depth cap is no longer silent.
  */
 function addChildren(
   data: unknown,
@@ -87,7 +85,19 @@ function addChildren(
   nodes: TreeNode[],
   state: { truncated: boolean },
 ): void {
-  if (depth >= MAX_DEPTH) return;
+  if (depth >= MAX_DEPTH) {
+    // The depth cap stops the walk here. If this container still holds entries,
+    // its descendants are dropped — flag the tree partial so the notice fires,
+    // exactly like the node budget. An empty container drops nothing, so it is
+    // not flagged (no spurious notice on a complete-but-deeply-nested tree).
+    const hasEntries = Array.isArray(data)
+      ? data.length > 0
+      : data !== null &&
+        typeof data === "object" &&
+        Object.keys(data as Record<string, unknown>).length > 0;
+    if (hasEntries) state.truncated = true;
+    return;
+  }
 
   if (Array.isArray(data)) {
     for (let i = 0; i < data.length; i++) {
