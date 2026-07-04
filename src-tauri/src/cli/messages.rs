@@ -127,6 +127,21 @@ pub fn err_permission_denied(loc: Locale, path: &Path) -> String {
     }
 }
 
+pub fn err_unsupported_extension(loc: Locale, path: &Path, allowed: &[&str]) -> String {
+    let p = escape_path(path);
+    let list = allowed.join(", ");
+    match loc {
+        Locale::En => format!(
+            "Unsupported file extension: {} (expected one of: {})",
+            p, list
+        ),
+        Locale::Ja => format!(
+            "サポートされていない拡張子です: {} (対応拡張子: {})",
+            p, list
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------
 // cli.* messages (clap help text)
 // ---------------------------------------------------------------------
@@ -180,6 +195,20 @@ pub fn cli_yaml_file(loc: Locale) -> &'static str {
     }
 }
 
+pub fn cli_html_about(loc: Locale) -> &'static str {
+    match loc {
+        Locale::En => "Display HTML file in eMterm",
+        Locale::Ja => "eMtermでHTMLファイルを表示",
+    }
+}
+
+pub fn cli_html_file(loc: Locale) -> &'static str {
+    match loc {
+        Locale::En => "Path to HTML file",
+        Locale::Ja => "HTMLファイルのパス",
+    }
+}
+
 pub fn cli_image_about(loc: Locale) -> &'static str {
     match loc {
         Locale::En => "Display image file in eMterm",
@@ -226,6 +255,21 @@ mod tests {
         assert!(msg.contains("exceeds"));
         assert!(msg.contains("3000000"));
         assert!(msg.contains("2000000"));
+    }
+
+    #[test]
+    fn unsupported_extension_en_includes_path_and_allowed() {
+        let msg = err_unsupported_extension(Locale::En, &PathBuf::from("f.txt"), &["html", "htm"]);
+        assert!(msg.contains("f.txt"));
+        assert!(msg.contains("html"));
+        assert!(msg.contains("htm"));
+    }
+
+    #[test]
+    fn unsupported_extension_ja_includes_path() {
+        let msg = err_unsupported_extension(Locale::Ja, &PathBuf::from("f.txt"), &["html", "htm"]);
+        assert!(msg.contains("f.txt"));
+        assert!(msg.contains("サポートされていない拡張子です"));
     }
 
     #[test]
