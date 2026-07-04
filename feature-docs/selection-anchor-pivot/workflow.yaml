@@ -1,0 +1,83 @@
+schema_version: 1
+feature: selection-anchor-pivot
+created: 2026-07-04
+base_branch: main
+parent_branch: em-workflow/selection-anchor-pivot/integration
+
+project:
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: f0491dd901e06cb0e70b3f796abd394960032330
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: f0491dd901e06cb0e70b3f796abd394960032330
+  - id: implement
+    status: pending
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: "Pivot-anchored word / line drag selection"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/selection.rs
+      - src-tauri/src/window_host.rs
+    wave: 1
+    skills: []
+    domains: [ui]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, NFR1]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "Word-mode pivot extension — origin word kept across consecutive extends"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-4]
+  FR2:
+    title: "Line-mode pivot extension — origin line kept across consecutive extends"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-5]
+  FR3:
+    title: "Absolute-row-model integration — origin shifted/clamped by eviction compensation"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-6]
+  NFR1:
+    title: "Regression safety — character mode, resolve/copy, fold, existing tests unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-7]
