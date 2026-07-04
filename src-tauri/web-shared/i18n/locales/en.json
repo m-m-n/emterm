@@ -432,7 +432,11 @@
     "mermaidPopupClose": "Close popup",
     "mermaidPopupZoomIn": "Zoom in",
     "mermaidPopupZoomOut": "Zoom out",
-    "mermaidPopupReset": "Reset zoom"
+    "mermaidPopupReset": "Reset zoom",
+    "frontMatter": {
+      "parseError": "Parse error",
+      "parseErrorNotice": "Failed to parse front matter"
+    }
   },
   "zoom": {
     "closeViewer": "Close viewer",
