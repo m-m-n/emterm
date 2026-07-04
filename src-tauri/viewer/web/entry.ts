@@ -17,6 +17,9 @@
 import { MarkdownRenderer } from "../../web-shared/markdown/renderer.ts";
 import { OutlinePanel } from "../../web-shared/markdown/outline.ts";
 import { MermaidRenderer } from "../../web-shared/markdown/mermaid-renderer.ts";
+import { extractFrontMatter } from "../../web-shared/markdown/frontmatter/extractor.ts";
+import { parseFrontMatter } from "../../web-shared/markdown/frontmatter/parser.ts";
+import { buildFrontMatterBlock } from "../../web-shared/markdown/frontmatter/view.ts";
 import {
   applyMarkdownColorTheme,
   applyMarkdownSettings,
@@ -32,6 +35,7 @@ import type {
 // WebView fullscreen overlay. Import-only — the source CSS is unchanged.
 import "../../web-shared/markdown/fullscreen.css";
 import "../../web-shared/markdown/outline.css";
+import "../../web-shared/markdown/frontmatter/frontmatter.css";
 
 /**
  * Resolved appearance carried from native-poc settings (Phase 1 resolver).
@@ -109,6 +113,12 @@ export function renderPayload(
 ): HTMLElement {
   applyAppearance(payload.appearance);
 
+  // Detect front matter on the original source (the renderer strips the same
+  // block from the body internally). The block DOM is mounted here, above the
+  // rendered body, so the renderer keeps its string-in/string-out API
+  // (IMPLEMENTATION.md D3).
+  const frontMatter = extractFrontMatter(payload.markdown);
+
   const renderer = new MarkdownRenderer();
   const html = renderer.render(payload.markdown, payload.format);
 
@@ -121,6 +131,19 @@ export function renderPayload(
   content.className = "markdown-fullscreen-content";
   content.tabIndex = 0;
   content.innerHTML = html;
+
+  // Mount the front matter block above the rendered body when present. It is
+  // inserted before the markdown body so it scrolls with the content and sits
+  // above it. On a parse failure the block still mounts (in its error state)
+  // and the stripped body still renders (FR6).
+  if (frontMatter.found) {
+    const parse = parseFrontMatter(frontMatter.raw, frontMatter.format);
+    content.insertBefore(
+      buildFrontMatterBlock(frontMatter, parse),
+      content.firstChild,
+    );
+  }
+
   overlay.appendChild(content);
   root.appendChild(overlay);
 
