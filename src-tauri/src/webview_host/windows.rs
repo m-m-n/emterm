@@ -105,6 +105,7 @@ impl ApplicationHandler<String> for WebViewApp {
         let url = format!("{}://{}/{}", host.scheme, host.host, host.initial_url_path);
         let request_handler: RequestHandler = host.request_handler;
         let navigation_handler: NavigationHandler = host.navigation_handler;
+        let new_window_handler = host.new_window_handler;
         let scheme = host.scheme.clone();
         let init_script = host.init_script;
         let has_ipc = host.ipc.is_some();
@@ -119,6 +120,18 @@ impl ApplicationHandler<String> for WebViewApp {
             .with_url(url)
             .with_custom_protocol(scheme, move |_id, request| request_handler(&request))
             .with_navigation_handler(move |uri| navigation_handler(&uri));
+
+        if let Some(handler) = new_window_handler {
+            // The popup is always denied in-WebView; the handler's only job
+            // is any safe external-open side effect (see `NewWindowHandler`).
+            // Per wry's docs the callback runs on a separate thread on
+            // Windows to avoid a deadlock — `handler` must stay `Send + Sync`
+            // (guaranteed by the `NewWindowHandler` type).
+            builder = builder.with_new_window_req_handler(move |uri, _features| {
+                handler(&uri);
+                wry::NewWindowResponse::Deny
+            });
+        }
 
         if let Some(script) = init_script.as_deref() {
             builder = builder.with_initialization_script(script);
