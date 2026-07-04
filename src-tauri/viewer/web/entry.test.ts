@@ -6,7 +6,7 @@
  * so we assert on the synchronous DOM structure only.
  */
 
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
 // Polyfill IntersectionObserver for happy-dom (the production WebKitGTK
 // runtime provides it; mirrors src/markdown/outline.test.ts).
@@ -257,6 +257,101 @@ describe("viewer entry — front matter theme-following (task0006 AC-1)", () => 
     // light values are the light palette.
     expect(darkBg.toUpperCase()).toBe("#1D1B20");
     expect(lightBg.toUpperCase()).toBe("#F3EDF7");
+  });
+});
+
+describe("viewer entry — single theme owner (task0007 AC-1/AC-2)", () => {
+  const realMatchMedia = window.matchMedia;
+
+  /**
+   * Install a controllable `prefers-color-scheme: dark` media query so a live
+   * OS theme flip can be simulated deterministically. Returns a `flip` helper
+   * that mutates `matches` and fires the `change` listeners the applier
+   * registered (the same path the real WebView runtime drives).
+   */
+  function installMatchMedia(initialDark: boolean): {
+    flip: (toDark: boolean) => void;
+  } {
+    let dark = initialDark;
+    const listeners = new Set<(e: MediaQueryListEvent) => void>();
+    const mql = {
+      get matches() {
+        return dark;
+      },
+      media: "(prefers-color-scheme: dark)",
+      addEventListener: (
+        _type: string,
+        cb: (e: MediaQueryListEvent) => void,
+      ) => {
+        listeners.add(cb);
+      },
+      removeEventListener: (
+        _type: string,
+        cb: (e: MediaQueryListEvent) => void,
+      ) => {
+        listeners.delete(cb);
+      },
+    };
+    (window as unknown as { matchMedia: unknown }).matchMedia = () => mql;
+    return {
+      flip(toDark: boolean) {
+        dark = toDark;
+        for (const cb of [...listeners]) {
+          cb({ matches: toDark } as MediaQueryListEvent);
+        }
+      },
+    };
+  }
+
+  afterEach(() => {
+    (window as unknown as { matchMedia: unknown }).matchMedia = realMatchMedia;
+  });
+
+  test("AC-1: system theme writes data-theme and a live OS flip updates palette + data-theme together", () => {
+    const root = document.documentElement;
+    const mm = installMatchMedia(false); // OS currently light
+
+    applyAppearance({
+      theme: "system",
+      preset: "purple",
+      bodyFontFamily: "",
+      codeFontFamily: "",
+      fontSize: 14,
+    });
+
+    // Initial resolution against the OS preference: light palette + attribute.
+    expect(root.getAttribute("data-theme")).toBe("light");
+    const lightBg = root.style.getPropertyValue("--markdown-pre-bg");
+    expect(lightBg.toUpperCase()).toBe("#F3EDF7");
+
+    // The OS switches to dark while the viewer is open.
+    mm.flip(true);
+
+    // BOTH the --markdown-* palette AND data-theme follow the flip in the same
+    // listener — so the data-theme-keyed --fm-error accent is not left stale.
+    expect(root.getAttribute("data-theme")).toBe("dark");
+    const darkBg = root.style.getPropertyValue("--markdown-pre-bg");
+    expect(darkBg.toUpperCase()).toBe("#1D1B20");
+    expect(darkBg).not.toBe(lightBg);
+
+    // Return to a fixed theme so the module-level system listener is torn down
+    // before the fake media query is restored.
+    applyAppearance({
+      theme: "light",
+      preset: "purple",
+      bodyFontFamily: "",
+      codeFontFamily: "",
+      fontSize: 14,
+    });
+    expect(root.getAttribute("data-theme")).toBe("light");
+  });
+
+  test("AC-2: entry.ts holds no hand-rolled system-theme resolution", async () => {
+    // Exactly one module (settings-applier) resolves system->light/dark for the
+    // markdown/viewer theme and writes data-theme; the viewer entry delegates.
+    const src = await Bun.file(new URL("./entry.ts", import.meta.url)).text();
+    expect(src).not.toContain("prefers-color-scheme");
+    expect(src).not.toContain("matchMedia");
   });
 });
 

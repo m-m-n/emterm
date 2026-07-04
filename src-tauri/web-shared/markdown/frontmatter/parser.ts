@@ -25,6 +25,7 @@
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 
+import { MAX_NODES } from "./tree-builder.ts";
 import type {
   FrontMatterFormat,
   FrontMatterParseResult,
@@ -54,7 +55,11 @@ export function parseFrontMatter(
 
   try {
     const raw = parseByFormat(content, format);
-    return { ok: true, value: normalizeValue(raw) };
+    const state: NormalizeState = { remaining: MAX_NODES, truncated: false };
+    const value = normalizeValue(raw, state);
+    return state.truncated
+      ? { ok: true, value, truncated: true }
+      : { ok: true, value };
   } catch (err) {
     return { ok: false, error: toErrorMessage(err) };
   }
@@ -76,6 +81,22 @@ function parseByFormat(content: string, format: FrontMatterFormat): unknown {
 const CIRCULAR_PLACEHOLDER = "[Circular]";
 
 /**
+ * Mutable normalization budget, shared across the whole recursive walk.
+ *
+ * `remaining` is the number of container children (object values / array
+ * elements) that may still be copied. It is decremented once per child before
+ * that child is copied, so the produced tree holds at most {@link MAX_NODES}
+ * copied nodes (plus the root). When it reaches zero, the remaining siblings of
+ * the current container are skipped and `truncated` is set — bounding the copy
+ * work on hostile wide/flat input at parse time (SPEC.md FR5), not only at tree
+ * building.
+ */
+interface NormalizeState {
+  remaining: number;
+  truncated: boolean;
+}
+
+/**
  * Recursively convert a parsed value into a plain JS value tree.
  *
  * `undefined` (e.g. a YAML document that parses to nothing) becomes `null`.
@@ -90,9 +111,16 @@ const CIRCULAR_PLACEHOLDER = "[Circular]";
  * {@link CIRCULAR_PLACEHOLDER} instead of being chased into stack exhaustion.
  * Nodes are removed from the set on the way out, so a value that is merely
  * *shared* between siblings (an acyclic alias) is still fully expanded.
+ *
+ * `state` carries the shared node budget: each child of a container consumes
+ * one unit before it is copied, and once the budget is exhausted the remaining
+ * children are dropped and {@link NormalizeState.truncated} is flagged. The
+ * cycle guard and the budget are independent — a back-reference collapses to
+ * the placeholder without spending budget on the cycle.
  */
 function normalizeValue(
   value: unknown,
+  state: NormalizeState,
   ancestors: WeakSet<object> = new WeakSet(),
 ): FrontMatterValue {
   if (value === null || value === undefined) {
@@ -124,11 +152,25 @@ function normalizeValue(
     ancestors.add(container);
     try {
       if (Array.isArray(value)) {
-        return value.map((v) => normalizeValue(v, ancestors));
+        const out: FrontMatterValue[] = [];
+        for (const v of value) {
+          if (state.remaining <= 0) {
+            state.truncated = true;
+            break;
+          }
+          state.remaining--;
+          out.push(normalizeValue(v, state, ancestors));
+        }
+        return out;
       }
       const out: { [key: string]: FrontMatterValue } = {};
       for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-        out[key] = normalizeValue(v, ancestors);
+        if (state.remaining <= 0) {
+          state.truncated = true;
+          break;
+        }
+        state.remaining--;
+        out[key] = normalizeValue(v, state, ancestors);
       }
       return out;
     } finally {

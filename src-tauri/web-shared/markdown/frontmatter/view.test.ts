@@ -314,6 +314,48 @@ describe("front matter block — truncated node budget (task0006 AC-6)", () => {
   });
 });
 
+describe("front matter block — parse-time truncation notice (task0007 AC-4)", () => {
+  test("AC-4: a parse result flagged truncated surfaces the same localized notice", () => {
+    // The value itself is small (well within the tree budget), so the notice
+    // can only come from the parse-time truncation signal on the result — the
+    // parser bounded the copy before the tree builder ever saw it.
+    const block = buildFrontMatterBlock(extracted("json", "{...}"), {
+      ok: true,
+      value: { a: 1, b: 2 },
+      truncated: true,
+    });
+    header(block).click();
+
+    const notice = block.querySelector(".fm-truncated");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain(String(MAX_NODES));
+    expect(notice?.textContent).toContain("omitted");
+    // The tree is the small within-budget value; the notice is from parse time.
+    expect(block.querySelectorAll(".fm-row").length).toBe(2);
+  });
+
+  test("AC-4: a non-truncated parse result shows no notice", () => {
+    const block = buildFrontMatterBlock(extracted("json", "{...}"), {
+      ok: true,
+      value: { a: 1 },
+      truncated: false,
+    });
+    header(block).click();
+    expect(block.querySelector(".fm-truncated")).toBeNull();
+  });
+
+  test("AC-4: the parse-time truncated notice is localized in ja", () => {
+    setLocale("ja");
+    const block = buildFrontMatterBlock(extracted("json", "{...}"), {
+      ok: true,
+      value: { a: 1 },
+      truncated: true,
+    });
+    header(block).click();
+    expect(block.querySelector(".fm-truncated")?.textContent).toContain("省略");
+  });
+});
+
 describe("front matter stylesheet — theme-following tokens (task0006 AC-1/AC-2)", () => {
   test("AC-2: block colors are drawn from the theme-aware --markdown-* variables", async () => {
     const cssUrl = new URL("./frontmatter.css", import.meta.url);

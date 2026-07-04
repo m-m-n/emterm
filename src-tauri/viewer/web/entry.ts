@@ -83,6 +83,14 @@ export function parsePayload(json: string): ViewerPayload {
  * The native resolver already honored `markdown_theme_follow_ui`, so we
  * pass `followUi: false` with the effective theme/preset and let the
  * shared applier write the `--markdown-*` CSS variables.
+ *
+ * `writeDataTheme: true` makes the shared applier the single owner of the
+ * root's `data-theme` attribute: it resolves "system" against the OS
+ * preference, writes the attribute together with the palette, and — via the
+ * applier's own system-theme change listener — keeps both in sync on a live OS
+ * theme flip. This viewer is the only page that opts in; the attribute drives
+ * theme-scoped tokens the `--markdown-*` palette cannot express (the front
+ * matter block's `--fm-error` accent).
  */
 export function applyAppearance(appearance: ViewerAppearance): void {
   applyMarkdownSettings(
@@ -98,20 +106,8 @@ export function applyAppearance(appearance: ViewerAppearance): void {
     // applier requires the shape; mirror the effective values.
     uiTheme: appearance.theme,
     uiPreset: appearance.preset,
+    writeDataTheme: true,
   });
-
-  // Expose the resolved light/dark theme on the root so theme-scoped styles
-  // that the theme-aware --markdown-* palette cannot express (the front matter
-  // block's parse-error accent) can follow the effective theme. "system" is
-  // resolved against the OS preference, mirroring the shared applier.
-  const root = document.documentElement;
-  const resolvedTheme =
-    appearance.theme === "system"
-      ? window.matchMedia?.("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light"
-      : appearance.theme;
-  root.setAttribute("data-theme", resolvedTheme);
 }
 
 /**

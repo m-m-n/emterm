@@ -77,6 +77,13 @@ export interface FrontMatterParseSuccess {
   ok: true;
   /** The parsed plain JS value tree. */
   value: FrontMatterValue;
+  /**
+   * True when normalization stopped early because the shared node budget
+   * (`MAX_NODES`) was exhausted, so `value` is a bounded partial copy of the
+   * parsed input (SPEC.md FR5). The view surfaces this as the same partial-tree
+   * notice the tree builder uses. Absent/`false` means the value is complete.
+   */
+  truncated?: boolean;
 }
 
 /**

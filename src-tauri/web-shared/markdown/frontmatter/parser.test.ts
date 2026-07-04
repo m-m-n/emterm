@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseFrontMatter } from "./parser.ts";
+import { MAX_NODES } from "./tree-builder.ts";
 import type {
   FrontMatterParseFailure,
   FrontMatterParseSuccess,
@@ -255,5 +256,84 @@ describe("AC-5 (task0006): cyclic YAML aliases complete with a defined, safe res
     expect(v.a).toEqual([1, 2, 3]);
     expect(v.b).toEqual([1, 2, 3]);
     expect(v.c).toEqual([1, 2, 3]);
+  });
+});
+
+/** Total number of values in a normalized tree (root + every descendant). */
+function countNodes(value: FrontMatterValue): number {
+  if (value === null || typeof value !== "object") return 1;
+  let n = 1;
+  if (Array.isArray(value)) {
+    for (const v of value) n += countNodes(v);
+  } else {
+    for (const v of Object.values(value)) n += countNodes(v);
+  }
+  return n;
+}
+
+/** A JSON object literal with `count` shallow numeric keys (no aliases). */
+function wideJson(count: number): string {
+  const parts: string[] = [];
+  for (let i = 0; i < count; i++) parts.push(`"k${i}": ${i}`);
+  return `{${parts.join(",")}}`;
+}
+
+describe("AC-3 (task0007): normalization respects the shared node budget at parse time", () => {
+  test("AC-3: a wide/flat object beyond the budget stops early and flags truncation", () => {
+    // A shallow but very wide mapping: no aliases, so the yaml/JSON parsers'
+    // own guards never fire — only the normalization budget can bound the copy.
+    const r = parseFrontMatter(wideJson(MAX_NODES + 500), "json");
+    const ok = expectOk(r);
+
+    // The result carries a parse-time truncation signal.
+    expect(ok.truncated).toBe(true);
+
+    // No full-size copy: the produced value holds at most budget-many nodes
+    // (root + one per copied child), never the whole over-budget input.
+    expect(countNodes(ok.value)).toBeLessThanOrEqual(MAX_NODES + 1);
+    const obj = ok.value as { [k: string]: FrontMatterValue };
+    expect(Object.keys(obj).length).toBeLessThan(MAX_NODES + 500);
+    expect(Object.keys(obj).length).toBeLessThanOrEqual(MAX_NODES);
+  });
+
+  test("AC-3: nested breadth is bounded too, not just top-level keys", () => {
+    // Each top-level key holds a one-key child object; the total copied nodes
+    // (keys + children) must still stop at the budget.
+    const parts: string[] = [];
+    for (let i = 0; i < MAX_NODES; i++) parts.push(`"k${i}": {"c": ${i}}`);
+    const r = parseFrontMatter(`{${parts.join(",")}}`, "json");
+    const ok = expectOk(r);
+    expect(ok.truncated).toBe(true);
+    expect(countNodes(ok.value)).toBeLessThanOrEqual(MAX_NODES + 1);
+  });
+
+  test("AC-3: a within-budget object is copied whole with no truncation signal", () => {
+    const r = parseFrontMatter(wideJson(10), "json");
+    const ok = expectOk(r);
+    expect(ok.truncated).toBeFalsy();
+    const obj = ok.value as { [k: string]: FrontMatterValue };
+    expect(Object.keys(obj).length).toBe(10);
+    expect(obj.k9).toBe(9);
+  });
+
+  test("AC-3: an exactly-at-budget object is complete, not truncated", () => {
+    const r = parseFrontMatter(wideJson(MAX_NODES), "json");
+    const ok = expectOk(r);
+    expect(ok.truncated).toBeFalsy();
+    const obj = ok.value as { [k: string]: FrontMatterValue };
+    expect(Object.keys(obj).length).toBe(MAX_NODES);
+  });
+
+  test("AC-3: the budget and the cycle guard coexist ([Circular] still survives)", () => {
+    // The same self-referential alias as the cycle tests above, now flowing
+    // through the budgeted normalizer: the ancestor back-reference must still
+    // collapse to the placeholder rather than spending budget chasing a cycle.
+    const r = parseFrontMatter("a: &x\n  b: *x\n", "yaml");
+    const ok = expectOk(r);
+    const a = (ok.value as { [k: string]: FrontMatterValue }).a as {
+      [k: string]: FrontMatterValue;
+    };
+    expect(a.b).toBe("[Circular]");
+    expect(ok.truncated).toBeFalsy();
   });
 });

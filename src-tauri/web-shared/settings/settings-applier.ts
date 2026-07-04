@@ -382,17 +382,33 @@ export interface MarkdownColorThemeOptions {
   mdPreset: UiThemePreset;
   uiTheme: UiTheme;
   uiPreset: UiThemePreset;
+  /**
+   * When true, this applier also owns the root's `data-theme` attribute: it
+   * writes the resolved light/dark value alongside the `--markdown-*` palette
+   * and keeps it in sync through the same system-theme change listener.
+   *
+   * Only the standalone Markdown viewer page passes `true` — there the markdown
+   * theme *is* the page theme, and `data-theme` selects theme-scoped tokens the
+   * palette cannot express (the front matter block's `--fm-error` accent). The
+   * main app / settings panel leaves this off: it manages `data-theme` via
+   * {@link applyUiTheme} (the UI theme), which the markdown theme must not clobber.
+   */
+  writeDataTheme?: boolean;
 }
 
 /**
  * Apply Markdown viewer color theme.
  * Resolves the effective theme/preset (follow UI or independent) and applies
- * the corresponding palette to --markdown-* CSS color variables.
+ * the corresponding palette to --markdown-* CSS color variables. When
+ * `writeDataTheme` is set, the resolved light/dark value is also written to the
+ * root's `data-theme` attribute in the same path — initially and on every live
+ * system-theme change — so the palette and the attribute never drift.
  */
 export function applyMarkdownColorTheme(
   options: MarkdownColorThemeOptions,
 ): void {
-  const { followUi, mdTheme, mdPreset, uiTheme, uiPreset } = options;
+  const { followUi, mdTheme, mdPreset, uiTheme, uiPreset, writeDataTheme } =
+    options;
   const root = document.documentElement;
 
   // Clean up previous markdown system theme listener
@@ -414,6 +430,11 @@ export function applyMarkdownColorTheme(
     const palette = MARKDOWN_THEME_PRESETS[safePreset][mode];
     for (const [key, cssVar] of Object.entries(MARKDOWN_COLOR_TO_CSS_VAR)) {
       root.style.setProperty(cssVar, palette[key as keyof MarkdownThemeColors]);
+    }
+    // Expose the resolved theme so theme-scoped styles the palette cannot
+    // express follow it too. Gated so only the viewer owns the attribute.
+    if (writeDataTheme) {
+      root.setAttribute("data-theme", mode);
     }
   };
 
