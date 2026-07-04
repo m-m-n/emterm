@@ -30,3 +30,20 @@ export const MAX_DEPTH = 128;
  * never truncated in practice.
  */
 export const MAX_NODES = 2000;
+
+/**
+ * Maximum raw front matter size, in UTF-8 bytes, that may be handed to a parser
+ * library. Raw content larger than this is rejected as a parse failure BEFORE
+ * any parser is invoked, so terminal-controlled front matter cannot force the
+ * YAML/TOML/JSON parser into a long synchronous parse that blocks the WebView
+ * (SPEC.md Security Considerations). The whole OSC session is already bounded on
+ * the Rust side (100 MiB); this is the pre-parse bound a single front matter
+ * block may reach the parser with.
+ *
+ * Chosen well above any realistic hand-written front matter (1 MiB) so
+ * legitimate documents are never rejected, yet far below anything that stalls a
+ * parse. Measured in bytes rather than UTF-16 code units so the bound does not
+ * depend on the script the content is written in (a CJK document reaches the
+ * same byte ceiling as an ASCII one).
+ */
+export const MAX_RAW_BYTES = 1024 * 1024;
