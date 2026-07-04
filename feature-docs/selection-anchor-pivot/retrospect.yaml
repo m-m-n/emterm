@@ -1,0 +1,15 @@
+feature: selection-anchor-pivot
+collected_at: "2026-07-05T00:17:35+09:00"
+session_ids: [ce854a47-ae9e-4d74-95b1-d2151712cb4d]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files: [src-tauri/src/app.rs]
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - "Fresh worktrees break the src-tauri build: gitignored bundled fonts (src-tauri/assets/fonts/) are absent so build.rs panics. Both the implementer (task worktree) and the orchestrator (integration worktree, verify phase) had to symlink the 7 font binaries from the main tree. A planner/protocol-level pre-step (or make fetch-fonts equivalent) for this repo would avoid rediscovering it every wave."
+  - "Adding a public field to a widely-literal-constructed struct (Selection) predictably ripples to every struct literal — app.rs was a file-prediction miss for exactly this reason. When a task plan adds a struct field, grep for struct literals at planning time and include those files in expected_files."
