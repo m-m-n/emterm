@@ -1,0 +1,134 @@
+round: 1
+executed_at: "2026-07-05T13:43:18+09:00"
+scope:
+  review_mode: diff
+  base_commit: da3448ca438cb5f7c0351b6e26492135fefe2c4d
+  head_commit: 574191fc12c686dc2f585441fbc5693ca0dab688
+  changed_files:
+    - src-tauri/src/cli/encoding/osc.rs
+    - src-tauri/src/cli/error.rs
+    - src-tauri/src/cli/html.rs
+    - src-tauri/src/cli/messages.rs
+    - src-tauri/src/cli/mod.rs
+    - src-tauri/src/cli/validation/file.rs
+    - src-tauri/src/main.rs
+    - src-tauri/src/settings_window/mod.rs
+    - src-tauri/src/viewer/html.rs
+    - src-tauri/src/viewer/html_resolver.rs
+    - src-tauri/src/viewer/html_window.rs
+    - src-tauri/src/viewer/mod.rs
+    - src-tauri/src/viewer/window.rs
+    - src-tauri/src/viewer_kinds.rs
+    - src-tauri/src/webview_host/linux.rs
+    - src-tauri/src/webview_host/mod.rs
+    - src-tauri/src/webview_host/windows.rs
+    - src-tauri/tests/cli_subcommands.rs
+    - src-tauri/tests/fixtures/html/sample.html
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  - stable_id: r1-main-dispatch-html
+    severity: high
+    category: architecture
+    file: src-tauri/src/main.rs
+    line: 75
+    title: "main.rs subcommand dispatch omits \"html\" — CLI feature unreachable from entry point"
+    description: >-
+      The bare-word subcommand gate in main() routed only markdown/json/yaml/image
+      to cli::run, so `emterm html <file>` fell through to the GUI path and never
+      emitted the OSC sequence. Registered in cli/mod.rs but not in the entry gate.
+      Flagged by claude:architecture, codex:architecture, codex:spec (3 sources).
+    suggestion: "Add \"html\" to the matches! gate and the CLI-only usage string."
+    sources: [claude:architecture, codex:architecture, codex:spec]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (matches! gate + usage string updated)"
+  - stable_id: r1-csp-form-base-missing
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/viewer/html_window.rs
+    line: 157
+    title: "CSP omits form-action / base-uri — form/base exfiltration vector"
+    description: >-
+      build_csp advertised network isolation but form-action and base-uri do not
+      fall back to default-src, leaving cross-origin form submission and <base>
+      re-pointing unrestricted despite connect-src 'none'.
+    suggestion: "Add form-action (viewer scheme) and base-uri 'none' to build_csp."
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (form-action confined to viewer scheme, base-uri 'none' added, unit test added)"
+  - stable_id: r1-script-nav-external-open
+    severity: high
+    category: security
+    file: src-tauri/src/viewer/html_window.rs
+    line: 199
+    title: "Script-initiated http(s) navigation is auto-opened in external browser"
+    description: >-
+      handle_navigation / handle_new_window hand any http(s) target to the OS
+      browser without a user gesture, so a document's own JS (location=, window.open,
+      meta-refresh) can force-navigate / beacon out. wry cannot distinguish click
+      from script-initiated navigation. Flagged by claude:security, codex:security.
+    suggestion: "Limit external-open to user-gesture navigation, or drop http(s) auto-open."
+    sources: [claude:security, codex:security]
+    confidence: 95
+    resolution: deferred
+    resolution_reason: >-
+      User decision: keep FR6 (http(s) links open externally). CSP hardening in this
+      round closed the form/base/connect exfiltration vectors; the residual
+      location-assignment auto-navigation is accepted for the AI-generated-HTML review
+      use case. wry cannot separate click from script navigation without sacrificing
+      FR6 link-click behavior.
+  - stable_id: r1-basedir-osc-trust
+    severity: high
+    category: security
+    file: src-tauri/src/viewer/html.rs
+    line: 113
+    title: "basedir taken from OSC sequence — attacker-influenceable local resource root"
+    description: >-
+      handle_begin trusts the basedir OSC param; any process that can write OSC 777
+      to the terminal can point the resolver at an arbitrary local directory.
+      Flagged by codex:security.
+    suggestion: "Bind resource root to a trusted local path flow / capability token."
+    sources: [codex:security]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      User decision: identical trust boundary to the existing Markdown viewer, and the
+      basedir mechanism is SPEC-approved. Not a new risk introduced by this feature.
+  - stable_id: r1-chunk-metadata-unbounded
+    severity: high
+    category: performance
+    file: src-tauri/src/viewer/html.rs
+    line: 148
+    title: "Session chunk metadata can grow unbounded via empty chunks"
+    description: >-
+      encoded_size charges only data.len(), so empty/tiny chunks on distinct seq
+      values grow the HashMap without hitting MAX_SESSION_DATA_SIZE.
+      Flagged by codex:performance; claude:performance judged the paths bounded.
+    suggestion: "Cap chunk count / seq range and reject empty chunks."
+    sources: [codex:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      User decision: identical accumulation pattern to the Markdown viewer, total data
+      size is capped (MAX_SESSION_DATA_SIZE) and session count is capped (MAX_SESSIONS),
+      so the practical DoS risk is low. claude:performance concurred the paths are bounded.
+auto_fix:
+  loops_run: 1
+  applied_total: 2
+  termination: user-resolved
+residual_critical_high: 0
+rework_required: false
