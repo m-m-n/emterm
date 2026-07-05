@@ -1,0 +1,174 @@
+schema_version: 1
+feature: render-cpu-optimization
+created: 2026-07-05
+base_branch: main
+parent_branch: em-workflow/render-cpu-optimization/integration
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli_gate:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 55e424ab0591e6dcc020b7debbbe73bc998c07bd
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 55e424ab0591e6dcc020b7debbbe73bc998c07bd
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: "Block cursor as egui overlay"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/render/mod.rs
+      - src-tauri/src/render/cursor.rs
+      - src-tauri/src/window_host.rs
+    wave: 1
+    skills: []
+    domains: [ui]
+    complexity: medium
+    requirements: [FR2, NFR2]
+    status: pending
+    notes: null
+  task0002:
+    title: "Honest dirty set + draw-skip decision + frames counter"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/app.rs
+      - src-tauri/src/window_host.rs
+    wave: 2
+    skills: []
+    domains: [ui]
+    complexity: medium
+    requirements: [FR1, FR6, NFR1]
+    status: pending
+    notes: null
+  task0003:
+    title: "Dirty-row-driven rendering + persistent instance buffer"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/render/mod.rs
+      - src-tauri/src/render/terminal_grid_pass.rs
+      - src-tauri/src/window_host.rs
+    wave: 3
+    skills: []
+    domains: [ui]
+    complexity: high
+    requirements: [FR3, FR4, FR6, NFR1]
+    status: pending
+    notes: null
+  task0004:
+    title: "Wait-driven event loop"
+    plan: tasks/task0004.md
+    files:
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/app.rs
+      - src-tauri/src/tabs.rs
+    wave: 4
+    skills: []
+    domains: [ui, concurrency]
+    complexity: high
+    requirements: [FR5, NFR1]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "Stage 1 — honest dirty set (remove unconditional cursor-row push)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS-1, TS-3]
+  FR2:
+    title: "Block cursor drawn as egui overlay instead of grid instance bake-in"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-2, TS-9]
+  FR3:
+    title: "Stage 2 — dirty-row-driven rendering with per-row CellInstance cache"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0003]
+    tests: [TS-4, TS-5]
+  FR4:
+    title: "Persistent instance buffer with grow-on-demand + write_buffer"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0003]
+    tests: [TS-6]
+  FR5:
+    title: "ControlFlow::Wait + explicit wakeup-driven event loop"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0004]
+    tests: [TS-8]
+  FR6:
+    title: "EMTERM_RENDER_PERF env-gated performance counters"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002, task0003]
+    tests: [TS-7]
+  NFR1:
+    title: "CPU usage reduced vs. before (idle and output), /proc sampling"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002, task0003, task0004]
+    tests: [TS-8]
+  NFR2:
+    title: "No visual regressions (cursor shapes, blink, CJK/emoji, selection, TUI)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-9, TS-10]
+  NFR3:
+    title: "Design validated against Alacritty/WezTerm official docs; no code reuse"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "GUI feature gating intact; --no-default-features build compiles"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-11]
