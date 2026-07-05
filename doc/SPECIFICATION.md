@@ -305,6 +305,21 @@ Configurable fonts for the Markdown viewer, independent of terminal fonts.
 
 ---
 
+#### Markdown Front Matter
+
+Detects YAML / TOML / JSON front matter at the very start of a Markdown document, strips it from the body before rendering, and presents it in a collapsible metadata block.
+
+**Key Functionality:**
+- Detects YAML (`---`), TOML (`+++`), and bare JSON (`{...}`) front matter at the start of the document; a UTF-8 BOM before the delimiter is tolerated
+- Strips the extracted block (including delimiters) from the source passed to the Markdown renderer, so delimiters are never mis-rendered as a horizontal rule or setext heading
+- Collapsed-by-default block above the rendered body, showing a "Front Matter" label and a format badge (YAML/TOML/JSON); clicking the header toggles expansion
+- Expanded view shows an always-fully-expanded tree of the parsed data (one row per key at every nesting level, array elements keyed as `[i]`)
+- Tree building is capped by a recursion depth of 128 and a node budget of 2000; past either cap the tree is truncated with a notice
+- Parse failures are quarantined: the block is still stripped from the body, the header shows a parse-error indication, and the raw front matter text (escaped) is shown when expanded
+- Documents without front matter render byte-identically to before (no block, no source change)
+
+---
+
 #### Image Display
 
 Inline image rendering supporting two standard protocols.
@@ -350,13 +365,36 @@ A fullscreen overlay for viewing terminal images at full resolution, rendering w
 
 ---
 
+#### HTML Viewer
+
+`emterm html PATH` displays a local HTML file in a child WebView window, rendering it as-is with no eMterm styling. Intended for reviewing AI-generated HTML documents, not as a full browser.
+
+**Key Functionality:**
+- CLI validates the input (`.html`/`.htm` extension case-insensitive, regular file, ≤ 10MB), then emits an OSC 777 sequence (kind `html`) with a session UUID and the file's basedir
+- GUI opens a child WebView window that renders the document directly (no Markdown renderer, no eMterm stylesheet)
+- Inline and basedir-local JavaScript executes normally
+- Network isolation: all remote resource loading (scripts, stylesheets, images, fonts, fetch/XHR, WebSocket) is blocked via CSP / request interception on both platforms
+- Basedir-relative local resources (images/CSS/JS) resolve against the file's directory; resolution outside the basedir subtree is denied
+- `http(s)` links open in the system default browser; the WebView never navigates away from the loaded document; in-page anchors (`#fragment`) work
+- Works in the CLI-only build (`--no-default-features`)
+- Mux snapshot replay strips the launch sequence and does not relaunch the viewer
+
+**Protocol:**
+```
+ESC ] 777 ; emterm ; html ; <verb> ; <params...> ST
+```
+Uses the same `begin` / `chunk` / `end` session transfer pipeline as the Markdown viewer (128 KB Base64-encoded chunks).
+
+---
+
 #### CLI Display Commands
 
-Helper CLI subcommands to output OSC control sequences for Markdown and image display.
+Helper CLI subcommands to output OSC control sequences for Markdown, HTML, and image display.
 
 **Commands:**
 ```bash
 emterm markdown <file.md>    # Output OSC 777 sequences to display Markdown
+emterm html <file.html>      # Output OSC 777 sequences to display an HTML file
 emterm image <image>         # Output APC/DCS sequences to display image
 emterm json <file>           # Output sequences to display JSON data
 emterm yaml <file>           # Output sequences to display YAML data
@@ -522,14 +560,16 @@ Comprehensive terminal key sequence mapping for all standard terminal keys.
 
 ---
 
-#### Word Selection Drag
+#### Word and Line Selection Drag
 
-Double-click selects a word; continuing to hold and drag extends the selection word-by-word.
+Double-click selects a word and triple-click selects a line; continuing to hold and drag extends the selection while keeping the originally clicked word or line anchored (pivot) for the whole drag.
 
 **Key Functionality:**
-- Double-click selects the word under the cursor
-- Holding the mouse button after double-click and dragging extends selection by whole words
-- Selection updates in real time during drag
+- Double-click selects the word under the cursor; dragging extends the selection word-by-word, with the origin word remaining part of the selection regardless of drag direction
+- Triple-click selects the line under the cursor; dragging extends the selection by full rows, with the origin line remaining part of the selection regardless of drag direction
+- Dragging back into the origin word/line collapses the selection to exactly that word/line
+- Selection updates in real time during drag; word/line boundaries are recomputed against the live buffer on each extend
+- Selection endpoints stay correct while scrolling, including when scrollback rows are evicted during the drag
 
 ---
 

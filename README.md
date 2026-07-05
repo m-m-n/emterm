@@ -17,14 +17,16 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
 - **Rich Content Display**
   - Inline Markdown rendering via custom OSC 777 extension (CommonMark, GFM, syntax highlighting, Mermaid diagrams)
   - Large document support: no file size limit, session timeout resets per chunk
+  - Markdown front matter: YAML/TOML/JSON front matter is detected and stripped from the body, shown in a collapsible metadata block with an expandable tree view; parse failures are quarantined with an error notice and raw text
   - Fullscreen Markdown viewer with outline panel (table of contents), zoom, Space/Shift+Space scrolling, and keyboard navigation
   - Markdown viewer link navigation: click `.md` links to browse related files; inline images loaded lazily (works over SSH)
   - Mermaid diagram rendering in Markdown (flowcharts, sequence diagrams, etc.) with Chart/Code toggle toolbar, a fullscreen zoom/pan popup (Spread button), and a working Copy-source button
   - Inline image rendering (Kitty Graphics Protocol and SIXEL)
   - Kitty protocol compatibility: works with kitten icat, ratatui-image, treemd, and other external tools
   - Fullscreen image viewer (pixel-perfect and fit-to-window modes, pan, wheel scroll, Space/Shift+Space scrolling)
+  - HTML viewer: `emterm html <file>` renders a local HTML file as-is in a child WebView window (JS executes, network access blocked, only basedir-relative local resources load, external links open in the system browser)
   - Viewers render within the terminal content area; tab bar remains accessible during viewing
-  - CLI commands: `emterm markdown` and `emterm image` (work over SSH, CLI-only build available)
+  - CLI commands: `emterm markdown`, `emterm html`, and `emterm image` (work over SSH, CLI-only build available)
   - File download via OSC 777: streaming I/O with no file size limit, save dialog at transfer start
 
 - **Terminal Multiplexer**
@@ -65,7 +67,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
     because PRIMARY handles them natively (and their `settings.json` values
     are ignored).
   - Shift+Enter as Alt+Enter for multiline input in AI interfaces (configurable, default ON)
-  - Word selection drag (double-click and drag to extend by word)
+  - Word and line selection drag: double-click (word) or triple-click (line) then drag keeps the originally clicked word/line anchored for the whole drag
   - Comprehensive special key mapping (Ctrl+symbols, modified arrow keys, F-keys, Shift+Tab)
 
 - **Navigation**
