@@ -1642,38 +1642,19 @@ impl WindowHost {
             let width_mode = app.settings.ambiguous_width_mode;
             let cell_inputs = if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
-                // Decide whether to bake a filled block cursor into the
-                // grid: only when the cursor is terminal-visible, in
-                // block style (style != underline/bar), and currently in
-                // the "on" blink phase. Underline / bar shapes stay on
-                // the egui overlay side and pass `None`.
-                // Filled (reverse-video) block cursor is reserved for
-                // the focused window — matches WezTerm, where an
-                // unfocused window degrades to a hollow outline drawn
-                // by `draw_cursor`. Underline / bar shapes always go
-                // through the egui overlay and pass `None`.
-                let cursor_style = core.get_cursor_style();
-                let is_block_style = cursor_style != 1 && cursor_style != 2;
-                // Suppress the cursor entirely while scrolled back into
-                // history (matches the WebView build, which skips cursor
-                // rendering when `scrollOffset !== 0` — canvas-renderer.ts).
+                // The filled block cursor is painted by the egui overlay
+                // (`render::cursor::draw_block_cursor`), not baked into
+                // the grid — grid instance data never depends on cursor
+                // position, blink phase, or window focus. Suppression
+                // (scrolled back into history, hidden by a fold) and the
+                // focused/blink/style visibility gate live on the
+                // overlay side now.
                 let scroll_offset = app.scroll_offset();
-                let block_cursor_cell = if scroll_offset == 0
-                    && app.window_focused
-                    && core.get_cursor_visible()
-                    && is_block_style
-                    && app.blink_visible_now(core.get_cursor_blink())
-                {
-                    Some((core.get_cursor_col(), core.get_cursor_row()))
-                } else {
-                    None
-                };
                 let mut inputs = crate::render::collect_cell_inputs(
                     &core,
                     &theme,
                     app.selection.as_ref(),
                     width_mode,
-                    block_cursor_cell,
                     hover_link_cells,
                     scroll_offset,
                     // Fold layout (built once at the top of `render` via

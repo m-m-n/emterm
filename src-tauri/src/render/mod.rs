@@ -566,12 +566,11 @@ fn sftp_status_label(
 /// existing fg/bg swap in [`resolve_cell_style_from_packed`] (no separate
 /// selection quad).
 ///
-/// `block_cursor_cell` is `Some((col, row))` when a block-shaped cursor
-/// is currently visible (blink-on, style=block, terminal-visible). The
-/// matching cell gets its fg/bg swapped so it reads as a filled cursor
-/// with the glyph in inverted color — matching the WebView build's
-/// rendering. Underline / bar cursor shapes stay on the egui overlay
-/// side and pass `None` here.
+/// Grid instance data is a pure function of terminal content + theme +
+/// selection/hover/search state — never of cursor position, blink phase,
+/// or window focus. The filled block cursor is drawn as an egui overlay
+/// by [`cursor::draw_block_cursor`] instead (see `draw_cursor`); this
+/// function no longer takes a cursor parameter.
 ///
 /// `scroll_offset` is the active tab's scrollback offset in rows (`0` =
 /// live tail). When non-zero the renderer reads scrollback rows for the
@@ -603,7 +602,6 @@ pub fn collect_cell_inputs(
     theme: &Theme,
     selection: Option<&Selection>,
     width_mode: AmbiguousWidthMode,
-    block_cursor_cell: Option<(u16, u16)>,
     hovered_link: Option<&[(u16, u16, u16)]>,
     scroll_offset: u32,
     fold_layout: Option<&crate::fold::FoldLayout>,
@@ -656,9 +654,6 @@ pub fn collect_cell_inputs(
                 if cell_in_hovered_link(hovered_link, row, col) {
                     style.underline = true;
                 }
-                if block_cursor_cell == Some((col, row)) {
-                    std::mem::swap(&mut style.fg, &mut style.bg);
-                }
                 let cell_width_cells = visible_width(&cell.glyph, width_mode);
                 out.push(CellInput {
                     col,
@@ -709,9 +704,6 @@ pub fn collect_cell_inputs(
             // required to underline; Ctrl only opens the link).
             if cell_in_hovered_link(hovered_link, row, col) {
                 style.underline = true;
-            }
-            if block_cursor_cell == Some((col, row)) {
-                std::mem::swap(&mut style.fg, &mut style.bg);
             }
             let ch = core.get_cell_char(col, content_row);
             let cell_width_cells = visible_width(&ch, width_mode);
@@ -930,15 +922,18 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
             );
         }
         _ => {
-            // Block cursor: focused → filled cell (the grid pass swaps
-            // fg/bg on the cursor cell, see `collect_cell_inputs`'s
-            // `block_cursor_cell` param). Unfocused → hollow outline
-            // here, matching WezTerm. egui 0.29 lacks
-            // `StrokeKind::Inside`, so a centered 1-px stroke would
-            // bleed half a pixel above / below the cell — inset the
-            // rect by half the stroke width to keep the visible
-            // outline flush with the IME reverse-video box.
-            if !app.window_focused {
+            // Block cursor: focused → filled cell overlay, painted by
+            // `cursor::draw_block_cursor` (the cell's resolved paint
+            // style inverted — this used to be baked into the grid pass
+            // via `collect_cell_inputs`'s removed `block_cursor_cell`
+            // param). Unfocused → hollow outline here, matching WezTerm.
+            // egui 0.29 lacks `StrokeKind::Inside`, so a centered 1-px
+            // stroke would bleed half a pixel above / below the cell —
+            // inset the rect by half the stroke width to keep the
+            // visible outline flush with the IME reverse-video box.
+            if app.window_focused {
+                cursor::draw_block_cursor(painter, core, theme, app);
+            } else {
                 const STROKE_W: f32 = 1.0;
                 let inset = STROKE_W * 0.5;
                 let rect = Rect::from_min_size(
@@ -1705,7 +1700,6 @@ mod tests {
             None,
             AmbiguousWidthMode::Narrow,
             None,
-            None,
             0,
             None,
         );
@@ -1736,7 +1730,6 @@ mod tests {
             None,
             AmbiguousWidthMode::Narrow,
             None,
-            None,
             0,
             None,
         );
@@ -1761,7 +1754,6 @@ mod tests {
             &theme,
             None,
             AmbiguousWidthMode::Narrow,
-            None,
             None,
             0,
             None,
@@ -1792,7 +1784,6 @@ mod tests {
             None,
             AmbiguousWidthMode::Narrow,
             None,
-            None,
             0,
             None,
         );
@@ -1800,6 +1791,46 @@ mod tests {
         let n = inputs.iter().find(|c| c.glyph == "N").expect("N present");
         assert!(r.draw_background);
         assert!(!n.draw_background);
+    }
+
+    /// AC-1: `collect_cell_inputs` no longer accepts a cursor parameter, so
+    /// its output cannot depend on where the terminal's cursor sits —
+    /// there is no code path left that could special-case "the cursor
+    /// cell". Regression guard: a styled cell that the real terminal
+    /// cursor is parked on top of still reports its plain resolved fg/bg
+    /// (no more fg/bg swap for "the cursor cell"; that inversion is now
+    /// the egui overlay's job — `cursor::draw_block_cursor`).
+    #[test]
+    fn collect_cell_inputs_never_inverts_the_cell_under_the_cursor() {
+        let mut core = TerminalCore::new(3, 1, 100);
+        // SGR 42 = green background.
+        core.process_pty_data(b"\x1b[42mX");
+        // Move the cursor back onto the styled 'X' cell (row 1, col 1 in
+        // 1-based CUP addressing = absolute (0, 0)).
+        core.process_pty_data(b"\x1b[1;1H");
+        assert_eq!((core.get_cursor_col(), core.get_cursor_row()), (0, 0));
+
+        let theme = Theme::default();
+        let packed_fg = core.get_cell_fg(0, 0);
+        let packed_bg = core.get_cell_bg(0, 0);
+        let flags = core.get_cell_flags(0, 0);
+        let expected = resolve_cell_style_from_packed(&theme, packed_fg, packed_bg, flags, false);
+
+        let inputs = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            0,
+            None,
+        );
+        let cell = inputs
+            .iter()
+            .find(|c| c.col == 0 && c.row == 0)
+            .expect("cell at cursor position present");
+        assert_eq!(cell.fg_rgba, color32_to_rgba(expected.fg));
+        assert_eq!(cell.bg_rgba, color32_to_rgba(expected.bg));
     }
 
     // ── Scrollback rendering (scroll_offset) ──────────────────────────
@@ -1833,7 +1864,6 @@ mod tests {
             None,
             AmbiguousWidthMode::Narrow,
             None,
-            None,
             0,
             None,
         );
@@ -1859,7 +1889,6 @@ mod tests {
             None,
             AmbiguousWidthMode::Narrow,
             None,
-            None,
             2,
             None,
         );
@@ -1882,7 +1911,6 @@ mod tests {
             &theme,
             None,
             AmbiguousWidthMode::Narrow,
-            None,
             None,
             1,
             None,
@@ -1907,7 +1935,6 @@ mod tests {
             &theme,
             None,
             AmbiguousWidthMode::Narrow,
-            None,
             None,
             1,
             None,
@@ -1941,7 +1968,6 @@ mod tests {
             &theme,
             None,
             AmbiguousWidthMode::Narrow,
-            None,
             None,
             1,
             None,
@@ -1983,7 +2009,6 @@ mod tests {
             None,
             AmbiguousWidthMode::Narrow,
             None,
-            None,
             0,
             Some(&layout),
         );
@@ -2017,7 +2042,6 @@ mod tests {
             &theme,
             None,
             AmbiguousWidthMode::Narrow,
-            None,
             None,
             0,
             None,
