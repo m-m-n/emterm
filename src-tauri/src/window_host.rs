@@ -1412,7 +1412,17 @@ impl WindowHost {
                 None
             };
             let status_bar_changed = app.status_bar_view_model_changed();
-            if should_skip_frame(dirty_count, status_bar_changed) {
+            // Overlay work in flight (a restart/SFTP toast counting down to
+            // auto-dismiss, or a visual-bell flash still decaying) needs the
+            // egui pass to run every frame just like the status bar carve-out
+            // above — otherwise the 60 Hz wake this scheduled in
+            // `about_to_wait` (see `toast_pending` / `bell_due` there) spins
+            // uselessly, discarding every frame here before `pump_sftp` /
+            // the toast prune / the bell-flash paint ever run.
+            let overlay_work = app.restart_toast.active()
+                || !app.sftp_ui.toasts.toasts.is_empty()
+                || app.visual_bell_progress().is_some();
+            if should_skip_frame(dirty_count, status_bar_changed, overlay_work) {
                 return;
             }
         }
@@ -1733,12 +1743,37 @@ impl WindowHost {
                     // glyphs inline at the anchor so the user can see
                     // what they are typing. `apply_preedit_overlay`
                     // mutates `CellInput`s *after* `collect_cell_inputs`
-                    // in a way the per-row cache cannot represent
-                    // without risking stale cached content once preedit
-                    // ends (task0003 design note under D3) — bypass the
-                    // cache entirely for such frames: rebuild every row
-                    // fresh via the full-grid path and skip both reading
-                    // and writing `row_cache`.
+                    // in a way the per-row cache must never observe
+                    // (baking the transient composition glyphs into
+                    // `row_cache` would leak them into every subsequent
+                    // cache-served frame after preedit ends) — the
+                    // frame actually painted below still comes from a
+                    // full, uncached `build_instances` call.
+                    //
+                    // That used to mean skipping `row_cache` entirely
+                    // for the whole preedit-active stretch (task0003
+                    // design note under D3), but `record_render_state`
+                    // unconditionally calls `core.clear_dirty()` at the
+                    // end of every frame regardless of this branch —
+                    // so any row changed by async PTY output or a
+                    // resize *while* composing was marked clean without
+                    // the cache ever learning about it, leaving stale
+                    // or (post-resize) `None`/blank rows once the cache
+                    // path resumed after preedit closed. Fix: still
+                    // feed the same dirty-row set through
+                    // `rebuild_and_collect` here (a "shadow" rebuild —
+                    // its returned instances are discarded, only its
+                    // cache-side effect matters) using the *clean*
+                    // (pre-overlay) cells, so `row_cache` keeps tracking
+                    // `term_core` continuously even during preedit.
+                    let row_count = core.rows();
+                    let anchor = tab.preedit_state.anchor();
+                    let effective_dirty_rows = preedit_effective_dirty_rows(
+                        frame_dirty_rows.take(),
+                        row_count,
+                        anchor.row,
+                    );
+
                     let mut inputs = crate::render::collect_cell_inputs(
                         &core,
                         &theme,
@@ -1754,21 +1789,39 @@ impl WindowHost {
                         app.fold_layout(),
                         None,
                     );
+
+                    // Shadow rebuild: `inputs` still holds the clean
+                    // (pre-overlay) cells here, so filtering it down to
+                    // `effective_dirty_rows` — preserving the ascending
+                    // row-major order `rebuild_dirty_rows` requires —
+                    // gives exactly the per-row cell slices `row_cache`
+                    // needs, without a second walk of `core`.
+                    let dirty_cells: Vec<_> = inputs
+                        .iter()
+                        .filter(|c| effective_dirty_rows.contains(&c.row))
+                        .cloned()
+                        .collect();
+                    let (_, cache_rows_rebuilt) = pass.rebuild_and_collect(
+                        &effective_dirty_rows,
+                        &dirty_cells,
+                        metrics,
+                        row_count,
+                    );
+
                     // No bg extension: glyph is clamped inside the
                     // cell rect by `fit_glyph_to_cell` so the
                     // reverse-video bg never has to spill into the
                     // next row to cover descenders.
                     crate::render::apply_preedit_overlay(
                         &mut inputs,
-                        tab.preedit_state.anchor(),
+                        anchor,
                         tab.preedit_state.text(),
                         &theme,
                         core.cols(),
                         core.rows(),
                         0.0,
                     );
-                    let rows = core.rows();
-                    (pass.build_instances(&inputs, metrics), rows as usize)
+                    (pass.build_instances(&inputs, metrics), cache_rows_rebuilt)
                 } else {
                     // Reuse the row set `dirty_rows_this_frame` already
                     // computed for the skip decision above (task0003 D2):
@@ -1980,11 +2033,52 @@ impl WindowHost {
 /// status bar's own wake chain (clock tick, git branch, OSC 777 push)
 /// live even when the terminal grid itself is quiescent.
 ///
+/// `overlay_work` is `true` when a restart/SFTP toast is counting down to
+/// auto-dismiss or a visual-bell flash is still decaying — either needs the
+/// egui pass (`pump_sftp` / toast prune / bell paint) to run every frame,
+/// the same carve-out `status_bar_changed` gets for the status bar's own
+/// wake chain.
+///
 /// Returns `true` (skip the frame) only when the dirty count is known to
-/// be exactly zero AND the status bar did not change; every other
-/// combination proceeds to a full frame.
-fn should_skip_frame(dirty_count: Option<usize>, status_bar_changed: bool) -> bool {
-    matches!(dirty_count, Some(0)) && !status_bar_changed
+/// be exactly zero AND the status bar did not change AND there is no
+/// pending overlay work; every other combination proceeds to a full frame.
+fn should_skip_frame(
+    dirty_count: Option<usize>,
+    status_bar_changed: bool,
+    overlay_work: bool,
+) -> bool {
+    matches!(dirty_count, Some(0)) && !status_bar_changed && !overlay_work
+}
+
+/// The dirty-row set fed to [`crate::render::terminal_grid_pass::
+/// TerminalGridPass::rebuild_and_collect`] during an IME-preedit-active
+/// frame (task0003 High finding fix): extracted as a pure function —
+/// plain values in, plain `Vec<u16>` out, no window/app/core types — so
+/// every combination is directly unit-testable, mirroring
+/// `should_skip_frame` above.
+///
+/// Starts from `frame_dirty_rows` (the same set `App::dirty_rows_this_frame`
+/// already computed this turn) or every row `0..row_count` when `None` (a
+/// forced full redraw). The preedit anchor row and the row immediately
+/// below it (composition may wrap) are then force-included even if
+/// `term_core` itself considers them clean — otherwise `row_cache` would
+/// keep whatever content those rows had *before* preedit started, one
+/// frame stale, the moment preedit ends. The result is sorted ascending
+/// and deduplicated, matching the invariant `rebuild_dirty_rows` requires.
+fn preedit_effective_dirty_rows(
+    frame_dirty_rows: Option<Vec<u16>>,
+    row_count: u16,
+    anchor_row: u16,
+) -> Vec<u16> {
+    let mut rows: Vec<u16> = frame_dirty_rows.unwrap_or_else(|| (0..row_count).collect());
+    for r in [anchor_row, anchor_row.saturating_add(1)] {
+        if r < row_count && !rows.contains(&r) {
+            rows.push(r);
+        }
+    }
+    rows.sort_unstable();
+    rows.dedup();
+    rows
 }
 
 /// task0004 AC-1/AC-2: pure decision for the next winit control flow, given
@@ -2696,7 +2790,11 @@ impl ApplicationHandler for PocApp {
                 }
                 // Cursor shape switches between filled (focused) and
                 // outline (unfocused), so we need a repaint on every
-                // focus transition.
+                // focus transition. The overlay cursor's filled/hollow
+                // state depends on `window_focused`, which the dirty-row
+                // tracking never sees, so a plain request_redraw() would
+                // be skipped by should_skip_frame; force a full redraw.
+                self.app.mark_full_redraw();
                 host.window().request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
@@ -3775,32 +3873,44 @@ mod tests {
 
     // ── task0002 AC-5: should_skip_frame pure decision ───────────────
 
-    /// AC-5: `Some(0)` dirty AND status bar unchanged → skip.
+    /// AC-5: `Some(0)` dirty AND status bar unchanged AND no overlay work
+    /// → skip.
     #[test]
     fn should_skip_frame_when_no_dirty_rows_and_status_bar_unchanged() {
-        assert!(should_skip_frame(Some(0), false));
+        assert!(should_skip_frame(Some(0), false, false));
     }
 
-    /// AC-5: dirty rows present (even with an unchanged status bar) →
-    /// never skip.
+    /// AC-5: dirty rows present (even with an unchanged status bar and no
+    /// overlay work) → never skip.
     #[test]
     fn should_skip_frame_false_when_dirty_rows_present() {
-        assert!(!should_skip_frame(Some(3), false));
+        assert!(!should_skip_frame(Some(3), false, false));
     }
 
-    /// AC-5: status bar changed (even with zero dirty rows) → never
-    /// skip — this is the carve-out that keeps the clock / git-branch /
-    /// OSC 777 wake chain alive on an otherwise-idle shell.
+    /// AC-5: status bar changed (even with zero dirty rows and no overlay
+    /// work) → never skip — this is the carve-out that keeps the clock /
+    /// git-branch / OSC 777 wake chain alive on an otherwise-idle shell.
     #[test]
     fn should_skip_frame_false_when_status_bar_changed() {
-        assert!(!should_skip_frame(Some(0), true));
+        assert!(!should_skip_frame(Some(0), true, false));
     }
 
     /// AC-5: no active tab (`None`) → never skip; the hint-message frame
     /// must still draw.
     #[test]
     fn should_skip_frame_false_when_no_active_tab() {
-        assert!(!should_skip_frame(None, false));
+        assert!(!should_skip_frame(None, false, false));
+    }
+
+    /// Overlay work pending (a toast counting down or a visual-bell flash
+    /// still decaying), even with zero dirty rows and an unchanged status
+    /// bar, must never skip — otherwise the 60 Hz wake `about_to_wait`
+    /// schedules while a toast/bell is active spins uselessly without the
+    /// egui pass ever running `pump_sftp` / the toast prune / the bell
+    /// paint.
+    #[test]
+    fn should_skip_frame_false_when_overlay_work_pending() {
+        assert!(!should_skip_frame(Some(0), false, true));
     }
 
     // ── task0004 AC-1/AC-2: next_wait_deadline pure decision ──────────
@@ -4125,6 +4235,44 @@ mod tests {
     }
 
     // ── skk_mode: bare Ctrl+J swallow ────────────────────────────────
+
+    // ── preedit_effective_dirty_rows: row-cache invalidation during IME
+    //    preedit (fix for the stale/blank-row High finding) ─────────────
+
+    /// The anchor row is force-included even when `term_core`'s own dirty
+    /// set is empty, and the row below it (composition wrap) too — the
+    /// core bug this fixes: without this, `row_cache` would never learn
+    /// about the row the composition overlays while term_core considers
+    /// it clean.
+    #[test]
+    fn preedit_dirty_rows_forces_anchor_and_next_row() {
+        let rows = preedit_effective_dirty_rows(Some(vec![]), 24, 5);
+        assert_eq!(rows, vec![5, 6]);
+    }
+
+    /// `None` (a forced full redraw) still expands to the full row range
+    /// with the anchor rows folded in (already present, so no duplicates).
+    #[test]
+    fn preedit_dirty_rows_none_means_full_redraw() {
+        let rows = preedit_effective_dirty_rows(None, 4, 1);
+        assert_eq!(rows, vec![0, 1, 2, 3]);
+    }
+
+    /// An anchor row already present in term_core's dirty set is not
+    /// duplicated, and the existing dirty rows are preserved alongside it.
+    #[test]
+    fn preedit_dirty_rows_merges_without_duplicates() {
+        let rows = preedit_effective_dirty_rows(Some(vec![2, 5]), 24, 5);
+        assert_eq!(rows, vec![2, 5, 6]);
+    }
+
+    /// The anchor row's "next row" (wrap case) is clamped at the grid
+    /// bottom — no out-of-range row index is ever produced.
+    #[test]
+    fn preedit_dirty_rows_clamps_anchor_at_last_row() {
+        let rows = preedit_effective_dirty_rows(Some(vec![]), 24, 23);
+        assert_eq!(rows, vec![23]);
+    }
 
     #[test]
     fn skk_chord_matches_bare_ctrl_j_case_insensitive() {
