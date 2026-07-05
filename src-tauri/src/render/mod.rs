@@ -591,6 +591,16 @@ fn sftp_status_label(
 /// drawn as an egui overlay by [`draw_fold_summaries`]). When `None` the
 /// linear scrollback path above is used unchanged, so the non-folded /
 /// existing behavior is bit-for-bit identical.
+///
+/// `only_rows` (task0003 FR3/FR4): when `Some(rows)`, only the given screen
+/// rows are walked — the per-row instance cache rebuild path in
+/// `render::terminal_grid_pass` uses this to avoid re-reading `core` for
+/// rows a frame did not mark dirty. `rows` must be sorted ascending
+/// (`App::dirty_rows_this_frame` already returns a sorted, deduplicated
+/// `Vec`); out-of-range entries (`>= core.rows()`) are skipped rather than
+/// panicking. `None` walks every row `0..core.rows()` — the existing
+/// full-grid behavior, reproduced bit-for-bit so pre-existing callers are
+/// unaffected.
 // The renderer hot path resolves a cell from its core + theme + selection +
 // width policy + cursor + hover + scroll + fold layout; these are distinct
 // per-frame inputs read at the single `window_host::render` call site, so a
@@ -605,18 +615,39 @@ pub fn collect_cell_inputs(
     hovered_link: Option<&[(u16, u16, u16)]>,
     scroll_offset: u32,
     fold_layout: Option<&crate::fold::FoldLayout>,
+    only_rows: Option<&[u16]>,
 ) -> Vec<CellInput> {
     let cols = core.cols();
     let rows = core.rows();
     let bg_default = rgb_to_egui(theme.bg);
-    let mut out: Vec<CellInput> = Vec::with_capacity((cols as usize) * (rows as usize));
+
+    // task0003: walk only the requested row subset when the caller supplies
+    // one; otherwise fall back to the full `0..rows` walk (the pre-existing
+    // behavior every caller before task0003 relied on). `full_range` is
+    // declared unconditionally so the `None` arm's `Vec` outlives the
+    // `row_iter` borrow below.
+    let full_range: Vec<u16>;
+    let row_iter: &[u16] = match only_rows {
+        Some(subset) => subset,
+        None => {
+            full_range = (0..rows).collect();
+            &full_range
+        }
+    };
+    let mut out: Vec<CellInput> = Vec::with_capacity((cols as usize) * row_iter.len());
 
     let scrollback_len = core.get_scrollback_length();
     // Top visible absolute row (saturating: the offset can momentarily
     // exceed the live length while content scrolls under a pinned viewport).
     let visible_start = scrollback_len.saturating_sub(scroll_offset);
 
-    for row in 0..rows {
+    for &row in row_iter {
+        if row >= rows {
+            // Defensive: a stale/out-of-range row in `only_rows` (e.g. a
+            // dirty set computed just before a shrink-resize) contributes
+            // no cells rather than reading out of bounds.
+            continue;
+        }
         // Resolve the absolute buffer row this screen row shows. With a
         // fold layout the mapping is non-linear (collapsed bodies are
         // hidden, summary rows draw no cells); without one it is the linear
@@ -1702,6 +1733,7 @@ mod tests {
             None,
             0,
             None,
+            None,
         );
         // 5 cols × 2 rows = 10 cell entries.
         assert_eq!(inputs.len(), 10);
@@ -1732,6 +1764,7 @@ mod tests {
             None,
             0,
             None,
+            None,
         );
         assert_eq!(inputs[0].glyph, "あ");
         assert_eq!(inputs[0].width_cells, 2);
@@ -1756,6 +1789,7 @@ mod tests {
             AmbiguousWidthMode::Narrow,
             None,
             0,
+            None,
             None,
         );
         let u = inputs.iter().find(|c| c.glyph == "U").expect("U present");
@@ -1785,6 +1819,7 @@ mod tests {
             AmbiguousWidthMode::Narrow,
             None,
             0,
+            None,
             None,
         );
         let r = inputs.iter().find(|c| c.glyph == "R").expect("R present");
@@ -1823,6 +1858,7 @@ mod tests {
             AmbiguousWidthMode::Narrow,
             None,
             0,
+            None,
             None,
         );
         let cell = inputs
@@ -1866,6 +1902,7 @@ mod tests {
             None,
             0,
             None,
+            None,
         );
         // Live viewport shows the last two logical lines.
         assert_eq!(row_text(&live, 0), "L2");
@@ -1891,6 +1928,7 @@ mod tests {
             None,
             2,
             None,
+            None,
         );
         assert_eq!(row_text(&scrolled, 0), "L0");
         assert_eq!(row_text(&scrolled, 1), "L1");
@@ -1913,6 +1951,7 @@ mod tests {
             AmbiguousWidthMode::Narrow,
             None,
             1,
+            None,
             None,
         );
         assert_eq!(row_text(&scrolled, 0), "L1");
@@ -1937,6 +1976,7 @@ mod tests {
             AmbiguousWidthMode::Narrow,
             None,
             1,
+            None,
             None,
         );
         let wide = scrolled
@@ -1970,6 +2010,7 @@ mod tests {
             AmbiguousWidthMode::Narrow,
             None,
             1,
+            None,
             None,
         );
         let b = scrolled
@@ -2011,6 +2052,7 @@ mod tests {
             None,
             0,
             Some(&layout),
+            None,
         );
 
         // Screen row 0 = actual L0.
@@ -2045,10 +2087,108 @@ mod tests {
             None,
             0,
             None,
+            None,
         );
         assert_eq!(row_text(&inputs, 0), "L0");
         assert_eq!(row_text(&inputs, 1), "L1");
         assert_eq!(row_text(&inputs, 2), "L2");
+    }
+
+    // ── task0003 AC-1/AC-6: `only_rows` row-subset mode ────────────────
+
+    /// `only_rows = Some(subset)` emits cells for exactly the requested
+    /// rows — none of the excluded rows' content leaks in.
+    #[test]
+    fn collect_cell_inputs_only_rows_restricts_output_to_subset() {
+        let mut core = TerminalCore::new(5, 3, 100);
+        core.process_pty_data(b"L0\r\nL1\r\nL2");
+        let theme = Theme::default();
+        let subset = [1u16];
+        let inputs = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            0,
+            None,
+            Some(&subset),
+        );
+        assert!(
+            inputs.iter().all(|c| c.row == 1),
+            "only row 1 should be present: {inputs:?}"
+        );
+        assert_eq!(row_text(&inputs, 1), "L1");
+    }
+
+    /// AC-1 (equivalence, mod.rs half): for every row in a subset, the
+    /// `CellInput`s produced by `only_rows = Some(subset)` are identical to
+    /// the corresponding rows filtered out of a full-grid (`None`) call —
+    /// the row-subset path must not diverge in per-cell content from the
+    /// full-grid path it is meant to replace for dirty rows.
+    #[test]
+    fn collect_cell_inputs_only_rows_matches_full_grid_filtered() {
+        let mut core = TerminalCore::new(6, 4, 100);
+        core.process_pty_data(b"\x1b[41mAAAAAA\x1b[0m\r\nBBBBBB\r\nCCCCCC\r\nDDDDDD");
+        let theme = Theme::default();
+        let full = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            0,
+            None,
+            None,
+        );
+        let subset = [0u16, 2u16];
+        let partial = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            0,
+            None,
+            Some(&subset),
+        );
+        let mut full_filtered: Vec<&CellInput> =
+            full.iter().filter(|c| subset.contains(&c.row)).collect();
+        let mut partial_refs: Vec<&CellInput> = partial.iter().collect();
+        let key = |c: &&CellInput| (c.row, c.col);
+        full_filtered.sort_by_key(key);
+        partial_refs.sort_by_key(key);
+        assert_eq!(full_filtered.len(), partial_refs.len());
+        for (a, b) in full_filtered.iter().zip(partial_refs.iter()) {
+            assert_eq!(a.row, b.row);
+            assert_eq!(a.col, b.col);
+            assert_eq!(a.glyph, b.glyph);
+            assert_eq!(a.fg_rgba, b.fg_rgba);
+            assert_eq!(a.bg_rgba, b.bg_rgba);
+            assert_eq!(a.draw_background, b.draw_background);
+        }
+    }
+
+    /// `only_rows = Some(&[])` (an empty subset) walks nothing and returns
+    /// an empty `Vec` — the AC-3 "clean frame" boundary case at the
+    /// `collect_cell_inputs` level.
+    #[test]
+    fn collect_cell_inputs_only_rows_empty_subset_returns_empty() {
+        let mut core = TerminalCore::new(5, 3, 100);
+        core.process_pty_data(b"L0\r\nL1\r\nL2");
+        let theme = Theme::default();
+        let subset: [u16; 0] = [];
+        let inputs = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            0,
+            None,
+            Some(&subset),
+        );
+        assert!(inputs.is_empty());
     }
 
     // ── fold_summary_texts ────────────────────────────────────────────

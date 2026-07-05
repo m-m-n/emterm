@@ -205,248 +205,173 @@ pub struct CellMetrics {
     pub font_size_px: f32,
 }
 
-/// Custom wgpu pass that draws the entire terminal grid in one instanced
-/// draw call.
+/// Growth factor applied to the persistent instance / uniform GPU buffers
+/// (task0003 FR4/AC-4) when the required upload size exceeds the buffer's
+/// current capacity. `1.5` bounds the number of reallocations to
+/// `O(log_1.5(n))` under monotone growth (à la common dynamic-array
+/// implementations) while keeping the worst-case overshoot modest.
+const BUFFER_GROWTH_FACTOR: f64 = 1.5;
+
+/// Minimum buffer capacity in bytes. Keeps a small grid (a handful of
+/// instances) from reallocating on every single-cell change by giving a
+/// freshly created buffer reasonable headroom up front.
+const MIN_BUFFER_CAPACITY_BYTES: u64 = 4096;
+
+/// Pure growth-policy function for the persistent GPU buffers (task0003
+/// AC-4): given a buffer's current capacity and the byte size actually
+/// required this frame, returns the capacity the buffer should be
+/// (re)created at.
 ///
-/// The pass owns the pipeline + bind-group layout + sampler. It does NOT
-/// own the glyph cache or atlas — those live alongside the renderer so
-/// they can be reused across frames. `prepare` consumes a slice of
-/// [`CellInput`] and produces a fresh instance buffer + bind group; `draw`
-/// records the instanced draw call into a render pass started with
-/// `LoadOp::Load` (so the wgpu clear performed before this pass survives).
-pub struct TerminalGridPass {
-    pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    /// Lazily-uploaded textures. Replaced on every `prepare` when the atlas
-    /// page bytes change.
-    alpha_texture: Option<wgpu::Texture>,
-    alpha_view: Option<wgpu::TextureView>,
-    alpha_dim: (u32, u32),
-    rgba_texture: Option<wgpu::Texture>,
-    rgba_view: Option<wgpu::TextureView>,
-    rgba_dim: (u32, u32),
+/// - Never returns less than `current_capacity` when `required` already
+///   fits — capacity never decreases (shrinking is out of scope per the
+///   task plan).
+/// - Never returns less than `required` — always covers the required size.
+/// - Grows geometrically (`required * BUFFER_GROWTH_FACTOR`, floored at
+///   `MIN_BUFFER_CAPACITY_BYTES`) rather than to the exact `required` size,
+///   so a monotonically growing grid triggers `O(log n)` reallocations
+///   instead of one every frame.
+fn grow_capacity(current_capacity: u64, required: u64) -> u64 {
+    if required <= current_capacity {
+        return current_capacity;
+    }
+    let grown = ((required as f64) * BUFFER_GROWTH_FACTOR).ceil() as u64;
+    grown.max(MIN_BUFFER_CAPACITY_BYTES).max(required)
+}
+
+/// One screen row's cached ready-to-upload instance data (task0003
+/// FR3/FR4), split into the background list and foreground list.
+///
+/// The split preserves the two-pass ordering invariant
+/// [`GridInstanceBuilder::build_instances`] relies on: concatenating every
+/// row's `bg` list (in row order) followed by every row's `fg` list (in
+/// row order) reproduces exactly the same instance sequence a from-scratch
+/// `build_instances` call over the same cells would produce, because
+/// `render::collect_cell_inputs` always emits cells in row-major order.
+/// Without this split, reusing a per-row `[bg, fg]` pair *as a unit* would
+/// let one row's bg quad land ahead of an *earlier* row's fg quad in
+/// concatenation order, resurrecting the tall-glyph-overhang clipping bug
+/// `build_instances`'s two-pass ordering was written to prevent (see its
+/// doc comment).
+#[derive(Debug, Clone, Default)]
+struct RowInstances {
+    bg: Vec<CellInstance>,
+    fg: Vec<CellInstance>,
+}
+
+/// Per-row instance cache (task0003 FR3/FR4). Keyed by screen row index
+/// (`Vec` index == row); `None` means "not yet built against the current
+/// content" and must be rebuilt before [`RowCache::concat_all`] can rely
+/// on it.
+///
+/// Invalidation is driven entirely by the caller (`WindowHost::render`)
+/// handing in the row set `App::dirty_rows_this_frame` already computed
+/// for the skip decision (task0003 D2/D3): scroll, resize, font/theme
+/// change, and fold+selection all already force that set to every row
+/// (`0..rows`) upstream in `App`, so no separate "clear on resize" signal
+/// is needed here — rebuilding every row via [`RowCache::resize`] +
+/// [`GridInstanceBuilder::rebuild_dirty_rows`] IS the cache drop.
+#[derive(Debug, Default)]
+struct RowCache {
+    rows: Vec<Option<RowInstances>>,
+}
+
+impl RowCache {
+    /// Ensure the cache has exactly `row_count` slots. A size change (grid
+    /// resize) drops every existing entry — positions and glyph metrics
+    /// baked into old entries no longer apply to the new dimensions.
+    fn resize(&mut self, row_count: usize) {
+        if self.rows.len() != row_count {
+            self.rows = vec![None; row_count];
+        }
+    }
+
+    /// Store freshly rebuilt instance data for `row`. No-op if `row` is
+    /// out of range (defensive; callers keep `row < row_count`).
+    fn set(&mut self, row: u16, instances: RowInstances) {
+        if let Some(slot) = self.rows.get_mut(row as usize) {
+            *slot = Some(instances);
+        }
+    }
+
+    /// Concatenate every cached row's instances into the two-pass order
+    /// (see the [`RowCache`] doc): all backgrounds in row order, then all
+    /// foregrounds in row order. Rows without a cached entry contribute
+    /// nothing — production callers always rebuild the full dirty set
+    /// before calling this, guaranteeing full population; the permissive
+    /// behavior here just keeps this method panic-free for tests that
+    /// exercise a partially populated cache.
+    fn concat_all(&self) -> Vec<CellInstance> {
+        let mut bgs: Vec<CellInstance> = Vec::new();
+        let mut fg: Vec<CellInstance> = Vec::new();
+        for row in self.rows.iter().flatten() {
+            bgs.extend_from_slice(&row.bg);
+        }
+        for row in self.rows.iter().flatten() {
+            fg.extend_from_slice(&row.fg);
+        }
+        bgs.extend(fg);
+        bgs
+    }
+}
+
+/// CPU-side (device-free) half of [`TerminalGridPass`]: glyph shaping plus
+/// the task0003 per-row instance cache. Split out from the GPU-owning
+/// struct so unit tests can exercise the row-cache rebuild logic (TS-4 /
+/// TS-5) directly against the real implementation instead of a hand-
+/// maintained mirror — `TerminalGridPass::new` is the only piece that
+/// actually needs a wgpu device (pipeline + bind-group-layout + sampler).
+struct GridInstanceBuilder {
     /// Cache + atlas live behind a mutex so the App can hand the same Arc
-    /// to multiple consumers (Phase 5+). The pass calls
-    /// `cache.get_or_rasterize` during `prepare`.
+    /// to multiple consumers (Phase 5+). Rasterization calls
+    /// `cache.get_or_rasterize` during a row (re)build.
     cache: Arc<Mutex<GlyphCache>>,
     /// Resolved fallback chain consulted per grapheme cluster.
     fallback: Arc<FallbackChain>,
     /// Active rasterizer (Swash or AbGlyph, picked at startup from
     /// `Settings::font_engine`).
     rasterizer: Arc<dyn GlyphRasterizer>,
-    /// The atlas content generation that the GPU textures currently reflect.
-    /// `None` until the first upload has been performed.
-    uploaded_generation: Option<u64>,
+    /// Per-row instance cache (task0003 FR3/FR4).
+    row_cache: RowCache,
 }
 
-/// Output of a single [`TerminalGridPass::prepare`] call. Held by the
-/// caller for the duration of the render pass so the bind group + buffer
-/// stay alive.
-pub struct PreparedFrame {
-    pub instances: Vec<CellInstance>,
-    pub instance_buffer: Option<wgpu::Buffer>,
-    pub uniform_buffer: Option<wgpu::Buffer>,
-    pub bind_group: Option<wgpu::BindGroup>,
-}
-
-impl TerminalGridPass {
-    /// Build the pipeline + bind group layout. The atlas textures are
-    /// uploaded lazily on the first `prepare` call (the atlas page sizes
-    /// are not known until the cache has uploaded at least one glyph).
-    pub fn new(
-        device: &wgpu::Device,
-        surface_format: wgpu::TextureFormat,
+impl GridInstanceBuilder {
+    fn new(
         cache: Arc<Mutex<GlyphCache>>,
         fallback: Arc<FallbackChain>,
         rasterizer: Arc<dyn GlyphRasterizer>,
     ) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("native-poc-terminal-grid-shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
-        });
-
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("native-poc-terminal-grid-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("native-poc-terminal-grid-pl"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        // Instance buffer layout. Eight scalar attributes packed as
-        // `vec2<f32>`, `vec2<f32>`, `vec4<f32>`, four `u32`s.
-        let attributes = [
-            // cell_xy
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 0,
-                shader_location: 0,
-            },
-            // cell_wh
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 8,
-                shader_location: 1,
-            },
-            // atlas_uv (u0,v0,u1,v1)
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 16,
-                shader_location: 2,
-            },
-            // fg_rgba
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Uint32,
-                offset: 32,
-                shader_location: 3,
-            },
-            // bg_rgba
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Uint32,
-                offset: 36,
-                shader_location: 4,
-            },
-            // page
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Uint32,
-                offset: 40,
-                shader_location: 5,
-            },
-            // flags
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Uint32,
-                offset: 44,
-                shader_location: 6,
-            },
-        ];
-
-        let vbuf_layout = wgpu::VertexBufferLayout {
-            array_stride: CellInstance::STRIDE,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &attributes,
-        };
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("native-poc-terminal-grid-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: &[vbuf_layout],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("native-poc-terminal-grid-sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-
         Self {
-            pipeline,
-            bind_group_layout,
-            sampler,
-            alpha_texture: None,
-            alpha_view: None,
-            alpha_dim: (0, 0),
-            rgba_texture: None,
-            rgba_view: None,
-            rgba_dim: (0, 0),
             cache,
             fallback,
             rasterizer,
-            uploaded_generation: None,
+            row_cache: RowCache::default(),
         }
     }
 
     /// CPU-side build path (no GPU). Computes the instance list for the
-    /// supplied grid input. The GPU upload step (`prepare`) wraps this and
-    /// also creates the wgpu buffers + bind group.
+    /// supplied grid input.
     ///
     /// This split exists so unit tests can exercise the per-cell pipeline
     /// (TS-font-13 / TS-font-14) without standing up a wgpu device.
-    pub fn build_instances(&self, cells: &[CellInput], metrics: CellMetrics) -> Vec<CellInstance> {
+    fn build_instances(&self, cells: &[CellInput], metrics: CellMetrics) -> Vec<CellInstance> {
+        let (mut bgs, fg) = self.build_instances_split(cells, metrics);
+        bgs.extend(fg);
+        bgs
+    }
+
+    /// Split form of [`Self::build_instances`]: returns the background and
+    /// foreground instance lists separately instead of concatenating them.
+    /// Shared by the full-grid path (`build_instances`) and the per-row
+    /// cache rebuild ([`Self::rebuild_dirty_rows`]) so both stay byte-for-
+    /// byte consistent with each other by construction — a single row's
+    /// split output, concatenated with every other row's in row order (see
+    /// [`RowCache`]), reproduces exactly what a monolithic `build_instances`
+    /// call over the same cells would produce.
+    fn build_instances_split(
+        &self,
+        cells: &[CellInput],
+        metrics: CellMetrics,
+    ) -> (Vec<CellInstance>, Vec<CellInstance>) {
         // Two-pass instance ordering: all background quads first, then
         // every foreground quad (glyphs, box / block-drawing strokes,
         // decoration lines). Without this split, the per-cell `[bg,
@@ -587,8 +512,55 @@ impl TerminalGridPass {
                 });
             }
         }
-        bgs.extend(fg);
-        bgs
+        (bgs, fg)
+    }
+
+    /// Rebuild the cache entries for exactly `dirty_rows` from
+    /// `dirty_cells` (already restricted to those rows by the caller — see
+    /// `render::collect_cell_inputs`'s `only_rows` mode). Cells for each
+    /// row must appear contiguously and in the same ascending order as
+    /// `dirty_rows` — guaranteed when `dirty_cells` came from
+    /// `collect_cell_inputs(..., Some(dirty_rows))`, since that function
+    /// walks rows in the given order and `App::dirty_rows_this_frame`
+    /// returns a sorted, deduplicated set. Returns the number of rows
+    /// rebuilt (`== dirty_rows.len()`) for the `EMTERM_RENDER_PERF`
+    /// rows-rebuilt counter.
+    fn rebuild_dirty_rows(
+        &mut self,
+        dirty_rows: &[u16],
+        dirty_cells: &[CellInput],
+        metrics: CellMetrics,
+        row_count: u16,
+    ) -> usize {
+        self.row_cache.resize(row_count as usize);
+        if dirty_rows.is_empty() {
+            return 0;
+        }
+        let mut idx = 0usize;
+        for &row in dirty_rows {
+            let start = idx;
+            while idx < dirty_cells.len() && dirty_cells[idx].row == row {
+                idx += 1;
+            }
+            let (bg, fg) = self.build_instances_split(&dirty_cells[start..idx], metrics);
+            self.row_cache.set(row, RowInstances { bg, fg });
+        }
+        dirty_rows.len()
+    }
+
+    /// CPU-side entry point for the cached (non-preedit) render path:
+    /// rebuild exactly the dirty rows, then concatenate the full per-row
+    /// cache into one instance sequence. Returns `(instances,
+    /// rows_rebuilt)`.
+    fn rebuild_and_collect(
+        &mut self,
+        dirty_rows: &[u16],
+        dirty_cells: &[CellInput],
+        metrics: CellMetrics,
+        row_count: u16,
+    ) -> (Vec<CellInstance>, usize) {
+        let rebuilt = self.rebuild_dirty_rows(dirty_rows, dirty_cells, metrics, row_count);
+        (self.row_cache.concat_all(), rebuilt)
     }
 
     /// Resolve a single cell's glyph to a `CellInstance`. Returns `None`
@@ -818,32 +790,303 @@ impl TerminalGridPass {
             flags: 0,
         })
     }
+}
 
-    /// Upload the current atlas page bytes to the GPU and rebuild the bind
-    /// group + instance buffer. Called once per frame from
-    /// `window_host::render` after the cell loop has produced
-    /// [`CellInput`] entries.
+/// Custom wgpu pass that draws the entire terminal grid in one instanced
+/// draw call.
+///
+/// The pass owns the pipeline + bind-group layout + sampler + persistent
+/// GPU buffers. It does NOT own the glyph cache or atlas — those live
+/// alongside the renderer so they can be reused across frames (see
+/// [`GridInstanceBuilder`], which the CPU-side glyph shaping + row-cache
+/// logic now lives on). `prepare` uploads an already-resolved instance
+/// list (grown/updated in place rather than reallocated every frame —
+/// task0003 AC-4); `draw` records the instanced draw call into a render
+/// pass started with `LoadOp::Load` (so the wgpu clear performed before
+/// this pass survives).
+pub struct TerminalGridPass {
+    pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    /// Lazily-uploaded textures. Replaced on every `prepare` when the atlas
+    /// page bytes change.
+    alpha_texture: Option<wgpu::Texture>,
+    alpha_view: Option<wgpu::TextureView>,
+    alpha_dim: (u32, u32),
+    rgba_texture: Option<wgpu::Texture>,
+    rgba_view: Option<wgpu::TextureView>,
+    rgba_dim: (u32, u32),
+    /// CPU-side glyph shaping + per-row instance cache.
+    builder: GridInstanceBuilder,
+    /// Persistent GPU-side instance buffer (task0003 AC-4): created once
+    /// and grown via [`grow_capacity`] instead of reallocated every frame.
+    instance_buffer: Option<wgpu::Buffer>,
+    /// Capacity of `instance_buffer` in bytes.
+    instance_capacity_bytes: u64,
+    /// Persistent GPU-side uniform buffer. Fixed size
+    /// (`size_of::<FrameUniform>()`), so it is created once and only ever
+    /// `write_buffer`'d in place afterward.
+    uniform_buffer: Option<wgpu::Buffer>,
+    /// Bind group referencing `uniform_buffer` + the atlas texture views +
+    /// sampler. Rebuilt only when a referenced resource's identity changes
+    /// (first creation, or atlas texture (re)creation).
+    bind_group: Option<wgpu::BindGroup>,
+    /// Instance count uploaded this frame; `draw` reads this instead of a
+    /// per-call parameter now that the instance buffer itself is
+    /// persistent.
+    instance_count: usize,
+    /// The atlas content generation that the GPU textures currently reflect.
+    /// `None` until the first upload has been performed.
+    uploaded_generation: Option<u64>,
+}
+
+impl TerminalGridPass {
+    /// Build the pipeline + bind group layout. The atlas textures are
+    /// uploaded lazily on the first `prepare` call (the atlas page sizes
+    /// are not known until the cache has uploaded at least one glyph).
+    pub fn new(
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+        cache: Arc<Mutex<GlyphCache>>,
+        fallback: Arc<FallbackChain>,
+        rasterizer: Arc<dyn GlyphRasterizer>,
+    ) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("native-poc-terminal-grid-shader"),
+            source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("native-poc-terminal-grid-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("native-poc-terminal-grid-pl"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        // Instance buffer layout. Eight scalar attributes packed as
+        // `vec2<f32>`, `vec2<f32>`, `vec4<f32>`, four `u32`s.
+        let attributes = [
+            // cell_xy
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            },
+            // cell_wh
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 8,
+                shader_location: 1,
+            },
+            // atlas_uv (u0,v0,u1,v1)
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 16,
+                shader_location: 2,
+            },
+            // fg_rgba
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Uint32,
+                offset: 32,
+                shader_location: 3,
+            },
+            // bg_rgba
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Uint32,
+                offset: 36,
+                shader_location: 4,
+            },
+            // page
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Uint32,
+                offset: 40,
+                shader_location: 5,
+            },
+            // flags
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Uint32,
+                offset: 44,
+                shader_location: 6,
+            },
+        ];
+
+        let vbuf_layout = wgpu::VertexBufferLayout {
+            array_stride: CellInstance::STRIDE,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &attributes,
+        };
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("native-poc-terminal-grid-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[vbuf_layout],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("native-poc-terminal-grid-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        Self {
+            pipeline,
+            bind_group_layout,
+            sampler,
+            alpha_texture: None,
+            alpha_view: None,
+            alpha_dim: (0, 0),
+            rgba_texture: None,
+            rgba_view: None,
+            rgba_dim: (0, 0),
+            builder: GridInstanceBuilder::new(cache, fallback, rasterizer),
+            instance_buffer: None,
+            instance_capacity_bytes: 0,
+            uniform_buffer: None,
+            bind_group: None,
+            instance_count: 0,
+            uploaded_generation: None,
+        }
+    }
+
+    /// CPU-side build path (no GPU): delegates to
+    /// [`GridInstanceBuilder::build_instances`]. Used directly by the IME
+    /// preedit bypass path (task0003 D3) — a frame with active preedit
+    /// rebuilds the full grid fresh rather than going through the per-row
+    /// cache. Also exercised by this module's device-free tests.
+    ///
+    /// This split exists so unit tests can exercise the per-cell pipeline
+    /// (TS-font-13 / TS-font-14) without standing up a wgpu device.
+    pub fn build_instances(&self, cells: &[CellInput], metrics: CellMetrics) -> Vec<CellInstance> {
+        self.builder.build_instances(cells, metrics)
+    }
+
+    /// CPU-side entry point for the cached (non-preedit) render path
+    /// (task0003 FR3/FR4): delegates to
+    /// [`GridInstanceBuilder::rebuild_and_collect`]. Rebuilds exactly
+    /// `dirty_rows` from `dirty_cells` and returns `(instances,
+    /// rows_rebuilt)` — `window_host::render` feeds `rows_rebuilt` into
+    /// the `EMTERM_RENDER_PERF` rows-rebuilt counter.
+    pub fn rebuild_and_collect(
+        &mut self,
+        dirty_rows: &[u16],
+        dirty_cells: &[CellInput],
+        metrics: CellMetrics,
+        row_count: u16,
+    ) -> (Vec<CellInstance>, usize) {
+        self.builder
+            .rebuild_and_collect(dirty_rows, dirty_cells, metrics, row_count)
+    }
+
+    /// Upload this frame's already-resolved instance list to the GPU and
+    /// (re)build the bind group as needed. Callers resolve `instances`
+    /// beforehand — either via [`Self::rebuild_and_collect`] (the cached
+    /// path) or [`Self::build_instances`] (the IME preedit bypass / any
+    /// other full-grid path) — so this method is pure GPU plumbing: atlas
+    /// texture sync, persistent instance/uniform buffer management (grown
+    /// via [`grow_capacity`] instead of reallocated every frame — task0003
+    /// AC-4), and bind-group (re)creation. Called once per frame from
+    /// `window_host::render`.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        cells: &[CellInput],
+        instances: &[CellInstance],
         metrics: CellMetrics,
         viewport_w: u32,
         viewport_h: u32,
-    ) -> PreparedFrame {
-        let instances = self.build_instances(cells, metrics);
+    ) {
+        self.instance_count = instances.len();
         if instances.is_empty() {
-            return PreparedFrame {
-                instances,
-                instance_buffer: None,
-                uniform_buffer: None,
-                bind_group: None,
-            };
+            return;
         }
         // Sync the GPU atlas textures with the CPU atlas bytes.
         let (alpha_dim, rgba_dim, generation) = {
-            let cache = self.cache.lock();
+            let cache = self.builder.cache.lock();
             (
                 cache.atlas().alpha_dim(),
                 cache.atlas().rgba_dim(),
@@ -906,7 +1149,7 @@ impl TerminalGridPass {
         // pixel RGBA page, making unconditional uploads expensive.
         let needs_upload = self.uploaded_generation != Some(generation) || texture_recreated;
         if needs_upload {
-            let cache = self.cache.lock();
+            let cache = self.builder.cache.lock();
             if let Some(tex) = self.alpha_texture.as_ref() {
                 queue.write_texture(
                     wgpu::ImageCopyTexture {
@@ -959,80 +1202,104 @@ impl TerminalGridPass {
             decoration_thickness_px: decoration_thickness_px(metrics.cell_h),
             _pad: 0.0,
         };
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("native-poc-terminal-grid-uniform"),
-            size: std::mem::size_of::<FrameUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        // Persistent uniform buffer (task0003 AC-4): fixed size, so it is
+        // only ever created once (first call) and `write_buffer`'d in
+        // place on every subsequent call.
+        let uniform_first_created = self.uniform_buffer.is_none();
+        let uniform_buffer = self.uniform_buffer.get_or_insert_with(|| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("native-poc-terminal-grid-uniform"),
+                size: std::mem::size_of::<FrameUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
         });
-        queue.write_buffer(&uniform_buffer, 0, bytemuck_compat::cast_slice(&[uniform]));
+        queue.write_buffer(uniform_buffer, 0, bytemuck_compat::cast_slice(&[uniform]));
 
-        let instance_bytes = bytemuck_compat::cast_slice(&instances);
-        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("native-poc-terminal-grid-instances"),
-            size: instance_bytes.len() as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&instance_buffer, 0, instance_bytes);
+        // Persistent instance buffer (task0003 AC-4): grown via
+        // `grow_capacity` only when the required upload size exceeds the
+        // current capacity; otherwise the existing buffer is reused and
+        // just `write_buffer`'d in place, so a steady-state frame (same
+        // instance count) allocates no new GPU buffer at all.
+        let instance_bytes = bytemuck_compat::cast_slice(instances);
+        let required = instance_bytes.len() as u64;
+        let new_capacity = grow_capacity(self.instance_capacity_bytes, required);
+        if self.instance_buffer.is_none() || new_capacity != self.instance_capacity_bytes {
+            self.instance_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("native-poc-terminal-grid-instances"),
+                size: new_capacity,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.instance_capacity_bytes = new_capacity;
+        }
+        queue.write_buffer(
+            self.instance_buffer.as_ref().expect("just ensured above"),
+            0,
+            instance_bytes,
+        );
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("native-poc-terminal-grid-bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        self.alpha_view
-                            .as_ref()
-                            .expect("alpha view present after upload"),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        self.rgba_view
-                            .as_ref()
-                            .expect("rgba view present after upload"),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-
-        PreparedFrame {
-            instances,
-            instance_buffer: Some(instance_buffer),
-            uniform_buffer: Some(uniform_buffer),
-            bind_group: Some(bind_group),
+        // Bind group references the uniform buffer (fixed identity once
+        // created) + the atlas texture views — NOT the instance buffer
+        // (bound separately via `set_vertex_buffer`), so instance-buffer
+        // regrowth alone never requires a bind-group rebuild.
+        if uniform_first_created || texture_recreated || self.bind_group.is_none() {
+            self.bind_group = Some(
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("native-poc-terminal-grid-bg"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self
+                                .uniform_buffer
+                                .as_ref()
+                                .expect("just ensured above")
+                                .as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                self.alpha_view
+                                    .as_ref()
+                                    .expect("alpha view present after upload"),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(
+                                self.rgba_view
+                                    .as_ref()
+                                    .expect("rgba view present after upload"),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                }),
+            );
         }
     }
 
     /// Issue one instanced draw call. The render pass must already be
     /// configured with `LoadOp::Load` (`clear` ran in an earlier pass).
-    pub fn draw<'pass>(
-        &'pass self,
-        rpass: &mut wgpu::RenderPass<'pass>,
-        frame: &'pass PreparedFrame,
-    ) {
-        let (Some(buf), Some(bg)) = (frame.instance_buffer.as_ref(), frame.bind_group.as_ref())
+    /// Reads the persistent instance buffer / bind group / instance count
+    /// [`Self::prepare`] populated this frame — a no-op when there is
+    /// nothing to draw (no tab, or the last `prepare` saw zero instances).
+    pub fn draw<'pass>(&'pass self, rpass: &mut wgpu::RenderPass<'pass>) {
+        if self.instance_count == 0 {
+            return;
+        }
+        let (Some(buf), Some(bg)) = (self.instance_buffer.as_ref(), self.bind_group.as_ref())
         else {
             return;
         };
-        if frame.instances.is_empty() {
-            return;
-        }
         rpass.set_pipeline(&self.pipeline);
         rpass.set_bind_group(0, bg, &[]);
         rpass.set_vertex_buffer(0, buf.slice(..));
-        rpass.draw(0..4, 0..frame.instances.len() as u32);
+        rpass.draw(0..4, 0..self.instance_count as u32);
     }
 }
 
@@ -1337,6 +1604,16 @@ mod tests {
         (raster, chain, cache)
     }
 
+    /// Fresh [`GridInstanceBuilder`] wired to the same `StubRasterizer`
+    /// stack `build_stack` sets up for `helper_build_instances` — used by
+    /// the task0003 row-cache tests to exercise the *real* rebuild /
+    /// concatenation implementation (not a hand-duplicated mirror) without
+    /// a wgpu device.
+    fn instance_builder() -> GridInstanceBuilder {
+        let (raster, chain, cache) = build_stack();
+        GridInstanceBuilder::new(cache, chain, raster as Arc<dyn GlyphRasterizer>)
+    }
+
     /// TS-font-13: `TerminalGridPass::prepare` emits one (glyph) instance
     /// per non-empty cell. We exercise the CPU-side `build_instances`
     /// helper here — it is the path GPU `prepare` calls before uploading.
@@ -1634,6 +1911,273 @@ mod tests {
         let flags: Vec<u32> = inst.iter().map(|i| i.flags).collect();
         assert_eq!(pages, vec![PAGE_ALPHA, PAGE_SOLID, PAGE_SOLID]);
         assert_eq!(flags, vec![0, FLAG_UNDERLINE, FLAG_STRIKETHROUGH]);
+    }
+
+    // ── task0003 AC-4: persistent-buffer growth policy ─────────────────
+
+    /// AC-4: capacity never decreases once the required size already fits.
+    #[test]
+    fn grow_capacity_never_decreases_when_it_already_fits() {
+        assert_eq!(grow_capacity(1000, 500), 1000);
+        assert_eq!(grow_capacity(1000, 1000), 1000);
+    }
+
+    /// AC-4: capacity always covers the required size, even growing from
+    /// zero (the first-ever `prepare` call).
+    #[test]
+    fn grow_capacity_always_covers_required_size() {
+        assert!(grow_capacity(0, 4096) >= 4096);
+        assert!(grow_capacity(100, 5000) >= 5000);
+        assert!(grow_capacity(0, 1_000_000) >= 1_000_000);
+    }
+
+    /// AC-4: a small requirement is floored at `MIN_BUFFER_CAPACITY_BYTES`
+    /// rather than allocating the bare minimum every time.
+    #[test]
+    fn grow_capacity_floors_small_requirements() {
+        assert_eq!(grow_capacity(0, 48), MIN_BUFFER_CAPACITY_BYTES);
+    }
+
+    /// AC-4: geometric growth bounds the number of reallocations under a
+    /// monotonically increasing requirement — doubling the required size
+    /// 20 times triggers far fewer than 20 capacity changes.
+    #[test]
+    fn grow_capacity_geometric_growth_bounds_reallocation_count() {
+        let mut capacity = 0u64;
+        let mut required = 48u64;
+        let mut reallocations = 0;
+        for _ in 0..20 {
+            let new_capacity = grow_capacity(capacity, required);
+            if new_capacity != capacity {
+                reallocations += 1;
+                capacity = new_capacity;
+            }
+            assert!(capacity >= required, "capacity must always cover required");
+            required *= 2;
+        }
+        assert!(
+            reallocations < 20,
+            "geometric growth should need fewer reallocations than linear regrowth, got {reallocations}"
+        );
+    }
+
+    // ── task0003: RowCache concatenation (mechanical, synthetic instances) ──
+
+    /// A distinguishable synthetic `CellInstance` for `RowCache` ordering
+    /// tests: `fg_rgba` carries an identity tag so assertions can name
+    /// which row/pass an instance came from without needing real glyph
+    /// shaping.
+    fn tagged_instance(tag: u32) -> CellInstance {
+        CellInstance {
+            cell_xy: [0.0, 0.0],
+            cell_wh: [0.0, 0.0],
+            atlas_uv: [0.0, 0.0, 0.0, 0.0],
+            fg_rgba: tag,
+            bg_rgba: 0,
+            page: PAGE_SOLID,
+            flags: 0,
+        }
+    }
+
+    /// `RowCache::concat_all` emits every row's `bg` entries (in row
+    /// order) before any row's `fg` entries (in row order) — the two-pass
+    /// invariant that keeps the row-cache path byte-identical to a
+    /// from-scratch `build_instances` call (see the `RowCache` doc).
+    #[test]
+    fn row_cache_concat_all_orders_all_bgs_before_any_fg() {
+        let mut cache = RowCache::default();
+        cache.resize(3);
+        cache.set(
+            0,
+            RowInstances {
+                bg: vec![tagged_instance(100)],
+                fg: vec![tagged_instance(101)],
+            },
+        );
+        cache.set(
+            1,
+            RowInstances {
+                bg: vec![tagged_instance(200)],
+                fg: vec![tagged_instance(201)],
+            },
+        );
+        cache.set(
+            2,
+            RowInstances {
+                bg: vec![tagged_instance(300)],
+                fg: vec![tagged_instance(301)],
+            },
+        );
+        let tags: Vec<u32> = cache.concat_all().iter().map(|i| i.fg_rgba).collect();
+        assert_eq!(tags, vec![100, 200, 300, 101, 201, 301]);
+    }
+
+    /// `RowCache::resize` to a different row count drops every existing
+    /// entry (task0003 D3: resize is one of the "full cache drop"
+    /// triggers).
+    #[test]
+    fn row_cache_resize_to_different_count_drops_existing_entries() {
+        let mut cache = RowCache::default();
+        cache.resize(2);
+        cache.set(
+            0,
+            RowInstances {
+                bg: vec![tagged_instance(1)],
+                fg: vec![],
+            },
+        );
+        cache.resize(3);
+        assert!(
+            cache.concat_all().is_empty(),
+            "resize to a new row count must drop stale entries"
+        );
+    }
+
+    /// `RowCache::resize` to the SAME row count is a no-op — existing
+    /// entries survive. This is what makes "no dirty rows" a true
+    /// full-cache-reuse frame rather than an accidental full rebuild.
+    #[test]
+    fn row_cache_resize_to_same_count_preserves_existing_entries() {
+        let mut cache = RowCache::default();
+        cache.resize(2);
+        cache.set(
+            0,
+            RowInstances {
+                bg: vec![tagged_instance(1)],
+                fg: vec![],
+            },
+        );
+        cache.resize(2);
+        let tags: Vec<u32> = cache.concat_all().iter().map(|i| i.fg_rgba).collect();
+        assert_eq!(tags, vec![1]);
+    }
+
+    // ── task0003 AC-1/AC-2/AC-3: row-cache equivalence & rebuild counting ──
+
+    /// AC-1 (SPEC TS-4): after an initial full-grid rebuild, mutating a
+    /// single row and rebuilding only that row (the "write a character"
+    /// scenario) reproduces exactly the same instance sequence a
+    /// from-scratch full rebuild of the new overall state would produce.
+    #[test]
+    fn row_cache_equivalence_after_single_row_write() {
+        let mut builder = instance_builder();
+        let m = metrics();
+
+        let frame1 = vec![
+            ascii_cell(0, 0, "A"),
+            ascii_cell(1, 0, "B"),
+            ascii_cell(0, 1, "C"),
+            ascii_cell(1, 1, "D"),
+            ascii_cell(0, 2, "E"),
+            ascii_cell(1, 2, "F"),
+        ];
+        let (instances1, rebuilt1) = builder.rebuild_and_collect(&[0, 1, 2], &frame1, m, 3);
+        assert_eq!(rebuilt1, 3, "first frame rebuilds every row");
+        assert_eq!(instances1, builder.build_instances(&frame1, m));
+
+        // Frame 2: only row 1 changes ("C" -> "X"); rows 0/2 are clean and
+        // must be served from cache without rebuilding.
+        let row1_only = vec![ascii_cell(0, 1, "X"), ascii_cell(1, 1, "D")];
+        let (instances2, rebuilt2) = builder.rebuild_and_collect(&[1], &row1_only, m, 3);
+        assert_eq!(
+            rebuilt2, 1,
+            "AC-3: a single-row write rebuilds exactly one row"
+        );
+
+        let frame2_full = vec![
+            ascii_cell(0, 0, "A"),
+            ascii_cell(1, 0, "B"),
+            ascii_cell(0, 1, "X"),
+            ascii_cell(1, 1, "D"),
+            ascii_cell(0, 2, "E"),
+            ascii_cell(1, 2, "F"),
+        ];
+        // Ground truth computed against the SAME builder (same glyph
+        // cache) so atlas allocation order for the one newly-seen glyph
+        // ('X') is identical regardless of which path requested it first.
+        let ground_truth = builder.build_instances(&frame2_full, m);
+        assert_eq!(instances2, ground_truth);
+    }
+
+    /// AC-3: a stable frame (empty dirty set) rebuilds zero rows and
+    /// reuses the entire cache — the instance sequence is unchanged.
+    #[test]
+    fn row_cache_stable_frame_rebuilds_zero_rows_and_reuses_cache() {
+        let mut builder = instance_builder();
+        let m = metrics();
+        let frame = vec![ascii_cell(0, 0, "A"), ascii_cell(0, 1, "B")];
+        let (instances1, rebuilt1) = builder.rebuild_and_collect(&[0, 1], &frame, m, 2);
+        assert_eq!(rebuilt1, 2);
+
+        let (instances2, rebuilt2) = builder.rebuild_and_collect(&[], &[], m, 2);
+        assert_eq!(rebuilt2, 0, "AC-3: empty dirty set rebuilds zero rows");
+        assert_eq!(
+            instances2, instances1,
+            "an empty dirty set must reuse every cached row unchanged"
+        );
+    }
+
+    /// AC-2 (invalidation matrix, consumption side): whatever subset of
+    /// rows the caller marks dirty — a single row (selection/hover-style),
+    /// a scattered pair (two independent highlight changes), or every row
+    /// (scroll/resize/font/theme-style full invalidation) — rebuilding
+    /// exactly that subset and reusing the rest still reproduces a
+    /// from-scratch full rebuild of the resulting state. Dirty-set
+    /// *semantics* (which trigger maps to which subset) is task0002's
+    /// concern (consumed as-is here); this test covers the row cache's
+    /// handling of an arbitrary dirty-row shape.
+    #[test]
+    fn row_cache_equivalence_holds_for_various_dirty_row_shapes() {
+        let base = vec![
+            ascii_cell(0, 0, "A"),
+            ascii_cell(0, 1, "B"),
+            ascii_cell(0, 2, "C"),
+            ascii_cell(0, 3, "D"),
+        ];
+        let scenarios: [(&[u16], Vec<CellInput>); 3] = [
+            // Single row dirty (e.g. a selection/hover change on row 2).
+            (&[2], vec![ascii_cell(0, 2, "Z")]),
+            // Scattered rows dirty (e.g. two independent highlight
+            // changes on rows 0 and 3).
+            (&[0, 3], vec![ascii_cell(0, 0, "Y"), ascii_cell(0, 3, "W")]),
+            // Every row dirty (scroll / resize / font-or-theme-change
+            // style full invalidation).
+            (
+                &[0, 1, 2, 3],
+                vec![
+                    ascii_cell(0, 0, "P"),
+                    ascii_cell(0, 1, "Q"),
+                    ascii_cell(0, 2, "R"),
+                    ascii_cell(0, 3, "S"),
+                ],
+            ),
+        ];
+        for (dirty_rows, mutated_cells) in scenarios {
+            let mut builder = instance_builder();
+            let m = metrics();
+            let (_, rebuilt_initial) = builder.rebuild_and_collect(&[0, 1, 2, 3], &base, m, 4);
+            assert_eq!(rebuilt_initial, 4);
+
+            let (partial, rebuilt) = builder.rebuild_and_collect(dirty_rows, &mutated_cells, m, 4);
+            assert_eq!(rebuilt, dirty_rows.len());
+
+            // Ground truth: the full grid with exactly `mutated_cells`
+            // overlaid on `base` at the same (row, col).
+            let mut full = base.clone();
+            for mutated in &mutated_cells {
+                if let Some(existing) = full
+                    .iter_mut()
+                    .find(|c| c.row == mutated.row && c.col == mutated.col)
+                {
+                    *existing = mutated.clone();
+                }
+            }
+            let ground_truth = builder.build_instances(&full, m);
+            assert_eq!(
+                partial, ground_truth,
+                "dirty rows {dirty_rows:?} must reproduce a full rebuild"
+            );
+        }
     }
 }
 
