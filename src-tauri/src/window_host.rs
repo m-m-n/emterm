@@ -296,6 +296,12 @@ pub struct WindowHost {
     /// events so trackpad micro-scrolls eventually resolve to one arrow
     /// key per whole-line boundary.
     alt_scroll_accum: f32,
+    /// `EMTERM_RENDER_PERF=1` gate (task0002 FR6-half). Read once at
+    /// construction and cached here — mirrors the `perf_log` field idiom
+    /// in `render::font::cache::GlyphCache::new`.
+    render_perf_enabled: bool,
+    /// Frames-drawn counter, active only while `render_perf_enabled`.
+    frame_counter: FrameCounter,
 }
 
 /// Cached link-hover state for the active tab's grid. Mirrors the
@@ -496,6 +502,10 @@ impl WindowHost {
             hover: HoverState::default(),
             pointer_in_window: false,
             alt_scroll_accum: 0.0,
+            render_perf_enabled: std::env::var("EMTERM_RENDER_PERF")
+                .map(|v| v == "1")
+                .unwrap_or(false),
+            frame_counter: FrameCounter::default(),
         }
     }
 
@@ -1388,9 +1398,23 @@ impl WindowHost {
                 None
             };
             let status_bar_changed = app.status_bar_view_model_changed();
-            if matches!(dirty_count, Some(0)) && !status_bar_changed {
+            if should_skip_frame(dirty_count, status_bar_changed) {
                 return;
             }
+        }
+
+        // task0002 FR6-half: count frames that proceed past the skip
+        // decision above (i.e. frames that are actually drawn), gated
+        // behind `EMTERM_RENDER_PERF=1` so there is zero overhead when
+        // unset. Logged at warn level (release builds drop below warn)
+        // with the `[EMTERM_RENDER_PERF]` prefix, same idiom as
+        // `EMTERM_FONT_PERF`.
+        if let Some(total) = record_drawn_frame(
+            self.render_perf_enabled,
+            &mut self.frame_counter,
+            Instant::now(),
+        ) {
+            log::warn!("[EMTERM_RENDER_PERF] frames drawn: {total}");
         }
 
         // Build this frame's fold layout for the active tab before any paint
@@ -1871,6 +1895,66 @@ impl WindowHost {
             system_theme: None,
         }
     }
+}
+
+/// Sub-phase 2 dirty-row skip decision (task0002 AC-5): extracted from
+/// `WindowHost::render` as a pure function — plain values in, plain bool
+/// out, no window/app/egui types — so it is directly unit-testable.
+///
+/// `dirty_count` is `None` when there is no active tab (the hint-message
+/// frame always proceeds so it can draw); `Some(n)` is
+/// `App::dirty_rows_this_frame(..).len()`. `status_bar_changed` is
+/// `App::status_bar_view_model_changed()` — the carve-out that keeps the
+/// status bar's own wake chain (clock tick, git branch, OSC 777 push)
+/// live even when the terminal grid itself is quiescent.
+///
+/// Returns `true` (skip the frame) only when the dirty count is known to
+/// be exactly zero AND the status bar did not change; every other
+/// combination proceeds to a full frame.
+fn should_skip_frame(dirty_count: Option<usize>, status_bar_changed: bool) -> bool {
+    matches!(dirty_count, Some(0)) && !status_bar_changed
+}
+
+/// Frames-drawn counter for `EMTERM_RENDER_PERF=1` (task0002 AC-6).
+/// Counts every frame `record_draw` is called for and reports the
+/// running total at most once per second of activity, so an idle host
+/// logging at 60 Hz doesn't flood `emterm.log`.
+#[derive(Debug, Default)]
+struct FrameCounter {
+    drawn: u64,
+    last_log_at: Option<Instant>,
+}
+
+impl FrameCounter {
+    /// Record one drawn (non-skipped) frame. Returns `Some(total)` when
+    /// at least a second has passed since the last reported log point
+    /// (or this is the first call ever), `None` otherwise. The count
+    /// itself always advances regardless of the return value.
+    fn record_draw(&mut self, now: Instant) -> Option<u64> {
+        self.drawn += 1;
+        let should_log = match self.last_log_at {
+            None => true,
+            Some(t) => now.duration_since(t) >= Duration::from_secs(1),
+        };
+        if should_log {
+            self.last_log_at = Some(now);
+            Some(self.drawn)
+        } else {
+            None
+        }
+    }
+}
+
+/// Wires the `EMTERM_RENDER_PERF` gate to [`FrameCounter`]: a no-op that
+/// never touches `counter` when `enabled` is `false` (AC-6's "no
+/// counting side effects" half), otherwise delegates to
+/// `FrameCounter::record_draw`. Kept separate from `WindowHost::render`
+/// so both halves of AC-6 are unit-testable without a window.
+fn record_drawn_frame(enabled: bool, counter: &mut FrameCounter, now: Instant) -> Option<u64> {
+    if !enabled {
+        return None;
+    }
+    counter.record_draw(now)
 }
 
 /// Translate a winit `MouseButton` to its `egui::PointerButton`
@@ -3516,6 +3600,90 @@ mod tests {
     use super::*;
     use crate::ui::chrome::build_egui_fonts;
     use std::time::Duration;
+
+    // ── task0002 AC-5: should_skip_frame pure decision ───────────────
+
+    /// AC-5: `Some(0)` dirty AND status bar unchanged → skip.
+    #[test]
+    fn should_skip_frame_when_no_dirty_rows_and_status_bar_unchanged() {
+        assert!(should_skip_frame(Some(0), false));
+    }
+
+    /// AC-5: dirty rows present (even with an unchanged status bar) →
+    /// never skip.
+    #[test]
+    fn should_skip_frame_false_when_dirty_rows_present() {
+        assert!(!should_skip_frame(Some(3), false));
+    }
+
+    /// AC-5: status bar changed (even with zero dirty rows) → never
+    /// skip — this is the carve-out that keeps the clock / git-branch /
+    /// OSC 777 wake chain alive on an otherwise-idle shell.
+    #[test]
+    fn should_skip_frame_false_when_status_bar_changed() {
+        assert!(!should_skip_frame(Some(0), true));
+    }
+
+    /// AC-5: no active tab (`None`) → never skip; the hint-message frame
+    /// must still draw.
+    #[test]
+    fn should_skip_frame_false_when_no_active_tab() {
+        assert!(!should_skip_frame(None, false));
+    }
+
+    // ── task0002 AC-6: EMTERM_RENDER_PERF frame counter ──────────────
+
+    /// AC-6: the first recorded frame always logs (no prior log point).
+    #[test]
+    fn frame_counter_logs_first_frame_immediately() {
+        let mut counter = FrameCounter::default();
+        let now = Instant::now();
+        assert_eq!(counter.record_draw(now), Some(1));
+    }
+
+    /// AC-6: a second frame within the same one-second window still
+    /// counts but does not re-log.
+    #[test]
+    fn frame_counter_suppresses_log_within_one_second_window() {
+        let mut counter = FrameCounter::default();
+        let t0 = Instant::now();
+        assert_eq!(counter.record_draw(t0), Some(1));
+        let t1 = t0 + Duration::from_millis(500);
+        assert_eq!(counter.record_draw(t1), None);
+        assert_eq!(counter.drawn, 2, "count must still advance without logging");
+    }
+
+    /// AC-6: once a full second has elapsed since the last log, the next
+    /// drawn frame logs again with the updated running total.
+    #[test]
+    fn frame_counter_logs_again_after_one_second_elapsed() {
+        let mut counter = FrameCounter::default();
+        let t0 = Instant::now();
+        assert_eq!(counter.record_draw(t0), Some(1));
+        let t1 = t0 + Duration::from_secs(1);
+        assert_eq!(counter.record_draw(t1), Some(2));
+    }
+
+    /// AC-6: with the gate disabled, `record_drawn_frame` never touches
+    /// the counter — "no counting side effects occur" when
+    /// `EMTERM_RENDER_PERF` is unset.
+    #[test]
+    fn record_drawn_frame_disabled_never_touches_counter() {
+        let mut counter = FrameCounter::default();
+        let now = Instant::now();
+        assert_eq!(record_drawn_frame(false, &mut counter, now), None);
+        assert_eq!(counter.drawn, 0, "disabled gate must not count frames");
+    }
+
+    /// AC-6: with the gate enabled, `record_drawn_frame` delegates to
+    /// the counter and surfaces its log payload.
+    #[test]
+    fn record_drawn_frame_enabled_delegates_to_counter() {
+        let mut counter = FrameCounter::default();
+        let now = Instant::now();
+        assert_eq!(record_drawn_frame(true, &mut counter, now), Some(1));
+        assert_eq!(counter.drawn, 1);
+    }
 
     // ── skk_mode: bare Ctrl+J swallow ────────────────────────────────
 

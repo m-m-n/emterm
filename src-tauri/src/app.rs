@@ -3719,12 +3719,20 @@ impl App {
 
     /// Compute the rows that must be repainted on the next frame. Union of:
     /// 1. `term_core::get_dirty_rows()` for cell-level edits
-    /// 2. previous + current cursor row (to clear cursor ghost on move,
-    ///    or to flip the cursor in/out of view on blink phase change)
-    /// 3. previous + current selection rows (to clear highlight on shrink)
+    /// 2. previous + current cursor row, but only when the cursor cell
+    ///    actually moved since the previous frame (clears the cursor ghost
+    ///    on move; a stationary cursor with a stable blink phase costs no
+    ///    repaint of its row now that the block cursor lives in the egui
+    ///    overlay rather than the grid instances — see task0001)
+    /// 3. the current cursor row again, but only on a blink phase flip
+    ///    while blink is enabled (so the overlay can paint/erase the glyph)
+    /// 4. previous + current selection rows (to clear highlight on shrink)
     ///
     /// Returns a sorted, deduplicated `Vec`. Returns `0..rows` when
-    /// `needs_full_redraw` or `force_full_redraw` is set.
+    /// `needs_full_redraw` or `force_full_redraw` is set. Honest emptiness
+    /// is the point: a frame with no content, cursor, blink, selection, or
+    /// scroll change returns an empty `Vec` so the render-skip decision in
+    /// `window_host.rs` can actually fire (task0002 AC-1).
     pub fn dirty_rows_this_frame(&self, core: &TerminalCore) -> Vec<u16> {
         let rows = core.rows();
         if rows == 0 {
@@ -3743,14 +3751,22 @@ impl App {
             }
         };
 
-        // Cursor history: previous + current. Also include the cursor row
-        // when the blink phase flips so the cursor overlay can repaint or
-        // erase without leaving a stale glyph.
+        // Cursor history: previous + current row, but only when the
+        // cursor cell (row, col) actually moved since the previous frame —
+        // a stationary cursor pushes no row here, letting an idle frame's
+        // dirty set go empty.
         let cursor_row = core.get_cursor_row();
-        push_unique(&mut set, cursor_row);
-        if let Some((prev_row, _)) = self.previous_cursor {
-            push_unique(&mut set, prev_row);
+        let cursor_col = core.get_cursor_col();
+        let cursor_moved = self.previous_cursor != Some((cursor_row, cursor_col));
+        if cursor_moved {
+            push_unique(&mut set, cursor_row);
+            if let Some((prev_row, _)) = self.previous_cursor {
+                push_unique(&mut set, prev_row);
+            }
         }
+        // Independently of cursor movement, a blink phase flip still needs
+        // the cursor row repainted (or erased) — but only while blink is
+        // enabled; a disabled blink never pushes a row here.
         let blink_enabled = core.get_cursor_blink();
         if blink_enabled && self.blink_visible_now(blink_enabled) != self.previous_blink_visible {
             push_unique(&mut set, cursor_row);
@@ -4740,37 +4756,121 @@ mod tests {
         assert!(app.visual_bell_started.is_none());
     }
 
+    /// AC-1: a frame with no content change, no cursor move, no blink
+    /// flip, no selection change, and no scroll returns an empty dirty
+    /// set — the render-skip decision in `window_host.rs` can only fire
+    /// when this is actually empty rather than perpetually `[cursor_row]`.
     #[test]
-    fn dirty_set_empty_after_clear_when_nothing_moved() {
+    fn dirty_set_empty_when_nothing_changed() {
         let mut core = fresh_core(20, 5);
+        // Blink is on by default; disable it so the blink-phase check
+        // can never introduce timing-dependent flakiness in this test —
+        // the phase comparison is skipped entirely when blink is off.
+        core.set_cursor_blink(false);
         let app = app_with_cleared_state(&mut core);
-        // Cursor at (0,0), no selection, nothing written.
+        // Cursor at (0,0) unchanged, no selection, nothing written.
         let set = app.dirty_rows_this_frame(&core);
-        // Current cursor row (0) is always in the set.
-        assert_eq!(set, vec![0]);
+        assert!(set.is_empty(), "expected empty dirty set, got {set:?}");
     }
 
+    /// AC-2: moving the cursor dirties exactly the old row and the new
+    /// row; once the move is recorded, a subsequent stationary frame goes
+    /// back to empty (no permanent cursor-row stowaway).
     #[test]
     fn dirty_set_includes_cursor_move_origin_and_destination() {
         let mut core = fresh_core(20, 5);
+        core.set_cursor_blink(false); // isolate cursor-move behavior from blink
         let mut app = app_with_cleared_state(&mut core);
         // Move cursor to row 3 via CSI Cursor Position (1-based).
         core.process_pty_data(b"\x1b[4;1H");
         core.clear_dirty(); // simulate that the write itself didn't touch cells
         // App still has previous_cursor = (0, 0) from initial record.
         let set = app.dirty_rows_this_frame(&core);
-        assert!(
-            set.contains(&0),
-            "previous cursor row should be in dirty set"
+        assert_eq!(
+            set,
+            vec![0, 3],
+            "exactly the vacated row and the destination row should be dirty"
         );
-        assert!(
-            set.contains(&3),
-            "current cursor row should be in dirty set"
-        );
-        // Record then ask again — cursor history is now (3, x).
+        // Record then ask again — cursor history is now (3, x) and the
+        // cursor hasn't moved since, so the set goes back to empty.
         app.record_render_state(&mut core);
         let set2 = app.dirty_rows_this_frame(&core);
-        assert_eq!(set2, vec![3]);
+        assert!(
+            set2.is_empty(),
+            "stationary cursor after the move must not stow away a row, got {set2:?}"
+        );
+    }
+
+    /// AC-3 (blink enabled): the cursor row is dirtied only on the frame
+    /// where the blink phase actually flips, not on every frame.
+    #[test]
+    fn dirty_set_includes_cursor_row_only_on_blink_phase_flip() {
+        let mut core = fresh_core(20, 5);
+        core.set_cursor_blink(true);
+        let mut app = app_with_cleared_state(&mut core);
+        // Immediately after recording, the phase has not flipped — the
+        // dirty set stays empty (no cursor move, no blink flip yet).
+        let set_before_flip = app.dirty_rows_this_frame(&core);
+        assert!(
+            set_before_flip.is_empty(),
+            "no blink flip yet — expected empty, got {set_before_flip:?}"
+        );
+        // Back-date the blink reference so the phase has crossed into its
+        // other half-cycle relative to the snapshot taken by
+        // `record_render_state` above.
+        app.blink_started = Instant::now()
+            .checked_sub(Duration::from_millis(BLINK_HALF_MS as u64 + 10))
+            .expect("test clock too close to process start to back-date");
+        let set_after_flip = app.dirty_rows_this_frame(&core);
+        assert_eq!(
+            set_after_flip,
+            vec![0],
+            "blink flip must dirty exactly the cursor row"
+        );
+    }
+
+    /// AC-3 (blink disabled): no blink-driven push ever occurs, no matter
+    /// how far the (unused) blink clock is back-dated.
+    #[test]
+    fn dirty_set_never_pushes_blink_row_when_blink_disabled() {
+        let mut core = fresh_core(20, 5);
+        core.set_cursor_blink(false);
+        let mut app = app_with_cleared_state(&mut core);
+        app.blink_started = Instant::now()
+            .checked_sub(Duration::from_millis(BLINK_HALF_MS as u64 * 5))
+            .expect("test clock too close to process start to back-date");
+        let set = app.dirty_rows_this_frame(&core);
+        assert!(
+            set.is_empty(),
+            "blink disabled must never push a blink-driven dirty row, got {set:?}"
+        );
+    }
+
+    /// AC-4: PTY output dirties only the rows it actually touched — a
+    /// content edit elsewhere on screen must not smuggle the (unmoved)
+    /// cursor row into the set. Exercised via save/restore cursor (`ESC 7`
+    /// / `ESC 8`) so the cursor ends the frame exactly where it started.
+    #[test]
+    fn dirty_set_after_pty_write_excludes_stationary_cursor_row() {
+        let mut core = fresh_core(20, 5);
+        core.set_cursor_blink(false);
+        let app = app_with_cleared_state(&mut core);
+        // Cursor starts at (0, 0). Save it, write to row 2 elsewhere, then
+        // restore — the cursor ends this frame at (0, 0), unmoved.
+        core.process_pty_data(b"\x1b7"); // DECSC: save cursor
+        core.process_pty_data(b"\x1b[3;1Hworld"); // move to row 2, write
+        core.process_pty_data(b"\x1b8"); // DECRC: restore cursor
+        assert_eq!(
+            (core.get_cursor_row(), core.get_cursor_col()),
+            (0, 0),
+            "cursor must be restored to its starting cell"
+        );
+        let set = app.dirty_rows_this_frame(&core);
+        assert_eq!(
+            set,
+            vec![2],
+            "only the edited row should be dirty — no stationary-cursor stowaway"
+        );
     }
 
     #[test]
