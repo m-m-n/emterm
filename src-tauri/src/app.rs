@@ -3835,16 +3835,16 @@ impl App {
         // into the screen rows it occupies before being added to the dirty
         // set.
         //
-        // With a fold layout the absolute → screen mapping is non-linear
+        // With a fold layout the core's row coordinates (viewport rows, used
+        // by core.get_dirty_rows()/get_cursor_row() above) and the absolute
+        // → screen mapping are both non-linear with respect to screen rows
         // (collapsed bodies are hidden, summary rows draw no cells), so a
-        // simple `abs - visible_start` does not hold. Rather than reproduce
-        // the fold walk here just for the dirty set, repaint every row when a
-        // selection is (or was) present and a fold layout is active — folds
-        // are rare and the selection touches at most the viewport, so the
-        // cost is bounded.
-        if self.fold_layout.is_some()
-            && (self.selection.is_some() || self.previous_selection.is_some())
-        {
+        // simple `abs - visible_start` does not hold and core-space dirty
+        // rows cannot be reinterpreted as screen rows. Rather than reproduce
+        // the fold walk here just for the dirty set, repaint every row
+        // whenever a fold layout is active — folds are rare and the cost is
+        // bounded to the viewport.
+        if self.fold_layout.is_some() {
             return (0..rows).collect();
         }
 
