@@ -198,6 +198,25 @@ pub fn cursor_screen_row(
     Some((display_line - layout.display_start) as u16)
 }
 
+/// Resolve the column whose glyph/style should paint the block cursor
+/// (task0005 AC-5, finding c0732dd907681dc1): `col` unchanged for a normal
+/// or wide-leading cell, or `col - 1` when `col` is the width-0 trailing
+/// half of a wide glyph (`cell_width == 0`) — the cursor must draw the
+/// glyph's full 2-cell footprint anchored at its leading column, not an
+/// empty 1-cell box over the (blank) trailing cell.
+///
+/// `cell_width` is `TerminalCore::get_cell_width(col, row)` at the raw
+/// cursor column. A trailing cell at column 0 (defensive — should not
+/// occur: a wide glyph's trailing half always has a leading half at
+/// `col - 1`) returns `col` unchanged rather than underflowing.
+pub fn resolve_cursor_glyph_col(col: u16, cell_width: u8) -> u16 {
+    if cell_width == 0 && col > 0 {
+        col - 1
+    } else {
+        col
+    }
+}
+
 /// Geometry of the filled block cursor's rectangle: the cell at
 /// `(col, screen_row)`, widened to `width_cells` columns so a wide glyph
 /// under the cursor (CJK character, emoji) has its full footprint
@@ -248,6 +267,13 @@ pub fn cursor_glyph_paintable(glyph: &str) -> bool {
 /// the grid instance for the cursor cell (removed `block_cursor_cell`
 /// parameter); grid instance data is now independent of cursor state.
 ///
+/// task0005 AC-5: `TerminalCore::get_cursor_col()` can report the width-0
+/// trailing half of a wide glyph (the cell the cursor logically advances
+/// past when a program repositions it there); [`resolve_cursor_glyph_col`]
+/// resolves that back to the leading column so the glyph, style, and rect
+/// all reflect the actual wide character rather than its blank
+/// continuation cell.
+///
 /// Suppressed per [`cursor_screen_row`]: scrolled back into history, or
 /// the cursor's row is hidden inside a collapsed fold region. The
 /// caller ([`super::draw_cursor`]) only reaches this function once the
@@ -265,7 +291,11 @@ pub fn draw_block_cursor(painter: &egui::Painter, core: &TerminalCore, theme: &T
         Some(r) => r,
         None => return,
     };
-    let col = core.get_cursor_col();
+    let raw_col = core.get_cursor_col();
+    // AC-5: when the cursor sits on the width-0 trailing half of a wide
+    // glyph, resolve to the leading column so the rect + glyph below
+    // reflect the actual character instead of the blank continuation cell.
+    let col = resolve_cursor_glyph_col(raw_col, core.get_cell_width(raw_col, content_row));
 
     let flags = core.get_cell_flags(col, content_row);
     let packed_fg = core.get_cell_fg(col, content_row);
@@ -472,6 +502,58 @@ mod tests {
         let rect = block_cursor_rect(200, 200, 1, 80, 24, fake_metrics());
         assert_eq!(rect.min.x, 4.0 + 79.0 * 10.0);
         assert_eq!(rect.min.y, 4.0 + 23.0 * 20.0);
+    }
+
+    // ── resolve_cursor_glyph_col (task0005 AC-5) ──────────────────────
+
+    #[test]
+    fn resolve_cursor_glyph_col_normal_cell_unchanged() {
+        assert_eq!(resolve_cursor_glyph_col(5, 1), 5);
+    }
+
+    #[test]
+    fn resolve_cursor_glyph_col_wide_leading_unchanged() {
+        assert_eq!(resolve_cursor_glyph_col(5, 2), 5);
+    }
+
+    #[test]
+    fn resolve_cursor_glyph_col_trailing_continuation_resolves_to_leading() {
+        // Cursor lands on the width-0 right half of a wide glyph at
+        // column 6; the leading half is column 5.
+        assert_eq!(resolve_cursor_glyph_col(6, 0), 5);
+    }
+
+    #[test]
+    fn resolve_cursor_glyph_col_trailing_at_col_zero_is_defensive_noop() {
+        // A width-0 cell at column 0 should not occur in practice (a wide
+        // glyph's trailing half always has a leading half at col - 1),
+        // but must not underflow.
+        assert_eq!(resolve_cursor_glyph_col(0, 0), 0);
+    }
+
+    #[test]
+    fn block_cursor_rect_from_resolved_trailing_col_covers_full_wide_footprint() {
+        // AC-5: cursor sits on the trailing half (col 6, width 0);
+        // resolving to the leading column (5) and drawing a 2-cell rect
+        // anchored there covers the glyph's full footprint instead of an
+        // empty 1-cell box at col 6.
+        let leading_col = resolve_cursor_glyph_col(6, 0);
+        assert_eq!(leading_col, 5);
+        let rect = block_cursor_rect(leading_col, 2, 2, 80, 24, fake_metrics());
+        assert_eq!(rect.min.x, 4.0 + 5.0 * 10.0);
+        assert_eq!(rect.width(), 20.0);
+    }
+
+    #[test]
+    fn block_cursor_rect_wide_glyph_at_right_edge_via_resolved_col_clamps() {
+        // AC-5: the right-edge clamp still applies when the wide glyph's
+        // leading column is the second-to-last column (its trailing half
+        // occupies the very last column).
+        let cols = 80u16;
+        let leading_col = resolve_cursor_glyph_col(cols - 1, 0);
+        assert_eq!(leading_col, cols - 2);
+        let rect = block_cursor_rect(leading_col, 0, 2, cols, 24, fake_metrics());
+        assert_eq!(rect.max.x, 4.0 + cols as f32 * 10.0);
     }
 
     // ── cursor_glyph_paintable (AC-2: empty cell → no glyph artifact) ─

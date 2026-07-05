@@ -59,6 +59,26 @@ pub type ProgressReceiver = Receiver<SftpUploadProgress>;
 /// The receiver half handed to the UI for duplicate-check results.
 pub type ResultReceiver = Receiver<DuplicateCheckResult>;
 
+/// Send a progress event and wake the winit event loop (task0005 AC-3,
+/// finding cd6820740f2c0769) so the egui `pump_sftp` drain observes it on
+/// the next turn instead of waiting for an unrelated event (input, PTY
+/// output, a timer) — mirrors the wake call the snapshot-replay /
+/// scrollback-restore workers already make after their own channel sends.
+/// Every progress-channel send in this module goes through this helper
+/// (never a bare `.send(` on `progress_tx`) so no site can be added later
+/// without the wake.
+fn send_progress(tx: &Sender<SftpUploadProgress>, progress: SftpUploadProgress) {
+    let _ = tx.send(progress);
+    crate::wakeup::wake();
+}
+
+/// Send a duplicate-check result and wake the event loop, mirroring
+/// [`send_progress`] for the result channel.
+fn send_result(tx: &Sender<DuplicateCheckResult>, result: DuplicateCheckResult) {
+    let _ = tx.send(result);
+    crate::wakeup::wake();
+}
+
 /// One queued upload, handed from `start_upload` to the resident dispatcher.
 ///
 /// Created on the UI thread but carries no UI references; everything the worker
@@ -174,10 +194,13 @@ impl SftpService {
             .and_then(|_| validate_remote_path(&remote_dir))
             .and_then(|_| get_sftp_binary(&sftp_binary))
         {
-            let _ = result_tx.send(DuplicateCheckResult {
-                request_id,
-                outcome: Err(e),
-            });
+            send_result(
+                &result_tx,
+                DuplicateCheckResult {
+                    request_id,
+                    outcome: Err(e),
+                },
+            );
             return;
         }
 
@@ -193,10 +216,13 @@ impl SftpService {
                     &remote_dir,
                 )
                 .map(|ls_output| find_duplicates(&ls_output, &file_names));
-            let _ = result_tx.send(DuplicateCheckResult {
-                request_id,
-                outcome,
-            });
+            send_result(
+                &result_tx,
+                DuplicateCheckResult {
+                    request_id,
+                    outcome,
+                },
+            );
         });
     }
 
@@ -299,7 +325,7 @@ impl SftpService {
     }
 
     fn emit(&self, progress: SftpUploadProgress) {
-        let _ = self.progress_tx.send(progress);
+        send_progress(&self.progress_tx, progress);
     }
 }
 
@@ -332,14 +358,17 @@ fn finish_cancelled(
     }
     ctx.session_tab.lock().unwrap().remove(session_id);
     ctx.cancelled.lock().unwrap().remove(session_id);
-    let _ = ctx.progress_tx.send(SftpUploadProgress {
-        session_id: session_id.to_string(),
-        file_name: file_name.to_string(),
-        bytes_transferred: 0,
-        total_bytes,
-        status: SftpUploadStatus::Cancelled,
-        error_message: None,
-    });
+    send_progress(
+        &ctx.progress_tx,
+        SftpUploadProgress {
+            session_id: session_id.to_string(),
+            file_name: file_name.to_string(),
+            bytes_transferred: 0,
+            total_bytes,
+            status: SftpUploadStatus::Cancelled,
+            error_message: None,
+        },
+    );
 }
 
 /// Spawn the single resident dispatcher thread.
@@ -378,14 +407,17 @@ fn spawn_dispatcher(ctx: DispatcherCtx) {
             // Size is computed here (off the UI thread); directories recurse.
             let total_bytes = get_local_size(&local_path, is_directory);
 
-            let _ = ctx.progress_tx.send(SftpUploadProgress {
-                session_id: session_id.clone(),
-                file_name: file_name.clone(),
-                bytes_transferred: 0,
-                total_bytes,
-                status: SftpUploadStatus::Uploading,
-                error_message: None,
-            });
+            send_progress(
+                &ctx.progress_tx,
+                SftpUploadProgress {
+                    session_id: session_id.clone(),
+                    file_name: file_name.clone(),
+                    bytes_transferred: 0,
+                    total_bytes,
+                    status: SftpUploadStatus::Uploading,
+                    error_message: None,
+                },
+            );
 
             // Hand the actual transfer to a short-lived thread so the dispatcher
             // returns to pulling jobs; that thread owns slot release and the
@@ -440,7 +472,7 @@ fn spawn_dispatcher(ctx: DispatcherCtx) {
                         }
                     }
                 };
-                let _ = progress_tx.send(progress);
+                send_progress(&progress_tx, progress);
             });
         }
     });
@@ -837,5 +869,80 @@ mod tests {
         assert_eq!(pool.active_count(), 0, "slot must be released");
         let p = progress_rx.try_recv().expect("a terminal progress event");
         assert_eq!(p.status, SftpUploadStatus::Cancelled);
+    }
+
+    // ── task0005 AC-3: every progress/result send wakes the event loop ──
+
+    #[test]
+    fn send_progress_delivers_on_the_channel() {
+        // `crate::wakeup::wake()` is a no-op until `wakeup::install` runs
+        // (never the case in this test binary), so this only exercises the
+        // send half directly; the wake call itself is covered by
+        // `wakeup::tests`.
+        let (tx, rx) = crossbeam_channel::unbounded();
+        send_progress(
+            &tx,
+            SftpUploadProgress {
+                session_id: "sftp-1".to_string(),
+                file_name: "f.txt".to_string(),
+                bytes_transferred: 0,
+                total_bytes: 10,
+                status: SftpUploadStatus::Uploading,
+                error_message: None,
+            },
+        );
+        let p = rx.try_recv().expect("progress must be delivered");
+        assert_eq!(p.session_id, "sftp-1");
+        assert_eq!(p.status, SftpUploadStatus::Uploading);
+    }
+
+    #[test]
+    fn send_result_delivers_on_the_channel() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        send_result(
+            &tx,
+            DuplicateCheckResult {
+                request_id: 42,
+                outcome: Ok(vec!["dup.txt".to_string()]),
+            },
+        );
+        let r = rx.try_recv().expect("result must be delivered");
+        assert_eq!(r.request_id, 42);
+        assert_eq!(r.outcome.unwrap(), vec!["dup.txt".to_string()]);
+    }
+
+    #[test]
+    fn every_progress_and_result_send_site_routes_through_the_wake_helpers() {
+        // AC-3: every progress/result channel send in this module must go
+        // through the wake helpers rather than a direct call on the named
+        // sender — so no send site can be added later without the
+        // accompanying wake. Structural check on the module's own
+        // production source (the sites span a UI-thread method, the
+        // background dispatcher loop, and short-lived worker threads); the
+        // job queue send is a distinct, intentionally-untouched channel —
+        // an internal queue consumed by the dispatcher's own background
+        // thread, not a progress/result channel the egui loop drains, so
+        // it needs no wake.
+        //
+        // Scanned text is cut at the `#[cfg(test)]` marker so this test's
+        // own source — which necessarily spells out the forbidden call
+        // shape in string literals — is never included in the scan.
+        let src =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sftp/service.rs"))
+                .expect("read own source for the structural send-site check");
+        let production_src = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields at least one piece");
+        let forbidden_progress = ["progress_tx", ".send("].concat();
+        let forbidden_result = ["result_tx", ".send("].concat();
+        assert!(
+            !production_src.contains(&forbidden_progress),
+            "found a bare progress_tx send — route it through send_progress instead"
+        );
+        assert!(
+            !production_src.contains(&forbidden_result),
+            "found a bare result_tx send — route it through send_result instead"
+        );
     }
 }
