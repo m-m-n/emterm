@@ -1,0 +1,43 @@
+feature: html-viewer
+collected_at: "2026-07-05T13:47:47+09:00"
+session_ids: [7c16183a-c0b6-42fa-bcbb-ac2fe20c75df]
+signals:
+  review_critical_high:
+    - stable_id: r1-main-dispatch-html
+      category: architecture
+      file: src-tauri/src/main.rs
+      title: "main.rs subcommand dispatch omits \"html\""
+      resolution: fixed
+    - stable_id: r1-script-nav-external-open
+      category: security
+      file: src-tauri/src/viewer/html_window.rs
+      title: "Script-initiated http(s) navigation auto-opened in external browser"
+      resolution: deferred
+    - stable_id: r1-basedir-osc-trust
+      category: security
+      file: src-tauri/src/viewer/html.rs
+      title: "basedir taken from OSC sequence"
+      resolution: declined
+    - stable_id: r1-chunk-metadata-unbounded
+      category: performance
+      file: src-tauri/src/viewer/html.rs
+      title: "Session chunk metadata can grow unbounded via empty chunks"
+      resolution: declined
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0004
+      files: [src-tauri/src/viewer/window.rs, src-tauri/src/settings_window/mod.rs]
+      note: "WebViewHost に new_window_handler フィールドを追加したため、全構築サイト(markdownビューア window.rs / settings_window)に `new_window_handler: None` の追記が必要になり、files 予測外の2ファイルを変更。Rust の struct literal 全フィールド必須ゆえの必然的な波及"
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings:
+    - stable_id: r1-basedir-osc-trust
+      category: security
+      resolution_reason: "既存 markdown ビューアと同一の信頼境界・SPEC承認済みの basedir 方式。新規リスクではない(ユーザー判断)"
+    - stable_id: r1-chunk-metadata-unbounded
+      category: performance
+      resolution_reason: "markdown ビューアと同一の蓄積パターン。総データ量(MAX_SESSION_DATA_SIZE)とセッション数(MAX_SESSIONS)は上限有り。claude:performance も有界と判断(ユーザー判断)"
+lessons_candidates:
+  - "共有構造体(WebViewHost)への必須フィールド追加は、全構築サイトへ波及する。planner の files 予測では『共有コンポーネントを変更するタスク』はその全 caller を files に含めるべき(task0004 が window.rs/settings_window を予測できていれば deviation にならなかった)"
+  - "既存ビューア(markdown)と同一設計を踏襲した箇所への security/performance 指摘は、新規リスクか既存設計の踏襲かを切り分けると declined 判断が速い。round_context だけでなく『類似既存機能との対比』も判断材料になる"
+  - "codex 単独 high(basedir/chunk) と claude の評価(performance は有界と否定)が割れたケースは、cross-model 不一致として confidence が低く出た(50)。結果的にユーザー判断で declined。cross-validation の不一致は誤検知フィルタとして機能した"
