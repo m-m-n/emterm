@@ -34,6 +34,16 @@ pub const BLINK_HALF_MS: u128 = 530;
 /// `.terminal-bell-flash` animation (150 ms ease-out, `src/styles.css`).
 pub const BELL_FLASH_MS: u64 = 150;
 
+/// Bounded poll interval the event loop keeps waking on while a restart or
+/// SFTP toast is active (task0004 D4, [`App::next_toast_deadline`]). Toast
+/// auto-dismiss (`pump_sftp` / `pump_restart_toast`) runs on egui's own
+/// frame-time clock, which only advances when a frame actually paints;
+/// nothing else schedules those intermediate frames, so this bounds the cost
+/// of keeping them flowing. Matches the interval `about_to_wait`
+/// unconditionally rearmed before task0004 — now scoped to only apply while
+/// a toast is actually pending.
+pub const TOAST_POLL_MS: u64 = 16;
+
 /// Minimum wall-clock gap between two automatic (per-frame) search
 /// re-resolves. A burst of PTY output flags the search document dirty on
 /// every chunk; without this throttle [`App::auto_research_if_dirty`] would
@@ -1258,6 +1268,54 @@ impl App {
             return false;
         }
         self.blink_visible_now(blink_enabled) != self.previous_blink_visible
+    }
+
+    /// Next `Instant` at which the active tab's cursor blink phase will
+    /// flip, if blink is currently eligible to animate (task0004 D4). Shares
+    /// `blink_started` / [`BLINK_HALF_MS`] with [`App::blink_visible_now`] /
+    /// [`App::needs_blink_repaint`], which detect *whether* the phase
+    /// flipped since it was last observed; this instead computes *when* the
+    /// next flip will occur, so the event loop can schedule a
+    /// `ControlFlow::WaitUntil` for it instead of polling every turn.
+    ///
+    /// `None` when there is nothing to schedule: no active tab, the window
+    /// is unfocused, the cursor is hidden, or blink is disabled — AC-2:
+    /// blink disabled means no periodic wakeup at all, even with the window
+    /// focused.
+    pub fn next_blink_deadline(&self) -> Option<Instant> {
+        if !self.window_focused {
+            return None;
+        }
+        let tab = self.tabs.get(self.active)?;
+        let core = tab.core.lock();
+        if !core.get_cursor_visible() || !core.get_cursor_blink() {
+            return None;
+        }
+        let elapsed_ms = self.blink_started.elapsed().as_millis();
+        let next_phase = elapsed_ms / BLINK_HALF_MS + 1;
+        let next_ms = (next_phase * BLINK_HALF_MS) as u64;
+        Some(self.blink_started + std::time::Duration::from_millis(next_ms))
+    }
+
+    /// Next `Instant` at which the in-flight visual-bell flash finishes
+    /// decaying, `None` while idle (task0004 D4). Companion to
+    /// [`App::needs_bell_repaint`] (which edge-triggers a redraw once the
+    /// flash has crossed [`BELL_FLASH_MS`]); this exposes the deadline
+    /// itself so the event loop can schedule a `ControlFlow::WaitUntil` for
+    /// it instead of polling every turn.
+    pub fn next_bell_deadline(&self) -> Option<Instant> {
+        let started = self.visual_bell_started?;
+        Some(started + std::time::Duration::from_millis(BELL_FLASH_MS))
+    }
+
+    /// Next `Instant` the event loop must wake while a restart or SFTP toast
+    /// is active (task0004 D4). See [`TOAST_POLL_MS`] for why this is a
+    /// bounded poll rather than an exact deadline. `None` once no toast is
+    /// active — the loop then only wakes on other timed work (blink/bell)
+    /// or an event.
+    pub fn next_toast_deadline(&self) -> Option<Instant> {
+        let toast_pending = self.restart_toast.active() || !self.sftp_ui.toasts.toasts.is_empty();
+        toast_pending.then(|| Instant::now() + std::time::Duration::from_millis(TOAST_POLL_MS))
     }
 
     /// Spawn the initial shell tab. Called once at startup.
@@ -4754,6 +4812,101 @@ mod tests {
         // …then the latch is gone.
         assert!(!app.needs_bell_repaint());
         assert!(app.visual_bell_started.is_none());
+    }
+
+    // ── task0004 D4: per-concern next-deadline getters ────────────────
+
+    #[test]
+    fn next_bell_deadline_none_when_no_bell_active() {
+        let app = App::new();
+        assert_eq!(app.next_bell_deadline(), None);
+    }
+
+    #[test]
+    fn next_bell_deadline_is_started_plus_flash_duration() {
+        let mut app = App::new();
+        let started = Instant::now();
+        app.visual_bell_started = Some(started);
+        assert_eq!(
+            app.next_bell_deadline(),
+            Some(started + Duration::from_millis(BELL_FLASH_MS))
+        );
+    }
+
+    #[test]
+    fn next_toast_deadline_none_when_no_toast_active() {
+        let app = App::new();
+        assert_eq!(app.next_toast_deadline(), None);
+    }
+
+    #[test]
+    fn next_toast_deadline_some_when_restart_toast_active() {
+        let mut app = App::new();
+        app.restart_toast.arm(0.0);
+        assert!(app.next_toast_deadline().is_some());
+    }
+
+    #[test]
+    fn next_toast_deadline_some_when_sftp_toast_active() {
+        let mut app = App::new();
+        app.sftp_ui.toasts.toasts.push(crate::sftp::ui::Toast {
+            session_id: "s1".to_string(),
+            file_name: "f.txt".to_string(),
+            status: crate::sftp::SftpUploadStatus::Uploading,
+            bytes_transferred: 0,
+            total_bytes: 100,
+            error_message: None,
+            dismiss_at: None,
+        });
+        assert!(app.next_toast_deadline().is_some());
+    }
+
+    #[test]
+    fn next_blink_deadline_none_when_no_active_tab() {
+        let app = App::new();
+        assert_eq!(app.tabs.len(), 0, "no tab spawned — precondition");
+        assert_eq!(app.next_blink_deadline(), None);
+    }
+
+    #[test]
+    fn next_blink_deadline_none_when_window_unfocused() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.tabs[0].core.lock().set_cursor_blink(true);
+        app.window_focused = false;
+        assert_eq!(
+            app.next_blink_deadline(),
+            None,
+            "AC-2: focus loss must not schedule a blink wakeup"
+        );
+    }
+
+    #[test]
+    fn next_blink_deadline_none_when_blink_disabled() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.tabs[0].core.lock().set_cursor_blink(false);
+        app.window_focused = true;
+        assert_eq!(
+            app.next_blink_deadline(),
+            None,
+            "AC-2: blink disabled must never schedule a periodic wakeup"
+        );
+    }
+
+    #[test]
+    fn next_blink_deadline_some_after_blink_started_when_enabled_and_focused() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.tabs[0].core.lock().set_cursor_blink(true);
+        app.window_focused = true;
+        let deadline = app
+            .next_blink_deadline()
+            .expect("blink enabled + focused + visible must yield a deadline");
+        assert!(
+            deadline > app.blink_started,
+            "the next flip must lie strictly after the blink reference instant"
+        );
     }
 
     /// AC-1: a frame with no content change, no cursor move, no blink
