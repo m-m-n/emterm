@@ -1987,6 +1987,51 @@ fn should_skip_frame(dirty_count: Option<usize>, status_bar_changed: bool) -> bo
     matches!(dirty_count, Some(0)) && !status_bar_changed
 }
 
+/// task0004 AC-1/AC-2: pure decision for the next winit control flow, given
+/// the pending timed-work deadlines this turn observed. Extracted as a free
+/// function — plain `Option<Instant>` in, plain `Option<Instant>` out, no
+/// winit/App types — so every combination is directly unit-testable
+/// (mirrors `should_skip_frame` above).
+///
+/// Each argument is `None` when that concern has no pending timed work:
+/// `blink_deadline` is `None` when blink is disabled, the window is
+/// unfocused, the cursor is hidden, or no tab is active
+/// ([`App::next_blink_deadline`]); `bell_deadline` is `None` when no
+/// visual-bell flash is decaying ([`App::next_bell_deadline`]);
+/// `toast_deadline` is `None` when no restart/SFTP toast is up
+/// ([`App::next_toast_deadline`]).
+///
+/// Returns `None` when every concern is quiescent — the caller maps this to
+/// `ControlFlow::Wait` (AC-2: an idle terminal, e.g. blink disabled, never
+/// reschedules a periodic wakeup). Returns the earliest deadline otherwise —
+/// the caller maps this to `ControlFlow::WaitUntil`.
+fn next_wait_deadline(
+    blink_deadline: Option<Instant>,
+    bell_deadline: Option<Instant>,
+    toast_deadline: Option<Instant>,
+) -> Option<Instant> {
+    [blink_deadline, bell_deadline, toast_deadline]
+        .into_iter()
+        .flatten()
+        .min()
+}
+
+/// Compute the winit `ControlFlow` for this turn from the App's pending
+/// timed-work deadlines (task0004 D4). Thin wiring around
+/// [`next_wait_deadline`] (the unit-tested pure decision) — used by both
+/// `PocApp::resumed`'s initial control flow and `PocApp::about_to_wait`'s
+/// end-of-turn rearm so the two follow the same rule.
+fn control_flow_for(app: &App) -> ControlFlow {
+    match next_wait_deadline(
+        app.next_blink_deadline(),
+        app.next_bell_deadline(),
+        app.next_toast_deadline(),
+    ) {
+        Some(deadline) => ControlFlow::WaitUntil(deadline),
+        None => ControlFlow::Wait,
+    }
+}
+
 /// Frames-drawn counter for `EMTERM_RENDER_PERF=1` (task0002 AC-6).
 /// Counts every frame `record_draw` is called for and reports the
 /// running total at most once per second of activity, so an idle host
@@ -2504,9 +2549,10 @@ impl ApplicationHandler for PocApp {
         self.app.set_ime_backend(backend);
 
         host.window().request_redraw();
-        event_loop.set_control_flow(ControlFlow::WaitUntil(
-            Instant::now() + Duration::from_millis(16),
-        ));
+        // task0004 D4: the initial control flow follows the same
+        // pending-timed-work rule `about_to_wait` uses below, rather than
+        // unconditionally rearming a 16 ms `WaitUntil`.
+        event_loop.set_control_flow(control_flow_for(&self.app));
         self.host = Some(host);
     }
 
@@ -3412,9 +3458,14 @@ impl ApplicationHandler for PocApp {
             event_loop.exit();
             return;
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(
-            Instant::now() + Duration::from_millis(16),
-        ));
+        // task0004 D4: stop unconditionally rearming a 16 ms `WaitUntil`.
+        // With no timed work pending (blink disabled or unfocused, no bell
+        // decay, no toast) the loop drops to a true `ControlFlow::Wait` —
+        // every producer that used to rely on this 60 Hz pump now wakes the
+        // loop explicitly (PTY reader threads / mux off-thread workers via
+        // `crate::wakeup::wake()`, IME/input via winit's native wake, this
+        // turn's own blink/bell/toast deadlines via `control_flow_for`).
+        event_loop.set_control_flow(control_flow_for(&self.app));
     }
 
     /// Phase E (TS-32): winit `EventLoopProxy::send_event(())` calls land
@@ -3750,6 +3801,68 @@ mod tests {
     #[test]
     fn should_skip_frame_false_when_no_active_tab() {
         assert!(!should_skip_frame(None, false));
+    }
+
+    // ── task0004 AC-1/AC-2: next_wait_deadline pure decision ──────────
+
+    /// AC-2: nothing pending → `None` (the caller maps this to
+    /// `ControlFlow::Wait`) — an idle terminal never reschedules a
+    /// periodic wakeup.
+    #[test]
+    fn next_wait_deadline_none_when_nothing_pending() {
+        assert_eq!(next_wait_deadline(None, None, None), None);
+    }
+
+    /// AC-1: only the blink deadline is pending → that deadline wins.
+    #[test]
+    fn next_wait_deadline_blink_only() {
+        let t = Instant::now() + Duration::from_millis(530);
+        assert_eq!(next_wait_deadline(Some(t), None, None), Some(t));
+    }
+
+    /// AC-1: only the bell deadline is pending → that deadline wins.
+    #[test]
+    fn next_wait_deadline_bell_only() {
+        let t = Instant::now() + Duration::from_millis(150);
+        assert_eq!(next_wait_deadline(None, Some(t), None), Some(t));
+    }
+
+    /// AC-1: only the toast deadline is pending → that deadline wins.
+    #[test]
+    fn next_wait_deadline_toast_only() {
+        let t = Instant::now() + Duration::from_millis(16);
+        assert_eq!(next_wait_deadline(None, None, Some(t)), Some(t));
+    }
+
+    /// AC-1: blink and bell both pending, blink is the sooner deadline →
+    /// the nearer (blink) deadline wins.
+    #[test]
+    fn next_wait_deadline_picks_sooner_of_blink_and_bell() {
+        let now = Instant::now();
+        let sooner = now + Duration::from_millis(50);
+        let later = now + Duration::from_millis(500);
+        assert_eq!(
+            next_wait_deadline(Some(sooner), Some(later), None),
+            Some(sooner)
+        );
+        // Order of arguments must not matter — the later one is bell here.
+        assert_eq!(
+            next_wait_deadline(Some(later), Some(sooner), None),
+            Some(sooner)
+        );
+    }
+
+    /// AC-1: all three concerns pending → the earliest of the three wins.
+    #[test]
+    fn next_wait_deadline_picks_earliest_of_all_three() {
+        let now = Instant::now();
+        let blink = now + Duration::from_millis(500);
+        let bell = now + Duration::from_millis(10);
+        let toast = now + Duration::from_millis(16);
+        assert_eq!(
+            next_wait_deadline(Some(blink), Some(bell), Some(toast)),
+            Some(bell)
+        );
     }
 
     // ── task0002 AC-6: EMTERM_RENDER_PERF frame counter ──────────────

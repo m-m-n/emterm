@@ -744,6 +744,13 @@ impl Tab {
                     &worker_cancel,
                 ) {
                     let _ = tx.send(replay);
+                    // task0004 D4/AC-3: pull the event loop out of
+                    // `ControlFlow::Wait` so `poll_pending_switch` observes
+                    // this swap on the next `about_to_wait` pass instead of
+                    // waiting for an unrelated event (input, PTY output on
+                    // another tab, …). Mirrors the existing PTY reader
+                    // thread's wake call in `pty::reader_loop`.
+                    crate::wakeup::wake();
                 }
             });
         match spawn_result {
@@ -1036,6 +1043,11 @@ impl Tab {
                         rebuilt_core: replay.core,
                         evicted_total_at_end: replay.evicted_total,
                     });
+                    // task0004 D4/AC-3: same rationale as the snapshot-replay
+                    // worker above — wake the loop so
+                    // `poll_pending_scrollback_restore` observes the merge
+                    // promptly under `ControlFlow::Wait`.
+                    crate::wakeup::wake();
                 }
             });
         match spawn_result {
