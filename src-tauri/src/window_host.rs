@@ -285,6 +285,17 @@ pub struct WindowHost {
     /// when the pointer crosses into a new grid cell so the detection
     /// regex doesn't run per pixel.
     hover: HoverState,
+    /// Set by [`WindowHost::refresh_link_hover`] /
+    /// [`WindowHost::invalidate_link_hover`] when the hovered link
+    /// cell-span actually changed (appear, move, disappear) since the
+    /// last frame (task0005 AC-1, finding 63c273cd4e0d66b1). `render`
+    /// consumes this once per frame and forces a full redraw so the
+    /// affected rows — baked into the grid instances as the hover
+    /// underline — actually rebuild in the row cache instead of the
+    /// honest-dirty-set skip serving a stale cached row. Hover spans
+    /// change on enter/leave-style events (not per-pixel), so a full
+    /// redraw on change is cheap.
+    hover_span_changed: bool,
     /// True while the pointer is inside the window. Set to `true` by
     /// `CursorMoved` (there is no `CursorEntered` handler) and to `false`
     /// by `CursorLeft`. Used to gate PTY-output re-detection in
@@ -503,6 +514,7 @@ impl WindowHost {
             current_resize_dir: None,
             current_cursor: CursorIcon::Default,
             hover: HoverState::default(),
+            hover_span_changed: false,
             pointer_in_window: false,
             alt_scroll_accum: 0.0,
             render_perf_enabled: std::env::var("EMTERM_RENDER_PERF")
@@ -740,7 +752,13 @@ impl WindowHost {
                 }
             }
 
-            if prev_cells != self.hover.link_cells {
+            if hover_link_cells_changed(&prev_cells, &self.hover.link_cells) {
+                // task0005 AC-1: latch so `render` forces a full redraw
+                // and the affected rows actually rebuild in the row
+                // cache (the request_redraw below only wakes the loop —
+                // it does not by itself make `dirty_rows_this_frame`
+                // non-empty).
+                self.hover_span_changed = true;
                 self.window().request_redraw();
             }
         }
@@ -859,6 +877,10 @@ impl WindowHost {
         let had = !self.hover.link_cells.is_empty();
         self.hover.link_cells.clear();
         if had {
+            // task0005 AC-1: same latch as `refresh_link_hover` above —
+            // a span disappearing needs its rows rebuilt just as much as
+            // one appearing or moving.
+            self.hover_span_changed = true;
             self.window().request_redraw();
         }
         self.update_link_cursor();
@@ -1331,6 +1353,16 @@ impl WindowHost {
 
     /// Run a single egui frame and present.
     pub fn render(&mut self, app: &mut App) {
+        // task0005 AC-1: consume the hover-span-changed latch (set by
+        // `refresh_link_hover` / `invalidate_link_hover` since the last
+        // frame) before the dirty-row skip decision below. Forcing a full
+        // redraw here makes `dirty_rows_this_frame` return every row this
+        // turn, so the hover underline's rows actually rebuild in the row
+        // cache instead of a stale cached row surviving the skip.
+        if std::mem::take(&mut self.hover_span_changed) {
+            app.mark_full_redraw();
+        }
+
         // Refresh the cached status-bar insets first: the deferred-
         // resize path below reads them to compute the PTY grid size,
         // and the grid-pass origin in this same frame also reads them.
@@ -1413,15 +1445,41 @@ impl WindowHost {
             };
             let status_bar_changed = app.status_bar_view_model_changed();
             // Overlay work in flight (a restart/SFTP toast counting down to
-            // auto-dismiss, or a visual-bell flash still decaying) needs the
-            // egui pass to run every frame just like the status bar carve-out
-            // above — otherwise the 60 Hz wake this scheduled in
+            // auto-dismiss, a visual-bell flash still decaying, the search
+            // UI being open, or the one-shot bell-erase-frame signal) needs
+            // the egui pass to run every frame just like the status bar
+            // carve-out above — otherwise the 60 Hz wake this scheduled in
             // `about_to_wait` (see `toast_pending` / `bell_due` there) spins
             // uselessly, discarding every frame here before `pump_sftp` /
-            // the toast prune / the bell-flash paint ever run.
+            // the toast prune / the bell-flash paint / the search overlay
+            // ever run.
+            //
+            // task0005 AC-2: `app.search_visible()` keeps every frame live
+            // while the search UI is open (interactive query editing,
+            // auto-research match movement) and is `false` — so it
+            // contributes nothing — once the overlay is closed, preserving
+            // idle skipping.
+            //
+            // task0005 AC-4: `app.take_bell_erase_pending()` consumes the
+            // one-shot signal `App::needs_bell_repaint` latches in
+            // `about_to_wait` when the flash crosses its expiry — by the
+            // time this frame runs, `visual_bell_progress()` already reads
+            // `None`, so without this the final erase frame would look
+            // identical to a fully idle frame and get skipped, freezing the
+            // flash at its last painted alpha instead of fading it out.
+            // Consumed unconditionally (not folded into the `||` chain
+            // below) so the one-shot latch is always drained exactly once
+            // per frame regardless of short-circuit evaluation — otherwise
+            // an active toast/bell-progress condition earlier in the chain
+            // would skip evaluating this call via `||` short-circuiting,
+            // leaving the latch to fire a frame later than the actual
+            // expiry.
+            let bell_erase_pending = app.take_bell_erase_pending();
             let overlay_work = app.restart_toast.active()
                 || !app.sftp_ui.toasts.toasts.is_empty()
-                || app.visual_bell_progress().is_some();
+                || app.visual_bell_progress().is_some()
+                || app.search_visible()
+                || bell_erase_pending;
             if should_skip_frame(dirty_count, status_bar_changed, overlay_work) {
                 return;
             }
@@ -1433,12 +1491,17 @@ impl WindowHost {
         // unset. Logged at warn level (release builds drop below warn)
         // with the `[EMTERM_RENDER_PERF]` prefix, same idiom as
         // `EMTERM_FONT_PERF`.
-        if let Some(total) = record_drawn_frame(
-            self.render_perf_enabled,
-            &mut self.frame_counter,
-            Instant::now(),
-        ) {
-            log::warn!("[EMTERM_RENDER_PERF] frames drawn: {total}");
+        //
+        // task0005 AC-6: the cached `render_perf_enabled` flag gates this
+        // whole block, including the `Instant::now()` timestamp — with the
+        // gate off, no timestamp is acquired and `record_drawn_frame`'s
+        // `enabled` branch is never reached at all (as opposed to reading
+        // `Instant::now()` unconditionally and only checking the gate
+        // inside the helper).
+        if self.render_perf_enabled {
+            if let Some(total) = record_drawn_frame(true, &mut self.frame_counter, Instant::now()) {
+                log::warn!("[EMTERM_RENDER_PERF] frames drawn: {total}");
+            }
         }
 
         // Build this frame's fold layout for the active tab before any paint
@@ -1859,13 +1922,19 @@ impl WindowHost {
             // task0003 FR6-half: count rows rebuilt this frame (0 on a
             // fully cache-served frame), gated behind
             // `EMTERM_RENDER_PERF=1` like the frames-drawn counter above.
-            if let Some(total) = record_rebuilt_rows(
-                self.render_perf_enabled,
-                &mut self.rows_rebuilt_counter,
-                rows_rebuilt as u64,
-                Instant::now(),
-            ) {
-                log::warn!("[EMTERM_RENDER_PERF] rows rebuilt: {total}");
+            //
+            // task0005 AC-6: same gate-before-argument-evaluation fix as
+            // `record_drawn_frame` above — `Instant::now()` is only
+            // acquired inside the `render_perf_enabled` branch.
+            if self.render_perf_enabled {
+                if let Some(total) = record_rebuilt_rows(
+                    true,
+                    &mut self.rows_rebuilt_counter,
+                    rows_rebuilt as u64,
+                    Instant::now(),
+                ) {
+                    log::warn!("[EMTERM_RENDER_PERF] rows rebuilt: {total}");
+                }
             }
 
             pass.prepare(
@@ -2022,6 +2091,15 @@ impl WindowHost {
     }
 }
 
+/// task0005 AC-1: whether the hovered link's cell-span changed (appear,
+/// move, or disappear). Extracted as a pure equality check so
+/// `refresh_link_hover` / `invalidate_link_hover`'s latch-setting logic is
+/// directly unit-testable without a window (mirrors `should_skip_frame`
+/// below).
+fn hover_link_cells_changed(prev_cells: &[(u16, u16, u16)], new_cells: &[(u16, u16, u16)]) -> bool {
+    prev_cells != new_cells
+}
+
 /// Sub-phase 2 dirty-row skip decision (task0002 AC-5): extracted from
 /// `WindowHost::render` as a pure function — plain values in, plain bool
 /// out, no window/app/egui types — so it is directly unit-testable.
@@ -2034,10 +2112,11 @@ impl WindowHost {
 /// live even when the terminal grid itself is quiescent.
 ///
 /// `overlay_work` is `true` when a restart/SFTP toast is counting down to
-/// auto-dismiss or a visual-bell flash is still decaying — either needs the
-/// egui pass (`pump_sftp` / toast prune / bell paint) to run every frame,
-/// the same carve-out `status_bar_changed` gets for the status bar's own
-/// wake chain.
+/// auto-dismiss, a visual-bell flash is still decaying, the search UI is
+/// visible, or the one-shot bell-erase-frame signal is pending — any of
+/// these needs the egui pass (`pump_sftp` / toast prune / bell paint /
+/// search overlay) to run every frame, the same carve-out
+/// `status_bar_changed` gets for the status bar's own wake chain.
 ///
 /// Returns `true` (skip the frame) only when the dirty count is known to
 /// be exactly zero AND the status bar did not change AND there is no
@@ -3911,6 +3990,44 @@ mod tests {
     #[test]
     fn should_skip_frame_false_when_overlay_work_pending() {
         assert!(!should_skip_frame(Some(0), false, true));
+    }
+
+    /// task0005 AC-2: the search UI being visible must also veto the skip,
+    /// exercised through the same `overlay_work` parameter as the toast /
+    /// bell carve-out above (the call site ORs `App::search_visible()` into
+    /// it).
+    #[test]
+    fn should_skip_frame_false_when_search_visible() {
+        assert!(!should_skip_frame(Some(0), false, true));
+    }
+
+    // ── task0005 AC-1: hover_link_cells_changed pure decision ─────────
+
+    /// AC-1: a link span appearing (empty → non-empty) counts as a change.
+    #[test]
+    fn hover_link_cells_changed_true_on_appear() {
+        assert!(hover_link_cells_changed(&[], &[(3, 5, 9)]));
+    }
+
+    /// AC-1: a link span moving (different cell range) counts as a change.
+    #[test]
+    fn hover_link_cells_changed_true_on_move() {
+        assert!(hover_link_cells_changed(&[(3, 5, 9)], &[(3, 10, 14)]));
+    }
+
+    /// AC-1: a link span disappearing (non-empty → empty) counts as a
+    /// change.
+    #[test]
+    fn hover_link_cells_changed_true_on_disappear() {
+        assert!(hover_link_cells_changed(&[(3, 5, 9)], &[]));
+    }
+
+    /// AC-1: an unchanged span (hover-stable idle frame) must not be
+    /// reported as a change, so the idle-skip path stays honest.
+    #[test]
+    fn hover_link_cells_changed_false_when_unchanged() {
+        assert!(!hover_link_cells_changed(&[(3, 5, 9)], &[(3, 5, 9)]));
+        assert!(!hover_link_cells_changed(&[], &[]));
     }
 
     // ── task0004 AC-1/AC-2: next_wait_deadline pure decision ──────────

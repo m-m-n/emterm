@@ -249,6 +249,16 @@ pub struct App {
     /// `render::draw_terminal` reads the decay via
     /// [`App::visual_bell_progress`].
     visual_bell_started: Option<Instant>,
+    /// One-shot latch (task0005 AC-4, finding 063320466ae233fe): set by
+    /// [`App::needs_bell_repaint`] in the same turn it observes the flash
+    /// crossing [`BELL_FLASH_MS`] and clears `visual_bell_started`. By the
+    /// time `window_host::render` runs, `visual_bell_progress()` already
+    /// reads `None` (the overlay is gone), so without this signal the
+    /// frame that erases the overlay would look identical to a fully idle
+    /// frame and get skipped — freezing the flash at its last painted
+    /// alpha instead of fading it out. Consumed (read + cleared) via
+    /// [`App::take_bell_erase_pending`].
+    bell_erase_pending: bool,
     /// Cursor row/col from the previous rendered frame. The renderer dirties
     /// this row so a moved cursor doesn't ghost the old position.
     previous_cursor: Option<(u16, u16)>,
@@ -626,6 +636,7 @@ impl App {
             blink_started: Instant::now(),
             previous_blink_visible: true,
             visual_bell_started: None,
+            bell_erase_pending: false,
             previous_cursor: None,
             previous_selection: None,
             previous_visible_start: 0,
@@ -1229,15 +1240,30 @@ impl App {
     /// otherwise request a redraw. Clears the latch once the flash
     /// expired — returning true one last time so the final frame erases
     /// the overlay.
+    ///
+    /// task0005 AC-4: also sets [`Self::bell_erase_pending`] on that same
+    /// expiry turn — `visual_bell_started` is already cleared by the time
+    /// `window_host::render` runs, so the skip decision needs this
+    /// separate one-shot signal to know the erase frame must not be
+    /// skipped. Consumed via [`App::take_bell_erase_pending`].
     pub fn needs_bell_repaint(&mut self) -> bool {
         match self.visual_bell_started {
             None => false,
             Some(started) if started.elapsed().as_millis() as u64 >= BELL_FLASH_MS => {
                 self.visual_bell_started = None;
+                self.bell_erase_pending = true;
                 true
             }
             Some(_) => true,
         }
+    }
+
+    /// Consume the one-shot bell-erase-frame signal (task0005 AC-4).
+    /// Returns `true` exactly once per bell expiry — the render skip
+    /// decision ORs this into its `overlay_work` input — then reads
+    /// `false` again until the next flash expires.
+    pub fn take_bell_erase_pending(&mut self) -> bool {
+        std::mem::take(&mut self.bell_erase_pending)
     }
 
     /// True when the cursor's blink half-cycle has crossed a boundary
@@ -4812,6 +4838,42 @@ mod tests {
         // …then the latch is gone.
         assert!(!app.needs_bell_repaint());
         assert!(app.visual_bell_started.is_none());
+    }
+
+    /// task0005 AC-4: the erase-frame signal is set exactly on the expiry
+    /// turn (not while the flash is still live) and reads `false` again
+    /// once consumed.
+    #[test]
+    fn bell_erase_pending_false_while_flash_still_live() {
+        let mut app = App::new();
+        app.visual_bell_started = Some(Instant::now());
+        assert!(app.needs_bell_repaint(), "live flash still requests frames");
+        assert!(
+            !app.take_bell_erase_pending(),
+            "erase-frame signal must not fire while the flash is still decaying"
+        );
+    }
+
+    /// task0005 AC-4: on the turn the flash crosses its expiry,
+    /// `needs_bell_repaint` both clears `visual_bell_started` (existing
+    /// behavior) and latches the erase-frame signal so the render skip
+    /// decision does not skip this frame — the frame after that, with the
+    /// flash long gone and nothing else pending, must read the signal as
+    /// already consumed (`false`) again.
+    #[test]
+    fn bell_erase_pending_true_exactly_once_after_expiry() {
+        let mut app = App::new();
+        app.visual_bell_started =
+            Instant::now().checked_sub(Duration::from_millis(BELL_FLASH_MS + 50));
+        assert!(app.needs_bell_repaint(), "expiry turn still returns true");
+        assert!(
+            app.take_bell_erase_pending(),
+            "the erase frame must not be skipped"
+        );
+        assert!(
+            !app.take_bell_erase_pending(),
+            "the signal is one-shot: a later idle frame reads it as false again"
+        );
     }
 
     // ── task0004 D4: per-concern next-deadline getters ────────────────
