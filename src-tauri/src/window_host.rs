@@ -302,6 +302,9 @@ pub struct WindowHost {
     render_perf_enabled: bool,
     /// Frames-drawn counter, active only while `render_perf_enabled`.
     frame_counter: FrameCounter,
+    /// Rows-rebuilt counter (task0003 FR6-half), active only while
+    /// `render_perf_enabled`. Same env gate as `frame_counter`.
+    rows_rebuilt_counter: RowsRebuiltCounter,
 }
 
 /// Cached link-hover state for the active tab's grid. Mirrors the
@@ -506,6 +509,7 @@ impl WindowHost {
                 .map(|v| v == "1")
                 .unwrap_or(false),
             frame_counter: FrameCounter::default(),
+            rows_rebuilt_counter: RowsRebuiltCounter::default(),
         }
     }
 
@@ -1381,6 +1385,14 @@ impl WindowHost {
         // against the previous frame's view model so the skip path
         // only triggers when neither the terminal nor the status bar
         // moved.
+        // task0003 D2: `dirty` is captured into `frame_dirty_rows` so the
+        // per-row instance cache rebuild below drives off the exact same
+        // row set the skip decision used, instead of recomputing (and
+        // potentially observing a different result if `app.fold_layout()`
+        // changes between here and there — see the design note at that
+        // call site). `None` when this block never ran (`was_surface_dirty`
+        // — a forced full redraw) or there is no active tab.
+        let mut frame_dirty_rows: Option<Vec<u16>> = None;
         if !was_surface_dirty {
             let dirty_count = if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
@@ -1391,7 +1403,9 @@ impl WindowHost {
                     dirty.len(),
                     rows
                 );
-                Some(dirty.len())
+                let count = dirty.len();
+                frame_dirty_rows = Some(dirty);
+                Some(count)
             } else {
                 // No tab: still render once to draw the hint message; rely
                 // on the `needs_full_redraw` flag bookkeeping for that.
@@ -1647,7 +1661,7 @@ impl WindowHost {
         } else {
             Some(&self.hover.link_cells)
         };
-        let prepared_grid = if let Some(pass) = self.grid_pass.as_mut() {
+        if let Some(pass) = self.grid_pass.as_mut() {
             // Theme is seeded from settings (font_size_pt + cursor
             // style) and then overlaid with the active tab's OSC
             // mutations when a tab is present, mirroring the layering
@@ -1664,52 +1678,6 @@ impl WindowHost {
                 }
             };
             let width_mode = app.settings.ambiguous_width_mode;
-            let cell_inputs = if let Some(tab) = app.active_tab() {
-                let core = tab.core.lock();
-                // The filled block cursor is painted by the egui overlay
-                // (`render::cursor::draw_block_cursor`), not baked into
-                // the grid — grid instance data never depends on cursor
-                // position, blink phase, or window focus. Suppression
-                // (scrolled back into history, hidden by a fold) and the
-                // focused/blink/style visibility gate live on the
-                // overlay side now.
-                let scroll_offset = app.scroll_offset();
-                let mut inputs = crate::render::collect_cell_inputs(
-                    &core,
-                    &theme,
-                    app.selection.as_ref(),
-                    width_mode,
-                    hover_link_cells,
-                    scroll_offset,
-                    // Fold layout (built once at the top of `render` via
-                    // `App::refresh_fold_layout`). `Some` only when the active
-                    // tab has a collapsed region; selects the fold-aware row
-                    // mapping + summary-row cell skip.
-                    app.fold_layout(),
-                );
-                // IME preedit overlay (Phase 4-G): paint composition
-                // glyphs inline at the anchor so the user can see what
-                // they are typing. Without this only fcitx5's candidate
-                // window hints at composition state.
-                if tab.preedit_state.active() {
-                    // No bg extension: glyph is clamped inside the
-                    // cell rect by `fit_glyph_to_cell` so the
-                    // reverse-video bg never has to spill into the
-                    // next row to cover descenders.
-                    crate::render::apply_preedit_overlay(
-                        &mut inputs,
-                        tab.preedit_state.anchor(),
-                        tab.preedit_state.text(),
-                        &theme,
-                        core.cols(),
-                        core.rows(),
-                        0.0,
-                    );
-                }
-                inputs
-            } else {
-                Vec::new()
-            };
             // Cell metrics come from `App::cell_w_logical` /
             // `App::cell_h_logical` so the wgpu-rendered cells line up
             // with the egui-side cursor and preedit overlays. The
@@ -1724,34 +1692,138 @@ impl WindowHost {
             // the `ScreenDescriptor`; we apply the same scale to every
             // length we hand wgpu (cell rect + origin + glyph
             // rasterize size) so cells line up with the egui-side
-            // cursor / preedit on 2.0× hosts.
-            let scale = self.pixels_per_point.max(1.0);
+            // cursor / preedit on 2.0× hosts. Computed before the cell
+            // collection below (task0003): the per-row cache rebuild
+            // needs the same metrics the upload step uses.
+            //
             // Origin already captured above and lines up with
             // `cell_metrics_px` so the status-bar top inset (when
             // configured) shifts cells down to sit below the panel —
             // otherwise the top row would paint behind the egui
             // status-bar.
-            Some(pass.prepare(
+            let scale = self.pixels_per_point.max(1.0);
+            let metrics = crate::render::terminal_grid_pass::CellMetrics {
+                cell_w: app.cell_w_logical * scale,
+                cell_h: app.cell_h_logical * scale,
+                origin: [origin_x_px as f32, origin_y_px as f32],
+                // `theme.font_size_pt` is in CSS-compatible points;
+                // the rasterizer takes pixels, so apply the same
+                // `pt → px` conversion the legacy WebView build
+                // does (96/72). Without this the glyph atlas is
+                // built at ~75% of the cell size.
+                font_size_px: theme.font_size_px() * scale,
+            };
+
+            // task0003: resolve this frame's instance list either through
+            // the per-row cache (normal path) or a full uncached rebuild
+            // (IME preedit bypass — see the comment below), then hand it
+            // to `prepare` for GPU upload.
+            let (instances, rows_rebuilt) = if let Some(tab) = app.active_tab() {
+                let core = tab.core.lock();
+                // The filled block cursor is painted by the egui overlay
+                // (`render::cursor::draw_block_cursor`), not baked into
+                // the grid — grid instance data never depends on cursor
+                // position, blink phase, or window focus. Suppression
+                // (scrolled back into history, hidden by a fold) and the
+                // focused/blink/style visibility gate live on the
+                // overlay side now.
+                let scroll_offset = app.scroll_offset();
+                if tab.preedit_state.active() {
+                    // IME preedit overlay (Phase 4-G): paint composition
+                    // glyphs inline at the anchor so the user can see
+                    // what they are typing. `apply_preedit_overlay`
+                    // mutates `CellInput`s *after* `collect_cell_inputs`
+                    // in a way the per-row cache cannot represent
+                    // without risking stale cached content once preedit
+                    // ends (task0003 design note under D3) — bypass the
+                    // cache entirely for such frames: rebuild every row
+                    // fresh via the full-grid path and skip both reading
+                    // and writing `row_cache`.
+                    let mut inputs = crate::render::collect_cell_inputs(
+                        &core,
+                        &theme,
+                        app.selection.as_ref(),
+                        width_mode,
+                        hover_link_cells,
+                        scroll_offset,
+                        // Fold layout (built once at the top of `render`
+                        // via `App::refresh_fold_layout`). `Some` only
+                        // when the active tab has a collapsed region;
+                        // selects the fold-aware row mapping +
+                        // summary-row cell skip.
+                        app.fold_layout(),
+                        None,
+                    );
+                    // No bg extension: glyph is clamped inside the
+                    // cell rect by `fit_glyph_to_cell` so the
+                    // reverse-video bg never has to spill into the
+                    // next row to cover descenders.
+                    crate::render::apply_preedit_overlay(
+                        &mut inputs,
+                        tab.preedit_state.anchor(),
+                        tab.preedit_state.text(),
+                        &theme,
+                        core.cols(),
+                        core.rows(),
+                        0.0,
+                    );
+                    let rows = core.rows();
+                    (pass.build_instances(&inputs, metrics), rows as usize)
+                } else {
+                    // Reuse the row set `dirty_rows_this_frame` already
+                    // computed for the skip decision above (task0003 D2):
+                    // a forced full redraw (surface reconfigure, or the
+                    // skip-check block never ran) rebuilds every row —
+                    // matching the row cache's "resize drops everything"
+                    // path; otherwise only the actual dirty rows are
+                    // rebuilt and every other row is served from cache.
+                    let row_count = core.rows();
+                    let effective_dirty_rows: Vec<u16> = match frame_dirty_rows.take() {
+                        Some(rows) => rows,
+                        None => (0..row_count).collect(),
+                    };
+                    let dirty_cells = crate::render::collect_cell_inputs(
+                        &core,
+                        &theme,
+                        app.selection.as_ref(),
+                        width_mode,
+                        hover_link_cells,
+                        scroll_offset,
+                        app.fold_layout(),
+                        Some(&effective_dirty_rows),
+                    );
+                    pass.rebuild_and_collect(
+                        &effective_dirty_rows,
+                        &dirty_cells,
+                        metrics,
+                        row_count,
+                    )
+                }
+            } else {
+                pass.rebuild_and_collect(&[], &[], metrics, 0)
+            };
+
+            // task0003 FR6-half: count rows rebuilt this frame (0 on a
+            // fully cache-served frame), gated behind
+            // `EMTERM_RENDER_PERF=1` like the frames-drawn counter above.
+            if let Some(total) = record_rebuilt_rows(
+                self.render_perf_enabled,
+                &mut self.rows_rebuilt_counter,
+                rows_rebuilt as u64,
+                Instant::now(),
+            ) {
+                log::warn!("[EMTERM_RENDER_PERF] rows rebuilt: {total}");
+            }
+
+            pass.prepare(
                 &self.device,
                 &self.queue,
-                &cell_inputs,
-                crate::render::terminal_grid_pass::CellMetrics {
-                    cell_w: app.cell_w_logical * scale,
-                    cell_h: app.cell_h_logical * scale,
-                    origin: [origin_x_px as f32, origin_y_px as f32],
-                    // `theme.font_size_pt` is in CSS-compatible points;
-                    // the rasterizer takes pixels, so apply the same
-                    // `pt → px` conversion the legacy WebView build
-                    // does (96/72). Without this the glyph atlas is
-                    // built at ~75% of the cell size.
-                    font_size_px: theme.font_size_px() * scale,
-                },
+                &instances,
+                metrics,
                 self.surface_config.width,
                 self.surface_config.height,
-            ))
-        } else {
-            None
-        };
+            );
+        }
 
         {
             // Clear to the active theme's bg so the padding strip around
@@ -1783,8 +1855,8 @@ impl WindowHost {
                     timestamp_writes: None,
                 })
                 .forget_lifetime();
-            if let (Some(grid), Some(frame)) = (self.grid_pass.as_ref(), prepared_grid.as_ref()) {
-                grid.draw(&mut pass, frame);
+            if let Some(grid) = self.grid_pass.as_ref() {
+                grid.draw(&mut pass);
             }
         }
 
@@ -1955,6 +2027,55 @@ fn record_drawn_frame(enabled: bool, counter: &mut FrameCounter, now: Instant) -
         return None;
     }
     counter.record_draw(now)
+}
+
+/// Rows-rebuilt counter for `EMTERM_RENDER_PERF=1` (task0003 FR6-half /
+/// AC-5). Same idiom as [`FrameCounter`]: accumulates every rebuilt row
+/// and reports the running total at most once per second of activity, so
+/// an idle host doesn't flood `emterm.log`.
+#[derive(Debug, Default)]
+struct RowsRebuiltCounter {
+    rebuilt: u64,
+    last_log_at: Option<Instant>,
+}
+
+impl RowsRebuiltCounter {
+    /// Record `rows` freshly rebuilt rows. Returns `Some(total)` when at
+    /// least a second has passed since the last reported log point (or
+    /// this is the first call ever), `None` otherwise. The running total
+    /// always advances regardless of the return value.
+    fn record_rebuilt(&mut self, rows: u64, now: Instant) -> Option<u64> {
+        self.rebuilt += rows;
+        let should_log = match self.last_log_at {
+            None => true,
+            Some(t) => now.duration_since(t) >= Duration::from_secs(1),
+        };
+        if should_log {
+            self.last_log_at = Some(now);
+            Some(self.rebuilt)
+        } else {
+            None
+        }
+    }
+}
+
+/// Wires the `EMTERM_RENDER_PERF` gate to [`RowsRebuiltCounter`]: a no-op
+/// that never touches `counter` when `enabled` is `false` (AC-5's "no
+/// side effects when unset" half) or when `rows == 0` (a fully
+/// cache-served frame has nothing to report), otherwise delegates to
+/// `RowsRebuiltCounter::record_rebuilt`. Kept separate from
+/// `WindowHost::render` so both halves of AC-5 are unit-testable without a
+/// window, mirroring `record_drawn_frame`.
+fn record_rebuilt_rows(
+    enabled: bool,
+    counter: &mut RowsRebuiltCounter,
+    rows: u64,
+    now: Instant,
+) -> Option<u64> {
+    if !enabled || rows == 0 {
+        return None;
+    }
+    counter.record_rebuilt(rows, now)
 }
 
 /// Translate a winit `MouseButton` to its `egui::PointerButton`
@@ -3683,6 +3804,73 @@ mod tests {
         let now = Instant::now();
         assert_eq!(record_drawn_frame(true, &mut counter, now), Some(1));
         assert_eq!(counter.drawn, 1);
+    }
+
+    // ── task0003 AC-5: EMTERM_RENDER_PERF rows-rebuilt counter ────────
+
+    /// AC-5: the first recorded batch always logs (no prior log point).
+    #[test]
+    fn rows_rebuilt_counter_logs_first_batch_immediately() {
+        let mut counter = RowsRebuiltCounter::default();
+        let now = Instant::now();
+        assert_eq!(counter.record_rebuilt(3, now), Some(3));
+    }
+
+    /// AC-5: a second batch within the same one-second window still
+    /// accumulates but does not re-log.
+    #[test]
+    fn rows_rebuilt_counter_suppresses_log_within_one_second_window() {
+        let mut counter = RowsRebuiltCounter::default();
+        let t0 = Instant::now();
+        assert_eq!(counter.record_rebuilt(3, t0), Some(3));
+        let t1 = t0 + Duration::from_millis(500);
+        assert_eq!(counter.record_rebuilt(2, t1), None);
+        assert_eq!(
+            counter.rebuilt, 5,
+            "total must still advance without logging"
+        );
+    }
+
+    /// AC-5: once a full second has elapsed since the last log, the next
+    /// rebuilt batch logs again with the updated running total.
+    #[test]
+    fn rows_rebuilt_counter_logs_again_after_one_second_elapsed() {
+        let mut counter = RowsRebuiltCounter::default();
+        let t0 = Instant::now();
+        assert_eq!(counter.record_rebuilt(1, t0), Some(1));
+        let t1 = t0 + Duration::from_secs(1);
+        assert_eq!(counter.record_rebuilt(1, t1), Some(2));
+    }
+
+    /// AC-5: with the gate disabled, `record_rebuilt_rows` never touches
+    /// the counter — "no side effects" when `EMTERM_RENDER_PERF` is unset.
+    #[test]
+    fn record_rebuilt_rows_disabled_never_touches_counter() {
+        let mut counter = RowsRebuiltCounter::default();
+        let now = Instant::now();
+        assert_eq!(record_rebuilt_rows(false, &mut counter, 5, now), None);
+        assert_eq!(counter.rebuilt, 0, "disabled gate must not count rows");
+    }
+
+    /// AC-3/AC-5: a stable (fully cache-served) frame reports zero rebuilt
+    /// rows; even with the gate enabled this must not touch the counter
+    /// (nothing meaningful to log on a frame with no rebuild work).
+    #[test]
+    fn record_rebuilt_rows_enabled_with_zero_rows_never_touches_counter() {
+        let mut counter = RowsRebuiltCounter::default();
+        let now = Instant::now();
+        assert_eq!(record_rebuilt_rows(true, &mut counter, 0, now), None);
+        assert_eq!(counter.rebuilt, 0);
+    }
+
+    /// AC-5: with the gate enabled, `record_rebuilt_rows` delegates to the
+    /// counter and surfaces its log payload.
+    #[test]
+    fn record_rebuilt_rows_enabled_delegates_to_counter() {
+        let mut counter = RowsRebuiltCounter::default();
+        let now = Instant::now();
+        assert_eq!(record_rebuilt_rows(true, &mut counter, 4, now), Some(4));
+        assert_eq!(counter.rebuilt, 4);
     }
 
     // ── skk_mode: bare Ctrl+J swallow ────────────────────────────────
