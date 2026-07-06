@@ -585,6 +585,15 @@ mod tests {
         r
     }
 
+    fn rasterizer_with_mono_emoji() -> SwashRasterizer {
+        let r = SwashRasterizer::with_subpixel(false);
+        r.register_bytes(
+            FontId(1),
+            Arc::<[u8]>::from(super::super::resolver::BUNDLED_EMOJI_MONO_FONT),
+        );
+        r
+    }
+
     /// TS-font-8: swash rasterizes ASCII 'A' to a non-empty alpha bitmap
     /// with sensible advance.
     #[test]
@@ -665,6 +674,33 @@ mod tests {
         let r = rasterizer_with_emoji();
         assert!(r.has_codepoint(FontId(1), 0x1F600));
         assert!(!r.has_codepoint(FontId(1), 0xE000_0001));
+    }
+
+    /// The bundled monochrome Noto Emoji must cover the text-default
+    /// emoji the legacy v1.05 cut was missing (U+2602 ☂ / U+2603 ☃ /
+    /// U+2639 ☹ / U+262F ☯). A coverage gap here makes
+    /// `FallbackChain::resolve_for_cluster` fall through to the color
+    /// emoji font, so Monochrome-presentation clusters render colored.
+    /// The raster must also stay on the alpha path so the glyph is
+    /// tinted with the cell foreground color.
+    #[test]
+    fn mono_emoji_covers_text_default_emoji_and_rasters_alpha() {
+        let r = rasterizer_with_mono_emoji();
+        for cp in [0x2600u32, 0x2602, 0x2603, 0x2639, 0x262F, 0x2764] {
+            assert!(
+                r.has_codepoint(FontId(1), cp),
+                "mono emoji font must cover U+{cp:04X}"
+            );
+        }
+        let glyphs = r.shape("\u{2602}", FontId(1), 26.0);
+        assert!(!glyphs.is_empty(), "shape returned no glyphs for U+2602");
+        let g = glyphs[0];
+        assert!(g.glyph_id > 0, "mono emoji font must map U+2602");
+        let bitmap = r
+            .raster(g.font, g.glyph_id, g.size_px)
+            .expect("mono emoji raster");
+        assert_eq!(bitmap.format, AtlasFormat::Alpha);
+        assert!(!bitmap.is_empty(), "U+2602 bitmap empty: {:?}", bitmap);
     }
 
     /// Bundled CBDT emoji font ingests with `has_color = true`. The
