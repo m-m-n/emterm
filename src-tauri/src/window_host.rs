@@ -1792,7 +1792,50 @@ impl WindowHost {
             // (IME preedit bypass — see the comment below), then hand it
             // to `prepare` for GPU upload.
             let (instances, rows_rebuilt) = if let Some(tab) = app.active_tab() {
-                let core = tab.core.lock();
+                let mut core = tab.core.lock();
+                let row_count = core.rows();
+                // task0006 (fixes review round-2 critical finding
+                // 779c9130c103c55b): consume term_core's accumulated
+                // scroll event exactly once per rendered frame, before
+                // either branch below decides which rows the per-row
+                // cache should serve from cache vs rebuild — the core's
+                // full-screen count==1 scroll optimization
+                // (`ring_buffer::scroll_up_internal`) shifts its own
+                // dirty bits + viewport mapping on the promise that the
+                // renderer shifts its own representation (`row_cache`,
+                // owned by `pass`) by the same amount; without this the
+                // cache kept serving stale upper rows after every
+                // ordinary live-tail scroll.
+                //
+                // `frame_dirty_rows` names fewer than every row only on
+                // the ordinary cached path — a forced full redraw
+                // (`was_surface_dirty`, `needs_full_redraw`/
+                // `force_full_redraw`, a fold layout, or a scrolled-back
+                // viewport reacting to new output — see
+                // `App::on_pty_output`) already names every row via
+                // `dirty_rows_this_frame`, so the rebuild below overwrites
+                // the whole cache regardless of any rotation; skip
+                // rotating in that case and only clear the now-stale
+                // event (task0006 Design: "needs_full_redraw frames: full
+                // rebuild already; just clear the event"). Otherwise (the
+                // ordinary cached path, and the IME preedit shadow-rebuild
+                // path below which shares the same `row_cache`) rotate
+                // first so both branches read a cache already tracking
+                // the shift.
+                let scroll_count = core.get_scroll_event_count();
+                if scroll_count > 0 {
+                    let partial_dirty_rows = frame_dirty_rows
+                        .as_ref()
+                        .is_some_and(|rows| (rows.len() as u16) < row_count);
+                    if should_rotate_row_cache_for_scroll_event(scroll_count, partial_dirty_rows) {
+                        pass.apply_scroll_event(
+                            core.get_scroll_event_direction(),
+                            scroll_count,
+                            metrics.cell_h,
+                        );
+                    }
+                    core.clear_scroll_event();
+                }
                 // The filled block cursor is painted by the egui overlay
                 // (`render::cursor::draw_block_cursor`), not baked into
                 // the grid — grid instance data never depends on cursor
@@ -1829,7 +1872,6 @@ impl WindowHost {
                     // cache-side effect matters) using the *clean*
                     // (pre-overlay) cells, so `row_cache` keeps tracking
                     // `term_core` continuously even during preedit.
-                    let row_count = core.rows();
                     let anchor = tab.preedit_state.anchor();
                     let effective_dirty_rows = preedit_effective_dirty_rows(
                         frame_dirty_rows.take(),
@@ -1893,7 +1935,6 @@ impl WindowHost {
                     // matching the row cache's "resize drops everything"
                     // path; otherwise only the actual dirty rows are
                     // rebuilt and every other row is served from cache.
-                    let row_count = core.rows();
                     let effective_dirty_rows: Vec<u16> = match frame_dirty_rows.take() {
                         Some(rows) => rows,
                         None => (0..row_count).collect(),
@@ -2127,6 +2168,29 @@ fn should_skip_frame(
     overlay_work: bool,
 ) -> bool {
     matches!(dirty_count, Some(0)) && !status_bar_changed && !overlay_work
+}
+
+/// task0006: whether this frame's pending core scroll event should
+/// rotate the per-row instance cache — extracted as a pure function
+/// (plain values in, plain bool out) mirroring `should_skip_frame`
+/// above, so the decision is directly unit-testable without a window.
+///
+/// `scroll_count` is `TerminalCore::get_scroll_event_count()`.
+/// `partial_dirty_rows` is `true` only on the ordinary cached path,
+/// where `frame_dirty_rows` names FEWER rows than the viewport's total —
+/// `false` on any turn where the effective dirty set is already every
+/// row (a forced full redraw: `was_surface_dirty`, `needs_full_redraw`
+/// / `force_full_redraw`, a fold layout, or a scrolled-back viewport
+/// reacting to new output — see `App::on_pty_output`). In every `false`
+/// case the rebuild below overwrites the whole cache regardless of any
+/// rotation, so rotating first would just be wasted work.
+///
+/// Callers still clear the core-side event whenever `scroll_count > 0`
+/// regardless of this function's answer (task0006 Design:
+/// "needs_full_redraw frames: full rebuild already; just clear the
+/// event") — this function only gates the rotation itself.
+fn should_rotate_row_cache_for_scroll_event(scroll_count: u16, partial_dirty_rows: bool) -> bool {
+    scroll_count > 0 && partial_dirty_rows
 }
 
 /// The dirty-row set fed to [`crate::render::terminal_grid_pass::
@@ -3999,6 +4063,41 @@ mod tests {
     #[test]
     fn should_skip_frame_false_when_search_visible() {
         assert!(!should_skip_frame(Some(0), false, true));
+    }
+
+    // ── task0006: should_rotate_row_cache_for_scroll_event pure decision ──
+
+    /// A pending scroll event on the ordinary cached path (dirty rows
+    /// captured this turn) must rotate the cache.
+    #[test]
+    fn should_rotate_row_cache_for_scroll_event_true_on_cached_path() {
+        assert!(should_rotate_row_cache_for_scroll_event(1, true));
+    }
+
+    /// A turn whose effective dirty set is already every row (forced full
+    /// redraw, fold layout, or a scrolled-back viewport reacting to new
+    /// output) must NOT rotate — every row rebuilds from scratch
+    /// regardless, so rotating first would just be overwritten (task0006
+    /// Design: "needs_full_redraw frames: full rebuild already; just
+    /// clear the event").
+    #[test]
+    fn should_rotate_row_cache_for_scroll_event_false_on_full_redraw() {
+        assert!(!should_rotate_row_cache_for_scroll_event(1, false));
+    }
+
+    /// No pending scroll event (`scroll_count == 0`) never rotates, even
+    /// on the cached path.
+    #[test]
+    fn should_rotate_row_cache_for_scroll_event_false_when_no_event() {
+        assert!(!should_rotate_row_cache_for_scroll_event(0, true));
+    }
+
+    /// Neither a pending event nor the cached path → false (defensive
+    /// combination; never actually reached since the call site only
+    /// calls this inside `scroll_count > 0`).
+    #[test]
+    fn should_rotate_row_cache_for_scroll_event_false_when_neither() {
+        assert!(!should_rotate_row_cache_for_scroll_event(0, false));
     }
 
     // ── task0005 AC-1: hover_link_cells_changed pure decision ─────────
