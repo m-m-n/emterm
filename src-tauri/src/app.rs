@@ -3312,6 +3312,17 @@ impl App {
         self.needs_full_redraw = true;
     }
 
+    /// Whether a full repaint is currently pending (`mark_full_redraw` /
+    /// `force_full_redraw`). Read by `window_host::render` at the grid-build
+    /// point: events applied from the frame's own egui pass (a tab switch,
+    /// a scrollbar jump) raise the flag *mid-frame*, after the frame-top
+    /// dirty snapshot was taken — the build must then widen to every row
+    /// instead of trusting the stale snapshot, or the per-row cache keeps
+    /// serving the previous tab's content.
+    pub fn full_redraw_pending(&self) -> bool {
+        self.needs_full_redraw || self.force_full_redraw
+    }
+
     /// FR4: whether the active tab/window cell should be scrolled into view
     /// this frame. Read by `render::draw_terminal` (immutable `&App`) and
     /// threaded into the tab strip; cleared post-frame by `window_host`.
