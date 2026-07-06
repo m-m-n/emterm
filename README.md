@@ -1,6 +1,6 @@
 # eMterm
 
-A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for the terminal window and wry (WebKitGTK / WebView2) for child windows that render Markdown, JSON, YAML, images, and the settings panel.
+A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for the terminal window; wry (WebKitGTK / WebView2) renders the Markdown/HTML viewers and the settings panel, while the JSON/YAML viewer and the image viewer are additional native winit + wgpu windows.
 
 ## Features
 
@@ -25,8 +25,9 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Kitty protocol compatibility: works with kitten icat, ratatui-image, treemd, and other external tools
   - Fullscreen image viewer (pixel-perfect and fit-to-window modes, pan, wheel scroll, Space/Shift+Space scrolling)
   - HTML viewer: `emterm html <file>` renders a local HTML file as-is in a child WebView window (JS executes, network access blocked, only basedir-relative local resources load, external links open in the system browser)
+  - JSON/YAML viewer: `emterm json <file>` / `emterm yaml <file>` display structured data in a native fullscreen window with an outline (tree + detail pane, default) or RAW view, syntax highlighting, and a JSON pretty-print toggle
   - Viewers render within the terminal content area; tab bar remains accessible during viewing
-  - CLI commands: `emterm markdown`, `emterm html`, and `emterm image` (work over SSH, CLI-only build available)
+  - CLI commands: `emterm markdown`, `emterm html`, `emterm json`, `emterm yaml`, and `emterm image` (work over SSH, CLI-only build available)
   - File download via OSC 777: streaming I/O with no file size limit, save dialog at transfer start
 
 - **Terminal Multiplexer**
@@ -96,6 +97,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Activity dot indicator on inactive tabs when new output or process events occur
   - OS desktop notifications when the window is not focused (configurable)
   - Notification throttling to prevent spam during high-frequency output
+  - Restart toast when the running binary no longer matches the on-disk binary after a package update, e.g. `apt`/`dpkg` (Linux)
 
 - **Internationalization**
   - English and Japanese UI (auto-detected from OS locale)

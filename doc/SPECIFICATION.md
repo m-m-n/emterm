@@ -2,11 +2,11 @@
 
 ## Overview
 
-eMterm is a terminal emulator for Linux and Windows. The terminal window is built with winit (event loop and IME), wgpu (GPU surface), and swash + zeno + fontdb (font rasterization). Child WebView windows (Markdown viewer, data viewer, settings panel) use wry (WebKitGTK on Linux, WebView2 on Windows). The design prioritizes low-latency input performance and compatibility with AI coding tools such as Claude Code.
+eMterm is a terminal emulator for Linux and Windows. The terminal window is built with winit (event loop and IME), wgpu (GPU surface), and swash + zeno + fontdb (font rasterization). Child WebView windows (Markdown viewer, HTML viewer, settings panel) use wry (WebKitGTK on Linux, WebView2 on Windows). The JSON/YAML data viewer and the image viewer are separate native child windows built on the same winit + wgpu + egui stack as the main terminal, not WebView. The design prioritizes low-latency input performance and compatibility with AI coding tools such as Claude Code.
 
 **Technology Stack:**
-- Rust — native terminal stack: winit (event loop, IME), wgpu (GPU surface), egui (in-process UI), swash + zeno + fontdb (font rasterization), portable-pty (PTY abstraction)
-- Rust + wry — child WebView windows (Markdown viewer, JSON/YAML data viewer, settings panel). Linux uses GTK + WebKitGTK, Windows uses WebView2
+- Rust — native terminal stack: winit (event loop, IME), wgpu (GPU surface), egui (in-process UI, also used to render the JSON/YAML data viewer and image viewer child windows), swash + zeno + fontdb (font rasterization), portable-pty (PTY abstraction)
+- Rust + wry — child WebView windows (Markdown viewer, HTML viewer, settings panel). Linux uses GTK + WebKitGTK, Windows uses WebView2
 - TypeScript (vanilla, no framework) — child WebView frontends (`src-tauri/{viewer,settings}/web/`) and the shared web modules they import from (`src-tauri/web-shared/`)
 - Bun — TypeScript bundler / test runner / package manager for the child WebView bundles only
 
@@ -24,7 +24,7 @@ graph TD
 
     PTY -- "OSC sequences" --> OscHandlers["OSC Handlers (Rust)"]
     OscHandlers --> MarkdownViewer["Markdown Viewer (wry)"]
-    OscHandlers --> DataViewer["Data Viewer (wry)"]
+    OscHandlers --> DataViewer["JSON/YAML Data Viewer (native winit+egui)"]
 
     App --> Settings["Settings Panel (wry)"]
 ```
@@ -41,8 +41,12 @@ graph LR
 
     subgraph ChildWebViews["Child WebView Windows (wry)"]
         MarkdownViewer["Markdown Viewer"]
-        DataViewer["JSON/YAML Data Viewer"]
         SettingsPanel["Settings Panel"]
+    end
+
+    subgraph NativeChildWindows["Native Child Windows (winit + wgpu + egui)"]
+        DataViewer["JSON/YAML Data Viewer"]
+        ImageViewer["Image Viewer"]
     end
 
     App --> Tabs
@@ -50,6 +54,7 @@ graph LR
     TermCore --> Renderer
     App --> MarkdownViewer
     App --> DataViewer
+    App --> ImageViewer
     App --> SettingsPanel
     Tabs --> MuxDaemon
 ```
@@ -86,6 +91,7 @@ Full-featured VT100/VT220/xterm ANSI escape sequence parser implemented as a pur
 - Mouse reporting: X10, normal, button-event, any-event tracking; SGR extended coordinates
 - Bracketed paste mode (DECSET 2004)
 - Application cursor keys (DECCKM), alternate screen (DECSET 47/1047/1049)
+- Device attributes: DA1 (`CSI c`) and DA2 (`CSI > c`) report a VT500 conformance level, reflecting implemented capabilities (132-column mode, Sixel graphics, ANSI color)
 
 **Handler Architecture:**
 - `TerminalStateAccessor` trait provides a clean interface for handler access
@@ -365,6 +371,28 @@ A fullscreen overlay for viewing terminal images at full resolution, rendering w
 
 ---
 
+#### JSON/YAML Viewer
+
+`emterm json PATH` / `emterm yaml PATH` display a structured data file in a native fullscreen child window (winit + wgpu + egui), separate from the wry-based WebView viewers.
+
+**Key Functionality:**
+- Outline view (default): left tree pane, fully expanded, resizable (280pt initial width, 200–600pt range); right detail pane re-serializes the selected subtree in the source format with 2-space indent
+- RAW view: full source text with a Copy button
+- Syntax highlighting for keys, strings, numbers, booleans, and null values
+- Parse errors: red banner (`Parse error: …`), plain-text RAW view only; outline view unavailable and locked
+- CLI side (`emterm json` / `emterm yaml`) works in the CLI-only build; the viewer window itself requires the `gui` feature
+
+**Keyboard Shortcuts:**
+| Key | Outline View | RAW View |
+|-----|--------------|----------|
+| `Esc` | Close viewer | Close viewer |
+| `r` | Switch to RAW | Switch to Outline |
+| `p` | (no effect) | Toggle JSON pretty-print |
+| `Up`/`Down`/`PageUp`/`PageDown`/`Home`/`End` | Tree navigation | Scroll |
+| `Space` / `Shift+Space` | (no effect) | Page scroll (~85% viewport) |
+
+---
+
 #### HTML Viewer
 
 `emterm html PATH` displays a local HTML file in a child WebView window, rendering it as-is with no eMterm styling. Intended for reviewing AI-generated HTML documents, not as a full browser.
@@ -389,7 +417,7 @@ Uses the same `begin` / `chunk` / `end` session transfer pipeline as the Markdow
 
 #### CLI Display Commands
 
-Helper CLI subcommands to output OSC control sequences for Markdown, HTML, and image display.
+Helper CLI subcommands to output OSC control sequences for Markdown, HTML, JSON/YAML, and image display.
 
 **Commands:**
 ```bash
@@ -1229,6 +1257,21 @@ Correct character width calculation for Unicode 17.0 and Emoji 17.0.
 - ZWJ (Zero Width Joiner) sequence support for multi-codepoint emoji
 - Emoji 17.0 character table
 - Width calculated in `term_core` (pure Rust, no WASM)
+
+---
+
+### Category 12: Reliability
+
+#### Binary-Mismatch Restart Toast
+
+Detects, on a failed self-spawn, that the running binary no longer matches the on-disk binary (e.g. after `apt`/`dpkg` replaces it while eMterm is still running) and prompts the user to restart. Linux only.
+
+**Key Functionality:**
+- eMterm launches its settings panel, viewers, and mux daemon by re-executing itself via `current_exe()`; after the on-disk binary is replaced, `current_exe()` resolves to a deleted inode and the self-spawn fails with `ENOENT`
+- Detection compares the startup baseline `(device, inode)` against the current on-disk file; a mismatch is confirmed reactively, only on a failed self-spawn
+- A top-right toast on the main window prompts the user to restart, auto-dismissing after 4 seconds
+- Toast text is localized (ja/en)
+- A failed self-spawn never blocks or affects terminal rendering/input
 
 ---
 
