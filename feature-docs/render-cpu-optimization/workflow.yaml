@@ -29,16 +29,20 @@ workflow:
     status: completed
     completed_at_commit: 55e424ab0591e6dcc020b7debbbe73bc998c07bd
   - id: implement
-    status: pending
-    base_commit: null
+    status: completed
+    base_commit: 55e424ab0591e6dcc020b7debbbe73bc998c07bd
+    completed_at_commit: 2782261d5163bb50f2f2f29fae2aefc2c324349c
+    rework: "review round 2 → task0006 (scroll-event cache rotation) — merged"
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 2782261d5163bb50f2f2f29fae2aefc2c324349c
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: "自動検証 pass: build (main + cli_gate/TS-11) / --lib テスト (失敗は既知の tabs:: replay フレーク族のみ、ベースコミットで再現確認済み)。手動項目 TS-8/TS-9/TS-10 はユーザー判断でマージ後実施に繰り延べ (mux 環境の都合)"
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
@@ -53,8 +57,9 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR2, NFR2]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/render-cpu-optimization/task0001
   task0002:
     title: "Honest dirty set + draw-skip decision + frames counter"
     plan: tasks/task0002.md
@@ -66,8 +71,9 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR1, FR6, NFR1]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/render-cpu-optimization/task0002
   task0003:
     title: "Dirty-row-driven rendering + persistent instance buffer"
     plan: tasks/task0003.md
@@ -80,8 +86,9 @@ tasks:
     domains: [ui]
     complexity: high
     requirements: [FR3, FR4, FR6, NFR1]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/render-cpu-optimization/task0003
   task0004:
     title: "Wait-driven event loop"
     plan: tasks/task0004.md
@@ -94,12 +101,55 @@ tasks:
     domains: [ui, concurrency]
     complexity: high
     requirements: [FR5, NFR1]
-    status: pending
-    notes: null
+    status: merged
+    notes: "residual risk flagged by implementer: pre-existing gap — SFTP progress channel producer (crate::sftp::service) has no wake call; out of task scope, hand to review"
+    branch: em-workflow/render-cpu-optimization/task0004
+  task0005:
+    title: "Review rework: overlay invalidation gaps + cursor/counter fixes"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/app.rs
+      - src-tauri/src/render/cursor.rs
+      - src-tauri/src/sftp/service.rs
+    wave: 5
+    skills: []
+    domains: [ui, concurrency]
+    complexity: medium
+    requirements: [FR2, FR3, FR5, FR6, NFR2]
+    status: merged
+    branch: em-workflow/render-cpu-optimization/task0005
+    notes: "review round 1 rework: findings 63c273cd4e0d66b1, 0a4db738aca57cbb, cd6820740f2c0769, 063320466ae233fe, c0732dd907681dc1, 40edebb31f8f5e20"
+  task0006:
+    title: "Row cache scroll tracking (rotate on scroll_event)"
+    plan: tasks/task0006.md
+    files:
+      - src-tauri/src/render/terminal_grid_pass.rs
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/app.rs
+    wave: 6
+    skills: []
+    domains: [ui]
+    complexity: high
+    requirements: [FR3, NFR2]
+    status: merged
+    branch: em-workflow/render-cpu-optimization/task0006
+    notes: "review round 2 rework: critical finding 779c9130c103c55b (cache rotation approach, user-selected)"
 
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 3
+  plan:
+    floor: [comprehensive, performance, architecture, spec]
+    discretionary: []
+    codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:

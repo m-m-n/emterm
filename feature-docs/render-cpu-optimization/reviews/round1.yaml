@@ -1,0 +1,261 @@
+round: 1
+executed_at: "2026-07-06T08:24:19+09:00"
+scope:
+  review_mode: diff
+  base_commit: 55e424ab0591e6dcc020b7debbbe73bc998c07bd
+  head_commit: 2c8db0b  # integration HEAD after auto-fix loop 1
+  changed_files:
+    - src-tauri/src/app.rs
+    - src-tauri/src/render/cursor.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/render/terminal_grid_pass.rs
+    - src-tauri/src/tabs.rs
+    - src-tauri/src/window_host.rs
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  - stable_id: 8edcba56d06d5b6f
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 3845
+    title: "fold 有効・選択なしフレームで dirty 行(core 座標)が screen 行とずれ、行キャッシュが誤った行を再構築"
+    description: "dirty_rows_this_frame の core 座標行が fold layout の screen 行として only_rows に渡り非線形マッピングとずれる。fold+selection のみ全行フォールバックしていた。"
+    suggestion: "fold_layout.is_some() なら選択の有無に関わらず (0..rows) を返すようガードを拡大"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (全行フォールバック); 再レビューで検証済み"
+  - stable_id: e0beda9bacfe0a19
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host.rs
+    line: 2700
+    title: "フォーカス変化でカーソル filled↔hollow が切り替わらない(skip 判定が握り潰す)"
+    description: "Focused ハンドラが request_redraw のみで dirty 化せず、honest dirty set + skip でフレーム全体が捨てられる。"
+    suggestion: "Focused ハンドラで mark_full_redraw() を呼ぶ"
+    sources: [claude:comprehensive, claude:spec]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (mark_full_redraw); 再レビューで TS-5 充足を検証済み"
+  - stable_id: cd6820740f2c0769
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/sftp/service.rs
+    line: 443
+    title: "SFTP 進捗/重複チェック producer が wakeup::wake() を呼ばず、Wait 化ループで進捗トーストが出ない"
+    description: "progress_tx/result_tx send 後に wake が無く、ControlFlow::Wait 下でチャネルが滞留する。implementer が residual risk として申告した既存ギャップが Wait 化で実害化。changed_files 外のため confidence 上限 50。"
+    suggestion: "各 send 直後に crate::wakeup::wake() を呼ぶ(tabs.rs worker と同じ作法)"
+    sources: [claude:comprehensive]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "rework task0005 で修正予定"
+  - stable_id: c4616be15c91e898
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/window_host.rs
+    line: 1415
+    title: "preedit キャンセル(確定なし)で stale preedit グリフが残る懸念"
+    description: "preedit バイパスフレームの GPU 内容が skip により残留し得る。"
+    suggestion: "preedit active→inactive 遷移フレームで dirty 化"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: "loop 1 の preedit shadow-rebuild + on_ime_* の needs_full_redraw で解消; 再レビューで検証済み"
+  - stable_id: 566170167b3851c4
+    severity: high
+    category: performance
+    file: src-tauri/src/window_host.rs
+    line: 1415
+    title: "トースト表示中に 60Hz busy-wake するが skip が全フレーム破棄し pump_sftp が飢餓"
+    description: "about_to_wait は toast/bell で起床させるが should_skip_frame が egui パス手前で return し、起床が全て無駄になり toast pump も走らない。"
+    suggestion: "should_skip_frame に overlay_work 引数を追加"
+    sources: [claude:performance, codex:architecture]
+    confidence: 75
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (overlay_work 追加); 再レビューでアイドル時 false も検証済み"
+  - stable_id: bafef72404de83a4
+    severity: high
+    category: architecture
+    file: src-tauri/src/window_host.rs
+    line: 1731
+    title: "IME preedit バイパスが行キャッシュの無効化契約を破る(陳腐化・空行)"
+    description: "preedit フレームがキャッシュを素通りする一方 record_render_state が dirty を無条件クリアし、preedit 中の PTY 出力/リサイズがキャッシュに届かない。"
+    suggestion: "preedit フレームでもキャッシュを term_core に追従させる(ユーザー選択: オーバーレイ化方針)"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (shadow-rebuild + 非キャッシュ描画); 再レビューで resize-during-preedit / 遷移フレーム含め検証済み"
+  - stable_id: bdd7819b8be7a351
+    severity: high
+    category: architecture
+    file: src-tauri/src/window_host.rs
+    line: 1415
+    title: "フレーム全体 skip の契約が非グリッドの時限 UI (toast/bell) を含まない"
+    description: "performance 観点と同サイト・同根。"
+    suggestion: "skip 判定に時限 UI 状態を含める"
+    sources: [codex:architecture]
+    confidence: 65
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (overlay_work); bell 最終消去フレームの残課題は 063320466ae233fe として分離"
+  - stable_id: 63c273cd4e0d66b1
+    severity: high
+    category: spec
+    file: src-tauri/src/window_host.rs
+    line: 744
+    title: "ホバー下線の変化が dirty 化されずフレームが skip される (FR3/TS-5/NFR2 違反)"
+    description: "refresh_link_hover / invalidate_link_hover / CursorMoved が request_redraw のみで行 dirty 化せず、hover のみ変化したフレームは skip され下線が出現/消滅しない。codex spec (app.rs:3794 / wh:743) も同一問題を独立検出。"
+    suggestion: "prev∪new hover 行を dirty 集合へ union する、または span 変化時に mark_full_redraw()"
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "rework task0005 で修正予定 (spec カテゴリは auto-fix ゲート対象外)"
+  - stable_id: 0a4db738aca57cbb
+    severity: high
+    category: spec
+    file: src-tauri/src/window_host.rs
+    line: 1422
+    title: "検索ハイライト/検索 UI の変化が overlay_work に含まれず skip される (FR3 違反)"
+    description: "検索ハイライトは egui オーバーレイ描画。検索入力・auto-research のマッチ移動が request_redraw のみで、dirty 0 のとき skip されて反映されない。"
+    suggestion: "overlay_work に search UI 可視状態を OR する、または検索変化サイトで mark_full_redraw()"
+    sources: [claude:spec]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "rework task0005 で修正予定"
+  - stable_id: 73bdd212e584558a
+    severity: medium
+    category: spec
+    file: src-tauri/src/window_host.rs
+    line: 2700
+    title: "フォーカス得失トリガーの欠落 (TS-5)"
+    description: "comprehensive e0beda9bacfe0a19 と同サイト。"
+    suggestion: "Focused で mark_full_redraw"
+    sources: [claude:spec]
+    confidence: 75
+    resolution: fixed
+    resolution_reason: "同サイトの comprehensive 修正 (loop 1) で解消; spec 再レビューで TS-5 充足確認済み"
+  - stable_id: 737e1c1569633ad7
+    severity: medium
+    category: architecture
+    file: src-tauri/src/window_host.rs
+    line: 1781
+    title: "cursor/blink の dirty 行が grid キャッシュ無効化を駆動する(フレームスケジューリングと無効化の未分離)"
+    description: "cursor/blink/focus 由来の dirty がグリッド行の再構築まで引き起こす。不変条件там維持されているが結合が残る。"
+    suggestion: "grid_dirty_rows と frame-required シグナルの分離"
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "設計トレードオフ。カーソル行のみの余分な再構築はコスト小。将来のリファクタリング候補として記録"
+  - stable_id: b015db8a51facd0d
+    severity: medium
+    category: performance
+    file: src-tauri/src/app.rs
+    line: 1306
+    title: "ビジュアルベルの deadline がフラッシュ終端のみで中間減衰フレームが駆動されない"
+    description: "next_bell_deadline が started+BELL_FLASH_MS のみ。claude 再レビューは「継続 repaint で実害なし・アルファは期限前に 0 到達」と評価、codex は保持。"
+    suggestion: "bell active 中は TOAST_POLL_MS 同様の bounded poll にする"
+    sources: [codex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "実害はアイドル時の減衰アニメの粒度のみ。task0005 の bell 消去フレーム修正時に実装者判断で改善可"
+  - stable_id: c80076c129ddfba8
+    severity: medium
+    category: performance
+    file: src-tauri/src/render/terminal_grid_pass.rs
+    line: 303
+    title: "concat_all が描画フレームごとに全グリッドの instance 列をコピー"
+    description: "行キャッシュはシェイプ回避には効くが、フレームごとの全体連結コピー+全量アップロードは残る。"
+    suggestion: "永続 flat 配列 + 行スパンのパッチ更新、または dirty 0 フレームの prepare スキップ"
+    sources: [codex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "シェイピング除去に比べ桁違いに軽い memcpy。計測(TS-8)で問題が出た場合の将来最適化として記録"
+  - stable_id: c1b3431310de942b
+    severity: medium
+    category: performance
+    file: src-tauri/src/render/terminal_grid_pass.rs
+    line: 540
+    title: "全行無効化時に行単位 rebuild の固定費(ロック/メトリクス)が行数分かかる"
+    description: "スクロール/リサイズ等の全行 dirty で per-row 固定費が乗る。"
+    suggestion: "全行時はフルグリッドビルドの fast-path"
+    sources: [codex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "全行無効化は低頻度イベント。計測で問題化した場合の将来最適化として記録"
+  - stable_id: 0d094fedba2e86ba
+    severity: medium
+    category: performance
+    file: src-tauri/src/app.rs
+    line: 3847
+    title: "fold 有効中は毎フレーム全行無効化になる"
+    description: "loop 1 の fold 全行フォールバック修正の帰結。fold はまれで描画はイベント駆動化済みのため既定線より軽い。"
+    suggestion: "fold-aware な dirty 行マッピングを将来実装"
+    sources: [codex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "ユーザー承認済みの正確性優先トレードオフ (folds are rare / cost is bounded 方針)"
+  - stable_id: 126daffea03e6229
+    severity: medium
+    category: performance
+    file: src-tauri/src/window_host.rs
+    line: 1804
+    title: "preedit shadow rebuild が破棄される全グリッド連結を行う"
+    description: "shadow rebuild の戻り値(連結済み instance 列)を捨てており、needs_full_redraw と重なると二重ビルドになる。"
+    suggestion: "キャッシュ更新のみを行う rebuild API の分離"
+    sources: [codex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "IME 打鍵ペースの経路で有界。将来最適化として記録"
+  - stable_id: c0732dd907681dc1
+    severity: medium
+    category: spec
+    file: src-tauri/src/render/cursor.rs
+    line: 282
+    title: "ブロックカーソルが wide 文字の後半セル(width 0)に来たとき 2 セル矩形にならない"
+    description: "SPEC Edge Cases 'Wide character straddling the cursor cell' に違反。後半セルでは先頭セルへ解決せず 1 セル矩形を描く。"
+    suggestion: "width 0 セルでは左の先頭セルへ解決し、先頭列から幅 2 の矩形を描く"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "rework task0005 で修正予定"
+  - stable_id: 40edebb31f8f5e20
+    severity: medium
+    category: spec
+    file: src-tauri/src/window_host.rs
+    line: 1426
+    title: "perf カウンタ無効時も Instant::now() 等の引数評価が毎フレーム走る (FR6 zero-overhead 違反)"
+    description: "record_drawn_frame/record_rebuilt_rows の引数として Instant::now() が gate の外で評価される。"
+    suggestion: "enabled 分岐の内側でのみ時刻取得・カウンタ呼び出しを行う"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "rework task0005 で修正予定"
+  - stable_id: 063320466ae233fe
+    severity: medium
+    category: architecture
+    file: src-tauri/src/window_host.rs
+    line: 1424
+    title: "ビジュアルベルの最終消去フレームが skip され得る(期限消費と skip 判定の状態分裂)"
+    description: "needs_bell_repaint が about_to_wait で expiry を消費して visual_bell_started をクリアするため、render 時点では visual_bell_progress()=None となり overlay_work が false になり、最終消去フレームが skip され得る。"
+    suggestion: "bell 消去フレーム要求フラグを render まで運ぶ、または expiry 消費を render 側へ移す"
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "rework task0005 で修正予定"
+auto_fix:
+  loops_run: 1
+  applied_total: 4
+  termination: clean  # 非 spec の critical/high は再レビューでゼロ (残存は spec 2 + changed_files 外 1)
+residual_critical_high: 3
+rework_required: true
+rework_task: task0005
