@@ -312,7 +312,78 @@ impl RowCache {
         bgs.extend(fg);
         bgs
     }
+
+    /// Rotate cached row entries to keep tracking term_core's full-screen
+    /// single-line scroll optimization (task0006; see
+    /// `ring_buffer::scroll_up_internal`'s `count == 1` full-screen path —
+    /// the core shifts its own dirty bits + viewport mapping by this
+    /// amount on the promise that the renderer shifts its representation
+    /// the same way).
+    ///
+    /// `direction` / `count` come straight from
+    /// `TerminalCore::get_scroll_event_direction()` /
+    /// `get_scroll_event_count()`. `cell_h` is the same per-row pixel
+    /// height [`GridInstanceBuilder::build_instances_split`] used to bake
+    /// each cached [`CellInstance`]'s `cell_xy` — every instance's pixel
+    /// position is `f(cell.row)`, so moving a row's cached entry to a
+    /// different slot index alone would leave it painting at its OLD
+    /// screen row's pixel position; this method also translates every
+    /// kept instance's Y coordinate by `count * cell_h` so the moved data
+    /// paints at its new row's position, exactly as a rebuild with the
+    /// row field decremented by `count` would.
+    ///
+    /// `count == 0` (no pending event) is a no-op.
+    ///
+    /// Otherwise: every cached row entry moves `count` positions toward
+    /// index 0 (`cache[i] = cache[i + count]`, Y-translated as above),
+    /// and the last `count` slots become `None`. A vacated slot is "must
+    /// rebuild" by [`RowCache`] construction even if the core's own dirty
+    /// set happens not to name it — defense in depth; in practice the
+    /// core's `mark_row_dirty(bottom)` call already names the vacated
+    /// rows every time (task0006 Test Notes).
+    ///
+    /// An unrecognized `direction` (term_core does not currently emit
+    /// anything but the "Up" encoding, but this consumer does not trust
+    /// an unknown value to mean "Up") or a `count` that reaches/exceeds
+    /// the row count degenerates to dropping every cached entry —
+    /// correctness over the optimization when the up-shift assumption
+    /// cannot be trusted.
+    fn rotate_for_scroll_event(&mut self, direction: u8, count: u16, cell_h: f32) {
+        if count == 0 {
+            return;
+        }
+        let len = self.rows.len();
+        if len == 0 {
+            return;
+        }
+        if direction != SCROLL_DIRECTION_UP || count as usize >= len {
+            for slot in &mut self.rows {
+                *slot = None;
+            }
+            return;
+        }
+        let count = count as usize;
+        self.rows.rotate_left(count);
+        let shift_up = count as f32 * cell_h;
+        for row in self.rows[..len - count].iter_mut().flatten() {
+            for instance in row.bg.iter_mut().chain(row.fg.iter_mut()) {
+                instance.cell_xy[1] -= shift_up;
+            }
+        }
+        for slot in &mut self.rows[len - count..] {
+            *slot = None;
+        }
+    }
 }
+
+/// Direction code emitted by `TerminalCore::get_scroll_event_direction()`
+/// for an "Up" full-screen single-line scroll
+/// (`ring_buffer::ScrollDirection::Up` encodes as `1`; `0` means "no
+/// event"). term_core does not currently emit any other non-zero code;
+/// [`RowCache::rotate_for_scroll_event`] treats anything else as
+/// untrusted and degenerates to a full cache drop rather than silently
+/// assuming "Up" semantics for an unrecognized encoding (task0006 AC-2).
+const SCROLL_DIRECTION_UP: u8 = 1;
 
 /// CPU-side (device-free) half of [`TerminalGridPass`]: glyph shaping plus
 /// the task0003 per-row instance cache. Split out from the GPU-owning
@@ -561,6 +632,19 @@ impl GridInstanceBuilder {
     ) -> (Vec<CellInstance>, usize) {
         let rebuilt = self.rebuild_dirty_rows(dirty_rows, dirty_cells, metrics, row_count);
         (self.row_cache.concat_all(), rebuilt)
+    }
+
+    /// Consume term_core's accumulated scroll event (task0006): delegates
+    /// to [`RowCache::rotate_for_scroll_event`]. Called once per rendered
+    /// frame by `window_host::render`, before either the ordinary or the
+    /// IME-preedit-shadow dirty-row rebuild, so the per-row cache tracks
+    /// the same up-shift the core's ring buffer already performed.
+    /// `cell_h` must be the same value the caller's `CellMetrics` uses
+    /// this frame — see [`RowCache::rotate_for_scroll_event`] for why the
+    /// rotation needs it.
+    fn apply_scroll_event(&mut self, direction: u8, count: u16, cell_h: f32) {
+        self.row_cache
+            .rotate_for_scroll_event(direction, count, cell_h);
     }
 
     /// Resolve a single cell's glyph to a `CellInstance`. Returns `None`
@@ -1060,6 +1144,21 @@ impl TerminalGridPass {
     ) -> (Vec<CellInstance>, usize) {
         self.builder
             .rebuild_and_collect(dirty_rows, dirty_cells, metrics, row_count)
+    }
+
+    /// CPU-side entry point (task0006): consume term_core's accumulated
+    /// scroll event by rotating the per-row cache. See
+    /// [`GridInstanceBuilder::apply_scroll_event`] /
+    /// [`RowCache::rotate_for_scroll_event`] for the rotation semantics.
+    /// Callers read `direction` / `count` from
+    /// `TerminalCore::get_scroll_event_direction()` /
+    /// `get_scroll_event_count()` and clear the core-side event
+    /// afterward (`TerminalCore::clear_scroll_event()`) — this method
+    /// only touches the renderer-side cache, once per rendered frame,
+    /// before the dirty-row rebuild. `cell_h` must match the
+    /// `CellMetrics` used for this frame's rebuild.
+    pub fn apply_scroll_event(&mut self, direction: u8, count: u16, cell_h: f32) {
+        self.builder.apply_scroll_event(direction, count, cell_h);
     }
 
     /// Upload this frame's already-resolved instance list to the GPU and
@@ -2178,6 +2277,391 @@ mod tests {
                 "dirty rows {dirty_rows:?} must reproduce a full rebuild"
             );
         }
+    }
+
+    // ── task0006: RowCache::rotate_for_scroll_event (pure) ──────────────
+
+    /// Per-row pixel height used by the rotation tests below (arbitrary;
+    /// distinct from [`metrics`]'s `cell_h` so these tests are visibly
+    /// independent of it).
+    const ROTATE_TEST_CELL_H: f32 = 20.0;
+
+    /// A synthetic instance carrying both an identity tag (`fg_rgba`) and
+    /// an explicit Y position, so rotation tests can assert on content
+    /// identity AND on the Y-translation `rotate_for_scroll_event` must
+    /// apply: a cached instance's `cell_xy` is baked for the screen row
+    /// it was BUILT at, so moving it to a different cache slot without
+    /// also translating its Y coordinate would paint it at its OLD row's
+    /// pixel position (the bug this task's first implementation attempt
+    /// hit — see the equivalence regression tests further below).
+    fn tagged_instance_at(tag: u32, y: f32) -> CellInstance {
+        CellInstance {
+            cell_xy: [0.0, y],
+            cell_wh: [0.0, 0.0],
+            atlas_uv: [0.0, 0.0, 0.0, 0.0],
+            fg_rgba: tag,
+            bg_rgba: 0,
+            page: PAGE_SOLID,
+            flags: 0,
+        }
+    }
+
+    /// AC-2: rotate-by-1 shifts every cached row toward index 0 by one
+    /// position, translates each kept instance's Y so it paints at its
+    /// NEW row's pixel position, and empties the vacated bottom slot.
+    #[test]
+    fn row_cache_rotate_for_scroll_event_rotates_by_one() {
+        let mut cache = RowCache::default();
+        cache.resize(3);
+        cache.set(
+            0,
+            RowInstances {
+                bg: vec![tagged_instance_at(1, 0.0 * ROTATE_TEST_CELL_H)],
+                fg: vec![],
+            },
+        );
+        cache.set(
+            1,
+            RowInstances {
+                bg: vec![tagged_instance_at(2, 1.0 * ROTATE_TEST_CELL_H)],
+                fg: vec![],
+            },
+        );
+        cache.set(
+            2,
+            RowInstances {
+                bg: vec![tagged_instance_at(3, 2.0 * ROTATE_TEST_CELL_H)],
+                fg: vec![],
+            },
+        );
+
+        cache.rotate_for_scroll_event(SCROLL_DIRECTION_UP, 1, ROTATE_TEST_CELL_H);
+
+        let row0 = cache.rows[0].as_ref().unwrap();
+        assert_eq!(row0.bg[0].fg_rgba, 2, "row0 now holds what was row1");
+        assert_eq!(
+            row0.bg[0].cell_xy[1],
+            0.0 * ROTATE_TEST_CELL_H,
+            "moved content must paint at its NEW row's Y, not its old one"
+        );
+        let row1 = cache.rows[1].as_ref().unwrap();
+        assert_eq!(row1.bg[0].fg_rgba, 3, "row1 now holds what was row2");
+        assert_eq!(row1.bg[0].cell_xy[1], 1.0 * ROTATE_TEST_CELL_H);
+        assert!(
+            cache.rows[2].is_none(),
+            "vacated bottom slot must be None (must-rebuild)"
+        );
+    }
+
+    /// AC-2: an accumulated count > 1 rotates by the full accumulated
+    /// amount in one call (mirrors several lines emitted between two
+    /// rendered frames — AC-3's scenario), Y-translating by
+    /// `count * cell_h`.
+    #[test]
+    fn row_cache_rotate_for_scroll_event_rotates_by_accumulated_count() {
+        let mut cache = RowCache::default();
+        cache.resize(5);
+        for i in 0..5u32 {
+            cache.set(
+                i as u16,
+                RowInstances {
+                    bg: vec![tagged_instance_at(i, i as f32 * ROTATE_TEST_CELL_H)],
+                    fg: vec![],
+                },
+            );
+        }
+
+        cache.rotate_for_scroll_event(SCROLL_DIRECTION_UP, 3, ROTATE_TEST_CELL_H);
+
+        let row0 = cache.rows[0].as_ref().unwrap();
+        assert_eq!(row0.bg[0].fg_rgba, 3);
+        assert_eq!(row0.bg[0].cell_xy[1], 0.0 * ROTATE_TEST_CELL_H);
+        let row1 = cache.rows[1].as_ref().unwrap();
+        assert_eq!(row1.bg[0].fg_rgba, 4);
+        assert_eq!(row1.bg[0].cell_xy[1], 1.0 * ROTATE_TEST_CELL_H);
+        assert!(cache.rows[2].is_none());
+        assert!(cache.rows[3].is_none());
+        assert!(cache.rows[4].is_none());
+    }
+
+    /// AC-2: a count that reaches/exceeds the row count drops the whole
+    /// cache rather than rotating out of bounds.
+    #[test]
+    fn row_cache_rotate_for_scroll_event_count_ge_row_count_drops_all() {
+        let mut cache = RowCache::default();
+        cache.resize(3);
+        for i in 0..3u16 {
+            cache.set(
+                i,
+                RowInstances {
+                    bg: vec![tagged_instance(i as u32)],
+                    fg: vec![],
+                },
+            );
+        }
+
+        cache.rotate_for_scroll_event(SCROLL_DIRECTION_UP, 3, ROTATE_TEST_CELL_H);
+
+        assert!(
+            cache.concat_all().is_empty(),
+            "count >= row_count must drop every cached entry"
+        );
+    }
+
+    /// AC-2: an unrecognized direction code degenerates to a full cache
+    /// drop. term_core does not currently emit anything but the "Up"
+    /// encoding — this exercises the defensive branch against a
+    /// future/unknown value rather than trusting it means "Up".
+    #[test]
+    fn row_cache_rotate_for_scroll_event_unknown_direction_drops_all() {
+        let mut cache = RowCache::default();
+        cache.resize(3);
+        for i in 0..3u16 {
+            cache.set(
+                i,
+                RowInstances {
+                    bg: vec![tagged_instance(i as u32)],
+                    fg: vec![],
+                },
+            );
+        }
+
+        cache.rotate_for_scroll_event(SCROLL_DIRECTION_UP + 1, 1, ROTATE_TEST_CELL_H);
+
+        assert!(
+            cache.concat_all().is_empty(),
+            "an unrecognized direction must drop every cached entry"
+        );
+    }
+
+    /// `count == 0` (no pending scroll event) is a no-op — every cached
+    /// entry survives untouched (content AND position).
+    #[test]
+    fn row_cache_rotate_for_scroll_event_zero_count_is_noop() {
+        let mut cache = RowCache::default();
+        cache.resize(2);
+        cache.set(
+            0,
+            RowInstances {
+                bg: vec![tagged_instance_at(9, 3.0 * ROTATE_TEST_CELL_H)],
+                fg: vec![],
+            },
+        );
+
+        cache.rotate_for_scroll_event(SCROLL_DIRECTION_UP, 0, ROTATE_TEST_CELL_H);
+
+        let row0 = cache.rows[0].as_ref().unwrap();
+        assert_eq!(row0.bg[0].fg_rgba, 9);
+        assert_eq!(row0.bg[0].cell_xy[1], 3.0 * ROTATE_TEST_CELL_H);
+    }
+
+    // ── task0006: row cache tracks term_core's live-tail scroll ─────────
+    // regression (review round-2 critical finding 779c9130c103c55b): the
+    // per-row cache must rotate to track term_core's full-screen
+    // count==1 scroll optimization (`ring_buffer::scroll_up_internal`),
+    // not just rebuild whatever rows the core names dirty — every other
+    // row's on-screen position shifted too.
+
+    /// Ground-truth full-grid `CellInput`s for `core`'s current viewport
+    /// state, using a fixed default theme/selection/hover/fold — the
+    /// input the row-cache path must reproduce exactly after any given
+    /// sequence of scroll/dirty operations.
+    fn full_grid_inputs(core: &term_core::terminal_core::TerminalCore) -> Vec<CellInput> {
+        crate::render::collect_cell_inputs(
+            core,
+            &crate::render::theme::Theme::default(),
+            None,
+            crate::settings::AmbiguousWidthMode::Narrow,
+            None,
+            0,
+            None,
+            None,
+        )
+    }
+
+    /// AC-1: fill the viewport, clear dirty state, emit one line that
+    /// causes a single-line full-screen scroll, render via the cache
+    /// path — the concatenated instances match a from-scratch full
+    /// rebuild of the post-scroll state, byte-exact.
+    #[test]
+    fn row_cache_scroll_regression_single_line_scroll_matches_full_rebuild() {
+        let mut core = term_core::terminal_core::TerminalCore::new(4, 3, 100);
+        core.process_pty_data(b"AAAA\r\nBBBB\r\nCCCC");
+        core.clear_dirty();
+
+        let mut builder = instance_builder();
+        let m = metrics();
+        let row_count = core.rows();
+
+        // Initial cache build: matches the state right after a full
+        // render (every row present in the cache).
+        let all_rows: Vec<u16> = (0..row_count).collect();
+        let initial_inputs = full_grid_inputs(&core);
+        let (initial_instances, rebuilt) =
+            builder.rebuild_and_collect(&all_rows, &initial_inputs, m, row_count);
+        assert_eq!(rebuilt, row_count as usize);
+        assert_eq!(
+            initial_instances,
+            builder.build_instances(&initial_inputs, m)
+        );
+
+        // Trigger a single-line full-screen scroll: the cursor sits at
+        // the bottom row after the writes above, so a line feed rolls
+        // the viewport (term_core::terminal_core::TerminalCore::line_feed
+        // -> scroll_up_internal(1)).
+        core.process_pty_data(b"\r\nDDDD");
+        assert_eq!(
+            core.get_scroll_event_direction(),
+            1,
+            "expected an Up scroll event"
+        );
+        assert_eq!(core.get_scroll_event_count(), 1);
+
+        // task0006 fix: rotate the cache to track the shift BEFORE
+        // rebuilding whatever rows the core reports dirty, then clear
+        // the event exactly once.
+        builder.apply_scroll_event(
+            core.get_scroll_event_direction(),
+            core.get_scroll_event_count(),
+            m.cell_h,
+        );
+        core.clear_scroll_event();
+
+        let dirty_rows = core.get_dirty_rows();
+        let dirty_cells = crate::render::collect_cell_inputs(
+            &core,
+            &crate::render::theme::Theme::default(),
+            None,
+            crate::settings::AmbiguousWidthMode::Narrow,
+            None,
+            0,
+            None,
+            Some(&dirty_rows),
+        );
+        let (cached_instances, _) =
+            builder.rebuild_and_collect(&dirty_rows, &dirty_cells, m, row_count);
+
+        let ground_truth = builder.build_instances(&full_grid_inputs(&core), m);
+        assert_eq!(cached_instances, ground_truth);
+    }
+
+    /// AC-3: several lines emitted between two rendered frames
+    /// (accumulated scroll count > 1, never consumed in between) still
+    /// produce a correct frame via the cache path once consumed.
+    #[test]
+    fn row_cache_scroll_regression_multi_scroll_between_frames_matches_full_rebuild() {
+        let mut core = term_core::terminal_core::TerminalCore::new(4, 5, 100);
+        core.process_pty_data(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD\r\nEEEE");
+        core.clear_dirty();
+
+        let mut builder = instance_builder();
+        let m = metrics();
+        let row_count = core.rows();
+        let all_rows: Vec<u16> = (0..row_count).collect();
+        let initial_inputs = full_grid_inputs(&core);
+        let (_, rebuilt) = builder.rebuild_and_collect(&all_rows, &initial_inputs, m, row_count);
+        assert_eq!(rebuilt, row_count as usize);
+
+        // Three line feeds at the bottom row, none of them consumed as a
+        // frame in between — the core accumulates a single ScrollEvent
+        // with count == 3 (ring_buffer::scroll_up_internal's count==1
+        // full-screen branch fires three separate times).
+        core.process_pty_data(b"\r\nFFFF\r\nGGGG\r\nHHHH");
+        assert_eq!(core.get_scroll_event_direction(), 1);
+        assert_eq!(
+            core.get_scroll_event_count(),
+            3,
+            "three separate single-line scrolls must accumulate to count == 3"
+        );
+
+        builder.apply_scroll_event(
+            core.get_scroll_event_direction(),
+            core.get_scroll_event_count(),
+            m.cell_h,
+        );
+        core.clear_scroll_event();
+
+        let dirty_rows = core.get_dirty_rows();
+        let dirty_cells = crate::render::collect_cell_inputs(
+            &core,
+            &crate::render::theme::Theme::default(),
+            None,
+            crate::settings::AmbiguousWidthMode::Narrow,
+            None,
+            0,
+            None,
+            Some(&dirty_rows),
+        );
+        let (cached_instances, _) =
+            builder.rebuild_and_collect(&dirty_rows, &dirty_cells, m, row_count);
+
+        let ground_truth = builder.build_instances(&full_grid_inputs(&core), m);
+        assert_eq!(cached_instances, ground_truth);
+    }
+
+    /// AC-4: the scroll event is cleared after consumption — a second
+    /// frame with no new PTY output rotates by zero (no-op) and rebuilds
+    /// only its own (empty) dirty set, reusing every cached row from the
+    /// first frame's rotation + rebuild.
+    #[test]
+    fn row_cache_scroll_event_cleared_after_consumption_second_frame_rotates_by_zero() {
+        let mut core = term_core::terminal_core::TerminalCore::new(4, 3, 100);
+        core.process_pty_data(b"AAAA\r\nBBBB\r\nCCCC");
+        core.clear_dirty();
+
+        let mut builder = instance_builder();
+        let m = metrics();
+        let row_count = core.rows();
+        let all_rows: Vec<u16> = (0..row_count).collect();
+        let initial_inputs = full_grid_inputs(&core);
+        builder.rebuild_and_collect(&all_rows, &initial_inputs, m, row_count);
+
+        // Frame 1: one scroll, consumed.
+        core.process_pty_data(b"\r\nDDDD");
+        assert_eq!(core.get_scroll_event_count(), 1);
+        builder.apply_scroll_event(
+            core.get_scroll_event_direction(),
+            core.get_scroll_event_count(),
+            m.cell_h,
+        );
+        core.clear_scroll_event();
+        let dirty_rows = core.get_dirty_rows();
+        let dirty_cells = crate::render::collect_cell_inputs(
+            &core,
+            &crate::render::theme::Theme::default(),
+            None,
+            crate::settings::AmbiguousWidthMode::Narrow,
+            None,
+            0,
+            None,
+            Some(&dirty_rows),
+        );
+        builder.rebuild_and_collect(&dirty_rows, &dirty_cells, m, row_count);
+        core.clear_dirty();
+
+        // Frame 2: no new PTY output. The scroll event must already be
+        // clear — a stale nonzero count here would wrongly rotate the
+        // cache again against content that never moved.
+        assert_eq!(
+            core.get_scroll_event_count(),
+            0,
+            "scroll event must be cleared after the first frame consumed it"
+        );
+        builder.apply_scroll_event(
+            core.get_scroll_event_direction(),
+            core.get_scroll_event_count(),
+            m.cell_h,
+        );
+        let dirty_rows2 = core.get_dirty_rows();
+        assert!(
+            dirty_rows2.is_empty(),
+            "no new output => nothing dirty on the second frame"
+        );
+        let (instances2, rebuilt2) = builder.rebuild_and_collect(&dirty_rows2, &[], m, row_count);
+        assert_eq!(rebuilt2, 0, "AC-4: zero-count rotation rebuilds zero rows");
+
+        let ground_truth = builder.build_instances(&full_grid_inputs(&core), m);
+        assert_eq!(instances2, ground_truth);
     }
 }
 
