@@ -1,6 +1,6 @@
 # eMterm
 
-Linux/Windows向けのネイティブターミナルエミュレータ。ターミナル本体は winit + wgpu + swash でネイティブ描画し、Markdown / JSON / YAML / 画像ビューア・設定パネルは wry（WebKitGTK / WebView2）の子ウィンドウで表示します。
+Linux/Windows向けのネイティブターミナルエミュレータ。ターミナル本体は winit + wgpu + swash でネイティブ描画します。Markdownビューア・HTMLビューア・設定パネルは wry（WebKitGTK / WebView2）の子ウィンドウで表示し、JSON/YAMLビューアと画像ビューアはターミナル本体と同じ winit + wgpu によるネイティブウィンドウです。
 
 ## 機能
 
@@ -25,8 +25,9 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
   - Kittyプロトコル互換性: kitten icat、ratatui-image、treemdなど外部ツールと連携
   - フルスクリーン画像ビューアー（ピクセルパーフェクト・フィット表示、パン操作、ホイールスクロール、Space/Shift+Spaceスクロール）
   - HTMLビューアー: `emterm html <file>` でローカルHTMLファイルを子WebViewウィンドウにそのまま表示（JSは実行、ネットワークアクセスは遮断、basedir配下のローカルリソースのみ読み込み、外部リンクはシステムブラウザで開く）
+  - JSON/YAMLビューアー: `emterm json <file>` / `emterm yaml <file>` でネイティブのフルスクリーンウィンドウに構造化データを表示。アウトライン表示（ツリー+詳細ペイン、デフォルト）とRAW表示を切替可能、シンタックスハイライトとJSON整形トグル付き
   - ビューアーはターミナルコンテンツ領域内に描画（ビューアー表示中もタブバーにアクセス可能）
-  - CLIコマンド: `emterm markdown` / `emterm html` / `emterm image`（SSH越しでも動作、CLIのみビルド対応）
+  - CLIコマンド: `emterm markdown` / `emterm html` / `emterm json` / `emterm yaml` / `emterm image`（SSH越しでも動作、CLIのみビルド対応）
   - OSC 777ファイルダウンロード: ストリーミングI/Oによるファイルサイズ無制限のダウンロード、転送開始時に保存ダイアログを表示
 
 - **ターミナルマルチプレクサ**
@@ -35,7 +36,7 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
   - セッションあたり複数ウィンドウとタブグループUI（全ウィンドウ同時ストリーミングによる瞬時切り替え）
   - ウィンドウ切り替え時にペインごとのスクロール位置とスクロールバック履歴を保持（デタッチ→リアタッチ不要）
   - ウィンドウ管理: `prefix+c`（新規）、`prefix+n`/`prefix+p`（切替）、`prefix+,`（リネーム）、`prefix+m`（移動/並び替え、`[N]`位置バッジ表示）
-  - tmux.conf インポート: プレフィックスキー、キーバインド、マウス、status-position
+  - tmux.conf インポート: プレフィックスキー、キーバインド、マウス
   - インバンドAPCプロトコル: PTYストリーム経由でmux制御メッセージを送受信（SSH透過、追加ソケット転送不要）
   - `emterm mux new-window [-n 名前] [-c コマンド]`: CLIからウィンドウを作成し初期コマンドを実行
   - `emterm mux send-keys [-t ウィンドウ]`: 標準入力のデータをmuxウィンドウにキー入力として送信
@@ -55,11 +56,12 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
   - カスタムコマンド: ユーザー定義の実行ファイルを設定したインターバルで実行
 
 - **入力・IME**
-  - 高スループットなキー入力（イベントベースのバイナリIPC、JSONシリアライズなし）
-  - 完全なIMEサポート: EditContext API（Chromium）および隠しtextareaフォールバック（WebKit）
+  - 高スループットなキー入力（winit `WindowEvent::KeyboardInput` を直接処理、JSONシリアライズ不要）
+  - winit `WindowEvent::Ime` によるネイティブIME（X11 / Wayland / Windows）
   - TUIアプリ使用時のIME位置自動調整（カーソル非表示時は左下に配置）
   - IMEと共存するキャプチャフェーズのクリップボードショートカット（Ctrl+Shift+C/V）
-  - ミドルクリックペースト（設定で切替可能）
+  - ミドルクリックペースト（Windowsは設定で切替可能、Linuxはネイティブ挙動に固定）
+  - Linux X11/Wayland PRIMARYセレクション: テキスト選択で自動的にPRIMARYへコピーし、ミドルクリックはPRIMARYから貼り付け（空の場合はCLIPBOARDにフォールバック）。PRIMARYとCLIPBOARDは独立しているため`Ctrl+C`の内容が選択操作で失われない。Linuxでは「選択時にコピー」「ミドルクリックペースト」の設定項目はPRIMARYがネイティブに処理するため非表示（`settings.json`の値も無視される）
   - AIインターフェースでのマルチライン入力向けShift+EnterをAlt+Enterとして送信（デフォルトON、設定で切替可能）
   - 単語・行選択ドラッグ: ダブルクリック（単語）またはトリプルクリック（行）の後にドラッグしても、最初にクリックした単語/行がドラッグ中ずっと選択に含まれ続ける
   - 包括的な特殊キーマッピング（Ctrl+記号、修飾キー付き矢印キー・ファンクションキー、Shift+Tab）
@@ -90,6 +92,7 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
   - バックグラウンドタブで新しい出力やプロセスイベントがあると、タブにアクティビティドットを表示
   - ウィンドウが非フォーカス時のOSデスクトップ通知（設定で切替可能）
   - 高頻度出力時の通知スロットリングによるスパム防止
+  - `apt`/`dpkg`等のパッケージ更新でバイナリが差し替わった際、実行中のバイナリと一致しなくなったことを検知して再起動を促すトースト表示（Linuxのみ）
 
 - **国際化**
   - 日本語・英語UI（OSロケールから自動検出）
