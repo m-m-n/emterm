@@ -1,0 +1,28 @@
+feature: render-cpu-optimization
+collected_at: "2026-07-06T19:35:58+09:00"
+session_ids: [e02990e5-ad23-4b07-911d-c907eecf2c4a]
+signals:
+  review_critical_high:
+    - {stable_id: 779c9130c103c55b, category: comprehensive, file: src-tauri/src/app.rs, title: "行キャッシュが main-screen 1 行スクロールで上部行を古いまま返す (critical)", resolution: fixed}
+    - {stable_id: 8edcba56d06d5b6f, category: comprehensive, file: src-tauri/src/app.rs, title: "fold 有効時の dirty 行座標系不一致", resolution: fixed}
+    - {stable_id: e0beda9bacfe0a19, category: comprehensive, file: src-tauri/src/window_host.rs, title: "フォーカス変化がカーソル表示に反映されない", resolution: fixed}
+    - {stable_id: cd6820740f2c0769, category: comprehensive, file: src-tauri/src/sftp/service.rs, title: "SFTP producer の wake 漏れ (Wait 化で顕在化)", resolution: fixed}
+    - {stable_id: 566170167b3851c4, category: performance, file: src-tauri/src/window_host.rs, title: "トースト中 60Hz busy-wake が skip で全破棄", resolution: fixed}
+    - {stable_id: bafef72404de83a4, category: architecture, file: src-tauri/src/window_host.rs, title: "preedit バイパスが行キャッシュ無効化契約を破る", resolution: fixed}
+    - {stable_id: bdd7819b8be7a351, category: architecture, file: src-tauri/src/window_host.rs, title: "skip 契約が時限 UI を含まない", resolution: fixed}
+    - {stable_id: 63c273cd4e0d66b1, category: spec, file: src-tauri/src/window_host.rs, title: "hover 変化の無効化漏れ (FR3)", resolution: fixed}
+    - {stable_id: 0a4db738aca57cbb, category: spec, file: src-tauri/src/window_host.rs, title: "search 変化の無効化漏れ (FR3)", resolution: fixed}
+  conflict_reworks: []
+  file_prediction_misses:
+    - {task: task0006, files: ["src-tauri/src/app.rs (予測したが未使用 — 消費点が window_host.rs に自然収束)"]}
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings:
+    - {stable_id: 794ecca25eebce28, category: spec, resolution_reason: "fold 全行フォールバックはユーザー承認済みの正確性優先トレードオフ。Wait 化によりアイドル folded ビューはフレーム自体がスケジュールされず FR1 の意図は実効的に保たれる"}
+lessons_candidates:
+  - "term_core の scroll_event 最適化契約 (フロントエンドが描画面をシフトする前提) に src-tauri 側の消費者が存在せず、行キャッシュ導入で critical に顕在化した。キャッシュ/差分レンダリングを導入するタスクの planner は、下流クレートが提供する『契約付き最適化イベント』(dirty ビット以外の副チャネル) の消費者インベントリを実装計画時に確認するべき"
+  - "『paint に影響するが dirty 集合に載らない状態』(focus / hover / search / toast / bell / preedit) が skip 導入で系統的に stale 化した。描画スキップ機構を入れるときはオーバーレイ状態の全数調査をタスク計画の設計項目に含めるべき (round 1-2 で計 7 件が同根)"
+  - "codex-reviewer が利用上限で 4 回 skip (round 2-3)。workflow-doctor 提案: rate_limited を通常の非 JSON fallback と区別し、リセット時刻後の再実行をラウンド再スケジュールとして扱う (tmp/workflow-doctor-recommend-20260706-094433.md)"
+  - "並行 codex reviewer 間で scratchpad の出力ファイル名 (codex_output_*.json) が衝突しかけた。ラウンド・観点・PID をファイル名に含める規約を codex-prompting スキルに追加する価値あり"
+  - "tabs:: replay テスト (spin 上限 10k yield) はシステム負荷で単独実行でも落ちる。--test-threads=1 でも不安定な場合がある。ベース比較 (git stash) が有効な切り分け手段として 3 タスクで機能した"
+  - "EMTERM_RENDER_PERF カウンタの引数評価 (Instant::now) が gate 外にあった件: env ゲート付き計測の『ゼロオーバーヘッド』要件はゲート内評価を AC に明文化すると一発で通る"

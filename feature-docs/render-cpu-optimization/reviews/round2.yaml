@@ -1,0 +1,73 @@
+round: 2
+executed_at: "2026-07-06T09:03:29+09:00"
+scope:
+  review_mode: diff
+  base_commit: 55e424ab0591e6dcc020b7debbbe73bc998c07bd
+  head_commit: 833f944b67b22cd9089c608aacc85fc7f618f3f9  # after rework task0005
+  changed_files:
+    - src-tauri/src/app.rs
+    - src-tauri/src/render/cursor.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/render/terminal_grid_pass.rs
+    - src-tauri/src/tabs.rs
+    - src-tauri/src/window_host.rs
+    - src-tauri/src/sftp/service.rs
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex usage limit reached"}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+verified_holding:
+  - "round 1 の全 fixed 項目 (fold 全行フォールバック / focus / preedit shadow-rebuild / overlay_work)"
+  - "task0005 の全修正: hover latch / search_visible / bell_erase_pending (latch handoff に消費ハザード無しと architecture が検証) / SFTP send+wake / wide-char leading-cell resolve / perf counter gate-first"
+findings:
+  - stable_id: 779c9130c103c55b
+    severity: critical
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 3767
+    title: "行キャッシュが main-screen 1 行スクロールで上部行を古いまま返す(通常のスクロール出力が崩れる)"
+    description: "term_core の full-screen count==1 スクロール最適化 (ring_buffer::scroll_up_internal) は dirty ビットをシフトして新下端行のみ dirty にし、scroll_event を記録する(フロントエンドが描画面を 1 行シフトする契約)。だが src-tauri 側に get_scroll_event_*/clear_scroll_event の消費者が無く、RowCache にもシフト操作が無い。旧実装は毎フレーム全読みで不可視だったが、行キャッシュ導入で 0..bottom-2 の行がスクロール前の内容のまま供給される。オーケストレーターが term_core ソースで裏取り済み(消費者ゼロを grep 確認)。"
+    suggestion: "(a) scroll_event 検知フレームは全行 dirty、または (b) scroll_event(方向+count)を消費して RowCache を同量ローテートしてから dirty 行のみ再構築。いずれも消費後に clear_scroll_event。等価性回帰テスト必須。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "rework task0006 で修正予定 (ユーザー選択: キャッシュ回転方式)"
+  - stable_id: 7b513b9896d0759c
+    severity: medium
+    category: performance
+    file: src-tauri/src/window_host.rs
+    line: 1362
+    title: "hover 変化が mark_full_redraw 経由で全行再構築になる"
+    description: "task0005 の hover latch は行単位でなく全再描画。リンク enter/leave 単位に有界(claude performance が storm 無しを検証済み)。"
+    suggestion: "prev∪new hover 行のみの one-shot dirty 化"
+    sources: [codex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "round 1 で受容済みの全行無効化トレードオフと同クラス。hover 変化はまれで有界"
+  - stable_id: 794ecca25eebce28
+    severity: medium
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 3873
+    title: "fold 有効中は無変化フレームでも dirty 集合が空にならない (FR1 との緊張)"
+    description: "round 1 の fold 全行フォールバック修正の帰結。"
+    suggestion: "fold-aware な dirty 行マッピング"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: "ユーザー承認済みの正確性優先トレードオフ (round 1, 0d094fedba2e86ba と同根)。Wait 化によりアイドルな folded ビューはそもそもフレームがスケジュールされず、FR1 の意図(無変化時に描画コストゼロ)は実効的に保たれる"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: rework  # critical はユーザー判断でキャッシュ回転方式の rework task0006 へ
+residual_critical_high: 1
+rework_required: true
+rework_task: task0006

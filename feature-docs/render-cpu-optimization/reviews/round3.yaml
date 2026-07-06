@@ -1,0 +1,39 @@
+round: 3
+executed_at: "2026-07-06T09:43:31+09:00"
+scope:
+  review_mode: diff
+  base_commit: 55e424ab0591e6dcc020b7debbbe73bc998c07bd
+  head_commit: 2782261d5163bb50f2f2f29fae2aefc2c324349c  # after rework task0006
+  changed_files:
+    - src-tauri/src/app.rs
+    - src-tauri/src/render/cursor.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/render/terminal_grid_pass.rs
+    - src-tauri/src/tabs.rs
+    - src-tauri/src/window_host.rs
+    - src-tauri/src/sftp/service.rs
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "codex usage limit (retry 13:02)"}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex usage limit (retry 13:02)"}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex usage limit (retry 13:02)"}
+verified_holding:
+  - "critical 779c9130c103c55b (行キャッシュのスクロール追跡): task0006 の rotate_for_scroll_event で修正。comprehensive が方向エンコード・Y平行移動・consume-once・スクロールフレーム非スキップ性・scrolled-back/fold/full-redraw 経路・preedit 共有キャッシュ・スレッド直列性まで検証し正しいと確認"
+  - "performance: 回転コストは置き換える再シェイプより厳密に軽い。count>=len は全破棄に退化し安全"
+  - "architecture: consume-once 契約・3層 API 委譲・tab切替/リサイズ/スクロールバック相互作用すべて整合"
+  - "spec: FR3 の規範的 MUST (等価性 postcondition) をバイト一致回帰テストで充足。FR1/FR2/FR4/FR5/FR6 も退行なし"
+findings: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+notes: "codex 3 観点は利用上限で skip (非失敗扱い)。workflow-doctor を起動し診断レポートを ./tmp/ に出力予定。Claude 側 4 観点は全て指摘ゼロ"
