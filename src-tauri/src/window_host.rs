@@ -263,6 +263,13 @@ pub struct WindowHost {
     /// Without this, `build_raw_input` ships `events: vec![]` and egui
     /// never sees pointer input even though winit already delivered it.
     pending_egui_events: Vec<egui::Event>,
+    /// Pointer buttons currently held (pressed-minus-released count).
+    /// While non-zero, `PointerMoved` counts as actionable input for the
+    /// frame-skip veto: egui chrome drags (scrollbar thumb, tab reorder)
+    /// are driven purely by motion between press and release, so skipping
+    /// motion-only frames mid-drag would freeze their live tracking on an
+    /// idle terminal. Reset on focus loss (the release may never arrive).
+    pointer_buttons_down: u8,
     /// Set when the user clicks the CSD title-bar's `×` button. The
     /// `about_to_wait` handler picks this up and runs the same
     /// teardown handshake (drop `host` → `event_loop.exit()`) used
@@ -510,6 +517,7 @@ impl WindowHost {
             clipboard,
             grid_pass: None,
             pending_egui_events: Vec::new(),
+            pointer_buttons_down: 0,
             pending_close: false,
             current_resize_dir: None,
             current_cursor: CursorIcon::Default,
@@ -1480,7 +1488,31 @@ impl WindowHost {
                 || app.visual_bell_progress().is_some()
                 || app.search_visible()
                 || bell_erase_pending;
-            if should_skip_frame(dirty_count, status_bar_changed, overlay_work) {
+            // Undrained *actionable* egui input (a click, wheel scroll, key,
+            // text, or clipboard event) vetoes the skip: `build_raw_input`
+            // below is the only drain, so a skipped frame would park it
+            // until the next unrelated wakeup (worst case a blink flip,
+            // ~530 ms). `PointerMoved` alone is excluded from this veto:
+            // `CursorMoved` pushes one unconditionally on every mouse
+            // motion, so without the exclusion an idle terminal would run a
+            // full egui+GPU frame on every hover pixel. A click always
+            // arrives as `[PointerMoved, PointerButton]`, so the trailing
+            // `PointerButton` still vetoes the skip and click latency is
+            // unaffected — only chrome hover feedback (e.g. a tab-bar
+            // highlight) is deferred until the next discrete event or a
+            // content change, which is an intentional trade-off.
+            // While a pointer button is held, motion IS actionable: egui
+            // chrome drags (scrollbar thumb, tab reorder) are driven by
+            // the press→release motion stream and must keep their live
+            // tracking even over an idle grid.
+            let egui_input_pending =
+                has_actionable_egui_input(&self.pending_egui_events, self.pointer_buttons_down > 0);
+            if should_skip_frame(
+                dirty_count,
+                status_bar_changed,
+                overlay_work,
+                egui_input_pending,
+            ) {
                 return;
             }
         }
@@ -1555,6 +1587,15 @@ impl WindowHost {
         // frame gives it exactly one-frame lifetime, so it never re-fires on
         // an unrelated repaint (e.g. after a mouse-driven horizontal scroll).
         app.clear_scroll_active_tab_into_view();
+        // Captured before the handlers below consume the `frame_events`
+        // options: whether ANY event fired this frame. Gates the second
+        // `refresh_fold_layout()` after the block — on the ordinary frame
+        // (no events) the layout built before the egui pass is still
+        // valid, and re-building it would double the per-frame fold cost
+        // while a region is collapsed. The field enumeration lives on
+        // `FrameEvents::any` (next to the struct) so a future event field
+        // can't silently fall out of this gate.
+        let frame_events_applied = frame_events.any();
         // CSD title-bar actions hit `winit::Window` directly except
         // for Close, which defers to `about_to_wait` via
         // `pending_close` so teardown follows the same handshake as
@@ -1602,8 +1643,18 @@ impl WindowHost {
                 SearchBarEvent::QueryChanged(_) | SearchBarEvent::OptionsChanged => {
                     app.run_search();
                 }
-                SearchBarEvent::Next => app.search_next(),
-                SearchBarEvent::Prev => app.search_prev(),
+                // Match navigation can scroll the viewport (and expand
+                // folds), so the cached hover spans index the pre-jump
+                // viewport — same invalidation the scrollbar-jump handler
+                // above does.
+                SearchBarEvent::Next => {
+                    app.search_next();
+                    self.invalidate_link_hover();
+                }
+                SearchBarEvent::Prev => {
+                    app.search_prev();
+                    self.invalidate_link_hover();
+                }
                 SearchBarEvent::Close => app.close_search(),
             }
         }
@@ -1652,6 +1703,19 @@ impl WindowHost {
             }
             self.window.request_redraw();
             crate::wakeup::wake();
+        }
+        // Re-derive the fold layout now that this frame's tab switch /
+        // scrollbar jump have been applied above. The first
+        // `refresh_fold_layout()` call (before the egui pass) fed the
+        // chrome that was just painted; the grid build below still reads
+        // `App::fold_layout()`, so it needs the layout recomputed against
+        // the post-event active tab / scroll offset. Gated on an event
+        // actually having fired: on the ordinary no-event frame the
+        // pre-egui layout is still valid, and an unconditional re-build
+        // would double the per-frame fold cost while a region is
+        // collapsed.
+        if frame_events_applied {
+            app.refresh_fold_layout();
         }
         // egui requested an immediate repaint (a popup opening, a widget
         // state transition, a one-frame animation step). Without honoring
@@ -1794,6 +1858,17 @@ impl WindowHost {
             let (instances, rows_rebuilt) = if let Some(tab) = app.active_tab() {
                 let mut core = tab.core.lock();
                 let row_count = core.rows();
+                // The egui pass above may have applied events that
+                // invalidate the frame-top dirty snapshot — a tab-bar
+                // click switched `app.active_tab()` (this `core` is not
+                // the one the snapshot was computed against), a scrollbar
+                // jump moved the viewport. Every such path raises
+                // `mark_full_redraw`, so widen the snapshot to every row
+                // when the flag is pending at build time; otherwise the
+                // per-row cache would keep serving the previous tab's
+                // rows with only the new tab's dirty rows patched in.
+                frame_dirty_rows =
+                    resolve_build_dirty_rows(frame_dirty_rows.take(), app.full_redraw_pending());
                 // task0006 (fixes review round-2 critical finding
                 // 779c9130c103c55b): consume term_core's accumulated
                 // scroll event exactly once per rendered frame, before
@@ -2159,15 +2234,78 @@ fn hover_link_cells_changed(prev_cells: &[(u16, u16, u16)], new_cells: &[(u16, u
 /// search overlay) to run every frame, the same carve-out
 /// `status_bar_changed` gets for the status bar's own wake chain.
 ///
+/// `egui_input_pending` is `true` when `pending_egui_events` holds input
+/// (a click, wheel, or key destined for the egui chrome) that no egui pass
+/// has consumed yet. Those events are drained only by `build_raw_input`,
+/// which runs *after* this decision — skipping such a frame would leave
+/// the click queued until the next unrelated wakeup (worst case the next
+/// blink flip, ~530 ms), which is exactly the sluggish tab-switch the
+/// post-merge report described. Any pending egui input therefore vetoes
+/// the skip.
+///
 /// Returns `true` (skip the frame) only when the dirty count is known to
 /// be exactly zero AND the status bar did not change AND there is no
-/// pending overlay work; every other combination proceeds to a full frame.
+/// pending overlay work AND no egui input is waiting; every other
+/// combination proceeds to a full frame.
 fn should_skip_frame(
     dirty_count: Option<usize>,
     status_bar_changed: bool,
     overlay_work: bool,
+    egui_input_pending: bool,
 ) -> bool {
-    matches!(dirty_count, Some(0)) && !status_bar_changed && !overlay_work
+    matches!(dirty_count, Some(0)) && !status_bar_changed && !overlay_work && !egui_input_pending
+}
+
+/// Whether `events` contains at least one egui event that must veto the
+/// idle-skip decision above. `egui::Event::PointerMoved` is deliberately
+/// excluded: `CursorMoved` pushes one unconditionally on every mouse
+/// motion, so treating it as actionable would force a full egui+GPU frame
+/// on every hover pixel over an otherwise idle terminal. A click still
+/// vetoes because it arrives as `[PointerMoved, PointerButton]` — the
+/// trailing `PointerButton` is not excluded — so click responsiveness is
+/// unaffected; only chrome hover feedback for motion-only frames is
+/// deferred until the next discrete event or a content change.
+///
+/// Exception: while a pointer button is held (`pointer_button_held`),
+/// motion IS actionable — egui chrome drags (scrollbar thumb, tab
+/// reorder) live entirely in the press→release motion stream, and
+/// skipping those frames would freeze the drag's live tracking on an
+/// idle terminal until the release finally vetoes.
+fn has_actionable_egui_input(events: &[egui::Event], pointer_button_held: bool) -> bool {
+    if pointer_button_held {
+        !events.is_empty()
+    } else {
+        events
+            .iter()
+            .any(|e| !matches!(e, egui::Event::PointerMoved(_)))
+    }
+}
+
+/// The dirty-row snapshot the grid build may trust, given whether a full
+/// redraw was raised since (or survived past) the frame-top snapshot —
+/// extracted as a pure function (plain values in, plain values out)
+/// mirroring `should_skip_frame` above.
+///
+/// The snapshot in `frame_dirty_rows` is taken at the top of `render` for
+/// the skip decision, but the egui pass in the middle of the frame can
+/// apply events that invalidate it: a tab-bar click switches the active
+/// tab (the snapshot then indexes a *different* tab's core), a scrollbar
+/// jump moves the viewport. Those paths call `App::mark_full_redraw`, so
+/// "the flag is set at build time" is exactly the signal that the
+/// snapshot is stale. Returning `None` routes both build branches to
+/// their existing every-row path (`None` already means "forced full
+/// redraw" there), rebuilding the whole cache against the current state.
+///
+/// Without this, the frame paints the new tab's dirty rows over the
+/// previous tab's cached rows, and `record_render_state` then consumes
+/// the mid-frame flag at end of frame — leaving the mixed content on
+/// screen indefinitely (the post-merge "switching tabs keeps the old
+/// tab's output, only the prompt row updates" report).
+fn resolve_build_dirty_rows(
+    snapshot: Option<Vec<u16>>,
+    full_redraw_pending: bool,
+) -> Option<Vec<u16>> {
+    if full_redraw_pending { None } else { snapshot }
 }
 
 /// task0006: whether this frame's pending core scroll event should
@@ -2923,6 +3061,11 @@ impl ApplicationHandler for PocApp {
                     // modifiers on focus loss; the next real
                     // ModifiersChanged re-seeds them.
                     host.current_mods = Modifiers::default();
+                    // Same staleness class for the held-button count: the
+                    // matching Released may never arrive once focus is
+                    // gone, and a latched count would keep treating every
+                    // hover motion as an actionable drag forever.
+                    host.pointer_buttons_down = 0;
                     host.update_link_cursor();
                 } else {
                     // Drop the user back into the cursor's "on" half-
@@ -3207,8 +3350,19 @@ impl ApplicationHandler for PocApp {
                 // observe hover + drag motion.
                 let logical = position.to_logical::<f32>(host.pixels_per_point as f64);
                 let egui_pos = egui::pos2(logical.x, logical.y);
-                host.pending_egui_events
-                    .push(egui::Event::PointerMoved(egui_pos));
+                // Coalesce consecutive `PointerMoved`s: motion-only frames
+                // are skippable (see `has_actionable_egui_input`), so
+                // without coalescing a sustained motion burst with no
+                // drawn frame in between (cursor_blink=false, or an
+                // unfocused window — nothing else forces a drain) would
+                // grow this queue one entry per motion event and rescan
+                // it per event. Only the latest position matters to egui.
+                if let Some(egui::Event::PointerMoved(last)) = host.pending_egui_events.last_mut() {
+                    *last = egui_pos;
+                } else {
+                    host.pending_egui_events
+                        .push(egui::Event::PointerMoved(egui_pos));
+                }
                 // CSD edge-resize hot zone: refresh the cached
                 // ResizeDirection + pointer icon so the next left-press
                 // can hand the matching direction to
@@ -3280,6 +3434,24 @@ impl ApplicationHandler for PocApp {
                         pressed: matches!(state, ElementState::Pressed),
                         modifiers: egui::Modifiers::default(),
                     });
+                }
+                // Held-button bookkeeping for the frame-skip veto: while
+                // an egui-mapped button is down, `PointerMoved` counts as
+                // actionable so egui chrome drags keep their live tracking
+                // (see `has_actionable_egui_input`). Only buttons egui can
+                // observe are counted — a held side button can't drive a
+                // chrome drag, so it must not defeat the idle skip during
+                // motion. Saturating on both edges — a stray release (e.g.
+                // after focus loss reset the count) must not underflow.
+                if winit_to_egui_button(button).is_some() {
+                    match state {
+                        ElementState::Pressed => {
+                            host.pointer_buttons_down = host.pointer_buttons_down.saturating_add(1);
+                        }
+                        ElementState::Released => {
+                            host.pointer_buttons_down = host.pointer_buttons_down.saturating_sub(1);
+                        }
+                    }
                 }
                 host.window().request_redraw();
 
@@ -3950,6 +4122,10 @@ fn handle_search_key(event: &KeyEvent, mods: Modifiers, host: &mut WindowHost, a
         } else {
             app.search_next();
         }
+        // Same contract as the search-bar button path in `render()`:
+        // match navigation can scroll the viewport (and expand folds),
+        // so the cached hover spans index the pre-jump viewport.
+        host.invalidate_link_hover();
         return;
     }
 
@@ -4017,17 +4193,17 @@ mod tests {
     // ── task0002 AC-5: should_skip_frame pure decision ───────────────
 
     /// AC-5: `Some(0)` dirty AND status bar unchanged AND no overlay work
-    /// → skip.
+    /// AND no pending egui input → skip.
     #[test]
     fn should_skip_frame_when_no_dirty_rows_and_status_bar_unchanged() {
-        assert!(should_skip_frame(Some(0), false, false));
+        assert!(should_skip_frame(Some(0), false, false, false));
     }
 
     /// AC-5: dirty rows present (even with an unchanged status bar and no
     /// overlay work) → never skip.
     #[test]
     fn should_skip_frame_false_when_dirty_rows_present() {
-        assert!(!should_skip_frame(Some(3), false, false));
+        assert!(!should_skip_frame(Some(3), false, false, false));
     }
 
     /// AC-5: status bar changed (even with zero dirty rows and no overlay
@@ -4035,14 +4211,14 @@ mod tests {
     /// git-branch / OSC 777 wake chain alive on an otherwise-idle shell.
     #[test]
     fn should_skip_frame_false_when_status_bar_changed() {
-        assert!(!should_skip_frame(Some(0), true, false));
+        assert!(!should_skip_frame(Some(0), true, false, false));
     }
 
     /// AC-5: no active tab (`None`) → never skip; the hint-message frame
     /// must still draw.
     #[test]
     fn should_skip_frame_false_when_no_active_tab() {
-        assert!(!should_skip_frame(None, false, false));
+        assert!(!should_skip_frame(None, false, false, false));
     }
 
     /// Overlay work pending (a toast counting down or a visual-bell flash
@@ -4053,7 +4229,7 @@ mod tests {
     /// paint.
     #[test]
     fn should_skip_frame_false_when_overlay_work_pending() {
-        assert!(!should_skip_frame(Some(0), false, true));
+        assert!(!should_skip_frame(Some(0), false, true, false));
     }
 
     /// task0005 AC-2: the search UI being visible must also veto the skip,
@@ -4062,7 +4238,95 @@ mod tests {
     /// it).
     #[test]
     fn should_skip_frame_false_when_search_visible() {
-        assert!(!should_skip_frame(Some(0), false, true));
+        assert!(!should_skip_frame(Some(0), false, true, false));
+    }
+
+    // ── has_actionable_egui_input pure decision ─────────────────────────
+
+    /// A `PointerMoved`-only queue (plain mouse-move hover over the
+    /// terminal body, no button held) must NOT be actionable — this is
+    /// the fix that lets an idle terminal skip the frame while the mouse
+    /// hovers over it.
+    #[test]
+    fn has_actionable_egui_input_false_for_pointer_moved_only() {
+        let events = vec![egui::Event::PointerMoved(egui::pos2(1.0, 2.0))];
+        assert!(!has_actionable_egui_input(&events, false));
+    }
+
+    /// A queue containing a `PointerButton` (the discrete event a click
+    /// delivers after its leading `PointerMoved`) must be actionable, so
+    /// click latency is unaffected by the `PointerMoved` exclusion above.
+    #[test]
+    fn has_actionable_egui_input_true_with_pointer_button() {
+        let events = vec![
+            egui::Event::PointerMoved(egui::pos2(1.0, 2.0)),
+            egui::Event::PointerButton {
+                pos: egui::pos2(1.0, 2.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        assert!(has_actionable_egui_input(&events, false));
+    }
+
+    /// An empty queue (no egui input arrived this frame) must not be
+    /// actionable — even mid-drag (a held button with no new motion needs
+    /// no frame).
+    #[test]
+    fn has_actionable_egui_input_false_when_empty() {
+        assert!(!has_actionable_egui_input(&[], false));
+        assert!(!has_actionable_egui_input(&[], true));
+    }
+
+    /// While a pointer button is held, motion alone IS actionable: egui
+    /// chrome drags (scrollbar thumb, tab reorder) are driven purely by
+    /// the press→release motion stream, and skipping those frames would
+    /// freeze the drag's live tracking over an idle grid.
+    #[test]
+    fn has_actionable_egui_input_true_for_motion_while_button_held() {
+        let events = vec![egui::Event::PointerMoved(egui::pos2(1.0, 2.0))];
+        assert!(has_actionable_egui_input(&events, true));
+    }
+
+    /// Post-merge regression fix: undrained egui input (a tab-bar click,
+    /// wheel over the chrome, a search-box key) must veto the skip even on
+    /// a fully idle grid — `build_raw_input` is the only drain and runs
+    /// after this decision, so skipping would park the click until the
+    /// next unrelated wakeup (worst case a blink flip, ~530 ms of
+    /// perceived tab-switch lag).
+    #[test]
+    fn should_skip_frame_false_when_egui_input_pending() {
+        assert!(!should_skip_frame(Some(0), false, false, true));
+    }
+
+    // ── post-merge regression fix: resolve_build_dirty_rows ─────────────
+
+    /// A full redraw raised mid-frame (tab switch / scrollbar jump applied
+    /// from this frame's egui pass) invalidates the frame-top snapshot:
+    /// the build must widen to every row (`None` routes both build
+    /// branches to their existing full-rebuild path).
+    #[test]
+    fn resolve_build_dirty_rows_widens_to_full_when_flag_pending() {
+        assert_eq!(resolve_build_dirty_rows(Some(vec![3, 7]), true), None);
+    }
+
+    /// No mid-frame invalidation → the snapshot is trusted as-is (the
+    /// ordinary cached path keeps its dirty-rows-only rebuild).
+    #[test]
+    fn resolve_build_dirty_rows_keeps_snapshot_when_no_flag() {
+        assert_eq!(
+            resolve_build_dirty_rows(Some(vec![3, 7]), false),
+            Some(vec![3, 7])
+        );
+    }
+
+    /// An absent snapshot (forced full redraw path, `was_surface_dirty`)
+    /// stays absent regardless of the flag.
+    #[test]
+    fn resolve_build_dirty_rows_none_snapshot_stays_none() {
+        assert_eq!(resolve_build_dirty_rows(None, false), None);
+        assert_eq!(resolve_build_dirty_rows(None, true), None);
     }
 
     // ── task0006: should_rotate_row_cache_for_scroll_event pure decision ──

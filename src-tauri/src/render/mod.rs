@@ -157,6 +157,22 @@ pub struct FrameEvents {
     pub sftp: Option<SftpFrameEvent>,
 }
 
+impl FrameEvents {
+    /// Whether ANY event fired this frame. Consumed by `window_host::render`
+    /// to gate post-event recomputation (the second fold-layout refresh).
+    /// Kept next to the field list so adding a field prompts extending it —
+    /// a call-site re-enumeration would drift silently when a new overlay
+    /// event is added.
+    pub fn any(&self) -> bool {
+        self.title.is_some()
+            || self.tab.is_some()
+            || self.scroll_to.is_some()
+            || self.search.is_some()
+            || self.profile.is_some()
+            || self.sftp.is_some()
+    }
+}
+
 /// A post-frame action requested by the SFTP overlay layer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SftpFrameEvent {
