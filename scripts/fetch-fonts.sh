@@ -147,9 +147,16 @@ fetch_one "NotoSansCJKjp-Bold.otf" \
     "https://raw.githubusercontent.com/googlefonts/noto-cjk/Sans2.004/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf" \
     "e53dcb0dcb2922e45d01aae1ebd2f382bb81d4229b18b6b883bd170678af1f76"
 
+# Modern monochrome Noto Emoji (v3.002, variable wght 300..700, default
+# 400 = Regular). Distributed via the google/fonts repo, which has no
+# release tags — the URL pins the commit that last touched the file,
+# which is equally immutable. The legacy fonts/NotoEmoji-Regular.ttf in
+# googlefonts/noto-emoji (v1.05, 888 glyphs) is missing text-default
+# emoji like U+2602 ☂ / U+2603 ☃ / U+2639 ☹ / U+262F ☯, which made the
+# fallback chain render them with the color emoji font.
 fetch_one "NotoEmoji-Regular.ttf" \
-    "https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.034/fonts/NotoEmoji-Regular.ttf" \
-    "415dc6290378574135b64c808dc640c1df7531973290c4970c51fdeb849cb0c5"
+    "https://raw.githubusercontent.com/google/fonts/b979dba422e445492b0eb9951ac52ee0b4d648c3/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf" \
+    "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551"
 
 fetch_one "Inconsolata-Regular.otf" \
     "https://raw.githubusercontent.com/googlefonts/Inconsolata/v3.000/fonts/otf/Inconsolata-Regular.otf" \

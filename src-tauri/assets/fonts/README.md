@@ -23,7 +23,7 @@ see `LICENSE` in this directory.
 | `Noto-COLRv1.ttf` | <https://github.com/googlefonts/noto-emoji> | `0ae57fe58645638523ba35f388d93739d292539a9acb84df5700c81b1e1a28d2` |
 | `NotoSansCJKjp-Regular.otf` | <https://github.com/notofonts/noto-cjk> | `68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5` |
 | `NotoSansCJKjp-Bold.otf` | <https://github.com/notofonts/noto-cjk> | `e53dcb0dcb2922e45d01aae1ebd2f382bb81d4229b18b6b883bd170678af1f76` |
-| `NotoEmoji-Regular.ttf` | <https://github.com/googlefonts/noto-emoji> | (added in font-bundle-redesign Phase 2) |
+| `NotoEmoji-Regular.ttf` | <https://github.com/google/fonts> (`ofl/notoemoji`, v3.002 variable) | `de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551` |
 | `Inconsolata-Regular.otf` | <https://github.com/googlefonts/Inconsolata> | `5273275eab5b74743c799b8bda94644b10cfa861ef86badcd37d91cf9eac8a1c` |
 | `Inconsolata-Bold.otf` | <https://github.com/googlefonts/Inconsolata> | `4981b5ed672b90221525976bdebd53f66d6b758857aad021245acbae8e2efb9b` |
 | `NotoSansSymbols2-Regular.ttf` | <https://github.com/notofonts/noto-fonts> | `e672040e4eb73c0d9ac841411eea34be3c1e12e81e88962786489fffae4fe973` |
