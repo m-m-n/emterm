@@ -47,8 +47,8 @@ findings:
       test with an overflow-length param (e.g. `ESC[99999999999n`).
     sources: [claude:spec, codex:spec]
     confidence: 100
-    resolution: unresolved
-    resolution_reason: null
+    resolution: fixed
+    resolution_reason: "task0002 で saturating 化+回帰テスト追加、round 2 で保持確認"
   - stable_id: bd3708c57a42f813
     severity: medium
     category: comprehensive
@@ -71,8 +71,8 @@ findings:
       `collecting_first_param && b.is_ascii_digit()` arm).
     sources: [claude:comprehensive]
     confidence: 80
-    resolution: unresolved
-    resolution_reason: null
+    resolution: fixed
+    resolution_reason: "task0002 で修正(8a413aacdea1392a と同一欠陥)、round 2 で保持確認"
   - stable_id: a723f48f748c0dd2
     severity: medium
     category: security
@@ -99,8 +99,8 @@ findings:
       for `ESC[?1!c`, `ESC[> c`, `ESC[?2026$$p`.
     sources: [claude:security, codex:security]
     confidence: 95
-    resolution: unresolved
-    resolution_reason: null
+    resolution: fixed
+    resolution_reason: "task0002 で DA/DECRPM 判定を term_core dispatch に合わせて緩和+回帰テスト追加、round 2 で保持確認"
   - stable_id: b476af92c46063c4
     severity: medium
     category: performance

@@ -50,8 +50,8 @@ findings:
       `\x1b[261n` / `\x1b[262n`.
     sources: [claude:spec]
     confidence: 70
-    resolution: unresolved
-    resolution_reason: null
+    resolution: fixed
+    resolution_reason: "task0003 で min(9999) as u8 の切り詰めミラー+回帰テスト追加、round 3 で保持確認"
   - stable_id: 445cfc21db4c4741
     severity: medium
     category: security
@@ -73,8 +73,8 @@ findings:
       strip tests for `ESC[?$1c` and a DECRPM form with a digit after `$`.
     sources: [codex:security]
     confidence: 50
-    resolution: unresolved
-    resolution_reason: null
+    resolution: fixed
+    resolution_reason: "task0003 で intermediate 後の digit/separator 受理を実装+回帰テスト追加、round 3 で保持確認"
   - stable_id: ed8f3f3e4759734b
     severity: medium
     category: spec
@@ -97,11 +97,11 @@ findings:
       and `\x1b[0?c`.
     sources: [codex:spec]
     confidence: 50
-    resolution: unresolved
-    resolution_reason: null
+    resolution: fixed
+    resolution_reason: "task0003 で非先頭 private marker による候補不成立を実装+回帰テスト追加、round 3 で保持確認"
 auto_fix:
   loops_run: 0
   applied_total: 0
   termination: clean
 residual_critical_high: 0
-rework_required: true
+rework_required: false
