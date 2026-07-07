@@ -1,0 +1,96 @@
+schema_version: 1
+feature: mux-snapshot-device-query-strip
+created: 2026-07-07
+base_branch: main
+parent_branch: em-workflow/mux-snapshot-device-query-strip/integration
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: d1619670803f05b4c196fe441be0e9d50036c625
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: d1619670803f05b4c196fe441be0e9d50036c625
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: "Strip device queries in scrollback filter"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/mux/scrollback_filter.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "Strip response-producing CSI device queries (DSR 5/6, DA1, DA2, XTWINOPS 14/16/18, DECRPM) from snapshot bytes"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6]
+  FR2:
+    title: "Preserve all non-response-producing CSI sequences byte-for-byte"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-7, TS-10, TS-11]
+  FR3:
+    title: "Preserve incomplete (unterminated) CSI sequences"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-8]
+  FR4:
+    title: "Re-emit C0 control bytes embedded inside a stripped CSI"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-9]
+  NFR1:
+    title: "Filter stays a single O(n) pass; 2 MiB bench under 30ms"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-13]
+  NFR2:
+    title: "CLI-only build (--no-default-features) still compiles"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [SC-3]
