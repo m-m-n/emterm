@@ -181,6 +181,15 @@ pub struct SlimStats {
 
 // ── CursorState ──────────────────────────────────────────
 
+/// Per-cursor saved state for DECSC/DECRC (`save_cursor` / `restore_cursor`)
+/// and the no-saved-state reset path.
+///
+/// Cursor shape and blink are deliberately NOT fields here (cursor-settings-fix
+/// D1): they live at the [`TerminalCore`] level instead
+/// (`cursor_style_default` / `cursor_blink_default` / `cursor_style_override`
+/// / `cursor_blink_override`), so DECSC/DECRC save/restore and the
+/// no-saved-state restore path can never clobber the settings-derived
+/// defaults or an active DECSCUSR/OSC 22 override.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CursorState {
     pub(crate) col: u16,
@@ -189,8 +198,6 @@ pub(crate) struct CursorState {
     pub(crate) bg: PackedColor,
     pub(crate) flags: u16,
     pub(crate) visible: bool,
-    pub(crate) style: u8, // 0=block, 1=underline, 2=bar
-    pub(crate) blink: bool,
     // SaveCursor/RestoreCursor extended fields
     pub(crate) g0_charset: u8,
     pub(crate) g1_charset: u8,
@@ -207,8 +214,6 @@ impl CursorState {
             bg: PackedColor::DEFAULT,
             flags: 0,
             visible: true,
-            style: 0,
-            blink: true,
             g0_charset: 0,
             g1_charset: 0,
             origin_mode: false,
@@ -272,6 +277,25 @@ pub struct TerminalCore {
     pub(crate) dirty: Vec<u64>,
     pub(crate) cursor: CursorState,
     pub(crate) saved_cursor: Option<CursorState>,
+    /// Settings-derived default cursor shape (0=block, 1=underline, 2=bar).
+    /// Terminal-level state (cursor-settings-fix D1), outside `CursorState`,
+    /// so DECSC/DECRC save/restore cannot alter it. Updated only by
+    /// `set_cursor_style` (settings apply); `get_cursor_style()` returns
+    /// `cursor_style_override` instead whenever one is active.
+    pub(crate) cursor_style_default: u8,
+    /// Settings-derived default cursor blink. Mirrors `cursor_style_default`
+    /// for blink: terminal-level, updated only by `set_cursor_blink`.
+    pub(crate) cursor_blink_default: bool,
+    /// Active DECSCUSR / OSC 22 shape override, if any. `None` means
+    /// `get_cursor_style()` falls back to `cursor_style_default`. Cleared by
+    /// RIS and by DECSCUSR Ps=0/absent; set by DECSCUSR (shape+blink
+    /// together) and by OSC 22 (shape only).
+    pub(crate) cursor_style_override: Option<u8>,
+    /// Active DECSCUSR blink override, if any. `None` means
+    /// `get_cursor_blink()` falls back to `cursor_blink_default`. Cleared by
+    /// RIS and by DECSCUSR Ps=0/absent; set only by DECSCUSR (OSC 22 never
+    /// touches blink, per SPEC FR4).
+    pub(crate) cursor_blink_override: Option<bool>,
     pub(crate) modes: u32,
     pub(crate) tab_stops: Vec<bool>,
     pub(crate) overflow: OverflowTable,
@@ -399,6 +423,10 @@ impl TerminalCore {
             dirty: vec![u64::MAX; dirty_words], // all dirty initially
             cursor: CursorState::new(),
             saved_cursor: None,
+            cursor_style_default: 0,
+            cursor_blink_default: true,
+            cursor_style_override: None,
+            cursor_blink_override: None,
             modes: default_modes,
             tab_stops,
             overflow: OverflowTable::new(),
@@ -898,6 +926,10 @@ impl TerminalCore {
         self.chars = CharTable::new();
         self.cursor = CursorState::new();
         self.saved_cursor = None;
+        // RIS clears active DECSCUSR/OSC 22 overrides; settings-derived
+        // defaults survive (they are configuration, not terminal state).
+        self.cursor_style_override = None;
+        self.cursor_blink_override = None;
         self.modes = (1u32 << MODE_AUTO_WRAP)
             | (1u32 << MODE_CURSOR_VISIBLE)
             | (1u32 << MODE_CURSOR_BLINK)

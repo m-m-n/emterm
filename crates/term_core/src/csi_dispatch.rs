@@ -43,6 +43,11 @@ impl TerminalCore {
                 self.handle_cursor_vertical_absolute(ParamParser::get_first_or_one(params));
             }
 
+            // DECSCUSR - Set Cursor Style: CSI Ps SP q
+            (Some(b' '), b'q') => {
+                self.handle_decscusr(ParamParser::get_first_or_zero(params));
+            }
+
             // Erase operations
             (None, b'J') => {
                 // ED 3 (Erase Scrollback) returns a sentinel from the screen
@@ -323,5 +328,33 @@ mod tests {
         core.handle_csi_internal(&[1, 2, 3], &[], b'z'); // Unknown
         assert_eq!(core.get_cursor_col(), 5); // Unchanged
         assert_eq!(core.get_cursor_row(), 5);
+    }
+
+    #[test]
+    fn test_csi_internal_decscusr_routes_to_handler() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_csi_internal(&[3], &[b' '], b'q'); // DECSCUSR Ps=3
+        assert_eq!(core.get_cursor_style(), 1); // underline
+        assert!(core.get_cursor_blink());
+    }
+
+    /// AC-9: entering and leaving the alternate screen (CSI ?1049h / ?1049l)
+    /// must not change the effective cursor shape or blink — the DECSCUSR/
+    /// OSC 22 override and the settings default both live at the terminal
+    /// level (cursor-settings-fix D1), untouched by the buffer-switch path.
+    #[test]
+    fn test_alt_screen_round_trip_preserves_cursor_style_and_blink() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_style(2); // bar (settings default)
+        core.set_cursor_blink(false); // steady (settings default)
+        core.handle_decscusr(3); // active override: blinking underline
+
+        core.process_pty_data_fully(b"\x1b[?1049h");
+        assert_eq!(core.get_cursor_style(), 1, "override survives alt-enter");
+        assert!(core.get_cursor_blink(), "override survives alt-enter");
+
+        core.process_pty_data_fully(b"\x1b[?1049l");
+        assert_eq!(core.get_cursor_style(), 1, "override survives alt-leave");
+        assert!(core.get_cursor_blink(), "override survives alt-leave");
     }
 }
