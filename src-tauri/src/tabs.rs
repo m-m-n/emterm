@@ -436,6 +436,11 @@ impl Tab {
         // inside `TerminalCore` is `true`, so this only matters when
         // `settings.json` opts out (`"cursor_blink": false`).
         core.set_cursor_blink(settings.cursor_blink);
+        // Seed the cursor shape default from `settings.cursor_style`
+        // using the canonical numeric mapping (0 = block, 1 =
+        // underline, 2 = bar) so newly spawned tabs match the
+        // settings-apply path below.
+        core.set_cursor_style(settings.cursor_style.as_cursor_shape_u8());
         // `term_core` knows no mux protocol; register the app-layer OSC mapping
         // so a pre-mux OSC 9999 `emterm-mux;` Welcome (the Windows ConPTY
         // fallback transport, parsed by `self.core` before mux is established)
@@ -3237,6 +3242,51 @@ mod tests {
             Arc::new(NoopSink),
             None,
         )
+    }
+
+    #[test]
+    fn spawn_seeds_cursor_style_from_settings() {
+        // AC-2: a tab spawned with `cursor_style: bar` reports
+        // `get_cursor_style()` = 2 on its core (spawn-path seeding).
+        let settings = Settings {
+            cursor_style: crate::settings::CursorStyle::Bar,
+            ..Settings::default()
+        };
+        let tab = Tab::spawn_shell(
+            "test",
+            80,
+            24,
+            100,
+            Arc::new(settings),
+            None,
+            None,
+            Arc::new(NoopSink),
+            None,
+        );
+        assert_eq!(tab.core.lock().get_cursor_style(), 2);
+    }
+
+    #[test]
+    fn spawn_seeds_cursor_blink_from_settings() {
+        // AC-4: existing spawn-path blink seeding behavior is preserved
+        // (`cursor_blink: false` in settings -> core reports blink false
+        // at spawn).
+        let settings = Settings {
+            cursor_blink: false,
+            ..Settings::default()
+        };
+        let tab = Tab::spawn_shell(
+            "test",
+            80,
+            24,
+            100,
+            Arc::new(settings),
+            None,
+            None,
+            Arc::new(NoopSink),
+            None,
+        );
+        assert!(!tab.core.lock().get_cursor_blink());
     }
 
     /// Build a prompt-start `PendingPromptMark` as `term_core` would emit

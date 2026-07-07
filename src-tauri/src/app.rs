@@ -2044,6 +2044,7 @@ impl App {
             {
                 let mut core = tab.core.lock();
                 core.set_cursor_blink(self.settings.cursor_blink);
+                core.set_cursor_style(self.settings.cursor_style.as_cursor_shape_u8());
                 core.mark_all_dirty();
             }
             tab.set_fold_enabled(self.settings.fold_enabled);
@@ -7470,6 +7471,27 @@ mod tests {
             !app.tabs[0].folds.is_enabled(),
             "fold gate pushed into live manager"
         );
+    }
+
+    #[test]
+    fn apply_settings_updates_cursor_style_and_blink_on_every_tab() {
+        // AC-3: applying new settings with `cursor_style: underline` /
+        // `cursor_blink: false` updates EVERY existing tab's core so
+        // `get_cursor_style()` = 1 and `get_cursor_blink()` = false.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_initial_tab();
+        let mut new = Settings::default();
+        new.cursor_style = crate::settings::CursorStyle::Underline;
+        new.cursor_blink = false;
+
+        app.apply_settings(new);
+
+        for tab in &app.tabs {
+            let core = tab.core.lock();
+            assert_eq!(core.get_cursor_style(), 1);
+            assert!(!core.get_cursor_blink());
+        }
     }
 
     // ── SFTP close-guard / identity-capture regression tests ──────
