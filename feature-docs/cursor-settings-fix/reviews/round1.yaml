@@ -1,0 +1,146 @@
+round: 1
+executed_at: "2026-07-07T23:38:56+09:00"
+scope:
+  review_mode: diff
+  base_commit: 931a7dae3b54e8481c8a643eedd6d83f0f1f9569
+  head_commit: 5e6e9fc3d29722123920ca8c2faf392bf2e2a27b
+  changed_files:
+    - crates/term_core/src/csi_cursor.rs
+    - crates/term_core/src/csi_dispatch.rs
+    - crates/term_core/src/esc_handler.rs
+    - crates/term_core/src/osc_handler.rs
+    - crates/term_core/src/snapshot.rs
+    - crates/term_core/src/terminal_core.rs
+    - crates/term_core/src/terminal_cursor.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/render/cursor.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/render/theme.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/src/tabs.rs
+plan:
+  floor: [comprehensive, spec, security, architecture]
+  discretionary:
+    - perspective: performance
+      reason: "毎フレームのカーソル描画パス（render/mod.rs, render/cursor.rs）への変更があり NFR1 で性能非劣化が要求されるため"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+findings:
+  - stable_id: c6ef2f448279d56e
+    severity: high
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 2041
+    title: "Settings apply wipes active OSC 12 cursor-color override"
+    description: >-
+      SPEC FR5 は「設定適用はアプリがシーケンスで設定した状態（DECSCUSR/OSC）を
+      消してはならない」と規定する。shape/blink は terminal-level override に
+      移設され設定適用でも保持される（TS-8 pass）が、OSC 12 のカーソル色
+      オーバーライドは theme.cursor_fg にのみ存在し、apply_settings の
+      `*tab.theme.lock() = Theme::from_settings(...)` 全面再構築で、色と無関係な
+      設定変更（フォントサイズ等）でも毎回スキーム色にリセットされる。
+    suggestion: >-
+      OSC 12 オーバーライドの有効状態を Theme に追跡し、設定適用の theme
+      再構築後に scheme_cursor_fg は新設定から更新しつつ、有効な override は
+      引き継ぐ。テスト: OSC 12 → 無関係な設定適用 → cursor_fg が不変。
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: "rework task0004 (merge 899f236) で修正。round 2 で全レビュアー検証済み"
+  - stable_id: 247075b264053ce9
+    severity: high
+    category: spec
+    file: crates/term_core/src/terminal_core.rs
+    line: 929
+    title: "RIS reset does not restore OSC 12 cursor color to the scheme default"
+    description: >-
+      SPEC FR4 / US2 AC は端末リセット（RIS）で shape/blink と共にカーソル色も
+      スキーム由来のデフォルトへ戻ることを要求する。core の reset() は
+      style/blink override をクリアするが、色は GUI 層 theme.cursor_fg に
+      あり、RIS を観測して scheme_cursor_fg へ戻す配線が存在しないため
+      OSC 12 の色が ESC c 後も残存する。
+    suggestion: >-
+      term_core が RIS 発生を GUI 層へ通知できるようにし（既存 callback 機構
+      またはリセットフラグ）、tab 側で theme.cursor_fg = scheme_cursor_fg を
+      適用する（OSC 112 ハンドラと同等の復帰）。テスト: OSC 12 → RIS →
+      cursor_fg == scheme_cursor_fg。
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: "rework task0004 (merge 899f236) で修正。round 2 で全レビュアー検証済み"
+  - stable_id: 9c2cd5aa4b85533e
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/osc_handler.rs
+    line: 150
+    title: "OSC 22 cursor shape dual authority SSOT drift"
+    description: >-
+      OSC 22 が term_core の cursor_style_override（描画の権威）と
+      Theme.cursor_style（描画では未読）の2箇所に書き込まれ、受理する値の
+      マッピングも両者で食い違う（core: block/underline/bar/空のみ、theme:
+      default/vertical-text 等も受理）。描画は core 経由で現状正しいが、
+      Theme.cursor_style を触る将来の保守者が描画に効くと誤認するリスク。
+    suggestion: >-
+      カーソル形状の権威が core.get_cursor_style() である旨を Theme.cursor_style
+      側に明示するコメントを追加する（または theme 側の cursor_style 経路を
+      撤去する）。
+    sources: [claude:architecture, codex:architecture]
+    confidence: 95
+    resolution: deferred
+    resolution_reason: >-
+      描画動作は core 権威で正しく実害なし（両 Claude レビュアー確認済み）。
+      権威の明示コメント追加を task0004 の付帯 AC として実施する。
+  - stable_id: 09cf0d5cd512074b
+    severity: high
+    category: architecture
+    file: crates/term_core/src/snapshot.rs
+    line: 487
+    title: "Snapshot v2 migration path was removed"
+    description: >-
+      SNAPSHOT_VERSION 2→3 バンプで restore_from_bytes が V3 と V1 のみを
+      受理し、旧 V2 ペイロードが復元不能になるという指摘（codex 単独）。
+    suggestion: "V2 構造体と version-2 match arm を追加して旧レイアウトをマップする。"
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      bincode snapshot API（snapshot_to_bytes/restore_from_bytes）には本番
+      呼び出し元がリポジトリ内に存在せず（テストのみ・WASM 時代の遺物）、
+      ディスク永続化も無く、mux の reattach/snapshot は別方式（ANSI byte
+      replay, mux/snapshot_bytes.rs）。claude:comprehensive と
+      claude:architecture が独立に呼び出し元ゼロを確認しており、具体的な
+      障害経路が存在しない。
+  - stable_id: 253e341c2ad822eb
+    severity: medium
+    category: spec
+    file: crates/term_core/src/csi_dispatch.rs
+    line: 46
+    title: "DECSCUSR default form CSI q is not dispatched"
+    description: >-
+      SPEC の「CSI q / CSI 0 q で設定値に戻る」記述を根拠に、intermediate
+      なしの CSI q が dispatch されないという指摘（codex 単独）。
+    suggestion: "(None, b'q') を handle_decscusr(0) に配線する。"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      DECSCUSR は VT 仕様上 `CSI Ps SP q`（space intermediate 必須）であり、
+      intermediate なしの `CSI q` は別シーケンス DECLL（Load LEDs）。これを
+      DECSCUSR reset に振ると誤解釈になる。実装が正しく、SPEC.md 側の略記
+      （`CSI q`）が曖昧だったため SPEC.md の表記を `CSI SP q` に修正済み。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-candidates
+residual_critical_high: 2
+rework_required: true

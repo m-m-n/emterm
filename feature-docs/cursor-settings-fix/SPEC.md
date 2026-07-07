@@ -36,7 +36,7 @@ cursor, and I want my configured defaults back when the app resets them.
 
 **Acceptance Criteria:**
 - [ ] DECSCUSR shape/blink and OSC 22 style requests win over settings.
-- [ ] DECSCUSR default (`CSI q` / `CSI 0 q`), OSC 112, and terminal reset restore the settings-derived shape/blink and the scheme cursor color.
+- [ ] DECSCUSR default (`CSI SP q` / `CSI 0 SP q` — the space intermediate is part of DECSCUSR; plain `CSI q` is DECLL and stays out of scope), OSC 112, and terminal reset restore the settings-derived shape/blink and the scheme cursor color.
 
 ## Technical Requirements
 
@@ -114,7 +114,7 @@ cursor, and I want my configured defaults back when the app resets them.
 - [ ] TS-2: Settings change at runtime updates the effective style/blink of every existing tab.
 - [ ] TS-3: `cursor_blink: false` + DECSC/DECRC round-trip → blink stays false.
 - [ ] TS-4: `cursor_blink: false` + terminal reset (RIS / `restore_cursor` with no saved state) → blink stays false.
-- [ ] TS-5: DECSCUSR `CSI 3 q` (blinking underline) overrides settings shape+blink; `CSI 0 q` / `CSI q` returns to settings-derived shape+blink.
+- [ ] TS-5: DECSCUSR `CSI 3 SP q` (blinking underline) overrides settings shape+blink; `CSI 0 SP q` / `CSI SP q` returns to settings-derived shape+blink.
 - [ ] TS-6: OSC 22 "underline" overrides settings style; OSC 22 "" resets to settings style.
 - [ ] TS-7: Cursor overlay color = scheme cursor color by default; OSC 12 override wins; OSC 112 restores scheme cursor color (not `theme.fg`).
 - [ ] TS-8: Applying settings while an app override is active preserves the override (FR5).

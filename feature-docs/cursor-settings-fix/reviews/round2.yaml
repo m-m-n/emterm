@@ -1,0 +1,75 @@
+round: 2
+executed_at: "2026-07-08T08:37:57+09:00"
+scope:
+  review_mode: diff
+  base_commit: 931a7dae3b54e8481c8a643eedd6d83f0f1f9569
+  head_commit: 899f2361a55ce03d12f659507285717c8294a27a
+  changed_files:
+    - crates/term_core/src/callbacks.rs
+    - crates/term_core/src/csi_cursor.rs
+    - crates/term_core/src/csi_dispatch.rs
+    - crates/term_core/src/esc_handler.rs
+    - crates/term_core/src/osc_handler.rs
+    - crates/term_core/src/snapshot.rs
+    - crates/term_core/src/terminal_core.rs
+    - crates/term_core/src/terminal_cursor.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/render/cursor.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/render/theme.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/src/tabs.rs
+plan:
+  floor: [comprehensive, spec, security, architecture]
+  discretionary:
+    - perspective: performance
+      reason: "毎フレームのカーソル描画パス（render/mod.rs, render/cursor.rs）への変更があり NFR1 で性能非劣化が要求されるため"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+round1_fix_verification:
+  - stable_id: c6ef2f448279d56e
+    verdict: fixed-verified
+    verified_by: [claude:comprehensive, claude:spec, claude:architecture, codex:spec, codex:security]
+    note: "設定適用は有効な OSC 12 override（cursor_fg + フラグ）を引き継ぎ、scheme_cursor_fg は新スキームを反映。ロックスコープも安全（非再入 parking_lot で先読みロックを drop 後に再取得）"
+  - stable_id: 247075b264053ce9
+    verdict: fixed-verified
+    verified_by: [claude:comprehensive, claude:spec, claude:architecture, codex:spec, codex:security]
+    note: "RIS が shape/blink override をクリアし on_reset callback 経由で scheme_cursor_fg へ色復帰（OSC 112 相当）。同一チャンク内 ESC c → OSC 12 の順序もパース順発火で保全（専用回帰テストあり）"
+findings:
+  - stable_id: 718ecd2ae072b58f
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/osc_handler.rs
+    line: 151
+    title: "OSC 22 parsing contract diverges between core and theme"
+    description: >-
+      core の OSC 22 は block/underline/bar/空のみ受理、theme 側の既存文法は
+      default/vertical-text 等も受理するため、theme が dirty になっても描画
+      形状が変わらないペイロードが存在するという指摘（codex 単独）。
+    suggestion: "OSC 22 の文字列→スタイルのパーサーを共有ヘルパーに一本化する。"
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: >-
+      round 1 の deferred 9c2cd5aa4b85533e（同一サイト・同一根本原因の OSC 22
+      二重権威）の再指摘。合意済みの緩和策（Theme.cursor_style への権威明示
+      コメント）は task0004 で着地済みと claude:architecture が確認。描画形状は
+      core.get_cursor_style() のみが権威で、theme 側の広い文法が引き起こすのは
+      最悪でも無害な再描画1回であり具体的な障害経路なし。文法一本化は本機能の
+      スコープ外のリファクタリングとして見送る。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
