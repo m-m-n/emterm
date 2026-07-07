@@ -1,0 +1,128 @@
+schema_version: 1
+feature: cursor-settings-fix
+created: 2026-07-07
+base_branch: main
+parent_branch: em-workflow/cursor-settings-fix/integration
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 931a7dae3b54e8481c8a643eedd6d83f0f1f9569
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 931a7dae3b54e8481c8a643eedd6d83f0f1f9569
+  - id: implement
+    status: pending
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: term_core effective cursor state + DECSCUSR / OSC 22
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/terminal_cursor.rs
+      - crates/term_core/src/csi_dispatch.rs
+      - crates/term_core/src/csi_cursor.rs
+      - crates/term_core/src/osc_handler.rs
+      - crates/term_core/src/esc_handler.rs
+      - crates/term_core/src/snapshot.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: high
+    requirements: [FR1, FR2, FR4, FR5, NFR2]
+    status: pending
+    notes: null
+  task0002:
+    title: Seed cursor style/blink defaults from settings (GUI)
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/settings.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/app.rs
+    skills: [backend-impl]
+    domains: [ui]
+    complexity: low
+    requirements: [FR1, FR5]
+    status: pending
+    notes: null
+  task0003:
+    title: Cursor color from theme (scheme / OSC 12 / OSC 112)
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/render/mod.rs
+      - src-tauri/src/render/cursor.rs
+      - src-tauri/src/render/theme.rs
+      - src-tauri/src/callbacks.rs
+    skills: [design-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR3, FR4, NFR1]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: Rendered cursor shape reflects effective cursor style (settings default)
+    status: ok
+    tbd_reason: null
+    tasks: [task0001, task0002]
+    tests: [TS-1, TS-2]
+  FR2:
+    title: Blink defaults to settings and survives save/restore, reset, tab switches
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-3, TS-4, TS-9]
+  FR3:
+    title: Cursor painted with color scheme cursor color, not SGR pen fg
+    status: ok
+    tbd_reason: null
+    tasks: [task0003]
+    tests: [TS-7, TS-12]
+  FR4:
+    title: DECSCUSR / OSC 22 / OSC 12 override settings; resets restore defaults
+    status: ok
+    tbd_reason: null
+    tasks: [task0001, task0003]
+    tests: [TS-5, TS-6, TS-7, TS-10]
+  FR5:
+    title: Settings changes apply immediately to all tabs without wiping app overrides
+    status: ok
+    tbd_reason: null
+    tasks: [task0001, task0002]
+    tests: [TS-2, TS-8]
+  NFR1:
+    title: No render-path performance regression
+    status: ok
+    tbd_reason: null
+    tasks: [task0003]
+    tests: []
+  NFR2:
+    title: CLI-only build keeps compiling; term_core stays GUI-agnostic
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: []
