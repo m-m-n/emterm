@@ -110,6 +110,20 @@ impl CursorStyle {
             Self::Bar => "bar",
         }
     }
+
+    /// Canonical numeric shape encoding consumed by
+    /// `term_core::TerminalCore::set_cursor_style` / `get_cursor_style`
+    /// and the renderer's cursor overlay: `0 = block`, `1 = underline`,
+    /// `2 = bar`. Shared by every settings-default seeding call site
+    /// (tab spawn, settings apply) so they cannot drift from one
+    /// another.
+    pub fn as_cursor_shape_u8(&self) -> u8 {
+        match self {
+            Self::Block => 0,
+            Self::Underline => 1,
+            Self::Bar => 2,
+        }
+    }
 }
 
 fn warn_unknown_cursor_style_once(seen: &str) {
@@ -2452,6 +2466,14 @@ mod tests {
     fn cursor_style_unknown_falls_back_to_block() {
         assert_eq!(CursorStyle::parse_or_warn("rectangle"), CursorStyle::Block);
         assert_eq!(CursorStyle::parse_or_warn(""), CursorStyle::Block);
+    }
+
+    #[test]
+    fn cursor_style_as_cursor_shape_u8_maps_block_underline_bar() {
+        // AC-1: block -> 0, underline -> 1, bar -> 2.
+        assert_eq!(CursorStyle::Block.as_cursor_shape_u8(), 0);
+        assert_eq!(CursorStyle::Underline.as_cursor_shape_u8(), 1);
+        assert_eq!(CursorStyle::Bar.as_cursor_shape_u8(), 2);
     }
 
     #[test]
