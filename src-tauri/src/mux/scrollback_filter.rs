@@ -242,29 +242,42 @@ struct CsiStrip {
 /// `crates/term_core/src/csi_dispatch.rs` answers with a response — the SSOT
 /// this predicate mirrors (see `csi_is_device_query`).
 ///
-/// Body grammar (matches the CSI recognition in the task design):
-/// parameter bytes (`0x30..=0x3F`, which includes the private markers
-/// `<=>?`), then intermediate bytes (`0x20..=0x2F`), then a final byte
-/// (`0x40..=0x7E`).
+/// Body grammar mirrors term_core's actual CSI parser states
+/// (`crates/term_core/src/parser/csi.rs`), not a stricter "params then
+/// intermediates" grammar:
+/// - A private marker (`<=>?`, `0x3C..=0x3F`) is valid ONLY as the very
+///   first byte of the body (term_core's `csi_entry` state; embedded C0
+///   bytes before it don't count against "first", since `csi_entry`'s C0
+///   arm doesn't transition state). Anywhere else it hits term_core's
+///   `csi_param` invalid-byte arm and CANCELS the whole CSI — no dispatch,
+///   no response — so the scanner returns `None` there too.
+/// - Digits and `;`/`:` (`0x30..=0x3B`) keep accumulating into the same
+///   first-parameter tracking regardless of whether an intermediate byte
+///   has already been seen — term_core's `ParamParser` accumulates digits
+///   into `current` independently of the separate `intermediates` vec, so
+///   `csi_param`'s digit arm has no "already saw an intermediate" guard.
+/// - Intermediate bytes (`0x20..=0x2F`) may appear at any point and keep
+///   accumulating (both `csi_entry` and `csi_param` accept them).
+/// - A final byte (`0x40..=0x7E`) completes the CSI and dispatches.
 ///
 /// Returns `Some` only for a COMPLETE CSI (a valid final byte is found) that
 /// matches the strip predicate. Returns `None` for: a CSI that completes but
 /// does not match (the caller preserves it byte-for-byte via its normal
 /// single-byte fallback, and the main loop then pushes the rest of the
-/// sequence one byte at a time — still an O(n) pass overall), an
-/// unterminated CSI (buffer ends before a final byte), a CSI body containing
-/// a bare ESC (aborts the candidate — the caller's single-byte fallback
-/// naturally re-processes bytes up to that ESC one at a time, so "the
-/// scanned prefix is preserved as-is and scanning resumes at that ESC"
-/// falls out of the existing fallback without special-casing), or a byte
-/// outside the CSI grammar (e.g. DEL).
+/// sequence one byte at a time — still an O(n) pass overall), a CSI
+/// cancelled by a non-leading private marker (see above), an unterminated
+/// CSI (buffer ends before a final byte), a CSI body containing a bare ESC
+/// (aborts the candidate — the caller's single-byte fallback naturally
+/// re-processes bytes up to that ESC one at a time, so "the scanned prefix
+/// is preserved as-is and scanning resumes at that ESC" falls out of the
+/// existing fallback without special-casing), or a byte outside the CSI
+/// grammar (e.g. DEL).
 fn scan_csi_device_query(bytes: &[u8], from: usize) -> Option<CsiStrip> {
     let mut j = from;
     let mut private_prefix: Option<u8> = None;
     let mut first_param: u32 = 0;
     let mut collecting_first_param = true;
     let mut param_bytes_seen = 0usize;
-    let mut in_intermediates = false;
     let mut intermediates: Vec<u8> = Vec::new();
     let mut embedded_c0: Vec<u8> = Vec::new();
 
@@ -278,35 +291,48 @@ fn scan_csi_device_query(bytes: &[u8], from: usize) -> Option<CsiStrip> {
                 embedded_c0.push(b);
                 j += 1;
             }
-            0x30..=0x3f if !in_intermediates => {
-                // Parameter byte (digit, ';', ':', or a private marker
-                // `<=>?` — only the FIRST parameter byte is a private
-                // prefix, matching term_core's CSI-entry-state behavior).
-                if param_bytes_seen == 0 && matches!(b, b'<' | b'=' | b'>' | b'?') {
+            b'<' | b'=' | b'>' | b'?' => {
+                // Private marker: valid only as the leading byte of the CSI
+                // body (term_core's `csi_entry` state). Once any parameter
+                // byte, separator, or intermediate has been seen, a private
+                // marker is invalid in `csi_param` and cancels the whole
+                // CSI — mirror that by invalidating the candidate.
+                if param_bytes_seen == 0 && intermediates.is_empty() {
                     private_prefix = Some(b);
-                } else if collecting_first_param && b.is_ascii_digit() {
+                    param_bytes_seen += 1;
+                    j += 1;
+                } else {
+                    return None;
+                }
+            }
+            0x30..=0x3b => {
+                // Digit, ';', or ':'. Accumulates into the first-parameter
+                // tracking regardless of intermediates seen so far — mirrors
+                // term_core's `ParamParser`, where digits feed `current`
+                // independently of the separate intermediates vec.
+                if collecting_first_param && b.is_ascii_digit() {
                     // Saturating accumulation mirrors term_core's
                     // `ParamParser::add_digit` (saturating_mul/saturating_add
                     // — crates/term_core/src/parser_params.rs): an
                     // arbitrarily long digit run can never overflow or panic.
                     // A saturated value never equals a small target constant
                     // (5/6/14/16/18), so an oversized parameter is simply
-                    // preserved, never stripped.
+                    // preserved, never stripped (the `n` arm additionally
+                    // clamps to term_core's MAX_PARAM_VALUE before
+                    // truncating to u8 — see `csi_is_device_query`).
                     first_param = first_param
                         .saturating_mul(10)
                         .saturating_add(u32::from(b - b'0'));
                 } else {
-                    // ';' / ':' / a digit past the first run / a stray
-                    // marker not in leading position — the leading decimal
-                    // run is over either way.
+                    // ';' / ':' / a digit past the first run — the leading
+                    // decimal run is over either way.
                     collecting_first_param = false;
                 }
                 param_bytes_seen += 1;
                 j += 1;
             }
             0x20..=0x2f => {
-                // Intermediate byte.
-                in_intermediates = true;
+                // Intermediate byte — may appear at any point.
                 intermediates.push(b);
                 j += 1;
             }
@@ -339,16 +365,25 @@ fn scan_csi_device_query(bytes: &[u8], from: usize) -> Option<CsiStrip> {
 /// `intermediates` here holds only the 0x20-0x2F bytes that would occupy
 /// term_core's remaining slot(s).
 ///
-/// | final | private prefix    | intermediates                           | first param | query kind |
-/// |-------|--------------------|------------------------------------------|--------------|------------|
-/// | `n`   | none               | none                                      | 5 or 6       | DSR / CPR  |
-/// | `c`   | none               | none                                      | any          | DA1        |
-/// | `c`   | `?` or `>`         | any (trailing bytes ignored)              | any          | DA1 / DA2  |
-/// | `t`   | none               | none                                      | 14, 16, 18   | XTWINOPS   |
-/// | `p`   | `?`                | first byte `$` (trailing bytes ignored)   | any          | DECRPM     |
+/// | final | private prefix    | intermediates                           | first param      | query kind |
+/// |-------|--------------------|------------------------------------------|-------------------|------------|
+/// | `n`   | none               | none                                      | 5 or 6 (mod 256) | DSR / CPR  |
+/// | `c`   | none               | none                                      | any               | DA1        |
+/// | `c`   | `?` or `>`         | any (trailing bytes ignored)              | any               | DA1 / DA2  |
+/// | `t`   | none               | none                                      | 14, 16, 18        | XTWINOPS   |
+/// | `p`   | `?`                | first byte `$` (trailing bytes ignored)   | any               | DECRPM     |
 ///
 /// `first_param` treats an empty leading digit run as 0, matching
 /// term_core's `ParamParser::get_first_or_zero`.
+///
+/// The `n` (DSR/CPR) row matches "mod 256" because term_core's dispatch
+/// site truncates the parameter to `u8` before comparing —
+/// `ParamParser::get_first_or_zero(params) as u8` (csi_dispatch.rs) — after
+/// the parameter itself was already clamped to `MAX_PARAM_VALUE = 9999`
+/// during accumulation (parser_params.rs). So e.g. `ESC[261n` (261 mod
+/// 256 = 5) dispatches DSR and must be stripped. This is the ONLY dispatch
+/// site among the ones this predicate mirrors that truncates to `u8`; the
+/// DA / XTWINOPS / DECRPM comparisons use the parameter untruncated.
 fn csi_is_device_query(
     private_prefix: Option<u8>,
     intermediates: &[u8],
@@ -357,7 +392,12 @@ fn csi_is_device_query(
 ) -> bool {
     match final_byte {
         b'n' => {
-            private_prefix.is_none() && intermediates.is_empty() && matches!(first_param, 5 | 6)
+            // Mirror term_core's clamp-then-truncate: clamp to
+            // MAX_PARAM_VALUE (9999, matching the accumulation clamp in
+            // `scan_csi_device_query`'s saturating accumulator collapsed to
+            // the same result) then truncate to u8 before the 5/6 match.
+            let truncated = first_param.min(9999) as u8;
+            private_prefix.is_none() && intermediates.is_empty() && matches!(truncated, 5 | 6)
         }
         b'c' => match private_prefix {
             None => intermediates.is_empty(),
@@ -820,5 +860,53 @@ mod tests {
                 "input {input:?} must be preserved"
             );
         }
+    }
+
+    // ── review round 2 rework regression tests (task0003 AC-1 … AC-3) ──
+
+    /// task0003 AC-1 (round 2 finding 864ff69541b6bcf8): term_core
+    /// dispatches DSR as
+    /// `handle_device_status_report(get_first_or_zero(params) as u8)`
+    /// (csi_dispatch.rs) — the clamped first parameter is truncated to u8
+    /// before the 5/6 match. `ESC[261n` (261 mod 256 = 5) and `ESC[262n`
+    /// (262 mod 256 = 6) must be stripped; `ESC[260n` (mod 256 = 4) and
+    /// `ESC[9999n` (mod 256 = 15) alias to neither 5 nor 6 and must be
+    /// preserved.
+    #[test]
+    fn strip_removes_dsr_via_u8_truncated_param_keeps_non_aliasing_values() {
+        assert_eq!(strip_replayable_rich_content(b"a\x1b[261nb"), b"ab");
+        assert_eq!(strip_replayable_rich_content(b"a\x1b[262nb"), b"ab");
+        let kept_260 = b"a\x1b[260nb";
+        assert_eq!(strip_replayable_rich_content(kept_260), kept_260);
+        let kept_9999 = b"a\x1b[9999nb";
+        assert_eq!(strip_replayable_rich_content(kept_9999), kept_9999);
+    }
+
+    /// task0003 AC-2 (round 2 finding 445cfc21db4c4741): term_core's
+    /// `csi_param` state keeps accepting parameter digits and `;`/`:` after
+    /// an intermediate byte — they still feed the same `ParamParser`
+    /// (`parser/csi.rs`), so `ESC[?$1c` still dispatches DA1 (intermediates
+    /// `[?, $]`) and must be stripped. A DECRPM form with a digit after `$`
+    /// dispatches the same way — csi_dispatch.rs's DECRPM arm only checks
+    /// `intermediates.get(1) == Some(&'$')`, independent of trailing
+    /// digits — so `ESC[?2026$1p` must also be stripped.
+    #[test]
+    fn strip_removes_da1_and_decrpm_with_digit_after_intermediate() {
+        assert_eq!(strip_replayable_rich_content(b"a\x1b[?$1cb"), b"ab");
+        assert_eq!(strip_replayable_rich_content(b"a\x1b[?2026$1pb"), b"ab");
+    }
+
+    /// task0003 AC-3 (round 2 finding ed8f3f3e4759734b): a private marker
+    /// byte is valid only as term_core's `csi_entry`-state leading byte.
+    /// Once any digit, separator, or intermediate has been seen, a private
+    /// marker hits `csi_param`'s invalid-byte arm and cancels the whole CSI
+    /// — no dispatch, no response (`parser/csi.rs`). `ESC[5?n` and
+    /// `ESC[0?c` must therefore be preserved byte-for-byte, not stripped.
+    #[test]
+    fn strip_keeps_non_leading_private_marker_cancelled_csi() {
+        let dsr = b"a\x1b[5?nb";
+        assert_eq!(strip_replayable_rich_content(dsr), dsr);
+        let da1 = b"a\x1b[0?cb";
+        assert_eq!(strip_replayable_rich_content(da1), da1);
     }
 }
