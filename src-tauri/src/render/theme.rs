@@ -42,6 +42,13 @@ pub struct Theme {
     pub fg: Rgb,
     pub bg: Rgb,
     pub cursor_fg: Rgb,
+    /// The active color scheme's cursor color, remembered separately from
+    /// `cursor_fg` so OSC 112 (reset cursor color) can restore it even
+    /// after OSC 12 has overridden `cursor_fg`, and even when the active
+    /// scheme is not the built-in `emterm` preset. Updated whenever a
+    /// color scheme is applied (`Theme::from_settings` /
+    /// `apply_color_scheme`); untouched by OSC 12/112 themselves.
+    pub scheme_cursor_fg: Rgb,
     pub palette16: [Rgb; 16],
     /// 256-entry sparse overlay onto the indexed palette. `None` means
     /// "use the default" (which for slots < 16 is `palette16[i]` and for
@@ -142,6 +149,7 @@ impl Default for Theme {
             fg: DEFAULT_TERMINAL_FG,
             bg: DEFAULT_TERMINAL_BG,
             cursor_fg: DEFAULT_TERMINAL_CURSOR_FG,
+            scheme_cursor_fg: DEFAULT_TERMINAL_CURSOR_FG,
             palette16: DEFAULT_PALETTE16,
             palette256: Box::new([None; 256]),
             cursor_style: CursorStyle::default(),
@@ -225,7 +233,11 @@ fn parse_hash(s: &str) -> Option<Rgb> {
 }
 
 impl Theme {
-    /// Default cursor foreground color (used by OSC 112).
+    /// Default cursor foreground color: the built-in `emterm` preset's
+    /// cursor color, used to seed `Theme::default()` /
+    /// `Theme::scheme_cursor_fg` before any color scheme is applied. OSC
+    /// 112 resets to `scheme_cursor_fg` (the ACTIVE scheme's cursor
+    /// color), not directly to this constant — see `Theme::apply_osc`.
     pub const DEFAULT_CURSOR_FG: Rgb = DEFAULT_TERMINAL_CURSOR_FG;
 
     /// Apply an OSC color/style mutation.
@@ -263,7 +275,11 @@ impl Theme {
                 true
             }
             112 => {
-                self.cursor_fg = Self::DEFAULT_CURSOR_FG;
+                // Reset to the ACTIVE SCHEME's cursor color (FR4), not a
+                // hard-coded preset — `scheme_cursor_fg` is seeded by
+                // `apply_color_scheme` at theme construction and survives
+                // OSC 12 overrides untouched.
+                self.cursor_fg = self.scheme_cursor_fg;
                 true
             }
             _ => false,
@@ -547,6 +563,7 @@ fn apply_color_scheme(theme: &mut Theme, settings: &crate::settings::Settings) {
         theme.fg = preset.fg;
         theme.bg = preset.bg;
         theme.cursor_fg = preset.cursor;
+        theme.scheme_cursor_fg = preset.cursor;
         theme.palette16 = preset.palette16;
         return;
     }
@@ -563,6 +580,7 @@ fn apply_user_scheme(theme: &mut Theme, user: &crate::settings::UserColorScheme)
     }
     if let Some(rgb) = parse_color_spec(&user.cursor) {
         theme.cursor_fg = rgb;
+        theme.scheme_cursor_fg = rgb;
     }
     for (i, spec) in user.ansi_colors.iter().take(16).enumerate() {
         if let Some(rgb) = parse_color_spec(spec) {
@@ -775,11 +793,63 @@ mod tests {
     }
 
     #[test]
-    fn apply_osc_112_resets_cursor_fg() {
+    fn apply_osc_112_resets_cursor_fg_to_default_scheme_baseline() {
         let mut t = Theme::default();
         t.cursor_fg = Rgb(1, 2, 3);
         assert!(t.apply_osc(112, ""));
         assert_eq!(t.cursor_fg, Theme::DEFAULT_CURSOR_FG);
+    }
+
+    // ── task0003 AC-2 / AC-3: cursor color follows the active scheme ──
+
+    #[test]
+    fn apply_osc_112_resets_cursor_fg_to_active_scheme_not_hardcoded_default() {
+        // AC-3: OSC 112 must restore the ACTIVE SCHEME's cursor color,
+        // not a hard-coded preset. Simulate a non-default scheme by
+        // setting `scheme_cursor_fg` directly (as `apply_color_scheme`
+        // would for a real scheme whose cursor color differs from the
+        // `emterm` default).
+        let mut t = Theme::default();
+        t.scheme_cursor_fg = Rgb(9, 8, 7);
+        t.cursor_fg = Rgb(1, 2, 3); // e.g. an OSC 12 override
+        assert!(t.apply_osc(112, ""));
+        assert_eq!(t.cursor_fg, Rgb(9, 8, 7));
+        assert_ne!(t.cursor_fg, Theme::DEFAULT_CURSOR_FG);
+    }
+
+    #[test]
+    fn from_settings_non_default_scheme_seeds_cursor_fg_from_scheme() {
+        // AC-2: with a non-default color scheme active, the resolved
+        // cursor color equals that scheme's cursor color — not the theme
+        // foreground, and not the default `emterm` preset's cursor color.
+        // `monokai`'s fg (0xf8f8f2) and cursor (0xf8f8f0) differ, so this
+        // also proves the cursor color isn't just aliased to fg.
+        let settings = crate::settings::Settings {
+            terminal_color_scheme: "monokai".to_string(),
+            ..Default::default()
+        };
+        let theme = Theme::from_settings(&settings);
+        assert_eq!(theme.cursor_fg, Rgb(0xf8, 0xf8, 0xf0));
+        assert_ne!(theme.cursor_fg, theme.fg);
+        assert_ne!(theme.cursor_fg, DEFAULT_TERMINAL_CURSOR_FG);
+    }
+
+    #[test]
+    fn from_settings_osc12_then_osc112_resets_to_active_scheme_cursor() {
+        // AC-3 end-to-end through the real settings-construction path:
+        // OSC 12 overrides the cursor color, then OSC 112 restores the
+        // ACTIVE SCHEME's cursor color (monokai), not the `emterm`
+        // default preset's cursor color.
+        let settings = crate::settings::Settings {
+            terminal_color_scheme: "monokai".to_string(),
+            ..Default::default()
+        };
+        let mut theme = Theme::from_settings(&settings);
+        assert!(theme.apply_osc(12, "rgb:aa/bb/cc"));
+        assert_eq!(theme.cursor_fg, Rgb(0xaa, 0xbb, 0xcc));
+        assert!(theme.apply_osc(112, ""));
+        assert_eq!(theme.cursor_fg, Rgb(0xf8, 0xf8, 0xf0));
+        assert_ne!(theme.cursor_fg, Theme::DEFAULT_CURSOR_FG);
     }
 
     #[test]
