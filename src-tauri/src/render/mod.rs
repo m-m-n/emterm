@@ -902,8 +902,11 @@ fn color32_to_rgba(c: Color32) -> [u8; 4] {
 
 /// Cursor overlay: shape from `get_cursor_style`, blink from
 /// `get_cursor_blink` modulated by `App::blink_visible_now`, visibility
-/// from `get_cursor_visible`, color from `get_cursor_fg` (falls back to
-/// the theme foreground when the field is at default).
+/// from `get_cursor_visible`, color from `Theme.cursor_fg` via
+/// [`cursor::resolve_cursor_color`] (task0003 D3) — the active color
+/// scheme's cursor color, or an OSC 12 override while one is active;
+/// never `TerminalCore::get_cursor_fg()` (the unrelated SGR pen
+/// foreground).
 fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App) {
     if !core.get_cursor_visible() {
         return;
@@ -947,8 +950,7 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
     let cx = origin.x + core.get_cursor_col() as f32 * cell_w;
     let cy = origin.y + core.get_cursor_row() as f32 * cell_h;
 
-    let cursor_color = packed_to_egui(core.get_cursor_fg(), theme.fg, theme)
-        .unwrap_or_else(|| rgb_to_egui(theme.fg));
+    let cursor_color = rgb_to_egui(cursor::resolve_cursor_color(theme));
 
     match core.get_cursor_style() {
         // 1 = underline. term_core clamps to 0..=2; once parser routes for
