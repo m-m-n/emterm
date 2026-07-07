@@ -1,0 +1,135 @@
+round: 1
+executed_at: "2026-07-07T21:09:03+09:00"
+scope:
+  review_mode: diff
+  base_commit: d1619670803f05b4c196fe441be0e9d50036c625
+  head_commit: 02cc71b08b473f116d4cbb3bb8f56055b273cadc
+  changed_files:
+    - src-tauri/src/mux/scrollback_filter.rs
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+    - perspective: performance
+      reason: "2MiB snapshot 組み立てホットパスのバイト走査ループに +287 行の変更が入るため"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+findings:
+  - stable_id: 8a413aacdea1392a
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 288
+    title: "Unbounded CSI parameter parsing can panic or misclassify oversized parameters"
+    description: >-
+      `first_param = first_param * 10 + u32::from(b - b'0')` accumulates the
+      first CSI parameter with non-saturating u32 arithmetic over untrusted
+      PTY scrollback bytes. SPEC FR1 / "CSI recognition rules" mandate
+      mirroring term_core's ParamParser::get_first_or_zero, which saturates
+      (saturating_mul/saturating_add) and clamps at MAX_PARAM_VALUE = 9999
+      (crates/term_core/src/parser_params.rs:56-59). A parameter with >= 10
+      decimal digits (e.g. `ESC[9999999999n`) overflows: under
+      overflow-checked builds (default cargo test / debug) this panics —
+      violating SPEC "Security Considerations: must never panic on arbitrary
+      bytes" — and in release it wraps silently, which can misclassify an
+      oversized parameter (e.g. wrap to 5) and strip a CSI term_core would
+      not answer.
+    suggestion: >-
+      Mirror term_core's saturating/clamped accumulation:
+      `first_param = first_param.saturating_mul(10).saturating_add(u32::from(b - b'0'));`
+      (optionally clamp to 9999 to match MAX_PARAM_VALUE). Add a keep-set
+      test with an overflow-length param (e.g. `ESC[99999999999n`).
+    sources: [claude:spec, codex:spec]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: bd3708c57a42f813
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 288
+    title: "Unchecked first_param accumulation can overflow on adversarial CSI param"
+    description: >-
+      Same physical defect as 8a413aacdea1392a, reported independently by the
+      comprehensive perspective: unchecked u32 digit accumulation on
+      untrusted scrollback panics in overflow-checked builds during snapshot
+      rebuild on tab-switch/reattach, and wraps in the shipped release
+      profile. The accumulator only needs to match small constants
+      (5/6/14/16/18), so overflow serves no purpose. Saturating at u32::MAX
+      never equals any target constant, so a huge param is simply preserved
+      (never stripped) instead of panicking/wrapping.
+    suggestion: >-
+      Replace the accumulation with
+      `first_param.saturating_mul(10).saturating_add(u32::from(b - b'0'))`
+      (structural diff provided by the reviewer targets the
+      `collecting_first_param && b.is_ascii_digit()` arm).
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: a723f48f748c0dd2
+    severity: medium
+    category: security
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 343
+    title: "DA/DECRPM strip predicate is stricter than term_core, leaving a replay response-injection gap"
+    description: >-
+      term_core dispatches on (intermediates.first(), final_byte) and
+      truncates intermediates to MAX_CSI_INTERMEDIATES=2, ignoring extras.
+      The filter is stricter on two arms: DA requires intermediates.is_empty()
+      (so `ESC[?1!c`, `ESC[> c` are answered by term_core but KEPT by the
+      filter), and DECRPM requires intermediates == [b'$'] exactly (so
+      `ESC[?2026$$p`, `ESC[?2026$ p` are answered but KEPT). Any program can
+      plant such a malformed-but-accepted query in scrollback; the next
+      replay injects the stale response into shell stdin. Impact bounded
+      (term_core-generated, newline-free responses, no attacker-controlled
+      content), but it is a concrete completeness gap in the exact control
+      this diff adds. The `n` / `t` arms are unaffected.
+    suggestion: >-
+      Relax the two arms to match term_core: for DA, with private marker
+      `?`/`>` answer regardless of trailing intermediates; bare form keeps
+      requiring empty intermediates; `<`/`=` never strip. For DECRPM, check
+      only the first remaining intermediate equals `$`. Add regression cases
+      for `ESC[?1!c`, `ESC[> c`, `ESC[?2026$$p`.
+    sources: [claude:security, codex:security]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: b476af92c46063c4
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 268
+    title: "CSI scanner buffers unbounded data before knowing the sequence will be stripped"
+    description: >-
+      `scan_csi_device_query` collects `intermediates` and embedded C0 bytes
+      into Vecs while scanning every CSI candidate. For a preserved or
+      unterminated CSI with a large intermediate run (e.g. `ESC[` followed by
+      a long 0x20..0x2F run) the snapshot path allocates transient memory
+      proportional to that segment only to return None and drop it. Common
+      traffic (SGR, cursor motion) never pushes, so the Vecs stay
+      non-allocating; the regression is limited to pathological runs.
+    suggestion: >-
+      Track scalar intermediate state (empty / only-dollar / other) instead
+      of buffering, and defer collecting embedded C0 bytes until a final byte
+      proves the CSI is a strippable query (bounded second pass).
+    sources: [codex:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      ユーザー判断で却下(2026-07-07)。一時確保は1つの CSI 候補長に有界で、
+      通常トラフィック(SGR/カーソル移動)は push が発生せず非アロケート。
+      病的入力限定の一時肥大に対し、スカラー状態化+二段パースの複雑度増は
+      見合わないと判断。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 1
+rework_required: true

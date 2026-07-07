@@ -71,15 +71,15 @@ After:  scrollback [... \x1b[c ...] → strip → snapshot (query removed)
 
 A candidate begins at `ESC [`. The body consists of parameter bytes (`0x30..=0x3F`, which includes digits, `;`, `:` and the private markers `<=>?`) followed by intermediate bytes (`0x20..=0x2F`), terminated by a final byte (`0x40..=0x7E`). C0 controls (`0x00..=0x1A`, `0x1C..=0x1F`) inside the body are skipped (and re-emitted on strip, per FR4); a bare ESC inside the body aborts the candidate (the aborted prefix is preserved and scanning resumes at the ESC).
 
-Strip decision on a complete CSI, mirroring `csi_dispatch.rs`:
+Strip decision on a complete CSI, mirroring `csi_dispatch.rs`. term_core dispatches on the FIRST collected intermediate (private markers are collected into the same intermediates array, truncated to `MAX_CSI_INTERMEDIATES = 2`), so trailing intermediates beyond the matched ones never prevent a response:
 
-| final | private prefix | intermediates | first param | action |
-|-------|----------------|---------------|-------------|--------|
-| `n` | none | none | 5 or 6 | strip |
-| `c` | none / `?` / `>` | none | any | strip |
-| `t` | none | none | 14 / 16 / 18 | strip |
-| `p` | `?` | `$` | any | strip |
-| anything else | — | — | — | keep |
+| final | intermediates condition (term_core view) | first param | action |
+|-------|------------------------------------------|-------------|--------|
+| `n` | none | 5 or 6 | strip |
+| `c` | none, or first ∈ {`?`, `>`} (trailing intermediates ignored) | any | strip |
+| `t` | none | 14 / 16 / 18 | strip |
+| `p` | first = `?` and second = `$` (bytes beyond the first two intermediates ignored, per parser truncation) | any | strip |
+| anything else | — | — | keep |
 
 "First param" is the leading decimal run of the parameter section (empty → 0, matching `ParamParser::get_first_or_zero`).
 
