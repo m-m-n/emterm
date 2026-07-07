@@ -361,6 +361,18 @@ impl NativeCallbacks {
         }
     }
 
+    /// cursor-settings-fix FR4: a full terminal reset (RIS) just ran.
+    /// Restore an active OSC 12 cursor-color override back to the scheme
+    /// color, mirroring OSC 112 — `term_core` already cleared its own
+    /// shape/blink overrides unconditionally inside `reset()` before firing
+    /// this callback.
+    fn handle_reset(&self) {
+        let changed = self.theme.lock().restore_cursor_fg_on_full_reset();
+        if changed {
+            self.mark_theme_dirty();
+        }
+    }
+
     fn handle_notify(&self, data: &str) {
         let (title, body) = parse_osc9(data, self.state.lock().title.as_deref());
         if self.rate_limiter.should_emit(&title, &body) {
@@ -533,6 +545,10 @@ impl TerminalCallbacks for NativeCallbacks {
 
     fn on_device_response(&self, data: &[u8]) {
         self.state.lock().device_responses.push(data.to_vec());
+    }
+
+    fn on_reset(&self) {
+        self.handle_reset();
     }
 }
 
@@ -866,6 +882,35 @@ mod tests {
         assert_eq!(h.theme.lock().cursor_fg, Rgb(9, 8, 7));
         assert_ne!(h.theme.lock().cursor_fg, Theme::DEFAULT_CURSOR_FG);
         assert!(h.cb.take_theme_dirty());
+    }
+
+    // ── task0004 AC-5: on_reset restores an active OSC 12 override ────
+
+    #[test]
+    fn on_reset_restores_active_cursor_override_to_active_scheme_color() {
+        let h = default_harness();
+        h.theme.lock().scheme_cursor_fg = Rgb(9, 8, 7);
+        h.cb.on_osc(OSC_SET_CURSOR_FG, "rgb:01/02/03");
+        assert!(h.cb.take_theme_dirty(), "OSC 12 itself marked dirty");
+        assert!(h.theme.lock().cursor_fg_override_active);
+
+        h.cb.on_reset();
+
+        let theme = h.theme.lock();
+        assert_eq!(theme.cursor_fg, Rgb(9, 8, 7));
+        assert!(!theme.cursor_fg_override_active);
+        drop(theme);
+        assert!(
+            h.cb.take_theme_dirty(),
+            "on_reset marks dirty when it changed cursor_fg"
+        );
+    }
+
+    #[test]
+    fn on_reset_is_a_noop_without_an_active_override() {
+        let h = default_harness();
+        h.cb.on_reset();
+        assert!(!h.cb.take_theme_dirty());
     }
 
     #[test]

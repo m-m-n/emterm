@@ -3289,6 +3289,44 @@ mod tests {
         assert!(!tab.core.lock().get_cursor_blink());
     }
 
+    // ── task0004 AC-5: RIS restores an OSC 12 cursor-color override ────
+
+    #[test]
+    fn ris_bytes_restore_theme_cursor_color_to_scheme() {
+        // Feeding RIS bytes after OSC 12 (AC-5) through the real
+        // core -> NativeCallbacks -> theme wiring restores the resolved
+        // cursor color to the scheme cursor color and clears the override
+        // state, exactly as OSC 112 would.
+        let tab = test_tab();
+        {
+            let mut theme = tab.theme.lock();
+            assert!(theme.apply_osc(12, "rgb:aa/bb/cc"));
+            assert!(theme.cursor_fg_override_active);
+        }
+
+        tab.core.lock().process_pty_data_fully(b"\x1bc"); // RIS
+
+        let theme = tab.theme.lock();
+        assert_eq!(theme.cursor_fg, theme.scheme_cursor_fg);
+        assert!(!theme.cursor_fg_override_active);
+    }
+
+    #[test]
+    fn ris_bytes_after_reversed_order_still_apply_later_osc12() {
+        // Guards the callback-based (in-order) design: a RIS followed BY a
+        // fresh OSC 12 in the SAME chunk must leave the later OSC 12's
+        // color in effect — the reset restore must not run after the whole
+        // chunk is parsed and clobber a color set later in the same chunk.
+        let tab = test_tab();
+        tab.core
+            .lock()
+            .process_pty_data_fully(b"\x1bc\x1b]12;rgb:11/22/33\x07");
+
+        let theme = tab.theme.lock();
+        assert_eq!(theme.cursor_fg, crate::render::theme::Rgb(0x11, 0x22, 0x33));
+        assert!(theme.cursor_fg_override_active);
+    }
+
     /// Build a prompt-start `PendingPromptMark` as `term_core` would emit
     /// it: `abs_row` is the emit-time absolute row, `evicted_total` the
     /// eviction counter at emit time.

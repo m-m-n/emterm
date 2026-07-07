@@ -318,6 +318,35 @@ mod tests {
         );
     }
 
+    /// AC-5: the RIS dispatch path (`handle_esc(6, 0)` -> `esc_full_reset` ->
+    /// `reset()`) fires the `on_reset` callback — the GUI-agnostic signal a
+    /// host uses to restore a theme-side OSC 12 cursor-color override
+    /// (cursor-settings-fix FR4). This is on top of, not instead of, the
+    /// shape/blink override clearing asserted above (AC-6 / task0001 AC-8).
+    #[test]
+    fn test_esc_ris_fires_on_reset_callback() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct ResetRecorder(Arc<AtomicUsize>);
+        impl crate::callbacks::TerminalCallbacks for ResetRecorder {
+            fn on_osc(&self, _action_type: u8, _data: &str) {}
+            fn on_apc(&self, _data: &[u8]) {}
+            fn on_dcs(&self, _data: &[u8]) {}
+            fn on_bell(&self) {}
+            fn on_device_response(&self, _data: &[u8]) {}
+            fn on_reset(&self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.callbacks = Some(Box::new(ResetRecorder(counter.clone())));
+        core.handle_esc(6, 0); // RIS
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
     // ── SetG0 / SetG1 ──────────────────────────────────
 
     #[test]

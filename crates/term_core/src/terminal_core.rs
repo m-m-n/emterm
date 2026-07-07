@@ -969,6 +969,13 @@ impl TerminalCore {
         self.bypass_b_mark_texts.clear();
         // Note: callbacks are NOT cleared on reset (terminal reset != dispose)
         self.mark_all_dirty();
+        // cursor-settings-fix FR4: tell the host a full reset just ran, in
+        // the same parse-order position as the cursor_style_override /
+        // cursor_blink_override clearing above, so a host-side cursor-COLOR
+        // override (OSC 12, tracked outside term_core) can be restored in
+        // lockstep. Fired last so everything else `reset()` does has
+        // already landed by the time the host's handler observes it.
+        self.fire_reset_callback();
     }
 
     /// Take and clear the mode action queue.
@@ -2139,6 +2146,33 @@ mod tests {
         assert!(core.get_mode(MODE_AUTO_WRAP));
         assert!(!core.get_mode(MODE_BRACKETED_PASTE));
         assert!(core.is_line_empty(5));
+    }
+
+    /// AC-5: `reset()` fires the GUI-agnostic "full reset occurred" signal
+    /// (`TerminalCallbacks::on_reset`), the mechanism a host uses to restore
+    /// a theme-side OSC 12 cursor-color override (cursor-settings-fix FR4).
+    #[test]
+    fn test_reset_fires_on_reset_callback() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Recorder(Arc<AtomicUsize>);
+        impl crate::callbacks::TerminalCallbacks for Recorder {
+            fn on_osc(&self, _action_type: u8, _data: &str) {}
+            fn on_apc(&self, _data: &[u8]) {}
+            fn on_dcs(&self, _data: &[u8]) {}
+            fn on_bell(&self) {}
+            fn on_device_response(&self, _data: &[u8]) {}
+            fn on_reset(&self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.callbacks = Some(Box::new(Recorder(counter.clone())));
+        core.reset();
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
     // ── Batch row packed ─────────────────────────────────
