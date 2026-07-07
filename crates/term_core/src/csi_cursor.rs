@@ -123,6 +123,32 @@ impl TerminalCore {
         self.cursor.row = self.to_zero_indexed_row(row);
         self.wrap_pending = false;
     }
+
+    /// CSI Ps SP q - DECSCUSR (Set Cursor Style).
+    ///
+    /// Ps 1/2 → block, 3/4 → underline, 5/6 → bar; odd Ps → blinking, even
+    /// Ps → steady. Sets BOTH the shape and blink overrides (cursor-settings-fix
+    /// D1). Ps 0 or absent clears both overrides, restoring the
+    /// settings-derived defaults. Values above 6 are ignored (no state
+    /// change), matching lenient terminal behavior.
+    pub fn handle_decscusr(&mut self, ps: u16) {
+        match ps {
+            0 => {
+                self.cursor_style_override = None;
+                self.cursor_blink_override = None;
+            }
+            1..=6 => {
+                let shape = match ps {
+                    1 | 2 => 0, // block
+                    3 | 4 => 1, // underline
+                    _ => 2,     // 5 | 6 = bar
+                };
+                self.cursor_style_override = Some(shape);
+                self.cursor_blink_override = Some(ps % 2 == 1);
+            }
+            _ => {} // Out of range: ignored, no state change.
+        }
+    }
 }
 
 #[cfg(test)]
@@ -463,5 +489,79 @@ mod tests {
         core.handle_cursor_previous_line(100);
         assert_eq!(core.get_cursor_row(), 5);
         assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    // ── DECSCUSR (CSI Ps SP q) ──────────────────────────────
+
+    /// AC-4: feeding the DECSCUSR bytes for Ps=3 (blinking underline) makes
+    /// the effective getters report underline/blinking regardless of
+    /// defaults; feeding Ps=0 afterwards restores the settings defaults.
+    /// Exercises the parser path (intermediate byte handling), not just the
+    /// handler function directly.
+    #[test]
+    fn test_decscusr_ps3_via_parser_then_ps0_restores_defaults() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_style(0); // default: block
+        core.set_cursor_blink(false); // default: steady
+
+        core.process_pty_data(b"\x1b[3 q"); // DECSCUSR Ps=3: blinking underline
+        assert_eq!(core.get_cursor_style(), 1, "underline");
+        assert!(core.get_cursor_blink(), "odd Ps blinks");
+
+        core.process_pty_data(b"\x1b[0 q"); // DECSCUSR Ps=0: clear overrides
+        assert_eq!(core.get_cursor_style(), 0, "back to settings default");
+        assert!(!core.get_cursor_blink(), "back to settings default");
+    }
+
+    /// AC-5: DECSCUSR Ps=4 (steady underline) yields blink=false while the
+    /// override is active, even though the settings default blink is true.
+    #[test]
+    fn test_decscusr_ps4_via_parser_overrides_blink_to_steady() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_blink(true); // default blink true
+
+        core.process_pty_data(b"\x1b[4 q"); // DECSCUSR Ps=4: steady underline
+        assert_eq!(core.get_cursor_style(), 1);
+        assert!(!core.get_cursor_blink(), "even Ps is steady");
+    }
+
+    /// DECSCUSR absent Ps (bare `CSI SP q`) behaves like Ps=0: clears
+    /// overrides.
+    #[test]
+    fn test_decscusr_absent_ps_clears_overrides() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_decscusr(5); // bar, blinking
+        assert_eq!(core.get_cursor_style(), 2);
+        core.process_pty_data(b"\x1b[ q"); // bare CSI SP q == Ps 0
+        assert_eq!(core.get_cursor_style(), 0);
+        assert!(core.get_cursor_blink(), "default blink restored");
+    }
+
+    #[test]
+    fn test_handle_decscusr_all_defined_ps_values() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // (Ps, expected_shape, expected_blink)
+        let cases: [(u16, u8, bool); 6] = [
+            (1, 0, true),
+            (2, 0, false),
+            (3, 1, true),
+            (4, 1, false),
+            (5, 2, true),
+            (6, 2, false),
+        ];
+        for (ps, shape, blink) in cases {
+            core.handle_decscusr(ps);
+            assert_eq!(core.get_cursor_style(), shape, "Ps={ps}");
+            assert_eq!(core.get_cursor_blink(), blink, "Ps={ps}");
+        }
+    }
+
+    #[test]
+    fn test_handle_decscusr_out_of_range_ignored() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_decscusr(2); // block, steady
+        core.handle_decscusr(7); // out of range: no-op
+        assert_eq!(core.get_cursor_style(), 0);
+        assert!(!core.get_cursor_blink());
     }
 }
