@@ -23,16 +23,29 @@ workflow:
     status: completed
     completed_at_commit: d1619670803f05b4c196fe441be0e9d50036c625
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: d1619670803f05b4c196fe441be0e9d50036c625
+    completed_at_commit: 824182e284d06c6ed2daa99a3ab67bf809e05504
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 824182e284d06c6ed2daa99a3ab67bf809e05504
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 824182e284d06c6ed2daa99a3ab67bf809e05504
+    result: pass
     failed_items: []
+    notes: >-
+      Build check (default + --no-default-features) pass. TS-1..TS-12 pass
+      (scrollback_filter 43 tests + snapshot_bytes all ok). TS-13 bench は
+      task0001 実装時の明示実行で 2.40ms/call < 30ms 閾値を確認済み。
+      full --lib 実行では tabs::tests の off-thread replay 系 flake が
+      7件失敗したが、変更を含まない base commit (main) での A/B 実行でも
+      同一ファミリー5件が失敗することを確認済み — 本 feature と無関係の
+      既存環境依存 flake(--test-threads=1 でも再現)。MT-1(実機
+      detach→attach 確認)はユーザーが後日実施。
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 824182e284d06c6ed2daa99a3ab67bf809e05504
 
 tasks:
   task0001:
@@ -68,19 +81,20 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: [FR1, FR2]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/mux-snapshot-device-query-strip/task0003
 
 review:
-  status: in_progress
-  rounds_completed: 2
+  status: completed
+  rounds_completed: 3
   perspectives:
     comprehensive: completed
     security: completed
     spec: completed
     performance: completed
   residual_critical_high: 0
-  needs_rework: true
+  needs_rework: false
   plan:
     floor: [comprehensive, security, spec]
     discretionary:

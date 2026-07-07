@@ -1,0 +1,40 @@
+feature: mux-snapshot-device-query-strip
+collected_at: "2026-07-07T22:31:11+09:00"
+session_ids: [0618ba08-fe09-4eec-bcbb-3c71fb093efb]
+signals:
+  review_critical_high:
+    - stable_id: 8a413aacdea1392a
+      category: spec
+      file: src-tauri/src/mux/scrollback_filter.rs
+      title: "Unbounded CSI parameter parsing can panic or misclassify oversized parameters"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "2MiB snapshot 組み立てホットパスのバイト走査ループに +287 行の変更が入るため"
+  declined_findings:
+    - stable_id: b476af92c46063c4
+      category: performance
+      resolution_reason: "一時確保は1 CSI候補長に有界・通常トラフィックは非アロケート。病的入力限定の一時肥大に対しスカラー状態化+二段パースの複雑度増は見合わない(ユーザー判断 2026-07-07)"
+lessons_candidates:
+  - >-
+    「別コンポーネントの挙動をミラーする」仕様は、SPEC 作成時点で相手側の
+    dispatch 実コード(パーサー状態遷移・パラメータ切り詰め・intermediates
+    truncation)まで読み込んで規範表を作るべきだった。初版 SPEC の表が
+    ECMA-48 教科書文法の近似だったため、term_core 実装との差分
+    (u8 truncation / intermediates.first() dispatch / mid-param private
+    marker cancel)がレビュー3ラウンド分の rework になった。
+  - >-
+    project memory の「tabs.rs replay テストは --test-threads=1 で安定」は
+    現状と不一致。このマシンでは single-thread でも off-thread replay 系
+    (ts7-ts13, welcome_without_windows)が非決定的に落ちる。base commit
+    での A/B で機能非依存を確認済み。メモリ更新候補+flake 恒久対策の
+    タスク化候補。
+  - >-
+    fresh worktree は gitignore された font 資産(src-tauri/assets/fonts/
+    *.otf|*.ttf)と viewer/settings dist を持たず、GUI feature の
+    cargo check/test が落ちる。implementer への環境準備ノート(main
+    worktree からのコピー)が毎回必要だった。em-workflow 側の worktree
+    セットアップ規律への追記候補。

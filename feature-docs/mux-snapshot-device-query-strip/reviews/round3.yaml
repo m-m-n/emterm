@@ -1,0 +1,39 @@
+round: 3
+executed_at: "2026-07-07T22:23:24+09:00"
+scope:
+  review_mode: diff
+  base_commit: d1619670803f05b4c196fe441be0e9d50036c625
+  head_commit: 824182e284d06c6ed2daa99a3ab67bf809e05504
+  changed_files:
+    - src-tauri/src/mux/scrollback_filter.rs
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+    - perspective: performance
+      reason: "2MiB snapshot 組み立てホットパスのバイト走査ループへの変更(round 1 と同一 plan を継続)"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+round2_fix_verification:
+  - stable_id: 864ff69541b6bcf8
+    verdict: holds
+    note: "first_param.min(9999) as u8 が term_core の clamp-then-truncate と全入力で等価であることを複数レビュアーが証明的に確認"
+  - stable_id: 445cfc21db4c4741
+    verdict: holds
+    note: "csi_param の digit arm に intermediate ガードが無いことと intermediates.first() dispatch を照合、ESC[?$1c strip を確認"
+  - stable_id: ed8f3f3e4759734b
+    verdict: holds
+    note: "csi_param の invalid-byte arm(cancel)と filter の param_bytes_seen ガードの一致を確認"
+findings: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
