@@ -45,6 +45,23 @@ pub trait TerminalCallbacks: Send {
     /// Response bytes the terminal wants to send back to the application
     /// (e.g., CSI device-response queries). `data` is the response payload.
     fn on_device_response(&self, data: &[u8]);
+
+    /// A full terminal reset (RIS, `ESC c`) just ran (cursor-settings-fix
+    /// FR4). `term_core` clears its own cursor shape/blink overrides
+    /// unconditionally inside `TerminalCore::reset()`; a host that layers a
+    /// GUI-side cursor-COLOR override on top (OSC 12, tracked entirely
+    /// outside `term_core` — see `TerminalCore::apply_osc`'s callback
+    /// consumer) uses this hook to mirror that clearing. Fired synchronously
+    /// from `reset()`, in the same parse-order position as `on_osc` /
+    /// `on_bell`, so a byte stream that continues past the reset with a
+    /// fresh OSC 12 in the SAME chunk (`ESC c` followed later by
+    /// `OSC 12;...`) still applies after this fires — a host must not defer
+    /// the restore past the end of the enclosing parse call, or it would
+    /// clobber that later OSC 12.
+    ///
+    /// Default no-op: most hosts (and the `term_core`-internal test
+    /// doubles) have no such GUI-side state to restore.
+    fn on_reset(&self) {}
 }
 
 // ── Fire methods ────────────────────────────────────────
@@ -85,6 +102,13 @@ impl TerminalCore {
             cb.on_device_response(data);
         }
     }
+
+    /// Fired from [`TerminalCore::reset`] — see [`TerminalCallbacks::on_reset`].
+    pub(crate) fn fire_reset_callback(&self) {
+        if let Some(cb) = self.callbacks.as_deref() {
+            cb.on_reset();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +128,7 @@ mod tests {
         dcs: Mutex<Vec<Vec<u8>>>,
         bell: Mutex<usize>,
         device: Mutex<Vec<Vec<u8>>>,
+        reset: Mutex<usize>,
     }
 
     impl TerminalCallbacks for Recorder {
@@ -124,6 +149,9 @@ mod tests {
         }
         fn on_device_response(&self, data: &[u8]) {
             self.device.lock().unwrap().push(data.to_vec());
+        }
+        fn on_reset(&self) {
+            *self.reset.lock().unwrap() += 1;
         }
     }
 
@@ -155,6 +183,12 @@ mod tests {
     fn test_fire_device_response_callback_none_does_not_panic() {
         let core = TerminalCore::new(80, 24, 0);
         core.fire_device_response_callback();
+    }
+
+    #[test]
+    fn test_fire_reset_callback_none_does_not_panic() {
+        let core = TerminalCore::new(80, 24, 0);
+        core.fire_reset_callback();
     }
 
     #[test]
@@ -213,9 +247,31 @@ mod tests {
             fn on_device_response(&self, d: &[u8]) {
                 self.0.on_device_response(d)
             }
+            fn on_reset(&self) {
+                self.0.on_reset()
+            }
         }
         core.callbacks = Some(Box::new(Fwd(recorder.clone())));
         (core, recorder)
+    }
+
+    // ── on_reset (cursor-settings-fix task0004 AC-5) ──────────────────
+
+    #[test]
+    fn test_reset_fires_on_reset_callback() {
+        let (mut core, recorder) = core_with_recorder();
+        core.reset();
+        assert_eq!(*recorder.reset.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_ris_bytes_fire_on_reset_callback() {
+        // AC-5: feeding RIS bytes through the normal parse path fires the
+        // same signal as a direct `reset()` call (RIS dispatches through
+        // `esc_full_reset` -> `reset()`).
+        let (mut core, recorder) = core_with_recorder();
+        core.process_pty_data_fully(b"\x1bc");
+        assert_eq!(*recorder.reset.lock().unwrap(), 1);
     }
 
     // ── NFR5: app-layer OSC param override (term_core holds no mux constant) ──

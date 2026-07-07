@@ -49,11 +49,28 @@ pub struct Theme {
     /// color scheme is applied (`Theme::from_settings` /
     /// `apply_color_scheme`); untouched by OSC 12/112 themselves.
     pub scheme_cursor_fg: Rgb,
+    /// Whether `cursor_fg` currently carries an active OSC 12 override
+    /// (cursor-settings-fix FR4). Set by [`Theme::apply_osc`] when OSC 12
+    /// (or a chained OSC 10 sequence that reaches the cursor-color slot)
+    /// sets `cursor_fg`; cleared by OSC 112 and by
+    /// [`Theme::restore_cursor_fg_on_full_reset`] (the RIS restore path),
+    /// both of which also reset `cursor_fg` to `scheme_cursor_fg`. A
+    /// settings apply that rebuilds this tab's theme must carry an active
+    /// override (and this flag) forward instead of letting the rebuild's
+    /// fresh `scheme_cursor_fg` seed silently replace it (FR5).
+    pub cursor_fg_override_active: bool,
     pub palette16: [Rgb; 16],
     /// 256-entry sparse overlay onto the indexed palette. `None` means
     /// "use the default" (which for slots < 16 is `palette16[i]` and for
     /// 16..255 is the xterm 256-color cube/grayscale formula).
     pub palette256: Box<[Option<Rgb>; 256]>,
+    /// Theme-layer cursor style, set by `Theme::from_settings` and by OSC 22
+    /// (`Theme::apply_cursor_style`). **Not a renderer input**: the terminal
+    /// cursor's rendered SHAPE is owned by
+    /// `term_core::TerminalCore::get_cursor_style()` (cursor-settings-fix
+    /// D1/D2) — the cursor overlay reads that accessor directly and never
+    /// this field. Retained for other theme-layer consumers of the OSC 22
+    /// mutation.
     pub cursor_style: CursorStyle,
     /// Theme-requested font family. Currently informational only after
     /// Phase 4-H: the `TerminalGridPass` resolves fonts through the
@@ -150,6 +167,7 @@ impl Default for Theme {
             bg: DEFAULT_TERMINAL_BG,
             cursor_fg: DEFAULT_TERMINAL_CURSOR_FG,
             scheme_cursor_fg: DEFAULT_TERMINAL_CURSOR_FG,
+            cursor_fg_override_active: false,
             palette16: DEFAULT_PALETTE16,
             palette256: Box::new([None; 256]),
             cursor_style: CursorStyle::default(),
@@ -240,6 +258,24 @@ impl Theme {
     /// color), not directly to this constant — see `Theme::apply_osc`.
     pub const DEFAULT_CURSOR_FG: Rgb = DEFAULT_TERMINAL_CURSOR_FG;
 
+    /// Restore `cursor_fg` to `scheme_cursor_fg` and clear an active OSC 12
+    /// override, mirroring `apply_osc(112, "")` exactly (cursor-settings-fix
+    /// FR4). Called when a full terminal reset (RIS) occurs, so an OSC 12
+    /// override does not survive a reset — matching how `term_core::reset()`
+    /// already clears its own terminal-level shape/blink overrides
+    /// unconditionally. Returns `true` when an override was actually
+    /// cleared; a no-op (returns `false`) when `cursor_fg` was already
+    /// scheme-derived.
+    pub fn restore_cursor_fg_on_full_reset(&mut self) -> bool {
+        if self.cursor_fg_override_active {
+            self.cursor_fg = self.scheme_cursor_fg;
+            self.cursor_fg_override_active = false;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Apply an OSC color/style mutation.
     ///
     /// `action_type` matches the value emitted by `term_core::osc_handler`:
@@ -280,6 +316,7 @@ impl Theme {
                 // `apply_color_scheme` at theme construction and survives
                 // OSC 12 overrides untouched.
                 self.cursor_fg = self.scheme_cursor_fg;
+                self.cursor_fg_override_active = false;
                 true
             }
             _ => false,
@@ -338,6 +375,7 @@ impl Theme {
                     }
                     12 => {
                         self.cursor_fg = rgb;
+                        self.cursor_fg_override_active = true;
                         changed = true;
                     }
                     _ => {}
@@ -798,6 +836,53 @@ mod tests {
         t.cursor_fg = Rgb(1, 2, 3);
         assert!(t.apply_osc(112, ""));
         assert_eq!(t.cursor_fg, Theme::DEFAULT_CURSOR_FG);
+    }
+
+    // ── task0004 AC-1: OSC 12 override state lifecycle ────────────────
+
+    #[test]
+    fn apply_osc_12_marks_an_active_override() {
+        // AC-1: after OSC 12, the theme reports the OSC color AND an
+        // active override state.
+        let mut t = Theme::default();
+        assert!(!t.cursor_fg_override_active);
+        assert!(t.apply_osc(12, "rgb:aa/bb/cc"));
+        assert_eq!(t.cursor_fg, Rgb(0xaa, 0xbb, 0xcc));
+        assert!(t.cursor_fg_override_active);
+    }
+
+    #[test]
+    fn apply_osc_112_clears_the_active_override_state() {
+        // AC-1: OSC 112 clears the override state and restores the scheme
+        // cursor color (existing behavior preserved).
+        let mut t = Theme::default();
+        assert!(t.apply_osc(12, "rgb:aa/bb/cc"));
+        assert!(t.cursor_fg_override_active);
+
+        assert!(t.apply_osc(112, ""));
+        assert!(!t.cursor_fg_override_active);
+        assert_eq!(t.cursor_fg, t.scheme_cursor_fg);
+    }
+
+    #[test]
+    fn restore_cursor_fg_on_full_reset_clears_active_override() {
+        // AC-5 (Theme-level half): the RIS restore path mirrors OSC 112.
+        let mut t = Theme::default();
+        t.scheme_cursor_fg = Rgb(9, 8, 7);
+        assert!(t.apply_osc(12, "rgb:aa/bb/cc"));
+
+        assert!(t.restore_cursor_fg_on_full_reset());
+
+        assert_eq!(t.cursor_fg, Rgb(9, 8, 7));
+        assert!(!t.cursor_fg_override_active);
+    }
+
+    #[test]
+    fn restore_cursor_fg_on_full_reset_is_a_noop_without_an_override() {
+        let mut t = Theme::default();
+        let before = t.cursor_fg;
+        assert!(!t.restore_cursor_fg_on_full_reset());
+        assert_eq!(t.cursor_fg, before);
     }
 
     // ── task0003 AC-2 / AC-3: cursor color follows the active scheme ──

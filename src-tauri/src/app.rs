@@ -2040,6 +2040,19 @@ impl App {
         for tab in &mut self.tabs {
             let mut theme = crate::render::theme::Theme::from_settings(self.settings.as_ref());
             theme.font_size_pt = self.runtime_font_size_pt;
+            {
+                // FR5 (cursor-settings-fix task0004 AC-2/AC-3): an active
+                // OSC 12 cursor-color override survives this rebuild.
+                // `scheme_cursor_fg` above already reflects the NEW
+                // settings' scheme (so a later OSC 112 restores THAT
+                // color); only `cursor_fg` + the override flag carry
+                // forward from the old theme.
+                let old_theme = tab.theme.lock();
+                if old_theme.cursor_fg_override_active {
+                    theme.cursor_fg = old_theme.cursor_fg;
+                    theme.cursor_fg_override_active = true;
+                }
+            }
             *tab.theme.lock() = theme;
             {
                 let mut core = tab.core.lock();
@@ -7471,6 +7484,90 @@ mod tests {
             !app.tabs[0].folds.is_enabled(),
             "fold gate pushed into live manager"
         );
+    }
+
+    #[test]
+    fn apply_settings_preserves_active_cursor_override_when_scheme_unchanged() {
+        // AC-2: with an active OSC 12 override, a settings apply that does
+        // NOT change the color scheme leaves the resolved cursor color at
+        // the OSC value.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        {
+            let mut theme = app.tabs[0].theme.lock();
+            assert!(theme.apply_osc(12, "rgb:aa/bb/cc"));
+        }
+        let mut new = Settings::default();
+        new.cursor_blink = false; // unrelated change; scheme stays default
+
+        app.apply_settings(new);
+
+        let theme = app.tabs[0].theme.lock();
+        assert_eq!(
+            theme.cursor_fg,
+            crate::render::theme::Rgb(0xaa, 0xbb, 0xcc),
+            "override survives a settings apply that keeps the scheme"
+        );
+        assert!(theme.cursor_fg_override_active);
+    }
+
+    #[test]
+    fn apply_settings_scheme_change_with_active_override_updates_scheme_baseline_only() {
+        // AC-3: with an active OSC 12 override, a settings apply that
+        // CHANGES the color scheme updates `scheme_cursor_fg` to the new
+        // scheme's cursor color while the resolved cursor color stays at
+        // the OSC value; a subsequent OSC 112 restores the NEW scheme's
+        // cursor color.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        {
+            let mut theme = app.tabs[0].theme.lock();
+            assert!(theme.apply_osc(12, "rgb:aa/bb/cc"));
+        }
+        let mut new = Settings::default();
+        new.terminal_color_scheme = "dracula".to_string();
+
+        app.apply_settings(new);
+
+        let expected_scheme_cursor =
+            crate::render::theme::Theme::from_settings(app.settings.as_ref()).scheme_cursor_fg;
+        {
+            let theme = app.tabs[0].theme.lock();
+            assert_eq!(
+                theme.cursor_fg,
+                crate::render::theme::Rgb(0xaa, 0xbb, 0xcc),
+                "override still wins over the new scheme"
+            );
+            assert_eq!(
+                theme.scheme_cursor_fg, expected_scheme_cursor,
+                "scheme baseline updated to dracula's cursor color"
+            );
+            assert!(theme.cursor_fg_override_active);
+        }
+
+        // A subsequent OSC 112 restores the NEW scheme's cursor color, not
+        // the old (default) scheme's.
+        let mut theme = app.tabs[0].theme.lock();
+        assert!(theme.apply_osc(112, ""));
+        assert_eq!(theme.cursor_fg, expected_scheme_cursor);
+    }
+
+    #[test]
+    fn apply_settings_with_no_active_override_resolves_scheme_cursor_color() {
+        // AC-4: with no active override, a settings apply resolves the
+        // cursor color to the (possibly new) scheme cursor color — same as
+        // today.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let mut new = Settings::default();
+        new.terminal_color_scheme = "monokai".to_string();
+
+        app.apply_settings(new);
+
+        let expected = crate::render::theme::Theme::from_settings(app.settings.as_ref());
+        let theme = app.tabs[0].theme.lock();
+        assert_eq!(theme.cursor_fg, expected.cursor_fg);
+        assert!(!theme.cursor_fg_override_active);
     }
 
     #[test]
