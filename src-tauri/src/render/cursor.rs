@@ -28,7 +28,7 @@ use term_core::terminal_core::TerminalCore;
 use crate::app::App;
 use crate::fold::FoldLayout;
 use crate::ime::preedit::Anchor;
-use crate::render::theme::Theme;
+use crate::render::theme::{Rgb, Theme};
 
 /// Cell metrics expected by the overlay routines. Mirrors the values
 /// `App` carries (`cell_w_logical` / `cell_h_logical` / `padding`) but
@@ -254,14 +254,32 @@ pub fn cursor_glyph_paintable(glyph: &str) -> bool {
     !glyph.trim().is_empty()
 }
 
+/// Resolve the terminal cursor overlay's paint color (task0003 AC-1,
+/// AC-2, AC-3, AC-5): the theme's effective cursor color — the active
+/// color scheme's cursor color, or an OSC 12 override while one is
+/// active; OSC 112 resets it back to the scheme color (see
+/// `Theme::apply_osc`). This is never `TerminalCore::get_cursor_fg()`
+/// (the SGR pen foreground the next printed character would use — an
+/// unrelated piece of state despite the similar getter name) and never
+/// a per-cell resolved style color. Shared by every cursor paint site:
+/// underline / bar / unfocused hollow-block outline in
+/// [`super::draw_cursor`], and the focused filled block's fill in
+/// [`draw_block_cursor`] below — so all cursor shapes agree on one
+/// color source (IMPLEMENTATION.md D3).
+pub fn resolve_cursor_color(theme: &Theme) -> Rgb {
+    theme.cursor_fg
+}
+
 /// Paint the focused block cursor's filled overlay on top of the grid:
-/// the covered cell's fully-resolved paint style — reverse video /
+/// the cell rect is filled with the theme's cursor color
+/// ([`resolve_cursor_color`] — task0003 D3, never the covered cell's own
+/// SGR-derived color) and the covered glyph (if any) is redrawn on top in
+/// the covered cell's fully-resolved BACKGROUND color — reverse video /
 /// selection / dim / hidden already applied, the same
 /// [`super::resolve_cell_style_from_packed`] pipeline every other cell
-/// goes through — inverted. The cell rect is filled with the resolved
-/// foreground color and the covered glyph (if any) is redrawn on top in
-/// the resolved background color. A wide (2-cell) glyph under the
-/// cursor has its full 2-cell footprint filled.
+/// goes through — so the glyph stays legible against the cursor fill. A
+/// wide (2-cell) glyph under the cursor has its full 2-cell footprint
+/// filled.
 ///
 /// This replaces the fg/bg swap `collect_cell_inputs` used to bake into
 /// the grid instance for the cursor cell (removed `block_cursor_cell`
@@ -328,7 +346,7 @@ pub fn draw_block_cursor(painter: &egui::Painter, core: &TerminalCore, theme: &T
         metrics,
     );
 
-    painter.rect_filled(rect, 0.0, style.fg);
+    painter.rect_filled(rect, 0.0, super::rgb_to_egui(resolve_cursor_color(theme)));
     if cursor_glyph_paintable(&ch) {
         let font_px = app.runtime_font_size_pt * crate::settings::PT_TO_PX;
         painter.text(
@@ -634,5 +652,37 @@ mod tests {
 
         assert_eq!(cursor_screen_row(0, 1, 0, Some(&layout)), None);
         assert_eq!(cursor_screen_row(0, 2, 0, Some(&layout)), None);
+    }
+
+    // ── resolve_cursor_color (task0003 AC-1, AC-2, AC-3, AC-5) ────────
+
+    #[test]
+    fn resolve_cursor_color_reads_theme_cursor_fg_not_theme_fg() {
+        // AC-1: the cursor overlay's color source is `Theme.cursor_fg`,
+        // distinct from the theme's regular text foreground.
+        let mut theme = Theme::default();
+        theme.fg = Rgb(0x11, 0x22, 0x33);
+        theme.cursor_fg = Rgb(0x44, 0x55, 0x66);
+        assert_eq!(resolve_cursor_color(&theme), Rgb(0x44, 0x55, 0x66));
+    }
+
+    #[test]
+    fn resolve_cursor_color_ignores_sgr_pen_fg() {
+        // AC-5: `TerminalCore::get_cursor_fg()` (the SGR pen foreground —
+        // confusingly named inside term_core, but unrelated to the
+        // terminal cursor's own paint color) must not influence the
+        // resolved cursor color. Mutate the SGR pen via
+        // `set_cursor_fg` (what an SGR sequence like `\e[38;2;255;0;0m`
+        // ultimately calls) and confirm the resolved color is
+        // unaffected.
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_fg(2, 0xff, 0x00, 0x00); // SGR pen -> truecolor red
+        let mut theme = Theme::default();
+        theme.cursor_fg = Rgb(0x0a, 0x14, 0x1e);
+        assert_eq!(resolve_cursor_color(&theme), Rgb(0x0a, 0x14, 0x1e));
+        // Sanity: the SGR pen mutation genuinely took effect, so this
+        // isn't a vacuous test — the helper's signature has no `core`
+        // parameter at all, structurally guaranteeing independence.
+        assert_eq!(core.get_cursor_fg(), 0x02_ff_00_00);
     }
 }

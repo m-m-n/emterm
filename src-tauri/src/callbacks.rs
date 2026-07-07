@@ -851,11 +851,20 @@ mod tests {
     }
 
     #[test]
-    fn osc_112_resets_cursor_fg() {
+    fn osc_112_resets_cursor_fg_to_active_scheme_color() {
+        // task0003 AC-3: OSC 112 restores the ACTIVE SCHEME's cursor
+        // color, not a hard-coded preset. `scheme_cursor_fg` stands in
+        // for a non-default scheme's cursor color (as `apply_color_scheme`
+        // would seed it); `cursor_fg` stands in for an OSC 12 override.
         let h = default_harness();
-        h.theme.lock().cursor_fg = Rgb(1, 2, 3);
+        {
+            let mut theme = h.theme.lock();
+            theme.scheme_cursor_fg = Rgb(9, 8, 7);
+            theme.cursor_fg = Rgb(1, 2, 3);
+        }
         h.cb.on_osc(OSC_RESET_CURSOR_FG, "");
-        assert_eq!(h.theme.lock().cursor_fg, Theme::DEFAULT_CURSOR_FG);
+        assert_eq!(h.theme.lock().cursor_fg, Rgb(9, 8, 7));
+        assert_ne!(h.theme.lock().cursor_fg, Theme::DEFAULT_CURSOR_FG);
         assert!(h.cb.take_theme_dirty());
     }
 
