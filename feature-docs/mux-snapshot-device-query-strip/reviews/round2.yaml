@@ -1,0 +1,107 @@
+round: 2
+executed_at: "2026-07-07T22:04:17+09:00"
+scope:
+  review_mode: diff
+  base_commit: d1619670803f05b4c196fe441be0e9d50036c625
+  head_commit: ddbe03e927505a84e89ae6d286ed17cd733661c4
+  changed_files:
+    - src-tauri/src/mux/scrollback_filter.rs
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+    - perspective: performance
+      reason: "2MiB snapshot 組み立てホットパスのバイト走査ループへの変更(round 1 と同一 plan を継続)"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+round1_fix_verification:
+  - stable_id: 8a413aacdea1392a
+    verdict: holds
+    note: "saturating_mul/saturating_add + regression test strip_keeps_oversized_first_param_no_panic を複数レビュアーが確認"
+  - stable_id: a723f48f748c0dd2
+    verdict: holds
+    note: "private_prefix + intermediates.first() ディスパッチを csi_dispatch.rs と突き合わせて複数レビュアーが確認"
+findings:
+  - stable_id: 864ff69541b6bcf8
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 360
+    title: "DSR strip predicate misses u8-aliased Ps params term_core answers"
+    description: >-
+      term_core dispatches DSR as
+      `handle_device_status_report(get_first_or_zero(params) as u8)`
+      (csi_dispatch.rs:127): the first param is clamped to <= 9999 then
+      truncated to u8 before matching 5/6. So every Ps ≡ 5|6 (mod 256) within
+      0..=9999 (e.g. `\x1b[261n`, `\x1b[517n`) gets a reply, but the filter
+      compares the full u32 and preserves those forms — a stale DSR/CPR reply
+      is synthesized on replay, the leak class FR1/US1 aim to eliminate.
+      Orchestrator-verified against csi_dispatch.rs. Malformed-input-only in
+      practice (no real program emits Ps=261 DSR).
+    suggestion: >-
+      Mirror the truncation in the `n` arm:
+      `matches!(first_param.min(9999) as u8, 5 | 6)`. Add strip tests for
+      `\x1b[261n` / `\x1b[262n`.
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: 445cfc21db4c4741
+    severity: medium
+    category: security
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 281
+    title: "CSI scanner misses term_core-answered queries with params after intermediates"
+    description: >-
+      term_core's CsiParam state accepts digits and `;`/`:` after
+      intermediate bytes (parser/csi.rs:59-67) and dispatch matches on
+      intermediates.first(), so forms like `ESC[?$1c` are answered (DA1) —
+      but the scanner's stricter params-then-intermediates grammar returns
+      None on a digit after an intermediate and preserves the sequence,
+      leaving a device-response injection path on replay.
+      Orchestrator-verified against parser/csi.rs. Malformed-input-only.
+    suggestion: >-
+      Mirror term_core's CsiParam state: keep accepting digits and `;`/`:`
+      after intermediates (accumulating into the param parser), keep
+      accepting 0x20..=0x2F intermediates, then apply the predicate. Add
+      strip tests for `ESC[?$1c` and a DECRPM form with a digit after `$`.
+    sources: [codex:security]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: ed8f3f3e4759734b
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 281
+    title: "Malformed private-marker CSI can be stripped as a device query"
+    description: >-
+      A private marker appearing after parameter digits (e.g. `\x1b[5?n`,
+      `\x1b[0?c`) cancels the CSI in term_core (CsiParam `_` arm,
+      parser/csi.rs:86-89 → Ground; no response; the trailing final byte is
+      then processed in Ground and typically prints). The scanner accepts
+      non-leading private markers as parameter bytes and strips the sequence
+      as a query, deleting bytes term_core would have partially echoed —
+      an FR2 byte-for-byte preservation violation on malformed input.
+      Orchestrator-verified against parser/csi.rs. Malformed-input-only.
+    suggestion: >-
+      Treat a private marker (0x3C..=0x3F) after any digit/separator/
+      intermediate as candidate-invalidating (return None → preserve),
+      mirroring term_core's CsiParam cancel. Add keep tests for `\x1b[5?n`
+      and `\x1b[0?c`.
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: null
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: true

@@ -23,10 +23,10 @@ workflow:
     status: completed
     completed_at_commit: d1619670803f05b4c196fe441be0e9d50036c625
   - id: implement
-    status: pending
+    status: in_progress
     base_commit: d1619670803f05b4c196fe441be0e9d50036c625
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -56,18 +56,30 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: [FR1, FR2]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-snapshot-device-query-strip/task0002
+  task0003:
+    title: "Review round 2 rework: mirror term_core CSI parser states exactly"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/mux/scrollback_filter.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: low
+    requirements: [FR1, FR2]
     status: pending
     notes: null
 
 review:
   status: in_progress
-  rounds_completed: 1
+  rounds_completed: 2
   perspectives:
     comprehensive: completed
     security: completed
     spec: completed
     performance: completed
-  residual_critical_high: 1
+  residual_critical_high: 0
   needs_rework: true
   plan:
     floor: [comprehensive, security, spec]
@@ -82,14 +94,14 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
+    tasks: [task0001, task0002, task0003]
     tests: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6]
   FR2:
     title: "Preserve all non-response-producing CSI sequences byte-for-byte"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
+    tasks: [task0001, task0002, task0003]
     tests: [TS-7, TS-10, TS-11]
   FR3:
     title: "Preserve incomplete (unterminated) CSI sequences"
