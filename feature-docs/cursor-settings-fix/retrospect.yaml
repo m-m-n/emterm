@@ -1,0 +1,41 @@
+feature: cursor-settings-fix
+collected_at: "2026-07-08T08:45:07+09:00"
+session_ids: [033cbdb7-d31f-4191-9a79-2c433dadcd35]
+signals:
+  review_critical_high:
+    - stable_id: c6ef2f448279d56e
+      category: spec
+      file: src-tauri/src/app.rs
+      title: "Settings apply wipes active OSC 12 cursor-color override"
+      resolution: fixed
+    - stable_id: 247075b264053ce9
+      category: spec
+      file: crates/term_core/src/terminal_core.rs
+      title: "RIS reset does not restore OSC 12 cursor color to the scheme default"
+      resolution: fixed
+    - stable_id: 09cf0d5cd512074b
+      category: architecture
+      file: crates/term_core/src/snapshot.rs
+      title: "Snapshot v2 migration path was removed"
+      resolution: declined
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0004
+      files: [crates/term_core/src/callbacks.rs]
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "毎フレームのカーソル描画パス（render/mod.rs, render/cursor.rs）への変更があり NFR1 で性能非劣化が要求されるため"
+  declined_findings:
+    - stable_id: 09cf0d5cd512074b
+      category: architecture
+      resolution_reason: "bincode snapshot API に本番呼び出し元なし（テストのみ・WASM遺物）。mux は別方式の byte-replay で具体的障害経路なし"
+    - stable_id: 253e341c2ad822eb
+      category: spec
+      resolution_reason: "DECSCUSR は CSI Ps SP q（space intermediate 必須）。素の CSI q は DECLL であり dispatch しない実装が正しい。SPEC.md の略記を修正"
+lessons_candidates:
+  - "SPEC にエスケープシーケンスを書くときは intermediate まで正確に表記する（`CSI q` 略記が codex:spec の誤検知 253e341c を招き、SPEC.md 修正で decline になった）"
+  - "theme 全面再構築（Theme::from_settings 代入）と『シーケンス由来オーバーライドの持続』要件の相互作用は planner がタスク設計時にライフサイクル表として列挙すべき。round 1 の high 2件（OSC 12 消去 / RIS 色復帰漏れ）はどちらも theme 常駐状態の見落としが根因"
+  - "tabs.rs の off-thread replay 系テスト（ts7-ts11）+ welcome_without_windows_leaves_group_none は --test-threads=1 でも非決定的に落ちるようになっている（未変更 base commit で実測）。メモリの『--test-threads=1 で安定』は陳腐化しており、環境起因 flaky として別途調査が要る"
+  - "worktree の fresh checkout は gitignored な src-tauri/assets/fonts が無く build.rs が hard-fail する。implementer 3人が各自対処した（cp / fetch-fonts.sh）。implement-phase の worktree セットアップにフォント準備を組み込む価値あり"
+  - "codex 単独 high（snapshot v2）は Claude 2観点の独立調査（呼び出し元ゼロ確認）で decline できた。codex 単独 findings は confidence 50 のまま鵜呑みにせず repo 内の実在経路を確認するのが有効"

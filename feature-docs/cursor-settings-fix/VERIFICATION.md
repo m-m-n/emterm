@@ -30,6 +30,8 @@
 | TS-10 | RIS full reset with overrides active | Overrides cleared; defaults survive | Unit |
 | TS-11 | Unknown `cursor_style` string in settings.json | Warn-once + block fallback preserved | Unit (existing) |
 | TS-12 | Block cursor glyph legibility | Covered glyph painted in cell's resolved background color | Unit |
+| TS-13 | OSC 12 override, then settings apply (no scheme change) | Resolved cursor color stays at the OSC 12 value | Unit |
+| TS-14 | OSC 12 override, then RIS | Resolved cursor color returns to the scheme cursor color; shape/blink overrides also cleared | Unit |
 
 ## Code Quality Verification
 - Format: (none configured — rustfmt is not enforced crate-wide in this
@@ -53,8 +55,8 @@
 | FR1 | task0001, task0002 | TS-1, TS-2 |
 | FR2 | task0001 | TS-3, TS-4, TS-9 |
 | FR3 | task0003 | TS-7, TS-12 |
-| FR4 | task0001, task0003 | TS-5, TS-6, TS-7, TS-10 |
-| FR5 | task0001, task0002 | TS-2, TS-8 |
+| FR4 | task0001, task0003, task0004 | TS-5, TS-6, TS-7, TS-10, TS-14 |
+| FR5 | task0001, task0002, task0004 | TS-2, TS-8, TS-13 |
 | NFR1 | task0003 | Review: no added locking/allocation on the per-frame path (see Manual/Review below) |
 | NFR2 | task0001 | `--no-default-features` build command above |
 
@@ -76,6 +78,6 @@
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build | 2 | 2 | 0 | 0 |
-| Test scenarios | 12 | 12 | 0 | 0 |
+| Test scenarios | 14 | 14 | 0 | 0 |
 | Manual | 5 | 0 | 0 | 5 |
 | Performance (NFR1) | 1 | 0 | 0 | 1 (review) |

@@ -23,15 +23,28 @@ workflow:
     status: completed
     completed_at_commit: 931a7dae3b54e8481c8a643eedd6d83f0f1f9569
   - id: implement
-    status: pending
+    status: completed
+    base_commit: 931a7dae3b54e8481c8a643eedd6d83f0f1f9569
+    completed_at_commit: 899f2361a55ce03d12f659507285717c8294a27a
+    notes: "review round 1 rework task0004 merged"
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 899f2361a55ce03d12f659507285717c8294a27a
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 899f2361a55ce03d12f659507285717c8294a27a
+    result: pass
     failed_items: []
+    notes: >-
+      Build check (default + --no-default-features) pass. term_core 708 tests
+      pass. emterm --lib 2295 pass / 6 fail — 失敗は既存の環境起因 flaky
+      (tabs.rs off-thread replay ts7-ts11 + welcome_without_windows_leaves_group_none)
+      で、未変更 base commit (931a7da) でも同一 family が非決定的に落ちることを
+      実測確認済み。TS-1〜TS-14 対応のカーソル機能テストは全 pass。
+      MT-1〜MT-5 (手動確認) はユーザー実機確認待ち。
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 899f2361a55ce03d12f659507285717c8294a27a
 
 tasks:
   task0001:
@@ -49,8 +62,9 @@ tasks:
     domains: [input-handling]
     complexity: high
     requirements: [FR1, FR2, FR4, FR5, NFR2]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/cursor-settings-fix/task0001
   task0002:
     title: Seed cursor style/blink defaults from settings (GUI)
     plan: tasks/task0002.md
@@ -62,8 +76,9 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR1, FR5]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/cursor-settings-fix/task0002
   task0003:
     title: Cursor color from theme (scheme / OSC 12 / OSC 112)
     plan: tasks/task0003.md
@@ -76,12 +91,44 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR3, FR4, NFR1]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/cursor-settings-fix/task0003
+  task0004:
+    title: OSC 12 cursor-color override lifecycle (rework)
+    plan: tasks/task0004.md
+    files:
+      - src-tauri/src/render/theme.rs
+      - src-tauri/src/app.rs
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/esc_handler.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/callbacks.rs
+    skills: [backend-impl]
+    domains: [input-handling, ui]
+    complexity: medium
+    requirements: [FR4, FR5]
+    status: merged
+    notes: "review round 1 findings c6ef2f448279d56e / 247075b264053ce9. Deviation: crates/term_core/src/callbacks.rs (on_reset hook; parse-order correctness)"
+    branch: em-workflow/cursor-settings-fix/task0004
 
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 2
+  residual_critical_high: 0
+  needs_rework: false
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    security: completed
+    architecture: completed
+    performance: completed
+  plan:
+    floor: [comprehensive, spec, security, architecture]
+    discretionary:
+      - perspective: performance
+        reason: "毎フレームのカーソル描画パス（render/mod.rs, render/cursor.rs）への変更があり NFR1 で性能非劣化が要求されるため"
+    codex_cross_validation: true
 
 requirements:
   FR1:
@@ -106,14 +153,14 @@ requirements:
     title: DECSCUSR / OSC 22 / OSC 12 override settings; resets restore defaults
     status: ok
     tbd_reason: null
-    tasks: [task0001, task0003]
-    tests: [TS-5, TS-6, TS-7, TS-10]
+    tasks: [task0001, task0003, task0004]
+    tests: [TS-5, TS-6, TS-7, TS-10, TS-14]
   FR5:
     title: Settings changes apply immediately to all tabs without wiping app overrides
     status: ok
     tbd_reason: null
-    tasks: [task0001, task0002]
-    tests: [TS-2, TS-8]
+    tasks: [task0001, task0002, task0004]
+    tests: [TS-2, TS-8, TS-13]
   NFR1:
     title: No render-path performance regression
     status: ok
