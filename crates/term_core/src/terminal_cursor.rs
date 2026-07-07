@@ -37,20 +37,32 @@ impl TerminalCore {
         self.cursor.visible = visible;
     }
 
+    /// Effective cursor shape: an active DECSCUSR/OSC 22 override takes
+    /// precedence over the settings-derived default (cursor-settings-fix D1).
     pub fn get_cursor_style(&self) -> u8 {
-        self.cursor.style
+        self.cursor_style_override
+            .unwrap_or(self.cursor_style_default)
     }
 
+    /// Set the settings-derived DEFAULT cursor shape. Never touches an
+    /// active sequence override — `get_cursor_style()` keeps returning the
+    /// override until it is explicitly cleared (SPEC FR5).
     pub fn set_cursor_style(&mut self, style: u8) {
-        self.cursor.style = if style <= 2 { style } else { 0 };
+        self.cursor_style_default = if style <= 2 { style } else { 0 };
     }
 
+    /// Effective cursor blink: an active DECSCUSR override takes precedence
+    /// over the settings-derived default (cursor-settings-fix D1).
     pub fn get_cursor_blink(&self) -> bool {
-        self.cursor.blink
+        self.cursor_blink_override
+            .unwrap_or(self.cursor_blink_default)
     }
 
+    /// Set the settings-derived DEFAULT cursor blink. Never touches an
+    /// active sequence override — `get_cursor_blink()` keeps returning the
+    /// override until it is explicitly cleared (SPEC FR5).
     pub fn set_cursor_blink(&mut self, blink: bool) {
-        self.cursor.blink = blink;
+        self.cursor_blink_default = blink;
     }
 
     pub fn get_cursor_fg(&self) -> u32 {
@@ -157,5 +169,75 @@ mod tests {
             PackedColor::rgb(255, 0, 0)
         );
         assert_eq!(core.get_cursor_flags(), STYLE_BOLD);
+    }
+
+    // ── Cursor shape/blink: settings defaults survive save/restore/reset
+    //    (cursor-settings-fix D1) ─────────────────────────────────────
+
+    /// AC-1: `set_cursor_blink(false)` survives a save_cursor → restore_cursor
+    /// round-trip (shape/blink are terminal-level, not `CursorState`-resident).
+    #[test]
+    fn test_cursor_blink_default_survives_save_restore() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_blink(false);
+        core.save_cursor();
+        // Mutate cursor position/attrs so the round-trip is meaningful.
+        core.set_cursor(5, 5);
+        core.restore_cursor();
+        assert!(!core.get_cursor_blink());
+    }
+
+    /// AC-2: `set_cursor_blink(false)` survives `restore_cursor` on the
+    /// no-saved-state (reset) path.
+    #[test]
+    fn test_cursor_blink_default_survives_restore_with_no_saved_state() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_blink(false);
+        // No save_cursor() call: restore_cursor takes the no-saved-state path.
+        core.restore_cursor();
+        assert!(!core.get_cursor_blink());
+    }
+
+    /// AC-3: `set_cursor_style(2)` (bar) stays in effect across save/restore
+    /// and the no-saved-state reset path.
+    #[test]
+    fn test_cursor_style_default_survives_save_restore_and_reset_path() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_style(2);
+        assert_eq!(core.get_cursor_style(), 2);
+
+        core.save_cursor();
+        core.restore_cursor();
+        assert_eq!(core.get_cursor_style(), 2);
+
+        // No-saved-state path.
+        core.restore_cursor();
+        assert_eq!(core.get_cursor_style(), 2);
+    }
+
+    /// AC-7: with a sequence override active, `set_cursor_style` /
+    /// `set_cursor_blink` (settings apply) change only the defaults — the
+    /// effective getters keep returning the override until it is cleared.
+    #[test]
+    fn test_settings_apply_does_not_clear_active_override() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // Simulate an active DECSCUSR override directly via the terminal-level
+        // fields (the DECSCUSR handler itself is exercised in csi_cursor.rs).
+        core.cursor_style_override = Some(2); // bar
+        core.cursor_blink_override = Some(false);
+
+        // Settings apply: changes defaults only.
+        core.set_cursor_style(0);
+        core.set_cursor_blink(true);
+
+        // Effective getters still report the override.
+        assert_eq!(core.get_cursor_style(), 2);
+        assert!(!core.get_cursor_blink());
+
+        // Clearing the override reveals the newly-applied defaults.
+        core.cursor_style_override = None;
+        core.cursor_blink_override = None;
+        assert_eq!(core.get_cursor_style(), 0);
+        assert!(core.get_cursor_blink());
     }
 }

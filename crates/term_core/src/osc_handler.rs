@@ -142,6 +142,21 @@ impl TerminalCore {
             }
         }
 
+        // OSC 22 (CursorShape): a recognized style name sets the terminal-level
+        // shape override; an empty payload clears it (cursor-settings-fix D1).
+        // The blink override is untouched (only DECSCUSR sets blink). This is
+        // IN ADDITION to the callback below: the existing theme-bound emission
+        // to the GUI layer (`Theme::apply_cursor_style`) is unchanged.
+        if param == 22 {
+            match data {
+                "block" => self.cursor_style_override = Some(0),
+                "underline" => self.cursor_style_override = Some(1),
+                "bar" => self.cursor_style_override = Some(2),
+                "" => self.cursor_style_override = None,
+                _ => {} // Unrecognized name: ignored, no state change.
+            }
+        }
+
         self.fire_osc_callback(action_type, data);
     }
 }
@@ -612,5 +627,58 @@ mod tests {
         core.process_pty_data(b"\x1b]777;emterm;fold;begin;a\x07");
         core.reset();
         assert!(core.take_fold_marks().is_empty());
+    }
+
+    // ── OSC 22 (CursorShape) shape override ───────────────────────────
+
+    /// AC-6: OSC 22 "underline" sets the shape override with defaults intact
+    /// underneath; an empty payload clears it back to the default. Blink is
+    /// unaffected in both steps.
+    #[test]
+    fn test_osc22_underline_sets_override_then_empty_clears_it() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_style(2); // bar (settings default)
+        core.set_cursor_blink(true); // default blink, untouched by OSC 22
+
+        core.process_pty_data(b"\x1b]22;underline\x07");
+        assert_eq!(core.get_cursor_style(), 1, "override active");
+        assert!(core.get_cursor_blink(), "blink unaffected by OSC 22");
+
+        core.process_pty_data(b"\x1b]22;\x07"); // empty payload clears
+        assert_eq!(core.get_cursor_style(), 2, "back to settings default");
+        assert!(core.get_cursor_blink(), "blink still unaffected");
+    }
+
+    #[test]
+    fn test_osc22_block_and_bar_set_override() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.process_pty_data(b"\x1b]22;block\x07");
+        assert_eq!(core.get_cursor_style(), 0);
+        core.process_pty_data(b"\x1b]22;bar\x07");
+        assert_eq!(core.get_cursor_style(), 2);
+    }
+
+    #[test]
+    fn test_osc22_unrecognized_name_ignored() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_style(0);
+        core.process_pty_data(b"\x1b]22;underline\x07");
+        assert_eq!(core.get_cursor_style(), 1);
+        core.process_pty_data(b"\x1b]22;not-a-shape\x07");
+        assert_eq!(core.get_cursor_style(), 1, "unrecognized name: no change");
+    }
+
+    /// OSC 22 never touches the blink override, even while a DECSCUSR blink
+    /// override is active (SPEC FR4 precedence: OSC 22 is shape-only).
+    #[test]
+    fn test_osc22_does_not_touch_active_blink_override() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_decscusr(3); // blinking underline: shape=1, blink=true override
+        core.process_pty_data(b"\x1b]22;bar\x07");
+        assert_eq!(core.get_cursor_style(), 2, "OSC 22 replaces the shape");
+        assert!(
+            core.get_cursor_blink(),
+            "OSC 22 must not touch the blink override"
+        );
     }
 }
