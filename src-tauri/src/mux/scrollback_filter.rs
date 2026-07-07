@@ -30,6 +30,14 @@ use crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS;
 ///   `q`; a DCS whose *data* merely contains `q`, e.g. DECRQSS, is KEPT).
 /// - emterm Markdown OSC 9999: `ESC ] 9999 ; emterm-md ; …` (BEL or ST
 ///   terminated). `ESC ] 9999 ; emterm-mux ; …` (mux control) is KEPT.
+/// - CSI device queries that `crates/term_core/src/csi_dispatch.rs` answers
+///   with a response, so a snapshot replay never makes the GUI synthesize a
+///   stale reply: DSR / CPR (`ESC[5n`, `ESC[6n`), DA1 / DA2 (`ESC[c`,
+///   `ESC[0c`, `ESC[?…c`, `ESC[>c`, `ESC[>0c`), XTWINOPS size reports
+///   (`ESC[14t`, `ESC[16t`, `ESC[18t`), and DECRPM (`ESC[?Ps$p`). Any other
+///   CSI — SGR, cursor motion, `ESC[?1049h/l`, DECSTBM, DA3 (`ESC[=c`,
+///   unanswered), `ESC[0n` (unanswered `Ps`), non-size XTWINOPS, … — is
+///   KEPT. See [`scan_csi_device_query`] for the exact predicate.
 ///
 /// `bytes` is assumed to be a completed byte run (the scrollback ring stores
 /// whole sequences). A sequence whose terminator never arrives is treated as
@@ -88,6 +96,18 @@ pub(in crate::mux) fn strip_replayable_rich_content(bytes: &[u8]) -> Vec<u8> {
                         i = end;
                         continue;
                     }
+                }
+                out.push(bytes[i]);
+                i += 1;
+            }
+            b'[' => {
+                // CSI: ESC [ ... final byte — remove only device queries
+                // term_core answers (see the module doc comment's "Removed"
+                // list / `scan_csi_device_query`).
+                if let Some(strip) = scan_csi_device_query(bytes, i + 2) {
+                    out.extend_from_slice(&strip.embedded_c0);
+                    i = strip.end;
+                    continue;
                 }
                 out.push(bytes[i]);
                 i += 1;
@@ -200,6 +220,137 @@ fn is_replayable_osc_body(body: &[u8]) -> bool {
         return true;
     }
     false
+}
+
+/// A matched (strippable) CSI device query: where scanning resumes, and any
+/// C0 control bytes embedded in the query body that must be re-emitted.
+///
+/// term_core's parser executes C0 controls encountered mid-CSI immediately
+/// without aborting the sequence (`crates/term_core/src/parser/csi.rs`), so
+/// dropping them along with the query would change replay behavior —
+/// IMPLEMENTATION.md D2.
+struct CsiStrip {
+    /// Index just past the CSI final byte.
+    end: usize,
+    /// C0 control bytes (other than ESC) encountered inside the query body,
+    /// in order.
+    embedded_c0: Vec<u8>,
+}
+
+/// Scan a candidate CSI sequence whose body starts at `from` (the index just
+/// past `ESC [`) and decide whether it is a device query that
+/// `crates/term_core/src/csi_dispatch.rs` answers with a response — the SSOT
+/// this predicate mirrors (see `csi_is_device_query`).
+///
+/// Body grammar (matches the CSI recognition in the task design):
+/// parameter bytes (`0x30..=0x3F`, which includes the private markers
+/// `<=>?`), then intermediate bytes (`0x20..=0x2F`), then a final byte
+/// (`0x40..=0x7E`).
+///
+/// Returns `Some` only for a COMPLETE CSI (a valid final byte is found) that
+/// matches the strip predicate. Returns `None` for: a CSI that completes but
+/// does not match (the caller preserves it byte-for-byte via its normal
+/// single-byte fallback, and the main loop then pushes the rest of the
+/// sequence one byte at a time — still an O(n) pass overall), an
+/// unterminated CSI (buffer ends before a final byte), a CSI body containing
+/// a bare ESC (aborts the candidate — the caller's single-byte fallback
+/// naturally re-processes bytes up to that ESC one at a time, so "the
+/// scanned prefix is preserved as-is and scanning resumes at that ESC"
+/// falls out of the existing fallback without special-casing), or a byte
+/// outside the CSI grammar (e.g. DEL).
+fn scan_csi_device_query(bytes: &[u8], from: usize) -> Option<CsiStrip> {
+    let mut j = from;
+    let mut private_prefix: Option<u8> = None;
+    let mut first_param: u32 = 0;
+    let mut collecting_first_param = true;
+    let mut param_bytes_seen = 0usize;
+    let mut in_intermediates = false;
+    let mut intermediates: Vec<u8> = Vec::new();
+    let mut embedded_c0: Vec<u8> = Vec::new();
+
+    loop {
+        let b = *bytes.get(j)?; // ran off the end: unterminated CSI
+        match b {
+            0x1b => return None, // bare ESC aborts the candidate
+            0x00..=0x1a | 0x1c..=0x1f => {
+                // C0 control other than ESC: does not abort the candidate;
+                // recorded for re-emission if the query ends up stripped.
+                embedded_c0.push(b);
+                j += 1;
+            }
+            0x30..=0x3f if !in_intermediates => {
+                // Parameter byte (digit, ';', ':', or a private marker
+                // `<=>?` — only the FIRST parameter byte is a private
+                // prefix, matching term_core's CSI-entry-state behavior).
+                if param_bytes_seen == 0 && matches!(b, b'<' | b'=' | b'>' | b'?') {
+                    private_prefix = Some(b);
+                } else if collecting_first_param && b.is_ascii_digit() {
+                    first_param = first_param * 10 + u32::from(b - b'0');
+                } else {
+                    // ';' / ':' / a digit past the first run / a stray
+                    // marker not in leading position — the leading decimal
+                    // run is over either way.
+                    collecting_first_param = false;
+                }
+                param_bytes_seen += 1;
+                j += 1;
+            }
+            0x20..=0x2f => {
+                // Intermediate byte.
+                in_intermediates = true;
+                intermediates.push(b);
+                j += 1;
+            }
+            0x40..=0x7e => {
+                // Final byte — the CSI is complete.
+                return if csi_is_device_query(private_prefix, &intermediates, first_param, b) {
+                    Some(CsiStrip {
+                        end: j + 1,
+                        embedded_c0,
+                    })
+                } else {
+                    None
+                };
+            }
+            _ => return None, // byte outside the CSI grammar (e.g. DEL)
+        }
+    }
+}
+
+/// The strip predicate (SPEC.md FR1/FR2), mirroring the dispatch conditions
+/// in `crates/term_core/src/csi_dispatch.rs`: true only for CSI forms
+/// term_core answers with a device response.
+///
+/// | final | private prefix    | intermediates | first param | query kind |
+/// |-------|--------------------|----------------|--------------|------------|
+/// | `n`   | none               | none           | 5 or 6       | DSR / CPR  |
+/// | `c`   | none, `?`, or `>`  | none           | any          | DA1 / DA2  |
+/// | `t`   | none               | none           | 14, 16, 18   | XTWINOPS   |
+/// | `p`   | `?`                | `$`            | any          | DECRPM     |
+///
+/// `first_param` treats an empty leading digit run as 0, matching
+/// term_core's `ParamParser::get_first_or_zero`.
+fn csi_is_device_query(
+    private_prefix: Option<u8>,
+    intermediates: &[u8],
+    first_param: u32,
+    final_byte: u8,
+) -> bool {
+    match final_byte {
+        b'n' => {
+            private_prefix.is_none() && intermediates.is_empty() && matches!(first_param, 5 | 6)
+        }
+        b'c' => {
+            matches!(private_prefix, None | Some(b'?') | Some(b'>')) && intermediates.is_empty()
+        }
+        b't' => {
+            private_prefix.is_none()
+                && intermediates.is_empty()
+                && matches!(first_param, 14 | 16 | 18)
+        }
+        b'p' => private_prefix == Some(b'?') && intermediates == [b'$'],
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -445,5 +596,141 @@ mod tests {
         assert!(!REPLAYABLE_VIEWER_KINDS.contains(&"fold"));
         let kept = b"\x1b]777;emterm;fold;x\x07".to_vec();
         assert_eq!(strip_replayable_rich_content(&kept), kept);
+    }
+
+    // ── CSI device-query strip tests (AC-1 … AC-10) ─────────────────────
+
+    /// AC-1: DA1 forms (`ESC[c`, `ESC[0c`, `ESC[?…c`) and DA2 forms
+    /// (`ESC[>c`, `ESC[>0c`) are removed; surrounding bytes preserved.
+    #[test]
+    fn strip_removes_da1_and_da2_queries() {
+        for input in [
+            b"a\x1b[cb".as_slice(),
+            b"a\x1b[0cb".as_slice(),
+            b"a\x1b[?1;2cb".as_slice(),
+            b"a\x1b[>cb".as_slice(),
+            b"a\x1b[>0cb".as_slice(),
+        ] {
+            let out = strip_replayable_rich_content(input);
+            assert_eq!(
+                out, b"ab",
+                "input {input:?} must be stripped to just surrounding text"
+            );
+        }
+    }
+
+    /// AC-2: `ESC[5n` and `ESC[6n` are removed; `ESC[0n` and `ESC[?6n` are
+    /// preserved.
+    #[test]
+    fn strip_removes_dsr_and_cpr_queries_keeps_others() {
+        assert_eq!(strip_replayable_rich_content(b"a\x1b[5nb"), b"ab");
+        assert_eq!(strip_replayable_rich_content(b"a\x1b[6nb"), b"ab");
+        let unanswered = b"a\x1b[0nb";
+        assert_eq!(strip_replayable_rich_content(unanswered), unanswered);
+        let private = b"a\x1b[?6nb";
+        assert_eq!(strip_replayable_rich_content(private), private);
+    }
+
+    /// AC-3: `ESC[14t`, `ESC[16t`, `ESC[18t` are removed; `ESC[22t`,
+    /// `ESC[23t`, `ESC[8;24;80t` are preserved.
+    #[test]
+    fn strip_removes_xtwinops_size_reports_keeps_others() {
+        for ps in [14, 16, 18] {
+            let input = format!("a\x1b[{ps}tb").into_bytes();
+            let out = strip_replayable_rich_content(&input);
+            assert_eq!(out, b"ab", "Ps={ps} must be stripped");
+        }
+        for suffix in ["22t", "23t", "8;24;80t"] {
+            let input = format!("a\x1b[{suffix}b").into_bytes();
+            assert_eq!(
+                strip_replayable_rich_content(&input),
+                input,
+                "ESC[{suffix} must be preserved"
+            );
+        }
+    }
+
+    /// AC-4: `ESC[?Ps$p` (known and unknown modes) is removed; `ESC[!p` and
+    /// `ESC["p` are preserved.
+    #[test]
+    fn strip_removes_decrpm_keeps_non_decrpm_p_final() {
+        // Known mode (2026 = synchronized output) and an unknown mode.
+        assert_eq!(strip_replayable_rich_content(b"a\x1b[?2026$pb"), b"ab");
+        assert_eq!(strip_replayable_rich_content(b"a\x1b[?9999$pb"), b"ab");
+
+        let bang = b"a\x1b[!pb";
+        assert_eq!(strip_replayable_rich_content(bang), bang);
+        let quote = b"a\x1b[\"pb";
+        assert_eq!(strip_replayable_rich_content(quote), quote);
+    }
+
+    /// AC-5: `ESC[=c` (DA3 — term_core does not answer it) is preserved.
+    #[test]
+    fn strip_keeps_da3_tertiary_device_attributes() {
+        let input = b"a\x1b[=cb";
+        assert_eq!(strip_replayable_rich_content(input), input);
+    }
+
+    /// AC-6: an unterminated CSI at end of buffer is preserved.
+    #[test]
+    fn strip_keeps_unterminated_csi_device_query() {
+        let input = b"text\x1b[5"; // DSR query missing its final byte
+        assert_eq!(strip_replayable_rich_content(input), input);
+    }
+
+    /// AC-7: a stripped query containing an embedded C0 byte re-emits that
+    /// byte (BEL survives; the query bytes do not).
+    #[test]
+    fn strip_removes_csi_query_reemits_embedded_c0() {
+        let input = b"before\x1b[5\x07nafter"; // BEL embedded mid-DSR-query
+        let out = strip_replayable_rich_content(input);
+        assert_eq!(out, b"before\x07after");
+    }
+
+    /// AC-8: a bare ESC inside a CSI body aborts the candidate — the prefix
+    /// is preserved and a following complete query is still stripped.
+    #[test]
+    fn strip_bare_esc_in_csi_body_aborts_then_strips_following_query() {
+        // "\x1b[5" has no final byte before a fresh ESC starts a new CSI;
+        // the aborted prefix is kept and the following ESC[6n is stripped.
+        let input = b"\x1b[5\x1b[6n";
+        let out = strip_replayable_rich_content(input);
+        assert_eq!(out, b"\x1b[5");
+    }
+
+    /// AC-9: a mixed payload of plain text, SGR, viewer OSC, and device
+    /// queries removes only the viewer OSC + queries.
+    #[test]
+    fn strip_removes_mixed_osc_and_csi_queries_keeps_text_and_sgr() {
+        let mut input = Vec::new();
+        input.extend_from_slice(b"$ prompt\x1b[31mred\x1b[0m\r\n");
+        input.extend_from_slice(b"\x1b]777;emterm;markdown;begin\x07");
+        input.extend_from_slice(b"\x1b[c"); // DA1 query
+        input.extend_from_slice(b"\x1b[6n"); // CPR query
+        input.extend_from_slice(b"more text");
+        let out = strip_replayable_rich_content(&input);
+        assert_eq!(out, b"$ prompt\x1b[31mred\x1b[0m\r\nmore text");
+    }
+
+    /// AC-10 (funnel regression, SPEC TS-12): a full `build_snapshot_bytes`
+    /// product built from a DA1-bearing scrollback contains no removable
+    /// device query.
+    #[test]
+    fn build_snapshot_bytes_funnel_strips_da1_device_query() {
+        use crate::mux::snapshot_bytes::build_snapshot_bytes;
+        let scrollback = b"prompt$ \x1b[cdone"; // DA1 query in scrollback
+        let out = build_snapshot_bytes(scrollback, b"", false);
+        assert!(
+            !out.windows(3).any(|w| w == b"\x1b[c"),
+            "snapshot must not contain a removable DA1 device query: {out:?}"
+        );
+        assert!(
+            out.windows(6).any(|w| w == b"prompt"),
+            "surrounding plain text must survive: {out:?}"
+        );
+        assert!(
+            out.windows(4).any(|w| w == b"done"),
+            "surrounding plain text must survive: {out:?}"
+        );
     }
 }
