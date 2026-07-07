@@ -285,7 +285,16 @@ fn scan_csi_device_query(bytes: &[u8], from: usize) -> Option<CsiStrip> {
                 if param_bytes_seen == 0 && matches!(b, b'<' | b'=' | b'>' | b'?') {
                     private_prefix = Some(b);
                 } else if collecting_first_param && b.is_ascii_digit() {
-                    first_param = first_param * 10 + u32::from(b - b'0');
+                    // Saturating accumulation mirrors term_core's
+                    // `ParamParser::add_digit` (saturating_mul/saturating_add
+                    // — crates/term_core/src/parser_params.rs): an
+                    // arbitrarily long digit run can never overflow or panic.
+                    // A saturated value never equals a small target constant
+                    // (5/6/14/16/18), so an oversized parameter is simply
+                    // preserved, never stripped.
+                    first_param = first_param
+                        .saturating_mul(10)
+                        .saturating_add(u32::from(b - b'0'));
                 } else {
                     // ';' / ':' / a digit past the first run / a stray
                     // marker not in leading position — the leading decimal
@@ -317,16 +326,26 @@ fn scan_csi_device_query(bytes: &[u8], from: usize) -> Option<CsiStrip> {
     }
 }
 
-/// The strip predicate (SPEC.md FR1/FR2), mirroring the dispatch conditions
-/// in `crates/term_core/src/csi_dispatch.rs`: true only for CSI forms
-/// term_core answers with a device response.
+/// The strip predicate (SPEC.md FR1/FR2 "Strip decision" table), mirroring
+/// the dispatch conditions in `crates/term_core/src/csi_dispatch.rs`: true
+/// only for CSI forms term_core answers with a device response.
 ///
-/// | final | private prefix    | intermediates | first param | query kind |
-/// |-------|--------------------|----------------|--------------|------------|
-/// | `n`   | none               | none           | 5 or 6       | DSR / CPR  |
-/// | `c`   | none, `?`, or `>`  | none           | any          | DA1 / DA2  |
-/// | `t`   | none               | none           | 14, 16, 18   | XTWINOPS   |
-/// | `p`   | `?`                | `$`            | any          | DECRPM     |
+/// term_core dispatches on `intermediates.first()` only, and truncates the
+/// collected intermediates to `MAX_CSI_INTERMEDIATES = 2`
+/// (`crates/term_core/src/parser_types.rs`) — so bytes beyond the matched
+/// ones never prevent a response. In this filter's variable split, a
+/// private marker (`<=>?`) — which can only ever occupy term_core's
+/// intermediates slot 0 — is tracked separately as `private_prefix`, so
+/// `intermediates` here holds only the 0x20-0x2F bytes that would occupy
+/// term_core's remaining slot(s).
+///
+/// | final | private prefix    | intermediates                           | first param | query kind |
+/// |-------|--------------------|------------------------------------------|--------------|------------|
+/// | `n`   | none               | none                                      | 5 or 6       | DSR / CPR  |
+/// | `c`   | none               | none                                      | any          | DA1        |
+/// | `c`   | `?` or `>`         | any (trailing bytes ignored)              | any          | DA1 / DA2  |
+/// | `t`   | none               | none                                      | 14, 16, 18   | XTWINOPS   |
+/// | `p`   | `?`                | first byte `$` (trailing bytes ignored)   | any          | DECRPM     |
 ///
 /// `first_param` treats an empty leading digit run as 0, matching
 /// term_core's `ParamParser::get_first_or_zero`.
@@ -340,15 +359,17 @@ fn csi_is_device_query(
         b'n' => {
             private_prefix.is_none() && intermediates.is_empty() && matches!(first_param, 5 | 6)
         }
-        b'c' => {
-            matches!(private_prefix, None | Some(b'?') | Some(b'>')) && intermediates.is_empty()
-        }
+        b'c' => match private_prefix {
+            None => intermediates.is_empty(),
+            Some(b'?') | Some(b'>') => true,
+            _ => false,
+        },
         b't' => {
             private_prefix.is_none()
                 && intermediates.is_empty()
                 && matches!(first_param, 14 | 16 | 18)
         }
-        b'p' => private_prefix == Some(b'?') && intermediates == [b'$'],
+        b'p' => private_prefix == Some(b'?') && intermediates.first() == Some(&b'$'),
         _ => false,
     }
 }
@@ -732,5 +753,72 @@ mod tests {
             out.windows(4).any(|w| w == b"done"),
             "surrounding plain text must survive: {out:?}"
         );
+    }
+
+    // ── review round 1 rework regression tests (task0002 AC-1 … AC-5) ──
+
+    /// task0002 AC-1: a first CSI parameter with more than 10 digits must be
+    /// preserved (a saturated accumulator never equals a small target
+    /// constant) and must not panic under overflow-checked builds — mirrors
+    /// term_core's saturating `ParamParser::add_digit`
+    /// (`crates/term_core/src/parser_params.rs`).
+    #[test]
+    fn strip_keeps_oversized_first_param_no_panic() {
+        let input = b"a\x1b[99999999999nb"; // 11-digit run, far beyond u32::MAX
+        assert_eq!(strip_replayable_rich_content(input), input);
+    }
+
+    /// task0002 AC-2: DA1/DA2 with a private marker (`?`/`>`) as the FIRST
+    /// intermediate must be stripped regardless of trailing intermediate
+    /// bytes — term_core dispatches on `intermediates.first()` only
+    /// (`crates/term_core/src/csi_dispatch.rs`).
+    #[test]
+    fn strip_removes_da_with_private_marker_and_trailing_intermediate() {
+        for input in [
+            b"a\x1b[?1$cb".as_slice(),
+            b"a\x1b[?1!cb".as_slice(),
+            b"a\x1b[> cb".as_slice(),
+        ] {
+            assert_eq!(
+                strip_replayable_rich_content(input),
+                b"ab",
+                "input {input:?} must be stripped"
+            );
+        }
+    }
+
+    /// task0002 AC-3: DECRPM must be stripped when the first intermediate is
+    /// `$`, regardless of further intermediate bytes beyond it (term_core
+    /// truncates the collected intermediates to `MAX_CSI_INTERMEDIATES = 2`
+    /// and only checks slot 1).
+    #[test]
+    fn strip_removes_decrpm_with_trailing_intermediate_bytes() {
+        for input in [b"a\x1b[?2026$$pb".as_slice(), b"a\x1b[?2026$ pb".as_slice()] {
+            assert_eq!(
+                strip_replayable_rich_content(input),
+                b"ab",
+                "input {input:?} must be stripped"
+            );
+        }
+    }
+
+    /// task0002 AC-4: DA3 (`ESC[=c`), non-DECRPM `p` finals (`ESC[!p`,
+    /// `ESC["p`), and a `c` final whose FIRST intermediate is not a private
+    /// marker (`ESC[!c`) are never answered by term_core and must be
+    /// preserved.
+    #[test]
+    fn strip_keeps_da3_non_decrpm_p_and_non_private_c() {
+        for input in [
+            b"a\x1b[=cb".as_slice(),
+            b"a\x1b[!pb".as_slice(),
+            b"a\x1b[\"pb".as_slice(),
+            b"a\x1b[!cb".as_slice(),
+        ] {
+            assert_eq!(
+                strip_replayable_rich_content(input),
+                input,
+                "input {input:?} must be preserved"
+            );
+        }
     }
 }
