@@ -293,6 +293,31 @@ mod tests {
         assert_eq!(core.get_scrollback_length(), 0);
     }
 
+    /// AC-8: full terminal reset (RIS) clears active cursor shape/blink
+    /// overrides; the settings-derived defaults survive and the effective
+    /// getters fall back to them (cursor-settings-fix D1).
+    #[test]
+    fn test_esc_ris_clears_cursor_overrides_but_keeps_defaults() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_style(2); // settings default: bar
+        core.set_cursor_blink(false); // settings default: steady
+        core.handle_decscusr(3); // active override: blinking underline
+        assert_eq!(core.get_cursor_style(), 1);
+        assert!(core.get_cursor_blink());
+
+        core.handle_esc(6, 0); // RIS
+
+        assert_eq!(
+            core.get_cursor_style(),
+            2,
+            "override cleared, settings default (bar) restored"
+        );
+        assert!(
+            !core.get_cursor_blink(),
+            "override cleared, settings default (steady) restored"
+        );
+    }
+
     // ── SetG0 / SetG1 ──────────────────────────────────
 
     #[test]

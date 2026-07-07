@@ -16,7 +16,11 @@ use crate::style_table::StyleTable;
 use crate::terminal_core::{CursorState, TerminalCore};
 
 /// Current snapshot format version. Increment when fields change.
-pub const SNAPSHOT_VERSION: u32 = 2;
+///
+/// Bumped 2 → 3 by cursor-settings-fix: `CursorState` no longer carries
+/// `style`/`blink` (moved to terminal-level default/override fields), so the
+/// `TerminalSnapshot` payload layout changed.
+pub const SNAPSHOT_VERSION: u32 = 3;
 /// Legacy V1: kept readable so old persisted snapshots still load
 /// (with scrollback dropped — see SPEC §Migration).
 pub const SNAPSHOT_VERSION_V1: u32 = 1;
@@ -56,6 +60,13 @@ pub(crate) struct TerminalSnapshot {
     // Cursor state
     pub cursor: CursorState,
     pub saved_cursor: Option<CursorState>,
+    // Cursor shape/blink: settings-derived defaults + active DECSCUSR/OSC 22
+    // overrides (cursor-settings-fix D1). Terminal-level, not part of
+    // `CursorState`, so they round-trip independently of save/restore.
+    pub cursor_style_default: u8,
+    pub cursor_blink_default: bool,
+    pub cursor_style_override: Option<u8>,
+    pub cursor_blink_override: Option<bool>,
     // Terminal modes and settings
     pub modes: u32,
     pub tab_stops: Vec<bool>,
@@ -149,6 +160,10 @@ impl TerminalCore {
             },
             cursor: self.cursor.clone(),
             saved_cursor: self.saved_cursor.clone(),
+            cursor_style_default: self.cursor_style_default,
+            cursor_blink_default: self.cursor_blink_default,
+            cursor_style_override: self.cursor_style_override,
+            cursor_blink_override: self.cursor_blink_override,
             modes: self.modes,
             tab_stops: self.tab_stops.clone(),
             scroll_region_top: self.scroll_region_top,
@@ -278,6 +293,10 @@ impl TerminalCore {
             dirty,
             cursor: snapshot.cursor,
             saved_cursor: snapshot.saved_cursor,
+            cursor_style_default: snapshot.cursor_style_default,
+            cursor_blink_default: snapshot.cursor_blink_default,
+            cursor_style_override: snapshot.cursor_style_override,
+            cursor_blink_override: snapshot.cursor_blink_override,
             modes: snapshot.modes,
             tab_stops: snapshot.tab_stops,
             overflow: snapshot.overflow,
@@ -398,6 +417,12 @@ impl TerminalCore {
             dirty,
             cursor: snapshot.cursor,
             saved_cursor: snapshot.saved_cursor,
+            // V1 predates cursor-settings-fix: seed fresh (factory) defaults,
+            // matching `TerminalCore::new()`, with no active override.
+            cursor_style_default: 0,
+            cursor_blink_default: true,
+            cursor_style_override: None,
+            cursor_blink_override: None,
             modes: snapshot.modes,
             tab_stops: snapshot.tab_stops,
             overflow: new_overflow,
@@ -504,7 +529,6 @@ mod tests {
         core.cursor.col = 42;
         core.cursor.row = 10;
         core.cursor.fg = PackedColor::rgb(255, 0, 0);
-        core.cursor.style = 2; // bar
         core.cursor.visible = false;
 
         let bytes = core.snapshot_to_bytes();
@@ -513,8 +537,50 @@ mod tests {
         assert_eq!(restored.cursor.col, 42);
         assert_eq!(restored.cursor.row, 10);
         assert_eq!(restored.cursor.fg, PackedColor::rgb(255, 0, 0));
-        assert_eq!(restored.cursor.style, 2);
         assert!(!restored.cursor.visible);
+    }
+
+    /// Cursor-settings-fix D1: shape/blink are terminal-level (default +
+    /// active override), not `CursorState`-resident. Round-trip both the
+    /// settings-derived defaults and an active DECSCUSR/OSC 22 override
+    /// through the snapshot.
+    #[test]
+    fn test_snapshot_preserves_cursor_style_and_blink_defaults_and_override() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_style(2); // settings default: bar
+        core.set_cursor_blink(false); // settings default: steady
+        core.handle_decscusr(3); // active override: blinking underline
+
+        let bytes = core.snapshot_to_bytes();
+        let restored = TerminalCore::restore_from_bytes(&bytes).unwrap();
+
+        // Effective getters report the override.
+        assert_eq!(restored.get_cursor_style(), 1);
+        assert!(restored.get_cursor_blink());
+
+        // Clearing the override on the restored core reveals the
+        // round-tripped defaults, proving they were preserved independently.
+        let mut restored = restored;
+        restored.cursor_style_override = None;
+        restored.cursor_blink_override = None;
+        assert_eq!(restored.get_cursor_style(), 2);
+        assert!(!restored.get_cursor_blink());
+    }
+
+    /// A core with no active override round-trips with `None` overrides
+    /// (not e.g. accidentally pinned to the default value as a spurious
+    /// override).
+    #[test]
+    fn test_snapshot_preserves_no_active_cursor_override() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cursor_style(1); // settings default: underline, no override
+
+        let bytes = core.snapshot_to_bytes();
+        let restored = TerminalCore::restore_from_bytes(&bytes).unwrap();
+
+        assert!(restored.cursor_style_override.is_none());
+        assert!(restored.cursor_blink_override.is_none());
+        assert_eq!(restored.get_cursor_style(), 1);
     }
 
     #[test]
