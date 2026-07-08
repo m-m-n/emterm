@@ -23,16 +23,29 @@ workflow:
     status: completed
     completed_at_commit: b928062dca2e7725027c885c234834a2d54327a9
   - id: implement
-    status: pending
-    base_commit: null
+    status: completed
+    base_commit: 7729df5b19ffd3ea99180908d7501a80d3bacebb
+    completed_at_commit: c0416922ecbe53c6a5257568fede62b81d7abe92
+    notes: "review round 1 rework task0002 merged"
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: c0416922ecbe53c6a5257568fede62b81d7abe92
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: c0416922ecbe53c6a5257568fede62b81d7abe92
+    result: pass
     failed_items: []
+    notes: >-
+      Build check (default + --no-default-features) pass. render:: 287 tests
+      all pass. --lib 全体は 2325 pass / 3 fail — tabs::tests の off-thread
+      replay 系 (ts9/ts10/welcome_without_windows_leaves_group_none) で、
+      cursor-settings-fix でも同 family が非決定的に落ちることが既知
+      (project_test_execution_notes.md)。本 feature の変更ファイル (render::cursor,
+      render::font, render::terminal_grid_pass) の影響外。MT-1〜MT-4 の手動確認は
+      ユーザーの実機ビルド確認待ち。
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: c0416922ecbe53c6a5257568fede62b81d7abe92
 
 tasks:
   task0001:
@@ -49,12 +62,40 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/block-cursor-glyph-font/task0001
+  task0002:
+    title: "align overlay glyph with grid pass (rework: v_pad + HiDPI + fit + cache-hit alloc)"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/render/cursor.rs
+      - src-tauri/src/render/font/mod.rs
+      - src-tauri/src/render/terminal_grid_pass.rs
+    skills: [backend-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR2, NFR1, NFR3]
+    status: merged
+    notes: "review round 1 rework — closes r1-c1 / r1-c2 / r1-c4 / r1-p1"
+    branch: em-workflow/block-cursor-glyph-font/task0002
 
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, spec]
+    discretionary:
+      - perspective: performance
+        reason: "NFR1 が per-frame allocation 禁止を要求しており、rasterizer キャッシュ共有の実装が新規追加されるため"
+    codex_cross_validation: false
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    performance: completed
+  residual_critical_high: 0
+  needs_rework: false
+  notes: "round 1 highs (r1-c1 baseline/v_pad, r1-c2 HiDPI, r1-p1 cache-hit alloc) + medium r1-c4 (GlyphFit) routed to task0002 rework and closed; mediums r1-c3 (box/block short-circuit) and r1-c5 (tint test hygiene) deferred as follow-ups"
 
 requirements:
   FR1:
