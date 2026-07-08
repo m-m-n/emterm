@@ -22,12 +22,13 @@
 //! ([`draw_block_cursor`]) is a thin wrapper called from
 //! [`super::draw_cursor`]'s block-style, focused branch.
 
-use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
+use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use term_core::terminal_core::TerminalCore;
 
 use crate::app::App;
 use crate::fold::FoldLayout;
 use crate::ime::preedit::Anchor;
+use crate::render::font::{GlyphKey, OverlayGlyph};
 use crate::render::theme::{Rgb, Theme};
 
 /// Cell metrics expected by the overlay routines. Mirrors the values
@@ -292,6 +293,24 @@ pub fn resolve_cursor_color(theme: &Theme) -> Rgb {
 /// all reflect the actual wide character rather than its blank
 /// continuation cell.
 ///
+/// block-cursor-glyph-font task0001: the covered-glyph redraw used to go
+/// through `egui::Painter::text` with egui's own built-in monospace
+/// `FontId` constructor — not the font the wgpu `terminal_grid_pass`
+/// draws the surrounding grid with. That made the covered glyph visibly
+/// diverge from the grid (e.g. a slashed-zero terminal font rendering an
+/// unslashed zero under the cursor). The glyph is now resolved via
+/// [`crate::render::font::resolve_overlay_glyph`] — the SAME
+/// `FallbackChain` / `GlyphRasterizer` / `GlyphCache` triple
+/// `terminal_grid_pass::GridInstanceBuilder::glyph_instance` uses — and
+/// painted as an egui texture tinted with the resolved cell color
+/// ([`get_or_create_overlay_texture`] caches one `egui::TextureHandle`
+/// per glyph in `egui::Context`'s own persistent storage, so a glyph
+/// already drawn this frame by the grid is a cache hit here too, not a
+/// second rasterize). Per the render-cpu-optimization task0001 invariant cited
+/// above the function doc, this stays entirely inside the egui overlay
+/// layer: the wgpu grid instance stream is untouched and still
+/// independent of cursor state (IMPLEMENTATION.md D1).
+///
 /// Suppressed per [`cursor_screen_row`]: scrolled back into history, or
 /// the cursor's row is hidden inside a collapsed fold region. The
 /// caller ([`super::draw_cursor`]) only reaches this function once the
@@ -349,14 +368,107 @@ pub fn draw_block_cursor(painter: &egui::Painter, core: &TerminalCore, theme: &T
     painter.rect_filled(rect, 0.0, super::rgb_to_egui(resolve_cursor_color(theme)));
     if cursor_glyph_paintable(&ch) {
         let font_px = app.runtime_font_size_pt * crate::settings::PT_TO_PX;
-        painter.text(
-            rect.left_top(),
-            Align2::LEFT_TOP,
-            &ch,
-            FontId::monospace(font_px),
-            style.bg,
-        );
+        // AC-1/D2: same fallback chain, rasterizer, and cache the grid
+        // pass uses — see `crate::render::font::resolve_overlay_glyph`.
+        let overlay = {
+            let mut cache = app.font_cache.lock();
+            crate::render::font::resolve_overlay_glyph(
+                app.font_rasterizer.as_ref(),
+                &app.font_fallback,
+                &mut cache,
+                &ch,
+                font_px,
+                style.bold,
+            )
+        };
+        if let Some(glyph) = overlay {
+            // Same baseline source the grid pass anchors every glyph to
+            // (`GridInstanceBuilder::build_instances_split`'s
+            // `base_ascent`) so the overlay glyph sits on the identical
+            // line the grid would have drawn it on.
+            let base_ascent = app
+                .font_rasterizer
+                .font_metrics(app.font_fallback.base(), font_px)
+                .map(|m| m.ascent)
+                .unwrap_or(font_px * 0.8);
+            // AC-3: tint is the covered cell's fully-resolved bg color.
+            paint_overlay_glyph(painter, &glyph, rect.min, base_ascent, style.bg);
+        }
     }
+}
+
+/// Paint `glyph`'s raster into the overlay, anchored at `origin` (the
+/// covered cell rect's top-left) with `base_ascent` giving the baseline
+/// offset. `tint` colors `glyph.needs_tint` (Alpha / Subpixel-sourced,
+/// a flat-white coverage mask) rasters; Rgba-sourced rasters (color
+/// emoji / COLRv1) keep their own color and paint with a neutral white
+/// tint (no-op multiply) instead.
+///
+/// `egui::Painter` I/O has no test hook (matches this module's existing
+/// `painter.text` / `painter.line_segment` philosophy — see the module
+/// doc); the pure geometry and caching feeding this call
+/// ([`crate::render::font::resolve_overlay_glyph`],
+/// [`get_or_create_overlay_texture`]) are unit-tested instead. The final
+/// on-screen pixels are covered by manual visual check (MT-1).
+fn paint_overlay_glyph(
+    painter: &egui::Painter,
+    glyph: &OverlayGlyph,
+    origin: Pos2,
+    base_ascent: f32,
+    tint: Color32,
+) {
+    let ctx = painter.ctx();
+    let image = egui::ColorImage::from_rgba_unmultiplied(
+        [glyph.width as usize, glyph.height as usize],
+        &glyph.pixels,
+    );
+    let texture = get_or_create_overlay_texture(ctx, glyph.key, || {
+        ctx.load_texture(
+            "emterm-cursor-overlay-glyph",
+            image,
+            egui::TextureOptions::LINEAR,
+        )
+    });
+    let baseline = origin.y + base_ascent;
+    let glyph_x = origin.x + glyph.bearing_left as f32;
+    let glyph_y = baseline - glyph.bearing_top as f32;
+    let dest = Rect::from_min_size(
+        Pos2::new(glyph_x, glyph_y),
+        Vec2::new(glyph.width as f32, glyph.height as f32),
+    );
+    let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
+    let tint = if glyph.needs_tint {
+        tint
+    } else {
+        Color32::WHITE
+    };
+    painter.image(texture.id(), dest, uv, tint);
+}
+
+/// Look up (or create via `loader`) the cached `egui::TextureHandle` for
+/// `key`, using `egui::Context`'s own persistent storage
+/// (`Context::data` / `data_mut`) so resolving the SAME glyph again —
+/// this frame or a later one — reuses the texture instead of registering
+/// a fresh one with egui's texture manager (AC-6 / NFR1: "no new
+/// `egui::TextureHandle` per frame for a glyph already in the shared
+/// cache"). `loader` is the only thing that actually calls
+/// `egui::Context::load_texture`; test-injectable so tests can count
+/// creations with a stub instead of driving a real paint pass.
+fn get_or_create_overlay_texture<L>(
+    ctx: &egui::Context,
+    key: GlyphKey,
+    loader: L,
+) -> egui::TextureHandle
+where
+    L: FnOnce() -> egui::TextureHandle,
+{
+    let id = egui::Id::new(("emterm-cursor-overlay-glyph-texture", key));
+    if let Some(handle) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return handle;
+    }
+    let handle = loader();
+    ctx.data_mut(|d| d.insert_temp(id, handle.clone()));
+    handle
 }
 
 #[cfg(test)]
@@ -684,5 +796,192 @@ mod tests {
         // isn't a vacuous test — the helper's signature has no `core`
         // parameter at all, structurally guaranteeing independence.
         assert_eq!(core.get_cursor_fg(), 0x02_ff_00_00);
+    }
+
+    // ── block-cursor-glyph-font task0001 ──────────────────────────────
+    //
+    // AC-1/AC-4/AC-6 (glyph resolution identity, wide-glyph single
+    // lookup, cache reuse) are unit-tested against `resolve_overlay_glyph`
+    // directly in `render::font`'s own test module — that function has no
+    // `egui` dependency, so the resolution logic is exercised there
+    // without needing a `Painter`. The tests below cover what's specific
+    // to this module: AC-3 (the tint plumbing) and AC-6's other half
+    // (the `egui::TextureHandle` reuse cache), plus AC-5 (no reference to
+    // egui's built-in monospace font selector left on the covered-glyph
+    // path).
+
+    use crate::render::font::{
+        AtlasFormat, FallbackChain, FontId as GlyphFontId, GlyphBitmap, GlyphCache, GlyphKey,
+        GlyphRasterizer, ShapedGlyph, resolve_overlay_glyph,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use term_core::cell::STYLE_REVERSE;
+
+    /// AC-5: no reference to egui's built-in monospace `FontId`
+    /// constructor may remain in this file — the overlay glyph now
+    /// comes from `resolve_overlay_glyph`'s shared swash/atlas raster
+    /// instead. The needle is assembled from two fragments at runtime so
+    /// this assertion doesn't match its own source line.
+    #[test]
+    fn draw_block_cursor_no_longer_uses_egui_monospace_font() {
+        let source = include_str!("cursor.rs");
+        let type_name = "FontId";
+        let ctor = "monospace";
+        let needle = format!("{type_name}::{ctor}");
+        assert!(
+            !source.contains(&needle),
+            "cursor.rs must not reference egui's built-in monospace FontId \
+             constructor after block-cursor-glyph-font task0001"
+        );
+    }
+
+    /// AC-3: the overlay glyph's tint is
+    /// `resolve_cell_style_from_packed(...).bg` for the covered cell —
+    /// `draw_block_cursor` computes `style` via this exact call and
+    /// passes `style.bg` as `paint_overlay_glyph`'s `tint` argument (see
+    /// its body). Reverse video swaps fg/bg at the packed level, so the
+    /// resolved tint under reverse must equal the NON-reversed
+    /// resolution's `fg` — proving the overlay would actually track
+    /// reverse video, not just echo a static color.
+    #[test]
+    fn overlay_glyph_tint_tracks_reverse_video_via_resolve_cell_style_from_packed() {
+        let theme = Theme::default();
+        let packed_fg = 0x01_00_00_01u32; // indexed, palette index irrelevant here
+        let packed_bg = 0x01_00_00_04u32;
+        let plain =
+            super::super::resolve_cell_style_from_packed(&theme, packed_fg, packed_bg, 0, false);
+        let reversed = super::super::resolve_cell_style_from_packed(
+            &theme,
+            packed_fg,
+            packed_bg,
+            STYLE_REVERSE,
+            false,
+        );
+        assert_eq!(reversed.bg, plain.fg);
+    }
+
+    /// AC-3 (selection half): selecting the covered cell swaps fg/bg on
+    /// top of any reverse already in effect — the overlay tint must
+    /// follow, since it reads the same `style.bg` selection already
+    /// swapped.
+    #[test]
+    fn overlay_glyph_tint_tracks_selection_via_resolve_cell_style_from_packed() {
+        let theme = Theme::default();
+        let packed_fg = 0x01_00_00_01u32;
+        let packed_bg = 0x01_00_00_04u32;
+        let unselected =
+            super::super::resolve_cell_style_from_packed(&theme, packed_fg, packed_bg, 0, false);
+        let selected =
+            super::super::resolve_cell_style_from_packed(&theme, packed_fg, packed_bg, 0, true);
+        assert_eq!(selected.bg, unselected.fg);
+    }
+
+    /// Fake rasterizer for the tests below: always resolves to glyph id
+    /// 7, counts `raster` calls.
+    struct FakeRasterizer {
+        calls: AtomicUsize,
+    }
+
+    impl GlyphRasterizer for FakeRasterizer {
+        fn shape(&self, _cluster: &str, font: GlyphFontId, size_px: f32) -> Vec<ShapedGlyph> {
+            vec![ShapedGlyph {
+                font,
+                glyph_id: 7,
+                size_px,
+            }]
+        }
+        fn raster(&self, _font: GlyphFontId, _glyph_id: u32, _size_px: f32) -> Option<GlyphBitmap> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Some(GlyphBitmap {
+                format: AtlasFormat::Alpha,
+                width: 4,
+                height: 4,
+                bearing: (0, 4),
+                advance: 8.0,
+                pixels: vec![0xFF; 16],
+            })
+        }
+    }
+
+    /// AC-4: a wide glyph's cursor lands on the trailing half (col 6,
+    /// width 0, per `resolve_cursor_glyph_col`'s contract); resolving
+    /// the overlay glyph once for the leading column's character (what
+    /// `draw_block_cursor`'s single `resolve_overlay_glyph` call site
+    /// does) fires exactly one rasterize call.
+    #[test]
+    fn wide_glyph_overlay_lookup_fires_once_for_leading_column_char() {
+        let leading_col = resolve_cursor_glyph_col(6, 0);
+        assert_eq!(leading_col, 5);
+
+        let rasterizer = FakeRasterizer {
+            calls: AtomicUsize::new(0),
+        };
+        let fallback = FallbackChain::new(GlyphFontId(1), []);
+        let mut cache = GlyphCache::new();
+        let glyph = resolve_overlay_glyph(&rasterizer, &fallback, &mut cache, "一", 13.0, false)
+            .expect("wide glyph must resolve");
+        assert_eq!(glyph.width, 4);
+        assert_eq!(rasterizer.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// AC-6: resolving the same glyph key's `egui::TextureHandle` twice
+    /// via [`get_or_create_overlay_texture`] must not create a second
+    /// texture — the "no new `egui::TextureHandle` per frame for a glyph
+    /// already in the shared cache" property (NFR1). `loader` is a
+    /// counting stub standing in for `egui::Context::load_texture`, so
+    /// this test drives the real caching logic without a live paint pass.
+    #[test]
+    fn get_or_create_overlay_texture_reuses_handle_for_same_key() {
+        let ctx = egui::Context::default();
+        let key = GlyphKey::new(GlyphFontId(1), 5, 13.0, 0.0);
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+
+        let make_loader = {
+            let ctx = ctx.clone();
+            let calls = calls.clone();
+            move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                ctx.load_texture(
+                    "test-overlay-glyph",
+                    egui::ColorImage::new([1, 1], egui::Color32::WHITE),
+                    egui::TextureOptions::LINEAR,
+                )
+            }
+        };
+
+        let first = get_or_create_overlay_texture(&ctx, key, make_loader.clone());
+        let second = get_or_create_overlay_texture(&ctx, key, make_loader);
+        // `TextureHandle` has no `Debug` impl, so `assert_eq!` can't be
+        // used directly (it needs `Debug` for the failure message).
+        assert!(first == second, "expected the same cached texture handle");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "second resolve of the same glyph key must reuse the cached texture"
+        );
+    }
+
+    /// Distinct glyph keys must NOT share a texture — the cache is keyed
+    /// per-glyph, not a single shared slot.
+    #[test]
+    fn get_or_create_overlay_texture_creates_distinct_handles_for_distinct_keys() {
+        let ctx = egui::Context::default();
+        let key_a = GlyphKey::new(GlyphFontId(1), 5, 13.0, 0.0);
+        let key_b = GlyphKey::new(GlyphFontId(1), 6, 13.0, 0.0);
+
+        let loader = {
+            let ctx = ctx.clone();
+            move || {
+                ctx.load_texture(
+                    "test-overlay-glyph",
+                    egui::ColorImage::new([1, 1], egui::Color32::WHITE),
+                    egui::TextureOptions::LINEAR,
+                )
+            }
+        };
+
+        let a = get_or_create_overlay_texture(&ctx, key_a, loader.clone());
+        let b = get_or_create_overlay_texture(&ctx, key_b, loader);
+        assert!(a != b, "distinct glyph keys must not share a texture");
     }
 }
