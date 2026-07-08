@@ -316,6 +316,12 @@ impl ViewerSink for ProcessViewerSink {
             theme: launch::theme_token(self.settings.ui_theme).to_string(),
             preset: launch::preset_token(self.settings.ui_theme_preset).to_string(),
             ui_font_family: self.settings.ui_font_family.clone(),
+            terminal_font_family: self
+                .settings
+                .font_family_fallback
+                .first()
+                .cloned()
+                .unwrap_or_default(),
         };
         let path = match data_payload::write_data_payload(request.format, &request.text, &chrome) {
             Ok(p) => p,

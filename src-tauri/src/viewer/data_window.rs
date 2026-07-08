@@ -87,7 +87,11 @@ pub fn run(payload_path: &str) -> Result<(), String> {
         EventLoop::new().map_err(|e| format!("data viewer: failed to create event loop: {e}"))?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let state = DataViewerState::new(payload.format, payload.text);
-    let mut app = ViewerApp::new(state, payload.chrome.ui_font_family.clone());
+    let mut app = ViewerApp::new(
+        state,
+        payload.chrome.ui_font_family.clone(),
+        payload.chrome.terminal_font_family.clone(),
+    );
     event_loop
         .run_app(&mut app)
         .map_err(|e| format!("data viewer: event loop error: {e}"))?;
@@ -170,6 +174,7 @@ struct ViewerApp {
     state: DataViewerState,
     ui: WindowUi,
     ui_font_family: String,
+    terminal_font_family: String,
     shell: Option<GpuShell>,
     clipboard: Option<arboard::Clipboard>,
     pending_egui_events: Vec<egui::Event>,
@@ -179,11 +184,12 @@ struct ViewerApp {
 }
 
 impl ViewerApp {
-    fn new(state: DataViewerState, ui_font_family: String) -> Self {
+    fn new(state: DataViewerState, ui_font_family: String, terminal_font_family: String) -> Self {
         Self {
             state,
             ui: WindowUi::new(),
             ui_font_family,
+            terminal_font_family,
             shell: None,
             clipboard: None,
             pending_egui_events: Vec::new(),
@@ -361,7 +367,12 @@ impl ApplicationHandler for ViewerApp {
         // `WM_CLASS` / Wayland `app_id`).
         #[cfg(target_os = "linux")]
         let attrs = crate::linux_wm::with_app_id(attrs);
-        self.shell = Some(GpuShell::new(event_loop, attrs, &self.ui_font_family));
+        self.shell = Some(GpuShell::new(
+            event_loop,
+            attrs,
+            &self.ui_font_family,
+            &self.terminal_font_family,
+        ));
     }
 
     fn window_event(

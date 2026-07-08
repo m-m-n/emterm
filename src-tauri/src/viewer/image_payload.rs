@@ -41,16 +41,25 @@ struct Header {
     /// UI chrome font family (title-bar text).
     #[serde(default, rename = "uiFontFamily")]
     ui_font_family: String,
+    /// Terminal font family — the parent's
+    /// `settings.font_family_fallback[0]`. Drives the `Monospace`
+    /// egui chain in the child so the viewer's monospace surfaces
+    /// (data viewer's JSON/YAML body, chrome monospace text) match
+    /// the terminal grid glyphs the user configured.
+    #[serde(default, rename = "terminalFontFamily")]
+    terminal_font_family: String,
 }
 
 /// Chrome appearance the parent passes to the viewer child — the
 /// parent-side resolved equivalents of `ui_theme` / `ui_theme_preset` /
-/// `ui_font_family`, as lowercase wire tokens.
+/// `ui_font_family` / `font_family_fallback[0]`, as lowercase wire
+/// tokens.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ViewerChrome {
     pub theme: String,
     pub preset: String,
     pub ui_font_family: String,
+    pub terminal_font_family: String,
 }
 
 /// A decoded RGBA image (plus chrome appearance) read back from a
@@ -102,6 +111,7 @@ pub fn write_image_payload(
         theme: chrome.theme.clone(),
         preset: chrome.preset.clone(),
         ui_font_family: chrome.ui_font_family.clone(),
+        terminal_font_family: chrome.terminal_font_family.clone(),
     })
     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     if header.len() + 1 > MAX_HEADER_BYTES {
@@ -190,6 +200,7 @@ pub fn read_image_payload(path: &std::path::Path) -> std::io::Result<ImagePayloa
             theme: header.theme,
             preset: header.preset,
             ui_font_family: header.ui_font_family,
+            terminal_font_family: header.terminal_font_family,
         },
     })
 }
@@ -251,6 +262,7 @@ mod tests {
             theme: "dark".to_string(),
             preset: "pink".to_string(),
             ui_font_family: "Noto Sans JP".to_string(),
+            terminal_font_family: "Inconsolata".to_string(),
         }
     }
 

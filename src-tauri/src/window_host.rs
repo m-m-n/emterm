@@ -4850,6 +4850,21 @@ mod tests {
             // …but never as the primary face.
             assert_ne!(chain[0], "EmtermBundledCJK");
         }
+        // Empty terminal font → Monospace HEAD falls back to bundled
+        // Inconsolata (mirrors the terminal grid's BUNDLED_BASE_FONT
+        // behavior). Without this, chrome would render on egui's
+        // bundled Hack while the grid renders on Inconsolata.
+        assert_eq!(
+            fonts.families[&egui::FontFamily::Monospace][0],
+            "EmtermBundledBase"
+        );
+        // The bundled base is Monospace-only — it must not leak into
+        // Proportional (the tab-bar / title-bar font).
+        assert!(
+            fonts.families[&egui::FontFamily::Proportional]
+                .iter()
+                .all(|n| n != "EmtermBundledBase")
+        );
     }
 
     #[test]
