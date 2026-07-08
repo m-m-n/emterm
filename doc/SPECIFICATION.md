@@ -192,6 +192,30 @@ Cursor visibility toggles correctly in response to DECTCEM escape sequences from
 
 ---
 
+#### Extended OSC Escape Sequence Support
+
+Terminal color query/set, desktop notification, and iTerm2-compatible OSC sequences are handled beyond OSC 0/1/2/7/8/52/133/777.
+
+**Key Functionality:**
+- OSC 4/10/11/12 — color palette / default foreground / background / cursor color set and query
+- OSC 104/110/111/112 — corresponding color resets
+- OSC 9 — desktop notification / progress bar
+- OSC 22 — mouse cursor shape
+- OSC 1337;File and OSC 1337;SetUserVar — iTerm2 inline image and user-variable protocol
+
+---
+
+#### Synchronized Output (DEC Private Mode 2026)
+
+Support for DEC Private Mode 2026, which lets terminal applications signal batched screen updates to avoid flicker.
+
+**Key Functionality:**
+- Mode 2026 set/reset (`CSI ?2026h` / `CSI ?2026l`) tracked in `term_core`
+- `CSI ?2026$p` (DECRPM) reports whether the mode is set or reset, so applications can detect support
+- Mode is implicitly reset when switching to/from the alternate screen buffer (modes 47/1047/1049)
+
+---
+
 ### Category 2: Rich Content Display
 
 #### Markdown Rendering
@@ -538,6 +562,16 @@ Native context menus for terminal area, tab elements, and tab bar empty space.
 
 ---
 
+#### New Tab with Global Settings Shortcut
+
+A dedicated keybind opens a new tab using global shell settings directly, bypassing the profile selector or default-profile logic.
+
+**Key Functionality:**
+- Separate `new_tab_global` keybind (default `Ctrl+Shift+G`), configurable in Settings → Keybinds → Tab Management
+- Existing `new_tab` behavior (`Ctrl+Shift+T`, including default-profile auto-selection) is unchanged
+
+---
+
 ### Category 4: Input and IME
 
 #### Key Input Performance
@@ -640,6 +674,18 @@ Linux (X11 and Wayland) has two independent clipboards that eMterm honors:
 
 ---
 
+#### Alternate Scroll Mode (DECSET 1007)
+
+DEC private mode 1007 translates mouse wheel notches into arrow-key sequences sent to the PTY while the terminal is in alternate-screen mode.
+
+**Key Functionality:**
+- Default ON; each wheel notch sends three `ESC[A` (up) or `ESC[B` (down) while in alternate screen
+- Shift+wheel behaves the same as plain wheel
+- On the main screen the wheel still scrolls eMterm's own scrollback (no PTY bytes sent)
+- `alternate_scroll_enabled` setting (Settings → Terminal, default ON) opts out
+
+---
+
 ### Category 5: Navigation
 
 #### Semantic Scroll and Search
@@ -691,6 +737,19 @@ URLs detected in terminal output open in the system browser via `Ctrl+click`.
 - Each character's actual foreground color is used for the underline
 - `Ctrl+click` opens URL in default browser
 - OSC 8 hyperlink sequences are also supported (explicit hyperlink markup)
+
+---
+
+#### Scroll-Stick and Auto-Resume
+
+While scrolled back into scrollback history, the visible content stays anchored to the same point as new PTY output arrives, instead of drifting. Pressing any key that would be sent to the PTY automatically returns the view to the live tail.
+
+**Key Functionality:**
+- Scroll position advances by the same delta as new scrollback growth, keeping the anchored view visually fixed
+- When scrollback capacity is exceeded, the view clamps at the top of the available scrollback and older lines flow off the top
+- Follow-the-tail behavior preserved when scrolled to the bottom
+- Any key input that writes bytes to the PTY snaps the view back to the live tail; bare modifiers (Shift / Ctrl / Alt alone) do not
+- Alt-screen and partial DECSTBM scroll regions unaffected
 
 ---
 
@@ -825,6 +884,7 @@ All keyboard shortcuts are configurable in the Settings panel.
 | Action | Default |
 |--------|---------|
 | New tab | `Ctrl+Shift+T` |
+| New tab (global settings) | `Ctrl+Shift+G` |
 | Close tab | `Ctrl+Shift+W` |
 | Next tab | `Ctrl+Tab` |
 | Previous tab | `Ctrl+Shift+Tab` |
@@ -834,6 +894,31 @@ All keyboard shortcuts are configurable in the Settings panel.
 | Jump to previous prompt | `Ctrl+Up` |
 | Jump to next prompt | `Ctrl+Down` |
 | Search | `Ctrl+F` |
+
+---
+
+#### Font Resolution Chain and User Font Override
+
+Font resolution follows a four-tier priority chain, and emoji fonts are configured separately for color and monochrome presentation.
+
+**Key Functionality:**
+- Four-tier font resolution order: settings-supplied path > user directory (`~/.local/share/net.laser5.app.emterm/fonts/` on Linux, `%APPDATA%\net.laser5.app.emterm\fonts\` on Windows) > system fonts > bundled fonts
+- Users can override a bundled font (e.g. color emoji) by placing a file in the user directory; removing it falls back to the bundled copy
+- Separate `font_family_emoji_color` / `font_family_emoji_monochrome` settings fields
+- Presentation-aware emoji font selection: VS16 → color, VS15 → monochrome, `Emoji_Presentation=Yes` → color, `=No` → monochrome; falls back to the opposite font if the glyph is missing
+
+---
+
+#### Window Maximize-on-Launch and Dock Grouping
+
+Settings, Markdown viewer, and JSON/YAML data viewer windows launch maximized by default, and all windows group under one dock icon.
+
+**Key Functionality:**
+- Settings window launches maximized (restore size 1080×760)
+- Markdown viewer launches maximized (restore size 960×720)
+- JSON/YAML data viewer launches maximized (restore size 960×640)
+- Image viewer is excluded from maximize-on-launch and keeps its image-fit sizing
+- All windows share a single application identifier (X11 `WM_CLASS` / Wayland `app_id` = `emterm`) so GNOME/Ubuntu groups the main terminal, settings, Markdown, JSON/YAML, and image windows under one dock icon
 
 ---
 
@@ -1231,6 +1316,7 @@ The CLI commands (`emterm image`, `emterm markdown`, `emterm json`, `emterm yaml
 - Enables building on servers without GTK / WebKit / GPU dependencies
 - `EMTERM_CLI_ONLY=1 make dpkg` workflow for CLI-only package generation
 - CLI deb package (`emterm-cli`) depends only on libc6
+- The mux subsystem (daemon / bridge / CLI / PTY) is included in the CLI-only build, so `emterm mux --daemon` can run on headless SSH hosts without GUI dependencies; GUI-only mux UI pieces remain gated behind `gui`
 
 ---
 
@@ -1272,6 +1358,18 @@ Detects, on a failed self-spawn, that the running binary no longer matches the o
 - A top-right toast on the main window prompts the user to restart, auto-dismissing after 4 seconds
 - Toast text is localized (ja/en)
 - A failed self-spawn never blocks or affects terminal rendering/input
+
+---
+
+#### Windows Application Icon and Shell Exit Reliability
+
+On Windows, the application icon is embedded in the `.exe` resource and applied to all windows, and a child-process watcher ensures a naturally-exiting shell reliably closes its tab. Windows only; Linux unchanged.
+
+**Key Functionality:**
+- `.exe` PE resource icon via build script; the winit main window and wry child windows (settings, Markdown, data viewer) all display the icon
+- Icon decode failure logs a warning and falls back to no icon
+- A watcher thread on `PtySession` detects shell exit via `Child::wait()` and drives the existing `PtyEvent::Exited` → tab-close chain (e.g. `exit`, Ctrl+D)
+- Exactly one exit event per session: X-button close and natural shell exit converge on the same path
 
 ---
 
