@@ -246,11 +246,11 @@ HTML parsers.
 - **FR11: Mux integration** — Preserve `Tab::apply_mux_message` for
   `MessageType::StatusUpdate`. The view-model produced by
   `App::status_bar_state()` is replaced with a richer struct that carries:
-  (a) the mux session badge + daemon `left/right` (-> OSC layer, no client
-  re-resolution), and (b) per-tab CallbackState reference / cwd / git
-  cache used by client-side providers (-> App Line 1/2 templates). On mux
-  disconnect (detected via tab dropping its `mux_session_name`), the OSC
-  layer is cleared.
+  (a) daemon `left/right` (-> OSC layer, no client re-resolution), and
+  (b) per-tab CallbackState reference / cwd / git cache used by
+  client-side providers (-> App Line 1/2 templates). On mux disconnect
+  (detected via tab dropping its `mux_session_name`), the OSC layer is
+  cleared.
 
 - **FR12: Auto layer visibility** — In `draw`, before rendering each row,
   check `left.is_empty() && right.is_empty()`. If true and the row is OSC
@@ -488,10 +488,6 @@ pub struct StatusBarViewModel {
 
     /// Row 3 (App Line 2). Hidden when both sides resolve to empty.
     pub app_line2: AppRow,
-
-    /// Optional mux session badge prepended to App Line 1 (or its own
-    /// position — TBD during implementation; spec keeps both options open).
-    pub mux_session_name: Option<String>,
 }
 
 pub struct OscRow {
