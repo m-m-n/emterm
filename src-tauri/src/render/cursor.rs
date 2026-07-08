@@ -28,7 +28,7 @@ use term_core::terminal_core::TerminalCore;
 use crate::app::App;
 use crate::fold::FoldLayout;
 use crate::ime::preedit::Anchor;
-use crate::render::font::{GlyphKey, OverlayGlyph};
+use crate::render::font::{GlyphCache, GlyphKey, OverlayGlyphMeta};
 use crate::render::theme::{Rgb, Theme};
 
 /// Cell metrics expected by the overlay routines. Mirrors the values
@@ -271,6 +271,32 @@ pub fn resolve_cursor_color(theme: &Theme) -> Rgb {
     theme.cursor_fg
 }
 
+/// HiDPI-aware font size in physical pixels for the overlay glyph raster
+/// (task0002 AC-1, r1-c2): mirrors `window_host::render`'s
+/// `theme.font_size_px() * pixels_per_point.max(1.0)` computation that
+/// feeds the wgpu grid pass' `CellMetrics::font_size_px`. Before this fix
+/// the overlay resolved at `runtime_font_size_pt * PT_TO_PX` alone — on a
+/// HiDPI host (`pixels_per_point > 1.0`) that built a DIFFERENT
+/// `GlyphKey` than the grid pass and rasterized the overlay glyph at
+/// logical (1x) resolution while the grid pass rasterized at the host's
+/// real scale factor.
+pub fn overlay_font_px(runtime_font_size_pt: f32, pixels_per_point: f32) -> f32 {
+    runtime_font_size_pt * crate::settings::PT_TO_PX * pixels_per_point.max(1.0)
+}
+
+/// Baseline y in the SAME coordinate space `cell_top_y` is expressed in
+/// (task0002 AC-2, r1-c1): mirrors
+/// `terminal_grid_pass::GridInstanceBuilder::build_instances_split`'s
+/// `let baseline = y + v_pad + base_ascent;` exactly — `v_pad`
+/// ([`crate::render::font::compute_v_pad`]) centers the line vertically
+/// inside a cell taller than the font's natural line height, and
+/// `base_ascent` is the base font's real ascent. The pre-rework overlay
+/// used `base_ascent` alone, so the covered glyph floated above the
+/// grid's baseline whenever `v_pad > 0.0`.
+fn overlay_baseline_y(cell_top_y: f32, v_pad: f32, base_ascent: f32) -> f32 {
+    cell_top_y + v_pad + base_ascent
+}
+
 /// Paint the focused block cursor's filled overlay on top of the grid:
 /// the cell rect is filled with the theme's cursor color
 /// ([`resolve_cursor_color`] — task0003 D3, never the covered cell's own
@@ -299,7 +325,7 @@ pub fn resolve_cursor_color(theme: &Theme) -> Rgb {
 /// draws the surrounding grid with. That made the covered glyph visibly
 /// diverge from the grid (e.g. a slashed-zero terminal font rendering an
 /// unslashed zero under the cursor). The glyph is now resolved via
-/// [`crate::render::font::resolve_overlay_glyph`] — the SAME
+/// [`crate::render::font::resolve_overlay_glyph_meta`] — the SAME
 /// `FallbackChain` / `GlyphRasterizer` / `GlyphCache` triple
 /// `terminal_grid_pass::GridInstanceBuilder::glyph_instance` uses — and
 /// painted as an egui texture tinted with the resolved cell color
@@ -310,6 +336,30 @@ pub fn resolve_cursor_color(theme: &Theme) -> Rgb {
 /// above the function doc, this stays entirely inside the egui overlay
 /// layer: the wgpu grid instance stream is untouched and still
 /// independent of cursor state (IMPLEMENTATION.md D1).
+///
+/// block-cursor-glyph-font task0002 (rework, closing review round 1's
+/// HIGH findings r1-c1/r1-c2/r1-p1 and MEDIUM r1-c4): three axes now
+/// mirror the grid pass exactly instead of approximating it —
+/// - **HiDPI** (r1-c2): `font_px` includes `painter.ctx().pixels_per_point()`
+///   ([`overlay_font_px`]), matching `window_host::render`'s
+///   `theme.font_size_px() * pixels_per_point.max(1.0)`. Without this the
+///   overlay's `GlyphKey` (and its raster resolution) silently diverged
+///   from the grid's on a 2x host.
+/// - **Baseline** (r1-c1): the baseline includes `v_pad`
+///   ([`crate::render::font::compute_v_pad`], the SAME formula
+///   `terminal_grid_pass::GridInstanceBuilder::build_instances_split`
+///   uses), not just `base_ascent` — see [`overlay_baseline_y`].
+/// - **Shrink-to-fit** (r1-c4): a wide-advance fallback glyph is shrunk
+///   horizontally via [`crate::render::font::overlay_horizontal_fit_scale`],
+///   mirroring the grid pass's `GlyphFit::HorizontalOnly` reference-width
+///   selection.
+/// - **Per-frame allocation** (r1-p1): [`resolve_overlay_glyph_meta`]
+///   resolves the cache key + geometry WITHOUT touching pixel data;
+///   [`paint_overlay_glyph`]'s `loader` closure — invoked only on an
+///   `egui::TextureHandle` cache MISS — is the only place that reaches
+///   `extract_overlay_glyph_pixels` / builds an `egui::ColorImage`.
+///
+/// [`resolve_overlay_glyph_meta`]: crate::render::font::resolve_overlay_glyph_meta
 ///
 /// Suppressed per [`cursor_screen_row`]: scrolled back into history, or
 /// the cursor's row is hidden inside a collapsed fold region. The
@@ -367,12 +417,19 @@ pub fn draw_block_cursor(painter: &egui::Painter, core: &TerminalCore, theme: &T
 
     painter.rect_filled(rect, 0.0, super::rgb_to_egui(resolve_cursor_color(theme)));
     if cursor_glyph_paintable(&ch) {
-        let font_px = app.runtime_font_size_pt * crate::settings::PT_TO_PX;
+        // r1-c2: HiDPI — same `pixels_per_point` the grid pass' wgpu
+        // `CellMetrics` applies (`window_host::render`), so the overlay's
+        // `GlyphKey` and raster resolution match the grid's instead of
+        // silently resolving at 1x on a 2x host.
+        let scale = painter.ctx().pixels_per_point().max(1.0);
+        let font_px = overlay_font_px(app.runtime_font_size_pt, scale);
         // AC-1/D2: same fallback chain, rasterizer, and cache the grid
-        // pass uses — see `crate::render::font::resolve_overlay_glyph`.
-        let overlay = {
+        // pass uses — see `crate::render::font::resolve_overlay_glyph_meta`.
+        // Meta only (r1-p1): no pixel extraction / `egui::ColorImage`
+        // happens here — see `paint_overlay_glyph`'s doc.
+        let meta = {
             let mut cache = app.font_cache.lock();
-            crate::render::font::resolve_overlay_glyph(
+            crate::render::font::resolve_overlay_glyph_meta(
                 app.font_rasterizer.as_ref(),
                 &app.font_fallback,
                 &mut cache,
@@ -381,63 +438,113 @@ pub fn draw_block_cursor(painter: &egui::Painter, core: &TerminalCore, theme: &T
                 style.bold,
             )
         };
-        if let Some(glyph) = overlay {
-            // Same baseline source the grid pass anchors every glyph to
-            // (`GridInstanceBuilder::build_instances_split`'s
-            // `base_ascent`) so the overlay glyph sits on the identical
-            // line the grid would have drawn it on.
-            let base_ascent = app
+        if let Some(meta) = meta {
+            // r1-c1: same v_pad + base_ascent source the grid pass
+            // anchors every glyph to
+            // (`GridInstanceBuilder::build_instances_split`), computed at
+            // the SAME (HiDPI-scaled) `font_px` / `cell_h` so the overlay
+            // glyph sits on the identical line the grid would have drawn
+            // it on — not `base_ascent` alone (the pre-rework bug).
+            let base_metrics = app
                 .font_rasterizer
-                .font_metrics(app.font_fallback.base(), font_px)
-                .map(|m| m.ascent)
-                .unwrap_or(font_px * 0.8);
+                .font_metrics(app.font_fallback.base(), font_px);
+            let base_ascent_px = base_metrics.map(|m| m.ascent).unwrap_or(font_px * 0.8);
+            let base_line_height_px = base_metrics.map(|m| m.line_height()).unwrap_or(font_px);
+            let cell_h_px = metrics.cell_h * scale;
+            let v_pad_px = crate::render::font::compute_v_pad(cell_h_px, base_line_height_px);
+            // Convert the physical-pixel baseline offset back down to the
+            // logical/point space `rect` (and every other `egui::Painter`
+            // call in this module) already operates in.
+            let baseline = overlay_baseline_y(rect.min.y, v_pad_px / scale, base_ascent_px / scale);
             // AC-3: tint is the covered cell's fully-resolved bg color.
-            paint_overlay_glyph(painter, &glyph, rect.min, base_ascent, style.bg);
+            paint_overlay_glyph(
+                painter,
+                &meta,
+                rect,
+                baseline,
+                scale,
+                style.bg,
+                &app.font_cache,
+            );
         }
     }
 }
 
-/// Paint `glyph`'s raster into the overlay, anchored at `origin` (the
-/// covered cell rect's top-left) with `base_ascent` giving the baseline
-/// offset. `tint` colors `glyph.needs_tint` (Alpha / Subpixel-sourced,
-/// a flat-white coverage mask) rasters; Rgba-sourced rasters (color
-/// emoji / COLRv1) keep their own color and paint with a neutral white
-/// tint (no-op multiply) instead.
+/// Paint `meta`'s raster into the overlay so its baseline lands at
+/// `baseline` (already converted to the logical/point space `rect` is
+/// expressed in — see [`overlay_baseline_y`]) and its horizontal
+/// footprint stays inside `rect`'s width (r1-c4:
+/// [`crate::render::font::overlay_horizontal_fit_scale`] shrinks a
+/// wide-advance fallback glyph rather than letting it bleed past the
+/// cursor rect). `scale` is `painter.ctx().pixels_per_point().max(1.0)`:
+/// `meta`'s width / height / bearing / advance were all resolved at a
+/// font size already multiplied by `scale` (r1-c2), so they are divided
+/// back down here to size the destination rect correctly in egui's point
+/// space (egui itself re-multiplies by `pixels_per_point` when
+/// rasterizing the final frame).
+///
+/// `tint` colors `meta.needs_tint` (Alpha / Subpixel-sourced, a flat-white
+/// coverage mask) rasters; Rgba-sourced rasters (color emoji / COLRv1)
+/// keep their own color and paint with a neutral white tint (no-op
+/// multiply) instead.
+///
+/// r1-p1: `loader` — and therefore
+/// `crate::render::font::extract_overlay_glyph_pixels` / building an
+/// `egui::ColorImage` — only runs on an `egui::TextureHandle` cache MISS
+/// inside [`get_or_create_overlay_texture`]. A cache HIT (the common
+/// case: the cursor sits on the same glyph across most frames) never
+/// locks `font_cache` again and never extracts pixels.
 ///
 /// `egui::Painter` I/O has no test hook (matches this module's existing
 /// `painter.text` / `painter.line_segment` philosophy — see the module
 /// doc); the pure geometry and caching feeding this call
-/// ([`crate::render::font::resolve_overlay_glyph`],
+/// ([`crate::render::font::resolve_overlay_glyph_meta`],
 /// [`get_or_create_overlay_texture`]) are unit-tested instead. The final
 /// on-screen pixels are covered by manual visual check (MT-1).
 fn paint_overlay_glyph(
     painter: &egui::Painter,
-    glyph: &OverlayGlyph,
-    origin: Pos2,
-    base_ascent: f32,
+    meta: &OverlayGlyphMeta,
+    rect: Rect,
+    baseline: f32,
+    scale: f32,
     tint: Color32,
+    font_cache: &parking_lot::Mutex<GlyphCache>,
 ) {
     let ctx = painter.ctx();
-    let image = egui::ColorImage::from_rgba_unmultiplied(
-        [glyph.width as usize, glyph.height as usize],
-        &glyph.pixels,
-    );
-    let texture = get_or_create_overlay_texture(ctx, glyph.key, || {
+    let texture = get_or_create_overlay_texture(ctx, meta.key, || {
+        let cache = font_cache.lock();
+        let pixels = crate::render::font::extract_overlay_glyph_pixels(&cache, meta);
+        let image = egui::ColorImage::from_rgba_unmultiplied(
+            [meta.width as usize, meta.height as usize],
+            &pixels,
+        );
         ctx.load_texture(
             "emterm-cursor-overlay-glyph",
             image,
             egui::TextureOptions::LINEAR,
         )
     });
-    let baseline = origin.y + base_ascent;
-    let glyph_x = origin.x + glyph.bearing_left as f32;
-    let glyph_y = baseline - glyph.bearing_top as f32;
+
+    let glyph_w = meta.width as f32 / scale;
+    let glyph_h = meta.height as f32 / scale;
+    let glyph_x = rect.min.x + meta.bearing_left as f32 / scale;
+    let glyph_y = baseline - meta.bearing_top as f32 / scale;
+
+    // r1-c4: shrink horizontally when the fallback glyph's design advance
+    // exceeds the covered cell footprint, mirroring the grid pass'
+    // `GlyphFit::HorizontalOnly` shrink so a wide CJK / Dingbat fallback
+    // under the cursor doesn't bleed past the cursor rect.
+    let sx = crate::render::font::overlay_horizontal_fit_scale(
+        rect.width(),
+        meta.advance / scale,
+        glyph_w,
+    );
     let dest = Rect::from_min_size(
         Pos2::new(glyph_x, glyph_y),
-        Vec2::new(glyph.width as f32, glyph.height as f32),
+        Vec2::new(glyph_w * sx, glyph_h),
     );
     let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
-    let tint = if glyph.needs_tint {
+    let tint = if meta.needs_tint {
         tint
     } else {
         Color32::WHITE
@@ -812,7 +919,8 @@ mod tests {
 
     use crate::render::font::{
         AtlasFormat, FallbackChain, FontId as GlyphFontId, GlyphBitmap, GlyphCache, GlyphKey,
-        GlyphRasterizer, ShapedGlyph, resolve_overlay_glyph,
+        GlyphRasterizer, ShapedGlyph, extract_overlay_glyph_pixels, resolve_overlay_glyph,
+        resolve_overlay_glyph_meta, test_hooks,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use term_core::cell::STYLE_REVERSE;
@@ -983,5 +1091,147 @@ mod tests {
         let a = get_or_create_overlay_texture(&ctx, key_a, loader.clone());
         let b = get_or_create_overlay_texture(&ctx, key_b, loader);
         assert!(a != b, "distinct glyph keys must not share a texture");
+    }
+
+    // ── block-cursor-glyph-font task0002 rework (review round 1) ──────
+
+    // ── overlay_font_px (AC-1, r1-c2) ──────────────────────────────────
+
+    #[test]
+    fn overlay_font_px_applies_pixels_per_point_like_grid_pass() {
+        // Mirrors `window_host::render`'s
+        // `theme.font_size_px() * pixels_per_point.max(1.0)`.
+        let font_size_pt = 13.0;
+        let font_size_px = font_size_pt * crate::settings::PT_TO_PX; // theme.font_size_px()
+        let grid_font_px_at_2x = font_size_px * 2.0f32.max(1.0);
+        assert_eq!(overlay_font_px(font_size_pt, 2.0), grid_font_px_at_2x);
+    }
+
+    #[test]
+    fn overlay_font_px_clamps_sub_1x_scale_to_1() {
+        // `pixels_per_point` below 1.0 (should not normally happen) is
+        // clamped, matching the grid pass' `.max(1.0)` guard.
+        let font_size_pt = 13.0;
+        assert_eq!(
+            overlay_font_px(font_size_pt, 0.5),
+            overlay_font_px(font_size_pt, 1.0)
+        );
+    }
+
+    /// AC-1: the overlay's `GlyphKey` at HiDPI scale matches what the grid
+    /// pass would build for the same cluster/size — proving
+    /// `pixels_per_point` genuinely propagates into the cache key (not
+    /// just into a display-only scale), closing r1-c2.
+    #[test]
+    fn overlay_glyph_key_matches_grid_key_at_hidpi_scale() {
+        let rasterizer = FakeRasterizer {
+            calls: AtomicUsize::new(0),
+        };
+        let fallback = FallbackChain::new(GlyphFontId(1), []);
+        let mut cache = GlyphCache::new();
+        let runtime_font_size_pt = 13.0;
+        let scale = 2.0;
+        let font_px = overlay_font_px(runtime_font_size_pt, scale);
+
+        let meta =
+            resolve_overlay_glyph_meta(&rasterizer, &fallback, &mut cache, "A", font_px, false)
+                .expect("must resolve");
+
+        // Mirror the grid pass' own key derivation for the same scale
+        // (`window_host::render` -> `CellMetrics::font_size_px` ->
+        // `GridInstanceBuilder::glyph_instance`).
+        let grid_font_size_px = runtime_font_size_pt * crate::settings::PT_TO_PX * scale;
+        let grid_font = fallback.resolve_for_cluster(&rasterizer, "A").unwrap();
+        let grid_shaped = rasterizer.shape("A", grid_font, grid_font_size_px);
+        let grid_key = GlyphKey::new(grid_font, grid_shaped[0].glyph_id, grid_font_size_px, 0.0);
+
+        assert_eq!(meta.key, grid_key);
+
+        // Sanity: at 1x scale the key differs, proving scale genuinely
+        // participates rather than being lost to size-bucket rounding.
+        let font_px_1x = overlay_font_px(runtime_font_size_pt, 1.0);
+        let mut cache_1x = GlyphCache::new();
+        let meta_1x = resolve_overlay_glyph_meta(
+            &rasterizer,
+            &fallback,
+            &mut cache_1x,
+            "A",
+            font_px_1x,
+            false,
+        )
+        .unwrap();
+        assert_ne!(meta.key, meta_1x.key);
+    }
+
+    // ── overlay_baseline_y (AC-2, r1-c1) ────────────────────────────────
+
+    #[test]
+    fn overlay_baseline_y_matches_grid_pass_formula() {
+        // Known metrics mirroring `build_instances_split`: cell_h=20,
+        // base_line_height=16 -> v_pad=2.0; base_ascent=13.0.
+        let v_pad = crate::render::font::compute_v_pad(20.0, 16.0);
+        let baseline = overlay_baseline_y(4.0, v_pad, 13.0);
+        // Grid pass: `let baseline = y + v_pad + base_ascent;` with
+        // y = cell top (4.0 here, mirroring `origin.y + row*cell_h`).
+        assert_eq!(baseline, 4.0 + 2.0 + 13.0);
+    }
+
+    #[test]
+    fn overlay_baseline_y_no_pad_when_line_height_exceeds_cell() {
+        // A font whose natural line height exceeds the cell height (small
+        // cell, tall font) must not push the baseline UP past the cell
+        // top — `compute_v_pad`'s `.max(0.0)` clamp means no extra offset.
+        let v_pad = crate::render::font::compute_v_pad(10.0, 16.0);
+        assert_eq!(v_pad, 0.0);
+        assert_eq!(overlay_baseline_y(4.0, v_pad, 13.0), 4.0 + 13.0);
+    }
+
+    // ── r1-p1 / AC-4: pixel extraction skipped on texture cache hit ────
+
+    /// AC-4 / r1-p1: on a texture-cache HIT (the second consecutive paint
+    /// of the same glyph — the common case: the cursor sits on the same
+    /// glyph across most frames), `extract_region_rgba` must not run and
+    /// no `egui::ColorImage` is built. Drives the ACTUAL sequence
+    /// `draw_block_cursor` / `paint_overlay_glyph` run
+    /// (`resolve_overlay_glyph_meta` + `get_or_create_overlay_texture`
+    /// with a loader that only calls `extract_overlay_glyph_pixels` on
+    /// miss), counting real invocations via
+    /// `render::font::test_hooks` rather than asserting on plumbing in
+    /// isolation.
+    #[test]
+    fn second_paint_of_same_glyph_skips_pixel_extraction() {
+        test_hooks::reset_extract_region_rgba_call_count();
+
+        let ctx = egui::Context::default();
+        let rasterizer = FakeRasterizer {
+            calls: AtomicUsize::new(0),
+        };
+        let fallback = FallbackChain::new(GlyphFontId(1), []);
+        let mut cache = GlyphCache::new();
+
+        for _ in 0..2 {
+            let meta =
+                resolve_overlay_glyph_meta(&rasterizer, &fallback, &mut cache, "A", 13.0, false)
+                    .expect("must resolve");
+            let ctx_for_loader = ctx.clone();
+            let _texture = get_or_create_overlay_texture(&ctx, meta.key, || {
+                let pixels = extract_overlay_glyph_pixels(&cache, &meta);
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [meta.width as usize, meta.height as usize],
+                    &pixels,
+                );
+                ctx_for_loader.load_texture(
+                    "test-overlay-glyph",
+                    image,
+                    egui::TextureOptions::LINEAR,
+                )
+            });
+        }
+
+        assert_eq!(
+            test_hooks::extract_region_rgba_call_count(),
+            1,
+            "second paint of the same glyph must not re-extract pixels"
+        );
     }
 }
