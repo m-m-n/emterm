@@ -7,11 +7,14 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
 - **Core Terminal**
   - Full ANSI/VT100/VT220/xterm control sequence support
   - Multi-tab terminal with independent PTY sessions
+  - New tab with global shell settings (`Ctrl+Shift+G`), bypassing the profile selector
   - `term_core` Rust crate for the parser, grid, and Unicode width
   - Unified ring buffer with full-buffer reflow on resize
   - SlimCell scrollback compression: 76% per-cell memory reduction (34B → 8B) via StyleTable/CharTable deduplication
   - wgpu render pipeline with dirty-row tracking and a winit event loop
   - Background Color Erase (BCE) support
+  - Extended OSC support: color palette set/query and resets (OSC 4/10/11/12, 104/110/111/112), desktop notification / progress (OSC 9), mouse cursor shape (OSC 22), iTerm2 OSC 1337 File / SetUserVar
+  - Synchronized output (DEC private mode 2026) with DECRPM support detection
   - COLRv1 vector emoji rendering (skrifa + tiny-skia): sharper color emoji at fractional DPI scales, ~5 MiB smaller bundled font than the previous CBDT bitmap font
 
 - **Rich Content Display**
@@ -47,6 +50,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Mux status bar: daemon-side command execution with template variables (`{cmd:name}`, `{hostname}`, `{cwd}`)
   - Correct main-buffer snapshot restore: daemon screen dump omitted for main-buffer panes; client replays scrollback bytes directly (eliminates progress-bar corruption after `apt install` and similar commands)
   - Windows support: Named Pipe IPC with daemon process detachment (survives terminal closure)
+  - Included in the CLI-only build: `emterm mux --daemon` runs on headless SSH hosts without GUI dependencies
 
 - **Status Bar**
   - Configurable status bar at the bottom of the window (default OFF, enabled in settings)
@@ -70,11 +74,13 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Shift+Enter as Alt+Enter for multiline input in AI interfaces (configurable, default ON)
   - Word and line selection drag: double-click (word) or triple-click (line) then drag keeps the originally clicked word/line anchored for the whole drag
   - Comprehensive special key mapping (Ctrl+symbols, modified arrow keys, F-keys, Shift+Tab)
+  - Alternate scroll mode (DECSET 1007): mouse wheel sends arrow keys in alternate-screen apps (default ON, configurable)
 
 - **Navigation**
   - OSC 133 semantic prompt jump (Ctrl+Up / Ctrl+Down)
   - Incremental text search with match highlighting (Ctrl+F)
   - Command output folding (collapse/expand)
+  - Scroll-stick: while scrolled back, new output does not shift the view; any key press snaps back to the live tail
   - File path Ctrl+click to open in editor (hover-only underline)
   - URL Ctrl+click to open in browser (hover-only underline)
   - Right-click context menu for terminal area, tabs, and tab bar
@@ -84,8 +90,10 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Dark/light/system theme with five accent color presets (Purple, Blue, Green, Orange, Pink)
   - Terminal color schemes: built-in presets plus fully user-customizable palette with horizontal layout
   - ANSI bold-brightens-color behavior (bold + color 0-7 uses bright variant, configurable)
-  - Three-field font configuration (primary, CJK/secondary, emoji) with system font picker and clear button
+  - Font configuration (primary, CJK/secondary, separate color/monochrome emoji) with system font picker and clear button
+  - Four-tier font resolution: settings path > user font directory (drop-in overrides) > system fonts > bundled fonts
   - Separate UI font setting for the settings panel
+  - Settings / Markdown / JSON-YAML viewer windows launch maximized; all windows group under one dock icon (`WM_CLASS` / `app_id` = `emterm`)
   - Terminal profiles: named shell configurations with shell, args, env vars, and working directory
   - SSH connection management: auto-detect ssh command, import from ~/.ssh/config, manage connections
   - SFTP file upload: drag and drop files onto SSH tabs to upload; non-SSH tabs paste file paths
@@ -98,6 +106,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - OS desktop notifications when the window is not focused (configurable)
   - Notification throttling to prevent spam during high-frequency output
   - Restart toast when the running binary no longer matches the on-disk binary after a package update, e.g. `apt`/`dpkg` (Linux)
+  - Windows: application icon embedded in the `.exe` shown on all windows; a shell that exits naturally (`exit`, Ctrl+D) reliably closes its tab
 
 - **Internationalization**
   - English and Japanese UI (auto-detected from OS locale)
