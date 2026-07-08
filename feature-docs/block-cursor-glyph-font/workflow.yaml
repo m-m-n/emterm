@@ -17,10 +17,11 @@ workflow:
   - id: create-spec
     artifacts: [REQUIREMENTS.md, SPEC.md]
     status: completed
-    completed_at_commit: fdd7b4dc1281e1a5fb2c1ebde3a5bfa9c12b0d2a
+    completed_at_commit: f6780dda1ecc058ffff4b232403bdc9268dbf9a1
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: PENDING_PLAN_COMMIT
   - id: implement
     status: pending
     base_commit: null
@@ -33,7 +34,23 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "block cursor overlay glyph via swash"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/render/cursor.rs
+      - src-tauri/src/render/font/cache.rs
+      - src-tauri/src/render/font/mod.rs
+      - src-tauri/src/render/font/swash_adapter.rs
+      - src-tauri/src/render/mod.rs
+      - src-tauri/src/render/terminal_grid_pass.rs
+    skills: [backend-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -45,68 +62,68 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
   FR2:
     title: "overlay glyph position/size/baseline/advance match grid glyph"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
   FR3:
     title: "overlay glyph color remains resolve_cell_style_from_packed(...).bg"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3]
   FR4:
     title: "wide 2-cell glyph behavior preserved (rect 2-cell, glyph at leading col)"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4]
   FR5:
     title: "cursor_glyph_paintable == false still suppresses overlay glyph"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2]
   FR6:
     title: "font fallback chain shared with grid (swash -> ab_glyph -> .notdef)"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
   NFR1:
     title: "no perceptible per-frame overlay cost regression"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
   NFR2:
     title: "wgpu grid instance data stays independent of cursor state"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-6]
   NFR3:
     title: "identical behavior on Linux and Windows"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR4:
     title: "draw_block_cursor doc comment updated for new glyph path"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
