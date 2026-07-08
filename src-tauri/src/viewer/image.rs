@@ -281,6 +281,11 @@ impl ImageViewerRouter {
             theme: theme_token(settings.ui_theme).to_string(),
             preset: preset_token(settings.ui_theme_preset).to_string(),
             ui_font_family: settings.ui_font_family.clone(),
+            terminal_font_family: settings
+                .font_family_fallback
+                .first()
+                .cloned()
+                .unwrap_or_default(),
         };
         Self {
             store: ImageStore::new(quota_bytes),

@@ -31,11 +31,15 @@ pub(crate) struct GpuShell {
 
 impl GpuShell {
     /// Create the window and the full wgpu/egui stack. `ui_font_family`
-    /// skins the egui chrome (title-bar text) like the terminal window.
+    /// skins the egui `Proportional` chain (title-bar text) like the
+    /// terminal window; `terminal_font_family` skins the `Monospace`
+    /// chain so any monospace content in the viewer (e.g. the data
+    /// viewer's JSON / YAML body) picks up the user's terminal font.
     pub fn new(
         event_loop: &ActiveEventLoop,
         attrs: WindowAttributes,
         ui_font_family: &str,
+        terminal_font_family: &str,
     ) -> Self {
         let window = Arc::new(
             event_loop
@@ -98,10 +102,7 @@ impl GpuShell {
         };
 
         let egui_ctx = egui::Context::default();
-        // Viewer windows carry no terminal-content surface, so the
-        // Monospace chain keeps egui's default. Only the Proportional
-        // chain (tab bar / title bar chrome) picks up the UI font.
-        configure_egui_fonts(&egui_ctx, ui_font_family, "");
+        configure_egui_fonts(&egui_ctx, ui_font_family, terminal_font_family);
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
         let pixels_per_point = window.scale_factor() as f32;
 

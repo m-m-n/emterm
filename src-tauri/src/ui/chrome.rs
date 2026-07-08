@@ -103,7 +103,7 @@ pub(crate) fn build_egui_fonts(
     terminal_font_family: &str,
 ) -> egui::FontDefinitions {
     use crate::render::font::resolver::{
-        BUNDLED_CJK_FONT, BUNDLED_EMOJI_COLOR_FONT, BUNDLED_SYMBOLS_FONT,
+        BUNDLED_BASE_FONT, BUNDLED_CJK_FONT, BUNDLED_EMOJI_COLOR_FONT, BUNDLED_SYMBOLS_FONT,
     };
 
     const CJK_KEY: &str = "EmtermBundledCJK";
@@ -111,6 +111,7 @@ pub(crate) fn build_egui_fonts(
     const SYMBOLS_KEY: &str = "EmtermBundledSymbols";
     const UI_FONT_KEY: &str = "EmtermUiFont";
     const TERMINAL_FONT_KEY: &str = "EmtermTerminalFont";
+    const BUNDLED_BASE_KEY: &str = "EmtermBundledBase";
 
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -134,6 +135,17 @@ pub(crate) fn build_egui_fonts(
         SYMBOLS_KEY.to_string(),
         egui::FontData::from_static(BUNDLED_SYMBOLS_FONT),
     );
+    // Bundled Inconsolata: the same base Latin monospace face the terminal
+    // grid uses as its `BUNDLED_BASE_FONT`. Inserted at the HEAD of the
+    // Monospace chain so status-bar chrome renders in the same base face
+    // as the grid even when the user has no `font_family_primary`
+    // configured (the common case — settings.json ships that field empty).
+    // If the user does configure a terminal font, it is inserted before
+    // this bundle below so the user's choice still wins.
+    fonts.font_data.insert(
+        BUNDLED_BASE_KEY.to_string(),
+        egui::FontData::from_static(BUNDLED_BASE_FONT),
+    );
 
     for family in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
         let chain = fonts.families.entry(family).or_default();
@@ -143,6 +155,18 @@ pub(crate) fn build_egui_fonts(
             }
         }
     }
+    // Prepend the bundled Inconsolata to the Monospace chain BEFORE the
+    // user-terminal-font insertion below, so the final order after both
+    // insertions is [user_terminal_font?, bundled_inconsolata, egui_default_hack, cjk, emoji, symbols].
+    // When the user font is empty, Inconsolata becomes the head — matching
+    // the grid's base-face behavior. When the user font resolves,
+    // it wins at position 0 and Inconsolata sits at position 1 as an
+    // ASCII/Latin fallback before egui's bundled Hack.
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .insert(0, BUNDLED_BASE_KEY.to_string());
 
     // User-configured UI font: resolve the family through the same
     // fontdb lookup the terminal grid uses, then make it the first
@@ -192,12 +216,12 @@ pub(crate) fn build_egui_fonts(
                     .or_default()
                     .insert(0, TERMINAL_FONT_KEY.to_string());
                 log::info!(
-                    "settings: font_family_primary={terminal_family:?} applied to status-bar chrome"
+                    "settings: terminal font (font_family_fallback[0])={terminal_family:?} applied to Monospace chrome"
                 );
             }
             None => {
                 log::warn!(
-                    "settings.font_family_primary={terminal_family:?}: family not found on this host; using egui default Monospace"
+                    "settings.font_family_fallback[0]={terminal_family:?}: family not found on this host; using egui default Monospace"
                 );
             }
         }

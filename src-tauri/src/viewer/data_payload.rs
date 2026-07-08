@@ -35,6 +35,8 @@ struct Header {
     preset: String,
     #[serde(default, rename = "uiFontFamily")]
     ui_font_family: String,
+    #[serde(default, rename = "terminalFontFamily")]
+    terminal_font_family: String,
 }
 
 /// A document (plus chrome appearance) read back from a payload file.
@@ -66,6 +68,7 @@ pub fn write_data_payload(
         theme: chrome.theme.clone(),
         preset: chrome.preset.clone(),
         ui_font_family: chrome.ui_font_family.clone(),
+        terminal_font_family: chrome.terminal_font_family.clone(),
     })
     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     if header.len() + 1 > MAX_HEADER_BYTES {
@@ -131,6 +134,7 @@ pub fn read_data_payload(path: &std::path::Path) -> std::io::Result<DataPayload>
             theme: header.theme,
             preset: header.preset,
             ui_font_family: header.ui_font_family,
+            terminal_font_family: header.terminal_font_family,
         },
     })
 }
@@ -161,6 +165,7 @@ mod tests {
             theme: "dark".to_string(),
             preset: "pink".to_string(),
             ui_font_family: "Noto Sans JP".to_string(),
+            terminal_font_family: "Inconsolata".to_string(),
         }
     }
 

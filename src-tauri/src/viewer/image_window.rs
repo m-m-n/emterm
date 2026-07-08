@@ -83,7 +83,8 @@ pub fn run(payload_path: &str) -> Result<(), String> {
         EventLoop::new().map_err(|e| format!("image viewer: failed to create event loop: {e}"))?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let ui_font_family = payload.chrome.ui_font_family.clone();
-    let mut app = ViewerApp::new(payload, ui_font_family);
+    let terminal_font_family = payload.chrome.terminal_font_family.clone();
+    let mut app = ViewerApp::new(payload, ui_font_family, terminal_font_family);
     event_loop
         .run_app(&mut app)
         .map_err(|e| format!("image viewer: event loop error: {e}"))?;
@@ -293,6 +294,7 @@ impl ViewerState {
 struct ViewerApp {
     payload: ImagePayload,
     ui_font_family: String,
+    terminal_font_family: String,
     state: ViewerState,
     shell: Option<GpuShell>,
     /// Keeps the uploaded image alive in egui's texture manager.
@@ -308,11 +310,12 @@ struct ViewerApp {
 }
 
 impl ViewerApp {
-    fn new(payload: ImagePayload, ui_font_family: String) -> Self {
+    fn new(payload: ImagePayload, ui_font_family: String, terminal_font_family: String) -> Self {
         let state = ViewerState::new(payload.width, payload.height);
         Self {
             payload,
             ui_font_family,
+            terminal_font_family,
             state,
             shell: None,
             texture: None,
@@ -426,7 +429,12 @@ impl ApplicationHandler for ViewerApp {
         // `WM_CLASS` / Wayland `app_id`) — grouping only, no maximize.
         #[cfg(target_os = "linux")]
         let attrs = crate::linux_wm::with_app_id(attrs);
-        let shell = GpuShell::new(event_loop, attrs, &self.ui_font_family);
+        let shell = GpuShell::new(
+            event_loop,
+            attrs,
+            &self.ui_font_family,
+            &self.terminal_font_family,
+        );
 
         // Nearest magnification keeps pixel mode (100%) exact; linear
         // minification keeps fit mode (<100%) smooth.
