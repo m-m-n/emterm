@@ -1,0 +1,146 @@
+round: 1
+executed_at: "2026-07-08T20:15:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 7729df5b19ffd3ea99180908d7501a80d3bacebb
+  head_commit: 73dac399dc0b5dbec0c7b58bca8f070ab49f9615
+  changed_files:
+    - src-tauri/src/render/cursor.rs
+    - src-tauri/src/render/font/mod.rs
+plan:
+  floor: [comprehensive, spec]
+  discretionary:
+    - perspective: performance
+      reason: "NFR1 が per-frame allocation 禁止を要求しており、rasterizer キャッシュ共有の実装が新規追加されるため"
+  codex_cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+findings:
+  - stable_id: r1-c1
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/render/cursor.rs
+    line: 389
+    title: "Overlay baseline misses grid pass's v_pad — glyph drawn above the grid's baseline"
+    description: >-
+      terminal_grid_pass anchors every glyph at baseline = y + v_pad + base_ascent,
+      where v_pad centers the font line vertically inside the cell. The overlay
+      omits v_pad, so on cell_h > base_line_height the overlay glyph sits above
+      the grid's baseline for the same character.
+    suggestion: >-
+      Recompute v_pad in draw_block_cursor (or paint_overlay_glyph) using the
+      same formula the grid pass uses and add it into the baseline. Ideally
+      hoist v_pad computation into the shared font module so both paths call
+      one helper.
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: "routed to task0002 rework"
+  - stable_id: r1-c2
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/render/cursor.rs
+    line: 370
+    title: "font_px omits HiDPI pixels_per_point scale — breaks shared cache and blurs the overlay glyph"
+    description: >-
+      draw_block_cursor uses font_size_pt * PT_TO_PX; the grid pass uses
+      theme.font_size_px() * pixels_per_point. On HiDPI (>1x) the GlyphKey
+      differs between grid and overlay (cache miss guaranteed) and the overlay
+      rasterizes at logical resolution (visibly softer).
+    suggestion: >-
+      Read painter.ctx().pixels_per_point() at the top of draw_block_cursor and
+      multiply into font_px, matching the grid pass. Adjust the destination
+      Rect in paint_overlay_glyph so the physically-sized raster is drawn at
+      its logical size in egui coordinates.
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: "routed to task0002 rework"
+  - stable_id: r1-c3
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/render/cursor.rs
+    line: 369
+    title: "Box-drawing / block-drawing glyphs still diverge from the grid under the cursor"
+    description: >-
+      terminal_grid_pass short-circuits box- and block-drawing codepoints into
+      solid-quad rectangles. The overlay skips this branch; for box/block chars
+      the covered glyph will be the rasterized font glyph rather than crisp
+      quads.
+    suggestion: >-
+      Have resolve_overlay_glyph (or a new helper) mirror the grid pass's box/
+      block short-circuit and return either None or a specialized variant
+      carrying the rect list. draw_block_cursor paints them via
+      painter.rect_filled tinted with style.bg.
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "known limitation; not blocking the primary reported symptom (font glyph mismatch). Track for a follow-up feature."
+  - stable_id: r1-c4
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/render/cursor.rs
+    line: 413
+    title: "Overlay ignores grid's GlyphFit shrink — wide-advance fallback glyphs can overflow the cursor rect"
+    description: >-
+      GridInstanceBuilder.glyph_instance shrinks the glyph quad by sx =
+      (cell_w / advance).min(1.0) so wide-advance fallback glyphs fit. The
+      overlay paints at raw pixel size and can overhang the cursor rect.
+    suggestion: >-
+      Compute the same sx (the OverlayGlyph.advance is already extracted) and
+      scale the destination Rect in paint_overlay_glyph horizontally.
+      Ideally factor the fit computation into render::font so both paths call
+      one helper.
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: "routed to task0002 rework (paired with the v_pad + HiDPI fixes since same integration boundary)"
+  - stable_id: r1-c5
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/render/cursor.rs
+    line: 213
+    title: "Named-for-plumbing overlay tint tests don't actually exercise the plumbing"
+    description: >-
+      overlay_glyph_tint_tracks_reverse_video_via_resolve_cell_style_from_packed
+      and overlay_glyph_tint_tracks_selection_via_resolve_cell_style_from_packed
+      only reprove resolve_cell_style_from_packed properties — a swap of
+      style.bg → style.fg in paint_overlay_glyph would still leave both green.
+    suggestion: >-
+      Extract the tint-selection step into a pure helper
+      overlay_tint_for_cell(...) that mirrors paint_overlay_glyph's branch and
+      have both draw_block_cursor and the tests call it.
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "test-hygiene issue; does not affect runtime behavior. Track for a follow-up cleanup."
+  - stable_id: r1-p1
+    severity: high
+    category: performance
+    file: src-tauri/src/render/cursor.rs
+    line: 421
+    title: "per-frame ColorImage / pixel Vec allocations even on TextureHandle cache hit break NFR1"
+    description: >-
+      paint_overlay_glyph builds egui::ColorImage::from_rgba_unmultiplied
+      unconditionally before get_or_create_overlay_texture checks the cache.
+      resolve_overlay_glyph also always calls extract_region_rgba, allocating
+      a fresh Vec<u8>. Both are discarded on cache hit — hundreds of KB/s
+      churn at 60fps for the blinking cursor.
+    suggestion: >-
+      Split resolve_overlay_glyph into (a) meta-only lookup returning the
+      GlyphKey and geometry, and (b) pixel extraction called only on cache
+      miss inside the loader closure. Add a regression test that
+      extract_region_rgba (or its allocation) is not invoked on the second
+      call for the same glyph.
+    sources: [claude:performance]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: "routed to task0002 rework"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: "routed to implement rework (findings are prose-only and cross-cutting; single-shot editor dispatch cannot address them coherently)"
+residual_critical_high: 0
+rework_required: true

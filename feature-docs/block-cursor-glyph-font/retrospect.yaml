@@ -1,0 +1,30 @@
+feature: block-cursor-glyph-font
+collected_at: "2026-07-08T20:35:00+09:00"
+session_ids: []
+signals:
+  review_critical_high:
+    - stable_id: r1-c1
+      category: comprehensive
+      file: src-tauri/src/render/cursor.rs
+      title: "Overlay baseline misses grid pass's v_pad — glyph drawn above the grid's baseline"
+      resolution: fixed
+    - stable_id: r1-c2
+      category: comprehensive
+      file: src-tauri/src/render/cursor.rs
+      title: "font_px omits HiDPI pixels_per_point scale — breaks shared cache and blurs the overlay glyph"
+      resolution: fixed
+    - stable_id: r1-p1
+      category: performance
+      file: src-tauri/src/render/cursor.rs
+      title: "per-frame ColorImage / pixel Vec allocations even on TextureHandle cache hit break NFR1"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "NFR1 が per-frame allocation 禁止を要求しており、rasterizer キャッシュ共有の実装が新規追加されるため"
+  declined_findings: []
+lessons_candidates:
+  - "task0001 の初回実装は `FontId::monospace` からの swap には成功したが、grid pass の baseline/HiDPI/GlyphFit を機械的にミラーせず自作したため、レビューで 3 件の high 相当のズレを露呈した。共有ヘルパー化 (compute_v_pad, overlay_horizontal_fit_scale) はレビュー段階で強制されたが、初回計画で「grid 側の baseline/HiDPI/fit の 3 変数を必ず継承する」チェックリストを task plan に入れておけば1発で通せた可能性が高い。"
+  - "overlay の per-frame allocation は raster 回数ベースのテストではキャッチできない。NFR1 のような「アロケーション 0」系の要件は、専用のカウンタ (test_hooks::extract_calls など) で回帰テストを書く前提でタスク受け入れ条件を作る必要がある。"
