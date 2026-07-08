@@ -21,7 +21,7 @@ workflow:
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
-    completed_at_commit: PENDING_PLAN_COMMIT
+    completed_at_commit: b928062dca2e7725027c885c234834a2d54327a9
   - id: implement
     status: pending
     base_commit: null
