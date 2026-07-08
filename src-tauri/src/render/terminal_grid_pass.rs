@@ -21,6 +21,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use super::font::cache::{GlyphCache, GlyphKey};
+use super::font::compute_v_pad;
 use super::font::fallback::FallbackChain;
 use super::font::traits::{AtlasFormat, GlyphRasterizer};
 
@@ -479,8 +480,10 @@ impl GridInstanceBuilder {
         // Center the line vertically inside the cell so cells with a
         // small font but tall cell (e.g. cell_h=17 / line_height≈16)
         // get balanced top / bottom padding instead of the text being
-        // anchored to the very top.
-        let v_pad = ((metrics.cell_h - base_line_height) * 0.5).max(0.0);
+        // anchored to the very top. `compute_v_pad` (task0002 AC-3) is
+        // shared with `render::cursor::draw_block_cursor`'s overlay glyph
+        // path so the two never drift apart on this formula again.
+        let v_pad = compute_v_pad(metrics.cell_h, base_line_height);
         for cell in cells {
             let x = metrics.origin[0] + cell.col as f32 * metrics.cell_w;
             let y = metrics.origin[1] + cell.row as f32 * metrics.cell_h;
@@ -1577,7 +1580,7 @@ mod tests {
         let base_line_height = base_metrics
             .map(|m| m.line_height())
             .unwrap_or(metrics.font_size_px);
-        let v_pad = ((metrics.cell_h - base_line_height) * 0.5).max(0.0);
+        let v_pad = compute_v_pad(metrics.cell_h, base_line_height);
         for cell in cells {
             let x = metrics.origin[0] + cell.col as f32 * metrics.cell_w;
             let y = metrics.origin[1] + cell.row as f32 * metrics.cell_h;
