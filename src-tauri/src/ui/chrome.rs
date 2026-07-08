@@ -55,8 +55,9 @@ pub(crate) fn classify_resize_edge(
 }
 
 /// Configure egui's font stack for the chrome (tab bar / title bar /
-/// status bar): the user's `ui_font_family` plus bundled CJK and
-/// outline-emoji fallbacks.
+/// status bar): the user's `ui_font_family` on `Proportional`, the
+/// user's terminal `font_family_primary` on `Monospace`, plus bundled
+/// CJK and outline-emoji fallbacks on both.
 ///
 /// Three problems are addressed:
 ///
@@ -68,11 +69,13 @@ pub(crate) fn classify_resize_edge(
 ///    only; pictographs (✅ 🟢 ☂ etc.) fall off the end of the
 ///    Monospace chain.
 /// 3. `settings.ui_font_family` mirrors the WebView build's
-///    `--ui-font-family` CSS variable, which skins the chrome's
+///    `--ui-font-family` CSS variable and skins the chrome's
 ///    proportional text (tab bar, title bar). It is prepended to
-///    `Proportional` only — the status bar follows
-///    `--terminal-font-family` in the WebView build and so stays on
-///    the `Monospace` chain here.
+///    `Proportional` only. Analogously `settings.font_family_primary`
+///    mirrors `--terminal-font-family` — the status bar renders on
+///    the `Monospace` chain, so the terminal font is prepended there
+///    so its glyph shape matches the terminal grid instead of egui's
+///    bundled Hack.
 ///
 /// We register the bundled `NotoSansCJK-JP` and `NotoColorEmoji.ttf`
 /// (already linked in via [`crate::render::font::resolver`] for the
@@ -85,13 +88,20 @@ pub(crate) fn classify_resize_edge(
 /// outline* layer is reachable. Full color-emoji parity with the
 /// WebView build requires switching the status-bar text path to a
 /// swash-based custom painter, which is out of scope here.
-pub(crate) fn configure_egui_fonts(ctx: &egui::Context, ui_font_family: &str) {
-    ctx.set_fonts(build_egui_fonts(ui_font_family));
+pub(crate) fn configure_egui_fonts(
+    ctx: &egui::Context,
+    ui_font_family: &str,
+    terminal_font_family: &str,
+) {
+    ctx.set_fonts(build_egui_fonts(ui_font_family, terminal_font_family));
 }
 
 /// Build the `FontDefinitions` for [`configure_egui_fonts`]. Split out
 /// so tests can inspect the resulting chains without an egui `Context`.
-pub(crate) fn build_egui_fonts(ui_font_family: &str) -> egui::FontDefinitions {
+pub(crate) fn build_egui_fonts(
+    ui_font_family: &str,
+    terminal_font_family: &str,
+) -> egui::FontDefinitions {
     use crate::render::font::resolver::{
         BUNDLED_CJK_FONT, BUNDLED_EMOJI_COLOR_FONT, BUNDLED_SYMBOLS_FONT,
     };
@@ -100,6 +110,7 @@ pub(crate) fn build_egui_fonts(ui_font_family: &str) -> egui::FontDefinitions {
     const EMOJI_KEY: &str = "EmtermBundledEmoji";
     const SYMBOLS_KEY: &str = "EmtermBundledSymbols";
     const UI_FONT_KEY: &str = "EmtermUiFont";
+    const TERMINAL_FONT_KEY: &str = "EmtermTerminalFont";
 
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -157,6 +168,36 @@ pub(crate) fn build_egui_fonts(ui_font_family: &str) -> egui::FontDefinitions {
             None => {
                 log::warn!(
                     "settings.ui_font_family={family:?}: family not found on this host; using egui default"
+                );
+            }
+        }
+    }
+
+    // User-configured terminal font: same resolution as the UI font,
+    // but prepended to `Monospace` so status-bar text picks up the
+    // user's chosen terminal typeface (e.g. Inconsolata) instead of
+    // egui's bundled Hack. Empty / unknown families keep egui's default
+    // Monospace head — matching the WebView CSS fallback for
+    // `var(--terminal-font-family, monospace)`.
+    let terminal_family = terminal_font_family.trim();
+    if !terminal_family.is_empty() {
+        match crate::render::font::resolver::load_system_family_bytes(terminal_family, 400, None) {
+            Some((bytes, index)) => {
+                let mut data = egui::FontData::from_owned(bytes.to_vec());
+                data.index = index;
+                fonts.font_data.insert(TERMINAL_FONT_KEY.to_string(), data);
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Monospace)
+                    .or_default()
+                    .insert(0, TERMINAL_FONT_KEY.to_string());
+                log::info!(
+                    "settings: font_family_primary={terminal_family:?} applied to status-bar chrome"
+                );
+            }
+            None => {
+                log::warn!(
+                    "settings.font_family_primary={terminal_family:?}: family not found on this host; using egui default Monospace"
                 );
             }
         }

@@ -358,9 +358,26 @@ struct HoverState {
     is_osc8: bool,
 }
 
+/// Terminal font family used to skin the egui `Monospace` chain
+/// (status-bar text). Runtime settings flatten `font_family_primary`
+/// into `font_family_fallback[0]`, so we read the first entry — empty
+/// when the user did not configure one, in which case chrome falls
+/// back to egui's default Hack.
+fn terminal_font_family(settings: &crate::settings::Settings) -> &str {
+    settings
+        .font_family_fallback
+        .first()
+        .map(String::as_str)
+        .unwrap_or("")
+}
+
 impl WindowHost {
     /// Build the window + GPU resources.
-    pub fn new(event_loop: &ActiveEventLoop, ui_font_family: &str) -> Self {
+    pub fn new(
+        event_loop: &ActiveEventLoop,
+        ui_font_family: &str,
+        terminal_font_family: &str,
+    ) -> Self {
         let attrs = WindowAttributes::default()
             .with_title("eMterm PoC")
             .with_decorations(false)
@@ -483,7 +500,7 @@ impl WindowHost {
         // used for in-flight surface loss, which is already covered.
 
         let egui_ctx = egui::Context::default();
-        configure_egui_fonts(&egui_ctx, ui_font_family);
+        configure_egui_fonts(&egui_ctx, ui_font_family, terminal_font_family);
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
 
         let pixels_per_point = window.scale_factor() as f32;
@@ -2154,13 +2171,22 @@ impl WindowHost {
     fn reload_settings_from_disk(&mut self, app: &mut App) {
         let new = crate::settings::Settings::load_or_default();
         let old_ui_font = app.settings.ui_font_family.clone();
+        let old_terminal_font = terminal_font_family(&app.settings).to_string();
         let needs_resize = app.apply_settings(new);
         // File-log recording is owned by the logging module, not App.
         crate::logging::set_recording_enabled(app.settings.log_recording_enabled);
         // The egui chrome font chain is owned by the host context, not
-        // the App; rebuild it when the UI font family changed.
-        if app.settings.ui_font_family != old_ui_font {
-            configure_egui_fonts(&self.egui_ctx, &app.settings.ui_font_family);
+        // the App; rebuild it when either the UI font (Proportional
+        // head) or the terminal font (Monospace head; drives status-bar
+        // glyph shape) changed.
+        if app.settings.ui_font_family != old_ui_font
+            || terminal_font_family(&app.settings) != old_terminal_font
+        {
+            configure_egui_fonts(
+                &self.egui_ctx,
+                &app.settings.ui_font_family,
+                terminal_font_family(&app.settings),
+            );
         }
         if needs_resize {
             // Cell metrics / padding changed: reshape the PTY grid for
@@ -2902,7 +2928,11 @@ impl ApplicationHandler for PocApp {
             // surface (the PoC has no Android target).
             return;
         }
-        let mut host = WindowHost::new(event_loop, &self.app.settings.ui_font_family);
+        let mut host = WindowHost::new(
+            event_loop,
+            &self.app.settings.ui_font_family,
+            terminal_font_family(&self.app.settings),
+        );
 
         // Phase 4-H: construct the TerminalGridPass against the wgpu
         // device now that the surface exists. The App owns the font
@@ -4808,8 +4838,9 @@ mod tests {
 
     #[test]
     fn egui_fonts_empty_ui_font_keeps_default_proportional_head() {
-        let fonts = build_egui_fonts("");
+        let fonts = build_egui_fonts("", "");
         assert!(!fonts.font_data.contains_key("EmtermUiFont"));
+        assert!(!fonts.font_data.contains_key("EmtermTerminalFont"));
         // Bundled CJK / emoji fallbacks are appended to both chains.
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
             let chain = &fonts.families[&family];
@@ -4823,10 +4854,18 @@ mod tests {
 
     #[test]
     fn egui_fonts_unknown_ui_font_falls_back_to_default() {
-        let fonts = build_egui_fonts("Emterm No Such Font Family 9000");
+        let fonts = build_egui_fonts("Emterm No Such Font Family 9000", "");
         assert!(!fonts.font_data.contains_key("EmtermUiFont"));
         let prop = &fonts.families[&egui::FontFamily::Proportional];
         assert_ne!(prop[0], "EmtermUiFont");
+    }
+
+    #[test]
+    fn egui_fonts_unknown_terminal_font_falls_back_to_default() {
+        let fonts = build_egui_fonts("", "Emterm No Such Terminal Font 9000");
+        assert!(!fonts.font_data.contains_key("EmtermTerminalFont"));
+        let mono = &fonts.families[&egui::FontFamily::Monospace];
+        assert_ne!(mono[0], "EmtermTerminalFont");
     }
 
     #[test]
@@ -4844,7 +4883,7 @@ mod tests {
         else {
             return;
         };
-        let fonts = build_egui_fonts(&family);
+        let fonts = build_egui_fonts(&family, "");
         assert!(
             fonts.font_data.contains_key("EmtermUiFont"),
             "host family {family:?} should load"
@@ -4859,6 +4898,36 @@ mod tests {
             fonts.families[&egui::FontFamily::Monospace]
                 .iter()
                 .all(|n| n != "EmtermUiFont")
+        );
+    }
+
+    #[test]
+    fn egui_fonts_known_terminal_font_prepends_to_monospace_only() {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        let Some(family) = db
+            .faces()
+            .flat_map(|f| f.families.first())
+            .map(|(name, _)| name.clone())
+            .next()
+        else {
+            return;
+        };
+        let fonts = build_egui_fonts("", &family);
+        assert!(
+            fonts.font_data.contains_key("EmtermTerminalFont"),
+            "host family {family:?} should load"
+        );
+        assert_eq!(
+            fonts.families[&egui::FontFamily::Monospace][0],
+            "EmtermTerminalFont"
+        );
+        // The terminal font must not leak into Proportional (that
+        // chain is skinned by --ui-font-family).
+        assert!(
+            fonts.families[&egui::FontFamily::Proportional]
+                .iter()
+                .all(|n| n != "EmtermTerminalFont")
         );
     }
 

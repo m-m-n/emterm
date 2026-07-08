@@ -98,7 +98,10 @@ impl GpuShell {
         };
 
         let egui_ctx = egui::Context::default();
-        configure_egui_fonts(&egui_ctx, ui_font_family);
+        // Viewer windows carry no terminal-content surface, so the
+        // Monospace chain keeps egui's default. Only the Proportional
+        // chain (tab bar / title bar chrome) picks up the UI font.
+        configure_egui_fonts(&egui_ctx, ui_font_family, "");
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
         let pixels_per_point = window.scale_factor() as f32;
 
