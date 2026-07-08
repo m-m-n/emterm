@@ -169,7 +169,7 @@ impl StatusBarRuntime {
     /// - `settings`: current status-bar settings (templates,
     ///   position, font_size, …)
     /// - `mux_session_name`: `Some(name)` when the active tab is in a
-    ///   mux session, used to populate the OSC row badge
+    ///   mux session, used to detect the mux-disconnect falling edge
     /// - `mux_status`: `Some(StatusUpdateMsg)` when the daemon has
     ///   pushed status state for the active tab — wins over the OSC
     ///   `777;statusbar` layer
@@ -231,7 +231,6 @@ impl StatusBarRuntime {
         StatusBarViewModel {
             enabled: true,
             font_size: settings.font_size,
-            mux_session_name: mux_session_name.map(str::to_string),
             osc,
             app_line1,
             app_line2,
@@ -431,7 +430,6 @@ mod tests {
         assert_eq!(vm.osc.left, "1:shell");
         assert_eq!(vm.osc.right, "host01");
         assert_eq!(vm.osc.forced_visible, Some(true));
-        assert_eq!(vm.mux_session_name.as_deref(), Some("main"));
     }
 
     #[test]

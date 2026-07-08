@@ -108,13 +108,7 @@ pub fn draw(
             // FR1 layer order: OSC layer, App Line 1, App Line 2
             // (top-to-bottom, regardless of panel placement).
             if osc_visible {
-                draw_osc_row(
-                    ui,
-                    &view_model.osc,
-                    view_model.mux_session_name.as_deref(),
-                    font_size,
-                    emoji,
-                );
+                draw_osc_row(ui, &view_model.osc, font_size, emoji);
             }
             if app1_visible {
                 draw_app_row(ui, &view_model.app_line1, font_size, emoji);
@@ -162,12 +156,10 @@ fn draw_app_row(
     });
 }
 
-/// Render the OSC row. The mux session badge (`[mux:<name>]`) is
-/// prepended to the left side when present.
+/// Render the OSC row.
 fn draw_osc_row(
     ui: &mut egui::Ui,
     row: &OscRow,
-    mux_session_name: Option<&str>,
     font_size: f32,
     emoji: Option<&EmojiResources<'_>>,
 ) {
@@ -178,23 +170,8 @@ fn draw_osc_row(
         ui.spacing_mut().item_spacing.x = 0.0;
         // Left and right each cap at half the row (see `draw_app_row`).
         let section_w = ui.available_width() * 0.5;
-        // Left section = optional mux badge + the OSC `left` text, built
-        // as one atom list so they truncate together. The badge is only
-        // rendered when the daemon supplied non-empty `left` content —
-        // an empty left side must not paint a lonely `[mux:<name>]`
-        // (intent: when the user's `mux.statusbar.left` template
-        // resolves to nothing, the row's left section stays empty).
         let mut left_atoms: Vec<DrawAtom> = Vec::new();
         if !row.left.is_empty() {
-            if let Some(name) = mux_session_name {
-                let badge_style = AtomStyle {
-                    bold: true,
-                    ..AtomStyle::plain()
-                };
-                push_text_atoms(&mut left_atoms, &format!("[mux:{}]", name), &badge_style);
-                // Keep the badge visually separate from the window list.
-                left_atoms.push(DrawAtom::FixedGap(8.0));
-            }
             // OSC row text is post-strip plain text — push it through the
             // same segmenter so color-emoji clusters become images.
             push_text_atoms(&mut left_atoms, &row.left, &AtomStyle::plain());
@@ -885,13 +862,13 @@ mod tests {
         );
     }
 
-    // TS-25: OSC row populated from mux state shows session badge.
+    // TS-25: OSC row populated from mux state renders the daemon's
+    // left/right text without any session badge.
     #[test]
-    fn mux_session_renders_badge_and_osc_text() {
+    fn mux_session_renders_osc_text_without_badge() {
         let mut vm = StatusBarViewModel::default();
         vm.enabled = true;
         vm.app_line1.left = vec![make_text_run("L1")];
-        vm.mux_session_name = Some("main".to_string());
         vm.osc = OscRow {
             left: "1:shell 2:nvim*".to_string(),
             right: "host01".to_string(),
@@ -899,37 +876,9 @@ mod tests {
         };
         let shapes = run_one_frame(&vm);
         let text = collected_text(&shapes);
-        assert!(
-            text.contains("[mux:main]"),
-            "session badge missing: {text:?}"
-        );
+        assert!(!text.contains("[mux:"), "session badge painted: {text:?}");
         assert!(text.contains("1:shell"), "window list missing: {text:?}");
         assert!(text.contains("host01"), "right segment missing: {text:?}");
-    }
-
-    // Regression: when the OSC `left` is empty, the `[mux:<name>]` badge
-    // MUST NOT paint on its own — a lonely badge with no left content
-    // (e.g. `mux.statusbar.left = ""` while right is non-empty) was a
-    // user-visible bug.
-    #[test]
-    fn mux_badge_suppressed_when_osc_left_empty() {
-        let mut vm = StatusBarViewModel::default();
-        vm.enabled = true;
-        vm.app_line1.left = vec![make_text_run("L1")];
-        vm.mux_session_name = Some("default".to_string());
-        vm.osc = OscRow {
-            left: String::new(),
-            right: "host01".to_string(),
-            forced_visible: Some(true),
-        };
-        let shapes = run_one_frame(&vm);
-        let text = collected_text(&shapes);
-        assert!(
-            !text.contains("[mux:"),
-            "lonely mux badge painted with empty OSC left: {text:?}"
-        );
-        // Sanity: the right side still renders.
-        assert!(text.contains("host01"), "OSC right missing: {text:?}");
     }
 
     // TS-26: OSC row hidden when no content and no mux session.

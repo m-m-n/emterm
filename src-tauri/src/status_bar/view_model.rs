@@ -19,14 +19,6 @@ pub struct StatusBarViewModel {
     /// Optional font-size override (egui logical points). `None`
     /// keeps the widget's default.
     pub font_size: Option<f32>,
-    /// Mux session badge (`[mux:<name>]`) prepended to the OSC row's
-    /// left side at draw time **only when this name is non-empty AND
-    /// `osc.left` is non-empty**. An empty `osc.left` (the daemon's
-    /// `mux.statusbar.left` resolved to nothing) suppresses the badge
-    /// entirely — the left section stays blank rather than painting a
-    /// lonely `[mux:<name>]`. The runtime sets this from
-    /// `Tab::mux_session_name`.
-    pub mux_session_name: Option<String>,
     pub osc: OscRow,
     pub app_line1: AppRow,
     pub app_line2: AppRow,
