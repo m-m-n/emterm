@@ -23,15 +23,33 @@ workflow:
     status: completed
     completed_at_commit: ae4ea2ee88fadaa49a7e1aabadf5771312dea6bf
   - id: implement
-    status: pending
+    status: completed
+    base_commit: ae4ea2ee88fadaa49a7e1aabadf5771312dea6bf
+    completed_at_commit: 5f4681c119440c903f6a71f03124c78e2b7a9907
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 5f4681c119440c903f6a71f03124c78e2b7a9907
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 5f4681c119440c903f6a71f03124c78e2b7a9907
+    result: pass
     failed_items: []
+    notes: >-
+      Build check (default + --no-default-features) pass. New feature tests
+      (AC-1..AC-7 = TS-1..TS-5, TS-7 assertions) all pass. Full --lib run:
+      2330 passed / 6 failed, but all 6 failures reproduce on the unmodified
+      base commit (orchestrator A/B in a detached worktree): 5x off-thread
+      replay worker timeout flake (environment-dependent, same family
+      recorded in mux-snapshot-device-query-strip verify) + 1x stale
+      welcome_without_windows_leaves_group_none (predates fresh-start mux
+      branch; deterministic on base too) — unrelated to this feature. TS-6
+      has no dedicated new test (recorded as medium spec finding in review
+      round1); NFR1 is covered behaviorally by the untouched sync path and
+      passing regression suite. MT-1 (detach->attach) / MT-2 (in-mux viewer
+      launch) are user-performed later (requires release build).
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 5f4681c119440c903f6a71f03124c78e2b7a9907
 
 tasks:
   task0001:
@@ -44,12 +62,25 @@ tasks:
     domains: [concurrency, input-handling]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/mux-offthread-swap-callback-restore/task0001
 
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:

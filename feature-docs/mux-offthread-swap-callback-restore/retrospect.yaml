@@ -1,0 +1,38 @@
+feature: mux-offthread-swap-callback-restore
+collected_at: "2026-07-09T22:27:19+09:00"
+session_ids: [9003b4cf-e2d5-4475-af00-65941eca0544]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    Fresh git worktrees lack the gitignored bundled fonts
+    (src-tauri/assets/fonts/*.ttf), so build.rs fails in any new
+    integration/task worktree until fonts are copied from the main tree or
+    fetched via scripts/fetch-fonts.sh. The implementer hit and solved this
+    independently; the verify phase hit it again. A worktree-setup pre-step
+    (or documenting the copy in the workflow) would avoid the repeated
+    stumble.
+  - >-
+    Pre-existing test debt surfaced twice: (a) tabs::tests off-thread replay
+    worker-timeout flake family (environment-dependent, also recorded in the
+    mux-snapshot-device-query-strip verify) and (b)
+    welcome_without_windows_leaves_group_none failing deterministically since
+    the fresh-start mux pane_count==0 branch landed — the stale test should
+    be fixed on main independently of any feature workflow.
+  - >-
+    Review round1 mediums worth a follow-up task: live-core wiring (OSC
+    app-param registration) now duplicated between Tab::new and
+    apply_offthread_swap with no shared helper/test pinning them together;
+    TS-6 (sync-path callback preservation) has no dedicated regression test.
+  - >-
+    Parallel investigation (tmp/report-mux-detached-race-investigation-2026-07-09.md)
+    REFUTED the discussion doc's Detached-race hypothesis: the real Detached
+    was delivered even in the failing detach; framed.send flushes before
+    close so the send/close race does not exist. Remaining actionable item is
+    warn-logging the let _ send errors (connection.rs:743 and kick path
+    :311) for bridge-died diagnosability.
