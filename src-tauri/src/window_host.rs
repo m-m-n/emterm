@@ -219,6 +219,21 @@ pub struct WindowHost {
     grid_pass: Option<TerminalGridPass>,
     egui_renderer: egui_wgpu::Renderer,
     egui_ctx: egui::Context,
+    /// Construction instant, fed to egui as `RawInput::time` every frame so
+    /// egui's clock advances in real time. With `time: None` egui substitutes
+    /// `previous_time + predicted_dt` (a fixed 1/60 s per pass), turning its
+    /// clock into a frame counter: anything scheduled against it — the
+    /// restart/SFTP toast auto-dismiss in `App::pump_sftp`, double-click
+    /// detection — then runs fast whenever frames outpace 60 Hz (Mailbox
+    /// present never blocks) and stalls when frames are skipped.
+    egui_start: Instant,
+    /// Last time `about_to_wait` requested a redraw on behalf of an active
+    /// toast. Rate-limits that request to the `TOAST_POLL_MS` cadence:
+    /// an unconditional request would re-enter `RedrawRequested` immediately
+    /// (never reaching the `WaitUntil` timer), and with a non-blocking
+    /// present mode the loop then spins at full speed for the toast's
+    /// entire lifetime.
+    last_toast_redraw: Option<Instant>,
     surface_config: wgpu::SurfaceConfiguration,
     queue: wgpu::Queue,
     device: wgpu::Device,
@@ -522,6 +537,8 @@ impl WindowHost {
             queue,
             egui_ctx,
             egui_renderer,
+            egui_start: Instant::now(),
+            last_toast_redraw: None,
             pixels_per_point,
             surface_dirty: true,
             pending_resize: false,
@@ -2217,7 +2234,14 @@ impl WindowHost {
                 egui::Pos2::ZERO,
                 egui::vec2(logical.width, logical.height),
             )),
-            time: None,
+            // Real elapsed time, NOT `None`: egui replaces `None` with
+            // `previous_time + predicted_dt`, i.e. a frame counter scaled by
+            // 1/60 s. The toast auto-dismiss deadlines (`App::pump_sftp`
+            // reads `ctx.input(|i| i.time)`) are scheduled against this
+            // clock, so it must track wall time regardless of the actual
+            // frame cadence (frame-skips below 60 Hz, Mailbox-present bursts
+            // above it).
+            time: Some(self.egui_start.elapsed().as_secs_f64()),
             predicted_dt: 1.0 / 60.0,
             // Forward the live modifier state so egui's TextEdit (search
             // bar) interprets editing chords like Ctrl+A / Ctrl+C / Ctrl+V
@@ -2280,6 +2304,22 @@ fn should_skip_frame(
     egui_input_pending: bool,
 ) -> bool {
     matches!(dirty_count, Some(0)) && !status_bar_changed && !overlay_work && !egui_input_pending
+}
+
+/// Whether `about_to_wait` should request a redraw on behalf of an active
+/// toast this turn: a toast is up AND at least [`crate::app::TOAST_POLL_MS`]
+/// has elapsed since the last toast-driven request (`None` = no request was
+/// made yet, so the first one fires immediately). This is the rate limit
+/// that keeps the toast-driven `request_redraw` → `RedrawRequested` →
+/// `about_to_wait` cycle at the poll cadence instead of spinning at full
+/// speed under a non-blocking present mode. Extracted as a pure function —
+/// plain values in, plain bool out — so it is directly unit-testable
+/// (mirrors [`should_skip_frame`] above).
+fn toast_redraw_due(toast_pending: bool, last_redraw: Option<Instant>, now: Instant) -> bool {
+    toast_pending
+        && last_redraw.is_none_or(|last| {
+            now.duration_since(last) >= Duration::from_millis(crate::app::TOAST_POLL_MS)
+        })
 }
 
 /// Whether `events` contains at least one egui event that must veto the
@@ -3869,11 +3909,23 @@ impl ApplicationHandler for PocApp {
         // intermediate frames: on an idle / unfocused terminal the redraw
         // triggers above can all be false, so a visible toast would never be
         // pruned until an unrelated event. While any toast is up, keep frames
-        // flowing (the 16 ms WaitUntil cadence below bounds the cost) so the
-        // restart / SFTP toasts dismiss on schedule.
+        // flowing so the restart / SFTP toasts dismiss on schedule.
+        //
+        // Rate-limited to the `TOAST_POLL_MS` cadence via `last_toast_redraw`:
+        // the `WaitUntil` timer below does NOT bound this by itself, because
+        // an unconditional `request_redraw()` here re-enters
+        // `RedrawRequested` → `about_to_wait` immediately (the loop never
+        // becomes idle enough to reach the timer), and with a non-blocking
+        // present mode (Mailbox/Immediate, see `WindowHost::new`) nothing
+        // else brakes the cycle — the loop spins at full speed for the
+        // toast's entire lifetime.
         let toast_pending =
             self.app.restart_toast.active() || !self.app.sftp_ui.toasts.toasts.is_empty();
-        if ime_changed || pty_changed || search_changed || blink_due || bell_due || toast_pending {
+        let toast_due = toast_redraw_due(toast_pending, host.last_toast_redraw, Instant::now());
+        if toast_due {
+            host.last_toast_redraw = Some(Instant::now());
+        }
+        if ime_changed || pty_changed || search_changed || blink_due || bell_due || toast_due {
             host.window().request_redraw();
         }
         // Cursor cell may have moved as a side effect of pumps; notify
@@ -4269,6 +4321,46 @@ mod tests {
     #[test]
     fn should_skip_frame_false_when_search_visible() {
         assert!(!should_skip_frame(Some(0), false, true, false));
+    }
+
+    // ── toast_redraw_due pure decision ──────────────────────────────────
+
+    /// No active toast → no toast-driven redraw, regardless of when the
+    /// last one fired.
+    #[test]
+    fn toast_redraw_due_false_when_no_toast() {
+        let now = Instant::now() + Duration::from_secs(10);
+        assert!(!toast_redraw_due(false, None, now));
+        assert!(!toast_redraw_due(false, Some(now), now));
+    }
+
+    /// First request for a freshly armed toast fires immediately (no
+    /// previous toast-driven redraw recorded).
+    #[test]
+    fn toast_redraw_due_true_on_first_request() {
+        assert!(toast_redraw_due(true, None, Instant::now()));
+    }
+
+    /// Within the poll interval of the previous toast-driven redraw the
+    /// request is suppressed — this is what keeps the redraw →
+    /// `about_to_wait` cycle from spinning at full speed while a toast is
+    /// up (the egui pass would otherwise consume the toast's lifetime at
+    /// frame-rate speed; with the old `time: None` frame-counter clock
+    /// that dismissed a 4 s toast almost instantly).
+    #[test]
+    fn toast_redraw_due_false_within_poll_interval() {
+        let now = Instant::now() + Duration::from_secs(10);
+        let last = now - Duration::from_millis(crate::app::TOAST_POLL_MS / 2);
+        assert!(!toast_redraw_due(true, Some(last), now));
+    }
+
+    /// Once the poll interval has elapsed the next request fires, keeping
+    /// the toast's prune cadence at ~`TOAST_POLL_MS`.
+    #[test]
+    fn toast_redraw_due_true_after_poll_interval() {
+        let now = Instant::now() + Duration::from_secs(10);
+        let last = now - Duration::from_millis(crate::app::TOAST_POLL_MS);
+        assert!(toast_redraw_due(true, Some(last), now));
     }
 
     // ── has_actionable_egui_input pure decision ─────────────────────────
