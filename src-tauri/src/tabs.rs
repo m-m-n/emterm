@@ -444,9 +444,13 @@ impl Tab {
         // `term_core` knows no mux protocol; register the app-layer OSC mapping
         // so a pre-mux OSC 9999 `emterm-mux;` Welcome (the Windows ConPTY
         // fallback transport, parsed by `self.core` before mux is established)
-        // reaches `on_osc(OSC_MUX_INBAND, …)` → the mux APC path (NFR5). Only
-        // the live outer-PTS tab core needs this; off-thread snapshot replay
-        // cores process inner content, which carries no mux transport frames.
+        // reaches `on_osc(OSC_MUX_INBAND, …)` → the mux APC path (NFR5).
+        // Off-thread snapshot replay cores are worker-built without this
+        // registration (and without callbacks — the worker contract requires
+        // `Send`), but they become the live core at swap time:
+        // `apply_offthread_swap` transplants the callbacks and re-registers
+        // this same mapping onto the swapped-in core, so it ends up
+        // behaviorally identical to a never-swapped tab core.
         core.register_osc_app_param(
             mux_ipc::protocol::MUX_OSC_PARAM,
             crate::callbacks::OSC_MUX_INBAND,
@@ -859,8 +863,27 @@ impl Tab {
         // Move out the pre-captured B-mark texts BEFORE partial-moving
         // `replay.core` (field ordering matters for partial moves).
         let bypass_b_mark_texts = replay.bypass_b_mark_texts;
-        // 1. Swap the built core in (renderer's Arc stays valid).
-        *self.core.lock() = replay.core;
+        // 1. Swap the built core in (renderer's Arc stays valid), transplanting
+        //    the pre-swap wiring onto it FIRST so the live core is never
+        //    observable (even momentarily, under this same lock) without its
+        //    callbacks / app-layer OSC registration:
+        //      - the old core's `callbacks` moves onto the worker-built core.
+        //        An old core with no callbacks (edge case) yields
+        //        `new_core.callbacks = None` — already `TerminalCore::new`'s
+        //        default, so no panic.
+        //      - the mux inband OSC param is re-registered on the new core
+        //        with the same call `Tab::new` makes, so the swapped-in core
+        //        ends up behaviorally identical to a never-swapped tab core.
+        {
+            let mut live = self.core.lock();
+            let mut new_core = replay.core;
+            new_core.callbacks = live.callbacks.take();
+            new_core.register_osc_app_param(
+                mux_ipc::protocol::MUX_OSC_PARAM,
+                crate::callbacks::OSC_MUX_INBAND,
+            );
+            *live = new_core;
+        }
         // 2. Stash the bypass texts so `backfill_prompt_marks` (called
         //    from inside `apply_replay_reconcile`) can populate
         //    `resolved_b_mark_texts` for each B mark it processes.
@@ -6183,5 +6206,209 @@ mod tests {
              the merge primitive must not append the rebuilt core's marks (FR8)"
         );
         assert_eq!(live_marks_after[0].kind, b'A');
+    }
+
+    // ── task0001: transplant callbacks + OSC registration across the
+    // off-thread core swap ────────────────────────────────────────────────
+
+    /// Minimal recording [`term_core::callbacks::TerminalCallbacks`] double
+    /// (mirrors `term_core`'s internal `Recorder` test pattern) used to
+    /// prove AC-1: the exact pre-swap callbacks instance is still the one
+    /// firing after `apply_offthread_swap`, not merely *a* fresh instance.
+    #[derive(Default)]
+    struct OscRecorder {
+        events: Mutex<Vec<(u8, String)>>,
+    }
+
+    struct RecorderCallbacks(Arc<OscRecorder>);
+
+    impl term_core::callbacks::TerminalCallbacks for RecorderCallbacks {
+        fn on_osc(&self, action_type: u8, data: &str) {
+            self.0.events.lock().push((action_type, data.to_string()));
+        }
+        fn on_apc(&self, _data: &[u8]) {}
+        fn on_dcs(&self, _data: &[u8]) {}
+        fn on_bell(&self) {}
+        fn on_device_response(&self, _data: &[u8]) {}
+    }
+
+    /// AC-1 (SPEC TS-1): after `apply_offthread_swap`, the live core's
+    /// callbacks is the pre-swap instance — a recording callbacks double
+    /// installed before the swap still receives events fed to the
+    /// swapped-in core afterward.
+    #[test]
+    fn ac1_offthread_swap_transplants_the_preswap_callbacks_instance() {
+        let mut tab = test_tab();
+        let recorder = Arc::new(OscRecorder::default());
+        tab.core.lock().callbacks = Some(Box::new(RecorderCallbacks(recorder.clone())));
+
+        tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+        assert!(
+            tab.test_has_pending_switch(),
+            "test prerequisite: large payload must go off-thread"
+        );
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+        // Feed an OSC directly through the now-swapped core; the SAME
+        // recorder installed before the swap must observe it.
+        tab.core
+            .lock()
+            .process_pty_data_fully(b"\x1b]2;hello\x1b\\");
+        assert_eq!(
+            recorder.events.lock().as_slice(),
+            &[(2u8, "hello".to_string())],
+            "the pre-swap callbacks instance must still be the one firing after the swap"
+        );
+    }
+
+    /// AC-2 (SPEC TS-2): after `apply_offthread_swap`, feeding an OSC 9999
+    /// (`MUX_OSC_PARAM`) sequence to the live core triggers the same
+    /// registered app-param action as on a never-swapped tab core. Without
+    /// the registration surviving the swap, OSC 9999 maps to action_type 255
+    /// (Unknown) and never reaches `pending_apc`.
+    #[test]
+    fn ac2_offthread_swap_preserves_osc_9999_app_param_registration() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+        let welcome = welcome_msg(&[(1, "a", 10)], 0);
+        let osc_bytes = welcome.to_osc();
+        tab.core.lock().process_pty_data_fully(osc_bytes.as_bytes());
+        assert_eq!(
+            tab.cb_state.lock().pending_apc.len(),
+            1,
+            "OSC 9999 must still map to OSC_MUX_INBAND and reach pending_apc after the swap"
+        );
+    }
+
+    /// AC-3 (SPEC TS-3): after an off-thread swap, a pre-mux Welcome frame in
+    /// OSC 9999 form arriving on the outer-stream path (`process_outer_via_core`,
+    /// taken while `mux_session_name` is `None`) reaches `apply_mux_message`.
+    #[test]
+    fn ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message() {
+        let mut tab = test_tab();
+        // No prior Welcome: the tab starts pre-mux, mirroring the Windows
+        // ConPTY fallback scenario where the OSC 9999 Welcome has not yet
+        // arrived when a large snapshot triggers the off-thread swap.
+        tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+        assert!(
+            tab.mux_session_name.is_none(),
+            "test prerequisite: tab is still pre-mux after the swap"
+        );
+
+        let welcome = welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0);
+        let osc_bytes = welcome.to_osc().into_bytes();
+        // Drive the pre-mux outer-stream path (`process_combined` routes
+        // through `self.core` when `mux_session_name` is `None`).
+        tab.test_process_combined(osc_bytes);
+        assert_eq!(
+            tab.mux_session_name.as_deref(),
+            Some("main"),
+            "the OSC 9999 Welcome frame must still reach apply_mux_message after the swap"
+        );
+    }
+
+    /// AC-4 (SPEC TS-4): after an off-thread swap, a pre-mux Welcome frame in
+    /// APC form is also processed to `apply_mux_message`. Unlike AC-3 (OSC
+    /// 9999), the APC path needs only the transplanted callbacks (`on_apc`
+    /// fires unconditionally for any APC, no app-param registration
+    /// involved) — this pins that path separately.
+    #[test]
+    fn ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+        assert!(
+            tab.mux_session_name.is_none(),
+            "test prerequisite: tab is still pre-mux after the swap"
+        );
+
+        let welcome = welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0);
+        let apc_bytes = welcome.to_apc().into_bytes();
+        tab.test_process_combined(apc_bytes);
+        assert_eq!(
+            tab.mux_session_name.as_deref(),
+            Some("main"),
+            "the APC-form Welcome frame must still reach apply_mux_message after the swap"
+        );
+    }
+
+    /// AC-5 (SPEC TS-5): after an off-thread swap, a callback-driven OSC
+    /// (title change) in subsequent PTY output invokes the transplanted
+    /// callbacks end to end (`NativeCallbacks::on_osc` -> `cb_state.title`
+    /// -> `Tab::title`), not merely proving a callback object is present.
+    #[test]
+    fn ac5_offthread_swap_transplanted_callbacks_apply_title_change() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+        tab.test_process_combined(b"\x1b]2;post-swap-title\x1b\\".to_vec());
+        assert_eq!(tab.title, "post-swap-title");
+    }
+
+    /// AC-6 (SPEC TS-7 / risk mitigation): the 2nd-pass scrollback restore
+    /// path (`spawn_scrollback_restore` -> `apply_scrollback_restore`) merges
+    /// into the live core via `merge_scrollback_from` and never replaces it
+    /// — the transplanted callbacks and OSC registration from the 1st-pass
+    /// swap survive the 2nd-pass merge too.
+    #[test]
+    fn ac6_scrollback_restore_merge_does_not_clear_callbacks_or_osc_registration() {
+        let mut tab = test_tab();
+        // Pre-mux (no Welcome), same as the AC tests above, so
+        // `test_process_combined` routes through `process_outer_via_core`
+        // below (mux established would route through the independent mux
+        // extractor instead, which is not what this test exercises).
+        tab.apply_mux_message(snapshot_msg(10, large_scrollable_payload()));
+        assert!(tab.test_has_pending_switch());
+        // Blocking-recv re-stage (not the spin-based `test_poll_until_swapped`)
+        // so this 1st-pass swap is robust to worker-thread scheduling delays
+        // under system load — this test drives both an off-thread swap AND a
+        // 2nd-pass restore in sequence, so it is more sensitive to that than
+        // the single-swap AC tests above.
+        tab.test_block_worker_ready();
+        assert_eq!(tab.poll_pending_switch(), SwapOutcome::Swapped);
+        assert!(tab.test_has_pending_scrollback_restore());
+
+        // Drive the 2nd-pass restore to completion (the merge under test).
+        tab.test_drain_pending_scrollback_restore_for_blocking_recv();
+        assert_eq!(
+            tab.poll_pending_scrollback_restore(),
+            ScrollbackRestoreOutcome::Merged
+        );
+
+        // Callbacks must still be installed and wired end to end (title
+        // sync)...
+        tab.test_process_combined(b"\x1b]2;after-restore\x1b\\".to_vec());
+        assert_eq!(tab.title, "after-restore");
+
+        // ...and the OSC 9999 app-param registration must still be in
+        // effect (pending_apc sink reached).
+        let welcome = welcome_msg(&[(3, "c", 30)], 0);
+        tab.core
+            .lock()
+            .process_pty_data_fully(welcome.to_osc().as_bytes());
+        assert_eq!(tab.cb_state.lock().pending_apc.len(), 1);
+    }
+
+    /// AC-7 (SPEC edge case): an old core whose callbacks slot is empty
+    /// swaps without panic and yields a live core with no callbacks.
+    #[test]
+    fn ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic() {
+        let mut tab = test_tab();
+        // Simulate a live core with an empty callbacks slot.
+        tab.core.lock().callbacks = None;
+
+        tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+        assert!(tab.test_has_pending_switch());
+        // Must not panic.
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+        assert!(
+            tab.core.lock().callbacks.is_none(),
+            "an old core with no callbacks must swap to a live core with no callbacks"
+        );
     }
 }
