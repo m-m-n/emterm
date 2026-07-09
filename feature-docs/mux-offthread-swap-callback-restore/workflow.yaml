@@ -1,0 +1,96 @@
+schema_version: 1
+feature: mux-offthread-swap-callback-restore
+created: 2026-07-09
+base_branch: main
+parent_branch: em-workflow/mux-offthread-swap-callback-restore/integration
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: ae4ea2ee88fadaa49a7e1aabadf5771312dea6bf
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: ae4ea2ee88fadaa49a7e1aabadf5771312dea6bf
+  - id: implement
+    status: pending
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: "Transplant callbacks and OSC registration across the off-thread core swap"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/tabs.rs
+      - crates/term_core/src/terminal_core.rs
+    skills: [backend-impl]
+    domains: [concurrency, input-handling]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "Transplant old core's callbacks onto the swapped-in core in apply_offthread_swap"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-5]
+  FR2:
+    title: "Preserve app-layer OSC 9999 (MUX_OSC_PARAM -> OSC_MUX_INBAND) registration across the swap"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-2]
+  FR3:
+    title: "Pre-mux Welcome (OSC 9999 and APC forms) reaches apply_mux_message after an off-thread swap"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-3, TS-4]
+  FR4:
+    title: "Callback-driven inner content processing works after an off-thread swap"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-5]
+  NFR1:
+    title: "Synchronous replay path and worker-panic fallback behavior unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-6, TS-7]
+  NFR2:
+    title: "CLI-only build (--no-default-features) still compiles"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [SC-3]
