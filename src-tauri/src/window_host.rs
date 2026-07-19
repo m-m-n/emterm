@@ -262,6 +262,15 @@ pub struct WindowHost {
     /// renders behind the status-bar panel.
     status_bar_top_inset_logical: f32,
     status_bar_bot_inset_logical: f32,
+    /// Cached persistent mux-sidebar horizontal grid inset in egui logical
+    /// points (task0005 D2), refreshed each frame from
+    /// [`App::mux_sidebar_visibility`] via [`Self::refresh_mux_sidebar_inset`].
+    /// Added to `origin_x` in [`Self::cell_metrics_px`] (and thus subtracted
+    /// from the usable width in [`Self::grid_size`]) so the terminal grid
+    /// never renders behind a persistent sidebar. Always `0.0` in overlay
+    /// mode or when the active tab is not mux-attached (NFR1: those cases
+    /// must not reshape the PTY).
+    mux_sidebar_inset_logical: f32,
     current_mods: Modifiers,
     /// Last cursor position in physical pixels (updated on `CursorMoved`).
     cursor_pos: PhysicalPosition<f64>,
@@ -545,6 +554,7 @@ impl WindowHost {
             pending_resize: false,
             status_bar_top_inset_logical: 0.0,
             status_bar_bot_inset_logical: 0.0,
+            mux_sidebar_inset_logical: 0.0,
             current_mods: Modifiers::NONE,
             cursor_pos: PhysicalPosition::new(0.0, 0.0),
             dragging: false,
@@ -1201,6 +1211,26 @@ impl WindowHost {
         }
     }
 
+    /// Refresh `mux_sidebar_inset_logical` from [`App::mux_sidebar_visibility`]
+    /// (task0005 D2). Called at the head of each `render()` alongside
+    /// [`Self::refresh_status_bar_insets`], mirroring its change-detection /
+    /// `pending_resize` flip so the PTY reshapes exactly once when the inset
+    /// actually moves — entering/leaving a mux-attached tab in persistent
+    /// mode, or flipping `mux.window_sidebar_overlay` (NFR1). Overlay
+    /// open/close never changes this value (overlay always resolves to 0
+    /// inset — [`crate::app::mux_sidebar_grid_inset`]), so toggling it never
+    /// touches `pending_resize` here.
+    fn refresh_mux_sidebar_inset(&mut self, app: &App) {
+        let scale = self.pixels_per_point.max(1.0) as f64;
+        let window_width_logical = (self.surface_config.width.max(1) as f64 / scale) as f32;
+        let inset =
+            crate::app::mux_sidebar_grid_inset(app.mux_sidebar_visibility(), window_width_logical);
+        if (self.mux_sidebar_inset_logical - inset).abs() > f32::EPSILON {
+            self.mux_sidebar_inset_logical = inset;
+            self.pending_resize = true;
+        }
+    }
+
     /// Cell metrics in **physical pixels**, matching what
     /// `TerminalGridPass::prepare` is fed (see render path:
     /// `app.cell_w_logical * scale`, `app.cell_h_logical * scale`,
@@ -1223,9 +1253,14 @@ impl WindowHost {
         let cell_h = (app.cell_h_logical as f64) * scale;
         // Inner padding comes from settings.padding (logical pixels);
         // falls back to the renderer's default constants when the
-        // user hasn't overridden them.
+        // user hasn't overridden them. `mux_sidebar_inset_logical`
+        // (task0005 D2) adds the persistent mux sidebar's width when one is
+        // showing on this tab, refreshed each frame by
+        // `refresh_mux_sidebar_inset`; it is `0.0` in overlay mode / on a
+        // local tab, reproducing the pre-sidebar origin exactly.
         let pad = (app.settings.padding as f64).max(0.0);
-        let origin_x = pad * scale;
+        let sidebar_inset = (self.mux_sidebar_inset_logical as f64).max(0.0);
+        let origin_x = (pad + sidebar_inset) * scale;
         // Vertical origin reserves room for every panel stacked above
         // the terminal grid: the CSD title bar, the tab strip, an
         // optional status-bar row pinned to the top, and the same
@@ -1413,6 +1448,13 @@ impl WindowHost {
         // in step with the panel growing / shrinking (e.g. when the
         // mux session attaches and the OSC row pops in).
         self.refresh_status_bar_insets(app);
+        // Same coalescing for the persistent mux sidebar's grid inset
+        // (task0005 D2 / NFR1): entering/leaving a mux-attached tab in
+        // persistent mode, or flipping `mux.window_sidebar_overlay`, are
+        // the only inputs that move this value, so those are the only
+        // cases that reshape the PTY — overlay open/close and plain
+        // window/tab switching leave it untouched.
+        self.refresh_mux_sidebar_inset(app);
 
         // Alacritty-style deferred resize: apply pending window-size changes
         // here, not inside the winit `Resized` handler. This coalesces
