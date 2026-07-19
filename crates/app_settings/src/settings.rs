@@ -132,6 +132,16 @@ fn default_sftp_max_concurrent_uploads() -> u16 {
 fn default_clipboard_max_size_osc52() -> u32 {
     10 * 1024 * 1024 // 10 MB
 }
+/// Field-level default for `shift_enter_behavior`, used only when the key
+/// is absent from the source JSON (never called for a present key, even
+/// an explicit `null` — see `deserialize_null_default`, which handles
+/// that case and always returns a real variant). Returns the
+/// `ShiftEnterBehavior::Unresolved` sentinel so
+/// `AppSettings::apply_migrations` can tell "key absent" apart from "key
+/// present and equal to the default" (FR5).
+fn shift_enter_behavior_absent_sentinel() -> ShiftEnterBehavior {
+    ShiftEnterBehavior::Unresolved
+}
 
 // ============================================================
 // Keybind Settings (macro-generated)
@@ -399,7 +409,10 @@ pub struct AppSettings {
     pub bold_brightens_ansi_colors: bool,
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub middle_click_paste: bool,
-    #[serde(default, deserialize_with = "deserialize_null_default")]
+    #[serde(
+        default = "shift_enter_behavior_absent_sentinel",
+        deserialize_with = "deserialize_null_default"
+    )]
     pub shift_enter_behavior: ShiftEnterBehavior,
     /// Legacy field for backward compatibility (FR5 migration input).
     /// Read during deserialization but never serialized; folded into
@@ -550,8 +563,9 @@ impl AppSettings {
     ///
     /// Currently migrated:
     /// - `font_family` → `font_family_primary` (when the new key is empty).
-    /// - `shift_enter_as_alt_enter` → `shift_enter_behavior` (when the new
-    ///   key is still at its default; see the field's migration below).
+    /// - `shift_enter_as_alt_enter` → `shift_enter_behavior` (only when the
+    ///   new key was truly absent from the source JSON; see the field's
+    ///   migration below).
     pub fn apply_migrations(&mut self) -> bool {
         let mut migrated = false;
 
@@ -564,15 +578,21 @@ impl AppSettings {
             migrated = true;
         }
 
-        // Legacy shift-enter boolean. Folds the legacy value in only
-        // while `shift_enter_behavior` is still at its default (i.e. the
-        // new key was absent from the source JSON); an explicit new-key
-        // value always wins, mirroring the font_family "still empty"
-        // sentinel above. The legacy key is never serialized again
-        // (`skip_serializing`), so `migrated` is reported whenever it was
-        // present so the caller can rewrite the file with the new shape.
+        // Legacy shift-enter boolean. The new key wins whenever it was
+        // PRESENT in the source JSON — including an explicit `null`, which
+        // `deserialize_null_default` already resolves to a real variant
+        // (the wire default) before this runs. Only the deserialize-time
+        // `Unresolved` sentinel (set by `shift_enter_behavior_absent_
+        // sentinel`, and only reachable when the key was fully absent)
+        // means the legacy boolean should be folded in (FR5). The legacy
+        // key is never serialized again (`skip_serializing`), so
+        // `migrated` is reported whenever it was present so the caller can
+        // rewrite the file with the new shape, regardless of whether it
+        // actually won.
+        let shift_enter_behavior_was_absent =
+            self.shift_enter_behavior == ShiftEnterBehavior::Unresolved;
         if let Some(legacy) = self.shift_enter_as_alt_enter.take() {
-            if self.shift_enter_behavior == ShiftEnterBehavior::default() {
+            if shift_enter_behavior_was_absent {
                 self.shift_enter_behavior = if legacy {
                     ShiftEnterBehavior::AltEnter
                 } else {
@@ -580,6 +600,11 @@ impl AppSettings {
                 };
             }
             migrated = true;
+        }
+        // No legacy key to fold in either: resolve the sentinel to the
+        // real wire default so it never survives past this method.
+        if self.shift_enter_behavior == ShiftEnterBehavior::Unresolved {
+            self.shift_enter_behavior = ShiftEnterBehavior::default();
         }
 
         migrated
@@ -1069,10 +1094,54 @@ mod tests {
         assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::KittyCsiU);
     }
 
+    /// AC-1 (task0004 rework, rd2-apply-migrations-precedence): the new
+    /// key wins even when its PRESENT value happens to equal the wire
+    /// default (`alt_enter`) — this is the case the old "resolved value
+    /// equals the default means absent" heuristic got wrong, since a
+    /// present-and-default value is indistinguishable from absent under
+    /// that heuristic.
+    #[test]
+    fn apply_migrations_new_key_present_as_default_value_wins_over_legacy() {
+        let mut s: AppSettings = serde_json::from_str(
+            r#"{"shift_enter_behavior": "alt_enter", "shift_enter_as_alt_enter": false}"#,
+        )
+        .unwrap();
+        s.apply_migrations();
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
+    /// AC-2 (task0004 rework): an explicit `null` for the new key counts
+    /// as PRESENT (it resolves to the wire default), so it still wins
+    /// over the legacy boolean rather than falling through to it.
+    #[test]
+    fn apply_migrations_new_key_present_as_explicit_null_wins_over_legacy() {
+        let mut s: AppSettings = serde_json::from_str(
+            r#"{"shift_enter_behavior": null, "shift_enter_as_alt_enter": false}"#,
+        )
+        .unwrap();
+        s.apply_migrations();
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
     #[test]
     fn apply_migrations_no_legacy_key_leaves_default_unmigrated() {
         let mut s = AppSettings::default();
         assert!(!s.apply_migrations());
         assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
+    /// Companion to `apply_migrations_no_legacy_key_leaves_default_
+    /// unmigrated` for the JSON-deserialize path specifically: when
+    /// BOTH keys are absent from the source JSON, the deserialize-time
+    /// `Unresolved` sentinel must still resolve to the real wire default
+    /// (not leak past `apply_migrations`).
+    #[test]
+    fn apply_migrations_neither_key_present_resolves_sentinel_to_default() {
+        let mut s: AppSettings = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(!s.apply_migrations());
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+        // The sentinel must not survive serialization either.
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["shift_enter_behavior"], json!("alt_enter"));
     }
 }

@@ -81,6 +81,19 @@ pub enum ShiftEnterBehavior {
     #[default]
     AltEnter,
     KittyCsiU,
+    /// Internal sentinel: never a valid wire value. Produced only by
+    /// `AppSettings`'s field-level deserialize default when the
+    /// `shift_enter_behavior` key is absent from the source JSON, so
+    /// `AppSettings::apply_migrations` can distinguish "key absent" from
+    /// "key present and resolved to the default" when deciding whether to
+    /// fold in the legacy `shift_enter_as_alt_enter` boolean (FR5).
+    /// `apply_migrations` always resolves this to a real variant before
+    /// the struct is used further. `#[serde(skip)]` makes it unreachable
+    /// from wire input and turns an accidental serialize into a hard
+    /// error instead of writing an invalid wire value.
+    #[doc(hidden)]
+    #[serde(skip)]
+    Unresolved,
 }
 
 // ============================================================
