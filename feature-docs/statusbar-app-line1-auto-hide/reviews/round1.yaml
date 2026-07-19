@@ -1,0 +1,22 @@
+round: 1
+executed_at: "2026-07-19T13:14:57+09:00"
+scope:
+  review_mode: diff
+  base_commit: 3c038cb761b008ff04b23ecd573e208594fcc758
+  head_commit: 44113f45f3a312d9003aaf3728da270d4fc46aaa
+  changed_files:
+    - src-tauri/src/ui/status_bar.rs
+plan:
+  floor: [comprehensive, spec]
+  discretionary: []
+  codex_cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+findings: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
