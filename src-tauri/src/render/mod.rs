@@ -284,21 +284,10 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
         _ => app
             .active_tab()
             .and_then(|t| t.mux_group.as_ref())
-            .map(|g| {
-                let active = g.active_index();
-                g.windows()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, w)| crate::ui::mux_sidebar::SidebarEntry {
-                        index: i,
-                        name: w.name.clone(),
-                        active: i == active,
-                    })
-                    .collect()
-            })
+            .map(crate::ui::mux_sidebar::build_entries)
             .unwrap_or_default(),
     };
-    let sidebar_width = crate::ui::mux_sidebar::width_px(ctx.screen_rect().width());
+    let sidebar_width = crate::ui::mux_sidebar::sidebar_width(ctx.screen_rect().width());
     if sidebar_visibility == crate::app::MuxSidebarVisibility::Persistent {
         // The sidebar's click result routes into the SAME
         // `TabEvent::MuxSwitch` application path the (now-collapsed) inline

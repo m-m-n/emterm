@@ -154,13 +154,14 @@ pub const DEFAULT_MUX_PREFIX_KEY: &str = "Ctrl+Z";
 /// `Ctrl+D`/`Ctrl+C`/`Ctrl+N`/`Ctrl+P`/`Ctrl+R`/`Ctrl+T`). SSOT is
 /// `DEFAULT_ACTION_BINDINGS` in `src-tauri/src/mux/prefix.rs`; the
 /// `src-tauri/web-shared/terminal/mux/prefix-key.ts` table is a mirror.
-pub const MUX_ACTION_NAMES: [&str; 6] = [
+pub const MUX_ACTION_NAMES: [&str; 7] = [
     "detach",
     "new-window",
     "next-window",
     "prev-window",
     "rename-window",
     "move-window",
+    "toggle-window-sidebar",
 ];
 
 /// Default follow-up chord for a mux action, or `None` if the action
@@ -197,6 +198,9 @@ fn is_legacy_mux_action(action: &str) -> bool {
 pub struct MuxSettings {
     /// Initial expansion state of the tab group (`mux.tab_always_expand`).
     pub tab_always_expand: bool,
+    /// Window sidebar placement mode (`mux.window_sidebar_overlay`).
+    /// `false` (default) = persistent left panel, `true` = right overlay.
+    pub window_sidebar_overlay: bool,
     /// Effective per-action follow-up chords (`mux.keybinds`), starting
     /// from the tmux defaults and overlaid with valid user entries.
     /// Invalid or unknown entries are dropped (warn) and the default is
@@ -207,12 +211,6 @@ pub struct MuxSettings {
     pub keybinds: std::collections::HashMap<String, crate::mux::prefix::PrefixChord>,
     /// Mux status-bar content (`mux.statusbar.*`).
     pub statusbar: MuxStatusbarSettings,
-    /// Window-list sidebar placement mode (`mux.window_sidebar_overlay`,
-    /// mux-vertical-tabs task0005 stand-in for the task0001 contract field —
-    /// see `feature-docs/mux-vertical-tabs/IMPLEMENTATION.md` Shared
-    /// Components). `false` (default) = persistent left panel, `true` =
-    /// right overlay.
-    pub window_sidebar_overlay: bool,
 }
 
 impl Default for MuxSettings {
@@ -225,9 +223,9 @@ impl Default for MuxSettings {
         }
         Self {
             tab_always_expand: false,
+            window_sidebar_overlay: false,
             keybinds,
             statusbar: MuxStatusbarSettings::default(),
-            window_sidebar_overlay: false,
         }
     }
 }
@@ -1357,9 +1355,9 @@ struct RawUserColorScheme {
 struct RawMux {
     prefix: Option<String>,
     tab_always_expand: Option<bool>,
+    window_sidebar_overlay: Option<bool>,
     keybinds: Option<std::collections::HashMap<String, String>>,
     statusbar: Option<RawMuxStatusbar>,
-    window_sidebar_overlay: Option<bool>,
 }
 
 /// Deserialize side of `mux.statusbar.*`. Mirrors the subset of
@@ -2170,24 +2168,28 @@ mod tests {
         assert!(s.mux.tab_always_expand);
     }
 
-    // ── task0005 stand-in: mux.window_sidebar_overlay loader ──────────────
+    // ── window_sidebar_overlay (task0001 AC-1..AC-4) ─────────────────────
 
     #[test]
-    fn default_mux_window_sidebar_overlay_is_persistent() {
-        let s = Settings::new();
+    fn loader_mux_window_sidebar_overlay_missing_defaults_false() {
+        // AC-1: a settings JSON without the field resolves to `false`.
+        let s = load_json(r#"{"mux": {"prefix": "Ctrl+A"}}"#);
+        assert!(!s.mux.window_sidebar_overlay);
+    }
+
+    #[test]
+    fn loader_mux_window_sidebar_overlay_null_resolves_false() {
+        // AC-2: a settings JSON with the field `null` resolves to `false`.
+        let s = load_json(r#"{"mux": {"window_sidebar_overlay": null}}"#);
         assert!(!s.mux.window_sidebar_overlay);
     }
 
     #[test]
     fn loader_mux_window_sidebar_overlay_true() {
+        // AC-3: `true` resolves to `true` in the runtime settings the GUI
+        // reads.
         let s = load_json(r#"{"mux": {"window_sidebar_overlay": true}}"#);
         assert!(s.mux.window_sidebar_overlay);
-    }
-
-    #[test]
-    fn loader_mux_window_sidebar_overlay_absent_keeps_default() {
-        let s = load_json(r#"{"mux": {"prefix": "Ctrl+A"}}"#);
-        assert!(!s.mux.window_sidebar_overlay);
     }
 
     #[test]

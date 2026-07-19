@@ -628,6 +628,8 @@ pub struct MuxSettings {
     #[serde(default)]
     pub tab_always_expand: bool,
     #[serde(default)]
+    pub window_sidebar_overlay: bool,
+    #[serde(default)]
     pub tmux_conf_imported: bool,
     #[serde(default)]
     pub keybinds: std::collections::HashMap<String, String>,
@@ -686,6 +688,7 @@ impl Default for MuxSettings {
         Self {
             prefix: default_mux_prefix(),
             tab_always_expand: false,
+            window_sidebar_overlay: false,
             tmux_conf_imported: false,
             keybinds: std::collections::HashMap::new(),
             statusbar: MuxStatusbarSettings::default(),
@@ -866,6 +869,41 @@ mod tests {
         assert!(!settings.statusbar.enabled);
         assert_eq!(settings.statusbar.left, "");
     }
+
+    // ── window_sidebar_overlay (task0001 AC-1/AC-3/AC-4) ────────────────
+
+    #[test]
+    fn test_mux_settings_window_sidebar_overlay_missing_defaults_false() {
+        // AC-1: a settings JSON without the field resolves to `false`.
+        let json = r#"{"prefix": "ctrl+b"}"#;
+        let settings: MuxSettings = serde_json::from_str(json).unwrap();
+        assert!(!settings.window_sidebar_overlay);
+    }
+
+    #[test]
+    fn test_mux_settings_window_sidebar_overlay_true() {
+        // AC-3: `true` resolves to `true` in the deserialized shape.
+        let json = r#"{"window_sidebar_overlay": true}"#;
+        let settings: MuxSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.window_sidebar_overlay);
+    }
+
+    #[test]
+    fn test_mux_settings_window_sidebar_overlay_round_trips() {
+        // AC-4: serializing default settings then re-loading them
+        // round-trips the field without loss.
+        let default_settings = MuxSettings::default();
+        let json = serde_json::to_string(&default_settings).unwrap();
+        let restored: MuxSettings = serde_json::from_str(&json).unwrap();
+        assert!(!restored.window_sidebar_overlay);
+
+        let mut overlay_settings = MuxSettings::default();
+        overlay_settings.window_sidebar_overlay = true;
+        let json = serde_json::to_string(&overlay_settings).unwrap();
+        let restored: MuxSettings = serde_json::from_str(&json).unwrap();
+        assert!(restored.window_sidebar_overlay);
+    }
+
     /// Full-coverage round-trip: the exhaustive struct literal (no
     /// `..Default::default()`) forces a compile error here whenever a new
     /// field is added, so the round-trip assertions stay complete. Lives in
