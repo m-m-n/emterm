@@ -1,0 +1,63 @@
+round: 1
+executed_at: "2026-07-19T19:40:11+09:00"
+scope:
+  review_mode: diff
+  base_commit: 43bb909272421543cbaa46526c81448727321721
+  head_commit: 87dcb63ddd0961f006941f36afad8a586754e4f1
+  changed_files:
+    - crates/app_settings/src/settings.rs
+    - crates/app_settings/src/types.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/src/settings_store.rs
+    - src-tauri/src/settings_window/commands.rs
+    - src-tauri/src/window_host.rs
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+    - src-tauri/web-shared/settings/sections/terminal-behavior-section.ts
+    - src-tauri/web-shared/settings/types.ts
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  - stable_id: lf1-grandfather-stale-option
+    severity: medium
+    category: spec
+    file: src-tauri/web-shared/settings/sections/terminal-behavior-section.ts
+    line: 252
+    title: "Grandfathered kitty option remains offered after selecting another value"
+    description: >-
+      FR3 says the kitty_csi_u option is no longer offered once another
+      value is saved. Options are computed at render time from the loaded
+      value, and the change handler only saves; within the same
+      still-rendered select, the grandfathered option therefore remains
+      present (and re-selectable) until the section re-renders. claude:spec
+      read the same code as FR3-compliant under the D2 render-time-only
+      design; codex:spec reads FR3 strictly. Practical impact is minimal:
+      re-selecting it just saves the still-functional hidden value.
+    suggestion: >-
+      Rebuild the select's options (or remove the kitty_csi_u option) after
+      a successful save of a different value, and add a section test
+      covering select-another-value-then-reopen.
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: >-
+      D2 (render-time-only grandfathering) の設計判断通りで、残存期間は
+      同一描画中のみ・再選択しても隠し値として正常動作するため実害なし。
+      厳密即時反映が必要になったら follow-up とする。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

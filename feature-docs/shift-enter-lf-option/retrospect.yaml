@@ -1,0 +1,25 @@
+feature: shift-enter-lf-option
+collected_at: "2026-07-19T19:44:11+09:00"
+session_ids: [9f6344c2-1a7c-41c8-8572-dac5e02a8647]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    前 feature (shift-enter-behavior) の教訓を implementer プロンプトの
+    environment note (フォントコピー・依存バージョン整合) として引き継いだ
+    結果、環境起因の失敗ゼロ・deviation ゼロ・レビュー rework ゼロで
+    1ラウンド完了した。worktree セットアップの定型注入は有効。
+  - >-
+    tabs::tests の pre-existing failure は実行ごとに落ちる集合が変わる
+    (今回 ts7/ts8/ts9/welcome の4件、前回は6件)。非決定的な素の failure
+    として要調査のまま。
+  - >-
+    review round 1 の deferred medium (lf1-grandfather-stale-option):
+    grandfathered な kitty_csi_u 選択肢が同一描画中の select に残る件。
+    render-time-only 設計 (D2) の意図通りで実害なしと判断して deferred。
+    厳密即時反映が必要になったら follow-up。

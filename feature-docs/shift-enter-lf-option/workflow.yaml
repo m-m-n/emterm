@@ -34,16 +34,28 @@ workflow:
     status: completed
     completed_at_commit: 43bb909272421543cbaa46526c81448727321721
   - id: implement
-    status: pending
-    base_commit: null
+    status: completed
+    base_commit: 43bb909272421543cbaa46526c81448727321721
+    completed_at_commit: 87dcb63ddd0961f006941f36afad8a586754e4f1
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 87dcb63ddd0961f006941f36afad8a586754e4f1
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 87dcb63ddd0961f006941f36afad8a586754e4f1
+    result: pass
     failed_items: []
+    notes: >-
+      cargo check pass / bun run typecheck pass / bun test 165 pass 0 fail /
+      cargo test --lib --test-threads=1: 2365 pass, 4 fail — all in
+      tabs::tests (ts7/ts8/ts9/welcome), the documented pre-existing
+      failures confirmed on the base commit; set varies between runs;
+      unrelated to this diff. Environment prep (fonts copy + dependency
+      alignment with the main tree) applied per the previous feature's
+      lessons. Manual scenarios M-1..M-2 remain for the user.
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 87dcb63ddd0961f006941f36afad8a586754e4f1
 
 tasks:
   task0001:
@@ -60,8 +72,9 @@ tasks:
     domains: [input-handling, data-persistence]
     complexity: medium
     requirements: [FR1, FR4, NFR1]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/shift-enter-lf-option/task0001
   task0002:
     title: "Select options rework with grandfathered kitty_csi_u"
     plan: tasks/task0002.md
@@ -75,12 +88,24 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR2, FR3, FR5]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/shift-enter-lf-option/task0002
 
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, security, performance, spec]
+    discretionary: []
+    codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
