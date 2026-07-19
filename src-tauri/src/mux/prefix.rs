@@ -154,6 +154,11 @@ pub enum PrefixAction {
     RenameWindow,
     /// Open the move-window dialog (tmux `prefix m`).
     MoveWindow,
+    /// Toggle the mux window-list sidebar overlay (tmux-less; new for the
+    /// mux-vertical-tabs feature). Only takes effect when
+    /// `settings.mux.window_sidebar_overlay` is `true`; a strict no-op in
+    /// persistent mode (FR4). Handled by `App::dispatch_mux_action`.
+    ToggleWindowSidebar,
 }
 
 /// Effective follow-up key bindings for the mux actions, resolved from
@@ -182,6 +187,8 @@ pub struct ActionBindings {
     pub rename_window: PrefixChord,
     /// move-window
     pub move_window: PrefixChord,
+    /// toggle-window-sidebar
+    pub toggle_window_sidebar: PrefixChord,
 }
 
 /// Bare single-letter [`PrefixChord`] (no modifiers). Test-only: the defaults
@@ -222,6 +229,7 @@ pub const DEFAULT_ACTION_BINDINGS: &[(&str, PrefixChord)] = &[
     ("prev-window", ctrl_letter('p')),
     ("rename-window", ctrl_letter('r')),
     ("move-window", ctrl_letter('t')),
+    ("toggle-window-sidebar", ctrl_letter('w')),
 ];
 
 /// Default follow-up chord for a mux action, or `None` if the action
@@ -301,6 +309,7 @@ impl Default for ActionBindings {
             prev_window: get("prev-window"),
             rename_window: get("rename-window"),
             move_window: get("move-window"),
+            toggle_window_sidebar: get("toggle-window-sidebar"),
         }
     }
 }
@@ -319,6 +328,10 @@ impl ActionBindings {
             prev_window: map.get("prev-window").copied().unwrap_or(d.prev_window),
             rename_window: map.get("rename-window").copied().unwrap_or(d.rename_window),
             move_window: map.get("move-window").copied().unwrap_or(d.move_window),
+            toggle_window_sidebar: map
+                .get("toggle-window-sidebar")
+                .copied()
+                .unwrap_or(d.toggle_window_sidebar),
         }
     }
 
@@ -340,6 +353,8 @@ impl ActionBindings {
             Some(PrefixAction::RenameWindow)
         } else if self.move_window.matches_as_follow_up(input) {
             Some(PrefixAction::MoveWindow)
+        } else if self.toggle_window_sidebar.matches_as_follow_up(input) {
+            Some(PrefixAction::ToggleWindowSidebar)
         } else {
             None
         }
@@ -711,7 +726,22 @@ mod tests {
                 ("prev-window", "Ctrl+P".to_string()),
                 ("rename-window", "Ctrl+R".to_string()),
                 ("move-window", "Ctrl+T".to_string()),
+                ("toggle-window-sidebar", "Ctrl+W".to_string()),
             ]
+        );
+    }
+
+    /// AC-1: `toggle-window-sidebar` appears in the default action bindings
+    /// with chord Ctrl+W.
+    #[test]
+    fn toggle_window_sidebar_default_chord_is_ctrl_w() {
+        assert_eq!(
+            default_action_chord("toggle-window-sidebar"),
+            Some(ctrl_letter('w'))
+        );
+        assert_eq!(
+            ActionBindings::default().toggle_window_sidebar,
+            ctrl_letter('w')
         );
     }
 
@@ -935,6 +965,17 @@ mod tests {
         );
     }
 
+    /// AC-1: the Ctrl+Z Ctrl+W chord dispatches `ToggleWindowSidebar`
+    /// through the same latch path as the other default follow-ups.
+    #[test]
+    fn default_binding_maps_ctrl_w_to_toggle_window_sidebar() {
+        let mut l = Latch::default();
+        assert_eq!(
+            arm_then(&mut l, KeyInput::ctrl_letter('w')),
+            PrefixAction::ToggleWindowSidebar
+        );
+    }
+
     #[test]
     fn unknown_follow_up_consumes_without_action() {
         let mut l = Latch::default();
@@ -991,6 +1032,52 @@ mod tests {
         );
         let mut l2 = l;
         assert_eq!(arm_then(&mut l2, KeyInput::letter('c')), PrefixAction::None);
+    }
+
+    /// AC-4: a user override of `toggle-window-sidebar` rebinds only that
+    /// action — the other six keep firing their own (unrelated) defaults.
+    #[test]
+    fn custom_toggle_window_sidebar_binding_does_not_affect_other_actions() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("toggle-window-sidebar".to_string(), bare_letter('s'));
+        let bindings = ActionBindings::from_settings_map(&map);
+        let mut l = Latch::with_bindings(PrefixChord::default(), DEFAULT_ARMED_TIMEOUT, bindings);
+        // New chord fires the action.
+        assert_eq!(
+            arm_then(&mut l, KeyInput::letter('s')),
+            PrefixAction::ToggleWindowSidebar
+        );
+        // Old default (Ctrl+W) no longer fires it (the binding was rewritten).
+        let mut l_stale = Latch::with_bindings(
+            PrefixChord::default(),
+            DEFAULT_ARMED_TIMEOUT,
+            ActionBindings::from_settings_map(&map),
+        );
+        assert_eq!(
+            arm_then(&mut l_stale, KeyInput::ctrl_letter('w')),
+            PrefixAction::None
+        );
+        // The other six actions are untouched by the override.
+        let checks: &[(char, PrefixAction)] = &[
+            ('d', PrefixAction::Detach),
+            ('c', PrefixAction::NewWindow),
+            ('n', PrefixAction::NextWindow),
+            ('p', PrefixAction::PrevWindow),
+            ('r', PrefixAction::RenameWindow),
+            ('t', PrefixAction::MoveWindow),
+        ];
+        for (key, want) in checks {
+            let mut l_other = Latch::with_bindings(
+                PrefixChord::default(),
+                DEFAULT_ARMED_TIMEOUT,
+                ActionBindings::from_settings_map(&map),
+            );
+            assert_eq!(
+                arm_then(&mut l_other, KeyInput::ctrl_letter(*key)),
+                *want,
+                "action for ctrl+{key} must stay at its default"
+            );
+        }
     }
 
     #[test]
