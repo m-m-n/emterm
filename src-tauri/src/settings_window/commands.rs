@@ -566,7 +566,7 @@ mod tests {
     /// (not a hand-built patch) preserves each of the three wire values.
     #[test]
     fn shift_enter_behavior_save_load_round_trips_through_settings_window_commands() {
-        for value in ["none", "alt_enter", "kitty_csi_u"] {
+        for value in ["none", "alt_enter", "kitty_csi_u", "lf"] {
             let dir = std::env::temp_dir().join(format!(
                 "emterm-settings-window-shift-enter-roundtrip-{value}-{}",
                 std::process::id()

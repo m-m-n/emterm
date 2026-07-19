@@ -974,6 +974,9 @@ pub enum ShiftEnterBehavior {
     /// sequence for Enter with the Shift modifier (`ESC [ 1 3 ; 2 u`),
     /// bypassing the key encoder.
     KittyCsiU,
+    /// `Shift+Enter` sends the single byte 0x0a (line feed), bypassing the
+    /// key encoder. See task0001 design D1.
+    Lf,
 }
 
 impl ShiftEnterBehavior {
@@ -986,6 +989,7 @@ impl ShiftEnterBehavior {
             "none" => Self::None,
             "alt_enter" => Self::AltEnter,
             "kitty_csi_u" => Self::KittyCsiU,
+            "lf" => Self::Lf,
             other => {
                 warn_unknown_shift_enter_behavior_once(other);
                 Self::AltEnter
@@ -1001,6 +1005,7 @@ impl ShiftEnterBehavior {
             Self::None => "none",
             Self::AltEnter => "alt_enter",
             Self::KittyCsiU => "kitty_csi_u",
+            Self::Lf => "lf",
         }
     }
 }
@@ -2658,6 +2663,10 @@ mod tests {
             ShiftEnterBehavior::parse_or_warn("kitty_csi_u"),
             ShiftEnterBehavior::KittyCsiU
         );
+        assert_eq!(
+            ShiftEnterBehavior::parse_or_warn("lf"),
+            ShiftEnterBehavior::Lf
+        );
     }
 
     #[test]
@@ -2669,6 +2678,8 @@ mod tests {
         assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
         let s = load_json(r#"{"shift_enter_behavior": "kitty_csi_u"}"#);
         assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::KittyCsiU);
+        let s = load_json(r#"{"shift_enter_behavior": "lf"}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::Lf);
     }
 
     #[test]
