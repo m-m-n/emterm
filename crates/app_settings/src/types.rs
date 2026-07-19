@@ -69,6 +69,20 @@ pub enum UiThemePreset {
     Pink,
 }
 
+/// `Shift+Enter` key-rewrite behavior. Wire values: `none` / `alt_enter`
+/// (default) / `kitty_csi_u`. Mirrors `src-tauri::settings::ShiftEnterBehavior`
+/// (the native runtime's own copy of this enum, consumed at the
+/// `window_host` key-event rewrite site); this copy is the shared
+/// `settings.json` schema consumed by the child settings window.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShiftEnterBehavior {
+    None,
+    #[default]
+    AltEnter,
+    KittyCsiU,
+}
+
 // ============================================================
 // User Color Scheme
 // ============================================================
