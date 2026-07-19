@@ -2,10 +2,12 @@
  * Tests for the Terminal Behavior section's Shift+Enter behavior select.
  *
  * Covers:
- * - AC-2: renders a select with exactly the three D2-ordered options and
- *   the current value selected.
- * - AC-3: changing the select saves `shift_enter_behavior` with the
- *   chosen wire value.
+ * - AC-2: with current value != kitty_csi_u, renders exactly the three
+ *   D2-ordered options (alt_enter, none, lf) with the current value
+ *   selected.
+ * - AC-3: with current value == kitty_csi_u, renders four options
+ *   including kitty_csi_u, grandfathered in and selected.
+ * - AC-4: selecting the LF option saves `shift_enter_behavior` as "lf".
  */
 
 import { describe, expect, test } from "bun:test";
@@ -144,7 +146,7 @@ function openSelect(panel: HTMLElement, id: string): HTMLElement {
 }
 
 describe("renderTerminalBehaviorSection() — Shift+Enter behavior select", () => {
-  test("AC-2: renders exactly the three D2-ordered options with the current value selected", () => {
+  test("AC-2: with current value != kitty_csi_u, renders exactly the three D2-ordered options with the current value selected", () => {
     const panel = document.createElement("div");
     const settings = makeSettings({ shift_enter_behavior: "none" });
     const ctx = makeCtx(settings, () => {});
@@ -159,7 +161,7 @@ describe("renderTerminalBehaviorSection() — Shift+Enter behavior select", () =
     expect(items.map((item) => item.dataset.value)).toEqual([
       "alt_enter",
       "none",
-      "kitty_csi_u",
+      "lf",
     ]);
 
     const selected = items.filter(
@@ -169,7 +171,33 @@ describe("renderTerminalBehaviorSection() — Shift+Enter behavior select", () =
     expect(selected[0]!.dataset.value).toBe("none");
   });
 
-  test("AC-3: choosing an option saves shift_enter_behavior with the chosen wire value", () => {
+  test("AC-3: with current value == kitty_csi_u, renders four options including kitty_csi_u selected", () => {
+    const panel = document.createElement("div");
+    const settings = makeSettings({ shift_enter_behavior: "kitty_csi_u" });
+    const ctx = makeCtx(settings, () => {});
+
+    renderTerminalBehaviorSection(panel, ctx);
+
+    const root = openSelect(panel, "settings-shift-enter-behavior");
+    const items = Array.from(
+      root.querySelectorAll(".md3-select-item"),
+    ) as HTMLElement[];
+
+    expect(items.map((item) => item.dataset.value)).toEqual([
+      "alt_enter",
+      "none",
+      "lf",
+      "kitty_csi_u",
+    ]);
+
+    const selected = items.filter(
+      (item) => item.getAttribute("aria-selected") === "true",
+    );
+    expect(selected.length).toBe(1);
+    expect(selected[0]!.dataset.value).toBe("kitty_csi_u");
+  });
+
+  test("AC-4: selecting the LF option saves shift_enter_behavior as lf", () => {
     const panel = document.createElement("div");
     const settings = makeSettings({ shift_enter_behavior: "alt_enter" });
     const saved: Array<[string, unknown]> = [];
@@ -180,13 +208,33 @@ describe("renderTerminalBehaviorSection() — Shift+Enter behavior select", () =
     renderTerminalBehaviorSection(panel, ctx);
 
     const root = openSelect(panel, "settings-shift-enter-behavior");
-    const kittyItem = root.querySelector(
-      '.md3-select-item[data-value="kitty_csi_u"]',
+    const lfItem = root.querySelector(
+      '.md3-select-item[data-value="lf"]',
     ) as HTMLElement;
-    expect(kittyItem).toBeTruthy();
-    kittyItem.click();
+    expect(lfItem).toBeTruthy();
+    lfItem.click();
 
-    expect(saved).toEqual([["shift_enter_behavior", "kitty_csi_u"]]);
+    expect(saved).toEqual([["shift_enter_behavior", "lf"]]);
+  });
+
+  test("choosing kitty_csi_u still saves shift_enter_behavior with the wire value", () => {
+    const panel = document.createElement("div");
+    const settings = makeSettings({ shift_enter_behavior: "kitty_csi_u" });
+    const saved: Array<[string, unknown]> = [];
+    const ctx = makeCtx(settings, (key, value) => {
+      saved.push([key, value]);
+    });
+
+    renderTerminalBehaviorSection(panel, ctx);
+
+    const root = openSelect(panel, "settings-shift-enter-behavior");
+    const noneItem = root.querySelector(
+      '.md3-select-item[data-value="none"]',
+    ) as HTMLElement;
+    expect(noneItem).toBeTruthy();
+    noneItem.click();
+
+    expect(saved).toEqual([["shift_enter_behavior", "none"]]);
   });
 
   test("does not render the legacy Shift+Enter as Alt+Enter toggle", () => {
