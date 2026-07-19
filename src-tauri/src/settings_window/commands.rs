@@ -622,4 +622,40 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
+
+    /// AC-1 / AC-2 (task0004 rework): when the new key is PRESENT in the
+    /// source JSON — either with a value that happens to equal the wire
+    /// default (`alt_enter`) or as an explicit `null` — it must win over
+    /// a conflicting legacy `shift_enter_as_alt_enter: false` through the
+    /// full `load_settings_from_path` boundary, not just at the
+    /// `apply_migrations` unit level.
+    #[test]
+    fn shift_enter_behavior_present_new_key_wins_over_legacy_through_settings_window_load() {
+        for (new_key_json, case) in [(r#""alt_enter""#, "value"), ("null", "null")] {
+            let dir = std::env::temp_dir().join(format!(
+                "emterm-settings-window-shift-enter-precedence-{case}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("settings.json");
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{"shift_enter_behavior": {new_key_json}, "shift_enter_as_alt_enter": false}}"#
+                ),
+            )
+            .unwrap();
+
+            let loaded = load_settings_from_path(Some(path.clone()))
+                .unwrap_or_else(|e| panic!("load_settings_from_path failed for {case}: {e}"));
+            assert_eq!(
+                loaded["shift_enter_behavior"],
+                json!("alt_enter"),
+                "present new key ({case}) must win over legacy false"
+            );
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 }
