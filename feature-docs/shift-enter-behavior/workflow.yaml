@@ -34,16 +34,31 @@ workflow:
     status: completed
     completed_at_commit: b8b2b6b878c64be9ac31cde7ebe8cc6a33c2fecc
   - id: implement
-    status: pending
-    base_commit: null
+    status: completed
+    base_commit: b8b2b6b878c64be9ac31cde7ebe8cc6a33c2fecc
+    completed_at_commit: 26bde5cc401e2d880218d0af3bacd2a93189af66
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 26bde5cc401e2d880218d0af3bacd2a93189af66
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 26bde5cc401e2d880218d0af3bacd2a93189af66
+    result: pass
     failed_items: []
+    notes: >-
+      cargo check pass / bun run typecheck pass / bun test 163 pass 0 fail /
+      cargo test --lib --test-threads=1: 2362 pass, 6 fail — all 6 in
+      tabs::tests, reproduced identically on base commit b8b2b6b in the main
+      tree (pre-existing, unrelated to this feature; they fail even in
+      isolated single-threaded runs). bun test initially failed 2 viewer
+      tests due to dependency drift (no committed lockfile; happy-dom
+      20.11.0 / dompurify 3.4.12 break viewer/web/entry.test.ts) — passes
+      with the main tree's versions (happy-dom 20.4.0 / dompurify 3.3.1).
+      Manual scenarios M-1..M-3 (VERIFICATION.md) remain for the user
+      (GUI required).
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 26bde5cc401e2d880218d0af3bacd2a93189af66
 
 tasks:
   task0001:
@@ -57,8 +72,9 @@ tasks:
     domains: [input-handling, data-persistence]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, NFR1]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/shift-enter-behavior/task0001
   task0002:
     title: "Settings-panel select UI and TS mirror"
     plan: tasks/task0002.md
@@ -72,19 +88,60 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR6, FR7]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/shift-enter-behavior/task0002
+  task0003:
+    title: "Persist shift_enter_behavior through the settings-window boundary (rework)"
+    plan: tasks/task0003.md
+    files:
+      - crates/app_settings/src/settings.rs
+      - src-tauri/src/settings_window/commands.rs
+      - src-tauri/src/settings.rs
+      - src-tauri/src/settings_store.rs
+    skills: [backend-impl]
+    domains: [input-handling, data-persistence]
+    complexity: medium
+    requirements: [FR1, FR5, FR6]
+    status: merged
+    notes: "rework from review round 1 (rd1-app-settings-schema / rd1-store-legacy-retained / rd1-null-legacy-precedence). Deviation: also modified crates/app_settings/src/types.rs (not in files prediction)"
+    branch: em-workflow/shift-enter-behavior/task0003
+  task0004:
+    title: "Align app_settings migration precedence with FR5 (rework)"
+    plan: tasks/task0004.md
+    files:
+      - crates/app_settings/src/settings.rs
+      - crates/app_settings/src/types.rs
+      - src-tauri/src/settings_window/commands.rs
+    skills: [backend-impl]
+    domains: [input-handling, data-persistence]
+    complexity: low
+    requirements: [FR5]
+    status: merged
+    notes: "rework from review round 2 (rd2-apply-migrations-precedence)"
+    branch: em-workflow/shift-enter-behavior/task0004
 
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 3
+  plan:
+    floor: [comprehensive, security, performance, spec]
+    discretionary: []
+    codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
     title: "shift_enter_behavior enum setting replacing shift_enter_as_alt_enter"
     status: ok
     tbd_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0003]
     tests: [TS-5, TS-6]
   FR2:
     title: "none: bare Shift+Enter passes through as plain Enter"
@@ -108,13 +165,13 @@ requirements:
     title: "Legacy shift_enter_as_alt_enter migration (true→alt_enter, false→none)"
     status: ok
     tbd_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0003, task0004]
     tests: [TS-5]
   FR6:
     title: "Settings panel select UI with ja/en locale strings"
     status: ok
     tbd_reason: null
-    tasks: [task0002]
+    tasks: [task0002, task0003]
     tests: [TS-8]
   FR7:
     title: "TypeScript AppSettings mirror as string union"

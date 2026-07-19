@@ -1,0 +1,67 @@
+round: 3
+executed_at: "2026-07-19T18:04:45+09:00"
+scope:
+  review_mode: diff
+  base_commit: b8b2b6b878c64be9ac31cde7ebe8cc6a33c2fecc
+  head_commit: 26bde5cc401e2d880218d0af3bacd2a93189af66
+  changed_files:
+    - crates/app_settings/src/settings.rs
+    - crates/app_settings/src/types.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/src/settings_store.rs
+    - src-tauri/src/settings_window/commands.rs
+    - src-tauri/src/window_host.rs
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+    - src-tauri/web-shared/settings/sections/terminal-behavior-section.ts
+    - src-tauri/web-shared/settings/types.ts
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+round_prior_verification: >-
+  All five prior findings (rd1-app-settings-schema, rd1-store-legacy-retained,
+  rd1-null-legacy-precedence, rd2-apply-migrations-precedence,
+  rd2-migration-divergence-comprehensive) verified as still fixed. spec
+  perspective (claude + codex) re-verified the full FR1-FR7/NFR1 set as
+  compliant, including byte-level FR4 verification.
+findings:
+  - stable_id: rd3-save-path-sentinel
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/settings_window/commands.rs
+    line: 264
+    title: "save_settings serializes AppSettings without apply_migrations (Unresolved sentinel can fail the save)"
+    description: >-
+      load_settings_from_path resolves the deserialize-time Unresolved
+      sentinel via apply_migrations before re-serializing, but
+      save_settings_to_path deserializes the incoming payload and
+      immediately re-serializes without that call. A payload omitting
+      shift_enter_behavior would leave the serde-skipped sentinel in place
+      and fail the entire save with a serialize error. Unreachable today
+      (the TS type requires the field, so the panel always sends it) but it
+      violates the sentinel's documented invariant and is a robustness
+      regression versus the plain-bool field for any future non-UI caller.
+    suggestion: >-
+      Call apply_migrations on the deserialized payload in the save path
+      (mirroring the load path) so the sentinel can never survive to
+      serialization; keeps save/load symmetric.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: null
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
