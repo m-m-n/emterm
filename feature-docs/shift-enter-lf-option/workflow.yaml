@@ -1,0 +1,121 @@
+schema_version: 1
+feature: shift-enter-lf-option
+created: 2026-07-19
+base_branch: main
+parent_branch: em-workflow/shift-enter-lf-option/integration
+
+project:
+  license: MIT
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 43bb909272421543cbaa46526c81448727321721
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "既存セレクト UI パターンの選択肢増減のみで外観が完全に決まるため"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 43bb909272421543cbaa46526c81448727321721
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: "lf variant across the Rust settings layers and key rewrite"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/settings.rs
+      - src-tauri/src/window_host.rs
+      - crates/app_settings/src/types.rs
+      - crates/app_settings/src/settings.rs
+      - src-tauri/src/settings_store.rs
+      - src-tauri/src/settings_window/commands.rs
+    skills: [backend-impl]
+    domains: [input-handling, data-persistence]
+    complexity: medium
+    requirements: [FR1, FR4, NFR1]
+    status: pending
+    notes: null
+  task0002:
+    title: "Select options rework with grandfathered kitty_csi_u"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/web-shared/settings/types.ts
+      - src-tauri/web-shared/settings/sections/terminal-behavior-section.ts
+      - src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+      - src-tauri/web-shared/i18n/locales/ja.json
+      - src-tauri/web-shared/i18n/locales/en.json
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: low
+    requirements: [FR2, FR3, FR5]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "lf variant sending 0x0a on all EncodeTargets (native + app_settings + TS)"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3]
+  FR2:
+    title: "Select offers alt_enter / none / lf in order"
+    status: ok
+    tbd_reason: null
+    tasks: [task0002]
+    tests: [TS-6]
+  FR3:
+    title: "kitty_csi_u shown only while it is the current value (grandfathering)"
+    status: ok
+    tbd_reason: null
+    tasks: [task0002]
+    tests: [TS-6]
+  FR4:
+    title: "kitty_csi_u remains a functional hidden wire value"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-4]
+  FR5:
+    title: "ja/en locale strings for the lf option"
+    status: ok
+    tbd_reason: null
+    tasks: [task0002]
+    tests: [TS-5, TS-6]
+  NFR1:
+    title: "Default, migration rules, and existing values' behavior unchanged"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-4]
