@@ -3,7 +3,7 @@ import {
   applyCursorBlink,
   applyFoldEnabled,
 } from "../settings-applier";
-import type { CursorStyle, BellAction } from "../types";
+import type { CursorStyle, BellAction, ShiftEnterBehavior } from "../types";
 import { MIN_SCROLL_SPEED, MAX_SCROLL_SPEED } from "../types";
 import { t } from "../../i18n/index.ts";
 import { isLinux } from "../../platform";
@@ -242,15 +242,24 @@ export function renderTerminalBehaviorSection(
     );
   }
 
-  // Shift+Enter as Alt+Enter (toggle)
-  renderToggle(
+  // Shift+Enter Behavior (select)
+  renderSelect(
     panel,
     {
-      key: "shift-enter-as-alt-enter",
-      label: t("settings.terminal.shiftEnterAsAltEnter"),
-      value: settings.shift_enter_as_alt_enter,
-      description: t("settings.terminal.shiftEnterAsAltEnterDesc"),
-      onSave: (v) => ctx.saveSetting("shift_enter_as_alt_enter", v),
+      key: "shift-enter-behavior",
+      label: t("settings.terminal.shiftEnterBehavior"),
+      value: settings.shift_enter_behavior,
+      options: [
+        { value: "alt_enter", label: t("settings.terminal.shiftEnterAltEnter") },
+        { value: "none", label: t("settings.terminal.shiftEnterNone") },
+        {
+          value: "kitty_csi_u",
+          label: t("settings.terminal.shiftEnterKittyCsiU"),
+        },
+      ],
+      description: t("settings.terminal.shiftEnterBehaviorDesc"),
+      onSave: (v) =>
+        ctx.saveSetting("shift_enter_behavior", v as ShiftEnterBehavior),
     },
     ctx.addContentListener,
   );
