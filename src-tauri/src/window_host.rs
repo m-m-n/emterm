@@ -2836,7 +2836,7 @@ enum ShiftEnterRewrite {
     /// sets Alt).
     Modifiers(Modifiers),
     /// Bypass the key encoder and write this literal byte sequence
-    /// (`kitty_csi_u`).
+    /// (`kitty_csi_u`, `lf`).
     RawBytes(&'static [u8]),
 }
 
@@ -2844,6 +2844,10 @@ enum ShiftEnterRewrite {
 /// code 13) with the Shift modifier (xterm modifier parameter 2):
 /// `ESC [ 1 3 ; 2 u`. See task0001 design D1.
 const KITTY_CSI_U_SHIFT_ENTER: [u8; 7] = [0x1B, b'[', b'1', b'3', b';', b'2', b'u'];
+
+/// Literal single-byte line feed (0x0a) emitted for `lf`. See task0001
+/// design D1.
+const LF_SHIFT_ENTER: [u8; 1] = [0x0A];
 
 /// Pure decision table for the `shift_enter_behavior` key rewrite
 /// (task0001 design D1). `is_enter` / `mods` describe the pressed key;
@@ -2869,6 +2873,7 @@ fn shift_enter_rewrite(
             ..mods
         }),
         ShiftEnterBehavior::KittyCsiU => ShiftEnterRewrite::RawBytes(&KITTY_CSI_U_SHIFT_ENTER),
+        ShiftEnterBehavior::Lf => ShiftEnterRewrite::RawBytes(&LF_SHIFT_ENTER),
     }
 }
 
@@ -5048,6 +5053,25 @@ mod tests {
     }
 
     #[test]
+    fn shift_enter_rewrite_lf_emits_exact_raw_byte() {
+        // AC-1 (task0001): `lf` -> the exact single byte 0x0a, independent
+        // of host-PTY vs mux encode target (the raw-bytes path bypasses
+        // the encoder entirely, so the target never enters this decision).
+        let mods = Modifiers {
+            shift: true,
+            ctrl: false,
+            alt: false,
+        };
+        let rewrite = shift_enter_rewrite(true, mods, ShiftEnterBehavior::Lf);
+        match rewrite {
+            ShiftEnterRewrite::RawBytes(bytes) => {
+                assert_eq!(bytes, &[0x0A]);
+            }
+            other => panic!("expected RawBytes, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn shift_enter_rewrite_unchanged_when_ctrl_held() {
         // AC-4: Enter with Ctrl+Shift is not rewritten under any value.
         let mods = Modifiers {
@@ -5059,6 +5083,7 @@ mod tests {
             ShiftEnterBehavior::None,
             ShiftEnterBehavior::AltEnter,
             ShiftEnterBehavior::KittyCsiU,
+            ShiftEnterBehavior::Lf,
         ] {
             assert_eq!(
                 shift_enter_rewrite(true, mods, behavior),
@@ -5079,6 +5104,7 @@ mod tests {
             ShiftEnterBehavior::None,
             ShiftEnterBehavior::AltEnter,
             ShiftEnterBehavior::KittyCsiU,
+            ShiftEnterBehavior::Lf,
         ] {
             assert_eq!(
                 shift_enter_rewrite(true, mods, behavior),
@@ -5099,6 +5125,7 @@ mod tests {
             ShiftEnterBehavior::None,
             ShiftEnterBehavior::AltEnter,
             ShiftEnterBehavior::KittyCsiU,
+            ShiftEnterBehavior::Lf,
         ] {
             assert_eq!(
                 shift_enter_rewrite(true, mods, behavior),
@@ -5117,6 +5144,10 @@ mod tests {
         };
         assert_eq!(
             shift_enter_rewrite(false, mods, ShiftEnterBehavior::KittyCsiU),
+            ShiftEnterRewrite::Unchanged
+        );
+        assert_eq!(
+            shift_enter_rewrite(false, mods, ShiftEnterBehavior::Lf),
             ShiftEnterRewrite::Unchanged
         );
     }
