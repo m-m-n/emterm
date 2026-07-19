@@ -207,6 +207,12 @@ pub struct MuxSettings {
     pub keybinds: std::collections::HashMap<String, crate::mux::prefix::PrefixChord>,
     /// Mux status-bar content (`mux.statusbar.*`).
     pub statusbar: MuxStatusbarSettings,
+    /// Window-list sidebar placement mode (`mux.window_sidebar_overlay`,
+    /// mux-vertical-tabs task0005 stand-in for the task0001 contract field —
+    /// see `feature-docs/mux-vertical-tabs/IMPLEMENTATION.md` Shared
+    /// Components). `false` (default) = persistent left panel, `true` =
+    /// right overlay.
+    pub window_sidebar_overlay: bool,
 }
 
 impl Default for MuxSettings {
@@ -221,6 +227,7 @@ impl Default for MuxSettings {
             tab_always_expand: false,
             keybinds,
             statusbar: MuxStatusbarSettings::default(),
+            window_sidebar_overlay: false,
         }
     }
 }
@@ -1352,6 +1359,7 @@ struct RawMux {
     tab_always_expand: Option<bool>,
     keybinds: Option<std::collections::HashMap<String, String>>,
     statusbar: Option<RawMuxStatusbar>,
+    window_sidebar_overlay: Option<bool>,
 }
 
 /// Deserialize side of `mux.statusbar.*`. Mirrors the subset of
@@ -1479,6 +1487,9 @@ impl RawSettings {
             }
             if let Some(v) = mux.tab_always_expand {
                 dst.mux.tab_always_expand = v;
+            }
+            if let Some(v) = mux.window_sidebar_overlay {
+                dst.mux.window_sidebar_overlay = v;
             }
             if let Some(kb) = mux.keybinds {
                 for (action, spec) in kb {
@@ -2157,6 +2168,26 @@ mod tests {
     fn loader_mux_tab_always_expand() {
         let s = load_json(r#"{"mux": {"tab_always_expand": true}}"#);
         assert!(s.mux.tab_always_expand);
+    }
+
+    // ── task0005 stand-in: mux.window_sidebar_overlay loader ──────────────
+
+    #[test]
+    fn default_mux_window_sidebar_overlay_is_persistent() {
+        let s = Settings::new();
+        assert!(!s.mux.window_sidebar_overlay);
+    }
+
+    #[test]
+    fn loader_mux_window_sidebar_overlay_true() {
+        let s = load_json(r#"{"mux": {"window_sidebar_overlay": true}}"#);
+        assert!(s.mux.window_sidebar_overlay);
+    }
+
+    #[test]
+    fn loader_mux_window_sidebar_overlay_absent_keeps_default() {
+        let s = load_json(r#"{"mux": {"prefix": "Ctrl+A"}}"#);
+        assert!(!s.mux.window_sidebar_overlay);
     }
 
     #[test]
