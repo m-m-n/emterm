@@ -221,6 +221,23 @@ pub struct App {
     /// `Option<Widget>` fields; reentry is guarded by the
     /// `MuxDialogState::Closed` variant.
     pub mux_dialog: crate::mux::dialog::MuxDialogState,
+    /// Runtime open/closed flag for the mux window-list sidebar overlay
+    /// (`mux.window_sidebar_overlay` placement mode). Toggled by
+    /// `PrefixAction::ToggleWindowSidebar` in `dispatch_mux_action` — a
+    /// strict no-op while overlay mode is off (FR4). Reset to `false` in
+    /// `pump_all` when the focused tab's mux group tears down. Rendering
+    /// input only; this field does not drive any drawing itself (task0005).
+    mux_sidebar_overlay_open: bool,
+    /// Bookkeeping for the reset above: `Some(tab_index)` when `tab_index`
+    /// was the active tab AND was mux-attached as of the end of the
+    /// previous `pump_all` call; `None` otherwise. A
+    /// same-tab `Some -> not-attached` transition is a genuine teardown
+    /// (Detach confirmed / last window's PtyExited emptied the group); a
+    /// changed `self.active` between calls is just a tab switch and must
+    /// NOT reset the flag (the overlay's visibility already gates on
+    /// "active tab is mux-attached" separately — see the Shared Components
+    /// contract in IMPLEMENTATION.md).
+    active_mux_attached_prev_pump: Option<usize>,
     /// Display locale resolved once from `settings.language` at
     /// construction (`Auto` consults the OS locale). Consumed by the
     /// desktop-notification body formatting in `pump_all`.
@@ -351,16 +368,6 @@ pub struct App {
     /// persisted setting so the toggle takes effect without rewriting
     /// `settings.json`.
     pub show_tab_bar: bool,
-    /// Runtime open/closed flag for the mux window-sidebar's overlay
-    /// placement variant (mux-vertical-tabs task0003 contract field, added
-    /// here as a task0005 read-side stand-in — see
-    /// `feature-docs/mux-vertical-tabs/IMPLEMENTATION.md` Shared
-    /// Components: "App overlay state"). task0003 owns the toggle entry
-    /// point (`ToggleWindowSidebar` prefix action) and the teardown reset;
-    /// this task only reads it through [`Self::mux_sidebar_visibility`].
-    /// Defaults to `false` (closed) so the overlay never renders until
-    /// task0003 wires the toggle.
-    pub mux_sidebar_overlay_open: bool,
     /// Color-emoji texture cache for the status bar. egui's text path
     /// (ab_glyph) cannot raster CBDT/COLR glyphs, so the widget walks
     /// each run via [`crate::ui::emoji_cache::split_segments`] and
@@ -496,7 +503,9 @@ pub enum MuxSidebarVisibility {
 /// `ctx.screen_rect()`).
 pub fn mux_sidebar_grid_inset(visibility: MuxSidebarVisibility, window_width_logical: f32) -> f32 {
     match visibility {
-        MuxSidebarVisibility::Persistent => crate::ui::mux_sidebar::width_px(window_width_logical),
+        MuxSidebarVisibility::Persistent => {
+            crate::ui::mux_sidebar::sidebar_width(window_width_logical)
+        }
         MuxSidebarVisibility::Hidden | MuxSidebarVisibility::Overlay => 0.0,
     }
 }
@@ -656,6 +665,8 @@ impl App {
             active: 0,
             mux_latch,
             mux_dialog: crate::mux::dialog::MuxDialogState::Closed,
+            mux_sidebar_overlay_open: false,
+            active_mux_attached_prev_pump: None,
             settings_launcher: Box::new(crate::settings_launcher::ProcessSettingsLauncher::new()),
             cell_size: GridDims::default(),
             selection: None,
@@ -696,7 +707,6 @@ impl App {
             cell_h_logical,
             runtime_font_size_pt,
             show_tab_bar,
-            mux_sidebar_overlay_open: false,
             emoji_texture_cache: Arc::new(Mutex::new(EmojiTextureCache::new())),
             status_bar_runtime,
             active_cwd,
@@ -2575,6 +2585,18 @@ impl App {
                     None => MuxActionOutcome::None,
                 }
             }
+            PrefixAction::ToggleWindowSidebar => {
+                // FR4: persistent mode (the common default) makes the
+                // keybind a strict no-op — no state change, no dialog, no
+                // PTY interaction. FR5: overlay mode flips the runtime
+                // flag; toggling never touches the PTY (NFR1), so this
+                // always reports `None` rather than `Changed` (rendering
+                // is task0005's concern, not this dispatch).
+                if self.settings.mux.window_sidebar_overlay {
+                    self.mux_sidebar_overlay_open = !self.mux_sidebar_overlay_open;
+                }
+                MuxActionOutcome::None
+            }
         };
         // The `tab` borrow has ended; commit the swapped scroll value and, on
         // a committed pane switch, force a full redraw so a shorter incoming
@@ -3270,6 +3292,26 @@ impl App {
         if active_mux_window_added {
             self.scroll_active_tab_into_view = true;
         }
+        // Reset the mux sidebar overlay flag when the FOCUSED tab's mux
+        // group tore down this pump (a `Detached` reply, or the last
+        // window's `PtyExited` emptying the group — both routed into
+        // `tab.mux_group` by `Tab::pump` above, before this read). Compared
+        // against `self.active` before the exited-tab reap below (which can
+        // renumber it, mirroring the before/after-scrollback sampling
+        // rationale above the tab loop): the reap only runs when a tab is
+        // fully removed, which already implies its mux group (if any) went
+        // to `None` earlier in this same pass, so reading here still
+        // targets the right tab. A changed `self.active` between pumps
+        // (the user just switched tabs) intentionally does NOT reset the
+        // flag — see the field doc on `active_mux_attached_prev_pump`.
+        let active_mux_attached_now = self
+            .tabs
+            .get(self.active)
+            .is_some_and(|t| t.mux_group.is_some());
+        if self.active_mux_attached_prev_pump == Some(self.active) && !active_mux_attached_now {
+            self.mux_sidebar_overlay_open = false;
+        }
+        self.active_mux_attached_prev_pump = active_mux_attached_now.then_some(self.active);
         for (sanitized_title, kind) in pending_notifications {
             let body = crate::notifications::notification_body(&sanitized_title, kind, self.locale);
             self.notify(crate::notifications::NOTIFICATION_TITLE, &body);
@@ -3429,6 +3471,12 @@ impl App {
     /// serving the previous tab's content.
     pub fn full_redraw_pending(&self) -> bool {
         self.needs_full_redraw || self.force_full_redraw
+    }
+
+    /// Whether the mux window-list sidebar overlay is currently open.
+    /// Rendering input only — see the `mux_sidebar_overlay_open` field doc.
+    pub fn mux_sidebar_overlay_open(&self) -> bool {
+        self.mux_sidebar_overlay_open
     }
 
     /// FR4: whether the active tab/window cell should be scrolled into view
@@ -6291,6 +6339,108 @@ mod tests {
         assert_eq!(active_idx(&app), 0);
     }
 
+    // ── task0003: toggle-window-sidebar + overlay-open flag ──────────────
+
+    /// Clone `app.settings` with `mux.window_sidebar_overlay` forced to
+    /// `overlay`. Test-only helper — production loading of this field is
+    /// out of this task's scope (see the field doc in `settings.rs`).
+    fn with_overlay_mode(app: &mut App, overlay: bool) {
+        let mut settings = (*app.settings).clone();
+        settings.mux.window_sidebar_overlay = overlay;
+        app.settings = std::sync::Arc::new(settings);
+    }
+
+    #[test]
+    fn ac2_toggle_round_trips_when_overlay_mode_enabled() {
+        let mut app = app_with_mux_windows(2);
+        with_overlay_mode(&mut app, true);
+
+        assert!(!app.mux_sidebar_overlay_open());
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar),
+            MuxActionOutcome::None
+        );
+        assert!(app.mux_sidebar_overlay_open());
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar),
+            MuxActionOutcome::None
+        );
+        assert!(
+            !app.mux_sidebar_overlay_open(),
+            "round-trip back to initial"
+        );
+    }
+
+    #[test]
+    fn ac3_toggle_is_strict_noop_when_overlay_mode_disabled() {
+        // Persistent mode is the default — `with_overlay_mode` not called.
+        let mut app = app_with_mux_windows(2);
+        assert!(!app.settings.mux.window_sidebar_overlay);
+
+        let idx_before = active_idx(&app);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar),
+            MuxActionOutcome::None
+        );
+        assert!(
+            !app.mux_sidebar_overlay_open(),
+            "persistent mode: flag stays false"
+        );
+        assert_eq!(active_idx(&app), idx_before, "no window switch side effect");
+    }
+
+    #[test]
+    fn mux_sidebar_overlay_resets_when_focused_tabs_mux_group_tears_down() {
+        let mut app = app_with_mux_windows(2);
+        with_overlay_mode(&mut app, true);
+        app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar);
+        assert!(app.mux_sidebar_overlay_open());
+
+        // Establish the "focused tab is mux-attached" baseline pump_all
+        // records for the reset comparison.
+        app.pump_all();
+        assert!(app.mux_sidebar_overlay_open());
+
+        // Daemon confirms detach: the focused tab's mux group tears down
+        // (mirrors `Tab::apply_mux_message`'s `Detached` arm, which
+        // production reaches via `Tab::pump` decoding the same message).
+        app.on_mux_message(
+            0,
+            MuxMessage {
+                msg_type: MessageType::Detached,
+                pane_id: 0,
+                payload: Vec::new(),
+            },
+        );
+        app.pump_all();
+
+        assert!(
+            !app.mux_sidebar_overlay_open(),
+            "flag resets once the focused tab's mux group tears down"
+        );
+    }
+
+    #[test]
+    fn mux_sidebar_overlay_survives_switching_away_from_the_mux_tab() {
+        // Switching the active tab away from a mux-attached tab must NOT
+        // reset the flag — only an actual teardown of the FOCUSED tab's
+        // group does (see the `active_mux_attached_prev_pump` field doc).
+        let mut app = app_with_mux_windows(2);
+        with_overlay_mode(&mut app, true);
+        app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar);
+        assert!(app.mux_sidebar_overlay_open());
+        app.pump_all();
+
+        app.spawn_initial_tab(); // a second, plain-local tab
+        app.active = app.tabs.len() - 1;
+        app.pump_all();
+
+        assert!(
+            app.mux_sidebar_overlay_open(),
+            "flag persists across a mere tab switch"
+        );
+    }
+
     #[test]
     fn pump_all_scrolls_new_mux_window_into_view_on_active_tab() {
         // FR6 (mux), App-level integration: a daemon `PaneCreated` on the ACTIVE
@@ -6605,7 +6755,7 @@ mod tests {
     #[test]
     fn grid_inset_equals_width_fn_when_persistent() {
         let inset = mux_sidebar_grid_inset(MuxSidebarVisibility::Persistent, 1000.0);
-        assert_eq!(inset, crate::ui::mux_sidebar::width_px(1000.0));
+        assert_eq!(inset, crate::ui::mux_sidebar::sidebar_width(1000.0));
         assert!(inset > 0.0);
     }
 
