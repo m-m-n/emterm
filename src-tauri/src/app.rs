@@ -351,6 +351,16 @@ pub struct App {
     /// persisted setting so the toggle takes effect without rewriting
     /// `settings.json`.
     pub show_tab_bar: bool,
+    /// Runtime open/closed flag for the mux window-sidebar's overlay
+    /// placement variant (mux-vertical-tabs task0003 contract field, added
+    /// here as a task0005 read-side stand-in — see
+    /// `feature-docs/mux-vertical-tabs/IMPLEMENTATION.md` Shared
+    /// Components: "App overlay state"). task0003 owns the toggle entry
+    /// point (`ToggleWindowSidebar` prefix action) and the teardown reset;
+    /// this task only reads it through [`Self::mux_sidebar_visibility`].
+    /// Defaults to `false` (closed) so the overlay never renders until
+    /// task0003 wires the toggle.
+    pub mux_sidebar_overlay_open: bool,
     /// Color-emoji texture cache for the status bar. egui's text path
     /// (ab_glyph) cannot raster CBDT/COLR glyphs, so the widget walks
     /// each run via [`crate::ui::emoji_cache::split_segments`] and
@@ -458,6 +468,36 @@ pub struct GridDims {
 impl Default for GridDims {
     fn default() -> Self {
         Self { cols: 80, rows: 24 }
+    }
+}
+
+/// Which mux window-sidebar variant (if any) is visible on the current
+/// frame. See [`App::mux_sidebar_visibility`] for the resolution rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MuxSidebarVisibility {
+    /// Neither variant renders (local tab, or overlay mode with the
+    /// runtime flag closed).
+    Hidden,
+    /// Persistent left panel — reserves grid space.
+    Persistent,
+    /// Right-edge overlay — draws over the terminal area, zero grid inset.
+    Overlay,
+}
+
+/// Horizontal grid inset (logical px) the persistent sidebar reserves,
+/// given this frame's [`MuxSidebarVisibility`] and the window's logical
+/// width. Only `Persistent` contributes a non-zero inset — overlay mode
+/// draws over the grid without reshaping it (task0005 NFR1). Pure function
+/// so `window_host::cell_metrics_px` / `grid_size` and `render::cursor` /
+/// `draw_search_highlights` share one formula despite reading the window
+/// width from different sources (task0005 D2: the wgpu grid geometry is
+/// computed outside egui, so `window_host` derives the width from
+/// `surface_config` while the egui overlay call sites read
+/// `ctx.screen_rect()`).
+pub fn mux_sidebar_grid_inset(visibility: MuxSidebarVisibility, window_width_logical: f32) -> f32 {
+    match visibility {
+        MuxSidebarVisibility::Persistent => crate::ui::mux_sidebar::width_px(window_width_logical),
+        MuxSidebarVisibility::Hidden | MuxSidebarVisibility::Overlay => 0.0,
     }
 }
 
@@ -656,6 +696,7 @@ impl App {
             cell_h_logical,
             runtime_font_size_pt,
             show_tab_bar,
+            mux_sidebar_overlay_open: false,
             emoji_texture_cache: Arc::new(Mutex::new(EmojiTextureCache::new())),
             status_bar_runtime,
             active_cwd,
@@ -2129,6 +2170,59 @@ impl App {
     }
     pub fn active_tab(&self) -> Option<&Tab> {
         self.tabs.get(self.active)
+    }
+
+    /// Whether the active tab carries an attached mux window group with at
+    /// least one window (`MuxWindowGroup::is_group`). Shared predicate for
+    /// [`Self::mux_sidebar_visibility`] and the tab-bar label (task0005
+    /// AC-1/AC-6).
+    fn active_tab_mux_attached(&self) -> bool {
+        self.active_tab()
+            .and_then(|t| t.mux_group.as_ref())
+            .map(|g| g.is_group())
+            .unwrap_or(false)
+    }
+
+    /// Which mux window-sidebar variant (if any) is visible on the current
+    /// frame, given `settings.mux.window_sidebar_overlay`, the runtime
+    /// overlay flag ([`Self::mux_sidebar_overlay_open`]), and whether the
+    /// active tab is mux-attached ([`Self::active_tab_mux_attached`]) —
+    /// task0005 FR2/FR4/FR5:
+    ///
+    /// - `Persistent`: overlay-mode setting is `false` AND the active tab
+    ///   is mux-attached.
+    /// - `Overlay`: overlay-mode setting is `true` AND the runtime overlay
+    ///   flag is set AND the active tab is mux-attached.
+    /// - `Hidden`: neither of the above (in particular, local tabs never
+    ///   show either variant).
+    ///
+    /// Read by both `render` (which widget variant to draw, if any) and
+    /// geometry code ([`mux_sidebar_grid_inset`] / `render::cursor` origin
+    /// math — only `Persistent` contributes a grid inset).
+    pub fn mux_sidebar_visibility(&self) -> MuxSidebarVisibility {
+        if !self.active_tab_mux_attached() {
+            return MuxSidebarVisibility::Hidden;
+        }
+        if self.settings.mux.window_sidebar_overlay {
+            if self.mux_sidebar_overlay_open {
+                MuxSidebarVisibility::Overlay
+            } else {
+                MuxSidebarVisibility::Hidden
+            }
+        } else {
+            MuxSidebarVisibility::Persistent
+        }
+    }
+
+    /// Horizontal grid inset (logical px) the persistent sidebar reserves
+    /// for `window_width_logical` on the current frame. Thin wrapper
+    /// around [`mux_sidebar_grid_inset`] for callers holding `&App`
+    /// (`render::cursor`, `render::draw_cursor` / `draw_search_highlights`)
+    /// — `window_host::cell_metrics_px` calls the free function directly
+    /// since it derives the window width from `surface_config` rather than
+    /// an egui context.
+    pub fn mux_sidebar_x_inset(&self, window_width_logical: f32) -> f32 {
+        mux_sidebar_grid_inset(self.mux_sidebar_visibility(), window_width_logical)
     }
 
     // ── SFTP upload (drag & drop) ────────────────────────────────
@@ -6438,6 +6532,91 @@ mod tests {
         // Out-of-range tab index must not panic and must leave state intact.
         assert!(!app.apply_tab_event(crate::ui::TabEvent::MuxSwitch { tab: 9, window: 1 }));
         assert_eq!(active_idx(&app), 0);
+    }
+
+    // ── task0005 AC-6: mux_sidebar_visibility matrix ───────────────────────
+
+    #[test]
+    fn sidebar_hidden_on_local_tab_regardless_of_mode() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        assert_eq!(app.mux_sidebar_visibility(), MuxSidebarVisibility::Hidden);
+        app.settings = Arc::new({
+            let mut s = (*app.settings).clone();
+            s.mux.window_sidebar_overlay = true;
+            s
+        });
+        app.mux_sidebar_overlay_open = true;
+        assert_eq!(app.mux_sidebar_visibility(), MuxSidebarVisibility::Hidden);
+    }
+
+    #[test]
+    fn sidebar_persistent_when_mux_attached_and_overlay_mode_off() {
+        let app = app_with_mux_windows(2);
+        assert!(!app.settings.mux.window_sidebar_overlay);
+        assert_eq!(
+            app.mux_sidebar_visibility(),
+            MuxSidebarVisibility::Persistent
+        );
+    }
+
+    #[test]
+    fn sidebar_overlay_when_mux_attached_mode_on_and_flag_open() {
+        let mut app = app_with_mux_windows(2);
+        app.settings = Arc::new({
+            let mut s = (*app.settings).clone();
+            s.mux.window_sidebar_overlay = true;
+            s
+        });
+        app.mux_sidebar_overlay_open = true;
+        assert_eq!(app.mux_sidebar_visibility(), MuxSidebarVisibility::Overlay);
+    }
+
+    #[test]
+    fn sidebar_hidden_when_mux_attached_mode_on_but_flag_closed() {
+        let mut app = app_with_mux_windows(2);
+        app.settings = Arc::new({
+            let mut s = (*app.settings).clone();
+            s.mux.window_sidebar_overlay = true;
+            s
+        });
+        assert!(!app.mux_sidebar_overlay_open);
+        assert_eq!(app.mux_sidebar_visibility(), MuxSidebarVisibility::Hidden);
+    }
+
+    // ── task0005 AC-3/AC-4: mux_sidebar_grid_inset pure math ───────────────
+
+    #[test]
+    fn grid_inset_zero_when_hidden() {
+        assert_eq!(
+            mux_sidebar_grid_inset(MuxSidebarVisibility::Hidden, 1000.0),
+            0.0
+        );
+    }
+
+    #[test]
+    fn grid_inset_zero_when_overlay_regardless_of_width() {
+        assert_eq!(
+            mux_sidebar_grid_inset(MuxSidebarVisibility::Overlay, 1000.0),
+            0.0
+        );
+    }
+
+    #[test]
+    fn grid_inset_equals_width_fn_when_persistent() {
+        let inset = mux_sidebar_grid_inset(MuxSidebarVisibility::Persistent, 1000.0);
+        assert_eq!(inset, crate::ui::mux_sidebar::width_px(1000.0));
+        assert!(inset > 0.0);
+    }
+
+    #[test]
+    fn x_inset_helper_matches_free_function() {
+        let app = app_with_mux_windows(2);
+        let width = 900.0;
+        assert_eq!(
+            app.mux_sidebar_x_inset(width),
+            mux_sidebar_grid_inset(app.mux_sidebar_visibility(), width)
+        );
     }
 
     // ── TS-14: rename confirm re-resolves by stable id ────────────────
