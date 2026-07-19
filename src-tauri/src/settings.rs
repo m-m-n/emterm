@@ -1203,6 +1203,26 @@ impl Settings {
 // - explicit `null` is treated as "absent" (Option = None)
 // - unknown keys are ignored (forward compatibility with newer
 //   src-tauri settings written by the legacy build)
+//
+// Exception: `shift_enter_behavior` is `Option<Option<String>>` because
+// its precedence over the legacy `shift_enter_as_alt_enter` boolean
+// depends on distinguishing "key absent" from "key present with null"
+// (FR5 / AC-3) — see its field doc comment.
+
+/// Deserializes a JSON field into `Option<Option<T>>`, distinguishing an
+/// absent key (`#[serde(default)]` on the container yields `None`; this
+/// function is never invoked for a missing key) from a key present with
+/// `null` (`Some(None)`) or a concrete value (`Some(Some(v))`). Used
+/// where the difference between "key absent" and "key explicitly null"
+/// changes precedence against a legacy fallback key — see
+/// `RawSettings::shift_enter_behavior` / FR5.
+fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
 
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(default)]
@@ -1247,9 +1267,19 @@ struct RawSettings {
     alternate_scroll_enabled: Option<bool>,
     copy_on_select: Option<bool>,
     middle_click_paste: Option<bool>,
-    /// New wire key (task0001). Wins over the legacy
-    /// `shift_enter_as_alt_enter` boolean below when both are present.
-    shift_enter_behavior: Option<String>,
+    /// New wire key (task0001/task0003). Wins over the legacy
+    /// `shift_enter_as_alt_enter` boolean below whenever this key was
+    /// PRESENT in the source JSON — including when it is explicitly
+    /// `null` (FR5 / AC-3). `Option<Option<String>>` (rather than the
+    /// plain `Option<String>` every other field in this struct uses)
+    /// distinguishes "key absent" (`None`, the struct-level
+    /// `#[serde(default)]`) from "key present with `null`"
+    /// (`Some(None)`, produced by [`deserialize_present_option`]) so
+    /// `merge_into` can resolve that precedence correctly; a plain
+    /// `Option<String>` would conflate the two (both deserialize to
+    /// `None`).
+    #[serde(deserialize_with = "deserialize_present_option")]
+    shift_enter_behavior: Option<Option<String>>,
     /// Legacy boolean, migration input only (FR5): `true` -> `AltEnter`,
     /// `false` -> `None`. Never written back to `settings.json`.
     shift_enter_as_alt_enter: Option<bool>,
@@ -1680,19 +1710,26 @@ impl RawSettings {
         if let Some(v) = self.middle_click_paste {
             dst.middle_click_paste = v;
         }
-        // FR5 migration: the new key wins when present; otherwise fall
-        // back to the legacy boolean (true -> AltEnter, false -> None).
-        // Neither present leaves `dst` at the default seeded by
+        // FR5 migration: the new key wins whenever it was PRESENT in the
+        // source JSON — including an explicit `null`, which resolves to
+        // the default (AC-3) rather than falling through to the legacy
+        // boolean. Only when the new key is fully ABSENT does the legacy
+        // boolean apply (true -> AltEnter, false -> None). Neither
+        // present leaves `dst` at the default seeded by
         // `Settings::default()` (AltEnter). The legacy key is read-only
         // here and is never written back to settings.json.
-        if let Some(v) = self.shift_enter_behavior {
-            dst.shift_enter_behavior = ShiftEnterBehavior::parse_or_warn(&v);
-        } else if let Some(legacy) = self.shift_enter_as_alt_enter {
-            dst.shift_enter_behavior = if legacy {
-                ShiftEnterBehavior::AltEnter
-            } else {
-                ShiftEnterBehavior::None
-            };
+        match self.shift_enter_behavior {
+            Some(Some(v)) => dst.shift_enter_behavior = ShiftEnterBehavior::parse_or_warn(&v),
+            Some(None) => dst.shift_enter_behavior = ShiftEnterBehavior::default(),
+            None => {
+                if let Some(legacy) = self.shift_enter_as_alt_enter {
+                    dst.shift_enter_behavior = if legacy {
+                        ShiftEnterBehavior::AltEnter
+                    } else {
+                        ShiftEnterBehavior::None
+                    };
+                }
+            }
         }
         if let Some(v) = self.skk_mode {
             dst.skk_mode = v;
@@ -2675,6 +2712,28 @@ mod tests {
     fn loader_shift_enter_behavior_neither_key_keeps_default() {
         // AC-2: neither key present -> default.
         let s = load_json(r#"{}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
+    #[test]
+    fn loader_shift_enter_behavior_explicit_null_wins_over_legacy_true() {
+        // AC-3: the new key present-but-null must be distinguished from
+        // the new key being absent — present null resolves to the
+        // default and wins over the legacy key, even though here the
+        // legacy value alone would ALSO resolve to `alt_enter` (so this
+        // case alone would not catch a regression to the old
+        // "null == absent" behavior; see the `_false` case below).
+        let s = load_json(r#"{"shift_enter_behavior": null, "shift_enter_as_alt_enter": true}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
+    #[test]
+    fn loader_shift_enter_behavior_explicit_null_wins_over_legacy_false() {
+        // AC-3: present null -> default (`alt_enter`), NOT `none` (which
+        // the legacy `false` value alone would produce). This is the
+        // regression case: conflating "null" with "absent" would
+        // incorrectly fall through to the legacy boolean here.
+        let s = load_json(r#"{"shift_enter_behavior": null, "shift_enter_as_alt_enter": false}"#);
         assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
     }
 
