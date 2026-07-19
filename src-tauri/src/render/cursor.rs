@@ -400,10 +400,16 @@ pub fn draw_block_cursor(painter: &egui::Painter, core: &TerminalCore, theme: &T
 
     let pad = app.settings.padding as f32;
     let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
+    // task0005 D2: same x-origin inset the main grid uses
+    // (`window_host::cell_metrics_px`) so the block cursor stays aligned
+    // next to a persistent mux sidebar (AC-5). `painter.ctx()` stands in
+    // for the `WindowHost`-cached window width this overlay has no access
+    // to (mirrors `render::draw_cursor` / `draw_search_highlights`).
+    let sidebar_inset = app.mux_sidebar_x_inset(painter.ctx().screen_rect().width());
     let metrics = FontMetrics {
         cell_w: app.cell_w_logical,
         cell_h: app.cell_h_logical,
-        left_pad: pad,
+        left_pad: pad + sidebar_inset,
         top_pad: crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad,
     };
     let rect = block_cursor_rect(

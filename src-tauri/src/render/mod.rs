@@ -236,14 +236,20 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             if let Some(name) = &t.mux_session_name {
                 item = item.with_mux_session(name.clone());
             }
-            // FR1 (WebView parity): a mux-attached tab renders one sub-tab per
-            // window (`[N] name`) instead of the plain title, whenever the
-            // group holds at least one window. The group is dissolved only at
-            // zero windows (`is_group()` false → the `Option` is cleared on the
-            // last `PtyExited`), falling back to the plain title.
+            // task0005 D1: a mux-attached tab collapses to a single cell
+            // labelled `mux: <active window name>` instead of the WebView-
+            // parity inline sub-tab expansion — the window list moved to the
+            // `ui::mux_sidebar` widget (drawn below). The group is dissolved
+            // only at zero windows (`is_group()` false → the `Option` is
+            // cleared on the last `PtyExited`), falling back to the plain
+            // title.
             if let Some(group) = &t.mux_group {
                 if group.is_group() {
-                    item = item.with_mux_cells(crate::ui::tab_bar::mux_group_render_model(group));
+                    let name = group
+                        .active_window()
+                        .map(|w| w.name.clone())
+                        .unwrap_or_default();
+                    item = item.with_mux_active_window_name(name);
                 }
             }
             // `tab_activity_indicator` gates the dot's rendering only;
@@ -254,7 +260,7 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             item
         })
         .collect();
-    let tab_event = if items.is_empty() || !app.show_tab_bar {
+    let mut tab_event = if items.is_empty() || !app.show_tab_bar {
         None
     } else {
         // FR4: read (do not clear) the one-shot scroll-into-view signal here —
@@ -263,6 +269,55 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
         // available.
         crate::ui::tab_bar::draw(ctx, &items, app.active, app.scroll_active_tab_into_view())
     };
+
+    // task0005 FR2/FR4/FR5: the mux window-sidebar. `mux_sidebar_visibility`
+    // gates on settings + the runtime overlay flag + whether the active tab
+    // is mux-attached (D1/D2/D3 in IMPLEMENTATION.md). The persistent
+    // variant is drawn here (between the tab bar and the central panel) so
+    // it reserves grid space via egui's own panel layout — matching the
+    // inset `window_host::cell_metrics_px` / `render::cursor` add on the
+    // wgpu side. The overlay variant draws after the central panel (below)
+    // so it floats over the terminal without affecting layout.
+    let sidebar_visibility = app.mux_sidebar_visibility();
+    let sidebar_entries: Vec<crate::ui::mux_sidebar::SidebarEntry> = match sidebar_visibility {
+        crate::app::MuxSidebarVisibility::Hidden => Vec::new(),
+        _ => app
+            .active_tab()
+            .and_then(|t| t.mux_group.as_ref())
+            .map(|g| {
+                let active = g.active_index();
+                g.windows()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, w)| crate::ui::mux_sidebar::SidebarEntry {
+                        index: i,
+                        name: w.name.clone(),
+                        active: i == active,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    let sidebar_width = crate::ui::mux_sidebar::width_px(ctx.screen_rect().width());
+    if sidebar_visibility == crate::app::MuxSidebarVisibility::Persistent {
+        // The sidebar's click result routes into the SAME
+        // `TabEvent::MuxSwitch` application path the (now-collapsed) inline
+        // sub-tab click used (`App::apply_tab_event`'s existing arm) — the
+        // widget itself never sends mux messages (task0005 AC-2).
+        if let Some(window) = crate::ui::mux_sidebar::draw(
+            ctx,
+            &sidebar_entries,
+            crate::ui::mux_sidebar::Placement::Persistent,
+            sidebar_width,
+        ) {
+            if tab_event.is_none() {
+                tab_event = Some(crate::ui::TabEvent::MuxSwitch {
+                    tab: app.active,
+                    window,
+                });
+            }
+        }
+    }
 
     // Phase 4-D: status-bar panel. Inserted before the central panel
     // (egui sizes top/bottom panels first, then the central panel
@@ -332,6 +387,26 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
                 );
             }
         });
+
+    // task0005 D3: the overlay sidebar draws after the central panel so it
+    // floats over the terminal area without affecting grid geometry (zero
+    // inset — NFR1). Same click-routing contract as the persistent variant
+    // above.
+    if sidebar_visibility == crate::app::MuxSidebarVisibility::Overlay {
+        if let Some(window) = crate::ui::mux_sidebar::draw(
+            ctx,
+            &sidebar_entries,
+            crate::ui::mux_sidebar::Placement::Overlay,
+            sidebar_width,
+        ) {
+            if tab_event.is_none() {
+                tab_event = Some(crate::ui::TabEvent::MuxSwitch {
+                    tab: app.active,
+                    window,
+                });
+            }
+        }
+    }
 
     // Keep blinking cursors animating. egui only repaints on demand, so we
     // schedule a wake-up at the half-period. Frame-level skip in
@@ -942,7 +1017,15 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
     // top-status panel, so adding the inset would double-count it.
     let pad = app.settings.padding as f32;
     let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
-    let origin = Pos2::new(pad, crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad);
+    // task0005 D2: the persistent mux sidebar reserves a horizontal inset
+    // mirroring the one `window_host::cell_metrics_px` adds to the wgpu
+    // grid's origin_x — read via `ui.ctx().screen_rect()` since this overlay
+    // has no access to `WindowHost`'s cached `surface_config` width.
+    let sidebar_inset = app.mux_sidebar_x_inset(ui.ctx().screen_rect().width());
+    let origin = Pos2::new(
+        pad + sidebar_inset,
+        crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad,
+    );
     let painter = ui.painter();
 
     let cell_w = app.cell_w_logical;
@@ -1037,10 +1120,17 @@ fn draw_search_highlights(ui: &mut egui::Ui, core: &TerminalCore, app: &App) {
     let fold_layout = app.fold_layout();
 
     // Same origin anchor as draw_cursor (status-bar top inset is handled
-    // by the central panel's min_rect, so it is omitted here on purpose).
+    // by the central panel's min_rect, so it is omitted here on purpose;
+    // the mux sidebar's x-inset — task0005 D2 — is NOT handled by egui's
+    // layout since it mirrors the wgpu grid's manually-computed origin, so
+    // it is added explicitly, same as draw_cursor).
     let pad = app.settings.padding as f32;
     let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
-    let origin = Pos2::new(pad, crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad);
+    let sidebar_inset = app.mux_sidebar_x_inset(ui.ctx().screen_rect().width());
+    let origin = Pos2::new(
+        pad + sidebar_inset,
+        crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad,
+    );
     let cell_w = app.cell_w_logical;
     let cell_h = app.cell_h_logical;
     let painter = ui.painter();
