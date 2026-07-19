@@ -211,13 +211,6 @@ pub struct MuxSettings {
     pub keybinds: std::collections::HashMap<String, crate::mux::prefix::PrefixChord>,
     /// Mux status-bar content (`mux.statusbar.*`).
     pub statusbar: MuxStatusbarSettings,
-    /// Sidebar placement mode (`mux.window_sidebar_overlay`): `false` =
-    /// persistent left panel (default), `true` = right overlay. Gates the
-    /// `toggle-window-sidebar` prefix action (FR4/FR5) — see
-    /// `App::dispatch_mux_action`. `settings.json` loading (the raw-key
-    /// overlay in `RawMux`) is out of this task's scope; the field always
-    /// resolves to its default here until that lands.
-    pub window_sidebar_overlay: bool,
 }
 
 impl Default for MuxSettings {
@@ -233,7 +226,6 @@ impl Default for MuxSettings {
             window_sidebar_overlay: false,
             keybinds,
             statusbar: MuxStatusbarSettings::default(),
-            window_sidebar_overlay: false,
         }
     }
 }
