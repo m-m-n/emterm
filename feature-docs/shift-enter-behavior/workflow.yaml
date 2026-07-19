@@ -1,0 +1,130 @@
+schema_version: 1
+feature: shift-enter-behavior
+created: 2026-07-19
+base_branch: main
+parent_branch: em-workflow/shift-enter-behavior/integration
+
+project:
+  license: MIT
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: b8b2b6b878c64be9ac31cde7ebe8cc6a33c2fecc
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "設定パネルの既存セレクト UI パターンで外観が完全に決まるため"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: b8b2b6b878c64be9ac31cde7ebe8cc6a33c2fecc
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: "Rust setting enum, migration, and key rewrite"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/settings.rs
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/settings_store.rs
+    skills: [backend-impl]
+    domains: [input-handling, data-persistence]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, NFR1]
+    status: pending
+    notes: null
+  task0002:
+    title: "Settings-panel select UI and TS mirror"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/web-shared/settings/types.ts
+      - src-tauri/web-shared/settings/sections/terminal-behavior-section.ts
+      - src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+      - src-tauri/web-shared/i18n/locales/ja.json
+      - src-tauri/web-shared/i18n/locales/en.json
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: low
+    requirements: [FR6, FR7]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "shift_enter_behavior enum setting replacing shift_enter_as_alt_enter"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-5, TS-6]
+  FR2:
+    title: "none: bare Shift+Enter passes through as plain Enter"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-1]
+  FR3:
+    title: "alt_enter: bare Shift+Enter delivered as Alt+Enter"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-2]
+  FR4:
+    title: "kitty_csi_u: bare Shift+Enter sends raw \\x1b[13;2u on all EncodeTargets"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-3]
+  FR5:
+    title: "Legacy shift_enter_as_alt_enter migration (true→alt_enter, false→none)"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-5]
+  FR6:
+    title: "Settings panel select UI with ja/en locale strings"
+    status: ok
+    tbd_reason: null
+    tasks: [task0002]
+    tests: [TS-8]
+  FR7:
+    title: "TypeScript AppSettings mirror as string union"
+    status: ok
+    tbd_reason: null
+    tasks: [task0002]
+    tests: [TS-7]
+  NFR1:
+    title: "Modifier and non-PTY key handling unaffected"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-4]
