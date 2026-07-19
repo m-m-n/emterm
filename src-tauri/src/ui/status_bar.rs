@@ -4,7 +4,8 @@
 //! the window. Rows top-to-bottom:
 //!
 //! 1. **App Line 1** — local templates resolved by the
-//!    `TemplateEngine` (typically `{time}` / `{cwd}`).
+//!    `TemplateEngine` (typically `{time}` / `{cwd}`). Auto-hidden
+//!    when its resolved content is empty.
 //! 2. **App Line 2** — second template row, auto-hidden when both
 //!    sides are empty (FR12).
 //! 3. **OSC row** — mux daemon's `StatusUpdateMsg` if the active tab
@@ -52,7 +53,9 @@ pub fn visible_row_count(view_model: &StatusBarViewModel) -> u32 {
         return 0;
     }
     let osc_visible = view_model.osc.should_render();
-    let app1_visible = true; // FR12: App Line 1 always renders.
+    // App Line 1 auto-hides on the same resolved-content rule as App
+    // Line 2 (no separate "always visible" carve-out).
+    let app1_visible = view_model.app_line1.has_content();
     let app2_visible = view_model.app_line2.has_content();
     (osc_visible as u32) + (app1_visible as u32) + (app2_visible as u32)
 }
@@ -92,7 +95,7 @@ pub fn draw(
         .show_separator_line(false)
         .exact_height(ROW_HEIGHT * visible_rows as f32);
 
-    let app1_visible = true;
+    let app1_visible = view_model.app_line1.has_content();
     let app2_visible = view_model.app_line2.has_content();
     let osc_visible = view_model.osc.should_render();
 
@@ -841,7 +844,8 @@ mod tests {
         );
     }
 
-    // TS-24: App Line 1 always renders; App Line 2 hidden when empty.
+    // TS-24: App Line 2 hidden when empty (App Line 1 has content here,
+    // so it stays visible in both frames of this comparison).
     #[test]
     fn app_line2_auto_hides_when_empty() {
         let mut vm = StatusBarViewModel::default();
@@ -1153,5 +1157,96 @@ mod tests {
         let shapes = run_one_frame(&vm);
         let text = collected_text(&shapes);
         assert!(!text.contains("hidden"));
+    }
+
+    // AC-1: enabled with OSC row, App Line 1, and App Line 2 all empty
+    // yields 0 visible rows and 0 panel height (full collapse).
+    #[test]
+    fn ac1_all_rows_empty_yields_zero_count_and_zero_height() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        // app_line1 / app_line2 / osc stay at their empty defaults.
+        assert_eq!(visible_row_count(&vm), 0);
+        assert_eq!(panel_height_logical(&vm), 0.0);
+    }
+
+    // AC-2: App Line 1 empty, OSC row forced visible with content ->
+    // exactly one visible row, and only the OSC row's text is drawn.
+    #[test]
+    fn ac2_only_osc_visible_counts_as_one_row_and_draws_only_osc() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        // app_line1 / app_line2 stay empty.
+        vm.osc = OscRow {
+            left: "osc-only".to_string(),
+            right: String::new(),
+            forced_visible: Some(true),
+        };
+        assert_eq!(visible_row_count(&vm), 1);
+        let shapes = run_one_frame(&vm);
+        let text = collected_text(&shapes);
+        assert!(text.contains("osc-only"), "OSC text missing: {text:?}");
+    }
+
+    // AC-3 (regression guard): App Line 1 with resolved content is
+    // counted and drawn.
+    #[test]
+    fn ac3_app_line1_with_content_is_counted_and_drawn() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        vm.app_line1.left = vec![make_text_run("L1-content")];
+        assert_eq!(visible_row_count(&vm), 1);
+        let shapes = run_one_frame(&vm);
+        let text = collected_text(&shapes);
+        assert!(text.contains("L1-content"), "L1 text missing: {text:?}");
+    }
+
+    // AC-4: App Line 1 empty, App Line 2 has content -> App Line 1
+    // stays hidden while App Line 2 shows.
+    #[test]
+    fn ac4_app_line1_hidden_app_line2_shown_when_only_line2_has_content() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        // app_line1 stays empty.
+        vm.app_line2.left = vec![make_text_run("L2-content")];
+        assert_eq!(visible_row_count(&vm), 1);
+        let shapes = run_one_frame(&vm);
+        let text = collected_text(&shapes);
+        assert!(text.contains("L2-content"), "L2 text missing: {text:?}");
+        assert!(
+            !text.contains("L1-content"),
+            "unexpected L1 text present: {text:?}"
+        );
+    }
+
+    // AC-5: a disabled view model yields 0 rows even when every row
+    // has content.
+    #[test]
+    fn ac5_disabled_view_model_yields_zero_rows_regardless_of_content() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = false;
+        vm.app_line1.left = vec![make_text_run("L1")];
+        vm.app_line2.left = vec![make_text_run("L2")];
+        vm.osc = OscRow {
+            left: "osc".to_string(),
+            right: String::new(),
+            forced_visible: Some(true),
+        };
+        assert_eq!(visible_row_count(&vm), 0);
+        assert_eq!(panel_height_logical(&vm), 0.0);
+    }
+
+    // Edge case (Test Notes): a run list containing only empty-text,
+    // non-line-break runs resolves to "no content" — same predicate
+    // App Line 2 already relies on — so App Line 1 stays hidden.
+    #[test]
+    fn app_line1_with_only_empty_text_run_is_hidden() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        vm.app_line1.left = vec![make_text_run("")];
+        // app_line2 / osc stay empty too, so a wrongly-counted App
+        // Line 1 would be the only thing keeping the count above 0.
+        assert_eq!(visible_row_count(&vm), 0);
+        assert_eq!(panel_height_logical(&vm), 0.0);
     }
 }
