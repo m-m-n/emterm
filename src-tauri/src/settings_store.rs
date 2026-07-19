@@ -263,6 +263,10 @@ mod tests {
                 app_settings::ShiftEnterBehavior::KittyCsiU,
                 crate::settings::ShiftEnterBehavior::KittyCsiU,
             ),
+            (
+                app_settings::ShiftEnterBehavior::Lf,
+                crate::settings::ShiftEnterBehavior::Lf,
+            ),
         ] {
             let path = tmp_path(&format!("shift-enter-behavior-roundtrip-{expected:?}"));
             let _ = std::fs::remove_file(&path);

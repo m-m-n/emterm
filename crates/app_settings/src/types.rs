@@ -70,10 +70,11 @@ pub enum UiThemePreset {
 }
 
 /// `Shift+Enter` key-rewrite behavior. Wire values: `none` / `alt_enter`
-/// (default) / `kitty_csi_u`. Mirrors `src-tauri::settings::ShiftEnterBehavior`
-/// (the native runtime's own copy of this enum, consumed at the
-/// `window_host` key-event rewrite site); this copy is the shared
-/// `settings.json` schema consumed by the child settings window.
+/// (default) / `kitty_csi_u` / `lf`. Mirrors
+/// `src-tauri::settings::ShiftEnterBehavior` (the native runtime's own copy
+/// of this enum, consumed at the `window_host` key-event rewrite site);
+/// this copy is the shared `settings.json` schema consumed by the child
+/// settings window.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ShiftEnterBehavior {
@@ -81,6 +82,8 @@ pub enum ShiftEnterBehavior {
     #[default]
     AltEnter,
     KittyCsiU,
+    /// `Shift+Enter` sends the single byte 0x0a (line feed).
+    Lf,
     /// Internal sentinel: never a valid wire value. Produced only by
     /// `AppSettings`'s field-level deserialize default when the
     /// `shift_enter_behavior` key is absent from the source JSON, so

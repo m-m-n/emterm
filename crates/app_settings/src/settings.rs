@@ -1042,6 +1042,7 @@ mod tests {
             ("none", ShiftEnterBehavior::None),
             ("alt_enter", ShiftEnterBehavior::AltEnter),
             ("kitty_csi_u", ShiftEnterBehavior::KittyCsiU),
+            ("lf", ShiftEnterBehavior::Lf),
         ] {
             let s: AppSettings =
                 serde_json::from_str(&format!(r#"{{"shift_enter_behavior": "{json_value}"}}"#))
