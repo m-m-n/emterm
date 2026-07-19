@@ -14,6 +14,7 @@ export type CursorStyle = "block" | "underline" | "bar";
 export type BellAction = "sound" | "visual" | "none";
 export type ScrollbarMode = "auto" | "always" | "never";
 export type Language = "auto" | "en" | "ja";
+export type ShiftEnterBehavior = "none" | "alt_enter" | "kitty_csi_u";
 
 // ============================================================
 // Settings Interfaces
@@ -57,7 +58,7 @@ export interface AppSettings {
   file_path_detection: boolean;
   bold_brightens_ansi_colors: boolean;
   middle_click_paste: boolean;
-  shift_enter_as_alt_enter: boolean;
+  shift_enter_behavior: ShiftEnterBehavior;
   editor_command: string;
 
   // IME
