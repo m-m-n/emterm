@@ -114,7 +114,26 @@ pub struct TabBarItem {
     /// [`crate::mux::window_group::MuxWindowGroup`] whenever the group holds
     /// at least one window (FR1, WebView parity). `None` leaves the plain-tab
     /// path untouched.
+    ///
+    /// mux-vertical-tabs task0005: production code (`render::draw_terminal`)
+    /// no longer populates this field — the mux tab group's window list
+    /// moved to the `ui::mux_sidebar` widget, and the tab-bar cell collapses
+    /// to a single cell labelled via [`Self::mux_active_window_name`]
+    /// instead (IMPLEMENTATION.md D1). The field, [`with_mux_cells`], and
+    /// the inline sub-tab expansion below are kept in place per that same
+    /// decision (reusable render-model, exercised by the tests in this
+    /// module) but are inert against any `TabBarItem` the app actually
+    /// constructs.
+    ///
+    /// [`with_mux_cells`]: Self::with_mux_cells
     pub mux_cells: Option<Vec<MuxSubTabCell>>,
+    /// When `Some(name)`, this tab is a mux tab group collapsed to a single
+    /// cell (task0005 AC-1): the rendered label becomes `mux: <name>`,
+    /// overriding both the plain `title` and the `mux_session_name` prefix
+    /// format. `name` is the group's active window's display name, already
+    /// live (OSC-renamed) since the caller rebuilds it every frame from
+    /// [`crate::mux::window_group::MuxWindowGroup::active_window`].
+    pub mux_active_window_name: Option<String>,
 }
 
 impl TabBarItem {
@@ -125,6 +144,7 @@ impl TabBarItem {
             has_activity: false,
             stable_id: 0,
             mux_cells: None,
+            mux_active_window_name: None,
         }
     }
 
@@ -149,11 +169,28 @@ impl TabBarItem {
         self.mux_cells = if cells.is_empty() { None } else { Some(cells) };
         self
     }
+
+    /// Mark this tab as a collapsed mux tab group whose single cell is
+    /// labelled `mux: <name>` (task0005 AC-1).
+    pub fn with_mux_active_window_name(mut self, name: impl Into<String>) -> Self {
+        self.mux_active_window_name = Some(name.into());
+        self
+    }
 }
 
 /// Compute the displayed label for a tab. Pure helper, kept public so
 /// TS-tab-3 can exercise it directly without driving egui.
+///
+/// task0005 AC-1: a collapsed mux tab group (`mux_active_window_name`
+/// `Some`) renders `mux: <active window name>`, taking precedence over both
+/// the plain title and the `[mux:<session>]` prefix format below (the
+/// latter only remains visible for the brief pre-window-list-populated
+/// window, where `mux_session_name` is set but the group has no windows
+/// yet).
 pub fn render_label(item: &TabBarItem) -> String {
+    if let Some(name) = &item.mux_active_window_name {
+        return format!("mux: {name}");
+    }
     match &item.mux_session_name {
         Some(session) => format!("[mux:{}] {}", session, item.title),
         None => item.title.clone(),
@@ -988,6 +1025,45 @@ mod tests {
     fn render_label_keeps_default_shell_title() {
         let it = item("shell");
         assert_eq!(render_label(&it), "shell");
+    }
+
+    // ── task0005 AC-1: collapsed mux tab label ──────────────────────────
+
+    #[test]
+    fn render_label_collapsed_mux_tab_shows_active_window_name() {
+        let it = TabBarItem::new("ignored").with_mux_active_window_name("editor");
+        assert_eq!(render_label(&it), "mux: editor");
+    }
+
+    #[test]
+    fn render_label_collapsed_mux_tab_takes_precedence_over_session_prefix() {
+        // A tab can carry both `mux_session_name` (set on attach) and
+        // `mux_active_window_name` (set once the window list is populated,
+        // same frame in practice) — the collapsed label wins.
+        let it = TabBarItem::new("ignored")
+            .with_mux_session("main")
+            .with_mux_active_window_name("editor");
+        assert_eq!(render_label(&it), "mux: editor");
+    }
+
+    #[test]
+    fn render_label_follows_active_window_rename() {
+        // AC-1: the label follows a rename of the active window — since
+        // `render_label` is pure over the current `TabBarItem`, a fresh
+        // view-model built with the new name changes the label with no
+        // extra plumbing.
+        let before = TabBarItem::new("ignored").with_mux_active_window_name("logs");
+        let after = TabBarItem::new("ignored").with_mux_active_window_name("logs-renamed");
+        assert_eq!(render_label(&before), "mux: logs");
+        assert_eq!(render_label(&after), "mux: logs-renamed");
+    }
+
+    #[test]
+    fn render_label_pre_group_mux_session_keeps_prefix_format() {
+        // Transitional state: `mux_session_name` set on attach, before the
+        // window list (and thus `mux_active_window_name`) is populated.
+        let it = TabBarItem::new("nvim").with_mux_session("main");
+        assert_eq!(render_label(&it), "[mux:main] nvim");
     }
 
     // ── TS-tab-1: simulated interaction → TabEvent ──────────
