@@ -79,7 +79,14 @@ pub fn handle(cmd: &str, args: &Value) -> CommandOutcome {
 /// is logged at `warn` but does NOT block the rewrite itself (the
 /// migrated values would otherwise be discarded on every launch).
 fn load_settings() -> Result<Value, String> {
-    let path = crate::settings::settings_path();
+    load_settings_from_path(crate::settings::settings_path())
+}
+
+/// Path-parameterized core of [`load_settings`], split out so tests can
+/// drive the real command logic (deserialize → `apply_migrations` →
+/// re-serialize, plus the migration rewrite) against a temp file instead
+/// of the OS-real `settings.json` path.
+fn load_settings_from_path(path: Option<PathBuf>) -> Result<Value, String> {
     let original_bytes: Option<Vec<u8>> = match &path {
         Some(p) => match std::fs::read(p) {
             Ok(bytes) => Some(bytes),
@@ -118,7 +125,7 @@ fn load_settings() -> Result<Value, String> {
 /// stripped from the rewritten `settings.json` so a subsequent load
 /// does not re-trigger the migration on every launch (the round-trip
 /// would otherwise leave a stale `.bak` rewrite each time).
-const LEGACY_KEYS_REMOVED_AFTER_MIGRATION: &[&str] = &["font_family"];
+const LEGACY_KEYS_REMOVED_AFTER_MIGRATION: &[&str] = &["font_family", "shift_enter_as_alt_enter"];
 
 /// Persist a migrated `settings.json`:
 /// 1. Best-effort copy of the existing bytes to `settings.json.bak`.
@@ -242,6 +249,15 @@ fn mux_action_defaults() -> Value {
 /// the schema's null-tolerant deserialization; the atomic patch write
 /// preserves any top-level keys the schema does not model.
 fn save_settings(args: &Value) -> Result<Value, String> {
+    let path = crate::settings::settings_path()
+        .ok_or_else(|| "settings window: unable to resolve config dir".to_string())?;
+    save_settings_to_path(&path, args)
+}
+
+/// Path-parameterized core of [`save_settings`], split out so tests can
+/// drive the real command logic against a temp file instead of the
+/// OS-real `settings.json` path.
+fn save_settings_to_path(path: &std::path::Path, args: &Value) -> Result<Value, String> {
     let raw = args
         .get("settings")
         .ok_or_else(|| "settings window: save_settings missing `settings` arg".to_string())?;
@@ -252,9 +268,7 @@ fn save_settings(args: &Value) -> Result<Value, String> {
     let Value::Object(patch) = serialized else {
         return Err("settings window: settings did not serialize to an object".to_string());
     };
-    let path = crate::settings::settings_path()
-        .ok_or_else(|| "settings window: unable to resolve config dir".to_string())?;
-    save_patch(&path, patch)?;
+    save_patch(path, patch)?;
     Ok(Value::Null)
 }
 
@@ -545,5 +559,67 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// AC-2: a full save → load round-trip through the *production*
+    /// `save_settings_to_path` / `load_settings_from_path` command logic
+    /// (not a hand-built patch) preserves each of the three wire values.
+    #[test]
+    fn shift_enter_behavior_save_load_round_trips_through_settings_window_commands() {
+        for value in ["none", "alt_enter", "kitty_csi_u"] {
+            let dir = std::env::temp_dir().join(format!(
+                "emterm-settings-window-shift-enter-roundtrip-{value}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("settings.json");
+
+            let mut settings_json = serde_json::to_value(AppSettings::default()).unwrap();
+            settings_json["shift_enter_behavior"] = json!(value);
+            save_settings_to_path(&path, &json!({ "settings": settings_json }))
+                .unwrap_or_else(|e| panic!("save_settings_to_path failed for {value}: {e}"));
+
+            let loaded = load_settings_from_path(Some(path))
+                .unwrap_or_else(|e| panic!("load_settings_from_path failed for {value}: {e}"));
+            assert_eq!(loaded["shift_enter_behavior"], json!(value));
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// AC-4: legacy-only input (`shift_enter_as_alt_enter`, no new key at
+    /// all) still maps `true` -> `alt_enter` / `false` -> `none` through
+    /// the settings-window `load_settings` boundary.
+    #[test]
+    fn legacy_shift_enter_as_alt_enter_migrates_through_settings_window_load() {
+        for (legacy, expected) in [(true, "alt_enter"), (false, "none")] {
+            let dir = std::env::temp_dir().join(format!(
+                "emterm-settings-window-shift-enter-legacy-{legacy}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("settings.json");
+            std::fs::write(
+                &path,
+                format!(r#"{{"shift_enter_as_alt_enter": {legacy}}}"#),
+            )
+            .unwrap();
+
+            let loaded = load_settings_from_path(Some(path.clone()))
+                .unwrap_or_else(|e| panic!("load_settings_from_path failed for {legacy}: {e}"));
+            assert_eq!(loaded["shift_enter_behavior"], json!(expected));
+
+            // The migration rewrite must also strip the stale legacy key
+            // from disk so a second load does not re-migrate.
+            let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert!(
+                v.get("shift_enter_as_alt_enter").is_none(),
+                "legacy shift_enter_as_alt_enter key must be stripped after rewrite"
+            );
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

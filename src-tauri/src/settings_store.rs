@@ -184,10 +184,10 @@ mod tests {
         s.editor_command = "vim {file}".into();
         s.copy_on_select = true;
         s.middle_click_paste = false;
-        // task0001: `app_settings::AppSettings` still models the legacy
-        // boolean (out of scope for this task); the native loader's FR5
-        // migration maps `false` -> `ShiftEnterBehavior::None` below.
-        s.shift_enter_as_alt_enter = false;
+        // task0003: `app_settings::AppSettings` now models the wire enum
+        // directly (the legacy boolean is a crate-private migration input,
+        // folded during `apply_migrations`, and never serialized).
+        s.shift_enter_behavior = app_settings::ShiftEnterBehavior::None;
         s.skk_mode = false;
         s.fold_enabled = false;
         s.clipboard_read_osc52 = false;
@@ -244,22 +244,39 @@ mod tests {
 
     #[test]
     fn shift_enter_behavior_round_trips_through_native_loader() {
-        // AC-5: the new `shift_enter_behavior` key persists and reloads
-        // correctly (task0001), independent of the legacy-boolean
-        // migration path exercised by
+        // AC-2 (task0003): the new `shift_enter_behavior` key persists
+        // and reloads correctly for each wire value, driven through the
+        // *production* `app_settings::AppSettings` struct's own
+        // serialization (not a hand-built patch) — independent of the
+        // legacy-boolean migration path exercised by
         // `app_settings_save_round_trips_through_native_loader` above.
-        let path = tmp_path("shift-enter-behavior-roundtrip");
-        let _ = std::fs::remove_file(&path);
+        for (value, expected) in [
+            (
+                app_settings::ShiftEnterBehavior::None,
+                crate::settings::ShiftEnterBehavior::None,
+            ),
+            (
+                app_settings::ShiftEnterBehavior::AltEnter,
+                crate::settings::ShiftEnterBehavior::AltEnter,
+            ),
+            (
+                app_settings::ShiftEnterBehavior::KittyCsiU,
+                crate::settings::ShiftEnterBehavior::KittyCsiU,
+            ),
+        ] {
+            let path = tmp_path(&format!("shift-enter-behavior-roundtrip-{expected:?}"));
+            let _ = std::fs::remove_file(&path);
 
-        let mut patch = Map::new();
-        patch.insert("shift_enter_behavior".into(), json!("kitty_csi_u"));
-        save_patch_to(&path, patch).unwrap();
+            let mut s = app_settings::AppSettings::default();
+            s.shift_enter_behavior = value;
+            let Value::Object(patch) = serde_json::to_value(&s).unwrap() else {
+                panic!("AppSettings must serialize to an object");
+            };
+            save_patch_to(&path, patch).unwrap();
 
-        let loaded = Settings::load_from(&path);
-        assert_eq!(
-            loaded.shift_enter_behavior,
-            crate::settings::ShiftEnterBehavior::KittyCsiU
-        );
+            let loaded = Settings::load_from(&path);
+            assert_eq!(loaded.shift_enter_behavior, expected);
+        }
     }
 
     #[test]
