@@ -1,0 +1,87 @@
+schema_version: 1
+feature: statusbar-app-line1-auto-hide
+created: 2026-07-19
+base_branch: main
+parent_branch: em-workflow/statusbar-app-line1-auto-hide/integration
+
+project:
+  license: MIT
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 3c038cb761b008ff04b23ecd573e208594fcc758
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "既存ステータスバーの行可視ルール変更のみで、新規のビジュアル決定を含まないため"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 3c038cb761b008ff04b23ecd573e208594fcc758
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: "App Line 1 auto-hide in the status-bar widget"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/ui/status_bar.rs
+    skills: []
+    domains: [ui]
+    complexity: low
+    requirements: [FR1, FR2, FR3, NFR1]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "App Line 1 visible only when resolved content is non-empty (has_content)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-2, TS-3, TS-4]
+  FR2:
+    title: "Status bar panel collapses to zero height when no row is visible"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1]
+  FR3:
+    title: "Existing enabled short-circuit, App Line 2 auto-hide, and OSC row rules unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-5]
+  NFR1:
+    title: "CLI-only build (--no-default-features) still compiles"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [SC-3]
