@@ -1,0 +1,16 @@
+feature: statusbar-app-line1-auto-hide
+collected_at: "2026-07-19T13:20:31+09:00"
+session_ids: [15201464-a78b-467b-ac3b-522728312e8d]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    integration worktree での cargo build は gitignore されたバンドルフォント
+    (src-tauri/assets/fonts/*.ttf|*.otf) が無くて build.rs が panic する。
+    verify フェーズ前にメインツリーからのコピーが必要だった。em-workflow の
+    worktree 系フェーズ（implementer / verify）で毎回発生しうる環境セットアップ。
