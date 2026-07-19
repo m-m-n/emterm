@@ -1,0 +1,52 @@
+feature: shift-enter-behavior
+collected_at: "2026-07-19T18:11:38+09:00"
+session_ids: [9f6344c2-1a7c-41c8-8572-dac5e02a8647]
+signals:
+  review_critical_high:
+    - stable_id: rd1-app-settings-schema
+      category: comprehensive
+      file: crates/app_settings/src/settings.rs
+      title: "settings panel can't persist/display shift_enter_behavior (app_settings schema not updated)"
+      resolution: fixed
+    - stable_id: rd1-store-legacy-retained
+      category: spec
+      file: src-tauri/src/settings_store.rs
+      title: "Settings panel backend still discards the new enum setting"
+      resolution: fixed
+    - stable_id: rd2-apply-migrations-precedence
+      category: spec
+      file: crates/app_settings/src/settings.rs
+      title: "app_settings migration lets legacy boolean beat a present new key resolving to the default"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0003
+      files: [crates/app_settings/src/types.rs]
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    planner: 設定系 feature では crates/app_settings (settings.json schema の
+    SSOT、CLAUDE.md の Settings Pattern に記載) を files 予測・タスク分割に
+    必ず含める。今回漏れて round 1 critical (設定パネルで保存されない) に
+    なり、rework 2周 (task0003/task0004) を要した。
+  - >-
+    tabs::tests の6件 (ts7/ts9/ts10/ts11/ts13 の off-thread replay 系 +
+    welcome_without_windows_leaves_group_none) は base b8b2b6b の main
+    ツリーで単独 --test-threads=1 実行でも fail する。並列フレークではなく
+    素の pre-existing failure に変化している疑い。要調査。
+  - >-
+    web 依存は lockfile 非コミットでフロートする。fresh install だと
+    happy-dom 20.11.0 / dompurify 3.4.12 が入り viewer/web/entry.test.ts が
+    2件落ちる (main の happy-dom 20.4.0 / dompurify 3.3.1 では通る)。
+    lockfile のコミット、または依存の追従修正を検討。
+  - >-
+    fresh worktree では gitignored の src-tauri/assets/fonts が無く build.rs
+    が panic する。implementer は scripts/fetch-fonts.sh で自己解決したが、
+    worktree セットアップ時にフォントをコピーする定型化を検討。
+  - >-
+    review round 3 residual medium (rd3-save-path-sentinel):
+    save_settings_to_path が apply_migrations を呼ばず、payload に
+    shift_enter_behavior が無い場合に Unresolved sentinel で保存全体が
+    失敗しうる (現状は TS 契約で到達不能)。follow-up 候補。

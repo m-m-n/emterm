@@ -1,0 +1,105 @@
+round: 1
+executed_at: "2026-07-19T16:05:51+09:00"
+scope:
+  review_mode: diff
+  base_commit: b8b2b6b878c64be9ac31cde7ebe8cc6a33c2fecc
+  head_commit: 5a9253c47ae852371710679e4513f82428d3591e
+  changed_files:
+    - src-tauri/src/settings.rs
+    - src-tauri/src/settings_store.rs
+    - src-tauri/src/window_host.rs
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+    - src-tauri/web-shared/settings/sections/terminal-behavior-section.ts
+    - src-tauri/web-shared/settings/types.ts
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  - stable_id: rd1-app-settings-schema
+    severity: critical
+    category: comprehensive
+    file: crates/app_settings/src/settings.rs
+    line: 403
+    title: "settings panel can't persist/display shift_enter_behavior (app_settings schema not updated)"
+    description: >-
+      The settings window's load_settings/save_settings round-trip through
+      app_settings::AppSettings, which still models only the legacy
+      shift_enter_as_alt_enter bool and has no catch-all. serde drops the new
+      shift_enter_behavior key on both load and save: the panel select never
+      shows the persisted value, and selecting none/kitty_csi_u is silently
+      discarded (save re-emits shift_enter_as_alt_enter: true, the schema
+      default). The AC-5 round-trip test bypasses the save_settings path and
+      gives false confidence. Note: file is outside the reviewed diff
+      (confidence capped; claude:spec finding at the same site was
+      category-forced to comprehensive per protocol R3 rule 7).
+    suggestion: >-
+      Add shift_enter_behavior (wire values none/alt_enter/kitty_csi_u,
+      default alt_enter) to app_settings::AppSettings with serde default;
+      fold the legacy boolean into it during migration (true -> alt_enter,
+      false -> none) and stop serializing the legacy key. Add a test driving
+      the real save_settings/load_settings command path proving none and
+      kitty_csi_u survive the round-trip.
+    sources: [claude:comprehensive, claude:spec]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: "rework task0003 (merge 8e25a1fcc520d61324dea7c9388cb9f43b1e8533)"
+  - stable_id: rd1-store-legacy-retained
+    severity: high
+    category: spec
+    file: src-tauri/src/settings_store.rs
+    line: 187
+    title: "Settings panel backend still discards the new enum setting"
+    description: >-
+      Same root cause as rd1-app-settings-schema anchored in the changed
+      file: the retained legacy-boolean usage documents that the production
+      settings-window boundary (via app_settings::AppSettings) still
+      round-trips only shift_enter_as_alt_enter, so panel selections of
+      none/kitty_csi_u never persist (FR6 break). Round-trip tests cover a
+      hand-built patch, not the production load/save boundary.
+    suggestion: >-
+      After extending app_settings::AppSettings, update the settings-window
+      round-trip tests to verify all three values persist through the
+      production load/save boundary rather than through a manually
+      constructed JSON patch only.
+    sources: [codex:spec]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: "rework task0003 (merge 8e25a1fcc520d61324dea7c9388cb9f43b1e8533)"
+  - stable_id: rd1-null-legacy-precedence
+    severity: medium
+    category: spec
+    file: src-tauri/src/settings.rs
+    line: 1688
+    title: "A null new key incorrectly allows the legacy key to win"
+    description: >-
+      RawSettings represents shift_enter_behavior as an optional string, so
+      an explicit null collapses to absent and the legacy branch applies:
+      {"shift_enter_behavior": null, "shift_enter_as_alt_enter": false}
+      resolves to none, although FR5 says a present-but-null new key follows
+      the default (alt_enter) and wins over the legacy key.
+    suggestion: >-
+      Track presence of shift_enter_behavior separately from its nullable
+      value; resolve present null to the default before considering the
+      legacy field. Add tests covering a null new key with each legacy
+      boolean value.
+    sources: [codex:spec]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: "rework task0003 (merge 8e25a1fcc520d61324dea7c9388cb9f43b1e8533)"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-progress
+residual_critical_high: 2
+rework_required: true

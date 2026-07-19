@@ -1,0 +1,91 @@
+round: 2
+executed_at: "2026-07-19T17:14:33+09:00"
+scope:
+  review_mode: diff
+  base_commit: b8b2b6b878c64be9ac31cde7ebe8cc6a33c2fecc
+  head_commit: 8e25a1fcc520d61324dea7c9388cb9f43b1e8533
+  changed_files:
+    - crates/app_settings/src/settings.rs
+    - crates/app_settings/src/types.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/src/settings_store.rs
+    - src-tauri/src/settings_window/commands.rs
+    - src-tauri/src/window_host.rs
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+    - src-tauri/web-shared/settings/sections/terminal-behavior-section.ts
+    - src-tauri/web-shared/settings/types.ts
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+round1_verification: >-
+  All three round-1 findings (rd1-app-settings-schema,
+  rd1-store-legacy-retained, rd1-null-legacy-precedence) verified as still
+  fixed by every perspective.
+findings:
+  - stable_id: rd2-apply-migrations-precedence
+    severity: high
+    category: spec
+    file: crates/app_settings/src/settings.rs
+    line: 575
+    title: "app_settings migration lets legacy boolean beat a present new key resolving to the default"
+    description: >-
+      apply_migrations uses equality with the default (alt_enter) as a proxy
+      for "new key absent", but the schema's null-tolerant deserialization
+      makes three cases indistinguishable: key absent, key present null, key
+      present "alt_enter". For {"shift_enter_behavior": "alt_enter"|null,
+      "shift_enter_as_alt_enter": false} the legacy boolean folds to none,
+      violating FR5 ("when the new key is present it wins"), and the
+      settings-window load path persists the corrupted value back to
+      settings.json. The native loader implements the correct
+      present-vs-absent distinction; this second migration path does not.
+      Migration tests only cover a non-default new value (kitty_csi_u), so
+      the divergence is unexercised. Reachability is narrow (both keys with
+      a default-resolving new value occur only via manual editing).
+    suggestion: >-
+      Give the app_settings path the same present-vs-absent distinction as
+      the native loader (track raw key presence and fold the legacy boolean
+      only when the new key was truly absent). Add regression tests for
+      explicit alt_enter + legacy false and explicit null + legacy false,
+      both resolving to alt_enter, keeping the two migration paths aligned.
+    sources: [claude:spec, codex:spec]
+    confidence: 100
+    resolution: fixed
+    resolution_reason: "rework task0004 (merge 26bde5c)"
+  - stable_id: rd2-migration-divergence-comprehensive
+    severity: medium
+    category: comprehensive
+    file: crates/app_settings/src/settings.rs
+    line: 575
+    title: "app_settings 移行の precedence が native 層と食い違う（明示 alt_enter が legacy に負ける）"
+    description: >-
+      Same physical bug as rd2-apply-migrations-precedence reported through
+      the comprehensive lens: migration logic now exists in two places with
+      different precedence semantics; the app_settings sentinel
+      (== default()) cannot distinguish explicit alt_enter from absent, so
+      the two layers resolve the same input differently and
+      persist_migrated_settings writes the wrong value.
+    suggestion: >-
+      Align the app_settings layer with the native present-key semantics or
+      consolidate the migration precedence into one place; pin the
+      agreement with a cross-layer test.
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: "rework task0004 (merge 26bde5c)"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-progress
+residual_critical_high: 1
+rework_required: true
