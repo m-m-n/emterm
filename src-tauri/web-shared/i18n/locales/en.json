@@ -343,6 +343,8 @@
     "mux": {
       "title": "Terminal Multiplexer",
       "prefix": "Prefix Key",
+      "windowSidebarOverlay": "Display as overlay",
+      "windowSidebarOverlayDesc": "Overlays the window sidebar on the right edge. Toggled with the mux prefix keybind.",
       "keybinds": "Keybinds",
       "keybind": {
         "detach": "Detach",
@@ -350,7 +352,8 @@
         "nextWindow": "Next Window",
         "prevWindow": "Previous Window",
         "renameWindow": "Rename Window",
-        "moveWindow": "Move Window"
+        "moveWindow": "Move Window",
+        "toggleWindowSidebar": "Toggle Window Sidebar"
       }
     },
     "log": {

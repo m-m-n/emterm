@@ -141,6 +141,7 @@ export interface MuxSettings {
   prefix: string;
   tab_always_expand: boolean;
   tmux_conf_imported: boolean;
+  window_sidebar_overlay: boolean;
   keybinds: Record<string, string>;
   statusbar: MuxStatusbarSettings;
 }

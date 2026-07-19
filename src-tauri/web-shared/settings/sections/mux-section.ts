@@ -1,5 +1,5 @@
 import { t } from "../../i18n/index.ts";
-import { renderSubsectionHeader } from "../settings-components";
+import { renderSubsectionHeader, renderToggle } from "../settings-components";
 import type { SectionContext } from "./types";
 
 /** i18n key mapping for each mux action. */
@@ -10,6 +10,7 @@ const ACTION_I18N_KEYS: Record<string, string> = {
   "prev-window": "settings.mux.keybind.prevWindow",
   "rename-window": "settings.mux.keybind.renameWindow",
   "move-window": "settings.mux.keybind.moveWindow",
+  "toggle-window-sidebar": "settings.mux.keybind.toggleWindowSidebar",
 };
 
 export function renderMuxSection(
@@ -22,6 +23,25 @@ export function renderMuxSection(
   header.className = "settings-section-header";
   header.textContent = t("settings.mux.title");
   panel.appendChild(header);
+
+  // Window sidebar overlay toggle. Off (false) = persistent left panel,
+  // on (true) = right-edge overlay toggled with the mux prefix keybind.
+  renderToggle(
+    panel,
+    {
+      key: "mux-window-sidebar-overlay",
+      label: t("settings.mux.windowSidebarOverlay"),
+      description: t("settings.mux.windowSidebarOverlayDesc"),
+      value: mux.window_sidebar_overlay,
+      onSave: (v) => {
+        ctx.saveSetting("mux", {
+          ...ctx.currentSettings.mux,
+          window_sidebar_overlay: v,
+        });
+      },
+    },
+    ctx.addContentListener,
+  );
 
   // -- Keybinds subsection --
   renderSubsectionHeader(panel, t("settings.mux.keybinds"));

@@ -343,6 +343,8 @@
     "mux": {
       "title": "ターミナルマルチプレクサ",
       "prefix": "プレフィックスキー",
+      "windowSidebarOverlay": "オーバーレイで表示",
+      "windowSidebarOverlayDesc": "ウィンドウサイドバーを右端にオーバーレイ表示します。mux プレフィックスキーバインドで切り替えます。",
       "keybinds": "キーバインド",
       "keybind": {
         "detach": "デタッチ",
@@ -350,7 +352,8 @@
         "nextWindow": "次のウィンドウ",
         "prevWindow": "前のウィンドウ",
         "renameWindow": "ウィンドウ名変更",
-        "moveWindow": "ウィンドウ移動"
+        "moveWindow": "ウィンドウ移動",
+        "toggleWindowSidebar": "ウィンドウサイドバー切替"
       }
     },
     "log": {
