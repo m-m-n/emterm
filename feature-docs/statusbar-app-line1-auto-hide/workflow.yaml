@@ -28,16 +28,32 @@ workflow:
     status: completed
     completed_at_commit: 3c038cb761b008ff04b23ecd573e208594fcc758
   - id: implement
-    status: pending
-    base_commit: null
+    status: completed
+    base_commit: 3c038cb761b008ff04b23ecd573e208594fcc758
+    completed_at_commit: 44113f45f3a312d9003aaf3728da270d4fc46aaa
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 44113f45f3a312d9003aaf3728da270d4fc46aaa
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 44113f45f3a312d9003aaf3728da270d4fc46aaa
+    result: pass
     failed_items: []
+    notes: >-
+      Build check (default + --no-default-features) pass. Full --lib run:
+      2340 passed / 6 failed, but all 6 failures (5x tabs.rs off-thread
+      replay flake + welcome_without_windows_leaves_group_none) reproduce
+      on the unmodified base commit (A/B in the main tree at 3c038cb) —
+      pre-existing, unrelated to this feature. All new status-bar tests
+      (AC-1..AC-5 + empty-run edge = TS-1..TS-4 and Edge 1) pass; TS-5
+      regression suite for status_bar module fully green. SC-3 verified
+      via --no-default-features check. Integration worktree needed
+      gitignored bundled fonts copied from the main tree for build.rs
+      (environment setup, not a code issue). MT-1 is user-performed later
+      (requires release build).
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 44113f45f3a312d9003aaf3728da270d4fc46aaa
 
 tasks:
   task0001:
@@ -49,12 +65,22 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR1, FR2, FR3, NFR1]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/statusbar-app-line1-auto-hide/task0001
 
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, spec]
+    discretionary: []
+    codex_cross_validation: false
+  perspectives:
+    comprehensive: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
