@@ -125,7 +125,7 @@
       "middleClickPaste": "ホイールクリックでペースト",
       "middleClickPasteDesc": "マウスの中ボタンをクリックするとクリップボードの内容をペーストします",
       "shiftEnterBehavior": "Shift+Enterの動作",
-      "shiftEnterBehaviorDesc": "Shift+Enter押下時にシェルへ送るバイト列を制御します。Kittyプロトコルは生のエスケープシーケンスを送信するため、対応していないアプリケーションでは余分な文字として扱われます。",
+      "shiftEnterBehaviorDesc": "Shift+Enter押下時にシェルへ送るバイト列を制御します。",
       "shiftEnterAltEnter": "Alt+Enter",
       "shiftEnterNone": "通常のEnter",
       "shiftEnterKittyCsiU": "Kittyプロトコル (CSI u)",

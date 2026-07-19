@@ -125,7 +125,7 @@
       "middleClickPaste": "Middle-Click Paste",
       "middleClickPasteDesc": "Paste clipboard contents when middle mouse button is clicked",
       "shiftEnterBehavior": "Shift+Enter Behavior",
-      "shiftEnterBehaviorDesc": "Controls the byte sequence sent to the shell when Shift+Enter is pressed. Kitty Protocol sends a raw escape sequence; applications that do not support it receive stray characters.",
+      "shiftEnterBehaviorDesc": "Controls the byte sequence sent to the shell when Shift+Enter is pressed.",
       "shiftEnterAltEnter": "Alt+Enter",
       "shiftEnterNone": "Plain Enter",
       "shiftEnterKittyCsiU": "Kitty Protocol (CSI u)",
