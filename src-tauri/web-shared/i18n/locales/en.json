@@ -129,6 +129,8 @@
       "shiftEnterAltEnter": "Alt+Enter",
       "shiftEnterNone": "Plain Enter",
       "shiftEnterKittyCsiU": "Kitty Protocol (CSI u)",
+      "shiftEnterLf": "Send as newline (LF)",
+      "shiftEnterLfDesc": "Sends a newline (LF) byte. Claude Code treats it as a line break; other shells treat it the same as Enter.",
       "skkMode": "SKK Mode (Block Ctrl+J)",
       "skkModeDesc": "Block Ctrl+J for Emacs-style IME (SKK) compatibility. Disable to send Ctrl+J to terminal",
       "clipboard": "Clipboard",

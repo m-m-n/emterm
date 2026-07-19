@@ -129,6 +129,8 @@
       "shiftEnterAltEnter": "Alt+Enter",
       "shiftEnterNone": "通常のEnter",
       "shiftEnterKittyCsiU": "Kittyプロトコル (CSI u)",
+      "shiftEnterLf": "改行 (LF) として送信",
+      "shiftEnterLfDesc": "改行 (LF) のバイトを送信します。Claude Codeでは改行として扱われ、それ以外のシェルではEnterと同じ扱いになります。",
       "skkMode": "SKKモード（Ctrl+Jブロック）",
       "skkModeDesc": "Emacs系IME（SKK）との互換性のためCtrl+Jをブロックします。無効にするとCtrl+Jをターミナルに送信します",
       "clipboard": "クリップボード",

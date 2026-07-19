@@ -14,7 +14,7 @@ export type CursorStyle = "block" | "underline" | "bar";
 export type BellAction = "sound" | "visual" | "none";
 export type ScrollbarMode = "auto" | "always" | "never";
 export type Language = "auto" | "en" | "ja";
-export type ShiftEnterBehavior = "none" | "alt_enter" | "kitty_csi_u";
+export type ShiftEnterBehavior = "none" | "alt_enter" | "kitty_csi_u" | "lf";
 
 // ============================================================
 // Settings Interfaces

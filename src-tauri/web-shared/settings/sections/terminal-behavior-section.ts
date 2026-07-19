@@ -243,20 +243,30 @@ export function renderTerminalBehaviorSection(
   }
 
   // Shift+Enter Behavior (select)
+  //
+  // Offered options are alt_enter / none / lf (D2 order). kitty_csi_u is
+  // grandfathered in as a fourth option only while it is the currently
+  // loaded value, so existing users keep seeing/using it without it being
+  // newly selectable. This is render-time only: saving a different value
+  // drops kitty_csi_u from subsequent renders.
+  const shiftEnterOptions: Array<{ value: string; label: string }> = [
+    { value: "alt_enter", label: t("settings.terminal.shiftEnterAltEnter") },
+    { value: "none", label: t("settings.terminal.shiftEnterNone") },
+    { value: "lf", label: t("settings.terminal.shiftEnterLf") },
+  ];
+  if (settings.shift_enter_behavior === "kitty_csi_u") {
+    shiftEnterOptions.push({
+      value: "kitty_csi_u",
+      label: t("settings.terminal.shiftEnterKittyCsiU"),
+    });
+  }
   renderSelect(
     panel,
     {
       key: "shift-enter-behavior",
       label: t("settings.terminal.shiftEnterBehavior"),
       value: settings.shift_enter_behavior,
-      options: [
-        { value: "alt_enter", label: t("settings.terminal.shiftEnterAltEnter") },
-        { value: "none", label: t("settings.terminal.shiftEnterNone") },
-        {
-          value: "kitty_csi_u",
-          label: t("settings.terminal.shiftEnterKittyCsiU"),
-        },
-      ],
+      options: shiftEnterOptions,
       description: t("settings.terminal.shiftEnterBehaviorDesc"),
       onSave: (v) =>
         ctx.saveSetting("shift_enter_behavior", v as ShiftEnterBehavior),
