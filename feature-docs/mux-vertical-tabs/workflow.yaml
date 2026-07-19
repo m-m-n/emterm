@@ -1,0 +1,176 @@
+schema_version: 1
+feature: mux-vertical-tabs
+created: 2026-07-19
+base_branch: main
+parent_branch: em-workflow/mux-vertical-tabs/integration
+
+project:
+  license: MIT
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 4cdd718f7eedd77228958551f5b57abf246b2b19
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: completed
+    completed_at_commit: 4cdd718f7eedd77228958551f5b57abf246b2b19
+    skipped_reason: null
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 4cdd718f7eedd77228958551f5b57abf246b2b19
+  - id: implement
+    status: in_progress
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: "Rust settings layer: mux.window_sidebar_overlay boolean"
+    plan: tasks/task0001.md
+    files:
+      - crates/app_settings/src/settings.rs
+      - src-tauri/src/settings.rs
+    skills: [backend-impl]
+    domains: [data-persistence]
+    complexity: low
+    requirements: [FR6]
+    status: pending
+    notes: null
+  task0002:
+    title: "Settings UI (TS): overlay toggle + i18n labels"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/web-shared/settings/types.ts
+      - src-tauri/web-shared/settings/sections/mux-section.ts
+      - src-tauri/web-shared/settings/sections/mux-section.test.ts
+      - src-tauri/web-shared/i18n/locales/ja.json
+      - src-tauri/web-shared/i18n/locales/en.json
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: low
+    requirements: [FR6]
+    status: pending
+    notes: null
+  task0003:
+    title: "Prefix action toggle-window-sidebar + App overlay state"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/mux/prefix.rs
+      - src-tauri/src/app.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR5, FR4, NFR2]
+    status: pending
+    notes: null
+  task0004:
+    title: "Vertical tab sidebar widget (ui::mux_sidebar)"
+    plan: tasks/task0004.md
+    files:
+      - src-tauri/src/ui/mux_sidebar.rs
+      - src-tauri/src/ui/mod.rs
+      - src-tauri/src/lib.rs
+    skills: [design-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR2, FR3, NFR3]
+    status: pending
+    notes: null
+  task0005:
+    title: "Frame integration: single mux tab, placement, grid geometry"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/src/render/mod.rs
+      - src-tauri/src/ui/tab_bar.rs
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/render/cursor.rs
+      - src-tauri/src/app.rs
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: high
+    requirements: [FR1, FR3, FR4, FR5, NFR1, NFR2]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "Top-tab consolidation: one mux tab titled 'mux: <active window name>' tracking OSC renames"
+    status: ok
+    tbd_reason: null
+    tasks: [task0005]
+    tests: [TS-1]
+  FR2:
+    title: "Vertical tab list: flat window list (number + name + active mark), mux tab only, dynamic 20-25% width"
+    status: ok
+    tbd_reason: null
+    tasks: [task0004, task0005]
+    tests: [TS-2, TS-7]
+  FR3:
+    title: "Click on a sidebar entry switches the mux window (same as top-tab click path)"
+    status: ok
+    tbd_reason: null
+    tasks: [task0004, task0005]
+    tests: [TS-3]
+  FR4:
+    title: "Persistent mode (default): fixed panel, overlay keybind is no-op"
+    status: ok
+    tbd_reason: null
+    tasks: [task0003, task0005]
+    tests: [TS-4, TS-7]
+  FR5:
+    title: "Overlay mode: right-side overlay toggled by Ctrl+Z Ctrl+W via DEFAULT_ACTION_BINDINGS"
+    status: ok
+    tbd_reason: null
+    tasks: [task0003, task0005]
+    tests: [TS-4]
+  FR6:
+    title: "Boolean setting 'display as overlay' (default off) across app_settings + TS mirror + settings UI + i18n"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001, task0002]
+    tests: [TS-5, TS-8]
+  NFR1:
+    title: "No PTY resize on overlay toggle or window switch; exactly one on placement-setting change"
+    status: ok
+    tbd_reason: null
+    tasks: [task0005]
+    tests: [TS-6]
+  NFR2:
+    title: "Local tab behavior and existing mux prefix follow-ups unchanged"
+    status: ok
+    tbd_reason: null
+    tasks: [task0003, task0005]
+    tests: [TS-4, TS-7]
+  NFR3:
+    title: "Sidebar visuals follow DESIGN.md, consistent with MD3 tokens"
+    status: ok
+    tbd_reason: null
+    tasks: [task0004]
+    tests: [M-1]

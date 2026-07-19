@@ -1,0 +1,284 @@
+<!--
+  Design mockup: mux vertical tabs (sidebar window list)
+  Design spec only — implementers never copy this markup/CSS.
+  Token values mirror the project-native MD3 system:
+  doc/UI-DESIGN-GUIDELINES.yaml + src-tauri/src/ui/md3.rs (PALETTE_PURPLE dark).
+-->
+<meta charset="utf-8">
+<title>Mockup: mux vertical tabs</title>
+<style>
+  :root {
+    /* md3.rs PALETTE_PURPLE (default dark) */
+    --md-sys-color-primary: #D0BCFF;
+    --md-sys-color-on-primary: #381E72;
+    --md-sys-color-secondary-container: #4A4458;
+    --md-sys-color-on-secondary-container: #E8DEF8;
+    --md-sys-color-surface: #141218;
+    --md-sys-color-surface-container: #211F26;
+    --md-sys-color-surface-container-low: #1D1B20;
+    --md-sys-color-surface-container-high: #2B2930;
+    --md-sys-color-on-surface: #E6E0E9;
+    --md-sys-color-on-surface-variant: #CAC4D0;
+    --md-sys-color-outline-variant: #49454F;
+    /* UI-DESIGN-GUIDELINES tokens */
+    --shape-corner-full: 9999px;
+    --spacing-xxs: 4px;
+    --spacing-xs: 8px;
+    --spacing-sm: 12px;
+    /* terminal surface stand-in */
+    --terminal-bg: #101014;
+    --terminal-fg: #d4d4d4;
+  }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: #000;
+    color: var(--md-sys-color-on-surface);
+    font-family: "Roboto", "Noto Sans JP", sans-serif;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+  }
+  h2 { font-size: 16px; font-weight: 500; margin: 0 0 8px; color: var(--md-sys-color-on-surface-variant); }
+
+  .app {
+    width: 960px;
+    height: 480px;
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* ---- top tab bar (existing component, unchanged styling) ---- */
+  .tab-bar {
+    height: 48px;
+    background: var(--md-sys-color-surface-container);
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    display: flex;
+    flex: none;
+  }
+  .tab {
+    flex: 1 1 0;
+    min-width: 120px;
+    max-width: 300px;
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0.1px;
+    color: var(--md-sys-color-on-surface-variant);
+    position: relative;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .tab.active { color: var(--md-sys-color-primary); }
+  .tab.active::after {
+    content: "";
+    position: absolute;
+    left: 16px; right: 16px; bottom: 0;
+    height: 3px;
+    border-radius: 3px 3px 0 0;
+    background: var(--md-sys-color-primary);
+  }
+
+  .main { display: flex; flex: 1; min-height: 0; position: relative; }
+
+  /* ---- vertical tabs (NEW component) ---- */
+  /* width: clamp(180px, 22% of app width, 320px) — here 22% of 960 = 211px */
+  .vtabs {
+    width: 211px;
+    flex: none;
+    background: var(--md-sys-color-surface-container-low);
+    border-right: 1px solid var(--md-sys-color-outline-variant);
+    padding: var(--spacing-sm) var(--spacing-xs);
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xxs);
+    overflow-y: auto;
+  }
+  .vtab-item {
+    height: 40px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: 0 var(--spacing-sm);
+    border-radius: var(--shape-corner-full);
+    font-size: 14px;
+    color: var(--md-sys-color-on-surface-variant);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .vtab-item:hover:not(.active) {
+    background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  }
+  .vtab-item.active {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+  }
+  .vtab-num {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--md-sys-color-on-surface-variant);
+    flex: none;
+    width: 16px;
+    text-align: right;
+  }
+  .vtab-item.active .vtab-num { color: var(--md-sys-color-on-secondary-container); }
+  .vtab-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* overlay placement variant: same component, right edge, over the terminal */
+  .vtabs.overlay {
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    border-right: none;
+    border-left: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface-container-high);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.30); /* elevation-3 */
+  }
+
+  /* ---- terminal surface stand-in ---- */
+  .term {
+    flex: 1;
+    background: var(--terminal-bg);
+    color: var(--terminal-fg);
+    font-family: monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 8px 12px;
+    overflow: hidden;
+    white-space: pre;
+  }
+  .empty-hint {
+    margin: auto;
+    font-size: 13px;
+    color: var(--md-sys-color-on-surface-variant);
+    opacity: 0.6;
+  }
+</style>
+
+<!-- ======================================================================
+     STATE: persistent (default) — fixed left panel, terminal excludes it
+     ====================================================================== -->
+<section data-state="persistent">
+  <h2>persistent mode (default) — left fixed panel, width = clamp(180px, 22%, 320px)</h2>
+  <div class="app">
+    <div class="tab-bar">
+      <div class="tab">1 zsh</div>
+      <div class="tab active">2 mux: claude-code</div>
+    </div>
+    <div class="main">
+      <nav class="vtabs">
+        <div class="vtab-item"><span class="vtab-num">1</span><span class="vtab-name">shell</span></div>
+        <div class="vtab-item active"><span class="vtab-num">2</span><span class="vtab-name">claude-code</span></div>
+        <div class="vtab-item"><span class="vtab-num">3</span><span class="vtab-name">logs</span></div>
+        <div class="vtab-item"><span class="vtab-num">4</span><span class="vtab-name">a-very-long-window-title-that-truncates</span></div>
+      </nav>
+      <div class="term">$ claude
+╭──────────────────────────────────────╮
+│ Claude Code                          │
+╰──────────────────────────────────────╯
+&gt; _</div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     STATE: overlay-open — right overlay over full-width terminal
+     ====================================================================== -->
+<section data-state="overlay-open">
+  <h2>overlay mode, open (Ctrl+Z Ctrl+W) — right overlay, terminal keeps full width</h2>
+  <div class="app">
+    <div class="tab-bar">
+      <div class="tab">1 zsh</div>
+      <div class="tab active">2 mux: claude-code</div>
+    </div>
+    <div class="main">
+      <div class="term">$ claude
+╭──────────────────────────────────────────────────────────────╮
+│ Claude Code                        (right edge covered) ▒▒▒▒
+╰──────────────────────────────────────────────────────────────╯
+&gt; _</div>
+      <nav class="vtabs overlay">
+        <div class="vtab-item"><span class="vtab-num">1</span><span class="vtab-name">shell</span></div>
+        <div class="vtab-item active"><span class="vtab-num">2</span><span class="vtab-name">claude-code</span></div>
+        <div class="vtab-item"><span class="vtab-num">3</span><span class="vtab-name">logs</span></div>
+      </nav>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     STATE: overlay-closed — overlay mode with the sidebar hidden
+     ====================================================================== -->
+<section data-state="overlay-closed">
+  <h2>overlay mode, closed — no sidebar, no window-name indicator</h2>
+  <div class="app">
+    <div class="tab-bar">
+      <div class="tab">1 zsh</div>
+      <div class="tab active">2 mux: claude-code</div>
+    </div>
+    <div class="main">
+      <div class="term">$ claude
+╭──────────────────────────────────────────────────────────────╮
+│ Claude Code                                                  │
+╰──────────────────────────────────────────────────────────────╯
+&gt; _</div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     STATE: many-windows — vertical scroll inside the sidebar
+     ====================================================================== -->
+<section data-state="many-windows">
+  <h2>boundary: many windows — the list scrolls, items never shrink</h2>
+  <div class="app" style="height: 320px;">
+    <div class="tab-bar">
+      <div class="tab">1 zsh</div>
+      <div class="tab active">2 mux: win-07</div>
+    </div>
+    <div class="main">
+      <nav class="vtabs">
+        <div class="vtab-item"><span class="vtab-num">1</span><span class="vtab-name">win-01</span></div>
+        <div class="vtab-item"><span class="vtab-num">2</span><span class="vtab-name">win-02</span></div>
+        <div class="vtab-item"><span class="vtab-num">3</span><span class="vtab-name">win-03</span></div>
+        <div class="vtab-item"><span class="vtab-num">4</span><span class="vtab-name">win-04</span></div>
+        <div class="vtab-item"><span class="vtab-num">5</span><span class="vtab-name">win-05</span></div>
+        <div class="vtab-item"><span class="vtab-num">6</span><span class="vtab-name">win-06</span></div>
+        <div class="vtab-item active"><span class="vtab-num">7</span><span class="vtab-name">win-07</span></div>
+        <div class="vtab-item"><span class="vtab-num">8</span><span class="vtab-name">win-08</span></div>
+        <div class="vtab-item"><span class="vtab-num">9</span><span class="vtab-name">win-09</span></div>
+        <div class="vtab-item"><span class="vtab-num">10</span><span class="vtab-name">win-10</span></div>
+      </nav>
+      <div class="term">$ _</div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     STATE: empty — transient 0-window list during attach/detach
+     ====================================================================== -->
+<section data-state="empty">
+  <h2>edge: empty window list (transient) — bare panel, no placeholder text</h2>
+  <div class="app" style="height: 240px;">
+    <div class="tab-bar">
+      <div class="tab">1 zsh</div>
+      <div class="tab active">2 mux</div>
+    </div>
+    <div class="main">
+      <nav class="vtabs"></nav>
+      <div class="term"></div>
+    </div>
+  </div>
+</section>
