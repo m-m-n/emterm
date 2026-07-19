@@ -20,6 +20,7 @@ pub mod keybinds;
 pub mod md3;
 pub mod md3_widgets;
 pub mod mux_dialogs;
+pub mod mux_sidebar;
 pub mod profile_selector;
 pub mod scrollbar;
 pub mod search_bar;
