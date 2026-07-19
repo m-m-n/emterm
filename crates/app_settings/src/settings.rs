@@ -399,8 +399,13 @@ pub struct AppSettings {
     pub bold_brightens_ansi_colors: bool,
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub middle_click_paste: bool,
-    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
-    pub shift_enter_as_alt_enter: bool,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub shift_enter_behavior: ShiftEnterBehavior,
+    /// Legacy field for backward compatibility (FR5 migration input).
+    /// Read during deserialization but never serialized; folded into
+    /// `shift_enter_behavior` by [`AppSettings::apply_migrations`].
+    #[serde(default, skip_serializing)]
+    pub(crate) shift_enter_as_alt_enter: Option<bool>,
     #[serde(skip)]
     pub ambiguous_width: bool,
     #[serde(
@@ -545,6 +550,8 @@ impl AppSettings {
     ///
     /// Currently migrated:
     /// - `font_family` → `font_family_primary` (when the new key is empty).
+    /// - `shift_enter_as_alt_enter` → `shift_enter_behavior` (when the new
+    ///   key is still at its default; see the field's migration below).
     pub fn apply_migrations(&mut self) -> bool {
         let mut migrated = false;
 
@@ -554,6 +561,24 @@ impl AppSettings {
             migrated = true;
         } else if !self.font_family.is_empty() {
             self.font_family.clear();
+            migrated = true;
+        }
+
+        // Legacy shift-enter boolean. Folds the legacy value in only
+        // while `shift_enter_behavior` is still at its default (i.e. the
+        // new key was absent from the source JSON); an explicit new-key
+        // value always wins, mirroring the font_family "still empty"
+        // sentinel above. The legacy key is never serialized again
+        // (`skip_serializing`), so `migrated` is reported whenever it was
+        // present so the caller can rewrite the file with the new shape.
+        if let Some(legacy) = self.shift_enter_as_alt_enter.take() {
+            if self.shift_enter_behavior == ShiftEnterBehavior::default() {
+                self.shift_enter_behavior = if legacy {
+                    ShiftEnterBehavior::AltEnter
+                } else {
+                    ShiftEnterBehavior::None
+                };
+            }
             migrated = true;
         }
 
@@ -710,7 +735,8 @@ impl Default for AppSettings {
             file_path_detection: default_true(),
             bold_brightens_ansi_colors: default_true(),
             middle_click_paste: default_true(),
-            shift_enter_as_alt_enter: default_true(),
+            shift_enter_behavior: ShiftEnterBehavior::default(),
+            shift_enter_as_alt_enter: None,
             ambiguous_width: default_true(),
             editor_command: default_editor_command(),
             skk_mode: default_true(),
@@ -739,6 +765,7 @@ impl Default for AppSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_mux_statusbar_settings_default() {
@@ -877,7 +904,8 @@ mod tests {
             file_path_detection: false,
             bold_brightens_ansi_colors: false,
             middle_click_paste: false,
-            shift_enter_as_alt_enter: false,
+            shift_enter_behavior: ShiftEnterBehavior::KittyCsiU,
+            shift_enter_as_alt_enter: None,
             ambiguous_width: false,
             editor_command: "vim +{line} {file}".to_string(),
             skk_mode: false,
@@ -922,7 +950,7 @@ mod tests {
         assert!(!restored.file_path_detection);
         assert!(!restored.bold_brightens_ansi_colors);
         assert!(!restored.middle_click_paste);
-        assert!(!restored.shift_enter_as_alt_enter);
+        assert_eq!(restored.shift_enter_behavior, ShiftEnterBehavior::KittyCsiU);
         assert_eq!(restored.editor_command, "vim +{line} {file}");
         assert!(!restored.skk_mode);
         assert_eq!(restored.keybinds.copy, "Ctrl+C");
@@ -971,5 +999,80 @@ mod tests {
         s.apply_migrations();
         assert_eq!(s.font_family_primary, "New Mono");
         assert!(s.font_family.is_empty());
+    }
+
+    // ── shift_enter_behavior (task0003 AC-1) ────────────────────────────
+
+    #[test]
+    fn shift_enter_behavior_defaults_to_alt_enter() {
+        assert_eq!(
+            AppSettings::default().shift_enter_behavior,
+            ShiftEnterBehavior::AltEnter
+        );
+    }
+
+    #[test]
+    fn shift_enter_behavior_each_wire_value_round_trips_through_serde() {
+        for (json_value, variant) in [
+            ("none", ShiftEnterBehavior::None),
+            ("alt_enter", ShiftEnterBehavior::AltEnter),
+            ("kitty_csi_u", ShiftEnterBehavior::KittyCsiU),
+        ] {
+            let s: AppSettings =
+                serde_json::from_str(&format!(r#"{{"shift_enter_behavior": "{json_value}"}}"#))
+                    .unwrap();
+            assert_eq!(s.shift_enter_behavior, variant);
+            let v = serde_json::to_value(&s).unwrap();
+            assert_eq!(v["shift_enter_behavior"], json!(json_value));
+        }
+    }
+
+    #[test]
+    fn shift_enter_behavior_null_resolves_to_default() {
+        let s: AppSettings = serde_json::from_str(r#"{"shift_enter_behavior": null}"#).unwrap();
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
+    #[test]
+    fn serializing_default_settings_never_emits_legacy_shift_enter_key() {
+        let v = serde_json::to_value(AppSettings::default()).unwrap();
+        assert!(
+            v.get("shift_enter_as_alt_enter").is_none(),
+            "legacy shift_enter_as_alt_enter key must not be serialized"
+        );
+        assert_eq!(v["shift_enter_behavior"], json!("alt_enter"));
+    }
+
+    #[test]
+    fn apply_migrations_maps_legacy_true_to_alt_enter_when_new_key_absent() {
+        let mut s: AppSettings =
+            serde_json::from_str(r#"{"shift_enter_as_alt_enter": true}"#).unwrap();
+        assert!(s.apply_migrations());
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
+    #[test]
+    fn apply_migrations_maps_legacy_false_to_none_when_new_key_absent() {
+        let mut s: AppSettings =
+            serde_json::from_str(r#"{"shift_enter_as_alt_enter": false}"#).unwrap();
+        assert!(s.apply_migrations());
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::None);
+    }
+
+    #[test]
+    fn apply_migrations_new_key_present_wins_over_legacy() {
+        let mut s: AppSettings = serde_json::from_str(
+            r#"{"shift_enter_behavior": "kitty_csi_u", "shift_enter_as_alt_enter": false}"#,
+        )
+        .unwrap();
+        s.apply_migrations();
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::KittyCsiU);
+    }
+
+    #[test]
+    fn apply_migrations_no_legacy_key_leaves_default_unmigrated() {
+        let mut s = AppSettings::default();
+        assert!(!s.apply_migrations());
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
     }
 }
