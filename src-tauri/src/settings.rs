@@ -154,13 +154,14 @@ pub const DEFAULT_MUX_PREFIX_KEY: &str = "Ctrl+Z";
 /// `Ctrl+D`/`Ctrl+C`/`Ctrl+N`/`Ctrl+P`/`Ctrl+R`/`Ctrl+T`). SSOT is
 /// `DEFAULT_ACTION_BINDINGS` in `src-tauri/src/mux/prefix.rs`; the
 /// `src-tauri/web-shared/terminal/mux/prefix-key.ts` table is a mirror.
-pub const MUX_ACTION_NAMES: [&str; 6] = [
+pub const MUX_ACTION_NAMES: [&str; 7] = [
     "detach",
     "new-window",
     "next-window",
     "prev-window",
     "rename-window",
     "move-window",
+    "toggle-window-sidebar",
 ];
 
 /// Default follow-up chord for a mux action, or `None` if the action
@@ -210,6 +211,13 @@ pub struct MuxSettings {
     pub keybinds: std::collections::HashMap<String, crate::mux::prefix::PrefixChord>,
     /// Mux status-bar content (`mux.statusbar.*`).
     pub statusbar: MuxStatusbarSettings,
+    /// Sidebar placement mode (`mux.window_sidebar_overlay`): `false` =
+    /// persistent left panel (default), `true` = right overlay. Gates the
+    /// `toggle-window-sidebar` prefix action (FR4/FR5) — see
+    /// `App::dispatch_mux_action`. `settings.json` loading (the raw-key
+    /// overlay in `RawMux`) is out of this task's scope; the field always
+    /// resolves to its default here until that lands.
+    pub window_sidebar_overlay: bool,
 }
 
 impl Default for MuxSettings {
@@ -225,6 +233,7 @@ impl Default for MuxSettings {
             window_sidebar_overlay: false,
             keybinds,
             statusbar: MuxStatusbarSettings::default(),
+            window_sidebar_overlay: false,
         }
     }
 }
