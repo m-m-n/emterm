@@ -184,6 +184,9 @@ mod tests {
         s.editor_command = "vim {file}".into();
         s.copy_on_select = true;
         s.middle_click_paste = false;
+        // task0001: `app_settings::AppSettings` still models the legacy
+        // boolean (out of scope for this task); the native loader's FR5
+        // migration maps `false` -> `ShiftEnterBehavior::None` below.
         s.shift_enter_as_alt_enter = false;
         s.skk_mode = false;
         s.fold_enabled = false;
@@ -229,11 +232,34 @@ mod tests {
         assert_eq!(loaded.editor_command, "vim {file}");
         assert!(loaded.copy_on_select);
         assert!(!loaded.middle_click_paste);
-        assert!(!loaded.shift_enter_as_alt_enter);
+        assert_eq!(
+            loaded.shift_enter_behavior,
+            crate::settings::ShiftEnterBehavior::None
+        );
         assert!(!loaded.skk_mode);
         assert!(!loaded.fold_enabled);
         assert!(!loaded.clipboard_read_osc52);
         assert_eq!(loaded.clipboard_max_size_osc52, 5 * 1024 * 1024);
+    }
+
+    #[test]
+    fn shift_enter_behavior_round_trips_through_native_loader() {
+        // AC-5: the new `shift_enter_behavior` key persists and reloads
+        // correctly (task0001), independent of the legacy-boolean
+        // migration path exercised by
+        // `app_settings_save_round_trips_through_native_loader` above.
+        let path = tmp_path("shift-enter-behavior-roundtrip");
+        let _ = std::fs::remove_file(&path);
+
+        let mut patch = Map::new();
+        patch.insert("shift_enter_behavior".into(), json!("kitty_csi_u"));
+        save_patch_to(&path, patch).unwrap();
+
+        let loaded = Settings::load_from(&path);
+        assert_eq!(
+            loaded.shift_enter_behavior,
+            crate::settings::ShiftEnterBehavior::KittyCsiU
+        );
     }
 
     #[test]

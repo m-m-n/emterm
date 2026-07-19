@@ -43,6 +43,7 @@ use crate::ime::backend::{KeyDispatchResult, ProcessEnv, RawKeyEvent, build_back
 use crate::mux::dialog::{MuxDialogOutcome, MuxDialogState};
 use crate::mux::prefix::{KeyInput as MuxKeyInput, KeySym};
 use crate::pty::input::{Key, Modifiers, Target as EncodeTarget, encode};
+use crate::settings::ShiftEnterBehavior;
 
 /// Drive one frame of the open mux dialog: render via the UI layer
 /// (`ui::mux_dialogs::draw`) and dispatch the resulting outcome into the
@@ -2824,6 +2825,53 @@ fn is_skk_swallowed_chord(logical_key: &WinitKey, mods: Modifiers) -> bool {
         && matches!(logical_key, WinitKey::Character(s) if s.eq_ignore_ascii_case("j"))
 }
 
+/// Outcome of the [`shift_enter_rewrite`] decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShiftEnterRewrite {
+    /// Not a bare Shift+Enter press (or the behavior is out of scope):
+    /// encode normally with the original modifiers.
+    Unchanged,
+    /// Encode normally after substituting these modifiers for the
+    /// original ones (`none` drops Shift; `alt_enter` drops Shift and
+    /// sets Alt).
+    Modifiers(Modifiers),
+    /// Bypass the key encoder and write this literal byte sequence
+    /// (`kitty_csi_u`).
+    RawBytes(&'static [u8]),
+}
+
+/// Literal Kitty keyboard protocol CSI u sequence for Enter (Unicode key
+/// code 13) with the Shift modifier (xterm modifier parameter 2):
+/// `ESC [ 1 3 ; 2 u`. See task0001 design D1.
+const KITTY_CSI_U_SHIFT_ENTER: [u8; 7] = [0x1B, b'[', b'1', b'3', b';', b'2', b'u'];
+
+/// Pure decision table for the `shift_enter_behavior` key rewrite
+/// (task0001 design D1). `is_enter` / `mods` describe the pressed key;
+/// the call site only reaches this after UI-layer handlers (search bar,
+/// keybind dispatch, SKK swallow) have already run. Rewrite applies only
+/// when the modifier state is exactly Shift (no Ctrl, no Alt).
+fn shift_enter_rewrite(
+    is_enter: bool,
+    mods: Modifiers,
+    behavior: ShiftEnterBehavior,
+) -> ShiftEnterRewrite {
+    if !is_enter || !mods.shift || mods.ctrl || mods.alt {
+        return ShiftEnterRewrite::Unchanged;
+    }
+    match behavior {
+        ShiftEnterBehavior::None => ShiftEnterRewrite::Modifiers(Modifiers {
+            shift: false,
+            ..mods
+        }),
+        ShiftEnterBehavior::AltEnter => ShiftEnterRewrite::Modifiers(Modifiers {
+            shift: false,
+            alt: true,
+            ..mods
+        }),
+        ShiftEnterBehavior::KittyCsiU => ShiftEnterRewrite::RawBytes(&KITTY_CSI_U_SHIFT_ENTER),
+    }
+}
+
 fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers, target: EncodeTarget) -> Option<Vec<u8>> {
     // Named keys take precedence over the printable fast path. winit on
     // Windows fills `event.text` for Backspace with `"\x7f"` (DEL); if we
@@ -3322,22 +3370,18 @@ impl ApplicationHandler for PocApp {
                         // SKK-style IMEs keep their mode-switch chord (see
                         // `is_skk_swallowed_chord`).
                     } else {
-                        // `shift_enter_as_alt_enter`: when the user has
-                        // opted in, present `Shift+Enter` to the shell
-                        // as `Alt+Enter` (M-RET) so editor multi-line
-                        // continuation bindings fire. Only the bare
-                        // Shift-on-Enter case is rewritten — Ctrl/Alt
-                        // already pass through unchanged.
-                        let mut mods = host.current_mods;
-                        if self.app.settings.shift_enter_as_alt_enter
-                            && mods.shift
-                            && !mods.ctrl
-                            && !mods.alt
-                            && matches!(event.logical_key, WinitKey::Named(NamedKey::Enter))
-                        {
-                            mods.shift = false;
-                            mods.alt = true;
-                        }
+                        // `shift_enter_behavior`: three-way rewrite decision
+                        // (task0001 design D1) for the bare Shift+Enter
+                        // chord. Only the bare Shift-on-Enter case is
+                        // rewritten — Ctrl/Alt already pass through
+                        // unchanged (see `shift_enter_rewrite`).
+                        let is_enter =
+                            matches!(event.logical_key, WinitKey::Named(NamedKey::Enter));
+                        let rewrite = shift_enter_rewrite(
+                            is_enter,
+                            host.current_mods,
+                            self.app.settings.shift_enter_behavior,
+                        );
                         // FR2 (key-resume): capture whether the key was
                         // forwarded to the PTY into a local flag. The
                         // `active_tab()` borrow holds `&self.app`, so we
@@ -3354,13 +3398,28 @@ impl ApplicationHandler for PocApp {
                             } else {
                                 EncodeTarget::HostPty
                             };
-                            if let Some(bytes) = winit_key_to_bytes(&event, mods, target) {
-                                // mux-aware: wraps as PtyInput in mux mode so the
-                                // bridge forwards it (raw stdin is dropped there).
-                                tab.write_input(bytes);
+                            if let ShiftEnterRewrite::RawBytes(bytes) = rewrite {
+                                // `kitty_csi_u`: bypass the key encoder
+                                // entirely and write the literal CSI u
+                                // sequence through the same output path as
+                                // encoder-produced bytes (host-PTY raw
+                                // write / mux PtyInput frame), per D1 —
+                                // the encoder cannot express CSI u.
+                                tab.write_input(bytes.to_vec());
                                 true
                             } else {
-                                false
+                                let mods = match rewrite {
+                                    ShiftEnterRewrite::Modifiers(m) => m,
+                                    _ => host.current_mods,
+                                };
+                                if let Some(bytes) = winit_key_to_bytes(&event, mods, target) {
+                                    // mux-aware: wraps as PtyInput in mux mode so the
+                                    // bridge forwards it (raw stdin is dropped there).
+                                    tab.write_input(bytes);
+                                    true
+                                } else {
+                                    false
+                                }
                             }
                         } else {
                             false
@@ -4926,6 +4985,140 @@ mod tests {
             &WinitKey::Named(NamedKey::Enter),
             ctrl
         ));
+    }
+
+    // ── task0001: shift_enter_rewrite pure decision (AC-3 / AC-4) ──────
+
+    #[test]
+    fn shift_enter_rewrite_none_drops_shift_and_encodes_plain_enter() {
+        // AC-3: `none` -> the plain Enter encoding (Shift dropped, no Alt).
+        let mods = Modifiers {
+            shift: true,
+            ctrl: false,
+            alt: false,
+        };
+        let rewrite = shift_enter_rewrite(true, mods, ShiftEnterBehavior::None);
+        assert_eq!(
+            rewrite,
+            ShiftEnterRewrite::Modifiers(Modifiers {
+                shift: false,
+                ctrl: false,
+                alt: false,
+            })
+        );
+    }
+
+    #[test]
+    fn shift_enter_rewrite_alt_enter_drops_shift_and_sets_alt() {
+        // AC-3: `alt_enter` -> the Alt+Enter encoding.
+        let mods = Modifiers {
+            shift: true,
+            ctrl: false,
+            alt: false,
+        };
+        let rewrite = shift_enter_rewrite(true, mods, ShiftEnterBehavior::AltEnter);
+        assert_eq!(
+            rewrite,
+            ShiftEnterRewrite::Modifiers(Modifiers {
+                shift: false,
+                ctrl: false,
+                alt: true,
+            })
+        );
+    }
+
+    #[test]
+    fn shift_enter_rewrite_kitty_csi_u_emits_exact_raw_bytes() {
+        // AC-3: `kitty_csi_u` -> the exact bytes
+        // 0x1B 0x5B 0x31 0x33 0x3B 0x32 0x75, independent of host-PTY vs
+        // mux encode target (the raw-bytes path bypasses the encoder
+        // entirely, so the target never enters this decision).
+        let mods = Modifiers {
+            shift: true,
+            ctrl: false,
+            alt: false,
+        };
+        let rewrite = shift_enter_rewrite(true, mods, ShiftEnterBehavior::KittyCsiU);
+        match rewrite {
+            ShiftEnterRewrite::RawBytes(bytes) => {
+                assert_eq!(bytes, &[0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x32, 0x75]);
+            }
+            other => panic!("expected RawBytes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shift_enter_rewrite_unchanged_when_ctrl_held() {
+        // AC-4: Enter with Ctrl+Shift is not rewritten under any value.
+        let mods = Modifiers {
+            shift: true,
+            ctrl: true,
+            alt: false,
+        };
+        for behavior in [
+            ShiftEnterBehavior::None,
+            ShiftEnterBehavior::AltEnter,
+            ShiftEnterBehavior::KittyCsiU,
+        ] {
+            assert_eq!(
+                shift_enter_rewrite(true, mods, behavior),
+                ShiftEnterRewrite::Unchanged
+            );
+        }
+    }
+
+    #[test]
+    fn shift_enter_rewrite_unchanged_when_alt_already_held() {
+        // AC-4: Enter with Alt (Shift+Alt) is not rewritten under any value.
+        let mods = Modifiers {
+            shift: true,
+            ctrl: false,
+            alt: true,
+        };
+        for behavior in [
+            ShiftEnterBehavior::None,
+            ShiftEnterBehavior::AltEnter,
+            ShiftEnterBehavior::KittyCsiU,
+        ] {
+            assert_eq!(
+                shift_enter_rewrite(true, mods, behavior),
+                ShiftEnterRewrite::Unchanged
+            );
+        }
+    }
+
+    #[test]
+    fn shift_enter_rewrite_unchanged_when_plain_ctrl_enter_no_shift() {
+        // AC-4: Enter with Ctrl (no Shift) is not rewritten under any value.
+        let mods = Modifiers {
+            shift: false,
+            ctrl: true,
+            alt: false,
+        };
+        for behavior in [
+            ShiftEnterBehavior::None,
+            ShiftEnterBehavior::AltEnter,
+            ShiftEnterBehavior::KittyCsiU,
+        ] {
+            assert_eq!(
+                shift_enter_rewrite(true, mods, behavior),
+                ShiftEnterRewrite::Unchanged
+            );
+        }
+    }
+
+    #[test]
+    fn shift_enter_rewrite_unchanged_when_not_enter_key() {
+        // Bare Shift on a non-Enter key is never rewritten.
+        let mods = Modifiers {
+            shift: true,
+            ctrl: false,
+            alt: false,
+        };
+        assert_eq!(
+            shift_enter_rewrite(false, mods, ShiftEnterBehavior::KittyCsiU),
+            ShiftEnterRewrite::Unchanged
+        );
     }
 
     #[test]
