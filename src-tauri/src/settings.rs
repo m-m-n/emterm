@@ -651,10 +651,11 @@ pub struct Settings {
     /// When `true`, a middle-click pastes the current PRIMARY selection
     /// into the terminal. When `false`, middle-click is a no-op.
     pub middle_click_paste: bool,
-    /// When `true`, `Shift+Enter` is delivered as `Alt+Enter`. Helps
+    /// `Shift+Enter` key-rewrite behavior. See [`ShiftEnterBehavior`].
+    /// Default `AltEnter` mirrors the legacy `true` behavior (helps
     /// integrate with editors / shells that bind a multi-line
-    /// continuation on `M-RET`.
-    pub shift_enter_as_alt_enter: bool,
+    /// continuation on `M-RET`).
+    pub shift_enter_behavior: ShiftEnterBehavior,
     /// When `true` (default), a bare `Ctrl+J` press is withheld from
     /// the PTY. Emacs-style IMEs (SKK) use `Ctrl+J` for mode switching;
     /// without the skip the chord encodes to LF (`0x0A`) and inserts
@@ -955,6 +956,67 @@ fn warn_unknown_bell_action_once(seen: &str) {
     });
 }
 
+/// `Shift+Enter` key-rewrite behavior. Replaces the legacy
+/// `shift_enter_as_alt_enter` boolean (migrated in
+/// [`RawSettings::merge_into`]). Consulted at the `window_host` key-event
+/// rewrite site (task0001 design D1). See IMPLEMENTATION.md's "Setting
+/// wire contract" for the shared serde values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShiftEnterBehavior {
+    /// Shift is dropped; `Shift+Enter` sends the same bytes as plain
+    /// `Enter`. Mirrors the legacy `false` value.
+    None,
+    /// Shift is dropped and Alt is set; `Shift+Enter` sends the same
+    /// bytes as `Alt+Enter` (M-RET). Mirrors the legacy `true` value.
+    #[default]
+    AltEnter,
+    /// `Shift+Enter` sends the literal Kitty keyboard protocol CSI u
+    /// sequence for Enter with the Shift modifier (`ESC [ 1 3 ; 2 u`),
+    /// bypassing the key encoder.
+    KittyCsiU,
+}
+
+impl ShiftEnterBehavior {
+    /// Parse the `settings.json` wire value. Unknown strings fall back to
+    /// the default (`AltEnter`) and emit a single `warn`-level log for the
+    /// process lifetime (subsequent unknown values silently coerce).
+    /// Mirrors [`BellAction::parse_or_warn`] / [`CursorStyle::parse_or_warn`].
+    pub fn parse_or_warn(spec: &str) -> Self {
+        match spec.trim().to_ascii_lowercase().as_str() {
+            "none" => Self::None,
+            "alt_enter" => Self::AltEnter,
+            "kitty_csi_u" => Self::KittyCsiU,
+            other => {
+                warn_unknown_shift_enter_behavior_once(other);
+                Self::AltEnter
+            }
+        }
+    }
+
+    /// Canonical `settings.json` spelling. Inverse of
+    /// [`ShiftEnterBehavior::parse_or_warn`] for the settings-panel save
+    /// path.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::AltEnter => "alt_enter",
+            Self::KittyCsiU => "kitty_csi_u",
+        }
+    }
+}
+
+fn warn_unknown_shift_enter_behavior_once(seen: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    let owned = seen.to_string();
+    ONCE.call_once(move || {
+        log::warn!(
+            "settings.shift_enter_behavior: unknown value {:?}, falling back to \"alt_enter\"",
+            owned
+        );
+    });
+}
+
 /// User-defined terminal color scheme. Mirrors
 /// `src-tauri/src/commands/config/types.rs::UserColorScheme`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1003,7 +1065,7 @@ impl Default for Settings {
             alternate_scroll_enabled: true,
             copy_on_select: false,
             middle_click_paste: true,
-            shift_enter_as_alt_enter: true,
+            shift_enter_behavior: ShiftEnterBehavior::AltEnter,
             skk_mode: true,
             bell_action: BellAction::default(),
             url_detection: true,
@@ -1185,6 +1247,11 @@ struct RawSettings {
     alternate_scroll_enabled: Option<bool>,
     copy_on_select: Option<bool>,
     middle_click_paste: Option<bool>,
+    /// New wire key (task0001). Wins over the legacy
+    /// `shift_enter_as_alt_enter` boolean below when both are present.
+    shift_enter_behavior: Option<String>,
+    /// Legacy boolean, migration input only (FR5): `true` -> `AltEnter`,
+    /// `false` -> `None`. Never written back to `settings.json`.
     shift_enter_as_alt_enter: Option<bool>,
     skk_mode: Option<bool>,
     bell_action: Option<String>,
@@ -1613,8 +1680,19 @@ impl RawSettings {
         if let Some(v) = self.middle_click_paste {
             dst.middle_click_paste = v;
         }
-        if let Some(v) = self.shift_enter_as_alt_enter {
-            dst.shift_enter_as_alt_enter = v;
+        // FR5 migration: the new key wins when present; otherwise fall
+        // back to the legacy boolean (true -> AltEnter, false -> None).
+        // Neither present leaves `dst` at the default seeded by
+        // `Settings::default()` (AltEnter). The legacy key is read-only
+        // here and is never written back to settings.json.
+        if let Some(v) = self.shift_enter_behavior {
+            dst.shift_enter_behavior = ShiftEnterBehavior::parse_or_warn(&v);
+        } else if let Some(legacy) = self.shift_enter_as_alt_enter {
+            dst.shift_enter_behavior = if legacy {
+                ShiftEnterBehavior::AltEnter
+            } else {
+                ShiftEnterBehavior::None
+            };
         }
         if let Some(v) = self.skk_mode {
             dst.skk_mode = v;
@@ -2518,6 +2596,86 @@ mod tests {
     fn loader_cursor_blink_can_be_disabled() {
         let s = load_json(r#"{"cursor_blink": false}"#);
         assert!(!s.cursor_blink);
+    }
+
+    // ── shift_enter_behavior loader (task0001 AC-1 / AC-2) ─────────────
+
+    #[test]
+    fn default_shift_enter_behavior_is_alt_enter() {
+        // AC-1: the default is `alt_enter`.
+        let s = Settings::new();
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
+    #[test]
+    fn shift_enter_behavior_parses_each_wire_value() {
+        assert_eq!(
+            ShiftEnterBehavior::parse_or_warn("none"),
+            ShiftEnterBehavior::None
+        );
+        assert_eq!(
+            ShiftEnterBehavior::parse_or_warn("alt_enter"),
+            ShiftEnterBehavior::AltEnter
+        );
+        assert_eq!(
+            ShiftEnterBehavior::parse_or_warn("kitty_csi_u"),
+            ShiftEnterBehavior::KittyCsiU
+        );
+    }
+
+    #[test]
+    fn loader_shift_enter_behavior_new_key_overrides_default_for_each_value() {
+        // AC-2: new key present (each value) -> that value.
+        let s = load_json(r#"{"shift_enter_behavior": "none"}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::None);
+        let s = load_json(r#"{"shift_enter_behavior": "alt_enter"}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+        let s = load_json(r#"{"shift_enter_behavior": "kitty_csi_u"}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::KittyCsiU);
+    }
+
+    #[test]
+    fn loader_shift_enter_behavior_null_keeps_default() {
+        // AC-2: new key null -> default.
+        let s = load_json(r#"{"shift_enter_behavior": null}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
+    #[test]
+    fn loader_shift_enter_behavior_unknown_string_falls_back_to_default() {
+        // AC-2: new key unknown string -> default.
+        let s = load_json(r#"{"shift_enter_behavior": "bogus"}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
+    #[test]
+    fn loader_shift_enter_behavior_legacy_key_only_migrates_true_to_alt_enter() {
+        // AC-2 / FR5: legacy key only, true -> alt_enter.
+        let s = load_json(r#"{"shift_enter_as_alt_enter": true}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
+    #[test]
+    fn loader_shift_enter_behavior_legacy_key_only_migrates_false_to_none() {
+        // AC-2 / FR5: legacy key only, false -> none.
+        let s = load_json(r#"{"shift_enter_as_alt_enter": false}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::None);
+    }
+
+    #[test]
+    fn loader_shift_enter_behavior_both_keys_new_key_wins() {
+        // AC-2: both keys present -> new key wins over the legacy value
+        // (here the legacy value alone would resolve to `alt_enter`, but
+        // the new key explicitly says `none`).
+        let s = load_json(r#"{"shift_enter_behavior": "none", "shift_enter_as_alt_enter": true}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::None);
+    }
+
+    #[test]
+    fn loader_shift_enter_behavior_neither_key_keeps_default() {
+        // AC-2: neither key present -> default.
+        let s = load_json(r#"{}"#);
+        assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
     }
 
     #[test]
