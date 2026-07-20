@@ -485,7 +485,9 @@ pub enum MuxSidebarVisibility {
     /// Neither variant renders (local tab, or overlay mode with the
     /// runtime flag closed).
     Hidden,
-    /// Persistent left panel — reserves grid space.
+    /// Persistent right panel — reserves grid WIDTH only (task0006
+    /// right-edge placement update: the grid's x-origin is identical with
+    /// and without it).
     Persistent,
     /// Right-edge overlay — draws over the terminal area, zero grid inset.
     Overlay,
@@ -495,12 +497,11 @@ pub enum MuxSidebarVisibility {
 /// given this frame's [`MuxSidebarVisibility`] and the window's logical
 /// width. Only `Persistent` contributes a non-zero inset — overlay mode
 /// draws over the grid without reshaping it (task0005 NFR1). Pure function
-/// so `window_host::cell_metrics_px` / `grid_size` and `render::cursor` /
-/// `draw_search_highlights` share one formula despite reading the window
-/// width from different sources (task0005 D2: the wgpu grid geometry is
-/// computed outside egui, so `window_host` derives the width from
-/// `surface_config` while the egui overlay call sites read
-/// `ctx.screen_rect()`).
+/// consumed by `window_host::grid_size` as a WIDTH-only reduction (task0006:
+/// the right-edge placement means this value never feeds an x-origin —
+/// `window_host::cell_metrics_px`, `render::cursor`, and
+/// `draw_search_highlights` all compute the grid/cursor/search x-origin the
+/// same way with or without the sidebar).
 pub fn mux_sidebar_grid_inset(visibility: MuxSidebarVisibility, window_width_logical: f32) -> f32 {
     match visibility {
         MuxSidebarVisibility::Persistent => {
@@ -2207,8 +2208,9 @@ impl App {
     ///   show either variant).
     ///
     /// Read by both `render` (which widget variant to draw, if any) and
-    /// geometry code ([`mux_sidebar_grid_inset`] / `render::cursor` origin
-    /// math — only `Persistent` contributes a grid inset).
+    /// geometry code ([`mux_sidebar_grid_inset`] — only `Persistent`
+    /// contributes a grid WIDTH inset; task0006 right-edge placement means
+    /// no x-origin math reads this).
     pub fn mux_sidebar_visibility(&self) -> MuxSidebarVisibility {
         if !self.active_tab_mux_attached() {
             return MuxSidebarVisibility::Hidden;
@@ -2224,13 +2226,14 @@ impl App {
         }
     }
 
-    /// Horizontal grid inset (logical px) the persistent sidebar reserves
-    /// for `window_width_logical` on the current frame. Thin wrapper
-    /// around [`mux_sidebar_grid_inset`] for callers holding `&App`
-    /// (`render::cursor`, `render::draw_cursor` / `draw_search_highlights`)
-    /// — `window_host::cell_metrics_px` calls the free function directly
-    /// since it derives the window width from `surface_config` rather than
-    /// an egui context.
+    /// Horizontal grid WIDTH inset (logical px) the persistent sidebar
+    /// reserves for `window_width_logical` on the current frame. Thin
+    /// wrapper around [`mux_sidebar_grid_inset`] for callers holding
+    /// `&App`. Despite the name, this is consumed as a width-only
+    /// reduction, never an x-origin term (task0006 right-edge placement
+    /// update) — `window_host::grid_size` reads the equivalent value via
+    /// [`mux_sidebar_grid_inset`] directly (deriving the window width from
+    /// `surface_config` rather than an egui context).
     pub fn mux_sidebar_x_inset(&self, window_width_logical: f32) -> f32 {
         mux_sidebar_grid_inset(self.mux_sidebar_visibility(), window_width_logical)
     }
