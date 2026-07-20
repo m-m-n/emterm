@@ -114,6 +114,11 @@ its geometry from the same functions/constants the draw path uses. Both
 edit `ui/mux_sidebar.rs`; merge conflicts resolve via the implementer
 parent-side-adoption protocol. Affects task0009, task0010.
 
+2026-07-20 update (round 6): the MouseInput press-suppression guard is a
+third consumer of the same shared helper — the pre-existing
+persistent-only width test missed the zero-inset overlay card, letting a
+press on the card start a terminal selection. Affects task0011.
+
 ### 4. No protocol changes
 
 The sidebar renders exclusively from the existing client-side

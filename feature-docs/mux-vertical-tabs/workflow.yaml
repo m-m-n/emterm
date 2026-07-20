@@ -35,36 +35,16 @@ workflow:
     status: completed
     completed_at_commit: null
   - id: implement
-    status: completed
-    base_commit: 3a3f34d0a71b4763e36ed8aeccae6e24383f6f6f
-    completed_at_commit: 8a41b9d9481bdf54a801069a046fab44fb256235
+    status: pending
+    base_commit: null
   - id: review
-    status: completed
-    completed_at_commit: 8a41b9d9481bdf54a801069a046fab44fb256235
+    status: pending
   - id: verify
-    status: completed
-    completed_at_commit: 8a41b9d9481bdf54a801069a046fab44fb256235
-    result: pass
+    status: pending
+    result: null
     failed_items: []
-    notes: >-
-      Round-5 (task0009 overlay resize tracking + task0010 sidebar wheel
-      routing) verification. cargo check pass / bun run typecheck pass /
-      bun test 171 pass 0 fail (bun.lock aligned to the main tree's
-      happy-dom 20.4.0 pin, same prep as prior rounds) / cargo test --lib
-      --test-threads=1: 2424 pass, 4 fail — all in the documented
-      pre-existing tabs.rs flaky set, none in mux_sidebar/window_host;
-      both implementers confirmed the same set against their merge-base
-      baselines. New TS-12 (two-frame resize grow/shrink paint-rect
-      tests) and TS-13 (hit-region boundary + real-panel-composition
-      AC-4 tests + wheel-guard source-scan regression) covered by the
-      task test suites, all passing. Review round 5 left 2 medium spec
-      findings (codex-only): wheel dead-zone on the 8-12px sidebar
-      padding (unresolved, UX polish candidate) and the round-1 deferred
-      stale-inset transient (re-deferred). Manual M-4 (resize + wheel
-      real-build check) remains for the user.
   - id: retrospect
-    status: completed
-    completed_at_commit: 8a41b9d9481bdf54a801069a046fab44fb256235
+    status: pending
 
 tasks:
   task0001:
@@ -211,6 +191,18 @@ tasks:
     notes: "app.rs in expected_files was untouched (mux_sidebar_visibility() already existed as the plan anticipated). Hit-region helpers extracted from the draw path so paint and hit-test share one derivation; winit MouseWheel guard forwards to egui before the terminal scroll path"
     branch: em-workflow/mux-vertical-tabs/task0010
 
+  task0011:
+    title: "Suppress terminal selection under the overlay card"
+    plan: tasks/task0011.md
+    files:
+      - src-tauri/src/window_host.rs
+    skills: [frontend-impl]
+    domains: [ui, input-handling]
+    complexity: low
+    requirements: [FR5, NFR2]
+    status: pending
+    notes: null
+
 review:
   status: completed
   rounds_completed: 5
@@ -254,8 +246,8 @@ requirements:
     title: "Overlay mode: right-side overlay toggled by Ctrl+Z Ctrl+W via DEFAULT_ACTION_BINDINGS"
     status: ok
     tbd_reason: null
-    tasks: [task0003, task0005, task0007, task0008, task0009]
-    tests: [TS-4, TS-10, TS-11, TS-12]
+    tasks: [task0003, task0005, task0007, task0008, task0009, task0011]
+    tests: [TS-4, TS-10, TS-11, TS-12, TS-14]
   FR6:
     title: "Boolean setting 'display as overlay' (default off) across app_settings + TS mirror + settings UI + i18n"
     status: ok
@@ -272,8 +264,8 @@ requirements:
     title: "Local tab behavior and existing mux prefix follow-ups unchanged"
     status: ok
     tbd_reason: null
-    tasks: [task0003, task0005, task0010]
-    tests: [TS-4, TS-7, TS-13]
+    tasks: [task0003, task0005, task0010, task0011]
+    tests: [TS-4, TS-7, TS-13, TS-14]
   NFR3:
     title: "Sidebar visuals follow DESIGN.md, consistent with MD3 tokens"
     status: ok
