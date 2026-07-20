@@ -1,0 +1,75 @@
+round: 5
+executed_at: "2026-07-20T22:43:09+09:00"
+scope:
+  review_mode: diff
+  base_commit: 3a3f34d0a71b4763e36ed8aeccae6e24383f6f6f
+  head_commit: 8a41b9d9481bdf54a801069a046fab44fb256235
+  changed_files:
+    - src-tauri/src/ui/mux_sidebar.rs
+    - src-tauri/src/window_host.rs
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  - stable_id: da8e691f10c5ba12
+    severity: medium
+    category: spec
+    file: src-tauri/src/window_host.rs
+    line: 3903
+    title: "Wheel events are swallowed on visible sidebar padding"
+    description: >-
+      point_in_sidebar treats the entire painted panel/card as the wheel
+      target, but draw_rows lives inside a content rect shrunk 8 px
+      horizontally / 12 px vertically. A wheel over the visible padding
+      strips is forwarded to egui (where no ScrollArea is hovered) while
+      the early return also skips the terminal scroll — the event does
+      nothing. codex:spec only; claude:spec and claude:comprehensive
+      reviewed the same boundary and did not flag it (before this round,
+      a wheel over the padding scrolled the TERMINAL, which the bug
+      report called wrong — dead padding is the conservative middle
+      ground, but scrolling the list would be friendlier).
+    suggestion: >-
+      Extend the ScrollArea's wheel-sensitive viewport to the full
+      sidebar/card and move the padding inside its content, with
+      regression cases for wheel events over every padding edge in both
+      placement modes.
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium・category spec — auto-fix ゲート対象外。UX 磨き込み候補として記録（padding 帯は 8-12px と狭く実害小）"
+  - stable_id: 648164d5f79383f8
+    severity: medium
+    category: spec
+    file: src-tauri/src/window_host.rs
+    line: 1226
+    title: "Known deferred item still derives the persistent inset from stale resize state"
+    description: >-
+      Re-report of round-1 finding a683038081ce469c (same site,
+      window_host.rs:1228, resolution deferred): refresh_mux_sidebar_inset
+      reads surface_config.width before apply_pending_resize updates it,
+      so during a resize frame the PTY grid uses the previous frame's
+      inset while the painted sidebar already follows the new width. The
+      state self-corrects on the next render. Not introduced by this
+      round — task0009/task0010 did not touch this code path.
+    suggestion: >-
+      Derive the inset from the current window inner size (or update the
+      surface extent before refreshing the inset) so one width value
+      drives both the sidebar rendering and the PTY grid in the same
+      frame.
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "round 1 で deferred 済みの既知項目の再指摘（1 フレームで自己修復する transient）。本ラウンドの diff は当該経路に触れていない"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

@@ -1,14 +1,14 @@
 feature: mux-vertical-tabs
-collected_at: "2026-07-20T21:41:35+09:00"
+collected_at: "2026-07-20T22:47:07+09:00"
 session_ids:
   - 417e05e9-2005-4a89-9c9c-07f1b58641de
   - 503a8fd2-67e1-4456-8800-2cd011e3f8c4
 note: >-
-  Fourth develop pass (task0008: overlay card paint-geometry fix — the
-  task0007 floating card's painted background collapsed to the padded row
-  region in the real build; egui 0.29 Frame::show paints the content's
-  bounding box, not the intended panel rect). Round-1..3 signals preserved
-  below; round-4 signals appended.
+  Fifth develop pass (task0009: overlay card resize tracking — egui Area
+  caches per-id size and set_min_size is grow-only; task0010: wheel over
+  the sidebar routed to the list via shared hit-region helpers + a winit
+  MouseWheel guard). Round-1..4 signals preserved below; round-5 signals
+  appended.
 signals:
   review_critical_high:
     # round 1
@@ -31,6 +31,9 @@ signals:
     # round 3: critical/high なし（medium 1 件はレビュアー自身が最終検証で
     # 非到達と判断して取り下げ — round3.yaml 参照）
     # round 4: critical/high なし（findings ゼロ — round4.yaml 参照）
+    # round 5: critical/high なし。medium 2 件（codex:spec のみ検出、
+    # round5.yaml 参照 — padding 帯のホイール dead-zone は unresolved、
+    # round-1 deferred 項目 a683038081ce469c の再指摘は re-deferred）
   conflict_reworks:
     - {task: task0005, retries: 1}
   file_prediction_misses:
@@ -94,3 +97,22 @@ lessons_candidates:
     （DESIGN.md 更新あり）と違い create-spec/design を触らず create-plan
     からのリセットで回せた。モックが正でコードが誤りのケースは
     「実装バグ修正タスク」として plan に直行するのが最短だった。
+  - >-
+    egui の描画不具合 2 連発（Frame::show の content 追従 / Area の
+    per-id サイズキャッシュ + grow-only set_min_size）はどちらも
+    「フレームワークが保持する暗黙状態 vs 毎フレーム計算した意図値」の
+    乖離クラス。egui で幾何を固定したい面は、キャッシュを経由しない
+    fresh Ui（allocate_new_ui + max_rect）に載せるのが確実で、テストは
+    単一フレームでなく「サイズを変えた連続フレーム」で書く必要がある。
+  - >-
+    winit 手動ガードと egui パネル幾何の乖離クラス（round 2 の教訓）が
+    ホイールルーティングで的中した。今回は hit-region 純関数を描画側と
+    同一導出に集約する設計を plan 段階で固定でき、実装は AC-4 で
+    「実際のパネル合成順に対する一致テスト」まで書けた。教訓が plan に
+    反映されて再発防止として機能した例。
+  - >-
+    input-handling domain の宣言で floor に security が入り codex
+    クロス検証が発火した round だった。codex:spec だけが medium 2 件を
+    出し、claude 3 観点は 0 件 — クロスモデルは「見逃し拾い」よりも
+    「境界ケースの別解釈」を出す傾向。codex-only confidence 50 の
+    運用どおり記録して完了ゲートには影響しなかった。

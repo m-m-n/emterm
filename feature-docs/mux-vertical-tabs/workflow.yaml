@@ -35,16 +35,36 @@ workflow:
     status: completed
     completed_at_commit: null
   - id: implement
-    status: pending
-    base_commit: null
+    status: completed
+    base_commit: 3a3f34d0a71b4763e36ed8aeccae6e24383f6f6f
+    completed_at_commit: 8a41b9d9481bdf54a801069a046fab44fb256235
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 8a41b9d9481bdf54a801069a046fab44fb256235
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 8a41b9d9481bdf54a801069a046fab44fb256235
+    result: pass
     failed_items: []
+    notes: >-
+      Round-5 (task0009 overlay resize tracking + task0010 sidebar wheel
+      routing) verification. cargo check pass / bun run typecheck pass /
+      bun test 171 pass 0 fail (bun.lock aligned to the main tree's
+      happy-dom 20.4.0 pin, same prep as prior rounds) / cargo test --lib
+      --test-threads=1: 2424 pass, 4 fail — all in the documented
+      pre-existing tabs.rs flaky set, none in mux_sidebar/window_host;
+      both implementers confirmed the same set against their merge-base
+      baselines. New TS-12 (two-frame resize grow/shrink paint-rect
+      tests) and TS-13 (hit-region boundary + real-panel-composition
+      AC-4 tests + wheel-guard source-scan regression) covered by the
+      task test suites, all passing. Review round 5 left 2 medium spec
+      findings (codex-only): wheel dead-zone on the 8-12px sidebar
+      padding (unresolved, UX polish candidate) and the round-1 deferred
+      stale-inset transient (re-deferred). Manual M-4 (resize + wheel
+      real-build check) remains for the user.
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 8a41b9d9481bdf54a801069a046fab44fb256235
 
 tasks:
   task0001:
@@ -172,8 +192,9 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR2, FR5]
-    status: pending
-    notes: null
+    status: merged
+    notes: "Root cause: egui Area caches per-id size after the first sizing pass and set_min_size is grow-only, so the card never shrank. Fixed by pinning the frame+rows to a fresh Ui built from the per-frame rect (allocate_new_ui), authoritative in both directions. Shrink-direction tests failed red before the fix"
+    branch: em-workflow/mux-vertical-tabs/task0009
 
   task0010:
     title: "Route wheel scroll over the sidebar to the list"
@@ -186,18 +207,20 @@ tasks:
     domains: [ui, input-handling]
     complexity: medium
     requirements: [FR2, NFR2]
-    status: pending
-    notes: null
+    status: merged
+    notes: "app.rs in expected_files was untouched (mux_sidebar_visibility() already existed as the plan anticipated). Hit-region helpers extracted from the draw path so paint and hit-test share one derivation; winit MouseWheel guard forwards to egui before the terminal scroll path"
+    branch: em-workflow/mux-vertical-tabs/task0010
 
 review:
   status: completed
-  rounds_completed: 4
+  rounds_completed: 5
   plan:
-    floor: [comprehensive, spec]
+    floor: [comprehensive, security, spec]
     discretionary: []
-    codex_cross_validation: false
+    codex_cross_validation: true
   perspectives:
     comprehensive: completed
+    security: completed
     spec: completed
   residual_critical_high: 0
   needs_rework: false
