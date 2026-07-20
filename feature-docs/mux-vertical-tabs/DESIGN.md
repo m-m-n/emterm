@@ -12,10 +12,16 @@ native system stays the SSOT. Mockup:
   `surface-container-low`, LEFT border 1px `outline-variant` on the
   terminal-facing edge — the settings-nav surface recipe with the separator
   mirrored to the right-side placement.
-- **Overlay placement: RIGHT edge panel over the terminal** (SPEC FR5).
-  Background `surface-container-high`, left border 1px `outline-variant`,
-  `elevation-3` shadow (0 8px 32px rgba(0,0,0,0.30)). No scrim — the terminal
-  stays fully visible except under the panel.
+- **Overlay placement: FLOATING CARD over the terminal's right side** (SPEC
+  FR5; reshaped 2026-07-20 from a flush edge panel per 実機フィードバック).
+  Uniform 16px (`spacing-md`) margin between the card and the terminal
+  area's top / right / bottom edges. `corner-medium` (12px) radius.
+  Background `surface-container-high` at **92% opacity** (slight
+  translucency for the overlay affordance; list text stays readable).
+  `elevation-3` shadow (0 8px 32px rgba(0,0,0,0.30)). **No separator line**
+  — the card's own rounded edge is the boundary (this also removes the
+  line-protrusion defect class seen on the flush panel). No scrim — the
+  terminal stays fully visible except under the card.
 - **Sidebar width** = clamp(180px, 22% of app window width, 320px). One
   formula for both placements ("20–25% 程度" requirement → 22% with sane
   floor/ceiling).
@@ -60,6 +66,14 @@ native system stays the SSOT. Mockup:
   above content use the high container tone (dialog anatomy in
   UI-DESIGN-GUIDELINES `dialogs:`); the shadow separates it from arbitrary
   terminal content underneath.
+- Floating card (2026-07-20): the flush panel showed accidental-looking gaps
+  on the right/bottom in the real build (screenshot kept outside git at
+  `tmp/overlay-actual-20260720.png` — binaries stay out of tracked paths)
+  plus a separator line protruding past the panel's bottom-left. A deliberate uniform margin turns
+  the gap into intent, the rounded translucent card reads unambiguously as
+  an overlay, and dropping the separator eliminates the protrusion defect
+  class entirely. Margin 16px / opacity 92% / radius 12px confirmed by the
+  user.
 - No animation: consistent with the status bar's no-open/close-animation
   precedent, and avoids egui repaint churn on a latency-sensitive surface
   (NFR1's spirit).
