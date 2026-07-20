@@ -36,7 +36,8 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
 - **Terminal Multiplexer**
   - `emterm mux` starts a native multiplexer daemon; GUI receives raw PTY bytes (no double-parse overhead)
   - Detach (`prefix+d`) / reattach (`emterm mux attach`) with full screen state restoration
-  - Multiple windows per session with tab group UI; instant window switching (all windows stream simultaneously)
+  - Multiple windows per session; instant window switching (all windows stream simultaneously)
+  - Vertical tab sidebar (native egui) lists mux windows by number/name with an active mark; persistent right-edge panel by default, or a keybind-toggled (`Ctrl+Z Ctrl+W`) right-edge overlay; the top tab bar shows a single consolidated `mux: <window name>` tab while attached
   - Per-pane scroll position and scrollback history preserved on window switch (no detach→reattach required)
   - Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename), `prefix+m` (move/reorder with `[N]` position badge)
   - tmux.conf import: prefix key, keybindings, mouse
@@ -71,7 +72,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
     On Linux the "Copy on select" / "Middle-click paste" settings are hidden
     because PRIMARY handles them natively (and their `settings.json` values
     are ignored).
-  - Shift+Enter as Alt+Enter for multiline input in AI interfaces (configurable, default ON)
+  - Shift+Enter behavior setting: pass-through, Alt+Enter rewrite (default), or LF for multiline input in AI interfaces
   - Word and line selection drag: double-click (word) or triple-click (line) then drag keeps the originally clicked word/line anchored for the whole drag
   - Comprehensive special key mapping (Ctrl+symbols, modified arrow keys, F-keys, Shift+Tab)
   - Alternate scroll mode (DECSET 1007): mouse wheel sends arrow keys in alternate-screen apps (default ON, configurable)
