@@ -52,9 +52,11 @@ keybind-toggled right overlay, so that columns are not permanently consumed.
   window, equivalent to the current top-tab click switch. Identical in both
   placement modes.
 - **FR4:** Persistent mode (default) — the sidebar is a fixed panel; it is
-  never opened/closed at runtime, so no PTY resize occurs from sidebar
-  presence changes while in this mode. The overlay toggle keybind is a no-op
-  in this mode.
+  never opened/closed at runtime within the mux tab. Because all tabs share
+  one terminal grid, switching the active top tab between a mux-attached tab
+  and a local tab changes the effective viewport width and triggers a PTY
+  resize (accepted behavior; see NFR1). The overlay toggle keybind is a
+  no-op in this mode.
 - **FR5:** Overlay mode — the sidebar overlays the right side of the terminal
   surface (terminal cells keep their size; the right edge is visually
   covered while open). Toggled by a new mux prefix action, default
@@ -70,9 +72,11 @@ keybind-toggled right overlay, so that columns are not permanently consumed.
 
 ### Non-Functional Requirements
 
-- **NFR1 - Resize discipline:** Window switching and overlay open/close must
-  not trigger PTY resizes. The only accepted resize is the single one caused
-  by changing the placement setting.
+- **NFR1 - Resize discipline:** Mux window switching and overlay open/close
+  must not trigger PTY resizes. Accepted resizes are: (a) the single one
+  caused by changing the placement setting, and (b) top-tab switches between
+  a mux-attached tab and a local tab in persistent mode (all tabs share one
+  grid, so the sidebar inset applies to the shared viewport width).
 - **NFR2 - Compatibility:** Local (non-mux) tab behavior is unchanged.
   Existing mux prefix follow-ups (Ctrl+D / Ctrl+C / Ctrl+N / Ctrl+P /
   Ctrl+R / Ctrl+T) are unchanged; `Ctrl+W` is currently unused so there is
