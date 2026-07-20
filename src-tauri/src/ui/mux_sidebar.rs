@@ -174,7 +174,11 @@ fn draw_persistent(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) ->
 /// from the shared dialog token. No scrim, no open/close animation.
 fn draw_overlay(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) -> Option<usize> {
     let mut clicked = None;
-    let screen = ctx.screen_rect();
+    // Use the remaining central-panel area (post title-bar / tab-bar /
+    // status-bar `TopBottomPanel`s), not the full window `screen_rect()`,
+    // so the overlay only covers the terminal-facing region and never the
+    // titlebar's minimize/maximize/close buttons or the tab/status bars.
+    let screen = ctx.available_rect();
     let rect = Rect::from_min_size(
         egui::pos2(screen.right() - width, screen.top()),
         Vec2::new(width, screen.height()),
