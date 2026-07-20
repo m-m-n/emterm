@@ -662,14 +662,17 @@ Linux (X11 and Wayland) has two independent clipboards that eMterm honors:
 
 ---
 
-#### Shift+Enter as Alt+Enter
+#### Shift+Enter Behavior
 
-`Shift+Enter` can be remapped to send the same escape sequence as `Alt+Enter` (ESC + CR: `0x1b 0x0d`).
+`shift_enter_behavior` setting selects what byte sequence a bare Shift+Enter (no Ctrl/Alt) sends to the PTY.
 
 **Key Functionality:**
-- `shift_enter_as_alt_enter` setting (default: `true`)
-- When enabled, Shift+Enter (without Ctrl or Alt) sends `[0x1b, 0x0d]`
-- When disabled, Shift+Enter sends `[0x0d]` (CR) as normal
+- `none`: Shift+Enter sends `[0x0d]` (CR), same as plain Enter
+- `alt_enter` (default): Shift+Enter sends the same escape sequence as Alt+Enter (`[0x1b, 0x0d]`)
+- `lf`: Shift+Enter sends the single byte `0x0a` (LF)
+- `kitty_csi_u`: Shift+Enter sends the raw bytes `\x1b[13;2u`; not offered in the settings-panel select unless it is the currently loaded value (hidden option kept for existing configurations)
+- Ctrl/Alt modifier combinations (including Ctrl+Shift+Enter) are unaffected by this setting
+- Legacy `shift_enter_as_alt_enter` boolean is migrated transparently: `true` → `alt_enter`, `false` → `none`
 - Additional mappings: Shift+Backspace sends `[0x7f]` (DEL); Shift+Escape sends `[0x1b]`
 
 ---
@@ -1011,6 +1014,7 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 | `rename-window` | `,` |
 | `move-window` | `m` |
 | `paste` | `]` |
+| `toggle-window-sidebar` | `w` |
 | `prefix-passthrough` | (prefix key again) |
 
 **IPC Protocol:**
@@ -1020,7 +1024,7 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 - Message types: PtyOutput, PtyInput, Hello/Welcome, PaneCreated, DestroyPane, Resize, Attach/Detach/Detached, Snapshot, SnapshotRestore, SessionList, Error, PtyExited, CreateWindow, SwitchWindow, RenameWindow, DestroyWindow, StatusUpdate, Shutdown
 
 **Window Management:**
-- Each mux window maps to a GUI tab (tab group UI)
+- While attached to mux, the entire session occupies a single top tab (title `mux: <active window name>`); windows are listed in a vertical tab sidebar rather than one top tab per window (see Mux Vertical Tabs)
 - Daemon streams PTY output for all windows simultaneously (not just the active one)
 - Window switching is instant via snapshot replay: target window's `TerminalCore` is rebuilt from daemon snapshot
 - Daemon-level OSC title propagation: daemon detects OSC 0/2 from each pane's PTY and updates `window.name` independently of GUI connection state
@@ -1031,6 +1035,21 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 - Daemon-side shadow grid (vt100 crate) for screen state restoration on reattach
 - Bridge timeout: 5s waiting for Welcome response
 - `emterm mux kill` sends a `Shutdown` IPC message for graceful shutdown
+
+---
+
+#### Mux Vertical Tabs
+
+The mux window list is rendered as a vertical tab sidebar (native egui) instead of one top tab per window. The top tab bar shows a single consolidated tab titled `mux: <active window name>`, tracking OSC title rewrites of the active window.
+
+**Key Functionality:**
+- Sidebar entries show window number, window name, and an active mark on the currently active window; flat list, no nesting, no bell/activity indicators
+- Click a sidebar entry to switch the active mux window (same effect as the previous top-tab click switch)
+- Sidebar is shown only while the mux-attached top tab is active; local (non-mux) tabs are unaffected
+- Sidebar width is a dynamically computed fixed value (roughly 20-25% of the app width, no drag resize); the list scrolls when entries exceed the available height
+- Persistent mode (default): fixed panel on the right edge of the terminal area; window switching and its own presence cause no PTY resize beyond the one triggered by switching between a mux-attached tab and a local tab (all tabs share one terminal grid)
+- Overlay mode: right-edge overlay toggled by the `toggle-window-sidebar` mux prefix action (default `Ctrl+Z Ctrl+W`), rebindable via `settings.mux.keybinds`; toggling causes no PTY resize
+- Placement setting `mux.window_sidebar_overlay` (default `false` = persistent, `true` = overlay); switching the setting triggers exactly one PTY resize
 
 ---
 
@@ -1255,8 +1274,9 @@ A configurable status bar displayed at the bottom of the application window, out
 
 **Key Functionality:**
 - Toggle enable/disable in Settings (default: OFF)
-- Three-layer structure: OSC layer (hidden when empty), Application line 1, Application line 2 (hidden when empty)
+- Three-layer structure: OSC layer, Application line 1, Application line 2 — each hidden when its resolved content is empty
 - Each layer has left and right sections; maximum 3 lines total
+- When all three layers are empty, the status-bar panel occupies zero height and the terminal grid regains the full height
 - Template variables: `{time}`, `{cwd}`, `{git_branch}`, `{cmd:name}`
 - Default display: Application line 1 left = `{time}`, right = `{cwd}`
 - Custom commands: user-defined executables with `interval_ms` refresh rate, referenced as `{cmd:name}`
@@ -1401,7 +1421,7 @@ Configuration is stored in a JSON file at the platform-specific app data directo
   "bell": true,
   "color_scheme": "emterm",
   "middle_click_paste": true,
-  "shift_enter_as_alt_enter": true,
+  "shift_enter_behavior": "alt_enter",
   "bold_brightens_ansi_colors": true,
   "notification_enabled": true,
   "tab_activity_indicator": true,
