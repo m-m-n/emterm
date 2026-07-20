@@ -10,13 +10,17 @@
 //!   grid's x-origin is identical with and without this panel showing
 //!   (2026-07-20 right-edge placement update; see IMPLEMENTATION.md
 //!   cross-task decision 2).
-//! - [`Placement::Overlay`] — a right-edge [`egui::Area`] drawn over the
-//!   terminal (no grid geometry impact), `surface_container_high`
-//!   background, 1 px `outline_variant` separator on its terminal-facing
-//!   (left) edge, elevation-3 shadow (reusing
+//! - [`Placement::Overlay`] — a floating card: a right-edge
+//!   [`egui::Area`] drawn over the terminal (no grid geometry impact),
+//!   inset by a uniform 16 px (`spacing-md`) from the terminal area's
+//!   top/right/bottom edges, 12 px corner radius (`corner-medium`) on all
+//!   four corners, `surface_container_high` background at 92% alpha
+//!   (slight translucency), NO separator line (the rounded edge is the
+//!   only boundary), elevation-3 shadow (reusing
 //!   [`crate::ui::dialog::tokens::elevation_shadow`] — the same token the
 //!   modal dialogs use, so no new shadow color is introduced here). No
-//!   scrim, no open/close animation.
+//!   scrim, no open/close animation. (2026-07-20 floating-card reshape;
+//!   see `IMPLEMENTATION.md` cross-task decision 3 update, task0007.)
 //!
 //! Contract (pinned in `IMPLEMENTATION.md`): input is an ordered entry list
 //! (window index, display name, active flag) plus a placement variant;
@@ -119,8 +123,20 @@ const NUMBER_FONT_SIZE: f32 = 12.0;
 const NAME_FONT_SIZE: f32 = 14.0;
 /// Fixed narrow column width the number right-aligns into.
 const NUMBER_COLUMN_WIDTH: f32 = 20.0;
-/// Separator hairline width (both variants' terminal-facing left edge).
+/// Separator hairline width (the persistent variant's terminal-facing left
+/// edge only; the overlay variant paints no separator — AC-3).
 const SEPARATOR_WIDTH: f32 = 1.0;
+
+// ── overlay floating-card geometry (task0007) ───────────────────────────
+
+/// Uniform margin (`spacing-md`) from the terminal area's top/right/bottom
+/// edges the overlay card is inset by.
+const OVERLAY_MARGIN: f32 = 16.0;
+/// Overlay card corner radius (`corner-medium`), all four corners.
+const OVERLAY_CORNER_RADIUS: f32 = 12.0;
+/// Overlay card background alpha, applied to `surface_container_high`'s
+/// alpha channel (slight translucency; list text stays readable).
+const OVERLAY_FILL_ALPHA: f32 = 0.92;
 
 // ── draw ─────────────────────────────────────────────────────────────
 
@@ -171,23 +187,44 @@ fn draw_persistent(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) ->
     clicked
 }
 
-/// Overlay variant: a right-edge `Area` drawn after the central panel
-/// (`Order::Foreground`), spanning the full window height. Contributes no
-/// grid inset — task0005 draws it without touching the terminal grid
-/// geometry. `surface_container_high` background, 1 px `outline_variant`
-/// separator on the terminal-facing (left) edge, elevation-3 shadow reused
+/// Overlay variant: a floating card. A right-edge `Area` drawn after the
+/// central panel (`Order::Foreground`), inset by [`OVERLAY_MARGIN`] from
+/// the terminal area's top/right/bottom edges (its width is exactly the
+/// caller-supplied `width` — the shared width function's value — so the
+/// card's left edge is `width` inward of its right edge, not independently
+/// inset). Contributes no grid inset — task0005 draws it without touching
+/// the terminal grid geometry. [`OVERLAY_CORNER_RADIUS`] corner radius on
+/// all four corners, `surface_container_high` background at
+/// [`OVERLAY_FILL_ALPHA`] alpha (slight translucency), NO separator line
+/// (AC-3 — the card's rounded edge is the only boundary; the persistent
+/// variant's left-edge separator is unchanged), elevation-3 shadow reused
 /// from the shared dialog token. No scrim, no open/close animation.
 fn draw_overlay(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) -> Option<usize> {
     let mut clicked = None;
     // Use the remaining central-panel area (post title-bar / tab-bar /
     // status-bar `TopBottomPanel`s), not the full window `screen_rect()`,
-    // so the overlay only covers the terminal-facing region and never the
-    // titlebar's minimize/maximize/close buttons or the tab/status bars.
-    let screen = ctx.available_rect();
+    // so the card's margins are measured from the terminal-facing region
+    // and it never covers the titlebar's minimize/maximize/close buttons
+    // or the tab/status bars.
+    let terminal_area = ctx.available_rect();
     let rect = Rect::from_min_size(
-        egui::pos2(screen.right() - width, screen.top()),
-        Vec2::new(width, screen.height()),
+        egui::pos2(
+            terminal_area.right() - OVERLAY_MARGIN - width,
+            terminal_area.top() + OVERLAY_MARGIN,
+        ),
+        Vec2::new(width, terminal_area.height() - 2.0 * OVERLAY_MARGIN),
     );
+    let fill = md3::state_layer(md3::surface_container_high(), OVERLAY_FILL_ALPHA);
+
+    #[cfg(test)]
+    tests::LAST_OVERLAY_CARD.with(|c| {
+        *c.borrow_mut() = Some(tests::OverlayCardDebug {
+            rect,
+            fill,
+            rounding: OVERLAY_CORNER_RADIUS,
+        });
+    });
+
     egui::Area::new(egui::Id::new("mux-sidebar-overlay"))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
@@ -196,16 +233,12 @@ fn draw_overlay(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) -> Op
         .show(ctx, |ui| {
             ui.set_min_size(rect.size());
             let frame = egui::Frame::none()
-                .fill(md3::surface_container_high())
+                .fill(fill)
+                .rounding(Rounding::same(OVERLAY_CORNER_RADIUS))
                 .inner_margin(egui::Margin::ZERO)
                 .shadow(crate::ui::dialog::tokens::elevation_shadow());
             frame.show(ui, |ui| {
                 let panel_rect = ui.max_rect();
-                ui.painter().vline(
-                    panel_rect.left() + SEPARATOR_WIDTH / 2.0,
-                    panel_rect.top()..=panel_rect.bottom(),
-                    Stroke::new(SEPARATOR_WIDTH, md3::outline_variant()),
-                );
                 let content_rect =
                     panel_rect.shrink2(Vec2::new(PANEL_PAD_HORIZONTAL, PANEL_PAD_VERTICAL));
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(content_rect), |ui| {
@@ -348,6 +381,17 @@ mod tests {
 
     thread_local! {
         pub(super) static LAST_ROW_RECTS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
+        pub(super) static LAST_OVERLAY_CARD: RefCell<Option<OverlayCardDebug>> =
+            const { RefCell::new(None) };
+    }
+
+    /// Test-only snapshot of the overlay card's computed geometry/paint
+    /// parameters, recorded by `draw_overlay` (AC-1, AC-2).
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct OverlayCardDebug {
+        pub rect: Rect,
+        pub fill: Color32,
+        pub rounding: f32,
     }
 
     fn win(id: u32, name: &str) -> MuxWindow {
@@ -541,17 +585,107 @@ mod tests {
     }
 
     #[test]
-    fn persistent_and_overlay_rows_share_the_same_right_edge() {
-        // Both placement variants now live on the right edge — their row
-        // rects' right edges should coincide (same width, same anchor).
+    fn persistent_and_overlay_rows_sit_16px_apart_on_the_right_edge() {
+        // Both placement variants live on the right edge, but the overlay
+        // is now a floating card inset by OVERLAY_MARGIN (16 px) from the
+        // terminal area's right edge, while the persistent panel is flush
+        // (task0007 AC-5: "overlay rows now sit 16 px further left").
         let items = entries(1, 0);
         let persistent_rects = row_rects(&items, Placement::Persistent);
         let overlay_rects = row_rects(&items, Placement::Overlay);
+        let actual_offset = persistent_rects[0].right() - overlay_rects[0].right();
         assert!(
-            (persistent_rects[0].right() - overlay_rects[0].right()).abs() < 0.5,
-            "persistent right {} and overlay right {} should coincide",
+            (actual_offset - OVERLAY_MARGIN).abs() < 0.5,
+            "persistent right {} and overlay right {} should differ by {OVERLAY_MARGIN}px, \
+             got {actual_offset}",
             persistent_rects[0].right(),
             overlay_rects[0].right()
+        );
+    }
+
+    // ── task0007 AC-1/AC-2/AC-3: overlay floating-card geometry ───────
+
+    fn draw_overlay_and_capture_card(items: &[SidebarEntry], width: f32) -> OverlayCardDebug {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(screen_rect());
+        let _ = ctx.run(input, |ctx| {
+            let _ = draw(ctx, items, Placement::Overlay, width);
+        });
+        LAST_OVERLAY_CARD
+            .with(|c| *c.borrow())
+            .expect("draw_overlay records the card geometry")
+    }
+
+    #[test]
+    fn overlay_card_rect_is_inset_16px_from_terminal_area_top_right_bottom() {
+        let items = entries(1, 0);
+        let card = draw_overlay_and_capture_card(&items, MIN_WIDTH);
+        let area = screen_rect();
+        assert!(
+            (card.rect.top() - (area.top() + OVERLAY_MARGIN)).abs() < 0.01,
+            "top inset: card top {} vs expected {}",
+            card.rect.top(),
+            area.top() + OVERLAY_MARGIN
+        );
+        assert!(
+            (card.rect.right() - (area.right() - OVERLAY_MARGIN)).abs() < 0.01,
+            "right inset: card right {} vs expected {}",
+            card.rect.right(),
+            area.right() - OVERLAY_MARGIN
+        );
+        assert!(
+            (card.rect.bottom() - (area.bottom() - OVERLAY_MARGIN)).abs() < 0.01,
+            "bottom inset: card bottom {} vs expected {}",
+            card.rect.bottom(),
+            area.bottom() - OVERLAY_MARGIN
+        );
+        assert!(
+            (card.rect.width() - MIN_WIDTH).abs() < 0.01,
+            "card width {} should equal the shared width function's value {MIN_WIDTH}",
+            card.rect.width()
+        );
+    }
+
+    #[test]
+    fn overlay_card_has_12px_corner_radius_and_92_percent_alpha_surface_container_high() {
+        let items = entries(1, 0);
+        let card = draw_overlay_and_capture_card(&items, MIN_WIDTH);
+        assert_eq!(card.rounding, OVERLAY_CORNER_RADIUS);
+
+        // `egui::Color32` stores premultiplied sRGB, so the RGB channels
+        // are no longer the raw `surface_container_high` base once alpha
+        // is applied (`md3::state_layer`/`from_rgba_unmultiplied` do
+        // gamma-correct premultiplication internally) — mirrors the
+        // reasoning in `md3::tests::state_layer_alpha_scales_with_opacity`.
+        // We verify the alpha channel here; the channel-level blend is
+        // exercised visually through the renderer.
+        let expected_alpha = (OVERLAY_FILL_ALPHA * 255.0) as u8;
+        assert_eq!(
+            card.fill.a(),
+            expected_alpha,
+            "overlay fill alpha should be 92% of surface_container_high's alpha channel"
+        );
+    }
+
+    #[test]
+    fn ac3_overlay_variant_paints_no_separator_line() {
+        let src = include_str!("mux_sidebar.rs");
+        let after_overlay_fn = src
+            .split("fn draw_overlay(")
+            .nth(1)
+            .expect("draw_overlay fn present in source");
+        // Isolate the function body up to the next top-level `fn`
+        // declaration (there are no nested `fn`s inside draw_overlay,
+        // only closures, so this boundary is unambiguous).
+        let body = after_overlay_fn
+            .split("\nfn ")
+            .next()
+            .unwrap_or(after_overlay_fn);
+        assert!(
+            !body.contains(".vline("),
+            "overlay variant must not paint a separator line (AC-3); the persistent \
+             variant's left-edge separator is unchanged"
         );
     }
 
