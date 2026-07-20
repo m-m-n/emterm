@@ -98,6 +98,22 @@ target the actually-painted rect, not a precomputed copy (the task0007
 defect escaped because the test hook recorded the intended rect). Affects
 task0008.
 
+### 3.5. Sidebar geometry is derived once and shared with winit-side guards
+
+2026-07-20 (rounds 5): the overlay card rect (and the persistent panel
+strip) must come from ONE derivation inside `ui::mux_sidebar`, consumed by
+(a) the draw path and (b) a pure hit-region helper that winit-side event
+guards (wheel routing in `window_host.rs`) query. Manual winit-side
+geometry guards do not follow egui panels automatically (round-2 lesson —
+scrollbar click-guard regression), so any guard referencing the sidebar
+region must call the shared helper instead of re-deriving numbers.
+Contract for parallel tasks: task0009 owns making the per-frame card-rect
+derivation authoritative over cached surface state (resize tracking);
+task0010 owns the hit-region helper and the wheel-routing guard, deriving
+its geometry from the same functions/constants the draw path uses. Both
+edit `ui/mux_sidebar.rs`; merge conflicts resolve via the implementer
+parent-side-adoption protocol. Affects task0009, task0010.
+
 ### 4. No protocol changes
 
 The sidebar renders exclusively from the existing client-side

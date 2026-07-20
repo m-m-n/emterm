@@ -35,35 +35,16 @@ workflow:
     status: completed
     completed_at_commit: null
   - id: implement
-    status: completed
-    base_commit: bd6ca8a92dafbdbfed3a8ba846537f5b9850f20e
-    completed_at_commit: 2ae163fc838daf5f9a9b0581af69ae3a545f9a57
+    status: pending
+    base_commit: null
   - id: review
-    status: completed
-    completed_at_commit: 2ae163fc838daf5f9a9b0581af69ae3a545f9a57
+    status: pending
   - id: verify
-    status: completed
-    completed_at_commit: 2ae163fc838daf5f9a9b0581af69ae3a545f9a57
-    result: pass
+    status: pending
+    result: null
     failed_items: []
-    notes: >-
-      Round-4 (task0008 overlay card paint-geometry fix) verification.
-      cargo check pass / bun run typecheck pass / bun test 171 pass 0 fail
-      (bun.lock aligned to the main tree's happy-dom 20.4.0 pin before
-      install, same prep as rounds 1-3) / cargo test --lib
-      --test-threads=1: 2411 pass, 7 fail — all in the documented
-      pre-existing tabs.rs flaky set (off-thread replay timing +
-      welcome_without_windows_leaves_group_none); task0008 touched only
-      mux_sidebar.rs and its implementer reproduced varying subsets of the
-      same set on repeated baseline runs. New TS-11 (painted card rect ==
-      computed card rect; rows inset 8/12 px from all four card edges;
-      few-entry lists span the full inset height) covered by task0008's
-      hardened paint-rect hook tests, all passing; test-catches-bug
-      verified by reverting the fix pin. Manual M-1/M-2 visual re-check
-      remains for the user (right/bottom padding on the real build).
   - id: retrospect
-    status: completed
-    completed_at_commit: 2ae163fc838daf5f9a9b0581af69ae3a545f9a57
+    status: pending
 
 tasks:
   task0001:
@@ -182,6 +163,32 @@ tasks:
     notes: "Root cause: egui 0.29 Frame::show paints the content's actual bounding box, so the manually padded row rect collapsed the painted background. Fixed via Frame::begin/Prepared with the card rect pinned as content min size; test hook now captures the actual paint rect. Test-catches-bug verified by reverting the pin"
     branch: em-workflow/mux-vertical-tabs/task0008
 
+  task0009:
+    title: "Overlay card follows window resize"
+    plan: tasks/task0009.md
+    files:
+      - src-tauri/src/ui/mux_sidebar.rs
+    skills: [design-impl]
+    domains: [ui]
+    complexity: low
+    requirements: [FR2, FR5]
+    status: pending
+    notes: null
+
+  task0010:
+    title: "Route wheel scroll over the sidebar to the list"
+    plan: tasks/task0010.md
+    files:
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/ui/mux_sidebar.rs
+      - src-tauri/src/app.rs
+    skills: [frontend-impl]
+    domains: [ui, input-handling]
+    complexity: medium
+    requirements: [FR2, NFR2]
+    status: pending
+    notes: null
+
 review:
   status: completed
   rounds_completed: 4
@@ -206,8 +213,8 @@ requirements:
     title: "Vertical tab list: flat window list (number + name + active mark), mux tab only, dynamic 20-25% width"
     status: ok
     tbd_reason: null
-    tasks: [task0004, task0005]
-    tests: [TS-2, TS-7]
+    tasks: [task0004, task0005, task0009, task0010]
+    tests: [TS-2, TS-7, TS-12, TS-13]
   FR3:
     title: "Click on a sidebar entry switches the mux window (same as top-tab click path)"
     status: ok
@@ -224,8 +231,8 @@ requirements:
     title: "Overlay mode: right-side overlay toggled by Ctrl+Z Ctrl+W via DEFAULT_ACTION_BINDINGS"
     status: ok
     tbd_reason: null
-    tasks: [task0003, task0005, task0007, task0008]
-    tests: [TS-4, TS-10, TS-11]
+    tasks: [task0003, task0005, task0007, task0008, task0009]
+    tests: [TS-4, TS-10, TS-11, TS-12]
   FR6:
     title: "Boolean setting 'display as overlay' (default off) across app_settings + TS mirror + settings UI + i18n"
     status: ok
@@ -242,8 +249,8 @@ requirements:
     title: "Local tab behavior and existing mux prefix follow-ups unchanged"
     status: ok
     tbd_reason: null
-    tasks: [task0003, task0005]
-    tests: [TS-4, TS-7]
+    tasks: [task0003, task0005, task0010]
+    tests: [TS-4, TS-7, TS-13]
   NFR3:
     title: "Sidebar visuals follow DESIGN.md, consistent with MD3 tokens"
     status: ok
