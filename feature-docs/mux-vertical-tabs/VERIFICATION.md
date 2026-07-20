@@ -29,6 +29,7 @@
 | TS-8 | Settings round-trip | Toggling the mux-section switch saves the mux settings object with the field and preserves sibling fields | Unit (bun) |
 | TS-9 | Right-edge persistent placement | Persistent panel renders on the right; grid x-origin identical with/without sidebar; usable width shrinks by the width function's value; overlay geometry unchanged | Unit |
 | TS-10 | Overlay floating card | Overlay card rect inset 16 px from the terminal area's top/right/bottom edges; 12 px corner radius; 92%-alpha `surface_container_high` fill; no separator line; zero grid inset and toggle behavior unchanged | Unit |
+| TS-11 | Overlay card paint geometry | The card background's PAINTED rect equals the computed card rect; rows are inset 8 px (horizontal) / 12 px (vertical) from the card edge on all four sides — right edge included; few-entry lists still span the full inset height | Unit |
 
 ## Code Quality Verification
 - Format: not enforced project-wide (rustfmt non-mandatory; do not run
@@ -52,11 +53,11 @@
 | FR2 | task0004, task0005 | TS-2, TS-7 |
 | FR3 | task0004, task0005 | TS-3 |
 | FR4 | task0003, task0005, task0006 | TS-4, TS-7, TS-9 |
-| FR5 | task0003, task0005, task0007 | TS-4, TS-10 |
+| FR5 | task0003, task0005, task0007, task0008 | TS-4, TS-10, TS-11 |
 | FR6 | task0001, task0002 | TS-5, TS-8 |
 | NFR1 | task0005 | TS-6 |
 | NFR2 | task0003, task0005 | TS-4, TS-7 |
-| NFR3 | task0004, task0006, task0007 | M-1 (mockup comparison), TS-9, TS-10 |
+| NFR3 | task0004, task0006, task0007, task0008 | M-1 (mockup comparison), TS-9, TS-10, TS-11 |
 
 ## Manual Testing (E2E Not Possible)
 
@@ -81,5 +82,5 @@ No automated E2E infrastructure exists (test/README.md). Human scenarios:
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build | 2 | 2 | 0 | 0 |
-| Unit/Integration | TS-1..TS-10 | 10 | 0 | 0 |
+| Unit/Integration | TS-1..TS-11 | 11 | 0 | 0 |
 | Manual | M-1..M-3 | 0 | 0 | 3 |

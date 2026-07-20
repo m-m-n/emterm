@@ -91,6 +91,13 @@ radius, 92%-alpha surface-container-high fill, no separator line — instead
 of a flush edge panel. Geometry stays entirely inside the overlay draw path
 (zero grid inset unchanged). Affects task0007.
 
+2026-07-20 update 2 (paint-rect authority): the computed card rect is the
+single authority for the painted background; the list content region is
+that rect shrunk by the panel padding on all four sides. Assertions must
+target the actually-painted rect, not a precomputed copy (the task0007
+defect escaped because the test hook recorded the intended rect). Affects
+task0008.
+
 ### 4. No protocol changes
 
 The sidebar renders exclusively from the existing client-side
