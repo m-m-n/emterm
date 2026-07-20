@@ -33,7 +33,7 @@
 //! pure draw functions, colors exclusively via [`crate::ui::md3`]
 //! accessors (AC-5).
 
-use egui::{Color32, FontId, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2};
+use egui::{Color32, FontId, Pos2, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2};
 
 use super::md3;
 
@@ -68,6 +68,102 @@ pub enum Placement {
     /// Right-edge `Area` drawn after the central panel; contributes no
     /// grid inset.
     Overlay,
+}
+
+// ── hit-region geometry (task0010: winit-side wheel routing) ───────────
+//
+// The winit `MouseWheel` handler (`window_host.rs`) has no egui context to
+// query `ctx.available_rect()` from, so the sidebar's region is expressed
+// here as pure functions of quantities the handler already tracks (window
+// size, title/tab bar heights, the status bar's bottom inset). `draw_overlay`
+// calls [`overlay_card_rect`] itself (below) rather than duplicating its
+// math, so this section and the paint path share ONE derivation
+// (IMPLEMENTATION.md cross-task decision 3.5) — a manual, independently
+// re-derived winit-side guard is exactly the defect class the round-2
+// scrollbar click-guard regression came from.
+
+/// Vertical space the CSD title bar + tab strip reserve above the terminal
+/// area, in logical px. Mirrors the two `TopBottomPanel::top` panels
+/// `render::draw_terminal` shows before the sidebar (title bar, then tab
+/// bar) — the same two functions `window_host::cell_metrics_px`'s
+/// `origin_y` and the existing tab-bar-strip wheel/click guards read.
+pub fn top_chrome_inset(show_tab_bar: bool) -> f32 {
+    super::title_bar::TITLE_BAR_HEIGHT + super::tab_bar::effective_tab_bar_height(show_tab_bar)
+}
+
+/// The persistent panel's own screen rect (task0006 right-edge placement).
+/// Spans the FULL window height below `top_chrome` — the status bar's
+/// height must NOT be subtracted here: `render::draw_terminal` shows the
+/// persistent `SidePanel` BEFORE the status-bar panel, so egui claims the
+/// sidebar's vertical extent first and the status bar lays out only in the
+/// narrower central column that remains (pinned by
+/// `tests::ac4_persistent_hit_region_matches_the_real_panel_rect_from_the_frame_composition_order`,
+/// which runs the real panel order and compares against this formula).
+/// Horizontal span is exactly `width` (the shared [`sidebar_width`] value),
+/// flush against the window's right edge.
+pub fn persistent_panel_rect(window_size: Vec2, top_chrome: f32, width: f32) -> Rect {
+    Rect::from_min_max(
+        egui::pos2(window_size.x - width, top_chrome),
+        egui::pos2(window_size.x, window_size.y),
+    )
+}
+
+/// The terminal area the overlay card anchors to — mirrors
+/// `ctx.available_rect()` at the point [`draw_overlay`] runs: title bar +
+/// tab bar reserved on top, the status bar's height reserved at the
+/// bottom. `CentralPanel` does not shrink `available_rect` further (egui's
+/// `pass_state::allocate_central_panel` is a no-op on it), so this is also
+/// exactly the central panel's rect.
+pub fn terminal_area_rect(window_size: Vec2, top_chrome: f32, bottom_chrome: f32) -> Rect {
+    Rect::from_min_max(
+        egui::pos2(0.0, top_chrome),
+        egui::pos2(window_size.x, window_size.y - bottom_chrome),
+    )
+}
+
+/// The overlay card's own rect, given the terminal area it anchors to.
+/// SHARED by [`draw_overlay`] (the paint path) and [`point_in_sidebar`]
+/// (the hit-region path) — the single derivation IMPLEMENTATION.md
+/// cross-task decision 3.5 requires. See [`draw_overlay`]'s doc comment
+/// for the margin/width reasoning.
+pub fn overlay_card_rect(terminal_area: Rect, width: f32) -> Rect {
+    Rect::from_min_size(
+        egui::pos2(
+            terminal_area.right() - OVERLAY_MARGIN - width,
+            terminal_area.top() + OVERLAY_MARGIN,
+        ),
+        Vec2::new(width, terminal_area.height() - 2.0 * OVERLAY_MARGIN),
+    )
+}
+
+/// AC-1/AC-2/AC-3: whether `point` (logical px, window-relative) lies
+/// inside the currently-visible sidebar's region. `visible_placement` is
+/// `None` when the sidebar is hidden (local tab, or overlay mode with the
+/// runtime flag closed) — always `false` then (AC-3 no-op). Otherwise
+/// `true` exactly inside the persistent panel strip
+/// ([`persistent_panel_rect`]) or the overlay card ([`overlay_card_rect`])
+/// for the respective placement, `false` elsewhere. `top_chrome` /
+/// `bottom_chrome` are logical-px insets the caller already tracks
+/// (title+tab bar height, status bar bottom inset).
+pub fn point_in_sidebar(
+    point: Pos2,
+    visible_placement: Option<Placement>,
+    window_size: Vec2,
+    top_chrome: f32,
+    bottom_chrome: f32,
+) -> bool {
+    let Some(placement) = visible_placement else {
+        return false;
+    };
+    let width = sidebar_width(window_size.x);
+    let rect = match placement {
+        Placement::Persistent => persistent_panel_rect(window_size, top_chrome, width),
+        Placement::Overlay => overlay_card_rect(
+            terminal_area_rect(window_size, top_chrome, bottom_chrome),
+            width,
+        ),
+    };
+    rect.contains(point)
 }
 
 // ── view-model ────────────────────────────────────────────────────────
@@ -173,6 +269,8 @@ fn draw_persistent(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) ->
         .show_separator_line(false)
         .show(ctx, |ui| {
             let panel_rect = ui.max_rect();
+            #[cfg(test)]
+            tests::LAST_PERSISTENT_PANEL_RECT.with(|c| *c.borrow_mut() = Some(panel_rect));
             ui.painter().vline(
                 panel_rect.left() + SEPARATOR_WIDTH / 2.0,
                 panel_rect.top()..=panel_rect.bottom(),
@@ -207,13 +305,10 @@ fn draw_overlay(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) -> Op
     // and it never covers the titlebar's minimize/maximize/close buttons
     // or the tab/status bars.
     let terminal_area = ctx.available_rect();
-    let rect = Rect::from_min_size(
-        egui::pos2(
-            terminal_area.right() - OVERLAY_MARGIN - width,
-            terminal_area.top() + OVERLAY_MARGIN,
-        ),
-        Vec2::new(width, terminal_area.height() - 2.0 * OVERLAY_MARGIN),
-    );
+    // task0010: the rect computation is factored into `overlay_card_rect`
+    // so the winit-side hit-region helper (`point_in_sidebar`) shares this
+    // exact derivation instead of re-deriving its own numbers.
+    let rect = overlay_card_rect(terminal_area, width);
     let fill = md3::state_layer(md3::surface_container_high(), OVERLAY_FILL_ALPHA);
 
     egui::Area::new(egui::Id::new("mux-sidebar-overlay"))
@@ -416,6 +511,12 @@ mod tests {
     thread_local! {
         pub(super) static LAST_ROW_RECTS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
         pub(super) static LAST_OVERLAY_CARD: RefCell<Option<OverlayCardDebug>> =
+            const { RefCell::new(None) };
+        /// task0010 AC-4: the persistent `SidePanel`'s own rect
+        /// (`ui.max_rect()`, pre-padding), recorded by `draw_persistent`
+        /// so tests can compare the hit-region helper's output against the
+        /// REAL panel rect egui laid out — not a re-derived assumption.
+        pub(super) static LAST_PERSISTENT_PANEL_RECT: RefCell<Option<Rect>> =
             const { RefCell::new(None) };
     }
 
@@ -986,6 +1087,209 @@ mod tests {
         assert!(
             production_src.contains("md3::"),
             "sanity: the module should reference md3 accessors at all"
+        );
+    }
+
+    // ── task0010 AC-1: hit-region boundary ─────────────────────────────
+
+    #[test]
+    fn ac1_hit_region_true_exactly_inside_persistent_strip_false_just_outside() {
+        let window_size = egui::vec2(800.0, 600.0);
+        let top_chrome = 80.0;
+        let bottom_chrome = 24.0;
+        let width = sidebar_width(window_size.x);
+        let visible = Some(Placement::Persistent);
+        let rect = persistent_panel_rect(window_size, top_chrome, width);
+
+        // Both edges (inclusive — `Rect::contains` is `<=` on every side)
+        // plus the interior.
+        for p in [rect.min, rect.max, rect.center()] {
+            assert!(
+                point_in_sidebar(p, visible, window_size, top_chrome, bottom_chrome),
+                "{p:?} should be inside the persistent strip {rect:?}"
+            );
+        }
+        // Just outside each of the four edges.
+        for p in [
+            egui::pos2(rect.min.x - 1.0, rect.center().y),
+            egui::pos2(rect.center().x, rect.min.y - 1.0),
+            egui::pos2(rect.max.x + 1.0, rect.center().y),
+            egui::pos2(rect.center().x, rect.max.y + 1.0),
+        ] {
+            assert!(
+                !point_in_sidebar(p, visible, window_size, top_chrome, bottom_chrome),
+                "{p:?} should be outside the persistent strip {rect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ac1_hit_region_true_exactly_inside_overlay_card_false_just_outside() {
+        let window_size = egui::vec2(800.0, 600.0);
+        let top_chrome = 80.0;
+        let bottom_chrome = 24.0;
+        let width = sidebar_width(window_size.x);
+        let visible = Some(Placement::Overlay);
+        let terminal_area = terminal_area_rect(window_size, top_chrome, bottom_chrome);
+        let rect = overlay_card_rect(terminal_area, width);
+
+        for p in [rect.min, rect.max, rect.center()] {
+            assert!(
+                point_in_sidebar(p, visible, window_size, top_chrome, bottom_chrome),
+                "{p:?} should be inside the overlay card {rect:?}"
+            );
+        }
+        for p in [
+            egui::pos2(rect.min.x - 1.0, rect.center().y),
+            egui::pos2(rect.center().x, rect.min.y - 1.0),
+            egui::pos2(rect.max.x + 1.0, rect.center().y),
+            egui::pos2(rect.center().x, rect.max.y + 1.0),
+        ] {
+            assert!(
+                !point_in_sidebar(p, visible, window_size, top_chrome, bottom_chrome),
+                "{p:?} should be outside the overlay card {rect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ac1_hit_region_always_false_when_sidebar_hidden() {
+        let window_size = egui::vec2(800.0, 600.0);
+        // Includes points that WOULD be inside either region were the
+        // sidebar visible, to prove `None` (hidden) overrides geometry
+        // entirely rather than merely picking a variant.
+        let width = sidebar_width(window_size.x);
+        let candidates = [
+            Pos2::ZERO,
+            egui::pos2(window_size.x - width / 2.0, window_size.y - 1.0),
+            egui::pos2(window_size.x - 20.0, 100.0),
+            egui::pos2(window_size.x / 2.0, window_size.y / 2.0),
+        ];
+        for p in candidates {
+            assert!(
+                !point_in_sidebar(p, None, window_size, 80.0, 24.0),
+                "{p:?} must be outside when the sidebar is hidden (visible_placement = None)"
+            );
+        }
+    }
+
+    // ── task0010 AC-4: hit-region geometry shares the draw path's ──────
+    // ── derivation (no duplicated magic numbers) ────────────────────────
+
+    #[test]
+    fn ac4_persistent_hit_region_matches_the_real_panel_rect_from_the_frame_composition_order() {
+        // Mirrors `render::draw_terminal`'s ACTUAL panel order: title bar
+        // (top), tab bar (top), THEN the persistent sidebar `SidePanel`,
+        // THEN the status bar (bottom), THEN the central panel — using the
+        // SAME shared height constants/functions the real widgets use
+        // (`title_bar::TITLE_BAR_HEIGHT`, `tab_bar::
+        // effective_tab_bar_height`). The sidebar `SidePanel` claims its
+        // full vertical span BEFORE the status-bar panel is added, so its
+        // REAL rect reaches the very bottom of the window; this test pins
+        // that against egui's actual panel layout (not a guessed
+        // assumption) and checks `persistent_panel_rect` reproduces it.
+        let ctx = egui::Context::default();
+        let window_size = egui::vec2(800.0, 600.0);
+        let mut input = RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, window_size));
+        let show_tab_bar = true;
+        let items = entries(1, 0);
+        let width = MIN_WIDTH;
+
+        LAST_PERSISTENT_PANEL_RECT.with(|c| *c.borrow_mut() = None);
+        let _ = ctx.run(input, |ctx| {
+            egui::TopBottomPanel::top("t0010-title")
+                .exact_height(super::super::title_bar::TITLE_BAR_HEIGHT)
+                .show(ctx, |_| {});
+            egui::TopBottomPanel::top("t0010-tabbar")
+                .exact_height(super::super::tab_bar::effective_tab_bar_height(
+                    show_tab_bar,
+                ))
+                .show(ctx, |_| {});
+            let _ = draw(ctx, &items, Placement::Persistent, width);
+            egui::TopBottomPanel::bottom("t0010-statusbar")
+                .exact_height(40.0)
+                .show(ctx, |_| {});
+            egui::CentralPanel::default().show(ctx, |_| {});
+        });
+
+        let real_rect = LAST_PERSISTENT_PANEL_RECT
+            .with(|c| *c.borrow())
+            .expect("draw_persistent records the panel rect");
+        let top_chrome = top_chrome_inset(show_tab_bar);
+        let computed = persistent_panel_rect(window_size, top_chrome, width);
+        assert!(
+            (real_rect.top() - computed.top()).abs() < 0.5,
+            "top: computed {computed:?} vs real {real_rect:?}"
+        );
+        assert!(
+            (real_rect.bottom() - computed.bottom()).abs() < 0.5,
+            "bottom: computed {computed:?} vs real {real_rect:?}"
+        );
+        assert!(
+            (real_rect.left() - computed.left()).abs() < 0.5,
+            "left: computed {computed:?} vs real {real_rect:?}"
+        );
+        assert!(
+            (real_rect.right() - computed.right()).abs() < 0.5,
+            "right: computed {computed:?} vs real {real_rect:?}"
+        );
+    }
+
+    #[test]
+    fn ac4_overlay_hit_region_matches_the_real_painted_card_with_top_and_bottom_chrome() {
+        // Same idea for the overlay: run a real top+bottom chrome pair (in
+        // the SAME order `render::draw_terminal` uses — chrome, then
+        // `CentralPanel`, then the overlay draws) and compare the ACTUAL
+        // painted card (`LAST_OVERLAY_CARD`, already the paint-rect
+        // authority per IMPLEMENTATION.md decision 3 update 2) against
+        // `overlay_card_rect(terminal_area_rect(...), width)`.
+        let ctx = egui::Context::default();
+        let window_size = egui::vec2(800.0, 600.0);
+        let mut input = RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, window_size));
+        let top_chrome = 80.0;
+        let bottom_chrome = 24.0;
+        let width = MIN_WIDTH;
+        let items = entries(1, 0);
+
+        let _ = ctx.run(input, |ctx| {
+            egui::TopBottomPanel::top("t0010-chrome-top")
+                .exact_height(top_chrome)
+                .show(ctx, |_| {});
+            egui::TopBottomPanel::bottom("t0010-chrome-bottom")
+                .exact_height(bottom_chrome)
+                .show(ctx, |_| {});
+            egui::CentralPanel::default().show(ctx, |_| {});
+            let _ = draw(ctx, &items, Placement::Overlay, width);
+        });
+
+        let card = LAST_OVERLAY_CARD
+            .with(|c| *c.borrow())
+            .expect("draw_overlay records the card geometry");
+        let computed = overlay_card_rect(
+            terminal_area_rect(window_size, top_chrome, bottom_chrome),
+            width,
+        );
+        assert!(
+            (card.rect.top() - computed.top()).abs() < 0.5,
+            "top: computed {computed:?} vs painted {:?}",
+            card.rect
+        );
+        assert!(
+            (card.rect.bottom() - computed.bottom()).abs() < 0.5,
+            "bottom: computed {computed:?} vs painted {:?}",
+            card.rect
+        );
+        assert!(
+            (card.rect.left() - computed.left()).abs() < 0.5,
+            "left: computed {computed:?} vs painted {:?}",
+            card.rect
+        );
+        assert!(
+            (card.rect.right() - computed.right()).abs() < 0.5,
+            "right: computed {computed:?} vs painted {:?}",
+            card.rect
         );
     }
 }
