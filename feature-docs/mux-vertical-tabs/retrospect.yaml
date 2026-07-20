@@ -1,12 +1,14 @@
 feature: mux-vertical-tabs
-collected_at: "2026-07-20T19:52:58+09:00"
+collected_at: "2026-07-20T21:41:35+09:00"
 session_ids:
   - 417e05e9-2005-4a89-9c9c-07f1b58641de
   - 503a8fd2-67e1-4456-8800-2cd011e3f8c4
 note: >-
-  Third develop pass (task0007: overlay reshaped from a flush right-edge
-  panel into a floating card per 実機フィードバック via /em-workflow:design).
-  Round-1/2 signals preserved below; round-3 signals appended.
+  Fourth develop pass (task0008: overlay card paint-geometry fix — the
+  task0007 floating card's painted background collapsed to the padded row
+  region in the real build; egui 0.29 Frame::show paints the content's
+  bounding box, not the intended panel rect). Round-1..3 signals preserved
+  below; round-4 signals appended.
 signals:
   review_critical_high:
     # round 1
@@ -28,6 +30,7 @@ signals:
       resolution: fixed
     # round 3: critical/high なし（medium 1 件はレビュアー自身が最終検証で
     # 非到達と判断して取り下げ — round3.yaml 参照）
+    # round 4: critical/high なし（findings ゼロ — round4.yaml 参照）
   conflict_reworks:
     - {task: task0005, retries: 1}
   file_prediction_misses:
@@ -78,3 +81,16 @@ lessons_candidates:
     （負の高さ edge case → 最小ウィンドウ制約で非到達と自己判定）。同一
     task-id から複数回の完了通知が来る場合、最後の構造化出力を正とする
     運用で問題なかった。
+  - >-
+    task0007 の実機バグ（カード背景が右/下で潰れる）はユニットテストを
+    すり抜けた。原因はテストフックが「計算した rect」を記録していて
+    「実際に描かれる rect」を見ていなかったこと。egui の Frame::show は
+    コンテンツ実寸で背景を描くため、意図した rect と実描画は別物になり得る。
+    描画系のテストは意図値でなく実描画値（paint rect）を捕捉するのが正。
+    round 4 で test-catches-bug 検証（修正を戻してテストが落ちることの確認）
+    まで行う運用が有効だった。
+  - >-
+    実機スクショ付きのバグ報告 → 修正ラウンドは、デザイン変更ラウンド
+    （DESIGN.md 更新あり）と違い create-spec/design を触らず create-plan
+    からのリセットで回せた。モックが正でコードが誤りのケースは
+    「実装バグ修正タスク」として plan に直行するのが最短だった。
