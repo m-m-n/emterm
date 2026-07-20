@@ -3685,9 +3685,13 @@ impl ApplicationHandler for PocApp {
                             .visible()
                         })
                         .unwrap_or(false);
+                    let central_right = window_size_logical.width - host.mux_sidebar_inset_logical;
                     let in_scrollbar = scrollbar_visible
-                        && egui_pos.x >= window_size_logical.width - crate::ui::scrollbar::TRACK_W;
-                    if in_bottom_strip || in_scrollbar {
+                        && egui_pos.x >= central_right - crate::ui::scrollbar::TRACK_W
+                        && egui_pos.x < central_right;
+                    let in_persistent_sidebar =
+                        host.mux_sidebar_inset_logical > 0.0 && egui_pos.x >= central_right;
+                    if in_bottom_strip || in_scrollbar || in_persistent_sidebar {
                         return;
                     }
                 }
