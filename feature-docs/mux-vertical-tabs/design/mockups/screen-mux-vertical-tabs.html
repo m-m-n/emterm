@@ -90,11 +90,13 @@
 
   /* ---- vertical tabs (NEW component) ---- */
   /* width: clamp(180px, 22% of app width, 320px) — here 22% of 960 = 211px */
+  /* persistent variant sits on the RIGHT edge; separator on its left
+     (terminal-facing) edge */
   .vtabs {
     width: 211px;
     flex: none;
     background: var(--md-sys-color-surface-container-low);
-    border-right: 1px solid var(--md-sys-color-outline-variant);
+    border-left: 1px solid var(--md-sys-color-outline-variant);
     padding: var(--spacing-sm) var(--spacing-xs);
     box-sizing: border-box;
     display: flex;
@@ -137,12 +139,11 @@
     text-overflow: ellipsis;
   }
 
-  /* overlay placement variant: same component, right edge, over the terminal */
+  /* overlay placement variant: same component, same right edge, but drawn
+     over the terminal with an elevated surface */
   .vtabs.overlay {
     position: absolute;
     top: 0; right: 0; bottom: 0;
-    border-right: none;
-    border-left: 1px solid var(--md-sys-color-outline-variant);
     background: var(--md-sys-color-surface-container-high);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.30); /* elevation-3 */
   }
@@ -171,24 +172,24 @@
      STATE: persistent (default) — fixed left panel, terminal excludes it
      ====================================================================== -->
 <section data-state="persistent">
-  <h2>persistent mode (default) — left fixed panel, width = clamp(180px, 22%, 320px)</h2>
+  <h2>persistent mode (default) — RIGHT fixed panel, width = clamp(180px, 22%, 320px)</h2>
   <div class="app">
     <div class="tab-bar">
       <div class="tab">1 zsh</div>
       <div class="tab active">2 mux: claude-code</div>
     </div>
     <div class="main">
+      <div class="term">$ claude
+╭──────────────────────────────────────╮
+│ Claude Code                          │
+╰──────────────────────────────────────╯
+&gt; _</div>
       <nav class="vtabs">
         <div class="vtab-item"><span class="vtab-num">1</span><span class="vtab-name">shell</span></div>
         <div class="vtab-item active"><span class="vtab-num">2</span><span class="vtab-name">claude-code</span></div>
         <div class="vtab-item"><span class="vtab-num">3</span><span class="vtab-name">logs</span></div>
         <div class="vtab-item"><span class="vtab-num">4</span><span class="vtab-name">a-very-long-window-title-that-truncates</span></div>
       </nav>
-      <div class="term">$ claude
-╭──────────────────────────────────────╮
-│ Claude Code                          │
-╰──────────────────────────────────────╯
-&gt; _</div>
     </div>
   </div>
 </section>
@@ -249,6 +250,7 @@
       <div class="tab active">2 mux: win-07</div>
     </div>
     <div class="main">
+      <div class="term">$ _</div>
       <nav class="vtabs">
         <div class="vtab-item"><span class="vtab-num">1</span><span class="vtab-name">win-01</span></div>
         <div class="vtab-item"><span class="vtab-num">2</span><span class="vtab-name">win-02</span></div>
@@ -261,7 +263,6 @@
         <div class="vtab-item"><span class="vtab-num">9</span><span class="vtab-name">win-09</span></div>
         <div class="vtab-item"><span class="vtab-num">10</span><span class="vtab-name">win-10</span></div>
       </nav>
-      <div class="term">$ _</div>
     </div>
   </div>
 </section>
@@ -277,8 +278,8 @@
       <div class="tab active">2 mux</div>
     </div>
     <div class="main">
-      <nav class="vtabs"></nav>
       <div class="term"></div>
+      <nav class="vtabs"></nav>
     </div>
   </div>
 </section>

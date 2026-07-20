@@ -51,7 +51,8 @@ keybind-toggled right overlay, so that columns are not permanently consumed.
 - **FR3:** Click-to-switch — clicking a window entry switches the active mux
   window, equivalent to the current top-tab click switch. Identical in both
   placement modes.
-- **FR4:** Persistent mode (default) — the sidebar is a fixed panel; it is
+- **FR4:** Persistent mode (default) — the sidebar is a fixed panel on the
+  RIGHT edge of the terminal area (same side as the overlay); it is
   never opened/closed at runtime within the mux tab. Because all tabs share
   one terminal grid, switching the active top tab between a mux-attached tab
   and a local tab changes the effective viewport width and triggers a PTY
@@ -95,13 +96,14 @@ placement strategy differs:
 ```
 ┌──────────────────────────────────────────────┐
 │ Top tab bar:  [local tab] [mux: <win name>]  │
-├───────────────┬──────────────────────────────┤
-│ Vertical tabs │                              │
-│  1 shell   ●  │      terminal surface        │
-│  2 editor     │      (wgpu render)           │
-│  3 logs       │                              │
-└───────────────┴──────────────────────────────┘
- persistent mode: fixed side panel (terminal viewport excludes sidebar width)
+├──────────────────────────────┬───────────────┤
+│                              │ Vertical tabs │
+│      terminal surface        │  1 shell   ●  │
+│      (wgpu render)           │  2 editor     │
+│                              │  3 logs       │
+└──────────────────────────────┴───────────────┘
+ persistent mode: fixed RIGHT side panel (terminal viewport excludes sidebar
+ width; grid origin stays at the left edge)
 
 ┌──────────────────────────────────────────────┐
 │ Top tab bar:  [local tab] [mux: <win name>]  │

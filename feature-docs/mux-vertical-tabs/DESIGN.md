@@ -7,10 +7,11 @@ native system stays the SSOT. Mockup:
 
 ## Decisions
 
-- **Persistent placement: LEFT fixed panel.** Background
-  `surface-container-low`, right border 1px `outline-variant` — the same
-  recipe as the settings nav (`navigation.settings-nav`), so the two side
-  menus in the product look like one family.
+- **Persistent placement: RIGHT fixed panel** (changed 2026-07-20 by user
+  request; both placement modes sit on the same side). Background
+  `surface-container-low`, LEFT border 1px `outline-variant` on the
+  terminal-facing edge — the settings-nav surface recipe with the separator
+  mirrored to the right-side placement.
 - **Overlay placement: RIGHT edge panel over the terminal** (SPEC FR5).
   Background `surface-container-high`, left border 1px `outline-variant`,
   `elevation-3` shadow (0 8px 32px rgba(0,0,0,0.30)). No scrim — the terminal
@@ -44,10 +45,11 @@ native system stays the SSOT. Mockup:
 
 ## Rationale
 
-- Left side for persistent: the product's only existing side menu (settings
-  nav) sits left; prompts/output are left-aligned so a *permanent* panel on
-  the left keeps the terminal's ragged right edge free — while the *overlay*
-  goes right per REQUIREMENTS §6.1 (left edge carries the information; FR5).
+- Right side for persistent: user decision (REQUIREMENTS §6.1 追記
+  2026-07-20) — both modes on the same side keeps the sidebar's screen
+  position identical across the placement-setting switch, and the terminal's
+  grid origin never moves (only the width changes). The earlier left-side
+  choice (settings-nav symmetry) was superseded by this preference.
 - Same width formula in both modes keeps the A↔C settings switch visually
   stable (only placement changes), matching the shared-component decision
   (REQUIREMENTS §5.3).
@@ -66,6 +68,6 @@ native system stays the SSOT. Mockup:
 
 ## Open items
 
-- None. Judgment calls above (left placement, width clamp bounds, 40px row
+- None. Judgment calls above (width clamp bounds, 40px row
   height, no animation) are revisitable via `/em-workflow:design` after the
   user sees the running result.

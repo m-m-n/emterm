@@ -27,6 +27,7 @@
 | TS-6 | Resize discipline | Overlay open/close and window switch leave grid size unchanged; placement-setting flip triggers exactly one pending-resize cycle | Unit |
 | TS-7 | Sidebar visibility | Visibility matrix over (mode, flag, tab mux-state); local tabs never show a sidebar | Unit |
 | TS-8 | Settings round-trip | Toggling the mux-section switch saves the mux settings object with the field and preserves sibling fields | Unit (bun) |
+| TS-9 | Right-edge persistent placement | Persistent panel renders on the right; grid x-origin identical with/without sidebar; usable width shrinks by the width function's value; overlay geometry unchanged | Unit |
 
 ## Code Quality Verification
 - Format: not enforced project-wide (rustfmt non-mandatory; do not run
@@ -38,7 +39,7 @@
 ### Success Criteria
 | ID | Criterion | How to Verify |
 |----|-----------|---------------|
-| SC-1 | All FR1–FR6 implemented and tested | TS-1..TS-8 pass |
+| SC-1 | All FR1–FR6 implemented and tested | TS-1..TS-9 pass |
 | SC-2 | Resize discipline (NFR1) | TS-6 + manual M-2 |
 | SC-3 | Local tab behavior unchanged (NFR2) | TS-7 + existing suite green + M-3 |
 | SC-4 | Visuals match the design decisions (NFR3) | Manual mockup comparison (below) |
@@ -49,20 +50,21 @@
 | FR1 | task0005 | TS-1 |
 | FR2 | task0004, task0005 | TS-2, TS-7 |
 | FR3 | task0004, task0005 | TS-3 |
-| FR4 | task0003, task0005 | TS-4, TS-7 |
+| FR4 | task0003, task0005, task0006 | TS-4, TS-7, TS-9 |
 | FR5 | task0003, task0005 | TS-4 |
 | FR6 | task0001, task0002 | TS-5, TS-8 |
 | NFR1 | task0005 | TS-6 |
 | NFR2 | task0003, task0005 | TS-4, TS-7 |
-| NFR3 | task0004 | M-1 (mockup comparison) |
+| NFR3 | task0004, task0006 | M-1 (mockup comparison), TS-9 |
 
 ## Manual Testing (E2E Not Possible)
 
 No automated E2E infrastructure exists (test/README.md). Human scenarios:
 
 - [ ] M-1: Attach mux with 3+ windows → sidebar lists all windows (number +
-      name + active pill); click switches; top tab shows `mux: <name>` and
-      follows a Claude Code title rewrite. **Mockup visual comparison**:
+      name + active pill) on the RIGHT edge in both placement modes; click
+      switches; top tab shows `mux: <name>` and follows a Claude Code title
+      rewrite. **Mockup visual comparison**:
       compare against
       `feature-docs/mux-vertical-tabs/design/mockups/screen-mux-vertical-tabs.html`
       (states: persistent / overlay-open / many-windows / empty)
