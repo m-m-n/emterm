@@ -265,11 +265,13 @@ pub struct WindowHost {
     /// Cached persistent mux-sidebar horizontal grid inset in egui logical
     /// points (task0005 D2), refreshed each frame from
     /// [`App::mux_sidebar_visibility`] via [`Self::refresh_mux_sidebar_inset`].
-    /// Added to `origin_x` in [`Self::cell_metrics_px`] (and thus subtracted
-    /// from the usable width in [`Self::grid_size`]) so the terminal grid
-    /// never renders behind a persistent sidebar. Always `0.0` in overlay
-    /// mode or when the active tab is not mux-attached (NFR1: those cases
-    /// must not reshape the PTY).
+    /// Subtracted from the usable WIDTH in [`Self::grid_size`] so the
+    /// terminal grid never renders behind the right-edge persistent
+    /// sidebar (task0006 update) — it does NOT touch `origin_x` in
+    /// [`Self::cell_metrics_px`]; the grid's x-origin is identical with
+    /// and without the sidebar. Always `0.0` in overlay mode or when the
+    /// active tab is not mux-attached (NFR1: those cases must not reshape
+    /// the PTY).
     mux_sidebar_inset_logical: f32,
     current_mods: Modifiers,
     /// Last cursor position in physical pixels (updated on `CursorMoved`).
@@ -1253,14 +1255,13 @@ impl WindowHost {
         let cell_h = (app.cell_h_logical as f64) * scale;
         // Inner padding comes from settings.padding (logical pixels);
         // falls back to the renderer's default constants when the
-        // user hasn't overridden them. `mux_sidebar_inset_logical`
-        // (task0005 D2) adds the persistent mux sidebar's width when one is
-        // showing on this tab, refreshed each frame by
-        // `refresh_mux_sidebar_inset`; it is `0.0` in overlay mode / on a
-        // local tab, reproducing the pre-sidebar origin exactly.
+        // user hasn't overridden them. task0006 (right-edge persistent
+        // placement): the persistent mux sidebar reserves usable grid
+        // WIDTH only (see `grid_size`) — it never contributes to
+        // `origin_x`, so this is the same formula as before the sidebar
+        // existed.
         let pad = (app.settings.padding as f64).max(0.0);
-        let sidebar_inset = (self.mux_sidebar_inset_logical as f64).max(0.0);
-        let origin_x = (pad + sidebar_inset) * scale;
+        let origin_x = pad * scale;
         // Vertical origin reserves room for every panel stacked above
         // the terminal grid: the CSD title bar, the tab strip, an
         // optional status-bar row pinned to the top, and the same
@@ -1284,12 +1285,20 @@ impl WindowHost {
         let (cell_w, cell_h, origin_x, origin_y) = self.cell_metrics_px(app);
         let scale = self.pixels_per_point.max(1.0) as f64;
         let bottom_inset_px = (self.status_bar_bot_inset_logical as f64) * scale;
+        // task0006 (right-edge persistent placement): the persistent mux
+        // sidebar reserves usable WIDTH from the right edge — subtracted
+        // here directly, not folded into `origin_x` (which stays at the
+        // pre-sidebar pad-only value). `mux_sidebar_inset_logical` is
+        // `0.0` in overlay mode / on a local tab, reproducing the
+        // pre-sidebar usable width exactly.
+        let sidebar_inset_px = (self.mux_sidebar_inset_logical as f64).max(0.0) * scale;
         // Usable area starts after the top bar (+ top status bar) +
-        // top pad and the left pad, and ends above the bottom status
-        // bar. Floor the resulting cell count so partial trailing
+        // top pad and the left pad, ends above the bottom status bar,
+        // and is narrowed on the right by the persistent sidebar (if
+        // any). Floor the resulting cell count so partial trailing
         // cells (which would clip at the surface edge) don't get
         // reported as a writable row/col.
-        let usable_w = (w - origin_x).max(cell_w);
+        let usable_w = (w - origin_x - sidebar_inset_px).max(cell_w);
         let usable_h = (h - origin_y - bottom_inset_px).max(cell_h);
         let cols = (usable_w / cell_w).floor().clamp(20.0, 500.0) as u16;
         let rows = (usable_h / cell_h).floor().clamp(5.0, 200.0) as u16;
@@ -4377,6 +4386,43 @@ mod tests {
     use super::*;
     use crate::ui::chrome::build_egui_fonts;
     use std::time::Duration;
+
+    // ── task0006 AC-2: grid x-origin carries no sidebar term ───────────
+
+    /// Regression guard for the right-edge placement update:
+    /// `cell_metrics_px`'s `origin_x` computation must not read the
+    /// persistent mux-sidebar inset — only `grid_size`'s usable-WIDTH
+    /// computation may. Scans each function's own source text so a future
+    /// edit that moves the sidebar term back onto `origin_x` fails loudly.
+    #[test]
+    fn cell_metrics_px_origin_x_has_no_sidebar_term() {
+        let src = include_str!("window_host.rs");
+        let start = src
+            .find("fn cell_metrics_px(&self, app: &App)")
+            .expect("marker `fn cell_metrics_px` not found in window_host.rs");
+        let body = &src[start..];
+        let end = body
+            .find("\n    pub fn grid_size(")
+            .expect("`cell_metrics_px` should be immediately followed by `grid_size`");
+        let cell_metrics_px_src = &body[..end];
+        // Target the specific inset code terms rather than the bare word
+        // "sidebar" — the function's own explanatory comment legitimately
+        // mentions the sidebar in prose (documenting why there is no term).
+        for needle in [
+            "sidebar_inset",
+            "mux_sidebar_inset_logical",
+            "mux_sidebar_grid_inset",
+        ] {
+            assert!(
+                !cell_metrics_px_src.contains(needle),
+                "cell_metrics_px's origin_x must contain no sidebar term \
+                 (AC-2): found `{needle}` — the grid x-origin must be \
+                 identical with and without the persistent sidebar; only \
+                 grid_size's usable-width computation may read the \
+                 sidebar inset"
+            );
+        }
+    }
 
     // ── task0002 AC-5: should_skip_frame pure decision ───────────────
 

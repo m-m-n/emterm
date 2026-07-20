@@ -273,11 +273,14 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
     // task0005 FR2/FR4/FR5: the mux window-sidebar. `mux_sidebar_visibility`
     // gates on settings + the runtime overlay flag + whether the active tab
     // is mux-attached (D1/D2/D3 in IMPLEMENTATION.md). The persistent
-    // variant is drawn here (between the tab bar and the central panel) so
-    // it reserves grid space via egui's own panel layout — matching the
-    // inset `window_host::cell_metrics_px` / `render::cursor` add on the
-    // wgpu side. The overlay variant draws after the central panel (below)
-    // so it floats over the terminal without affecting layout.
+    // variant is drawn here (between the tab bar and the central panel) as
+    // a RIGHT `SidePanel` (task0006 update) so it reserves grid WIDTH via
+    // egui's own panel layout — matching the usable-width reduction
+    // `window_host::grid_size` applies on the wgpu side. It never shifts
+    // the grid's x-origin (`render::cursor` / `draw_search_highlights`
+    // carry no sidebar term). The overlay variant draws after the central
+    // panel (below) so it floats over the terminal without affecting
+    // layout.
     let sidebar_visibility = app.mux_sidebar_visibility();
     let sidebar_entries: Vec<crate::ui::mux_sidebar::SidebarEntry> = match sidebar_visibility {
         crate::app::MuxSidebarVisibility::Hidden => Vec::new(),
@@ -1006,15 +1009,11 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
     // top-status panel, so adding the inset would double-count it.
     let pad = app.settings.padding as f32;
     let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
-    // task0005 D2: the persistent mux sidebar reserves a horizontal inset
-    // mirroring the one `window_host::cell_metrics_px` adds to the wgpu
-    // grid's origin_x — read via `ui.ctx().screen_rect()` since this overlay
-    // has no access to `WindowHost`'s cached `surface_config` width.
-    let sidebar_inset = app.mux_sidebar_x_inset(ui.ctx().screen_rect().width());
-    let origin = Pos2::new(
-        pad + sidebar_inset,
-        crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad,
-    );
+    // task0006 (right-edge persistent placement): the persistent mux
+    // sidebar reserves usable grid WIDTH only — the x-origin here is
+    // identical with and without it, matching
+    // `window_host::cell_metrics_px`'s un-inset origin_x.
+    let origin = Pos2::new(pad, crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad);
     let painter = ui.painter();
 
     let cell_w = app.cell_w_logical;
@@ -1109,17 +1108,13 @@ fn draw_search_highlights(ui: &mut egui::Ui, core: &TerminalCore, app: &App) {
     let fold_layout = app.fold_layout();
 
     // Same origin anchor as draw_cursor (status-bar top inset is handled
-    // by the central panel's min_rect, so it is omitted here on purpose;
-    // the mux sidebar's x-inset — task0005 D2 — is NOT handled by egui's
-    // layout since it mirrors the wgpu grid's manually-computed origin, so
-    // it is added explicitly, same as draw_cursor).
+    // by the central panel's min_rect, so it is omitted here on purpose).
+    // task0006 (right-edge persistent placement): the persistent mux
+    // sidebar reserves usable grid WIDTH only, so no x-origin term belongs
+    // here either — identical to draw_cursor.
     let pad = app.settings.padding as f32;
     let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
-    let sidebar_inset = app.mux_sidebar_x_inset(ui.ctx().screen_rect().width());
-    let origin = Pos2::new(
-        pad + sidebar_inset,
-        crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad,
-    );
+    let origin = Pos2::new(pad, crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad);
     let cell_w = app.cell_w_logical;
     let cell_h = app.cell_h_logical;
     let painter = ui.painter();
@@ -1516,6 +1511,56 @@ fn palette_256(idx: u8) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── task0006 AC-3: cursor/search origin carry no sidebar term ──────
+
+    /// Regression guard for the right-edge placement update: `draw_cursor`
+    /// and `draw_search_highlights` must not read any mux-sidebar inset
+    /// into their x-origin — the persistent sidebar reserves grid WIDTH
+    /// only. Scans each function's own source text (between its `fn`
+    /// signature and the next top-level `fn`) rather than the whole file,
+    /// since `sidebar_width` / `sidebar_visibility` legitimately appear
+    /// elsewhere in this module for drawing the widget itself.
+    #[test]
+    fn draw_cursor_and_search_highlights_origin_have_no_sidebar_term() {
+        let src = include_str!("mod.rs");
+        let extract_fn_source = |signature: &str| -> String {
+            let start = src
+                .find(signature)
+                .unwrap_or_else(|| panic!("marker `{signature}` not found in mod.rs"));
+            let body = &src[start..];
+            let end = body[signature.len()..]
+                .find("\nfn ")
+                .map(|i| i + signature.len())
+                .unwrap_or(body.len());
+            body[..end].to_string()
+        };
+        let draw_cursor_src = extract_fn_source("fn draw_cursor(");
+        let draw_search_src = extract_fn_source("fn draw_search_highlights(");
+        // Target the specific x-origin-inset code terms rather than the
+        // bare word "sidebar" — both functions' doc comments legitimately
+        // mention the sidebar in prose (explaining why there is no term).
+        let forbidden = [
+            "sidebar_inset",
+            "mux_sidebar_x_inset",
+            "mux_sidebar_grid_inset",
+        ];
+        for needle in forbidden {
+            assert!(
+                !draw_cursor_src.contains(needle),
+                "draw_cursor's origin math must contain no sidebar term \
+                 (AC-3): found `{needle}` — the cursor x-origin must be \
+                 identical with and without the persistent sidebar"
+            );
+            assert!(
+                !draw_search_src.contains(needle),
+                "draw_search_highlights's origin math must contain no \
+                 sidebar term (AC-3): found `{needle}` — the search-\
+                 highlight x-origin must be identical with and without the \
+                 persistent sidebar"
+            );
+        }
+    }
 
     #[test]
     fn visible_width_narrow_for_ascii() {

@@ -400,16 +400,14 @@ pub fn draw_block_cursor(painter: &egui::Painter, core: &TerminalCore, theme: &T
 
     let pad = app.settings.padding as f32;
     let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
-    // task0005 D2: same x-origin inset the main grid uses
-    // (`window_host::cell_metrics_px`) so the block cursor stays aligned
-    // next to a persistent mux sidebar (AC-5). `painter.ctx()` stands in
-    // for the `WindowHost`-cached window width this overlay has no access
-    // to (mirrors `render::draw_cursor` / `draw_search_highlights`).
-    let sidebar_inset = app.mux_sidebar_x_inset(painter.ctx().screen_rect().width());
+    // task0006 (right-edge persistent placement): the terminal grid's
+    // x-origin is identical with and without the persistent mux sidebar —
+    // it only reserves usable WIDTH on the right, so no inset belongs
+    // here. Matches `window_host::cell_metrics_px`'s un-inset origin_x.
     let metrics = FontMetrics {
         cell_w: app.cell_w_logical,
         cell_h: app.cell_h_logical,
-        left_pad: pad + sidebar_inset,
+        left_pad: pad,
         top_pad: crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad,
     };
     let rect = block_cursor_rect(
@@ -587,6 +585,31 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── task0006 AC-3: block-cursor origin carries no sidebar term ─────
+
+    /// Regression guard for the right-edge placement update:
+    /// `draw_block_cursor`'s `FontMetrics` construction must not read any
+    /// mux-sidebar inset into `left_pad` — the persistent sidebar reserves
+    /// grid WIDTH only, so the block cursor's x-origin is identical with
+    /// and without it.
+    #[test]
+    fn draw_block_cursor_left_pad_has_no_sidebar_term() {
+        let src = include_str!("cursor.rs");
+        let production_src = src.split("\nmod tests {").next().unwrap_or(src);
+        for needle in [
+            "sidebar_inset",
+            "mux_sidebar_x_inset",
+            "mux_sidebar_grid_inset",
+        ] {
+            assert!(
+                !production_src.contains(needle),
+                "cursor.rs's origin math must contain no sidebar term (AC-3): \
+                 found `{needle}` — the block cursor's x-origin must be \
+                 identical with and without the persistent sidebar"
+            );
+        }
+    }
 
     fn fake_metrics() -> FontMetrics {
         FontMetrics {

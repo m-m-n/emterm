@@ -4,9 +4,12 @@
 //! placement variants pinned in `IMPLEMENTATION.md :: Shared Components ::
 //! Sidebar widget ui::mux_sidebar`:
 //!
-//! - [`Placement::Persistent`] — a left [`egui::SidePanel`], `surface
+//! - [`Placement::Persistent`] — a right [`egui::SidePanel`], `surface
 //!   container low` background, 1 px `outline_variant` separator on the
-//!   terminal-facing (right) edge.
+//!   terminal-facing (left) edge. Reserves grid WIDTH only — the terminal
+//!   grid's x-origin is identical with and without this panel showing
+//!   (2026-07-20 right-edge placement update; see IMPLEMENTATION.md
+//!   cross-task decision 2).
 //! - [`Placement::Overlay`] — a right-edge [`egui::Area`] drawn over the
 //!   terminal (no grid geometry impact), `surface_container_high`
 //!   background, 1 px `outline_variant` separator on its terminal-facing
@@ -53,8 +56,10 @@ pub fn sidebar_width(window_inner_width: f32) -> f32 {
 /// at the task0005 call site; this module only draws the variant it is told.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
-    /// Left `SidePanel` that participates in layout (task0005 insets the
-    /// terminal grid by [`sidebar_width`] while this is showing).
+    /// Right `SidePanel` that participates in layout (task0005 insets the
+    /// terminal grid's usable WIDTH by [`sidebar_width`] while this is
+    /// showing; the grid's x-origin is unaffected — task0006 right-edge
+    /// placement update).
     Persistent,
     /// Right-edge `Area` drawn after the central panel; contributes no
     /// grid inset.
@@ -114,7 +119,7 @@ const NUMBER_FONT_SIZE: f32 = 12.0;
 const NAME_FONT_SIZE: f32 = 14.0;
 /// Fixed narrow column width the number right-aligns into.
 const NUMBER_COLUMN_WIDTH: f32 = 20.0;
-/// Separator hairline width (persistent right edge / overlay left edge).
+/// Separator hairline width (both variants' terminal-facing left edge).
 const SEPARATOR_WIDTH: f32 = 1.0;
 
 // ── draw ─────────────────────────────────────────────────────────────
@@ -134,9 +139,9 @@ pub fn draw(
     }
 }
 
-/// Persistent variant: a left `SidePanel` that participates in layout.
+/// Persistent variant: a right `SidePanel` that participates in layout.
 /// `surface_container_low` background, 1 px `outline_variant` separator on
-/// the terminal-facing (right) edge. `inner_margin` stays zero on the
+/// the terminal-facing (left) edge. `inner_margin` stays zero on the
 /// `Frame` itself (mirrors `tab_bar`'s convention) so `ui.max_rect()`
 /// inside the closure is the panel's full (pre-padding) rect; the 12/8 px
 /// panel padding is then applied manually before laying out rows.
@@ -145,7 +150,7 @@ fn draw_persistent(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) ->
     let frame = egui::Frame::none()
         .fill(md3::surface_container_low())
         .inner_margin(egui::Margin::ZERO);
-    egui::SidePanel::left("mux-sidebar-persistent")
+    egui::SidePanel::right("mux-sidebar-persistent")
         .frame(frame)
         .exact_width(width)
         .resizable(false)
@@ -153,7 +158,7 @@ fn draw_persistent(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) ->
         .show(ctx, |ui| {
             let panel_rect = ui.max_rect();
             ui.painter().vline(
-                panel_rect.right() - SEPARATOR_WIDTH / 2.0,
+                panel_rect.left() + SEPARATOR_WIDTH / 2.0,
                 panel_rect.top()..=panel_rect.bottom(),
                 Stroke::new(SEPARATOR_WIDTH, md3::outline_variant()),
             );
@@ -511,6 +516,43 @@ mod tests {
         }
         let actives: Vec<bool> = got.iter().map(|e| e.active).collect();
         assert_eq!(actives, vec![false, false, true, false]);
+    }
+
+    // ── task0006 AC-1: persistent panel sits on the RIGHT edge ────────
+
+    #[test]
+    fn persistent_panel_rows_hug_the_right_edge_of_the_screen() {
+        let items = entries(1, 0);
+        let rects = row_rects(&items, Placement::Persistent);
+        let expected_right = screen_rect().right() - PANEL_PAD_HORIZONTAL;
+        assert!(
+            (rects[0].right() - expected_right).abs() < 0.5,
+            "persistent row right edge {} should hug the screen's right edge \
+             (expected ~{expected_right}) — the panel must be right-placed",
+            rects[0].right()
+        );
+        // And NOT left-placed: the row must not sit near x=0.
+        assert!(
+            rects[0].left() > screen_rect().width() / 2.0,
+            "persistent row left edge {} should be in the right half of the \
+             screen, not hugging the left edge",
+            rects[0].left()
+        );
+    }
+
+    #[test]
+    fn persistent_and_overlay_rows_share_the_same_right_edge() {
+        // Both placement variants now live on the right edge — their row
+        // rects' right edges should coincide (same width, same anchor).
+        let items = entries(1, 0);
+        let persistent_rects = row_rects(&items, Placement::Persistent);
+        let overlay_rects = row_rects(&items, Placement::Overlay);
+        assert!(
+            (persistent_rects[0].right() - overlay_rects[0].right()).abs() < 0.5,
+            "persistent right {} and overlay right {} should coincide",
+            persistent_rects[0].right(),
+            overlay_rects[0].right()
+        );
     }
 
     // ── AC-3: click reporting ────────────────────────────────────────
