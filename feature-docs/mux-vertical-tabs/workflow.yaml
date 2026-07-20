@@ -35,16 +35,29 @@ workflow:
     status: completed
     completed_at_commit: 4cdd718f7eedd77228958551f5b57abf246b2b19
   - id: implement
-    status: in_progress
-    base_commit: null
+    status: completed
+    base_commit: 4cdd718f7eedd77228958551f5b57abf246b2b19
+    completed_at_commit: 1571943aba6beb39fbef961414c1b7a9772b4a6b
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: de1e08c83921bee2971a1b6ad4d1a4718ba80c7c
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: de1e08c83921bee2971a1b6ad4d1a4718ba80c7c
+    result: pass
     failed_items: []
+    notes: >-
+      cargo check pass / bun run typecheck pass / bun test 171 pass 0 fail
+      (happy-dom must match the untracked bun.lock — a fresh non-frozen
+      install pulled 20.11.0 and broke 2 pre-existing viewer tests; aligned
+      to 20.4.0) / cargo test --lib --test-threads=1: 2400 pass, 7 fail —
+      the documented pre-existing tabs.rs set (6 off-thread replay timing +
+      welcome_without_windows_leaves_group_none), confirmed on the base
+      commit by three implementers via stash-based baseline runs. TS-1..TS-8
+      covered by unit suites. Manual scenarios M-1..M-3 remain for the user.
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: de1e08c83921bee2971a1b6ad4d1a4718ba80c7c
 
 tasks:
   task0001:
@@ -57,8 +70,9 @@ tasks:
     domains: [data-persistence]
     complexity: low
     requirements: [FR6]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/mux-vertical-tabs/task0001
   task0002:
     title: "Settings UI (TS): overlay toggle + i18n labels"
     plan: tasks/task0002.md
@@ -72,8 +86,9 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR6]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/mux-vertical-tabs/task0002
   task0003:
     title: "Prefix action toggle-window-sidebar + App overlay state"
     plan: tasks/task0003.md
@@ -84,8 +99,9 @@ tasks:
     domains: [input-handling]
     complexity: medium
     requirements: [FR5, FR4, NFR2]
-    status: pending
-    notes: null
+    status: merged
+    notes: "Deviations: also touched src-tauri/src/settings.rs (MUX_ACTION_NAMES 7 entries) and settings_window/commands.rs (defaults test) — SSOT drift-guard tests required it. Transient duplicate MuxSettings field from concurrent task0001 merge was self-detected and fixed before final merge"
+    branch: em-workflow/mux-vertical-tabs/task0003
   task0004:
     title: "Vertical tab sidebar widget (ui::mux_sidebar)"
     plan: tasks/task0004.md
@@ -97,8 +113,9 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR2, FR3, NFR3]
-    status: pending
-    notes: null
+    status: merged
+    notes: "Row number renders in default weight (no medium font variant in project); human visual check flagged for M-1"
+    branch: em-workflow/mux-vertical-tabs/task0004
   task0005:
     title: "Frame integration: single mux tab, placement, grid geometry"
     plan: tasks/task0005.md
@@ -112,12 +129,25 @@ tasks:
     domains: [ui]
     complexity: high
     requirements: [FR1, FR3, FR4, FR5, NFR1, NFR2]
-    status: pending
-    notes: null
+    status: merged
+    notes: "1 conflict cycle resolved via parent-side adoption (contract stand-ins for task0001/0004 superseded by real implementations). AC-5 cursor/search alignment and pending-resize single-reshape are manual items (no WindowHost test harness)"
+    branch: em-workflow/mux-vertical-tabs/task0005
 
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
