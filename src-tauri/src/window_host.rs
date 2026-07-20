@@ -3689,9 +3689,32 @@ impl ApplicationHandler for PocApp {
                     let in_scrollbar = scrollbar_visible
                         && egui_pos.x >= central_right - crate::ui::scrollbar::TRACK_W
                         && egui_pos.x < central_right;
-                    let in_persistent_sidebar =
-                        host.mux_sidebar_inset_logical > 0.0 && egui_pos.x >= central_right;
-                    if in_bottom_strip || in_scrollbar || in_persistent_sidebar {
+                    // AC-1/AC-4: query the SAME shared hit-region helper the
+                    // MouseWheel guard below uses (IMPLEMENTATION.md cross-
+                    // task decision 3.5), instead of the persistent-only
+                    // width test above — that test's inset is 0 for the
+                    // overlay placement, so a press on the floating overlay
+                    // card used to fall through this guard and start a
+                    // terminal selection on the cell underneath it.
+                    let visible_placement = match self.app.mux_sidebar_visibility() {
+                        crate::app::MuxSidebarVisibility::Hidden => None,
+                        crate::app::MuxSidebarVisibility::Persistent => {
+                            Some(crate::ui::mux_sidebar::Placement::Persistent)
+                        }
+                        crate::app::MuxSidebarVisibility::Overlay => {
+                            Some(crate::ui::mux_sidebar::Placement::Overlay)
+                        }
+                    };
+                    let top_chrome =
+                        crate::ui::mux_sidebar::top_chrome_inset(self.app.show_tab_bar);
+                    let in_sidebar = crate::ui::mux_sidebar::point_in_sidebar(
+                        egui_pos,
+                        visible_placement,
+                        egui::vec2(window_size_logical.width, window_size_logical.height),
+                        top_chrome,
+                        host.status_bar_bot_inset_logical,
+                    );
+                    if in_bottom_strip || in_scrollbar || in_sidebar {
                         return;
                     }
                 }
@@ -5093,6 +5116,109 @@ mod tests {
             between_guard_and_scroll.contains("return;"),
             "the sidebar hit-region guard must `return` on a hit so the terminal scroll path \
              is genuinely skipped, not merely forwarded-then-continued (AC-2)"
+        );
+    }
+
+    // ── task0011 AC-1/AC-3/AC-4: mux sidebar press-suppression guard ───
+
+    /// AC-1/AC-3: the MouseInput handler's Pressed-edge suppression guard
+    /// (the same `if button == MouseButton::Left && state ==
+    /// ElementState::Pressed` block that already covers the bottom status
+    /// bar and the scrollbar) must query the shared
+    /// `ui::mux_sidebar::point_in_sidebar` helper and `return` on a hit —
+    /// this is what makes a press on the overlay card (zero grid inset, so
+    /// the old persistent-only width test missed it) stop before the
+    /// selection-start arm, while keeping the guard scoped to the Pressed
+    /// edge only (a drag that started inside the terminal still gets its
+    /// Released event processed normally, since this block never runs for
+    /// `ElementState::Released`). Source-scans the way
+    /// `mouse_wheel_handler_routes_sidebar_hits_to_egui_before_the_terminal_scroll_path`
+    /// does; the geometric correctness of "is this point inside the
+    /// sidebar" is exercised by `ui::mux_sidebar::tests::ac1_*`/`ac4_*`.
+    /// AC-2 (overlay closed / local tab: selection starts as before)
+    /// follows from `point_in_sidebar` answering `false` there — pinned by
+    /// `ui::mux_sidebar::tests` (`visible_placement: None` returns
+    /// `false` unconditionally), so the guard here is a complete no-op in
+    /// that case and this test does not re-derive that coverage.
+    #[test]
+    fn mouse_input_press_guard_queries_shared_sidebar_hit_region_before_selection_start() {
+        let src = include_str!("window_host.rs");
+        let arm_start = src
+            .find("WindowEvent::MouseInput { state, button, .. } =>")
+            .expect("MouseInput arm not found in window_host.rs");
+        let arm_body = &src[arm_start..];
+        let guard_start = arm_body
+            .find("// Same rule for the bottom status-bar panel")
+            .expect("bottom-strip/scrollbar/sidebar press guard comment not found");
+        let guard_end = arm_body
+            .find("// While the profile-selector modal is up")
+            .expect("profile-selector guard marker not found after the press guard");
+        let guard_section = &arm_body[guard_start..guard_end];
+        assert!(
+            guard_section
+                .contains("if button == MouseButton::Left && state == ElementState::Pressed {"),
+            "the sidebar press guard must stay inside the Pressed-edge-only conditional \
+             shared with the bottom-strip/scrollbar guards (AC-3)"
+        );
+        let sidebar_guard_pos = guard_section.find("mux_sidebar::point_in_sidebar(").expect(
+            "MouseInput's press guard must query ui::mux_sidebar::point_in_sidebar \
+             (AC-4: the shared hit-region derivation, not a re-derived guard)",
+        );
+        assert!(
+            guard_section.contains("return;"),
+            "the sidebar press guard must `return` on a hit so the selection-start arm \
+             is genuinely skipped (AC-1)"
+        );
+        let selection_start_pos = arm_body
+            .find("(MouseButton::Left, ElementState::Pressed) => {")
+            .expect("selection-start arm not found in the MouseInput handler");
+        assert!(
+            guard_start + sidebar_guard_pos < selection_start_pos,
+            "the sidebar hit-region guard must run BEFORE the selection-start arm so a hit \
+             on the overlay card never starts a terminal selection (AC-1)"
+        );
+    }
+
+    /// AC-4: the press guard and the wheel guard both resolve the sidebar
+    /// region through `ui::mux_sidebar::point_in_sidebar` — neither
+    /// independently re-derives the sidebar's geometry (e.g. by calling
+    /// `sidebar_width` directly), which is exactly the class of drift the
+    /// round-2 scrollbar click-guard regression came from
+    /// (IMPLEMENTATION.md decision 3.5).
+    #[test]
+    fn press_and_wheel_guards_share_the_same_sidebar_hit_region_helper() {
+        let src = include_str!("window_host.rs");
+        let press_start = src
+            .find("WindowEvent::MouseInput { state, button, .. } =>")
+            .expect("MouseInput arm not found in window_host.rs");
+        let wheel_start = src
+            .find("WindowEvent::MouseWheel { delta, .. } =>")
+            .expect("MouseWheel arm not found in window_host.rs");
+        assert!(
+            press_start < wheel_start,
+            "expected the MouseInput arm to appear before the MouseWheel arm"
+        );
+        let press_body = &src[press_start..wheel_start];
+        assert!(
+            press_body.contains("mux_sidebar::point_in_sidebar("),
+            "MouseInput press guard must call the shared hit-region helper"
+        );
+        assert!(
+            !press_body.contains("mux_sidebar::sidebar_width("),
+            "MouseInput press guard must not re-derive the sidebar width itself"
+        );
+        let wheel_body = &src[wheel_start..];
+        let wheel_arm_end = wheel_body
+            .find("let lines = match delta {")
+            .expect("terminal scroll path marker not found after the MouseWheel guard");
+        let wheel_guard_section = &wheel_body[..wheel_arm_end];
+        assert!(
+            wheel_guard_section.contains("mux_sidebar::point_in_sidebar("),
+            "MouseWheel guard must call the shared hit-region helper"
+        );
+        assert!(
+            !wheel_guard_section.contains("mux_sidebar::sidebar_width("),
+            "MouseWheel guard must not re-derive the sidebar width itself"
         );
     }
 
