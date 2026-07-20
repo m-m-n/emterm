@@ -1,0 +1,80 @@
+round: 2
+executed_at: "2026-07-20T16:56:27+09:00"
+scope:
+  review_mode: diff
+  base_commit: 461d46d3c4449499c187ee3f751ee64e0b95eb76
+  head_commit: 3ffeff44afede1047fe0b17ef6daec2e3f2683d2
+  changed_files:
+    - src-tauri/src/app.rs
+    - src-tauri/src/render/cursor.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/ui/mux_sidebar.rs
+    - src-tauri/src/window_host.rs
+  note: >-
+    Round 2 reviews only task0006 (persistent sidebar moved to the right
+    edge). Diff base is the implement base_commit for this develop re-run
+    (461d46d = round-1 final merge).
+plan:
+  floor: [comprehensive, spec]
+  discretionary:
+    - perspective: architecture
+      reason: "task0006 が grid/cursor/search の origin 計算を横断変更するため"
+  codex_cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+findings:
+  - stable_id: a6671519566d1452
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host.rs
+    line: 3688
+    title: "スクロールバーのクリック抑止領域が persistent サイドバー幅ぶんズレる（task0006 右寄せの副作用）"
+    description: >-
+      persistent サイドバーを右端 SidePanel::right に移したことで CentralPanel
+      が左に縮み、その中で描かれるスクロールバー（ui.max_rect().right() -
+      TRACK_W）も左へ移動する。だが MouseInput のスクロールバー・クリック抑止
+      ガードは絶対的なウィンドウ右端基準のままで、既定構成（mux アタッチ・
+      persistent・スクロールバー可視）で実スクロールバーを押しても in_scrollbar
+      が false になりターミナルのドラッグ選択が二重発火する。加えて右サイドバー
+      領域自体に drag-select 抑止が無く、押すと最終列で選択が始まる。
+    suggestion: >-
+      キャッシュ済み mux_sidebar_inset_logical から central_right を導出し、
+      スクロールバー帯を [central_right - TRACK_W, central_right) に補正、
+      右サイドバー領域 (x >= central_right) を top/bottom strip と同様に
+      drag-select から除外する。
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: >-
+      auto-applied loop 1（central_right 導出 + in_scrollbar 補正 +
+      in_persistent_sidebar 追加）。再レビューで comprehensive / spec /
+      architecture が scrollbar::draw / SidePanel::right の実描画ジオメトリと
+      の整合を確認、overlay/非mux は inset==0 で不変と検証済み。
+  - stable_id: e25280b0ecd28770
+    severity: medium
+    category: architecture
+    file: src-tauri/src/app.rs
+    line: 2237
+    title: "mux_sidebar_x_inset is now dead public API whose name contradicts its behavior"
+    description: >-
+      task0006 が右端配置で x-origin 項を全廃したため、mux_sidebar_x_inset の
+      本番呼び出し元（draw_block_cursor / draw_cursor / draw_search_highlights）
+      が全て消え、残る呼び出しは自己参照テストのみ。かつ x_inset という名称が
+      width-only の実挙動と矛盾し、将来 x-origin に再導入する回帰を誘発しうる。
+      live な幅計算経路は mux_sidebar_grid_inset + キャッシュ値を通るため本
+      メソッド削除は挙動に影響しない。
+    suggestion: >-
+      mux_sidebar_x_inset と自己参照テストを削除するか、width-only 意味を表す
+      名称（例 mux_sidebar_width_inset）へ改名する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: null
+auto_fix:
+  loops_run: 1
+  applied_total: 1
+  termination: clean
+residual_critical_high: 0
+rework_required: false

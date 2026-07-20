@@ -35,16 +35,31 @@ workflow:
     status: completed
     completed_at_commit: 461d46d3c4449499c187ee3f751ee64e0b95eb76
   - id: implement
-    status: pending
-    base_commit: null
+    status: completed
+    base_commit: 461d46d3c4449499c187ee3f751ee64e0b95eb76
+    completed_at_commit: 3d7c00a9b1982a7d7046bd0e551ea8a91b2cca94
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 3ffeff44afede1047fe0b17ef6daec2e3f2683d2
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 3ffeff44afede1047fe0b17ef6daec2e3f2683d2
+    result: pass
     failed_items: []
+    notes: >-
+      Round-2 (task0006 right-edge sidebar) verification. cargo check pass /
+      bun run typecheck pass / bun test 171 pass 0 fail (happy-dom aligned to
+      20.4.0 via the untracked bun.lock) / cargo test --lib --test-threads=1:
+      2408 pass, 4 fail — the documented pre-existing tabs.rs flaky set
+      (off-thread replay timing + welcome_without_windows_leaves_group_none),
+      confirmed unrelated by task0006's stash-based baseline run. New TS-9
+      (right-edge placement: width-only inset, x-origin unchanged, overlay
+      unchanged) covered by task0006's mux_sidebar + source-scan guard tests.
+      Manual M-1..M-3 remain for the user (now include right-edge visual
+      check).
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 3ffeff44afede1047fe0b17ef6daec2e3f2683d2
 
 tasks:
   task0001:
@@ -133,22 +148,23 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR4, NFR3]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/mux-vertical-tabs/task0006
 
 review:
-  status: pending
-  rounds_completed: 1
+  status: completed
+  rounds_completed: 2
   plan:
-    floor: [comprehensive, security, performance, architecture, spec]
-    discretionary: []
-    codex_cross_validation: true
+    floor: [comprehensive, spec]
+    discretionary:
+      - perspective: architecture
+        reason: "task0006 が grid/cursor/search の origin 計算を横断変更するため"
+    codex_cross_validation: false
   perspectives:
     comprehensive: completed
-    security: completed
-    performance: completed
-    architecture: completed
     spec: completed
+    architecture: completed
   residual_critical_high: 0
   needs_rework: false
 
