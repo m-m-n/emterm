@@ -1,0 +1,51 @@
+feature: mux-vertical-tabs
+collected_at: "2026-07-20T14:42:02+09:00"
+session_ids: [417e05e9-2005-4a89-9c9c-07f1b58641de]
+signals:
+  review_critical_high:
+    - stable_id: aff70644e3bdd29f
+      category: comprehensive
+      file: src-tauri/src/ui/mux_sidebar.rs
+      title: "オーバーレイサイドバーがタイトルバーの最小化/最大化/閉じるボタンを覆う"
+      resolution: fixed
+    - stable_id: a683038081ce469c
+      category: spec
+      file: src-tauri/src/window_host.rs
+      title: "Sidebar visibility changes resize every PTY"
+      resolution: deferred
+  conflict_reworks:
+    - {task: task0005, retries: 1}
+  file_prediction_misses:
+    - task: task0003
+      files: [src-tauri/src/settings.rs, src-tauri/src/settings_window/commands.rs]
+    - task: task0005
+      files: [src-tauri/src/settings.rs, src-tauri/src/ui/mux_sidebar.rs, src-tauri/src/ui/mod.rs]
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    並行タスクが同一 struct（MuxSettings）へ別々にフィールドを追加すると、
+    git のテキストマージが非重複 hunk として黙って両方取り込み、重複
+    フィールドのコンパイルエラーになる（merge-task.sh は exit 0）。
+    task0003 と task0005 の双方が task0001 の契約フィールドのスタンドイン
+    を作って踏んだ。プランナーが「同一 struct への追加は1タスクに集約」
+    または「スタンドイン禁止・コンパイルゲートは cfg で逃がす」等の
+    規約を検討する余地がある。
+  - >-
+    integration worktree での検証には環境準備が2つ必要だった:
+    (1) gitignored フォント資産のコピー（build.rs が無いと panic）、
+    (2) bun.lock が git 管理外のため、素の bun install が新しい
+    happy-dom (20.11.0) を解決して既存 viewer テストが2件壊れる。
+    main tree の bun.lock をコピーして --frozen-lockfile で揃えるのが正。
+  - >-
+    tabs.rs の既知 flaky セット（off-thread replay timing 6件 +
+    welcome_without_windows_leaves_group_none）は --test-threads=1 でも
+    サンドボックス CPU 競合下で落ちる。ベースライン比較（git stash）で
+    既存性を確認する運用が3タスクで独立に機能した。
+  - >-
+    「mux タブのみ表示のサイドバー」×「全タブ共有 grid」の組合せで
+    タブ切替 resize が構造的に発生する点は、spec 作成時に既存
+    アーキテクチャ制約（共有 cell_size）を洗い出せていれば事前に
+    決められた。UI 面積を変える機能の spec では「grid/viewport への
+    影響」を必須確認項目にする価値がある。

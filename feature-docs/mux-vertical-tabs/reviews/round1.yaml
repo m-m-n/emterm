@@ -1,0 +1,278 @@
+round: 1
+executed_at: "2026-07-20T14:37:19+09:00"
+scope:
+  review_mode: diff
+  base_commit: 4cdd718f7eedd77228958551f5b57abf246b2b19
+  head_commit: de1e08c83921bee2971a1b6ad4d1a4718ba80c7c
+  changed_files:
+    - crates/app_settings/src/settings.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/mux/prefix.rs
+    - src-tauri/src/render/cursor.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/src/settings_window/commands.rs
+    - src-tauri/src/ui/mod.rs
+    - src-tauri/src/ui/mux_sidebar.rs
+    - src-tauri/src/ui/tab_bar.rs
+    - src-tauri/src/window_host.rs
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/settings/sections/mux-section.test.ts
+    - src-tauri/web-shared/settings/sections/mux-section.ts
+    - src-tauri/web-shared/settings/types.ts
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  - stable_id: aff70644e3bdd29f
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/ui/mux_sidebar.rs
+    line: 179
+    title: "オーバーレイサイドバーがタイトルバーの最小化/最大化/閉じるボタンを覆う"
+    description: >-
+      draw_overlay が rect を screen_rect() 起点・ウィンドウ全高で作るため、
+      CSD タイトルバー右上の minimize/maximize/close ボタンとドラッグ領域を
+      不透明フレーム (Order::Foreground) が覆う。spec 観点 (9a8d23820f9303c9)
+      も同一サイトを指摘。
+    suggestion: >-
+      オーバーレイ rect をターミナル領域（パネル確保後の残余 =
+      available_rect()）から導出する。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (available_rect() 化)、再レビューで claude comprehensive / claude spec が egui 0.29.1 の available_rect 意味論まで確認して健全性を検証済み"
+  - stable_id: 9a8d23820f9303c9
+    severity: medium
+    category: spec
+    file: src-tauri/src/ui/mux_sidebar.rs
+    line: 177
+    title: "Overlay covers the whole window instead of the terminal surface"
+    description: >-
+      オーバーレイ矩形が screen_rect() 全高でタイトル/タブ/ステータスバーに
+      被り、SPEC FR5 の「ターミナル面の右側のみ」に反する。
+      aff70644e3bdd29f と同一サイト。
+    suggestion: "ターミナル中央パネル矩形にアンカーする。"
+    sources: [codex:spec]
+    confidence: 65
+    resolution: fixed
+    resolution_reason: "aff70644e3bdd29f と同一の loop-1 修正で解消。再レビューで FR5 準拠を確認"
+  - stable_id: a683038081ce469c
+    severity: high
+    category: spec
+    file: src-tauri/src/window_host.rs
+    line: 1228
+    title: "Sidebar visibility changes resize every PTY"
+    description: >-
+      persistent モードでローカル⇔mux タブ切替のたびに inset が変わり
+      pending_resize 経由で全タブの PTY が resize される。全タブが1つの
+      grid を共有する既存設計と「mux タブのみサイドバー表示」の組合せでは
+      構造的に不可避。
+    suggestion: >-
+      サイドバー可視性変化から PTY resize をトリガーしない設計に変える、
+      または仕様側で許容する。
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "ユーザーが 2026-07-20 に現挙動の許容を決定。SPEC NFR1/FR4 を追記済み（accepted resize として明文化）。修正不要"
+  - stable_id: 5664533dd58e78d1
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 3311
+    title: "非フォーカスタブの mux group teardown で overlay-open フラグがリセットされず再アタッチ時に勝手に開く"
+    description: >-
+      pump_all のリセットがフォーカス中タブの teardown のみ対象で、
+      非フォーカスタブの group 消滅時にフラグが残り、再アタッチで
+      オーバーレイが勝手に開く。同サイトを architecture (79b5e4df28b325e2) /
+      spec (ab3a98570423e818) も指摘。なお claude comprehensive /
+      architecture の再レビューは現実装のテスト整合性自体は確認しており、
+      発生条件は「非フォーカスタブでの teardown」に限られる。
+    suggestion: >-
+      アタッチ境界でフラグをクリアする、またはタブ stable_id ベースで
+      owner を追跡してフォーカス非依存にリセットする。
+    sources: [claude:comprehensive]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: 79b5e4df28b325e2
+    severity: medium
+    category: architecture
+    file: src-tauri/src/app.rs
+    line: 3307
+    title: "Sidebar teardown tracking uses a positional tab index as identity"
+    description: >-
+      前回フォーカス mux タブを Option<usize>（位置インデックス）で記録して
+      teardown を推定しており、タブの reorder/削除でインデックスが変わると
+      比較が破綻する。Tab::stable_id ベースの追跡が堅い。
+    suggestion: "stable_id で追跡するか attach/detach イベント駆動にする。"
+    sources: [codex:architecture]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: ab3a98570423e818
+    severity: medium
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 3307
+    title: "Overlay-open flag not reset when a non-focused tab's mux group detaches"
+    description: >-
+      SPEC Edge Cases「Detach while overlay open: overlay state resets」に
+      対し、オーバーレイを開いたタブからフォーカスを外した後にそのタブが
+      detach するとフラグが残る。5664533dd58e78d1 / 79b5e4df28b325e2 と
+      同一サイト。
+    suggestion: "フラグの owner タブを記録し、そのタブの teardown で必ずクリアする。"
+    sources: [codex:spec]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: dfe46fd5ce76882d
+    severity: medium
+    category: performance
+    file: src-tauri/src/ui/mux_sidebar.rs
+    line: 220
+    title: "The scrollable sidebar lays out every window, including off-screen rows"
+    description: >-
+      ScrollArea::show が全 window をレイアウトし、フレームコストが
+      window 総数に比例する。
+    suggestion: "ScrollArea::show_rows で可視範囲のみ描画する。"
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: c1641ecdd2aa7807
+    severity: medium
+    category: performance
+    file: src-tauri/src/ui/mux_sidebar.rs
+    line: 83
+    title: "The sidebar reallocates and clones the entire window roster every frame"
+    description: >-
+      build_entries が毎フレーム Vec 生成＋全 window 名 clone を行う。
+      wait-driven ループ＋少数 window では実測影響は小さい。
+    suggestion: "名前の借用またはロスター変更時のみのキャッシュ更新にする。"
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: 2883f76fe2ce5a12
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/prefix.rs
+    line: 218
+    title: "The advertised action SSOT does not drive binding or dispatch"
+    description: >-
+      アクション追加に PrefixAction / ActionBindings / DEFAULT_ACTION_BINDINGS /
+      Default / from_settings_map / action_for_input / MUX_ACTION_NAMES の
+      7箇所の変更が必要（shotgun surgery）。ドリフトガードテストで検出は
+      できるが、レジストリ駆動にすれば1箇所化できる。
+    suggestion: "記述子レジストリからバインディングとディスパッチを導出する。"
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: 9c89d4e625eca620
+    severity: medium
+    category: comprehensive
+    file: src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+    line: 42
+    title: "Required MuxSettings interface change leaves an existing consumer invalid"
+    description: >-
+      MuxSettings に必須フィールドを追加したが既存テストの makeMux()
+      リテラルが未更新。tsconfig が *.test.ts を除外しているため typecheck
+      では検出されない（bun test は型検査しないため実行は通る）。
+      changed_files 外のため confidence 50 に cap・category を comprehensive
+      に強制（元 codex:architecture）。
+    suggestion: >-
+      makeMux() に window_sidebar_overlay: false を追加し、テストソースも
+      型検査対象にする。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: a1b84602f783a576
+    severity: medium
+    category: architecture
+    file: src-tauri/src/app.rs
+    line: 494
+    title: "Sidebar geometry crosses the application/UI boundary without a single layout contract"
+    description: >-
+      app モジュールが presentation 固有の可視性型を持ち ui::mux_sidebar::
+      sidebar_width を直接呼ぶ一方、WindowHost は surface_config、render は
+      screen_rect()、sidebar は available_rect() と幾何ソースが分散している
+      （D2 で文書化済みのトレードオフだが単一レイアウト契約が無い）。
+    suggestion: >-
+      フレームレベルの TerminalViewportMetrics を1箇所で計算し明示的に
+      配布する。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: ba52f02b58626d3c
+    severity: medium
+    category: architecture
+    file: src-tauri/src/ui/tab_bar.rs
+    line: 129
+    title: "TabBarItem exposes two contradictory mux representations"
+    description: >-
+      production-inert な mux_cells 表現と新設の mux_active_window_name が
+      併存し、両方設定された view model は render_label と build_visuals で
+      矛盾した観測結果になる。
+    suggestion: >-
+      Plain / MuxCollapsed の enum に一本化し、mux_cells 経路を削除する
+      （意図的保持なら invariant を型で表現する）。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: 13f44e7a3117cb7d
+    severity: medium
+    category: spec
+    file: src-tauri/src/ui/mux_sidebar.rs
+    line: 189
+    title: "Overlay dimensions are not re-forced to the current terminal rectangle every frame"
+    description: >-
+      loop-1 修正は origin を available_rect() 由来にしたが、サイズは
+      default_size（初回ヒント）＋ set_min_size のみで、既存 Area id の
+      記憶サイズを縮小できない。ステータスバー表示切替等でターミナル領域が
+      縮んだ場合にオーバーレイが旧サイズのままはみ出す可能性がある。
+    suggestion: >-
+      毎フレーム set_min_size と set_max_size の両方で現在の
+      available_rect() に正確にクランプし、縮小の回帰テストを足す。
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: 03928f715c2b0a42
+    severity: medium
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 2189
+    title: "Transient zero-window mux groups hide the sidebar instead of rendering it empty"
+    description: >-
+      SPEC Error Handling は「空 window リスト（attach/detach 過渡）は空の
+      サイドバーを描画」と定めるが、可視判定が is_group()（非空）ゲートの
+      ため過渡状態でサイドバーが消える。なお tabs.rs は group 空化時に即
+      None 化するため観測可能窓は狭い（claude architecture round-1 評価）。
+    suggestion: "可視判定を mux_group.is_some() ベースにする。"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: null
+auto_fix:
+  loops_run: 1
+  applied_total: 1
+  termination: clean
+residual_critical_high: 0
+rework_required: false
