@@ -4,8 +4,8 @@
 
 Collapse the mux window group's inline top-tab expansion into a single top tab
 titled `mux: <active window name>`, and present the window list in a new
-egui-native vertical sidebar with two placement modes (persistent left /
-right overlay).
+egui-native vertical sidebar with two placement modes (persistent right /
+right overlay — both on the right edge since the 2026-07-20 spec update).
 
 ## Technology Stack
 
@@ -31,7 +31,7 @@ settings pipeline.
 
 | Component | Responsibility | Contract (pre/postcondition) | Used by tasks |
 |-----------|----------------|------------------------------|---------------|
-| Settings field `mux.window_sidebar_overlay` | Persisted placement mode | Boolean; serde default `false` (= persistent mode). Present in `crates/app_settings` `MuxSettings`, resolved `Settings.mux` in `src-tauri/src/settings.rs`, and TS `MuxSettings` mirror under the SAME name. `false` = persistent left panel, `true` = right overlay | task0001 (defines Rust), task0002 (TS mirror + UI), task0003 (no-op guard), task0005 (placement) |
+| Settings field `mux.window_sidebar_overlay` | Persisted placement mode | Boolean; serde default `false` (= persistent mode). Present in `crates/app_settings` `MuxSettings`, resolved `Settings.mux` in `src-tauri/src/settings.rs`, and TS `MuxSettings` mirror under the SAME name. `false` = persistent right panel, `true` = right overlay | task0001 (defines Rust), task0002 (TS mirror + UI), task0003 (no-op guard), task0005 (placement), task0006 (right-edge move) |
 | Prefix action id `toggle-window-sidebar` | Overlay open/close action | New row in `DEFAULT_ACTION_BINDINGS` bound to Ctrl+W (after the Ctrl+Z prefix); new `PrefixAction` variant named `ToggleWindowSidebar`. The id string is what `settings.mux.keybinds` and `get_mux_action_defaults` expose | task0003 (defines), task0002 (i18n label for the keybind grid) |
 | App overlay state | Runtime open/closed flag for the overlay | Single per-App boolean field `mux_sidebar_overlay_open`, initial `false`. Toggle entry point: dispatching `ToggleWindowSidebar` flips it ONLY when `mux.window_sidebar_overlay` is `true`; otherwise it is a strict no-op (FR4). Postcondition: the flag is reset to `false` whenever the mux group of the focused tab is torn down (detach / session end). Readers treat "overlay visible" = flag AND overlay mode AND active tab is mux-attached | task0003 (owns field + toggle + reset), task0005 (reads for rendering) |
 | Sidebar width function | One width formula for both placements | Pure function in the new `ui::mux_sidebar` module: given the window inner width in physical/logical px, returns clamp(180 px, 22% of width, 320 px). Deterministic, no state | task0004 (defines), task0005 (grid inset + overlay rect) |
@@ -64,13 +64,18 @@ becomes the new emitter of window-switch intents, reusing
 The wgpu terminal grid is computed outside egui (`grid_size` /
 `cell_metrics_px` in `window_host.rs`, plus duplicated origin math for cursor
 and search overlays in `render/`). A persistent sidebar therefore requires an
-explicit x-inset term in these computations, mirroring how
-`effective_tab_bar_height` gates the y-origin: inset = sidebar width when
+explicit width-inset term in these computations: inset = sidebar width when
 (persistent mode AND active tab mux-attached), else 0. Overlay mode
 contributes 0 inset (draws over the grid). Mode changes flip the existing
 `pending_resize` coalescing flag — the same mechanism used when the tab bar
-visibility changes — producing exactly one PTY reshape (NFR1). Affects
-task0005 (implementation), task0004 (width function input).
+visibility changes — producing exactly one PTY reshape (NFR1).
+
+2026-07-20 update (right-edge persistent placement): the panel sits on the
+RIGHT edge, so the inset reduces only the usable grid WIDTH — the grid's
+x-origin, cursor, and search-overlay origins are identical with and without
+the sidebar (no x-origin term anywhere). Affects task0005 (original
+implementation), task0006 (right-edge move), task0004 (width function
+input).
 
 ### 3. Overlay is an egui right side surface drawn after the central panel
 

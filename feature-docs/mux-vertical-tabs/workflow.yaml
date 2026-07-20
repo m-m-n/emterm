@@ -24,40 +24,27 @@ workflow:
   - id: create-spec
     artifacts: [REQUIREMENTS.md, SPEC.md]
     status: completed
-    completed_at_commit: 4cdd718f7eedd77228958551f5b57abf246b2b19
+    completed_at_commit: 461d46d3c4449499c187ee3f751ee64e0b95eb76
   - id: design
     artifacts: [DESIGN.md, design/]
     status: completed
-    completed_at_commit: 4cdd718f7eedd77228958551f5b57abf246b2b19
+    completed_at_commit: 461d46d3c4449499c187ee3f751ee64e0b95eb76
     skipped_reason: null
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
-    completed_at_commit: 4cdd718f7eedd77228958551f5b57abf246b2b19
+    completed_at_commit: 461d46d3c4449499c187ee3f751ee64e0b95eb76
   - id: implement
-    status: completed
-    base_commit: 4cdd718f7eedd77228958551f5b57abf246b2b19
-    completed_at_commit: 1571943aba6beb39fbef961414c1b7a9772b4a6b
+    status: pending
+    base_commit: null
   - id: review
-    status: completed
-    completed_at_commit: de1e08c83921bee2971a1b6ad4d1a4718ba80c7c
+    status: pending
   - id: verify
-    status: completed
-    completed_at_commit: de1e08c83921bee2971a1b6ad4d1a4718ba80c7c
-    result: pass
+    status: pending
+    result: null
     failed_items: []
-    notes: >-
-      cargo check pass / bun run typecheck pass / bun test 171 pass 0 fail
-      (happy-dom must match the untracked bun.lock — a fresh non-frozen
-      install pulled 20.11.0 and broke 2 pre-existing viewer tests; aligned
-      to 20.4.0) / cargo test --lib --test-threads=1: 2400 pass, 7 fail —
-      the documented pre-existing tabs.rs set (6 off-thread replay timing +
-      welcome_without_windows_leaves_group_none), confirmed on the base
-      commit by three implementers via stash-based baseline runs. TS-1..TS-8
-      covered by unit suites. Manual scenarios M-1..M-3 remain for the user.
   - id: retrospect
-    status: completed
-    completed_at_commit: de1e08c83921bee2971a1b6ad4d1a4718ba80c7c
+    status: pending
 
 tasks:
   task0001:
@@ -133,8 +120,24 @@ tasks:
     notes: "1 conflict cycle resolved via parent-side adoption (contract stand-ins for task0001/0004 superseded by real implementations). AC-5 cursor/search alignment and pending-resize single-reshape are manual items (no WindowHost test harness)"
     branch: em-workflow/mux-vertical-tabs/task0005
 
+  task0006:
+    title: "Move the persistent sidebar to the right edge"
+    plan: tasks/task0006.md
+    files:
+      - src-tauri/src/render/mod.rs
+      - src-tauri/src/ui/mux_sidebar.rs
+      - src-tauri/src/render/cursor.rs
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/app.rs
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR4, NFR3]
+    status: pending
+    notes: null
+
 review:
-  status: completed
+  status: pending
   rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
@@ -169,11 +172,11 @@ requirements:
     tasks: [task0004, task0005]
     tests: [TS-3]
   FR4:
-    title: "Persistent mode (default): fixed panel, overlay keybind is no-op"
+    title: "Persistent mode (default): fixed RIGHT panel, overlay keybind is no-op"
     status: ok
     tbd_reason: null
-    tasks: [task0003, task0005]
-    tests: [TS-4, TS-7]
+    tasks: [task0003, task0005, task0006]
+    tests: [TS-4, TS-7, TS-9]
   FR5:
     title: "Overlay mode: right-side overlay toggled by Ctrl+Z Ctrl+W via DEFAULT_ACTION_BINDINGS"
     status: ok
@@ -202,5 +205,5 @@ requirements:
     title: "Sidebar visuals follow DESIGN.md, consistent with MD3 tokens"
     status: ok
     tbd_reason: null
-    tasks: [task0004]
-    tests: [M-1]
+    tasks: [task0004, task0006]
+    tests: [M-1, TS-9]
