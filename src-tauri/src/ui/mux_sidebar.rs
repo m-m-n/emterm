@@ -222,63 +222,94 @@ fn draw_overlay(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) -> Op
         .default_size(rect.size())
         .constrain(false)
         .show(ctx, |ui| {
-            ui.set_min_size(rect.size());
-            let frame = egui::Frame::none()
-                .fill(fill)
-                .rounding(Rounding::same(OVERLAY_CORNER_RADIUS))
-                .inner_margin(egui::Margin::ZERO)
-                .shadow(crate::ui::dialog::tokens::elevation_shadow());
+            // `egui::Area` caches this id's geometry in per-frame-crossing
+            // `AreaState` and only ever consults `default_size` on the very
+            // first ("sizing pass") frame — from the second frame on,
+            // `state.size.get_or_insert_with(..)` (egui::containers::area::
+            // Area::begin) returns the PREVIOUS frame's cached size
+            // unconditionally, ignoring `default_size` entirely. And
+            // `Ui::set_min_size` "can't shrink the ui, only make it
+            // larger" (its own doc comment) — so on a window SHRINK, the
+            // outer `ui` handed to this closure keeps the old, now-too-
+            // large `max_rect` no matter what we do to it. Neither
+            // mechanism can ever make the painted geometry track a
+            // shrinking window (task0009: the per-frame `rect` computed
+            // above must be authoritative over both, in both directions).
+            //
+            // Escape both by allocating a BRAND-NEW child `Ui` pinned
+            // exactly to the freshly computed `rect` every frame — a new
+            // `Ui` gets a fresh `Placer` built directly from the `max_rect`
+            // we hand it (no history, no grow-only accumulation), so
+            // everything laid out inside is authoritatively sized off THIS
+            // frame's `rect`, never a stale cached one.
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+                // Still register `rect` as this Ui's own minimum size so
+                // it bubbles back up (`Ui::allocate_new_ui` advances the
+                // PARENT's placer by the child's `min_rect`) into what the
+                // `Area` caches as `AreaState.size` for hit-testing next
+                // frame — irrelevant to the painted geometry (which no
+                // longer depends on that cache) but keeps click/hover
+                // routing consistent with the visible card even on the
+                // very next frame before this override runs again.
+                ui.set_min_size(rect.size());
 
-            // `Frame::show` is not used here: `egui::containers::frame::
-            // Prepared::paint` paints `content_ui.min_rect() +
-            // inner_margin` — the CONTENT's actual bounding box, not the
-            // rect `panel_rect` below intends. Since the row list is
-            // manually inset by the panel padding before being laid out,
-            // `content_ui.min_rect()` would otherwise collapse to that
-            // padded-in (smaller) rect, so the background silently
-            // shrinks to hug the rows on the right/bottom edges — the
-            // defect this task fixes (IMPLEMENTATION.md cross-task
-            // decision 3, 2026-07-20 update 2: the computed card rect is
-            // the sole authority for the painted background).
-            let mut prepared = frame.begin(ui);
+                let frame = egui::Frame::none()
+                    .fill(fill)
+                    .rounding(Rounding::same(OVERLAY_CORNER_RADIUS))
+                    .inner_margin(egui::Margin::ZERO)
+                    .shadow(crate::ui::dialog::tokens::elevation_shadow());
 
-            // Pin the frame's own content ui to its full intended size
-            // BEFORE laying out the smaller, padding-shrunk row content,
-            // so `content_ui.min_rect()` cannot end up equal to just the
-            // padded content region.
-            let panel_rect = prepared.content_ui.max_rect();
-            prepared.content_ui.set_min_size(panel_rect.size());
+                // `Frame::show` is not used here: `egui::containers::frame::
+                // Prepared::paint` paints `content_ui.min_rect() +
+                // inner_margin` — the CONTENT's actual bounding box, not the
+                // rect `panel_rect` below intends. Since the row list is
+                // manually inset by the panel padding before being laid out,
+                // `content_ui.min_rect()` would otherwise collapse to that
+                // padded-in (smaller) rect, so the background silently
+                // shrinks to hug the rows on the right/bottom edges — the
+                // defect task0008 fixes (IMPLEMENTATION.md cross-task
+                // decision 3, 2026-07-20 update 2: the computed card rect is
+                // the sole authority for the painted background).
+                let mut prepared = frame.begin(ui);
 
-            let content_rect =
-                panel_rect.shrink2(Vec2::new(PANEL_PAD_HORIZONTAL, PANEL_PAD_VERTICAL));
-            prepared.content_ui.allocate_new_ui(
-                egui::UiBuilder::new().max_rect(content_rect),
-                |ui| {
-                    clicked = draw_rows(ui, entries);
-                },
-            );
+                // Pin the frame's own content ui to its full intended size
+                // BEFORE laying out the smaller, padding-shrunk row content,
+                // so `content_ui.min_rect()` cannot end up equal to just the
+                // padded content region.
+                let panel_rect = prepared.content_ui.max_rect();
+                prepared.content_ui.set_min_size(panel_rect.size());
 
-            #[cfg(test)]
-            {
-                // Mirrors `Prepared::paint`'s private `paint_rect`
-                // computation exactly, so the test hook asserts the rect
-                // the background is ACTUALLY painted with — not a
-                // precomputed copy (the escaped-review defect class: the
-                // task0007 hook recorded the intended rect, which stayed
-                // "correct" even while the real paint silently
-                // disagreed).
-                let painted_rect = prepared.content_ui.min_rect() + prepared.frame.inner_margin;
-                tests::LAST_OVERLAY_CARD.with(|c| {
-                    *c.borrow_mut() = Some(tests::OverlayCardDebug {
-                        rect: painted_rect,
-                        content_rect,
-                        fill,
-                        rounding: OVERLAY_CORNER_RADIUS,
+                let content_rect =
+                    panel_rect.shrink2(Vec2::new(PANEL_PAD_HORIZONTAL, PANEL_PAD_VERTICAL));
+                prepared.content_ui.allocate_new_ui(
+                    egui::UiBuilder::new().max_rect(content_rect),
+                    |ui| {
+                        clicked = draw_rows(ui, entries);
+                    },
+                );
+
+                #[cfg(test)]
+                {
+                    // Mirrors `Prepared::paint`'s private `paint_rect`
+                    // computation exactly, so the test hook asserts the rect
+                    // the background is ACTUALLY painted with — not a
+                    // precomputed copy (the escaped-review defect class: the
+                    // task0007 hook recorded the intended rect, which stayed
+                    // "correct" even while the real paint silently
+                    // disagreed).
+                    let painted_rect = prepared.content_ui.min_rect() + prepared.frame.inner_margin;
+                    tests::LAST_OVERLAY_CARD.with(|c| {
+                        *c.borrow_mut() = Some(tests::OverlayCardDebug {
+                            rect: painted_rect,
+                            content_rect,
+                            fill,
+                            rounding: OVERLAY_CORNER_RADIUS,
+                        });
                     });
-                });
-            }
+                }
 
-            prepared.end(ui);
+                prepared.end(ui);
+            });
         });
     clicked
 }
@@ -816,6 +847,169 @@ mod tests {
             card.fill.a(),
             expected_alpha,
             "overlay fill alpha should be 92% of surface_container_high's alpha channel"
+        );
+    }
+
+    // ── task0009 AC-1/AC-2/AC-3: per-frame card rect authoritative across
+    // resize (cached Area surface state must not leak stale geometry) ─────
+
+    /// Renders TWO consecutive frames of the SAME egui context (so the
+    /// `Area`'s cached per-id surface state carries over between them, the
+    /// exact condition the single-frame `draw_overlay_and_capture_card`
+    /// helper cannot exercise) with different screen rects / widths, and
+    /// returns the SECOND frame's actually-painted card geometry.
+    fn draw_overlay_two_frames_and_capture_card(
+        items: &[SidebarEntry],
+        screen1: Rect,
+        width1: f32,
+        screen2: Rect,
+        width2: f32,
+    ) -> OverlayCardDebug {
+        let ctx = egui::Context::default();
+
+        let mut input1 = RawInput::default();
+        input1.screen_rect = Some(screen1);
+        let _ = ctx.run(input1, |ctx| {
+            let _ = draw(ctx, items, Placement::Overlay, width1);
+        });
+
+        let mut input2 = RawInput::default();
+        input2.screen_rect = Some(screen2);
+        LAST_ROW_RECTS.with(|c| c.borrow_mut().clear());
+        let _ = ctx.run(input2, |ctx| {
+            let _ = draw(ctx, items, Placement::Overlay, width2);
+        });
+        LAST_OVERLAY_CARD
+            .with(|c| *c.borrow())
+            .expect("draw_overlay records the card geometry")
+    }
+
+    fn assert_card_matches_frame(card: OverlayCardDebug, screen: Rect, width: f32, label: &str) {
+        assert!(
+            (card.rect.top() - (screen.top() + OVERLAY_MARGIN)).abs() < 0.5,
+            "{label}: card top {} should track the SECOND frame's terminal area top \
+             (expected ~{})",
+            card.rect.top(),
+            screen.top() + OVERLAY_MARGIN
+        );
+        assert!(
+            (card.rect.right() - (screen.right() - OVERLAY_MARGIN)).abs() < 0.5,
+            "{label}: card right {} should track the SECOND frame's terminal area right \
+             (expected ~{})",
+            card.rect.right(),
+            screen.right() - OVERLAY_MARGIN
+        );
+        assert!(
+            (card.rect.bottom() - (screen.bottom() - OVERLAY_MARGIN)).abs() < 0.5,
+            "{label}: card bottom {} should track the SECOND frame's terminal area bottom \
+             (expected ~{})",
+            card.rect.bottom(),
+            screen.bottom() - OVERLAY_MARGIN
+        );
+        assert!(
+            (card.rect.width() - width).abs() < 0.5,
+            "{label}: card width {} should equal the SECOND frame's width-function value {width}, \
+             not a stale cached value from the first frame",
+            card.rect.width()
+        );
+    }
+
+    #[test]
+    fn ac1_ac2_resize_grow_small_to_large_card_follows_second_frame() {
+        let items = entries(1, 0);
+        let screen_small = Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 400.0));
+        let screen_large = Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 900.0));
+        let width_small = MIN_WIDTH;
+        let width_large = 300.0;
+        let card = draw_overlay_two_frames_and_capture_card(
+            &items,
+            screen_small,
+            width_small,
+            screen_large,
+            width_large,
+        );
+        assert_card_matches_frame(card, screen_large, width_large, "grow small->large");
+    }
+
+    #[test]
+    fn ac1_ac2_resize_shrink_large_to_small_card_follows_second_frame() {
+        let items = entries(1, 0);
+        let screen_large = Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 900.0));
+        let screen_small = Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 400.0));
+        let width_large = 300.0;
+        let width_small = MIN_WIDTH;
+        let card = draw_overlay_two_frames_and_capture_card(
+            &items,
+            screen_large,
+            width_large,
+            screen_small,
+            width_small,
+        );
+        assert_card_matches_frame(card, screen_small, width_small, "shrink large->small");
+    }
+
+    #[test]
+    fn ac3_overlay_row_insets_hold_on_post_resize_frame() {
+        // task0008's row-inset assertions (8/12px) must still hold on the
+        // frame immediately after a resize, not just on a freshly-created
+        // context's first frame.
+        let items = entries(1, 0);
+        let screen1 = Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 400.0));
+        let screen2 = Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 900.0));
+        let width1 = MIN_WIDTH;
+        let width2 = 300.0;
+        let card =
+            draw_overlay_two_frames_and_capture_card(&items, screen1, width1, screen2, width2);
+        let rows = LAST_ROW_RECTS.with(|c| c.borrow().clone());
+        assert_eq!(rows.len(), 1);
+        assert!(
+            (rows[0].right() - (card.rect.right() - PANEL_PAD_HORIZONTAL)).abs() < 0.5,
+            "post-resize row right edge {} should stay inset {PANEL_PAD_HORIZONTAL}px from the \
+             post-resize card's right edge {}",
+            rows[0].right(),
+            card.rect.right()
+        );
+        assert!(
+            (rows[0].left() - (card.rect.left() + PANEL_PAD_HORIZONTAL)).abs() < 0.5,
+            "post-resize row left edge {} should stay inset {PANEL_PAD_HORIZONTAL}px from the \
+             post-resize card's left edge {}",
+            rows[0].left(),
+            card.rect.left()
+        );
+        assert!(
+            (rows[0].top() - (card.rect.top() + PANEL_PAD_VERTICAL)).abs() < 0.5,
+            "post-resize first row top {} should stay inset {PANEL_PAD_VERTICAL}px from the \
+             post-resize card's top edge {}",
+            rows[0].top(),
+            card.rect.top()
+        );
+    }
+
+    #[test]
+    fn ac3_overlay_full_inset_height_holds_with_few_entries_post_resize() {
+        // task0008 AC-3 re-asserted on a post-resize frame: with zero
+        // entries the card must still span the full inset height of the
+        // SECOND frame's terminal area, not the first frame's.
+        let items: Vec<SidebarEntry> = Vec::new();
+        let screen1 = Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 900.0));
+        let screen2 = Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 400.0));
+        let width1 = 300.0;
+        let width2 = MIN_WIDTH;
+        let card =
+            draw_overlay_two_frames_and_capture_card(&items, screen1, width1, screen2, width2);
+        assert!(
+            (card.rect.top() - (screen2.top() + OVERLAY_MARGIN)).abs() < 0.5,
+            "card top {} should stay {OVERLAY_MARGIN}px from the SECOND frame's terminal area \
+             top even with zero entries, got screen2.top() {}",
+            card.rect.top(),
+            screen2.top()
+        );
+        assert!(
+            (card.rect.bottom() - (screen2.bottom() - OVERLAY_MARGIN)).abs() < 0.5,
+            "card bottom {} should stay {OVERLAY_MARGIN}px from the SECOND frame's terminal \
+             area bottom even with zero entries, got screen2.bottom() {}",
+            card.rect.bottom(),
+            screen2.bottom()
         );
     }
 
