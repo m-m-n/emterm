@@ -28,6 +28,7 @@
 | TS-7 | Sidebar visibility | Visibility matrix over (mode, flag, tab mux-state); local tabs never show a sidebar | Unit |
 | TS-8 | Settings round-trip | Toggling the mux-section switch saves the mux settings object with the field and preserves sibling fields | Unit (bun) |
 | TS-9 | Right-edge persistent placement | Persistent panel renders on the right; grid x-origin identical with/without sidebar; usable width shrinks by the width function's value; overlay geometry unchanged | Unit |
+| TS-10 | Overlay floating card | Overlay card rect inset 16 px from the terminal area's top/right/bottom edges; 12 px corner radius; 92%-alpha `surface_container_high` fill; no separator line; zero grid inset and toggle behavior unchanged | Unit |
 
 ## Code Quality Verification
 - Format: not enforced project-wide (rustfmt non-mandatory; do not run
@@ -51,11 +52,11 @@
 | FR2 | task0004, task0005 | TS-2, TS-7 |
 | FR3 | task0004, task0005 | TS-3 |
 | FR4 | task0003, task0005, task0006 | TS-4, TS-7, TS-9 |
-| FR5 | task0003, task0005 | TS-4 |
+| FR5 | task0003, task0005, task0007 | TS-4, TS-10 |
 | FR6 | task0001, task0002 | TS-5, TS-8 |
 | NFR1 | task0005 | TS-6 |
 | NFR2 | task0003, task0005 | TS-4, TS-7 |
-| NFR3 | task0004, task0006 | M-1 (mockup comparison), TS-9 |
+| NFR3 | task0004, task0006, task0007 | M-1 (mockup comparison), TS-9, TS-10 |
 
 ## Manual Testing (E2E Not Possible)
 
@@ -68,7 +69,8 @@ No automated E2E infrastructure exists (test/README.md). Human scenarios:
       compare against
       `feature-docs/mux-vertical-tabs/design/mockups/screen-mux-vertical-tabs.html`
       (states: persistent / overlay-open / many-windows / empty)
-- [ ] M-2: Overlay mode → `Ctrl+Z Ctrl+W` opens/closes the right overlay; a
+- [ ] M-2: Overlay mode → `Ctrl+Z Ctrl+W` opens/closes the right floating
+      card (16 px margins, rounded translucent card, no separator line); a
       full-screen TUI (e.g. Claude Code) does NOT reflow on toggle; flipping
       the setting reflows exactly once
 - [ ] M-3: Persistent mode → `Ctrl+Z Ctrl+W` does nothing; local tabs show
@@ -79,5 +81,5 @@ No automated E2E infrastructure exists (test/README.md). Human scenarios:
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build | 2 | 2 | 0 | 0 |
-| Unit/Integration | TS-1..TS-8 | 8 | 0 | 0 |
+| Unit/Integration | TS-1..TS-10 | 10 | 0 | 0 |
 | Manual | M-1..M-3 | 0 | 0 | 3 |

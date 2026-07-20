@@ -79,11 +79,17 @@ input).
 
 ### 3. Overlay is an egui right side surface drawn after the central panel
 
-The overlay variant renders on the right edge over the terminal area without
+The overlay variant renders over the terminal area's right side without
 affecting grid geometry, styled per the design step (surface-container-high,
 elevation shadow, no scrim, no animation). Placement variant selection is
 data-driven (settings bool + runtime flag), not duplicated widget code.
 Affects task0004, task0005.
+
+2026-07-20 update (floating card): the overlay is a floating card — uniform
+16 px margin from the terminal area's top/right/bottom edges, 12 px corner
+radius, 92%-alpha surface-container-high fill, no separator line — instead
+of a flush edge panel. Geometry stays entirely inside the overlay draw path
+(zero grid inset unchanged). Affects task0007.
 
 ### 4. No protocol changes
 

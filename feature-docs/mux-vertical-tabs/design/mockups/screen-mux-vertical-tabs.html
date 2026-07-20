@@ -22,9 +22,11 @@
     --md-sys-color-outline-variant: #49454F;
     /* UI-DESIGN-GUIDELINES tokens */
     --shape-corner-full: 9999px;
+    --shape-corner-medium: 12px;
     --spacing-xxs: 4px;
     --spacing-xs: 8px;
     --spacing-sm: 12px;
+    --spacing-md: 16px;
     /* terminal surface stand-in */
     --terminal-bg: #101014;
     --terminal-fg: #d4d4d4;
@@ -139,12 +141,22 @@
     text-overflow: ellipsis;
   }
 
-  /* overlay placement variant: same component, same right edge, but drawn
-     over the terminal with an elevated surface */
+  /* overlay placement variant: FLOATING CARD (2026-07-20 実機フィードバック).
+     Uniform 16px (spacing-md) margin from the terminal area's top/right/
+     bottom edges, corner-medium radius, 92%-opacity surface, elevation-3
+     shadow. No separator line — the card's own edge is the boundary. */
   .vtabs.overlay {
     position: absolute;
-    top: 0; right: 0; bottom: 0;
-    background: var(--md-sys-color-surface-container-high);
+    top: var(--spacing-md);
+    right: var(--spacing-md);
+    bottom: var(--spacing-md);
+    border-left: none;
+    border-radius: var(--shape-corner-medium);
+    background: color-mix(
+      in srgb,
+      var(--md-sys-color-surface-container-high) 92%,
+      transparent
+    );
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.30); /* elevation-3 */
   }
 
@@ -198,7 +210,7 @@
      STATE: overlay-open — right overlay over full-width terminal
      ====================================================================== -->
 <section data-state="overlay-open">
-  <h2>overlay mode, open (Ctrl+Z Ctrl+W) — right overlay, terminal keeps full width</h2>
+  <h2>overlay mode, open (Ctrl+Z Ctrl+W) — floating card, uniform 16px margin, 92% opacity, terminal keeps full width</h2>
   <div class="app">
     <div class="tab-bar">
       <div class="tab">1 zsh</div>
