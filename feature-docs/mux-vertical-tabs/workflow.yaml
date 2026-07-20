@@ -35,16 +35,34 @@ workflow:
     status: completed
     completed_at_commit: null
   - id: implement
-    status: pending
-    base_commit: null
+    status: completed
+    base_commit: cfdcce68caed5dba56db61362a1b8a6e3469fbe4
+    completed_at_commit: e85df43db196de4bdcf91b476d3363db9222d4cb
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: e85df43db196de4bdcf91b476d3363db9222d4cb
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: e85df43db196de4bdcf91b476d3363db9222d4cb
+    result: pass
     failed_items: []
+    notes: >-
+      Round-3 (task0007 overlay floating card) verification. cargo check
+      pass / bun run typecheck pass / bun test 171 pass 0 fail (after
+      aligning the integration worktree's bun.lock to the main tree's
+      happy-dom 20.4.0 pin — fresh install resolved 20.11.0 and broke 2
+      unrelated viewer/entry tests). cargo test --lib --test-threads=1:
+      2410 pass, 5 fail — all in the documented pre-existing tabs.rs flaky
+      set (off-thread replay timing + welcome_without_windows_leaves_group_none),
+      confirmed unrelated by re-running the same tests on main without
+      task0007 (identical failures). New TS-10 (floating card: 16px
+      top/right/bottom inset, 12px radius, 92% alpha, no separator) covered
+      by task0007's mux_sidebar unit tests, all passing. Manual M-1..M-3
+      remain for the user (M-2 now includes the floating-card visual
+      check).
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: e85df43db196de4bdcf91b476d3363db9222d4cb
 
 tasks:
   task0001:
@@ -146,22 +164,20 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR5, NFR3]
-    status: pending
-    notes: null
+    status: merged
+    notes: "Fetched gitignored font assets via scripts/fetch-fonts.sh inside the worktree to unblock build.rs. Only pre-existing tabs.rs flaky set observed (baseline-confirmed via stash)"
+    branch: em-workflow/mux-vertical-tabs/task0007
 
 review:
   status: completed
-  rounds_completed: 2
+  rounds_completed: 3
   plan:
     floor: [comprehensive, spec]
-    discretionary:
-      - perspective: architecture
-        reason: "task0006 が grid/cursor/search の origin 計算を横断変更するため"
+    discretionary: []
     codex_cross_validation: false
   perspectives:
     comprehensive: completed
     spec: completed
-    architecture: completed
   residual_critical_high: 0
   needs_rework: false
 

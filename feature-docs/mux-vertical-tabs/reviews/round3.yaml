@@ -1,0 +1,28 @@
+round: 3
+executed_at: "2026-07-20T19:46:19+09:00"
+scope:
+  review_mode: diff
+  base_commit: cfdcce68caed5dba56db61362a1b8a6e3469fbe4
+  head_commit: e85df43db196de4bdcf91b476d3363db9222d4cb
+  changed_files:
+    - src-tauri/src/ui/mux_sidebar.rs
+plan:
+  floor: [comprehensive, spec]
+  discretionary: []
+  codex_cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+# The comprehensive reviewer's interim report raised one medium (negative
+# card height when the terminal area is shorter than 32 px,
+# src-tauri/src/ui/mux_sidebar.rs:214, stable_id 4608cb2f067b9c08) but its
+# final verification pass dismissed it as non-actionable: the region cannot
+# get that short given title/tab/status bars + winit min window size, and
+# egui clamps to 0 without panicking. Final findings list is empty.
+findings: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

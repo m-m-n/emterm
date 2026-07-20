@@ -1,10 +1,12 @@
 feature: mux-vertical-tabs
-collected_at: "2026-07-20T16:58:36+09:00"
-session_ids: [417e05e9-2005-4a89-9c9c-07f1b58641de]
+collected_at: "2026-07-20T19:52:58+09:00"
+session_ids:
+  - 417e05e9-2005-4a89-9c9c-07f1b58641de
+  - 503a8fd2-67e1-4456-8800-2cd011e3f8c4
 note: >-
-  Second develop pass (task0006: move the persistent sidebar to the right
-  edge per user request). Round-1 signals preserved below; round-2 signals
-  appended.
+  Third develop pass (task0007: overlay reshaped from a flush right-edge
+  panel into a floating card per 実機フィードバック via /em-workflow:design).
+  Round-1/2 signals preserved below; round-3 signals appended.
 signals:
   review_critical_high:
     # round 1
@@ -24,6 +26,8 @@ signals:
       file: src-tauri/src/window_host.rs
       title: "スクロールバーのクリック抑止領域が persistent サイドバー幅ぶんズレる（task0006 右寄せの副作用）"
       resolution: fixed
+    # round 3: critical/high なし（medium 1 件はレビュアー自身が最終検証で
+    # 非到達と判断して取り下げ — round3.yaml 参照）
   conflict_reworks:
     - {task: task0005, retries: 1}
   file_prediction_misses:
@@ -65,3 +69,12 @@ lessons_candidates:
     bun.lock の happy-dom ピン揃え）は round 1 と同じ手当てが再び必要だった。
     develop 再実行でも同じ落とし穴を踏むので、verify 前の環境準備は
     チェックリスト化する価値がある。
+  - >-
+    round 3 でも同じ環境準備 2 点（fetch-fonts.sh + bun.lock ピン揃え）を
+    三たび踏んだ。integration worktree 作成直後に機械的に流す前処理として
+    完全に定型化できることが確定した。
+  - >-
+    レビュアーが最初の報告後に自主継続して指摘を取り下げるケースがあった
+    （負の高さ edge case → 最小ウィンドウ制約で非到達と自己判定）。同一
+    task-id から複数回の完了通知が来る場合、最後の構造化出力を正とする
+    運用で問題なかった。
