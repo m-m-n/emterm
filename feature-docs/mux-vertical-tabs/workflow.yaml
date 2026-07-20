@@ -35,16 +35,34 @@ workflow:
     status: completed
     completed_at_commit: null
   - id: implement
-    status: pending
-    base_commit: null
+    status: completed
+    base_commit: aeb238b3550b7d622695cbfe986a9e87bb216607
+    completed_at_commit: 65fb28cb42c5e1582a7a28870abad54503527de2
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 65fb28cb42c5e1582a7a28870abad54503527de2
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 65fb28cb42c5e1582a7a28870abad54503527de2
+    result: pass
     failed_items: []
+    notes: >-
+      Round-6 (task0011 overlay press suppression) verification. cargo
+      check pass / bun run typecheck pass / bun test 171 pass 0 fail
+      (bun.lock aligned to the main tree's happy-dom 20.4.0 pin, same
+      prep as prior rounds) / cargo test --lib --test-threads=1: 2426
+      pass, 4 fail — the identical documented pre-existing tabs.rs flaky
+      set (ts9/ts11/ts13 off-thread replay timing +
+      welcome_without_windows_leaves_group_none), none in
+      window_host/mux_sidebar. New TS-14 (press suppression via the
+      shared point_in_sidebar helper; Pressed-edge-only; guard/wheel
+      shared-helper structural tests) covered by task0011's tests, all
+      passing; test-catches-bug verified by reverting the fix. Manual
+      M-4 extension (drag on the open overlay card leaves no terminal
+      selection) remains for the user.
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 65fb28cb42c5e1582a7a28870abad54503527de2
 
 tasks:
   task0001:
@@ -200,12 +218,13 @@ tasks:
     domains: [ui, input-handling]
     complexity: low
     requirements: [FR5, NFR2]
-    status: pending
-    notes: null
+    status: merged
+    notes: "Press guard now routes through the shared point_in_sidebar helper (same as the wheel guard); Pressed-edge-only semantics kept. Source-scan regression tests verified red on fix-revert. Implementer initially ran cargo from the wrong cwd, caught and re-verified before commit"
+    branch: em-workflow/mux-vertical-tabs/task0011
 
 review:
   status: completed
-  rounds_completed: 5
+  rounds_completed: 6
   plan:
     floor: [comprehensive, security, spec]
     discretionary: []

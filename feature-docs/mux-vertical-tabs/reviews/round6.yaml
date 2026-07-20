@@ -1,0 +1,36 @@
+round: 6
+executed_at: "2026-07-20T23:51:27+09:00"
+scope:
+  review_mode: diff
+  base_commit: aeb238b3550b7d622695cbfe986a9e87bb216607
+  head_commit: 65fb28cb42c5e1582a7a28870abad54503527de2
+  changed_files:
+    - src-tauri/src/window_host.rs
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+# task0011 (suppress terminal selection under the overlay card): all five
+# reviewers returned zero findings. Verified in depth: the old
+# persistent-only width test is exactly subsumed (same sidebar_width
+# source; the added top_chrome bound is covered by the earlier top-strip
+# return), the overlay-card suppression is the intended new behavior,
+# Pressed-edge-only semantics hold (Released over the sidebar commits a
+# terminal-started drag / no-ops gracefully otherwise), and the egui
+# PointerButton forward stays ahead of the early return so sidebar row
+# clicks keep working. Noted pre-existing out-of-scope behavior (not a
+# round-6 regression): middle-click paste over the sidebar reaches the
+# terminal — the guard was Left-only before and after this change.
+findings: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

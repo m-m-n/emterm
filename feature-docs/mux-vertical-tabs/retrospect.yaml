@@ -1,14 +1,13 @@
 feature: mux-vertical-tabs
-collected_at: "2026-07-20T22:47:07+09:00"
+collected_at: "2026-07-20T23:55:10+09:00"
 session_ids:
   - 417e05e9-2005-4a89-9c9c-07f1b58641de
   - 503a8fd2-67e1-4456-8800-2cd011e3f8c4
 note: >-
-  Fifth develop pass (task0009: overlay card resize tracking — egui Area
-  caches per-id size and set_min_size is grow-only; task0010: wheel over
-  the sidebar routed to the list via shared hit-region helpers + a winit
-  MouseWheel guard). Round-1..4 signals preserved below; round-5 signals
-  appended.
+  Sixth develop pass (task0011: press on the overlay card no longer
+  starts a terminal selection — the MouseInput press guard now routes
+  through the shared point_in_sidebar helper covering both placements).
+  Round-1..5 signals preserved below; round-6 signals appended.
 signals:
   review_critical_high:
     # round 1
@@ -34,6 +33,8 @@ signals:
     # round 5: critical/high なし。medium 2 件（codex:spec のみ検出、
     # round5.yaml 参照 — padding 帯のホイール dead-zone は unresolved、
     # round-1 deferred 項目 a683038081ce469c の再指摘は re-deferred）
+    # round 6: critical/high なし（5 レビュアー全員 findings ゼロ —
+    # round6.yaml 参照。middle-click paste は pre-existing で対象外と明記）
   conflict_reworks:
     - {task: task0005, retries: 1}
   file_prediction_misses:
@@ -116,3 +117,11 @@ lessons_candidates:
     出し、claude 3 観点は 0 件 — クロスモデルは「見逃し拾い」よりも
     「境界ケースの別解釈」を出す傾向。codex-only confidence 50 の
     運用どおり記録して完了ゲートには影響しなかった。
+  - >-
+    round 2 の教訓（winit 手動ガードが egui パネル幾何に追従しない）は
+    round 5 のホイール、round 6 の押下ガードと同一クラスで 3 度目。
+    サイドバー導入時に「winit 側で幾何判定している全イベント種
+    （wheel / press / middle-click / motion）」を一括で棚卸しして
+    共有ヘルパーに寄せるタスクを最初から切っておけば、実機バグ報告
+    2 往復を省けた可能性が高い。同種の UI 面追加時は plan 段階で
+    イベント種の総当たり表を作る価値がある。
