@@ -1,8 +1,13 @@
 feature: mux-vertical-tabs
-collected_at: "2026-07-20T14:42:02+09:00"
+collected_at: "2026-07-20T16:58:36+09:00"
 session_ids: [417e05e9-2005-4a89-9c9c-07f1b58641de]
+note: >-
+  Second develop pass (task0006: move the persistent sidebar to the right
+  edge per user request). Round-1 signals preserved below; round-2 signals
+  appended.
 signals:
   review_critical_high:
+    # round 1
     - stable_id: aff70644e3bdd29f
       category: comprehensive
       file: src-tauri/src/ui/mux_sidebar.rs
@@ -13,6 +18,12 @@ signals:
       file: src-tauri/src/window_host.rs
       title: "Sidebar visibility changes resize every PTY"
       resolution: deferred
+    # round 2
+    - stable_id: a6671519566d1452
+      category: comprehensive
+      file: src-tauri/src/window_host.rs
+      title: "スクロールバーのクリック抑止領域が persistent サイドバー幅ぶんズレる（task0006 右寄せの副作用）"
+      resolution: fixed
   conflict_reworks:
     - {task: task0005, retries: 1}
   file_prediction_misses:
@@ -21,31 +32,36 @@ signals:
     - task: task0005
       files: [src-tauri/src/settings.rs, src-tauri/src/ui/mux_sidebar.rs, src-tauri/src/ui/mod.rs]
   verification_failures: []
-  discretionary_perspectives: []
+  discretionary_perspectives:
+    - perspective: architecture
+      reason: "task0006 が grid/cursor/search の origin 計算を横断変更するため（round 2）"
   declined_findings: []
 lessons_candidates:
   - >-
-    並行タスクが同一 struct（MuxSettings）へ別々にフィールドを追加すると、
-    git のテキストマージが非重複 hunk として黙って両方取り込み、重複
-    フィールドのコンパイルエラーになる（merge-task.sh は exit 0）。
-    task0003 と task0005 の双方が task0001 の契約フィールドのスタンドイン
-    を作って踏んだ。プランナーが「同一 struct への追加は1タスクに集約」
-    または「スタンドイン禁止・コンパイルゲートは cfg で逃がす」等の
-    規約を検討する余地がある。
+    「サイドバーを左→右に移す」という一見小さな UI 変更が、CentralPanel の
+    右端に依存する別コンポーネント（右端スクロールバーのクリック抑止ガード）
+    を巻き込んで high 級リグレッションになった。egui SidePanel は
+    CentralPanel を縮めるが、winit 生イベントを幾何で手動ガードしている
+    箇所（top/bottom strip / scrollbar）はその縮小を自動追従しない。
+    「ウィンドウの右端」を絶対座標で参照している全ガードは、サイドバーの
+    inset を反映する必要がある。geometry を触る変更では
+    「絶対 window 端に依存する hit-test の棚卸し」をレビュー観点に加える
+    価値がある。
   - >-
-    integration worktree での検証には環境準備が2つ必要だった:
-    (1) gitignored フォント資産のコピー（build.rs が無いと panic）、
-    (2) bun.lock が git 管理外のため、素の bun install が新しい
-    happy-dom (20.11.0) を解決して既存 viewer テストが2件壊れる。
-    main tree の bun.lock をコピーして --frozen-lockfile で揃えるのが正。
+    right-edge 配置は left-edge より geometry がシンプルになった（x-origin
+    項が全廃され width-only inset に）。ただし副作用として、以前 x-origin に
+    inset を足していたヘルパー mux_sidebar_x_inset が dead API 化し、名前
+    （x_inset）が実挙動（width-only）と矛盾する medium が残った。配置変更で
+    「不要になった旧経路のヘルパー」を消し忘れやすい。
   - >-
-    tabs.rs の既知 flaky セット（off-thread replay timing 6件 +
-    welcome_without_windows_leaves_group_none）は --test-threads=1 でも
-    サンドボックス CPU 競合下で落ちる。ベースライン比較（git stash）で
-    既存性を確認する運用が3タスクで独立に機能した。
+    2回目の develop 差分再実行では、workflow.yaml の後段 step
+    (implement/review/verify/retrospect) を pending に戻し、追加タスク
+    (task0006) を tasks に足し、要件マッピングを更新する手当てが必要だった。
+    upstream 3 step (spec/design/plan) は「変更した内容を反映して completed
+    のまま commit を現行 HEAD に更新」で回せた。差分再実行のための
+    workflow.yaml 手当ては手動で、定型化の余地がある。
   - >-
-    「mux タブのみ表示のサイドバー」×「全タブ共有 grid」の組合せで
-    タブ切替 resize が構造的に発生する点は、spec 作成時に既存
-    アーキテクチャ制約（共有 cell_size）を洗い出せていれば事前に
-    決められた。UI 面積を変える機能の spec では「grid/viewport への
-    影響」を必須確認項目にする価値がある。
+    integration worktree の検証環境準備（gitignored フォント + 非追跡
+    bun.lock の happy-dom ピン揃え）は round 1 と同じ手当てが再び必要だった。
+    develop 再実行でも同じ落とし穴を踏むので、verify 前の環境準備は
+    チェックリスト化する価値がある。
