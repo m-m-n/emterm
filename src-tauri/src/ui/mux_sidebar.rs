@@ -216,15 +216,6 @@ fn draw_overlay(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) -> Op
     );
     let fill = md3::state_layer(md3::surface_container_high(), OVERLAY_FILL_ALPHA);
 
-    #[cfg(test)]
-    tests::LAST_OVERLAY_CARD.with(|c| {
-        *c.borrow_mut() = Some(tests::OverlayCardDebug {
-            rect,
-            fill,
-            rounding: OVERLAY_CORNER_RADIUS,
-        });
-    });
-
     egui::Area::new(egui::Id::new("mux-sidebar-overlay"))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
@@ -237,14 +228,57 @@ fn draw_overlay(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) -> Op
                 .rounding(Rounding::same(OVERLAY_CORNER_RADIUS))
                 .inner_margin(egui::Margin::ZERO)
                 .shadow(crate::ui::dialog::tokens::elevation_shadow());
-            frame.show(ui, |ui| {
-                let panel_rect = ui.max_rect();
-                let content_rect =
-                    panel_rect.shrink2(Vec2::new(PANEL_PAD_HORIZONTAL, PANEL_PAD_VERTICAL));
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(content_rect), |ui| {
+
+            // `Frame::show` is not used here: `egui::containers::frame::
+            // Prepared::paint` paints `content_ui.min_rect() +
+            // inner_margin` — the CONTENT's actual bounding box, not the
+            // rect `panel_rect` below intends. Since the row list is
+            // manually inset by the panel padding before being laid out,
+            // `content_ui.min_rect()` would otherwise collapse to that
+            // padded-in (smaller) rect, so the background silently
+            // shrinks to hug the rows on the right/bottom edges — the
+            // defect this task fixes (IMPLEMENTATION.md cross-task
+            // decision 3, 2026-07-20 update 2: the computed card rect is
+            // the sole authority for the painted background).
+            let mut prepared = frame.begin(ui);
+
+            // Pin the frame's own content ui to its full intended size
+            // BEFORE laying out the smaller, padding-shrunk row content,
+            // so `content_ui.min_rect()` cannot end up equal to just the
+            // padded content region.
+            let panel_rect = prepared.content_ui.max_rect();
+            prepared.content_ui.set_min_size(panel_rect.size());
+
+            let content_rect =
+                panel_rect.shrink2(Vec2::new(PANEL_PAD_HORIZONTAL, PANEL_PAD_VERTICAL));
+            prepared.content_ui.allocate_new_ui(
+                egui::UiBuilder::new().max_rect(content_rect),
+                |ui| {
                     clicked = draw_rows(ui, entries);
+                },
+            );
+
+            #[cfg(test)]
+            {
+                // Mirrors `Prepared::paint`'s private `paint_rect`
+                // computation exactly, so the test hook asserts the rect
+                // the background is ACTUALLY painted with — not a
+                // precomputed copy (the escaped-review defect class: the
+                // task0007 hook recorded the intended rect, which stayed
+                // "correct" even while the real paint silently
+                // disagreed).
+                let painted_rect = prepared.content_ui.min_rect() + prepared.frame.inner_margin;
+                tests::LAST_OVERLAY_CARD.with(|c| {
+                    *c.borrow_mut() = Some(tests::OverlayCardDebug {
+                        rect: painted_rect,
+                        content_rect,
+                        fill,
+                        rounding: OVERLAY_CORNER_RADIUS,
+                    });
                 });
-            });
+            }
+
+            prepared.end(ui);
         });
     clicked
 }
@@ -385,11 +419,14 @@ mod tests {
             const { RefCell::new(None) };
     }
 
-    /// Test-only snapshot of the overlay card's computed geometry/paint
-    /// parameters, recorded by `draw_overlay` (AC-1, AC-2).
+    /// Test-only snapshot of the overlay card's ACTUALLY-PAINTED geometry
+    /// (`rect` mirrors `Prepared::paint`'s own computation, not a
+    /// precomputed copy) plus the row content region derived from it
+    /// (`content_rect`), recorded by `draw_overlay` (AC-1, AC-2, AC-3).
     #[derive(Debug, Clone, Copy)]
     pub(super) struct OverlayCardDebug {
         pub rect: Rect,
+        pub content_rect: Rect,
         pub fill: Color32,
         pub rounding: f32,
     }
@@ -603,7 +640,7 @@ mod tests {
         );
     }
 
-    // ── task0007 AC-1/AC-2/AC-3: overlay floating-card geometry ───────
+    // ── task0007/task0008 AC-1/AC-2/AC-3: overlay floating-card geometry ──
 
     fn draw_overlay_and_capture_card(items: &[SidebarEntry], width: f32) -> OverlayCardDebug {
         let ctx = egui::Context::default();
@@ -617,8 +654,34 @@ mod tests {
             .expect("draw_overlay records the card geometry")
     }
 
+    /// Runs one frame of the overlay variant and returns BOTH the
+    /// actually-painted card geometry and every row rect from that SAME
+    /// frame, so tests can cross-check two independently-produced hooks
+    /// (task0008 AC-1/AC-2 — this is what the task0007 hook could not do,
+    /// since it recorded a precomputed rect instead of the real paint).
+    fn draw_overlay_and_capture_card_and_rows(
+        items: &[SidebarEntry],
+        width: f32,
+    ) -> (OverlayCardDebug, Vec<Rect>) {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(screen_rect());
+        LAST_ROW_RECTS.with(|c| c.borrow_mut().clear());
+        let _ = ctx.run(input, |ctx| {
+            let _ = draw(ctx, items, Placement::Overlay, width);
+        });
+        let card = LAST_OVERLAY_CARD
+            .with(|c| *c.borrow())
+            .expect("draw_overlay records the card geometry");
+        let rows = LAST_ROW_RECTS.with(|c| c.borrow().clone());
+        (card, rows)
+    }
+
     #[test]
-    fn overlay_card_rect_is_inset_16px_from_terminal_area_top_right_bottom() {
+    fn ac1_overlay_card_painted_rect_is_inset_16px_from_terminal_area_top_right_bottom() {
+        // AC-1: asserted against the rect the background is ACTUALLY
+        // painted with (`OverlayCardDebug::rect` now mirrors
+        // `Prepared::paint`'s own computation), not a precomputed copy.
         let items = entries(1, 0);
         let card = draw_overlay_and_capture_card(&items, MIN_WIDTH);
         let area = screen_rect();
@@ -644,6 +707,94 @@ mod tests {
             (card.rect.width() - MIN_WIDTH).abs() < 0.01,
             "card width {} should equal the shared width function's value {MIN_WIDTH}",
             card.rect.width()
+        );
+    }
+
+    #[test]
+    fn ac3_overlay_card_spans_full_inset_height_with_zero_entries() {
+        // AC-3: with (even) no entries, the card must still span the full
+        // inset height — the painted background does not shrink to hug
+        // an empty/short content region.
+        let items: Vec<SidebarEntry> = Vec::new();
+        let card = draw_overlay_and_capture_card(&items, MIN_WIDTH);
+        let area = screen_rect();
+        assert!(
+            (card.rect.top() - (area.top() + OVERLAY_MARGIN)).abs() < 0.01,
+            "card top {} should stay {OVERLAY_MARGIN}px from the terminal area's top even \
+                 with zero entries, got area.top() {}",
+            card.rect.top(),
+            area.top()
+        );
+        assert!(
+            (card.rect.bottom() - (area.bottom() - OVERLAY_MARGIN)).abs() < 0.01,
+            "card bottom {} should stay {OVERLAY_MARGIN}px from the terminal area's bottom \
+             even with zero entries (the area below the last row renders as plain card \
+             surface, not a shrunk-to-content background), got area.bottom() {}",
+            card.rect.bottom(),
+            area.bottom()
+        );
+    }
+
+    #[test]
+    fn ac2_overlay_row_rects_are_inset_from_the_painted_card_by_panel_padding() {
+        // AC-2 (left/right/top): cross-checks the row-paint hook against
+        // the card-paint hook from the SAME frame. Under the pre-fix
+        // defect, the painted card rect collapsed to the padded content
+        // rect, so row.right() == card.rect.right() (no inset) — this
+        // test fails under that defect and passes once the card rect is
+        // the authoritative, larger rect.
+        let items = entries(1, 0);
+        let (card, rows) = draw_overlay_and_capture_card_and_rows(&items, MIN_WIDTH);
+        assert_eq!(rows.len(), 1);
+        assert!(
+            (rows[0].right() - (card.rect.right() - PANEL_PAD_HORIZONTAL)).abs() < 0.5,
+            "row right edge {} should be inset {PANEL_PAD_HORIZONTAL}px from the painted \
+             card's right edge {} — the row must not touch the card's edge",
+            rows[0].right(),
+            card.rect.right()
+        );
+        assert!(
+            (rows[0].left() - (card.rect.left() + PANEL_PAD_HORIZONTAL)).abs() < 0.5,
+            "row left edge {} should be inset {PANEL_PAD_HORIZONTAL}px from the painted \
+             card's left edge {}",
+            rows[0].left(),
+            card.rect.left()
+        );
+        assert!(
+            (rows[0].top() - (card.rect.top() + PANEL_PAD_VERTICAL)).abs() < 0.5,
+            "first row top {} should be inset {PANEL_PAD_VERTICAL}px from the painted card's \
+             top edge {}",
+            rows[0].top(),
+            card.rect.top()
+        );
+    }
+
+    #[test]
+    fn ac2_overlay_scroll_viewport_bottom_not_last_row_is_inset_from_the_painted_card() {
+        // AC-2 (bottom): "bottom applies to the scroll viewport's extent,
+        // not each row". With a single short row far from filling the
+        // card, the row's OWN bottom sits nowhere near the card's bottom,
+        // but the row list's scrollable content region
+        // (`OverlayCardDebug::content_rect`, the same rect the row ui is
+        // actually laid out into) must still reach exactly the panel
+        // padding above the painted card's bottom edge.
+        let items = entries(1, 0);
+        let (card, rows) = draw_overlay_and_capture_card_and_rows(&items, MIN_WIDTH);
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].bottom() < card.rect.bottom() - PANEL_PAD_VERTICAL - 1.0,
+            "sanity: with only one row the row's own bottom {} should sit well above the \
+             card's padded bottom {} — otherwise this test isn't exercising the \
+             viewport-vs-row distinction",
+            rows[0].bottom(),
+            card.rect.bottom() - PANEL_PAD_VERTICAL
+        );
+        assert!(
+            (card.content_rect.bottom() - (card.rect.bottom() - PANEL_PAD_VERTICAL)).abs() < 0.01,
+            "scroll viewport bottom {} should be {PANEL_PAD_VERTICAL}px above the painted \
+             card's bottom edge {}, regardless of how far the rows themselves reach",
+            card.content_rect.bottom(),
+            card.rect.bottom()
         );
     }
 
