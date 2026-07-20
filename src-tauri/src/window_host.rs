@@ -3868,6 +3868,64 @@ impl ApplicationHandler for PocApp {
                         return;
                     }
                 }
+                // task0010 FR2/NFR2: a wheel over the mux sidebar
+                // (persistent panel OR overlay card) scrolls the sidebar's
+                // window list instead of the terminal scrollback /
+                // AltScreen arrow-scroll path. `point_in_sidebar` is the
+                // SAME hit-region derivation `ui::mux_sidebar`'s draw path
+                // uses (IMPLEMENTATION.md cross-task decision 3.5), so this
+                // guard can never independently drift from what's actually
+                // painted — the round-2 lesson a manual, re-derived
+                // winit-side guard caused. `visible_placement` resolves to
+                // `None` on local tabs and sidebar-hidden states, so
+                // `point_in_sidebar` always answers `false` there and this
+                // block is a complete no-op (NFR2).
+                {
+                    let visible_placement = match self.app.mux_sidebar_visibility() {
+                        crate::app::MuxSidebarVisibility::Hidden => None,
+                        crate::app::MuxSidebarVisibility::Persistent => {
+                            Some(crate::ui::mux_sidebar::Placement::Persistent)
+                        }
+                        crate::app::MuxSidebarVisibility::Overlay => {
+                            Some(crate::ui::mux_sidebar::Placement::Overlay)
+                        }
+                    };
+                    if visible_placement.is_some() {
+                        let logical = host
+                            .cursor_pos
+                            .to_logical::<f32>(host.pixels_per_point as f64);
+                        let window_size_logical = host
+                            .window
+                            .inner_size()
+                            .to_logical::<f32>(host.pixels_per_point as f64);
+                        let top_chrome =
+                            crate::ui::mux_sidebar::top_chrome_inset(self.app.show_tab_bar);
+                        if crate::ui::mux_sidebar::point_in_sidebar(
+                            egui::pos2(logical.x, logical.y),
+                            visible_placement,
+                            egui::vec2(window_size_logical.width, window_size_logical.height),
+                            top_chrome,
+                            host.status_bar_bot_inset_logical,
+                        ) {
+                            let (unit, ev_delta) = match delta {
+                                MouseScrollDelta::LineDelta(x, y) => {
+                                    (egui::MouseWheelUnit::Line, egui::vec2(x, y))
+                                }
+                                MouseScrollDelta::PixelDelta(p) => (
+                                    egui::MouseWheelUnit::Point,
+                                    egui::vec2(p.x as f32, p.y as f32),
+                                ),
+                            };
+                            host.pending_egui_events.push(egui::Event::MouseWheel {
+                                unit,
+                                delta: ev_delta,
+                                modifiers: egui::Modifiers::default(),
+                            });
+                            host.window().request_redraw();
+                            return;
+                        }
+                    }
+                }
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => {
@@ -4990,6 +5048,52 @@ mod tests {
     fn fr1_wheel_sub_notch_pixel_delta_is_noop() {
         assert_eq!(alternate_scroll_wheel_bytes(0.4, true, true, true), None);
         assert_eq!(alternate_scroll_wheel_bytes(-0.4, true, true, true), None);
+    }
+
+    // ── task0010 AC-2/AC-3: mux sidebar wheel-routing guard wiring ─────
+
+    /// Regression guard: the `MouseWheel` handler must query
+    /// `ui::mux_sidebar::point_in_sidebar` (the shared hit-region
+    /// derivation task0010 introduces) and `return` early on a hit, BEFORE
+    /// it reaches the terminal scroll path — this is what makes AC-2 ("the
+    /// terminal scroll path is skipped": no scrollback movement, no
+    /// AltScreen arrow bytes, no alt-scroll accumulator change) true, and
+    /// what makes AC-3 (byte-identical behavior everywhere the helper
+    /// returns `false`) hold — the branch does nothing but query-and-maybe-
+    /// return, so a `false` answer falls through to the untouched code
+    /// below unconditionally. Source-scans the `MouseWheel` arm's body the
+    /// same way `cell_metrics_px_origin_x_has_no_sidebar_term` guards
+    /// `cell_metrics_px`'s origin math: the correctness of the DECISION
+    /// itself (which points are "inside" the sidebar) is exercised by
+    /// `ui::mux_sidebar::tests::ac1_*` / `ac4_*`; this test pins the
+    /// STRUCTURAL property that wires that decision to the right place in
+    /// the winit handler. Pixel-level scroll feel is manual (M-4, per the
+    /// task plan's Test Notes).
+    #[test]
+    fn mouse_wheel_handler_routes_sidebar_hits_to_egui_before_the_terminal_scroll_path() {
+        let src = include_str!("window_host.rs");
+        let start = src
+            .find("WindowEvent::MouseWheel { delta, .. } =>")
+            .expect("MouseWheel arm not found in window_host.rs");
+        let body = &src[start..];
+        let sidebar_guard_pos = body.find("mux_sidebar::point_in_sidebar").expect(
+            "MouseWheel handler must query ui::mux_sidebar::point_in_sidebar (AC-4: the \
+                 shared hit-region derivation, not a re-derived guard)",
+        );
+        let terminal_scroll_pos = body
+            .find("let lines = match delta {")
+            .expect("terminal scroll path marker (`let lines = match delta {`) not found");
+        assert!(
+            sidebar_guard_pos < terminal_scroll_pos,
+            "the sidebar hit-region guard must run BEFORE the terminal scroll path so a hit \
+             skips scrollback / AltScreen-arrow movement (AC-2)"
+        );
+        let between_guard_and_scroll = &body[sidebar_guard_pos..terminal_scroll_pos];
+        assert!(
+            between_guard_and_scroll.contains("return;"),
+            "the sidebar hit-region guard must `return` on a hit so the terminal scroll path \
+             is genuinely skipped, not merely forwarded-then-continued (AC-2)"
+        );
     }
 
     // ── skk_mode: bare Ctrl+J swallow ────────────────────────────────
