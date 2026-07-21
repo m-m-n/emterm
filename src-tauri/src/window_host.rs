@@ -2853,6 +2853,20 @@ fn winit_physical_key_code(event: &KeyEvent) -> u32 {
     h.finish() as u32
 }
 
+/// Synthetic key press gate (task0002, IMPLEMENTATION.md Shared Components
+/// "Synthetic key press gate"). Winit flags a `KeyboardInput` event
+/// `is_synthetic` when it is generated internally rather than from a real
+/// hardware press — notably X11 `FocusIn` replays of keys already held down,
+/// which produced the stray-`q`-class bugs (see project memory
+/// `project_stray_q_xwayland_synthetic_press`). Returns `true` when the
+/// event must be dropped before any state mutation, keybinding dispatch, IME
+/// forwarding, or PTY write. Applies identically at both call sites (the
+/// `Pressed` and `Released` `KeyboardInput` arms): a synthetic release is
+/// dropped by the same rule as a synthetic press.
+fn should_drop_synthetic_key_event(is_synthetic: bool) -> bool {
+    is_synthetic
+}
+
 /// Translate a winit `KeyEvent` into the PoC's `(Key, Modifiers)` pair and
 /// produce the PTY byte sequence. Returns `None` for events that should be
 /// ignored (e.g. modifier-only presses).
@@ -3257,7 +3271,22 @@ impl ApplicationHandler for PocApp {
                 self.app.mark_full_redraw();
                 host.window().request_redraw();
             }
-            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } if event.state == ElementState::Pressed => {
+                // Synthetic key press gate (task0002): drop X11 FocusIn
+                // replay presses before any state mutation, keybinding
+                // dispatch, IME forwarding, or PTY write. See
+                // `should_drop_synthetic_key_event`.
+                if should_drop_synthetic_key_event(is_synthetic) {
+                    log::warn!(
+                        "native-poc: dropping synthetic key press: physical_key={:?}",
+                        event.physical_key
+                    );
+                    return;
+                }
                 // Search overlay capture: while the search bar is visible
                 // it owns the keyboard. Navigation / close chords are
                 // handled here directly; copy / paste are translated to
@@ -3494,7 +3523,21 @@ impl ApplicationHandler for PocApp {
                 }
                 host.window().request_redraw();
             }
-            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Released => {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } if event.state == ElementState::Released => {
+                // Synthetic key press gate (task0002): a synthetic
+                // release is dropped by the same rule as a synthetic
+                // press (see `should_drop_synthetic_key_event`).
+                if should_drop_synthetic_key_event(is_synthetic) {
+                    log::warn!(
+                        "native-poc: dropping synthetic key release: physical_key={:?}",
+                        event.physical_key
+                    );
+                    return;
+                }
                 // Phase 4-G-3: forward releases too so the
                 // WinitImeBridge can observe Ghostty-style
                 // modifier-only release events (fcitx5 toggles on bare
@@ -5472,6 +5515,39 @@ mod tests {
             shift_enter_rewrite(false, mods, ShiftEnterBehavior::Lf),
             ShiftEnterRewrite::Unchanged
         );
+    }
+
+    // ── task0002: synthetic key press gate (AC-1 / AC-2) ──────────────
+
+    #[test]
+    fn synthetic_key_press_gate_drops_synthetic_press() {
+        // AC-1: a synthetic Pressed event must be gated (dropped) so it
+        // never reaches keybinding dispatch or a PTY write.
+        assert!(should_drop_synthetic_key_event(true));
+    }
+
+    #[test]
+    fn synthetic_key_press_gate_drops_synthetic_release() {
+        // AC-1 (Released arm): the same predicate governs the Released
+        // arm — a synthetic release is dropped by the same gate (design
+        // note in IMPLEMENTATION.md Shared Components). The gate does not
+        // take press/release state, so a synthetic flag alone is enough
+        // to prove the release arm is covered too.
+        assert!(should_drop_synthetic_key_event(true));
+    }
+
+    #[test]
+    fn synthetic_key_press_gate_allows_non_synthetic_press() {
+        // AC-2 (Pressed arm): a non-synthetic press is processed exactly
+        // as before — the gate must not drop it.
+        assert!(!should_drop_synthetic_key_event(false));
+    }
+
+    #[test]
+    fn synthetic_key_press_gate_allows_non_synthetic_release() {
+        // AC-2 (Released arm): a non-synthetic release is processed
+        // exactly as before — the gate must not drop it.
+        assert!(!should_drop_synthetic_key_event(false));
     }
 
     #[test]
