@@ -26,7 +26,7 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{ResizeDirection, Window};
+use winit::window::{ResizeDirection, WindowAttributes};
 
 use super::data::DataFormat;
 use super::data_model::{DataViewerState, TokKind, ViewMode};
@@ -87,13 +87,13 @@ pub fn run(payload_path: &str) -> Result<(), String> {
         EventLoop::new().map_err(|e| format!("data viewer: failed to create event loop: {e}"))?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let state = DataViewerState::new(payload.format, payload.text);
-    let mut app = ViewerApp::new(
+    let app = ViewerApp::new(
         state,
         payload.chrome.ui_font_family.clone(),
         payload.chrome.terminal_font_family.clone(),
     );
     event_loop
-        .run_app(&mut app)
+        .run_app(app)
         .map_err(|e| format!("data viewer: event loop error: {e}"))?;
     Ok(())
 }
@@ -279,7 +279,7 @@ impl ViewerApp {
     }
 
     /// Keyboard dispatch (WebView fullscreen.ts:273-335 parity).
-    fn handle_key(&mut self, key: &Key, event_loop: &ActiveEventLoop) {
+    fn handle_key(&mut self, key: &Key, event_loop: &dyn ActiveEventLoop) {
         let outline = self.state.mode == ViewMode::Outline;
         let page = self.ui.content_height;
         match key {
@@ -337,7 +337,9 @@ impl ViewerApp {
                     self.ui.raw_scroll += SCROLL_TO_END;
                 }
             }
-            Key::Named(NamedKey::Space) => {
+            // winit 0.31 removed `NamedKey::Space`; match on the literal
+            // character instead (matches `Key::Character(" ")`).
+            Key::Character(c) if c.as_str() == " " => {
                 if !outline {
                     let up = self.modifiers.state().shift_key();
                     let step = page * SPACE_SCROLL_FRACTION;
@@ -351,22 +353,22 @@ impl ViewerApp {
 }
 
 impl ApplicationHandler for ViewerApp {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.shell.is_some() {
             return;
         }
-        let attrs = Window::default_attributes()
+        let attrs = WindowAttributes::default()
             .with_title(Self::window_title(self.state.format))
             .with_decorations(false)
-            // FR3: open maximized; `with_inner_size` below is the restore
+            // FR3: open maximized; `with_surface_size` below is the restore
             // size the window returns to when un-maximized.
             .with_maximized(true)
-            .with_inner_size(LogicalSize::new(960.0, 640.0))
-            .with_min_inner_size(LogicalSize::new(320.0, 240.0));
+            .with_surface_size(LogicalSize::new(960.0, 640.0))
+            .with_min_surface_size(LogicalSize::new(320.0, 240.0));
         // FR5: stamp the canonical dock-grouping identifier (X11
         // `WM_CLASS` / Wayland `app_id`).
         #[cfg(target_os = "linux")]
-        let attrs = crate::linux_wm::with_app_id(attrs);
+        let attrs = crate::linux_wm::with_app_id(event_loop, attrs);
         self.shell = Some(GpuShell::new(
             event_loop,
             attrs,
@@ -377,13 +379,13 @@ impl ApplicationHandler for ViewerApp {
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(_) => {
+            WindowEvent::SurfaceResized(_) => {
                 if let Some(s) = self.shell.as_mut() {
                     s.surface_dirty = true;
                 }
@@ -406,7 +408,7 @@ impl ApplicationHandler for ViewerApp {
                 let key = event.logical_key.clone();
                 self.handle_key(&key, event_loop);
             }
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowEvent::PointerMoved { position, .. } => {
                 let ppp = self
                     .shell
                     .as_ref()
@@ -422,7 +424,7 @@ impl ApplicationHandler for ViewerApp {
                     .push(egui::Event::PointerMoved(self.cursor_pos));
                 self.request_redraw();
             }
-            WindowEvent::CursorLeft { .. } => {
+            WindowEvent::PointerLeft { .. } => {
                 self.current_resize_dir = None;
                 self.pending_egui_events.push(egui::Event::PointerGone);
                 self.request_redraw();
@@ -449,7 +451,10 @@ impl ApplicationHandler for ViewerApp {
                 });
                 self.request_redraw();
             }
-            WindowEvent::MouseInput { state, button, .. } => {
+            WindowEvent::PointerButton { state, button, .. } => {
+                let Some(button) = button.mouse_button() else {
+                    return;
+                };
                 if button == MouseButton::Left && state == ElementState::Pressed {
                     if let Some(dir) = self.current_resize_dir {
                         if let Some(s) = &self.shell {
