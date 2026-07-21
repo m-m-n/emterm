@@ -9,8 +9,10 @@
 
 use std::sync::Arc;
 
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use winit::cursor::CursorIcon;
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{CursorIcon, Window, WindowAttributes};
+use winit::window::{Window, WindowAttributes};
 
 use egui_wgpu::ScreenDescriptor;
 
@@ -18,7 +20,7 @@ use crate::ui::chrome::configure_egui_fonts;
 
 /// Window + GPU resources for one native viewer window.
 pub(crate) struct GpuShell {
-    pub window: Arc<Window>,
+    pub window: Arc<dyn Window>,
     surface: wgpu::Surface<'static>,
     pub surface_config: wgpu::SurfaceConfiguration,
     device: wgpu::Device,
@@ -36,12 +38,12 @@ impl GpuShell {
     /// chain so any monospace content in the viewer (e.g. the data
     /// viewer's JSON / YAML body) picks up the user's terminal font.
     pub fn new(
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         attrs: WindowAttributes,
         ui_font_family: &str,
         terminal_font_family: &str,
     ) -> Self {
-        let window = Arc::new(
+        let window: Arc<dyn Window> = Arc::from(
             event_loop
                 .create_window(attrs)
                 .expect("viewer shell: failed to create window"),
@@ -51,15 +53,21 @@ impl GpuShell {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
         });
-        // SAFETY: `window` is kept alive in `Arc<Window>` next to the
+        // SAFETY: `window` is kept alive in `Arc<dyn Window>` next to the
         // surface for the whole `GpuShell` lifetime (same pattern as
         // `WindowHost::new`).
         let surface: wgpu::Surface<'static> = unsafe {
             instance
-                .create_surface_unsafe(
-                    wgpu::SurfaceTargetUnsafe::from_window(&*window)
-                        .expect("viewer shell: surface target"),
-                )
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: window
+                        .display_handle()
+                        .expect("viewer shell: display handle")
+                        .as_raw(),
+                    raw_window_handle: window
+                        .window_handle()
+                        .expect("viewer shell: window handle")
+                        .as_raw(),
+                })
                 .expect("viewer shell: create surface")
         };
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -80,7 +88,7 @@ impl GpuShell {
         ))
         .expect("viewer shell: failed to request wgpu device");
 
-        let size = window.inner_size();
+        let size = window.surface_size();
         let surface_caps = surface.get_capabilities(&adapter);
         // Non-sRGB surface for the same verbatim-bytes reason as the
         // terminal window (see `WindowHost::new`).
@@ -127,7 +135,7 @@ impl GpuShell {
         modifiers: egui::Modifiers,
         events: Vec<egui::Event>,
     ) -> egui::RawInput {
-        let size = self.window.inner_size();
+        let size = self.window.surface_size();
         let logical = size.to_logical::<f32>(self.pixels_per_point as f64);
         egui::RawInput {
             viewport_id: egui::ViewportId::ROOT,
@@ -234,7 +242,7 @@ impl GpuShell {
 
     /// Reconfigure the wgpu surface for the current window size.
     fn reconfigure_surface(&mut self) {
-        let size = self.window.inner_size();
+        let size = self.window.surface_size();
         self.surface_config.width = size.width.max(1);
         self.surface_config.height = size.height.max(1);
         self.surface.configure(&self.device, &self.surface_config);
@@ -282,7 +290,7 @@ impl GpuShell {
             Some(dir) => CursorIcon::from(dir),
             None => egui_to_winit_cursor(self.egui_ctx.output(|o| o.cursor_icon)),
         };
-        self.window.set_cursor(cursor);
+        self.window.set_cursor(cursor.into());
     }
 }
 
@@ -303,7 +311,7 @@ impl GpuShell {
         }
         let size = self
             .window
-            .inner_size()
+            .surface_size()
             .to_logical::<f32>(self.pixels_per_point as f64);
         let dir = classify_resize_edge(
             size.width,

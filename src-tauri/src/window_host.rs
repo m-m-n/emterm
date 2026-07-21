@@ -31,12 +31,14 @@ use std::time::{Duration, Instant};
 use egui::ViewportId;
 use egui_wgpu::ScreenDescriptor;
 use egui_wgpu::wgpu::SurfaceError;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::application::ApplicationHandler;
+use winit::cursor::CursorIcon;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
-use winit::window::{CursorIcon, ResizeDirection, Window, WindowAttributes, WindowId};
+use winit::window::{ResizeDirection, Window, WindowAttributes, WindowId};
 
 use crate::app::App;
 use crate::ime::backend::{KeyDispatchResult, ProcessEnv, RawKeyEvent, build_backend_with_window};
@@ -240,14 +242,14 @@ pub struct WindowHost {
     device: wgpu::Device,
     surface: wgpu::Surface<'static>,
     instance: wgpu::Instance,
-    window: Arc<Window>,
+    window: Arc<dyn Window>,
     pixels_per_point: f32,
     /// True when the surface must be recreated on the next frame (e.g. after
     /// `SurfaceError::Lost`).
     surface_dirty: bool,
-    /// Alacritty-style deferred resize: `WindowEvent::Resized` only flips
+    /// Alacritty-style deferred resize: `WindowEvent::SurfaceResized` only flips
     /// this flag and requests a redraw; the next `render()` call reads the
-    /// current `window.inner_size()` once and runs `surface.configure()` +
+    /// current `window.surface_size()` once and runs `surface.configure()` +
     /// `app.set_grid_size()` together. This coalesces bursts of compositor
     /// resize events (one configure per frame instead of one per event) and
     /// avoids back-buffer locking when configure and draw happen out of
@@ -274,10 +276,10 @@ pub struct WindowHost {
     /// the PTY).
     mux_sidebar_inset_logical: f32,
     current_mods: Modifiers,
-    /// Last cursor position in physical pixels (updated on `CursorMoved`).
+    /// Last cursor position in physical pixels (updated on `PointerMoved`).
     cursor_pos: PhysicalPosition<f64>,
     /// Whether the left button is currently held — used as the gate for
-    /// turning subsequent `CursorMoved` events into selection extends.
+    /// turning subsequent `PointerMoved` events into selection extends.
     dragging: bool,
     /// Click tracker for double / triple click detection.
     click_tracker: ClickTracker,
@@ -304,7 +306,7 @@ pub struct WindowHost {
     /// unwind in the same order regardless of the close path.
     pending_close: bool,
     /// Cached CSD resize direction under the pointer. Refreshed on
-    /// every `CursorMoved` (when not selection-dragging) so the next
+    /// every `PointerMoved` (when not selection-dragging) so the next
     /// left-press can hand the matching [`ResizeDirection`] to
     /// `Window::drag_resize_window` without re-running the hit test.
     /// `None` means the pointer is in the window interior — a press
@@ -312,7 +314,7 @@ pub struct WindowHost {
     current_resize_dir: Option<ResizeDirection>,
     /// Last cursor icon pushed to winit. Cached so [`update_resize_hint`]
     /// can skip the IPC round-trip when the icon would not change —
-    /// `set_cursor` is otherwise called on every `CursorMoved`, which
+    /// `set_cursor` is otherwise called on every `PointerMoved`, which
     /// floods the compositor with redundant requests.
     current_cursor: CursorIcon,
     /// Link-hover state (URL / file-path auto-detection). Refreshed only
@@ -331,8 +333,8 @@ pub struct WindowHost {
     /// redraw on change is cheap.
     hover_span_changed: bool,
     /// True while the pointer is inside the window. Set to `true` by
-    /// `CursorMoved` (there is no `CursorEntered` handler) and to `false`
-    /// by `CursorLeft`. Used to gate PTY-output re-detection in
+    /// `PointerMoved` (there is no `PointerEntered` handler) and to `false`
+    /// by `PointerLeft`. Used to gate PTY-output re-detection in
     /// `about_to_wait`: when the pointer has left the window there is
     /// nothing to underline, so we skip the `find_link_at` work entirely.
     pointer_in_window: bool,
@@ -401,15 +403,15 @@ fn terminal_font_family(settings: &crate::settings::Settings) -> &str {
 impl WindowHost {
     /// Build the window + GPU resources.
     pub fn new(
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         ui_font_family: &str,
         terminal_font_family: &str,
     ) -> Self {
         let attrs = WindowAttributes::default()
             .with_title("eMterm PoC")
             .with_decorations(false)
-            .with_inner_size(LogicalSize::new(960.0, 600.0))
-            .with_min_inner_size(LogicalSize::new(320.0, 200.0))
+            .with_surface_size(LogicalSize::new(960.0, 600.0))
+            .with_min_surface_size(LogicalSize::new(320.0, 200.0))
             .with_maximized(true)
             // FR2: attach the bundled app icon to the main winit window so
             // the title bar and taskbar (Windows fallbacks) render the
@@ -417,29 +419,29 @@ impl WindowHost {
             .with_window_icon(crate::window_icon::app_icon());
         // FR5: report the canonical dock-grouping identifier (X11
         // `WM_CLASS` / Wayland `app_id`) so every window groups under one
-        // `emterm` dock icon. winit applies the trait matching the active
-        // backend; the other is a no-op. `with_name` is on both extension
-        // traits, so call each via fully-qualified syntax to avoid an
-        // ambiguous method resolution.
+        // `emterm` dock icon. The active event loop decides between the
+        // X11 / Wayland platform-attribute builders (see `linux_wm`).
         #[cfg(target_os = "linux")]
-        let attrs = crate::linux_wm::with_app_id(attrs);
-        let window = event_loop
-            .create_window(attrs)
-            .expect("native-poc: failed to create winit window");
-        let window = Arc::new(window);
+        let attrs = crate::linux_wm::with_app_id(event_loop, attrs);
+        let window: Arc<dyn Window> = Arc::from(
+            event_loop
+                .create_window(attrs)
+                .expect("native-poc: failed to create winit window"),
+        );
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
         });
 
-        // SAFETY: `window` is kept alive in `Arc<Window>` and stored
+        // SAFETY: `window` is kept alive in `Arc<dyn Window>` and stored
         // alongside the surface for the whole `WindowHost` lifetime.
         let surface: wgpu::Surface<'static> = unsafe {
             instance
-                .create_surface_unsafe(
-                    wgpu::SurfaceTargetUnsafe::from_window(&*window).expect("surface target"),
-                )
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: window.display_handle().expect("display handle").as_raw(),
+                    raw_window_handle: window.window_handle().expect("window handle").as_raw(),
+                })
                 .expect("create surface")
         };
 
@@ -462,7 +464,7 @@ impl WindowHost {
         ))
         .expect("native-poc: failed to request wgpu device");
 
-        let size = window.inner_size();
+        let size = window.surface_size();
         let surface_caps = surface.get_capabilities(&adapter);
         // Prefer a NON-sRGB surface. All of our color sources (theme
         // palette, egui paint, glyph fg/bg) are sRGB-encoded byte values;
@@ -598,15 +600,15 @@ impl WindowHost {
         self.grid_pass = Some(pass);
     }
 
-    pub fn window(&self) -> &Window {
-        &self.window
+    pub fn window(&self) -> &dyn Window {
+        self.window.as_ref()
     }
 
-    /// Hand a clone of the `Arc<Window>` to callers that need to retain
+    /// Hand a clone of the `Arc<dyn Window>` to callers that need to retain
     /// the handle themselves (Phase 4-G-3 passes this to
     /// `WinitImeBridge::init` so the bridge can call
     /// `Window::set_ime_cursor_area`).
-    pub fn window_arc(&self) -> Arc<Window> {
+    pub fn window_arc(&self) -> Arc<dyn Window> {
         self.window.clone()
     }
 
@@ -649,11 +651,11 @@ impl WindowHost {
     /// Toggle borderless full-screen for the window. When already
     /// full-screen, restore windowed mode (`None`); otherwise enter
     /// `Borderless(None)` so winit picks the window's current monitor.
-    /// The resulting `WindowEvent::Resized` drives the deferred
+    /// The resulting `WindowEvent::SurfaceResized` drives the deferred
     /// `apply_pending_resize`, so the grid reshapes on the next frame
     /// without any extra plumbing here.
     fn toggle_fullscreen(&self) {
-        use winit::window::Fullscreen;
+        use winit::monitor::Fullscreen;
         if self.window.fullscreen().is_some() {
             self.window.set_fullscreen(None);
         } else {
@@ -674,7 +676,7 @@ impl WindowHost {
         }
         let size = self
             .window
-            .inner_size()
+            .surface_size()
             .to_logical::<f32>(self.pixels_per_point as f64);
         let dir = classify_resize_edge(
             size.width,
@@ -703,7 +705,7 @@ impl WindowHost {
     }
 
     /// Refresh the cached resize direction + pointer icon for a new
-    /// pointer position. Cheap to call on every `CursorMoved`: skips
+    /// pointer position. Cheap to call on every `PointerMoved`: skips
     /// the `set_cursor` IPC round-trip when the resulting icon would
     /// match the one already in flight.
     fn update_resize_hint(&mut self, logical_x: f32, logical_y: f32) {
@@ -717,7 +719,7 @@ impl WindowHost {
             return;
         }
         self.current_cursor = icon;
-        self.window.set_cursor(icon);
+        self.window.set_cursor(icon.into());
     }
 
     /// Map a physical pixel position to a grid cell, returning `None`
@@ -916,7 +918,7 @@ impl WindowHost {
         };
         if icon != self.current_cursor {
             self.current_cursor = icon;
-            self.window.set_cursor(icon);
+            self.window.set_cursor(icon.into());
         }
     }
 
@@ -1085,7 +1087,7 @@ impl WindowHost {
 
     /// Reconfigure the wgpu surface for the current window size.
     fn reconfigure_surface(&mut self) {
-        let size = self.window.inner_size();
+        let size = self.window.surface_size();
         self.surface_config.width = size.width.max(1);
         self.surface_config.height = size.height.max(1);
         self.surface.configure(&self.device, &self.surface_config);
@@ -1151,9 +1153,14 @@ impl WindowHost {
         log::warn!("recreating wgpu surface after device/surface loss");
         let new_surface: wgpu::Surface<'static> = unsafe {
             self.instance
-                .create_surface_unsafe(
-                    wgpu::SurfaceTargetUnsafe::from_window(&*self.window).expect("surface target"),
-                )
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: self
+                        .window
+                        .display_handle()
+                        .expect("display handle")
+                        .as_raw(),
+                    raw_window_handle: self.window.window_handle().expect("window handle").as_raw(),
+                })
                 .expect("recreate surface")
         };
         self.surface = new_surface;
@@ -1170,7 +1177,7 @@ impl WindowHost {
         self.pending_resize = true;
     }
 
-    /// Consume `pending_resize` and apply the latest `window.inner_size()`.
+    /// Consume `pending_resize` and apply the latest `window.surface_size()`.
     ///
     /// Called once per `render()` so a burst of compositor resize events
     /// produces a single configure + PTY resize cycle aligned with the
@@ -1181,7 +1188,7 @@ impl WindowHost {
             return;
         }
         self.pending_resize = false;
-        let size = self.window.inner_size();
+        let size = self.window.surface_size();
         if size.width == 0 || size.height == 0 {
             return;
         }
@@ -1579,7 +1586,7 @@ impl WindowHost {
             // below is the only drain, so a skipped frame would park it
             // until the next unrelated wakeup (worst case a blink flip,
             // ~530 ms). `PointerMoved` alone is excluded from this veto:
-            // `CursorMoved` pushes one unconditionally on every mouse
+            // `PointerMoved` pushes one unconditionally on every mouse
             // motion, so without the exclusion an idle terminal would run a
             // full egui+GPU frame on every hover pixel. A click always
             // arrives as `[PointerMoved, PointerButton]`, so the trailing
@@ -2270,7 +2277,7 @@ impl WindowHost {
     /// Translate winit state into a minimal `egui::RawInput`. Phase 1 only
     /// needs screen-rect + pixels-per-point; later phases populate events.
     fn build_raw_input(&mut self) -> egui::RawInput {
-        let size = self.window.inner_size();
+        let size = self.window.surface_size();
         let logical = size.to_logical::<f32>(self.pixels_per_point as f64);
         egui::RawInput {
             viewport_id: ViewportId::ROOT,
@@ -2376,7 +2383,7 @@ fn toast_redraw_due(toast_pending: bool, last_redraw: Option<Instant>, now: Inst
 
 /// Whether `events` contains at least one egui event that must veto the
 /// idle-skip decision above. `egui::Event::PointerMoved` is deliberately
-/// excluded: `CursorMoved` pushes one unconditionally on every mouse
+/// excluded: `PointerMoved` pushes one unconditionally on every mouse
 /// motion, so treating it as actionable would force a full egui+GPU frame
 /// on every hover pixel over an otherwise idle terminal. A click still
 /// vetoes because it arrives as `[PointerMoved, PointerButton]` — the
@@ -2787,6 +2794,9 @@ fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
                 '=' => Some(egui::Key::Equals),
                 ';' => Some(egui::Key::Semicolon),
                 ':' => Some(egui::Key::Colon),
+                // winit 0.31 removed `NamedKey::Space`; the space bar now
+                // arrives as `Character(" ")`.
+                ' ' => Some(egui::Key::Space),
                 _ => None,
             }
         }
@@ -2805,7 +2815,6 @@ fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
             NamedKey::Backspace => Some(egui::Key::Backspace),
             NamedKey::Delete => Some(egui::Key::Delete),
             NamedKey::Insert => Some(egui::Key::Insert),
-            NamedKey::Space => Some(egui::Key::Space),
             NamedKey::F1 => Some(egui::Key::F1),
             NamedKey::F2 => Some(egui::Key::F2),
             NamedKey::F3 => Some(egui::Key::F3),
@@ -2997,12 +3006,13 @@ fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers, target: EncodeTarget) -
     }
 
     let key = match &event.logical_key {
+        // winit 0.31 removed `NamedKey::Space`; the space bar now arrives
+        // as `Character(" ")`, already covered by this arm.
         WinitKey::Character(s) => {
             let mut chars = s.chars();
             let c = chars.next()?;
             Key::Char(c)
         }
-        WinitKey::Named(NamedKey::Space) => Key::Char(' '),
         _ => return None,
     };
     let bytes = encode(key, mods, target);
@@ -3064,13 +3074,14 @@ fn alternate_scroll_wheel_bytes(
     Some(buf)
 }
 
-/// `ApplicationHandler` impl driving the App + WindowHost on winit 0.30.
+/// `ApplicationHandler` impl driving the App + WindowHost on winit 0.31.
 ///
-/// winit 0.30 replaced the closure-based event-loop API with the
-/// `ApplicationHandler` trait. `resumed` creates the window the first
-/// time the platform is ready, `window_event` mirrors what used to be
-/// the inner `match event` arm, and `about_to_wait` does the periodic
-/// pump (PTY drain, IME pump, cursor-rect notification) that the old
+/// `can_create_surfaces` creates the window the first time the platform
+/// is ready to accept a render surface (the only lifecycle hook winit
+/// 0.31 guarantees on desktop platforms — `resumed`/`suspended` are now
+/// iOS/Web/Android-only), `window_event` mirrors what used to be the
+/// inner `match event` arm, and `about_to_wait` does the periodic pump
+/// (PTY drain, IME pump, cursor-rect notification) that the old
 /// `StartCause::Poll` path handled.
 struct PocApp {
     app: App,
@@ -3078,11 +3089,11 @@ struct PocApp {
 }
 
 impl ApplicationHandler for PocApp {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.host.is_some() {
-            // Re-entering `Resumed` is an Android lifecycle artifact;
-            // desktop winit only fires this once at startup. Keep the
-            // existing host so a stray resume does not reinitialize the
+            // Back-to-back `can_create_surfaces()` calls are expected
+            // per the trait's portability contract; keep the existing
+            // host so a stray re-entry does not reinitialize the
             // surface (the PoC has no Android target).
             return;
         }
@@ -3119,7 +3130,12 @@ impl ApplicationHandler for PocApp {
         self.host = Some(host);
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        _id: WindowId,
+        event: WindowEvent,
+    ) {
         let Some(host) = self.host.as_mut() else {
             return;
         };
@@ -3151,7 +3167,7 @@ impl ApplicationHandler for PocApp {
                 self.host = None;
                 event_loop.exit();
             }
-            WindowEvent::Resized(new_size) => {
+            WindowEvent::SurfaceResized(new_size) => {
                 // Alacritty-style deferral: do not call `surface.configure()`
                 // or resize the PTY here. Both run together at the head of
                 // the next `render()` so a burst of compositor resize events
@@ -3550,7 +3566,7 @@ impl ApplicationHandler for PocApp {
                 };
                 let _ = self.app.dispatch_key_event_via_ime(&raw_key);
             }
-            WindowEvent::CursorLeft { .. } => {
+            WindowEvent::PointerLeft { .. } => {
                 // Mark the pointer as outside the window so PTY-output
                 // re-detection in `about_to_wait` is suppressed — there
                 // is nothing to underline when no pointer is inside.
@@ -3565,13 +3581,13 @@ impl ApplicationHandler for PocApp {
                 if host.current_resize_dir.is_some() || host.current_cursor != CursorIcon::Default {
                     host.current_resize_dir = None;
                     host.current_cursor = CursorIcon::Default;
-                    host.window.set_cursor(CursorIcon::Default);
+                    host.window.set_cursor(CursorIcon::Default.into());
                 }
                 // Drop any link-hover underline + hand cursor when the
                 // pointer leaves the window.
                 host.invalidate_link_hover();
             }
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowEvent::PointerMoved { position, .. } => {
                 host.pointer_in_window = true;
                 host.cursor_pos = position;
                 // Forward to egui so the tab bar / status bar widgets
@@ -3632,7 +3648,16 @@ impl ApplicationHandler for PocApp {
                     }
                 }
             }
-            WindowEvent::MouseInput { state, button, .. } => {
+            WindowEvent::PointerButton { state, button, .. } => {
+                // winit 0.31's pointer-event overhaul folds mouse/touch/
+                // pen buttons into `ButtonSource`; normalize to the plain
+                // `MouseButton` this handler already speaks. Non-mouse
+                // sources with no natural `MouseButton` mapping are
+                // ignored (touch already normalizes to `Left` inside
+                // `mouse_button()`).
+                let Some(button) = button.mouse_button() else {
+                    return;
+                };
                 // CSD edge-resize: a left press on the edge hot zone
                 // hands off to the WM via `drag_resize_window`. Run
                 // before the egui forward so the tab bar / title bar
@@ -3707,7 +3732,7 @@ impl ApplicationHandler for PocApp {
                 if button == MouseButton::Left && state == ElementState::Pressed {
                     let window_size_logical = host
                         .window
-                        .inner_size()
+                        .surface_size()
                         .to_logical::<f32>(host.pixels_per_point as f64);
                     let bottom_strip_top =
                         window_size_logical.height - host.status_bar_bot_inset_logical;
@@ -3774,7 +3799,7 @@ impl ApplicationHandler for PocApp {
                         // Ctrl+click opens a hovered URL / file path and
                         // skips starting a selection. Reuses the cached
                         // hover detection for the cell under the pointer
-                        // (refreshed on the CursorMoved that brought us
+                        // (refreshed on the PointerMoved that brought us
                         // here), re-detecting only if the cached cell no
                         // longer matches the click cell.
                         if host.current_mods.ctrl && host.try_open_link_at_pointer(&self.app) {
@@ -3903,8 +3928,9 @@ impl ApplicationHandler for PocApp {
                 // `always_scroll_the_only_direction` set both bare and
                 // Shift+wheel fold onto the horizontal axis. egui hit-tests
                 // against the hover position kept current by the
-                // `PointerMoved` events forwarded on `CursorMoved`, so the
-                // wheel only reaches the strip when the pointer is over it.
+                // `PointerMoved` events forwarded on every winit
+                // `WindowEvent::PointerMoved`, so the wheel only reaches
+                // the strip when the pointer is over it.
                 // Restricted to the tab-bar band (below the CSD title bar);
                 // the title bar's existing wheel behaviour is left untouched.
                 {
@@ -3962,7 +3988,7 @@ impl ApplicationHandler for PocApp {
                             .to_logical::<f32>(host.pixels_per_point as f64);
                         let window_size_logical = host
                             .window
-                            .inner_size()
+                            .surface_size()
                             .to_logical::<f32>(host.pixels_per_point as f64);
                         let top_chrome =
                             crate::ui::mux_sidebar::top_chrome_inset(self.app.show_tab_bar);
@@ -4034,7 +4060,7 @@ impl ApplicationHandler for PocApp {
                             tab.write_input(buf);
                         }
                         // Visible content may shift under the pointer;
-                        // drop the cached hover so the next CursorMoved
+                        // drop the cached hover so the next PointerMoved
                         // re-detects.
                         host.invalidate_link_hover();
                         host.window().request_redraw();
@@ -4051,7 +4077,7 @@ impl ApplicationHandler for PocApp {
                     self.app.scroll_up_by(step);
                     // Scrollback content shifts under the pointer, so the
                     // cached hover no longer maps to the same text. Drop
-                    // it; the next CursorMoved re-detects.
+                    // it; the next PointerMoved re-detects.
                     host.invalidate_link_hover();
                     host.window().request_redraw();
                 } else if lines < 0.0 {
@@ -4060,7 +4086,7 @@ impl ApplicationHandler for PocApp {
                     host.window().request_redraw();
                 }
             }
-            WindowEvent::HoveredFile(_path) => {
+            WindowEvent::DragEntered { .. } => {
                 // A drag entered the window: show the drop overlay. The
                 // message depends on whether the active tab is an SSH tab
                 // (upload) or not (paste).
@@ -4077,16 +4103,24 @@ impl ApplicationHandler for PocApp {
                 self.app.sftp_ui.hover = Some(overlay);
                 host.window().request_redraw();
             }
-            WindowEvent::HoveredFileCancelled => {
+            // The pointer moving while files are dragged over the window
+            // carries no paths and needs no state change here — the
+            // `DragEntered` overlay set above stays up until `DragLeft` /
+            // `DragDropped`.
+            WindowEvent::DragMoved { .. } => {}
+            WindowEvent::DragLeft { .. } => {
                 self.app.sftp_ui.hover = None;
                 host.window().request_redraw();
             }
-            WindowEvent::DroppedFile(path) => {
-                // Accumulate one path; `about_to_wait` finalizes the batch on
-                // the next loop turn (winit gives no drop-complete signal).
+            WindowEvent::DragDropped { paths, .. } => {
+                // winit 0.31 delivers the whole drag session's paths in
+                // one event (FR3 / IMPLEMENTATION.md D3) — no cross-event
+                // batching needed.
                 self.app.sftp_ui.hover = None;
-                self.app.sftp_ui.aggregator.push(path);
-                host.window().request_redraw();
+                if let Some(batch) = crate::sftp::ui::drop_batch_from_paths(paths) {
+                    self.app.dispatch_drop(batch);
+                    host.window().request_redraw();
+                }
             }
             WindowEvent::RedrawRequested => {
                 host.render(&mut self.app);
@@ -4095,7 +4129,7 @@ impl ApplicationHandler for PocApp {
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         let Some(host) = self.host.as_mut() else {
             return;
         };
@@ -4111,17 +4145,6 @@ impl ApplicationHandler for PocApp {
         // reload settings.json and apply it live.
         if crate::settings_launcher::take_saved() {
             host.reload_settings_from_disk(&mut self.app);
-        }
-        // Finalize a drag-drop gesture once per loop turn: winit delivers each
-        // dropped file as a separate `DroppedFile` event with no completion
-        // signal, so the per-file paths accumulated since the last turn are
-        // dispatched here as a single batch (upload on SSH tabs, paste on
-        // non-SSH tabs).
-        if self.app.sftp_ui.aggregator.is_armed() {
-            if let Some(batch) = self.app.sftp_ui.aggregator.take_batch() {
-                self.app.dispatch_drop(batch);
-                host.window().request_redraw();
-            }
         }
         // If the search overlay is open with live results, the pumps (PTY
         // output / resize) may have shifted matched text into scrollback,
@@ -4206,29 +4229,33 @@ impl ApplicationHandler for PocApp {
         event_loop.set_control_flow(control_flow_for(&self.app));
     }
 
-    /// Phase E (TS-32): winit `EventLoopProxy::send_event(())` calls land
-    /// here. Without this override, the trait-default `user_event` is a
-    /// no-op and the provider-owned wake chain (`TimeProvider` timer
-    /// thread → `WakeFn` → `EventLoopProxy::send_event(())` → here →
-    /// `request_redraw`) is silently broken, freezing the status-bar
-    /// clock when the shell is idle.
+    /// Phase E (TS-32): winit `EventLoopProxy::wake_up()` calls land
+    /// here (renamed from `user_event` in winit 0.31 — wake-ups no
+    /// longer carry a payload). Without this override, the trait-default
+    /// `proxy_wake_up` is a no-op and the provider-owned wake chain
+    /// (`TimeProvider` timer thread → `WakeFn` → `EventLoopProxy::wake_up()`
+    /// → here → `request_redraw`) is silently broken, freezing the
+    /// status-bar clock when the shell is idle.
     ///
     /// Defensive: if `self.host` is `None` (we are between
-    /// `Resumed`-time construction failure and process exit, or already
-    /// torn down in `CloseRequested`), this is a no-op.
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+    /// `can_create_surfaces`-time construction failure and process exit,
+    /// or already torn down in `CloseRequested`), this is a no-op.
+    fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
         request_redraw_on_user_event(self.host.as_ref(), |host| {
             host.window().request_redraw();
         });
     }
+}
 
-    /// winit calls this once after `event_loop.exit()` and before
-    /// `run_app` returns. Use it as a defense-in-depth shutdown step
-    /// for any code path that flagged exit without zeroing `self.host`
-    /// (e.g. future error-path exits). The Vulkan / X11 teardown must
-    /// happen while EventLoop is still alive — see the field-order
-    /// note on `WindowHost`.
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+impl Drop for PocApp {
+    /// winit 0.31 removed `ApplicationHandler::exiting`; the same
+    /// defense-in-depth shutdown step (for any code path that flagged
+    /// exit without zeroing `self.host`, e.g. future error-path exits)
+    /// now runs in `Drop`, called once `run_app` unwinds after
+    /// `event_loop.exit()`. The Vulkan / X11 teardown must happen while
+    /// EventLoop is still alive — see the field-order note on
+    /// `WindowHost`.
+    fn drop(&mut self) {
         if self.host.is_some() {
             log::info!("native-poc: exiting handler dropping WindowHost");
             self.host = None;
@@ -4253,16 +4280,15 @@ where
 }
 
 /// Run the event loop until the window is closed. Owns the App.
-pub fn run(event_loop: EventLoop<()>, app: App) -> ! {
-    let mut handler = PocApp { app, host: None };
-    if let Err(e) = event_loop.run_app(&mut handler) {
+pub fn run(event_loop: EventLoop, app: App) -> ! {
+    let handler = PocApp { app, host: None };
+    // winit 0.31's `run_app` takes the handler by value (no more
+    // `&mut app`) and explicitly drops it before returning, so the
+    // PTY-owning tabs' reader/writer threads shut down cleanly here —
+    // no separate `drop(handler)` needed after this call.
+    if let Err(e) = event_loop.run_app(handler) {
         log::error!("native-poc: winit event loop returned an error: {e}");
     }
-    // Drop the PTY-owning tabs explicitly before the process exits so
-    // reader/writer threads can shut down cleanly; without this they
-    // outlive `main` and produce noisy platform-specific cleanup
-    // warnings.
-    drop(handler);
     std::process::exit(0);
 }
 
@@ -4388,7 +4414,9 @@ fn handle_profile_selector_key(event: &KeyEvent, app: &mut App) {
         WinitKey::Named(NamedKey::ArrowUp) => app.profile_selector.move_selection(-1, len),
         WinitKey::Named(NamedKey::Home) => app.profile_selector.select_edge(false, len),
         WinitKey::Named(NamedKey::End) => app.profile_selector.select_edge(true, len),
-        WinitKey::Named(NamedKey::Enter) | WinitKey::Named(NamedKey::Space) => {
+        // winit 0.31 removed `NamedKey::Space`; the space bar now arrives
+        // as `Character(" ")`, already covered by the arm below.
+        WinitKey::Named(NamedKey::Enter) => {
             let idx = app.profile_selector.selected;
             app.confirm_profile_selection(idx);
         }
@@ -5164,7 +5192,7 @@ mod tests {
 
     // ── task0011 AC-1/AC-3/AC-4: mux sidebar press-suppression guard ───
 
-    /// AC-1/AC-3: the MouseInput handler's Pressed-edge suppression guard
+    /// AC-1/AC-3: the PointerButton handler's Pressed-edge suppression guard
     /// (the same `if button == MouseButton::Left && state ==
     /// ElementState::Pressed` block that already covers the bottom status
     /// bar and the scrollbar) must query the shared
@@ -5187,8 +5215,8 @@ mod tests {
     fn mouse_input_press_guard_queries_shared_sidebar_hit_region_before_selection_start() {
         let src = include_str!("window_host.rs");
         let arm_start = src
-            .find("WindowEvent::MouseInput { state, button, .. } =>")
-            .expect("MouseInput arm not found in window_host.rs");
+            .find("WindowEvent::PointerButton { state, button, .. } =>")
+            .expect("PointerButton arm not found in window_host.rs");
         let arm_body = &src[arm_start..];
         let guard_start = arm_body
             .find("// Same rule for the bottom status-bar panel")
@@ -5204,7 +5232,7 @@ mod tests {
              shared with the bottom-strip/scrollbar guards (AC-3)"
         );
         let sidebar_guard_pos = guard_section.find("mux_sidebar::point_in_sidebar(").expect(
-            "MouseInput's press guard must query ui::mux_sidebar::point_in_sidebar \
+            "PointerButton's press guard must query ui::mux_sidebar::point_in_sidebar \
              (AC-4: the shared hit-region derivation, not a re-derived guard)",
         );
         assert!(
@@ -5214,7 +5242,7 @@ mod tests {
         );
         let selection_start_pos = arm_body
             .find("(MouseButton::Left, ElementState::Pressed) => {")
-            .expect("selection-start arm not found in the MouseInput handler");
+            .expect("selection-start arm not found in the PointerButton handler");
         assert!(
             guard_start + sidebar_guard_pos < selection_start_pos,
             "the sidebar hit-region guard must run BEFORE the selection-start arm so a hit \
@@ -5232,23 +5260,23 @@ mod tests {
     fn press_and_wheel_guards_share_the_same_sidebar_hit_region_helper() {
         let src = include_str!("window_host.rs");
         let press_start = src
-            .find("WindowEvent::MouseInput { state, button, .. } =>")
-            .expect("MouseInput arm not found in window_host.rs");
+            .find("WindowEvent::PointerButton { state, button, .. } =>")
+            .expect("PointerButton arm not found in window_host.rs");
         let wheel_start = src
             .find("WindowEvent::MouseWheel { delta, .. } =>")
             .expect("MouseWheel arm not found in window_host.rs");
         assert!(
             press_start < wheel_start,
-            "expected the MouseInput arm to appear before the MouseWheel arm"
+            "expected the PointerButton arm to appear before the MouseWheel arm"
         );
         let press_body = &src[press_start..wheel_start];
         assert!(
             press_body.contains("mux_sidebar::point_in_sidebar("),
-            "MouseInput press guard must call the shared hit-region helper"
+            "PointerButton press guard must call the shared hit-region helper"
         );
         assert!(
             !press_body.contains("mux_sidebar::sidebar_width("),
-            "MouseInput press guard must not re-derive the sidebar width itself"
+            "PointerButton press guard must not re-derive the sidebar width itself"
         );
         let wheel_body = &src[wheel_start..];
         let wheel_arm_end = wheel_body

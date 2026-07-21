@@ -2,9 +2,11 @@
 //! wry, driven by the standard Win32 message pump that winit runs.
 //!
 //! Unlike the Linux GTK path, there is no separate main-loop type to
-//! manage: winit's `EventLoop::with_user_event` carries IPC bodies from
-//! wry's worker thread back to the main thread, where the user's
-//! [`IpcHandler`](super::IpcHandler) runs inside `user_event`.
+//! manage: winit 0.31 removed the generic `user_event` payload (only
+//! `EventLoopProxy::wake_up()` remains, carrying no data), so IPC bodies
+//! from wry's worker thread reach the main thread via an `mpsc::channel`
+//! paired with the wake-up call; [`WebViewApp::proxy_wake_up`] drains the
+//! channel and runs the user's [`IpcHandler`](super::IpcHandler).
 
 #![cfg(target_os = "windows")]
 
@@ -12,6 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -26,15 +29,17 @@ use super::{IpcHandler, NavigationHandler, RequestHandler, WebViewHost};
 /// Run the configured child window on Windows. Blocks until the window
 /// closes.
 pub fn run(host: WebViewHost) -> Result<(), String> {
-    let event_loop = EventLoop::<String>::with_user_event()
-        .build()
-        .map_err(|e| format!("webview_host: event loop build failed: {e}"))?;
-    let proxy: EventLoopProxy<String> = event_loop.create_proxy();
+    let event_loop =
+        EventLoop::new().map_err(|e| format!("webview_host: event loop build failed: {e}"))?;
+    let proxy: EventLoopProxy = event_loop.create_proxy();
+    let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<String>();
 
     let build_error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let mut app = WebViewApp {
+    let app = WebViewApp {
         host: Some(host),
         proxy,
+        ipc_tx,
+        ipc_rx,
         window: None,
         webview: None,
         ipc_handler: None,
@@ -43,7 +48,7 @@ pub fn run(host: WebViewHost) -> Result<(), String> {
         build_error: build_error.clone(),
     };
     event_loop
-        .run_app(&mut app)
+        .run_app(app)
         .map_err(|e| format!("webview_host: event loop returned error: {e}"))?;
     if let Some(err) = build_error.borrow().clone() {
         return Err(err);
@@ -53,8 +58,15 @@ pub fn run(host: WebViewHost) -> Result<(), String> {
 
 struct WebViewApp {
     host: Option<WebViewHost>,
-    proxy: EventLoopProxy<String>,
-    window: Option<Rc<Window>>,
+    proxy: EventLoopProxy,
+    /// Cloned into the wry IPC callback (which may run on a worker thread
+    /// on Windows) so a non-reserved IPC body reaches the main thread;
+    /// paired with `proxy.wake_up()` since winit 0.31's `EventLoopProxy`
+    /// only wakes the loop and carries no payload.
+    ipc_tx: Sender<String>,
+    /// Drained in [`Self::proxy_wake_up`].
+    ipc_rx: Receiver<String>,
+    window: Option<Rc<dyn Window>>,
     webview: Option<wry::WebView>,
     ipc_handler: Option<IpcHandler>,
     close_on_esc_q: bool,
@@ -68,8 +80,8 @@ struct WebViewApp {
     build_error: Rc<RefCell<Option<String>>>,
 }
 
-impl ApplicationHandler<String> for WebViewApp {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+impl ApplicationHandler for WebViewApp {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
@@ -79,9 +91,9 @@ impl ApplicationHandler<String> for WebViewApp {
 
         let attrs = WindowAttributes::default()
             .with_title(host.title.clone())
-            // `with_inner_size` is the restore size; `with_maximized`
+            // `with_surface_size` is the restore size; `with_maximized`
             // (when the caller opts in) makes the window start maximized.
-            .with_inner_size(winit::dpi::LogicalSize::new(
+            .with_surface_size(winit::dpi::LogicalSize::new(
                 host.initial_size.0,
                 host.initial_size.1,
             ))
@@ -92,8 +104,8 @@ impl ApplicationHandler<String> for WebViewApp {
             // `linux.rs` is intentionally left untouched (see
             // `要件定義書.md` section 14.1 — Windows-only icon scope).
             .with_window_icon(crate::window_icon::app_icon());
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Rc::new(w),
+        let window: Rc<dyn Window> = match event_loop.create_window(attrs) {
+            Ok(w) => Rc::from(w),
             Err(e) => {
                 *self.build_error.borrow_mut() =
                     Some(format!("webview_host: create_window failed: {e}"));
@@ -111,6 +123,7 @@ impl ApplicationHandler<String> for WebViewApp {
         let has_ipc = host.ipc.is_some();
         let ipc_handler = host.ipc.map(|c| c.on_invoke);
 
+        let ipc_tx = self.ipc_tx.clone();
         let ipc_proxy = self.proxy.clone();
         // FR6 native ESC guard shared between the IPC handler closure and the
         // `KeyboardInput` arm. The wry IPC callback may run off the main thread
@@ -159,14 +172,18 @@ impl ApplicationHandler<String> for WebViewApp {
                 }
                 // Guard-only windows (close_on_esc_q without a user-level IPC
                 // bridge) have no consumer for non-reserved bodies: drop them
-                // here instead of posting events the loop would only discard.
+                // here instead of sending a body the loop would only discard.
                 if has_ipc {
-                    let _ = ipc_proxy.send_event(body.clone());
+                    // winit 0.31's `EventLoopProxy` carries no payload
+                    // (`wake_up()` only), so the body travels over the
+                    // channel and the wake-up merely signals "go check it".
+                    let _ = ipc_tx.send(body.clone());
+                    ipc_proxy.wake_up();
                 }
             });
         }
 
-        let webview = match builder.build(window.as_ref()) {
+        let webview = match builder.build(&window) {
             Ok(w) => w,
             Err(e) => {
                 *self.build_error.borrow_mut() =
@@ -183,7 +200,12 @@ impl ApplicationHandler<String> for WebViewApp {
         self.esc_guard = esc_guard;
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        _id: WindowId,
+        event: WindowEvent,
+    ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::KeyboardInput {
@@ -209,19 +231,26 @@ impl ApplicationHandler<String> for WebViewApp {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, body: String) {
-        // Reserved `__emterm_host:*` messages are consumed in the IPC callback
-        // (see `resumed`) and never reach the event loop, so `body` here is
-        // always destined for the user-level handler (FR6).
-        let Some(handler) = self.ipc_handler.as_mut() else {
-            return;
-        };
-        let Some(script) = handler(body) else {
-            return;
-        };
-        if let Some(webview) = self.webview.as_ref() {
-            if let Err(e) = webview.evaluate_script(&script) {
-                log::warn!("webview_host: reply eval failed: {e}");
+    fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        // Reserved `__emterm_host:*` messages are consumed in the IPC
+        // callback (see `can_create_surfaces`) and never sent over
+        // `ipc_tx`, so every body drained here is destined for the
+        // user-level handler (FR6). winit 0.31's wake-up carries no
+        // payload, so all bodies queued since the last drain are
+        // processed in one pass (mirrors the old per-event `user_event`
+        // delivery: each queued body still reaches the handler exactly
+        // once, in order).
+        while let Ok(body) = self.ipc_rx.try_recv() {
+            let Some(handler) = self.ipc_handler.as_mut() else {
+                continue;
+            };
+            let Some(script) = handler(body) else {
+                continue;
+            };
+            if let Some(webview) = self.webview.as_ref() {
+                if let Err(e) = webview.evaluate_script(&script) {
+                    log::warn!("webview_host: reply eval failed: {e}");
+                }
             }
         }
     }

@@ -32,22 +32,129 @@ pub const APP_WM_ID: &str = "emterm";
 ///
 /// Every winit window (main terminal, image viewer, JSON/YAML data
 /// viewer) routes through here so the identifier is set in exactly one
-/// place (FR5 / NFR4). `with_name` exists on both the X11 and Wayland
-/// extension traits, so each is invoked via fully-qualified syntax to
-/// avoid an ambiguous method call; winit applies whichever matches the
-/// active backend and ignores the other.
+/// place (FR5 / NFR4). winit 0.31 attaches platform-specific attributes
+/// through `WindowAttributes::with_platform_attributes`, which requires
+/// knowing which backend is active, so the active event loop decides
+/// between the X11 and Wayland attribute builders at call time.
 #[cfg(all(feature = "gui", target_os = "linux"))]
 pub mod linux_wm {
-    use winit::platform::wayland::WindowAttributesExtWayland;
-    use winit::platform::x11::WindowAttributesExtX11;
+    use winit::event_loop::ActiveEventLoop;
+    use winit::platform::wayland::{ActiveEventLoopExtWayland, WindowAttributesWayland};
+    use winit::platform::x11::{ActiveEventLoopExtX11, WindowAttributesX11};
     use winit::window::WindowAttributes;
 
     /// Set the X11 `WM_CLASS` and Wayland `app_id` to [`super::APP_WM_ID`].
-    pub fn with_app_id(attrs: WindowAttributes) -> WindowAttributes {
+    pub fn with_app_id(
+        event_loop: &dyn ActiveEventLoop,
+        attrs: WindowAttributes,
+    ) -> WindowAttributes {
         let id = super::APP_WM_ID;
         // X11: (general/class, instance). Wayland: app_id from `general`.
-        let attrs = WindowAttributesExtX11::with_name(attrs, id, id);
-        WindowAttributesExtWayland::with_name(attrs, id, id)
+        if event_loop.is_x11() {
+            attrs.with_platform_attributes(Box::new(
+                WindowAttributesX11::default().with_name(id, id),
+            ))
+        } else if event_loop.is_wayland() {
+            attrs.with_platform_attributes(Box::new(
+                WindowAttributesWayland::default().with_name(id, id),
+            ))
+        } else {
+            attrs
+        }
+    }
+}
+
+/// The Linux event-loop backend decision (FR2). Wayland is the default;
+/// `EMTERM_BACKEND` can force either backend explicitly.
+///
+/// A library module (not inline in `main.rs`) so [`decide_backend`]'s unit
+/// tests run under `cargo test --lib` — this crate's binary target has no
+/// test harness of its own.
+#[cfg(all(feature = "gui", target_os = "linux"))]
+pub mod backend_select {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Backend {
+        /// No backend forced — winit auto-selects (Wayland preferred).
+        Auto,
+        ForceWayland,
+        ForceX11,
+    }
+
+    /// Pure decision function for the Linux backend selection (FR2).
+    ///
+    /// `env_value` is the raw `EMTERM_BACKEND` value (may be empty/unknown).
+    /// `has_wayland` / `has_x11` are the presence flags of a Wayland session
+    /// (`WAYLAND_DISPLAY` / `WAYLAND_SOCKET` non-empty) and an X11 display
+    /// (`DISPLAY` non-empty), respectively — kept as inputs to mirror the
+    /// IMPLEMENTATION.md contract even though only `has_x11` currently
+    /// changes the outcome.
+    ///
+    /// - `"wayland"` -> [`Backend::ForceWayland`]
+    /// - `"x11"` with `has_x11` -> [`Backend::ForceX11`]
+    /// - anything else (`"x11"` without X11 present, empty, unknown) ->
+    ///   [`Backend::Auto`]
+    pub fn decide_backend(env_value: &str, _has_wayland: bool, has_x11: bool) -> Backend {
+        match env_value {
+            "wayland" => Backend::ForceWayland,
+            "x11" if has_x11 => Backend::ForceX11,
+            _ => Backend::Auto,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{Backend, decide_backend};
+
+        // AC-2: EMTERM_BACKEND=wayland -> ForceWayland, regardless of
+        // presence flags.
+        #[test]
+        fn wayland_env_forces_wayland() {
+            assert_eq!(
+                decide_backend("wayland", false, false),
+                Backend::ForceWayland
+            );
+            assert_eq!(decide_backend("wayland", true, true), Backend::ForceWayland);
+        }
+
+        // AC-2: EMTERM_BACKEND=x11 with X11 present -> ForceX11.
+        #[test]
+        fn x11_env_with_x11_present_forces_x11() {
+            assert_eq!(decide_backend("x11", false, true), Backend::ForceX11);
+            assert_eq!(decide_backend("x11", true, true), Backend::ForceX11);
+        }
+
+        // AC-2: EMTERM_BACKEND=x11 without X11 present -> Auto.
+        #[test]
+        fn x11_env_without_x11_present_is_auto() {
+            assert_eq!(decide_backend("x11", false, false), Backend::Auto);
+            assert_eq!(decide_backend("x11", true, false), Backend::Auto);
+        }
+
+        // AC-2: empty EMTERM_BACKEND -> Auto.
+        #[test]
+        fn empty_env_is_auto() {
+            assert_eq!(decide_backend("", false, false), Backend::Auto);
+            assert_eq!(decide_backend("", true, true), Backend::Auto);
+        }
+
+        // AC-2: unknown EMTERM_BACKEND values -> Auto.
+        #[test]
+        fn unknown_env_is_auto() {
+            assert_eq!(decide_backend("bogus", false, false), Backend::Auto);
+            assert_eq!(decide_backend("Wayland", false, true), Backend::Auto);
+            assert_eq!(decide_backend("X11", false, true), Backend::Auto);
+        }
+
+        // AC-3: the Auto decision never carries a force-X11 (or
+        // force-Wayland) intent — `build_event_loop()` in `main.rs` only
+        // calls `with_x11()` / `with_wayland()` in the ForceX11 /
+        // ForceWayland match arms, never for Auto.
+        #[test]
+        fn auto_decision_is_distinct_from_forced_variants() {
+            let auto = decide_backend("", false, true);
+            assert_ne!(auto, Backend::ForceX11);
+            assert_ne!(auto, Backend::ForceWayland);
+        }
     }
 }
 

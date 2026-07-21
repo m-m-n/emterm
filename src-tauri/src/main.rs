@@ -15,42 +15,37 @@ use emterm::{app, mux, self_exec, settings, settings_window, viewer, wakeup, win
 #[cfg(feature = "gui")]
 use winit::event_loop::EventLoop;
 
-/// Build the winit event loop, preferring the X11 backend on Linux when a
-/// Wayland session also exposes X11 (XWayland).
-///
-/// winit 0.30's Wayland backend does not emit `WindowEvent::DroppedFile` /
-/// `HoveredFile` (only X11 / Windows / macOS do), so file drag-and-drop — the
-/// SFTP upload entry point — is dead under native Wayland. When both
-/// `WAYLAND_DISPLAY` and `DISPLAY` are set we force the X11 backend so drops
-/// work via XWayland. Remove this once winit lands Wayland DnD
-/// (rust-windowing/winit#1881 / PR #2429).
-///
-/// Override with `EMTERM_BACKEND=wayland` (keep native Wayland, no file drop)
-/// or `EMTERM_BACKEND=x11` (force X11 whenever `DISPLAY` is set).
+/// Build the winit event loop. Wayland is the Linux default; `EMTERM_BACKEND`
+/// overrides to `wayland` (explicit, no-op) or `x11` (force X11 whenever
+/// `DISPLAY` is set) per [`emterm::backend_select::decide_backend`]. The
+/// decision logic itself lives in the library crate (`emterm::backend_select`)
+/// rather than here so its unit tests run under `cargo test --lib` — this
+/// crate's binary target has no test harness of its own.
 #[cfg(all(feature = "gui", target_os = "linux"))]
-fn build_event_loop() -> EventLoop<()> {
+fn build_event_loop() -> EventLoop {
+    use emterm::backend_select::{Backend, decide_backend};
+    use winit::platform::wayland::EventLoopBuilderExtWayland;
     use winit::platform::x11::EventLoopBuilderExtX11;
 
     let non_empty = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
-    let backend = std::env::var("EMTERM_BACKEND").unwrap_or_default();
+    let backend_env = std::env::var("EMTERM_BACKEND").unwrap_or_default();
     let has_wayland = non_empty("WAYLAND_DISPLAY") || non_empty("WAYLAND_SOCKET");
     let has_x11 = non_empty("DISPLAY");
-
-    let force_x11 = match backend.as_str() {
-        "wayland" => false,
-        "x11" => has_x11,
-        // auto: prefer X11 only when a Wayland session would otherwise be
-        // selected (winit picks Wayland first) AND XWayland is available.
-        _ => has_wayland && has_x11,
-    };
+    let decision = decide_backend(&backend_env, has_wayland, has_x11);
 
     let mut builder = EventLoop::builder();
-    if force_x11 {
-        builder.with_x11();
-        log::info!(
-            "emterm: forcing X11 backend (XWayland) so file drag-and-drop works \
-             — winit Wayland DnD is unimplemented; set EMTERM_BACKEND=wayland to opt out"
-        );
+    match decision {
+        Backend::ForceWayland => {
+            builder.with_wayland();
+            log::info!("emterm: backend decision = ForceWayland (EMTERM_BACKEND=wayland)");
+        }
+        Backend::ForceX11 => {
+            builder.with_x11();
+            log::info!("emterm: backend decision = ForceX11 (EMTERM_BACKEND=x11, DISPLAY set)");
+        }
+        Backend::Auto => {
+            log::info!("emterm: backend decision = Auto (winit auto-select, Wayland preferred)");
+        }
     }
     builder
         .build()
@@ -58,7 +53,7 @@ fn build_event_loop() -> EventLoop<()> {
 }
 
 #[cfg(all(feature = "gui", not(target_os = "linux")))]
-fn build_event_loop() -> EventLoop<()> {
+fn build_event_loop() -> EventLoop {
     EventLoop::new().expect("emterm: failed to create winit event loop")
 }
 
@@ -146,7 +141,7 @@ fn run_gui(args: Vec<String>) {
         return;
     }
 
-    log::info!("emterm starting (winit 0.30 backend)");
+    log::info!("emterm starting (winit 0.31 backend)");
 
     let event_loop = build_event_loop();
     // Install a cross-thread wakeup so PTY readers can pull the main
@@ -155,7 +150,7 @@ fn run_gui(args: Vec<String>) {
     // misses when the surface has nothing else to draw.
     let proxy = event_loop.create_proxy();
     wakeup::install(Box::new(move || {
-        let _ = proxy.send_event(());
+        proxy.wake_up();
     }));
     // Capture the self-binary baseline (path, device, inode) once, before any
     // self-spawn, so a later on-disk replacement is detectable. Must run after
