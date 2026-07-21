@@ -1,0 +1,119 @@
+round: 1
+executed_at: "2026-07-22T01:35:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 2bf83bde329f86b0152494deaf8ff72d5fd30ea6
+  head_commit: 3a4b721e7f86b2aaaa28f38b9cc008c666deee9b
+  changed_files:
+    - Cargo.lock
+    - src-tauri/Cargo.toml
+    - src-tauri/src/ime/backend.rs
+    - src-tauri/src/ime/mod.rs
+    - src-tauri/src/ime/winit_bridge.rs
+    - src-tauri/src/lib.rs
+    - src-tauri/src/main.rs
+    - src-tauri/src/sftp/ui.rs
+    - src-tauri/src/viewer/data_window.rs
+    - src-tauri/src/viewer/image_window.rs
+    - src-tauri/src/viewer/shell.rs
+    - src-tauri/src/webview_host/windows.rs
+    - src-tauri/src/window_host.rs
+    - src-tauri/src/window_icon.rs
+plan:
+  floor: [comprehensive, spec, security, architecture]
+  discretionary:
+    - perspective: license
+      reason: "diff が Cargo.toml / Cargo.lock（依存マニフェスト・ロックファイル）に触れるため"
+    - perspective: performance
+      reason: "イベントループ・wake-up 経路・入力ハンドラというホットパスの書き換えを含むため"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: license, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+findings:
+  - stable_id: 6dcaa64b96370321
+    severity: medium
+    category: spec
+    file: src-tauri/src/window_host.rs
+    line: 5551
+    title: "Synthetic-key tests do not verify PTY or keybinding suppression"
+    description: "追加テストは should_drop_synthetic_key_event の真偽値のみ検証し、synthetic な KeyboardInput がキー処理を通らず PTY 書き込み・キーバインド発火が起きないことを挙動として検証していない。SPEC.md の Unit Tests 要件（synthetic press が PTY バイトを生まないこと）を完全には満たさない。"
+    suggestion: "キーイベントディスパッチを観測可能な PTY/キーバインドシンク付きに分離し、synthetic press が双方のシンクを呼ばず、実 press は通常経路を通ることを検証するテストを追加する。"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium・自動修正対象外（critical/high のみ）。テスト粒度の改善候補として記録"
+  - stable_id: 61a55abf75c1e231
+    severity: medium
+    category: spec
+    file: src-tauri/src/sftp/ui.rs
+    line: 281
+    title: "Drag-and-drop tests stop before the required upload entry point"
+    description: "テストは drop_batch_from_paths の恒等変換と空リスト None のみ検証し、リストが dispatch_drop（既存アップロード入口）へ到達することを検証していない。SPEC.md Unit Tests の「dropped path list maps to the existing upload entry point」の後半が挙動として未カバー。"
+    suggestion: "DragDropped ルーティングをテスト可能な関数に分離するかディスパッチコールバックを注入し、非空リストが順序どおり 1 回ディスパッチされ、空リストはディスパッチされないことを検証する。"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium・自動修正対象外。テスト粒度の改善候補として記録"
+  - stable_id: 78f57e732616abba
+    severity: medium
+    category: security
+    file: src-tauri/src/sftp/ui.rs
+    line: 194
+    title: "Dropped paths can be swapped to symlinks before upload"
+    description: "ドロップされたパスは確認ダイアログ後も Path::exists 程度の検証で再オープンされるため、確認後にシンボリックリンクへ差し替えられると意図しないローカルファイルが SSH 先へアップロードされ得る（TOCTOU）。"
+    suggestion: "確認対象と実際にアップロードするオブジェクトを束縛する（no-follow でオープンしたハンドル/ステージングコピーからアップロード、シンボリックリンク拒否）。"
+    sources: [codex:security]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "dispatch_drop 以降の検証ロジックは本 diff で変更されておらず既存挙動。別タスク候補として繰り越し"
+  - stable_id: c6a427e1fb4fae28
+    severity: medium
+    category: security
+    file: src-tauri/src/window_host.rs
+    line: 3290
+    title: "Synthetic-key gate does not block hostile X11 input injection"
+    description: "is_synthetic は winit の FocusIn replay 識別であり、XSendEvent/XTest で注入された通常キーイベントは non-synthetic として通過する。X11 バックエンドでは display アクセスを持つ悪意あるクライアントの注入は防げない。"
+    suggestion: "このゲートは FocusIn replay 対策のワークアラウンドとして扱い、攻撃者入力境界とみなさない。信頼できない GUI クライアントが脅威モデルに入るなら Wayland を必須とする。"
+    sources: [codex:security]
+    confidence: 50
+    resolution: declined
+    resolution_reason: "SPEC/FR4 はゲートを X11 FocusIn synthetic replay 対策と定義しており、X11 クライアント注入への防御は要求していない（X11 の設計上、クライアント側で XTest 入力とハードウェア入力は区別不能）。指摘の推奨（Wayland を既定にする）は本 feature 自体が実現している"
+  - stable_id: 00aed978895f7d1a
+    severity: medium
+    category: architecture
+    file: src-tauri/src/ime/backend.rs
+    line: 206
+    title: "The IME abstraction depends cyclically on its winit implementation"
+    description: "プラットフォーム中立のはずの backend モジュールが factory で winit Window を露出し WinitImeBridge を直接構築、winit_bridge は backend のインターフェースを実装する相互依存。winit 型変更が抽象と実装の両方に伝播する。"
+    suggestion: "backend.rs は中立トレイトとデータに限定し、具象選択は composition-root へ、winit 型変換は winit_bridge へ隔離する。"
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "移行前からの既存構造で本 feature のスコープ外。リファクタリング候補として繰り越し"
+  - stable_id: 0125f1b251995be6
+    severity: medium
+    category: architecture
+    file: src-tauri/src/window_host.rs
+    line: 3133
+    title: "The event callback has become a cross-subsystem god function"
+    description: "PocApp::window_event が約1000行に達し、ウィンドウ/GPU/IME/キーバインド/ポインタ/SFTP ドロップを直接調停。本 diff も synthetic ゲートと D&D ディスパッチを同じ match に追加しており、将来の winit 移行のたびに単一の高リスク統合点を触ることになる。"
+    suggestion: "window_event を薄い winit アダプタにし、キーボード/ポインタ/ライフサイクル/ドロップの各ルーターへ委譲、明示的コマンド（redraw/resize/exit/PTY input）を返す構造にする。"
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "移行前からの既存構造で本 feature のスコープ外。リファクタリング候補として繰り越し"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

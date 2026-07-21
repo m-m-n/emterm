@@ -1,0 +1,24 @@
+feature: winit-031-wayland-native
+collected_at: "2026-07-22T01:26:06+09:00"
+session_ids: [59c38c28-882b-4b6b-955c-59559414dc0b]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files: [src-tauri/src/lib.rs]
+      note: "decide_backend を main.rs でなく lib 側モジュール backend_select に配置（--lib でテストが走るため。ファイル集合自体は予測内）"
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: license
+      reason: "diff が Cargo.toml / Cargo.lock（依存マニフェスト・ロックファイル）に触れるため"
+    - perspective: performance
+      reason: "イベントループ・wake-up 経路・入力ハンドラというホットパスの書き換えを含むため"
+  declined_findings:
+    - stable_id: c6a427e1fb4fae28
+      category: security
+      resolution_reason: "SPEC/FR4 はゲートを X11 FocusIn synthetic replay 対策と定義しており、X11 クライアント注入への防御は要求していない"
+lessons_candidates:
+  - "fresh worktree では gitignore 済みバンドルフォント (src-tauri/assets/fonts/*.ttf) が無く build.rs が panic する。implement/verify を worktree で回す前にメインツリーから assets/fonts をコピーするか fetch-fonts を実行する必要がある"
+  - "tabs.rs の offthread swap/restore 系 + welcome_without_windows_leaves_group_none は --test-threads=1 でもこのサンドボックス環境では非決定的に落ちる（変更前ツリーで同一再現を確認済み）。verify では base commit との A/B で切り分けるのが有効だった"
+  - "winit 0.31 は EventLoopProxy の user event 廃止 (wake_up のみ)・Window のトレイトオブジェクト化・D&D のセット単位化が大きい。Windows webview_host は mpsc channel + wake_up ブリッジで移行できた"
