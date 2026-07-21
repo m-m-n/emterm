@@ -31,7 +31,7 @@ use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{ResizeDirection, Window};
+use winit::window::{ResizeDirection, WindowAttributes};
 
 use super::image_payload::{ImagePayload, read_image_payload};
 use super::shell::{GpuShell, payload_path_is_in_temp_dir};
@@ -84,9 +84,9 @@ pub fn run(payload_path: &str) -> Result<(), String> {
     event_loop.set_control_flow(ControlFlow::Wait);
     let ui_font_family = payload.chrome.ui_font_family.clone();
     let terminal_font_family = payload.chrome.terminal_font_family.clone();
-    let mut app = ViewerApp::new(payload, ui_font_family, terminal_font_family);
+    let app = ViewerApp::new(payload, ui_font_family, terminal_font_family);
     event_loop
-        .run_app(&mut app)
+        .run_app(app)
         .map_err(|e| format!("image viewer: event loop error: {e}"))?;
     Ok(())
 }
@@ -393,7 +393,7 @@ impl ViewerApp {
 }
 
 impl ApplicationHandler for ViewerApp {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.shell.is_some() {
             return;
         }
@@ -403,9 +403,9 @@ impl ApplicationHandler for ViewerApp {
         let monitor = event_loop
             .primary_monitor()
             .or_else(|| event_loop.available_monitors().next());
-        let (max_w, max_h) = match &monitor {
-            Some(m) => {
-                let s = m.size();
+        let (max_w, max_h) = match monitor.as_ref().and_then(|m| m.current_video_mode()) {
+            Some(vm) => {
+                let s = vm.size();
                 (
                     (s.width as f32 * 0.9) as u32,
                     (s.height as f32 * 0.9) as u32,
@@ -418,17 +418,17 @@ impl ApplicationHandler for ViewerApp {
 
         // CSD like the terminal window: no WM decorations; the egui
         // title bar + edge zones replace them.
-        let attrs = Window::default_attributes()
+        let attrs = WindowAttributes::default()
             .with_title("eMterm Image Viewer")
             .with_decorations(false)
             // FR4: deliberately NOT maximized — the image viewer keeps its
             // image-fit sizing (`win_w`/`win_h` above).
-            .with_inner_size(PhysicalSize::new(win_w, win_h))
-            .with_min_inner_size(LogicalSize::new(320.0, 240.0));
+            .with_surface_size(PhysicalSize::new(win_w, win_h))
+            .with_min_surface_size(LogicalSize::new(320.0, 240.0));
         // FR5: stamp the canonical dock-grouping identifier (X11
         // `WM_CLASS` / Wayland `app_id`) — grouping only, no maximize.
         #[cfg(target_os = "linux")]
-        let attrs = crate::linux_wm::with_app_id(attrs);
+        let attrs = crate::linux_wm::with_app_id(event_loop, attrs);
         let shell = GpuShell::new(
             event_loop,
             attrs,
@@ -456,13 +456,13 @@ impl ApplicationHandler for ViewerApp {
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(_) => {
+            WindowEvent::SurfaceResized(_) => {
                 if let Some(s) = self.shell.as_mut() {
                     s.surface_dirty = true;
                 }
@@ -484,7 +484,9 @@ impl ApplicationHandler for ViewerApp {
                 }
                 match &event.logical_key {
                     Key::Named(NamedKey::Escape) => event_loop.exit(),
-                    Key::Named(NamedKey::Space) => {
+                    // winit 0.31 removed `NamedKey::Space`; match on the
+                    // literal character instead.
+                    Key::Character(c) if c.as_str() == " " => {
                         let (vw, vh) = self.image_viewport();
                         let up = self.modifiers.state().shift_key();
                         self.state.space_scroll(vw, vh, up);
@@ -497,7 +499,7 @@ impl ApplicationHandler for ViewerApp {
                     _ => {}
                 }
             }
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowEvent::PointerMoved { position, .. } => {
                 let ppp = self
                     .shell
                     .as_ref()
@@ -513,12 +515,15 @@ impl ApplicationHandler for ViewerApp {
                     .push(egui::Event::PointerMoved(self.cursor_pos));
                 self.request_redraw();
             }
-            WindowEvent::CursorLeft { .. } => {
+            WindowEvent::PointerLeft { .. } => {
                 self.current_resize_dir = None;
                 self.pending_egui_events.push(egui::Event::PointerGone);
                 self.request_redraw();
             }
-            WindowEvent::MouseInput { state, button, .. } => {
+            WindowEvent::PointerButton { state, button, .. } => {
+                let Some(button) = button.mouse_button() else {
+                    return;
+                };
                 // A left press on a CSD edge hands off to the WM resize
                 // loop instead of reaching egui.
                 if button == MouseButton::Left && state == ElementState::Pressed {

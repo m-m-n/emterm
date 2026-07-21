@@ -22,5 +22,5 @@ pub mod preedit;
 pub mod backend;
 pub mod null;
 
-// Phase 4-G-3: winit IME bridge (X11 / Wayland / Windows via winit 0.30).
+// Phase 4-G-3: winit IME bridge (X11 / Wayland / Windows via winit 0.31).
 pub mod winit_bridge;

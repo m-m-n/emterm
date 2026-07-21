@@ -38,7 +38,7 @@ use super::backend::{ImeBackend, ImeEvent, ImeInitError, KeyDispatchResult, RawK
 
 /// Window handle abstraction so the bridge can be unit-tested without
 /// spinning up a real winit `EventLoop`. Production code always uses
-/// [`WinitWindowHandle`] backed by `Arc<winit::window::Window>`.
+/// [`WinitWindowHandle`] backed by `Arc<dyn winit::window::Window>`.
 pub trait BridgeWindow: Send + Sync {
     /// Toggle whether the platform IM server should send composition
     /// events to this window. Called once at `init` (`true`) and from
@@ -50,8 +50,8 @@ pub trait BridgeWindow: Send + Sync {
 }
 
 /// Production [`BridgeWindow`] implementation backed by an
-/// `Arc<winit::window::Window>`.
-struct WinitWindowHandle(Arc<Window>);
+/// `Arc<dyn winit::window::Window>`.
+struct WinitWindowHandle(Arc<dyn Window>);
 
 impl BridgeWindow for WinitWindowHandle {
     fn set_ime_allowed(&self, allowed: bool) {
@@ -60,8 +60,11 @@ impl BridgeWindow for WinitWindowHandle {
 
     fn set_ime_cursor_area(&self, x: i32, y: i32, width: i32, height: i32) {
         self.0.set_ime_cursor_area(
-            PhysicalPosition::new(x, y),
-            PhysicalSize::new(width.max(1), height.max(1)),
+            winit::dpi::Position::Physical(PhysicalPosition::new(x, y)),
+            winit::dpi::Size::Physical(PhysicalSize::new(
+                width.max(1) as u32,
+                height.max(1) as u32,
+            )),
         );
     }
 }
@@ -88,7 +91,7 @@ impl WinitImeBridge {
     /// Build a bridge attached to a winit window. The returned bridge
     /// has already called `set_ime_allowed(true)` so winit will start
     /// surfacing `WindowEvent::Ime` events.
-    pub fn init(window: Arc<Window>) -> Result<Self, ImeInitError> {
+    pub fn init(window: Arc<dyn Window>) -> Result<Self, ImeInitError> {
         // Hint the platform that this is a terminal so candidate
         // windows can size themselves accordingly. `Normal` is the
         // default; we set it explicitly for documentation.
@@ -145,6 +148,15 @@ impl WinitImeBridge {
                 // any preedit overlay.
                 self.im_composing = false;
                 self.queue.push_back(ImeEvent::FocusOut);
+            }
+            WinitIme::DeleteSurrounding { .. } => {
+                // New in winit 0.31: the IM server asks the editor to
+                // delete text surrounding the cursor/selection. The
+                // existing Ghostty-derived pipeline (Preedit/Commit/
+                // Enabled/Disabled) has no editor-side hook for this
+                // yet, so it is a documented no-op rather than a
+                // migration regression — wiring it up is out of scope
+                // for the winit version bump.
             }
         }
     }

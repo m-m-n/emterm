@@ -1,7 +1,7 @@
 //! Shared window-icon loader.
 //!
 //! Loads the bundled `128x128.png` asset, decodes it to RGBA, and hands
-//! back a [`winit::window::Icon`] ready for `WindowAttributes::with_window_icon`.
+//! back a [`winit::icon::Icon`] ready for `WindowAttributes::with_window_icon`.
 //! The same helper feeds both the winit main window
 //! ([`crate::window_host::WindowHost::new`]) and the wry child WebView
 //! windows ([`crate::webview_host::windows::WebViewApp::resumed`]), so the
@@ -13,10 +13,10 @@
 //! and the window is still created.
 //!
 //! This module is gated behind `#[cfg(feature = "gui")]` because
-//! `winit::window::Icon` only exists in the GUI build. The CLI-only build
+//! `winit::icon::Icon` only exists in the GUI build. The CLI-only build
 //! (`--no-default-features`) never reaches this code.
 
-use winit::window::Icon;
+use winit::icon::{Icon, RgbaIcon};
 
 /// Embedded PNG payload used for the window icon.
 ///
@@ -52,10 +52,10 @@ fn decode_icon(bytes: &[u8]) -> Option<Icon> {
     };
     let rgba = img.into_rgba8();
     let (w, h) = rgba.dimensions();
-    match Icon::from_rgba(rgba.into_raw(), w, h) {
-        Ok(icon) => Some(icon),
+    match RgbaIcon::new(rgba.into_raw(), w, h) {
+        Ok(rgba_icon) => Some(Icon::from(rgba_icon)),
         Err(e) => {
-            log::warn!("window_icon: Icon::from_rgba failed: {e}");
+            log::warn!("window_icon: RgbaIcon::new failed: {e}");
             None
         }
     }

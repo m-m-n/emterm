@@ -96,9 +96,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # tao 0.34 with winit 0.30.9. tao did not expose XKB keycodes, breaking
 # self-built XIM; winit provides native IME via WindowEvent::Ime on
 # X11 / Wayland / Windows. default-features=false drops Android/iOS;
-# we keep rwh_06 (raw-window-handle 0.6) for wgpu surface integration
-# and x11 + wayland for Linux platform support.
-winit = { version = "0.30.9", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"], optional = true }
+# x11 + wayland for Linux platform support (raw-window-handle 0.6 support
+# is built in by default in 0.31, no separate feature flag needed).
+# Pinned to the exact 0.31.0-beta.2 beta; bump to the plain version
+# requirement once 0.31 stable is released.
+winit = { version = "=0.31.0-beta.2", default-features = false, features = ["x11", "wayland", "wayland-dlopen"], optional = true }
 
 # GPU surface + egui rendering
 wgpu = { version = "22", optional = true }
