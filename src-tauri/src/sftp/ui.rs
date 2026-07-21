@@ -1,10 +1,11 @@
-//! SFTP egui UI state and drop aggregation.
+//! SFTP egui UI state and drop-path handling.
 //!
-//! winit delivers dropped files one `DroppedFile` event at a time with no
-//! "drop complete" signal, so per-file paths are accumulated in
-//! [`DropAggregator`] and finalized once on the next event-loop turn. The
-//! rest of this module holds the overlay / dialog / toast state machine that
-//! the egui render path draws and the progress pump updates.
+//! winit's `WindowEvent::DragDropped` delivers the full set of dropped paths
+//! in a single event (one drag session = one event), so [`drop_batch_from_paths`]
+//! maps that list directly onto the existing upload entry point — no
+//! cross-event accumulation is needed. The rest of this module holds the
+//! overlay / dialog / toast state machine that the egui render path draws
+//! and the progress pump updates.
 
 use std::path::PathBuf;
 
@@ -157,8 +158,6 @@ pub enum HoverOverlay {
 /// Aggregate SFTP UI state held by `App` and drawn by the render path.
 #[derive(Default)]
 pub struct SftpUiState {
-    /// Per-file drop aggregation, finalized on the next loop turn.
-    pub aggregator: DropAggregator,
     /// The hover overlay, when a drag is in progress.
     pub hover: Option<HoverOverlay>,
     /// The active upload-confirmation dialog, if any.
@@ -189,39 +188,15 @@ impl SftpUiState {
     }
 }
 
-/// Accumulates per-file winit drop events into a single batch, finalized on
-/// the next loop turn (winit gives no drop-complete signal).
-#[derive(Debug, Default)]
-pub struct DropAggregator {
-    /// Paths collected since the last `take_batch`.
-    pending: Vec<PathBuf>,
-    /// Set when at least one file has been dropped and the batch is awaiting
-    /// finalization on the next loop turn.
-    armed: bool,
-}
-
-impl DropAggregator {
-    /// Record one dropped file path and arm the batch for finalization.
-    pub fn push(&mut self, path: PathBuf) {
-        self.pending.push(path);
-        self.armed = true;
-    }
-
-    /// Whether a batch is waiting to be finalized this loop turn.
-    pub fn is_armed(&self) -> bool {
-        self.armed
-    }
-
-    /// Finalize and return the accumulated batch, clearing the aggregator.
-    /// Returns `None` when nothing was dropped.
-    pub fn take_batch(&mut self) -> Option<Vec<PathBuf>> {
-        self.armed = false;
-        if self.pending.is_empty() {
-            None
-        } else {
-            Some(std::mem::take(&mut self.pending))
-        }
-    }
+/// Map a winit `WindowEvent::DragDropped` path list onto the SFTP drop
+/// entry point (FR3 / IMPLEMENTATION.md D3).
+///
+/// `paths` is fed to [`crate::app::App::dispatch_drop`] in list order,
+/// preserved verbatim (`DragDropped` already delivers the whole drag
+/// session's paths in one event, in drop order); an empty list is a
+/// no-op (`None`).
+pub fn drop_batch_from_paths(paths: Vec<PathBuf>) -> Option<Vec<PathBuf>> {
+    if paths.is_empty() { None } else { Some(paths) }
 }
 
 #[cfg(test)]
@@ -300,29 +275,28 @@ mod tests {
         );
     }
 
+    // ── drop_batch_from_paths (AC-4) ─────────────────────────────────────
+
     #[test]
-    fn aggregator_starts_empty() {
-        let mut agg = DropAggregator::default();
-        assert!(!agg.is_armed());
-        assert!(agg.take_batch().is_none());
+    fn drop_batch_empty_list_is_noop() {
+        assert_eq!(drop_batch_from_paths(Vec::new()), None);
     }
 
     #[test]
-    fn aggregator_folds_multiple_drops_into_one_batch() {
-        let mut agg = DropAggregator::default();
-        agg.push(PathBuf::from("/a/one.txt"));
-        agg.push(PathBuf::from("/a/two.txt"));
-        agg.push(PathBuf::from("/a/three.txt"));
-        assert!(agg.is_armed());
+    fn drop_batch_non_empty_list_preserves_order() {
+        let paths = vec![
+            PathBuf::from("/a/one.txt"),
+            PathBuf::from("/a/two.txt"),
+            PathBuf::from("/a/three.txt"),
+        ];
+        let batch = drop_batch_from_paths(paths.clone()).expect("a batch");
+        assert_eq!(batch, paths);
+    }
 
-        let batch = agg.take_batch().expect("a batch");
-        assert_eq!(batch.len(), 3);
-        assert_eq!(batch[0], PathBuf::from("/a/one.txt"));
-        assert_eq!(batch[2], PathBuf::from("/a/three.txt"));
-
-        // After taking, the aggregator is reset.
-        assert!(!agg.is_armed());
-        assert!(agg.take_batch().is_none());
+    #[test]
+    fn drop_batch_single_path() {
+        let paths = vec![PathBuf::from("/a/one.txt")];
+        assert_eq!(drop_batch_from_paths(paths.clone()), Some(paths));
     }
 
     fn upload_dialog(remote: &str) -> UploadDialog {
@@ -383,14 +357,5 @@ mod tests {
         let b = ui.next_request_id();
         let c = ui.next_request_id();
         assert!(a < b && b < c);
-    }
-
-    #[test]
-    fn aggregator_take_disarms_even_when_empty() {
-        let mut agg = DropAggregator::default();
-        // Arming with no push is impossible, but a finalize pass on an empty
-        // aggregator must still leave it disarmed and yield nothing.
-        assert!(agg.take_batch().is_none());
-        assert!(!agg.is_armed());
     }
 }

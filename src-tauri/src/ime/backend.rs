@@ -198,12 +198,13 @@ pub fn build_platform_backend(
     ))
 }
 
-/// Startup factory variant that consumes a real `Arc<winit::window::Window>`
-/// and builds the [`crate::ime::winit_bridge::WinitImeBridge`] on top of it.
-/// Same env / settings short-circuits as [`build_backend`]; on
+/// Startup factory variant that consumes a real
+/// `Arc<dyn winit::window::Window>` and builds the
+/// [`crate::ime::winit_bridge::WinitImeBridge`] on top of it. Same env /
+/// settings short-circuits as [`build_backend`]; on
 /// `WinitImeBridge::init` failure the App still gets [`crate::ime::null::NullBackend`].
 pub fn build_backend_with_window(
-    window: std::sync::Arc<winit::window::Window>,
+    window: std::sync::Arc<dyn winit::window::Window>,
     settings: &crate::settings::ImeSettings,
     env: &dyn EnvLookup,
 ) -> Box<dyn ImeBackend> {
