@@ -40,16 +40,20 @@ workflow:
     status: completed
     completed_at_commit: 2bf83bde329f86b0152494deaf8ff72d5fd30ea6
   - id: implement
-    status: pending
-    base_commit: null
+    status: completed
+    base_commit: 2bf83bde329f86b0152494deaf8ff72d5fd30ea6
+    completed_at_commit: 3a4b721e7f86b2aaaa28f38b9cc008c666deee9b
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 3a4b721e7f86b2aaaa28f38b9cc008c666deee9b
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 3a4b721e7f86b2aaaa28f38b9cc008c666deee9b
+    result: pass
     failed_items: []
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 3a4b721e7f86b2aaaa28f38b9cc008c666deee9b
 
 tasks:
   task0001:
@@ -95,8 +99,9 @@ tasks:
     domains: [input-handling, ui, config-infra]
     complexity: high
     requirements: [FR1, FR2, FR3, NFR1, NFR2, NFR3]
-    status: pending
-    notes: null
+    status: merged
+    notes: "Merged first attempt. Deviation: decide_backend lives in new module src-tauri/src/backend_select.rs (lib) so its tests run under --lib. tabs.rs/app.rs flakes verified pre-existing via stash A/B."
+    branch: em-workflow/winit-031-wayland-native/task0001
   task0002:
     title: "Synthetic key press gate"
     plan: tasks/task0002.md
@@ -106,12 +111,30 @@ tasks:
     domains: [input-handling]
     complexity: medium
     requirements: [FR4]
-    status: pending
-    notes: null
+    status: merged
+    notes: "Fast-forward merge, no conflicts. 17 tabs.rs --lib failures are pre-existing timing flakiness (reproduced on pre-change tree)."
+    branch: em-workflow/winit-031-wayland-native/task0002
 
 review:
-  status: pending
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    security: completed
+    architecture: completed
+    performance: completed
+    license: completed
+  residual_critical_high: 0
+  needs_rework: false
+  plan:
+    floor: [comprehensive, spec, security, architecture]
+    discretionary:
+      - perspective: license
+        reason: "diff が Cargo.toml / Cargo.lock（依存マニフェスト・ロックファイル）に触れるため"
+      - perspective: performance
+        reason: "イベントループ・wake-up 経路・入力ハンドラというホットパスの書き換えを含むため"
+    codex_cross_validation: true
 
 requirements:
   FR1:
