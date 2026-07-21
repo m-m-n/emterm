@@ -1,0 +1,158 @@
+schema_version: 1
+feature: winit-031-wayland-native
+created: 2026-07-22
+base_branch: main
+parent_branch: em-workflow/winit-031-wayland-native/integration
+
+project:
+  license: MIT
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    windows:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 2bf83bde329f86b0152494deaf8ff72d5fd30ea6
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "視覚的な UI 変更なし（バックエンド選択・依存更新・入力処理のみ）"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 2bf83bde329f86b0152494deaf8ff72d5fd30ea6
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks:
+  task0001:
+    title: "winit 0.31 migration, Wayland default, D&D new API"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/Cargo.toml
+      - src-tauri/Cargo.lock
+      - src-tauri/src/main.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/app.rs
+      - src-tauri/src/wakeup.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/self_exec.rs
+      - src-tauri/src/settings_launcher.rs
+      - src-tauri/src/settings_window/mod.rs
+      - src-tauri/src/render/mod.rs
+      - src-tauri/src/window_icon.rs
+      - src-tauri/src/ime/mod.rs
+      - src-tauri/src/ime/backend.rs
+      - src-tauri/src/ime/winit_bridge.rs
+      - src-tauri/src/sftp/ui.rs
+      - src-tauri/src/sftp/service.rs
+      - src-tauri/src/status_bar/runtime.rs
+      - src-tauri/src/status_bar/providers/command.rs
+      - src-tauri/src/status_bar/providers/git_branch.rs
+      - src-tauri/src/status_bar/providers/time.rs
+      - src-tauri/src/ui/mod.rs
+      - src-tauri/src/ui/chrome.rs
+      - src-tauri/src/ui/keybinds.rs
+      - src-tauri/src/ui/mux_sidebar.rs
+      - src-tauri/src/ui/title_bar.rs
+      - src-tauri/src/viewer/window.rs
+      - src-tauri/src/viewer/shell.rs
+      - src-tauri/src/viewer/data_window.rs
+      - src-tauri/src/viewer/html_window.rs
+      - src-tauri/src/viewer/image_window.rs
+      - src-tauri/src/webview_host/mod.rs
+      - src-tauri/src/webview_host/linux.rs
+      - src-tauri/src/webview_host/windows.rs
+    skills: [backend-impl]
+    domains: [input-handling, ui, config-infra]
+    complexity: high
+    requirements: [FR1, FR2, FR3, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+  task0002:
+    title: "Synthetic key press gate"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/window_host.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR4]
+    status: pending
+    notes: null
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "Migrate winit to 0.31.0-beta.2 (crate split + API changes)"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-4, M-1]
+  FR2:
+    title: "Remove X11-forcing default; keep EMTERM_BACKEND overrides"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-5, M-4]
+  FR3:
+    title: "Migrate file D&D to DragEntered/DragMoved/DragDropped/DragLeft"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-7, M-3]
+  FR4:
+    title: "Ignore synthetic key presses in key handling"
+    status: ok
+    tbd_reason: null
+    tasks: [task0002]
+    tests: [TS-6]
+  NFR1:
+    title: "Windows target keeps compiling (cargo xwin check)"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-4]
+  NFR2:
+    title: "CLI-only build (--no-default-features) keeps compiling"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-3]
+  NFR3:
+    title: "Pin beta version with comment; bump at 0.31 stable"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [M-5]
