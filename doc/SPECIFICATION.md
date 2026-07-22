@@ -982,6 +982,9 @@ Files can be uploaded to the remote host by dragging and dropping them onto an S
 - Remote CWD is detected via OSC 7 emitted by the remote shell
 - If OSC 7 is not configured on the remote host, the destination defaults to the user's home directory
 
+**Known Limitation (Linux Wayland):**
+- File drag & drop does not work on the Wayland backend (the Linux default): winit 0.31.0-beta.2 does not ship Wayland drag-and-drop support. The drag event handlers are in place and work on the X11 backend (`EMTERM_BACKEND=x11`). Resolved by a future winit update (implementation already merged upstream)
+
 ---
 
 ### Category 8: Terminal Multiplexer

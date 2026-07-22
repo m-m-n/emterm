@@ -97,7 +97,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Settings / Markdown / JSON-YAML viewer windows launch maximized; all windows group under one dock icon (`WM_CLASS` / `app_id` = `emterm`)
   - Terminal profiles: named shell configurations with shell, args, env vars, and working directory
   - SSH connection management: auto-detect ssh command, import from ~/.ssh/config, manage connections
-  - SFTP file upload: drag and drop files onto SSH tabs to upload; non-SSH tabs paste file paths
+  - SFTP file upload: drag and drop files onto SSH tabs to upload; non-SSH tabs paste file paths (currently unavailable on Linux Wayland — see [Known Issues](#known-issues))
   - WSL distribution detection, import, and profile integration (Windows only)
   - Configurable cursor shape, scrollbar, opacity, line height, scrollback, shell, and more
   - All keyboard shortcuts configurable
@@ -221,6 +221,18 @@ emterm markdown <file.md>
 
 # Display image in terminal
 emterm image <image.png>
+```
+
+## Known Issues
+
+### File drag & drop does not work on Linux Wayland
+
+On Linux, eMterm runs as a native Wayland client by default. The bundled winit version (`0.31.0-beta.2`) does not yet ship Wayland drag-and-drop support, so dropping files onto the terminal window (SFTP upload / path paste) currently does nothing on Wayland. The implementation has already landed on winit's master branch and will be picked up by updating winit once the next release is published.
+
+Workaround: launch with the X11 backend when you need drag & drop:
+
+```bash
+EMTERM_BACKEND=x11 emterm
 ```
 
 ## tmux Usage Notes
