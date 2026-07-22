@@ -12,14 +12,15 @@
 //! zwp_text_input_v3 / IMM32 details that the previous self-built
 //! backends struggled with on tao 0.34. We only need to:
 //!
-//! 1. Toggle `Window::set_ime_allowed` so winit attaches to the IM
+//! 1. Enable / disable the IME via `Window::request_ime_update`
+//!    (`ImeRequest::Enable` / `Disable`) so winit attaches to the IM
 //!    server at startup and detaches on shutdown.
 //! 2. Mirror `Ime::*` into `ImeEvent::*` plus update the
 //!    `im_composing` flag so [`Self::dispatch_key_event`] can suppress
 //!    PTY writes that the IM server has already swallowed.
-//! 3. Forward cursor cell changes to `Window::set_ime_cursor_area`
-//!    rate-limited to actual cell movement (`notify_cursor_rect`
-//!    dedup).
+//! 3. Forward cursor cell changes as `ImeRequest::Update` cursor-area
+//!    requests, rate-limited to actual cell movement
+//!    (`notify_cursor_rect` dedup).
 //!
 //! The state machine is deliberately a strict subset of Ghostty's. We
 //! never need `in_keyevent` to gate a *next-tick* dedup because winit's
@@ -32,7 +33,9 @@ use std::sync::Arc;
 
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::Ime as WinitIme;
-use winit::window::{ImePurpose, Window};
+use winit::window::{
+    ImeCapabilities, ImeEnableRequest, ImeHint, ImePurpose, ImeRequest, ImeRequestData, Window,
+};
 
 use super::backend::{ImeBackend, ImeEvent, ImeInitError, KeyDispatchResult, RawKeyEvent};
 
@@ -55,17 +58,50 @@ struct WinitWindowHandle(Arc<dyn Window>);
 
 impl BridgeWindow for WinitWindowHandle {
     fn set_ime_allowed(&self, allowed: bool) {
-        self.0.set_ime_allowed(allowed);
+        let request = if allowed {
+            // Enable with hint/purpose + cursor-area capabilities. The
+            // (0,0)/(0,0) cursor area is a placeholder — the first
+            // `notify_cursor_rect` after enable replaces it with the
+            // real caret cell. Purpose `Normal` documents "plain
+            // terminal text", replacing the former standalone
+            // `set_ime_purpose` call.
+            let caps = ImeCapabilities::new()
+                .with_hint_and_purpose()
+                .with_cursor_area();
+            let data = ImeRequestData::default()
+                .with_hint_and_purpose(ImeHint::NONE, ImePurpose::Normal)
+                .with_cursor_area(
+                    winit::dpi::Position::Physical(PhysicalPosition::new(0, 0)),
+                    winit::dpi::Size::Physical(PhysicalSize::new(1, 1)),
+                );
+            let Some(enable) = ImeEnableRequest::new(caps, data) else {
+                // Unreachable by construction (caps and data match),
+                // but never panic inside the input path.
+                return;
+            };
+            ImeRequest::Enable(enable)
+        } else {
+            ImeRequest::Disable
+        };
+        // AlreadyEnabled / NotSupported are fine: notify_focus(true)
+        // re-fires on every focus-in, which was idempotent under the
+        // old set_ime_allowed contract too.
+        let _ = self.0.request_ime_update(request);
     }
 
     fn set_ime_cursor_area(&self, x: i32, y: i32, width: i32, height: i32) {
-        self.0.set_ime_cursor_area(
-            winit::dpi::Position::Physical(PhysicalPosition::new(x, y)),
-            winit::dpi::Size::Physical(PhysicalSize::new(
-                width.max(1) as u32,
-                height.max(1) as u32,
-            )),
-        );
+        // NotEnabled (rect pushed while the IME is off) is fine — the
+        // enable path re-seeds the area and notify_cursor_rect keeps
+        // updating it afterwards.
+        let _ = self.0.request_ime_update(ImeRequest::Update(
+            ImeRequestData::default().with_cursor_area(
+                winit::dpi::Position::Physical(PhysicalPosition::new(x, y)),
+                winit::dpi::Size::Physical(PhysicalSize::new(
+                    width.max(1) as u32,
+                    height.max(1) as u32,
+                )),
+            ),
+        ));
     }
 }
 
@@ -92,11 +128,8 @@ impl WinitImeBridge {
     /// has already called `set_ime_allowed(true)` so winit will start
     /// surfacing `WindowEvent::Ime` events.
     pub fn init(window: Arc<dyn Window>) -> Result<Self, ImeInitError> {
-        // Hint the platform that this is a terminal so candidate
-        // windows can size themselves accordingly. `Normal` is the
-        // default; we set it explicitly for documentation.
-        window.set_ime_purpose(ImePurpose::Normal);
-        window.set_ime_allowed(true);
+        // The IME purpose (`Normal`) rides along in the Enable request
+        // issued by `with_handle` → `set_ime_allowed(true)`.
         Ok(Self::with_handle(Box::new(WinitWindowHandle(window))))
     }
 
