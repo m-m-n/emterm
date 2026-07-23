@@ -47,8 +47,36 @@ pub(super) struct SpawnedPty {
     pub(super) reader: Box<dyn std::io::Read + Send>,
 }
 
+/// Build the fixed environment variables set on every newly spawned mux
+/// pane's shell process. Extracted as a pure function (separate from the
+/// real `portable_pty` spawn call) so `EMTERM_PANE_ID` injection is
+/// testable without spawning a real PTY (AC-6, IMPLEMENTATION.md FR13:
+/// mux pane spawn injects `EMTERM_PANE_ID` into the pane's environment,
+/// resolved by `emterm mux read|send|wait --pane current`).
+///
+/// `public_pane_id` is minted by the caller via
+/// `SessionManager::public_pane_id` (SPEC FR13) before `spawn_pty` runs —
+/// this module has no direct dependency on `SessionManager`'s incarnation
+/// state.
+fn pane_env_vars(public_pane_id: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("TERM", "xterm-256color".to_string()),
+        ("COLORTERM", "truecolor".to_string()),
+        ("TERM_PROGRAM", "emterm".to_string()),
+        ("EMTERM_MUX", "1".to_string()),
+        ("EMTERM_PANE_ID", public_pane_id.to_string()),
+    ]
+}
+
 /// Spawn a PTY with a shell process at the given size.
-pub(super) fn spawn_pty(cols: u16, rows: u16) -> Result<SpawnedPty, String> {
+///
+/// `public_pane_id` is the pane's public (opaque, daemon-incarnation-
+/// scoped) ID, minted by the caller (`SessionManager::public_pane_id`)
+/// BEFORE spawn — environment variables must be set before the shell
+/// process starts, so the ID cannot be injected after the fact. Resolved
+/// client-side by `emterm mux read|send|wait --pane current` via
+/// `EMTERM_PANE_ID` (IMPLEMENTATION.md FR13 / "Public pane ID format").
+pub(super) fn spawn_pty(cols: u16, rows: u16, public_pane_id: &str) -> Result<SpawnedPty, String> {
     let pty_system = portable_pty::native_pty_system();
     let pty_size = portable_pty::PtySize {
         rows,
@@ -63,10 +91,9 @@ pub(super) fn spawn_pty(cols: u16, rows: u16) -> Result<SpawnedPty, String> {
 
     let shell = detect_default_shell();
     let mut cmd = portable_pty::CommandBuilder::new(&shell);
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    cmd.env("TERM_PROGRAM", "emterm");
-    cmd.env("EMTERM_MUX", "1");
+    for (key, value) in pane_env_vars(public_pane_id) {
+        cmd.env(key, value);
+    }
     cmd.env_remove("TMUX");
     cmd.env_remove("TMUX_PANE");
 
@@ -101,12 +128,17 @@ pub(super) fn spawn_pty(cols: u16, rows: u16) -> Result<SpawnedPty, String> {
 
 /// Register a new pane in the session manager and start its reader thread.
 ///
-/// Returns the new pane_id and its output target (for the reader thread).
+/// `pane_id` is pre-allocated by the caller (`SessionManager::alloc_pane_id`)
+/// BEFORE `spawn_pty` runs, so `EMTERM_PANE_ID` can be injected into the
+/// shell's environment at spawn time. Returns the pane_id and its output
+/// target (for the reader thread) — `None` only when `session_id` /
+/// `window_id` no longer resolve (a race with concurrent teardown).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn register_pane_and_start_reader(
     mgr: &mut SessionManager,
     session_id: u32,
     window_id: u32,
+    pane_id: PaneId,
     cols: u16,
     rows: u16,
     spawned: SpawnedPty,
@@ -116,13 +148,13 @@ pub(super) fn register_pane_and_start_reader(
     agent_status_tx: &AgentStatusReportSender,
     pane_exit_sender: &SharedPaneExitSender,
 ) -> Option<PaneId> {
-    // Verify session/window exist before allocating pane ID
+    // Verify session/window still exist (pane_id was already allocated by
+    // the caller before spawn_pty, so there is nothing to allocate here).
     {
         let session = mgr.get_session(session_id)?;
         session.windows.get(&window_id)?;
     }
 
-    let pane_id = mgr.alloc_pane_id();
     let session = mgr.get_session_mut(session_id)?;
     let window = session.windows.get_mut(&window_id)?;
 
@@ -770,6 +802,39 @@ fn capture_passthrough(
 mod tests {
     use super::*;
     use crate::pty::visibility::HIDDEN_PASSTHROUGH_CAPACITY_MUX;
+
+    // ── pane_env_vars (EMTERM_PANE_ID injection, AC-6) ─────────────────────
+
+    #[test]
+    fn pane_env_vars_includes_emterm_pane_id_matching_the_given_public_id() {
+        let vars = pane_env_vars("abc123-7");
+        let found = vars.iter().find(|(k, _)| *k == "EMTERM_PANE_ID");
+        assert_eq!(found.map(|(_, v)| v.as_str()), Some("abc123-7"));
+    }
+
+    #[test]
+    fn pane_env_vars_pane_id_differs_per_pane() {
+        let get = |vars: &[(&str, String)]| {
+            vars.iter()
+                .find(|(k, _)| *k == "EMTERM_PANE_ID")
+                .unwrap()
+                .1
+                .clone()
+        };
+        let a = get(&pane_env_vars("abc123-1"));
+        let b = get(&pane_env_vars("abc123-2"));
+        assert_ne!(a, b, "distinct public pane ids must round-trip distinctly");
+    }
+
+    #[test]
+    fn pane_env_vars_keeps_existing_fixed_vars() {
+        let vars = pane_env_vars("abc123-1");
+        let get = |key: &str| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
+        assert_eq!(get("TERM"), Some("xterm-256color".to_string()));
+        assert_eq!(get("COLORTERM"), Some("truecolor".to_string()));
+        assert_eq!(get("TERM_PROGRAM"), Some("emterm".to_string()));
+        assert_eq!(get("EMTERM_MUX"), Some("1".to_string()));
+    }
 
     // ── extract_main_buffer_bytes (alt-screen scrollback gating) ──────────
 

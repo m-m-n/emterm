@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use super::ipc::connection::handle_connection;
-use super::ipc::handlers::handle_destroy_pane;
+use super::ipc::handlers::{handle_destroy_pane, reevaluate_agent_waiters};
 use super::ipc::protocol::{
     AgentStatusUpdateMsg, MessageType, MuxMessage, NotifyMsg, RenameWindowMsg,
 };
@@ -573,9 +573,14 @@ async fn run_notification_task(
 
 /// Map the core (build-agnostic) `AgentState` to the `mux_ipc` wire mirror
 /// enum. Two distinct types by design: `mux_ipc` must not depend on the
-/// binary crate (task0002 IMPLEMENTATION.md), so this conversion is the
-/// only place the two ever meet.
-fn to_wire_state(state: crate::agent_status::AgentState) -> crate::mux::ipc::protocol::AgentState {
+/// binary crate (task0002 IMPLEMENTATION.md), so this conversion (and its
+/// inverse, [`from_wire_state`]) is the only place the two ever meet.
+/// Widened beyond this module (`pub(in crate::mux)`) so the agent API
+/// handlers (task0004, `mux::ipc::handlers`) share the same conversion
+/// rather than re-deriving it.
+pub(in crate::mux) fn to_wire_state(
+    state: crate::agent_status::AgentState,
+) -> crate::mux::ipc::protocol::AgentState {
     use crate::agent_status::AgentState as Core;
     use crate::mux::ipc::protocol::AgentState as Wire;
     match state {
@@ -583,6 +588,23 @@ fn to_wire_state(state: crate::agent_status::AgentState) -> crate::mux::ipc::pro
         Core::Working => Wire::Working,
         Core::Blocked => Wire::Blocked,
         Core::Done => Wire::Done,
+    }
+}
+
+/// Inverse of [`to_wire_state`]: map the `mux_ipc` wire `AgentState` to the
+/// core (build-agnostic) enum. Used by the agent API's `WaitAgentState`
+/// handler to match a request's wire `states` set against pane state held
+/// in the core type.
+pub(in crate::mux) fn from_wire_state(
+    state: crate::mux::ipc::protocol::AgentState,
+) -> crate::agent_status::AgentState {
+    use crate::agent_status::AgentState as Core;
+    use crate::mux::ipc::protocol::AgentState as Wire;
+    match state {
+        Wire::Idle => Core::Idle,
+        Wire::Working => Core::Working,
+        Wire::Blocked => Core::Blocked,
+        Wire::Done => Core::Done,
     }
 }
 
@@ -618,6 +640,10 @@ async fn apply_agent_status_report(
     };
 
     let revision = pane.apply_agent_status_event(event);
+    // task0004 "Wait implementation": every accepted report (set, clear,
+    // same-state re-report) re-evaluates this pane's registered
+    // `WaitAgentState` waiters (level-triggered, no polling).
+    reevaluate_agent_waiters(pane);
     let (state, name) = {
         let status = pane.agent_status.lock().unwrap();
         (status.state, status.name.clone())
