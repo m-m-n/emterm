@@ -57,7 +57,129 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "agent-status core module + emterm agent-status CLI"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/agent_status.rs
+      - src-tauri/src/cli/agent_status.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/src/main.rs
+      - src-tauri/src/cli/mod.rs
+      - src-tauri/tests/cli_subcommands.rs
+    skills: [backend-impl]
+    domains: [input-handling, api-contract]
+    complexity: medium
+    requirements: [FR1, FR2, NFR1, NFR2]
+    status: pending
+    notes: null
+  task0002:
+    title: "mux_ipc protocol extension (AgentStatusUpdate + API messages + pane ID)"
+    plan: tasks/task0002.md
+    files:
+      - crates/mux_ipc/src/protocol.rs
+      - crates/mux_ipc/src/lib.rs
+    skills: [backend-impl]
+    domains: [api-contract, input-handling]
+    complexity: high
+    requirements: [FR5, FR10, FR11, FR12, FR13, NFR2]
+    status: pending
+    notes: null
+  task0003:
+    title: "daemon agent-state store, OSC intercept, replay strip, broadcast"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/session/session.rs
+      - src-tauri/src/mux/session/manager.rs
+      - src-tauri/src/mux/scrollback_filter.rs
+      - src-tauri/src/mux/daemon.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/snapshot.rs
+    skills: [backend-impl]
+    domains: [input-handling, concurrency]
+    complexity: high
+    requirements: [FR1, FR3, FR4, FR5, NFR2, NFR3]
+    status: pending
+    notes: null
+  task0004:
+    title: "agent API daemon handlers + EMTERM_PANE_ID injection + emterm mux CLI"
+    plan: tasks/task0004.md
+    files:
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/mux/daemon.rs
+      - src-tauri/src/mux/cli.rs
+      - src-tauri/src/main.rs
+    skills: [backend-impl]
+    domains: [concurrency, api-contract, input-handling]
+    complexity: high
+    requirements: [FR10, FR11, FR12, FR13, NFR1, NFR3]
+    status: pending
+    notes: null
+  task0005:
+    title: "GUI AgentStatusModel + plain-tab OSC path + update ingestion"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/src/agent_status_model.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/src/callbacks.rs
+      - src-tauri/src/mux/bridge.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/app.rs
+    skills: [backend-impl]
+    domains: [input-handling, concurrency]
+    complexity: medium
+    requirements: [FR5, FR6, NFR3]
+    status: pending
+    notes: null
+  task0006:
+    title: "tab/window badges, status-bar summary, pane-ID copy UI"
+    plan: tasks/task0006.md
+    files:
+      - src-tauri/src/ui/tab_bar.rs
+      - src-tauri/src/ui/mux_sidebar.rs
+      - src-tauri/src/ui/mux_dialogs.rs
+      - src-tauri/src/ui/status_bar.rs
+      - src-tauri/src/app.rs
+      - src-tauri/src/i18n.rs
+    skills: [design-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR7, FR8, FR13, NFR4]
+    status: pending
+    notes: null
+  task0007:
+    title: "agent notifications + settings toggle"
+    plan: tasks/task0007.md
+    files:
+      - src-tauri/src/notifications.rs
+      - src-tauri/src/app.rs
+      - crates/app_settings/src/settings.rs
+      - crates/app_settings/src/types.rs
+      - src-tauri/src/settings.rs
+      - src-tauri/web-shared/settings/types.ts
+      - src-tauri/web-shared/settings/settings-sections.ts
+      - src-tauri/web-shared/i18n/locales/en.json
+      - src-tauri/web-shared/i18n/locales/ja.json
+    skills: [backend-impl]
+    domains: [ui, input-handling]
+    complexity: medium
+    requirements: [FR9, NFR1, NFR4]
+    status: pending
+    notes: null
+  task0008:
+    title: "user documentation (doc/AGENT-STATUS.md)"
+    plan: tasks/task0008.md
+    files:
+      - doc/AGENT-STATUS.md
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [NFR1]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -68,104 +190,104 @@ requirements:
     title: "agent-status OSC sequence (set/clear, validation, last-report-wins)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0003]
+    tests: [TS-1, TS-11]
   FR2:
     title: "emterm agent-status CLI subcommand (stdout OSC, tmux passthrough, both builds)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-11, TS-12]
   FR3:
     title: "daemon per-pane state store with revision semantics and lifecycle discard"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-2]
   FR4:
     title: "replay stripping and post-snapshot state sync (no notify)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-3]
   FR5:
     title: "AgentStatusUpdate mux_ipc message with PROTOCOL_VERSION handling"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002, task0003, task0005]
+    tests: [TS-4, TS-3]
   FR6:
     title: "unified GUI AgentStatus model (plain tab GUI-owned / mux pane daemon-owned)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0005]
+    tests: [TS-5]
   FR7:
     title: "tab/window aggregated state badges with seen/unseen separation"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0005, task0006]
+    tests: [TS-5, TS-6, TS-13]
   FR8:
     title: "status-bar per-state count summary"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0006]
+    tests: [TS-6, TS-13]
   FR9:
     title: "OS notifications on blocked/done transitions with gating and rate limit"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0007]
+    tests: [TS-7, TS-13]
   FR10:
     title: "emterm mux read (rendered-row tail, ANSI-stripped, capped)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002, task0004]
+    tests: [TS-8]
   FR11:
     title: "emterm mux send (raw UTF-8, atomic, revision watermark response)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002, task0004]
+    tests: [TS-9]
   FR12:
     title: "emterm mux wait (level-triggered, --after, timeout exit code)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002, task0004]
+    tests: [TS-10]
   FR13:
     title: "opaque pane ID system with incarnation, EMTERM_PANE_ID, GUI copy"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002, task0003, task0004, task0006]
+    tests: [TS-14, TS-13]
   NFR1:
     title: "security: trust boundary, name sanitization, socket privilege"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0004, task0007, task0008]
+    tests: [TS-1, TS-7, TS-15]
   NFR2:
     title: "compatibility: IPC versioning, unchanged snapshot format, CLI-only build"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002, task0003]
+    tests: [TS-4, TS-12, TS-3]
   NFR3:
     title: "performance: event-driven state handling, capped responses"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003, task0004, task0005]
+    tests: [TS-8, TS-3]
   NFR4:
     title: "UI/i18n: MD3 tokens and inline t(ja,en)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0006, task0007]
+    tests: [TS-6, TS-13]
 
 batch:
   review_rework_count: 0
