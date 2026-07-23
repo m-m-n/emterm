@@ -17,15 +17,17 @@
 //! pipeline projects the active tab + runtime state into the view
 //! model once per frame.
 
-use egui::{Align, Color32, FontFamily, FontId, Image, Layout, Margin, RichText};
+use egui::{Align, Color32, FontFamily, FontId, Image, Layout, Margin, Rect, RichText};
 use parking_lot::Mutex;
 
+use crate::agent_status_model::Counts;
 use crate::html::{CssColor, RichTextRun};
 use crate::render::font::fallback::FallbackChain;
 use crate::render::font::traits::GlyphRasterizer;
 use crate::status_bar::{AppRow, OscRow, StatusBarViewModel};
 use crate::ui::emoji_cache::{EmojiTextureCache, TextSegment, split_segments};
 use crate::ui::md3;
+use crate::ui::tab_bar::agent_state_color;
 
 /// External handles the status-bar widget needs to render color
 /// emoji. The widget itself stays oblivious to wgpu / swash; it just
@@ -46,16 +48,72 @@ pub const ROW_HEIGHT: f32 = 22.0;
 /// view model overrides `font_size`.
 const DEFAULT_FONT_SIZE: f32 = 12.0;
 
+// ── agent-status summary segment (task0006 AC-3) ────────────────────────
+//
+// Rides App Line 1's right edge: a dot + count per semantic state, fixed
+// order (blocked/working/done/idle), zero counts omitted, the whole
+// segment absent when nothing has ever reported a state. Painted as an
+// independent overlay (not folded into the `AppRow` template pipeline) so
+// its font size / colors stay decoupled from user-configured template
+// runs. Presence of at least one segment ALSO counts as content for App
+// Line 1's own visibility (see `visible_row_count` / `draw`), so the
+// summary is not silently dropped when the user has no App Line 1
+// template configured.
+
+/// MD3 `label-extra-small` typescale (`doc/UI-DESIGN-GUIDELINES.yaml`).
+const AGENT_SUMMARY_FONT_SIZE: f32 = 11.0;
+/// Dot diameter for one summary segment.
+const AGENT_SUMMARY_DOT_DIAMETER: f32 = 8.0;
+/// Gap between a segment's dot and its count text.
+const AGENT_SUMMARY_DOT_GAP: f32 = 4.0;
+/// Gap between adjacent summary segments.
+const AGENT_SUMMARY_SEGMENT_GAP: f32 = 10.0;
+/// Gap between the summary (rightmost element) and the row's own right
+/// edge / the row's own right-section content.
+const AGENT_SUMMARY_EDGE_GAP: f32 = 8.0;
+
+/// One dot+count group in the agent-status summary.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AgentSummarySegment {
+    pub color: Color32,
+    pub count: u32,
+}
+
+/// Build the summary's segment list from per-state `counts` (task0006
+/// AC-3): fixed order blocked/working/done/idle, zero counts omitted.
+/// Empty `counts` (or all-zero) yields an empty list — the caller treats
+/// that as "hide the whole segment".
+pub fn agent_summary_segments(counts: Counts) -> Vec<AgentSummarySegment> {
+    use crate::agent_status::AgentState;
+    [
+        (counts.blocked, AgentState::Blocked),
+        (counts.working, AgentState::Working),
+        (counts.done, AgentState::Done),
+        (counts.idle, AgentState::Idle),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, state)| AgentSummarySegment {
+        color: agent_state_color(state),
+        count,
+    })
+    .collect()
+}
+
 /// Number of rows the status bar will paint for `view_model` this
-/// frame (0 when disabled or every row is auto-hidden).
-pub fn visible_row_count(view_model: &StatusBarViewModel) -> u32 {
+/// frame (0 when disabled or every row is auto-hidden). `has_agent_summary`
+/// (task0006 AC-3) additionally counts as App Line 1 content, so the
+/// summary can appear on its own even when the user has no App Line 1
+/// template configured.
+pub fn visible_row_count(view_model: &StatusBarViewModel, has_agent_summary: bool) -> u32 {
     if !view_model.enabled {
         return 0;
     }
     let osc_visible = view_model.osc.should_render();
     // App Line 1 auto-hides on the same resolved-content rule as App
-    // Line 2 (no separate "always visible" carve-out).
-    let app1_visible = view_model.app_line1.has_content();
+    // Line 2 (no separate "always visible" carve-out), OR'd with the
+    // agent-status summary's own presence.
+    let app1_visible = view_model.app_line1.has_content() || has_agent_summary;
     let app2_visible = view_model.app_line2.has_content();
     (osc_visible as u32) + (app1_visible as u32) + (app2_visible as u32)
 }
@@ -64,8 +122,8 @@ pub fn visible_row_count(view_model: &StatusBarViewModel) -> u32 {
 /// this to reserve room above/below the cell area so the bottom row
 /// never gets covered by the status-bar panel (and, when the panel
 /// sits on top, so cells don't render behind it).
-pub fn panel_height_logical(view_model: &StatusBarViewModel) -> f32 {
-    ROW_HEIGHT * visible_row_count(view_model) as f32
+pub fn panel_height_logical(view_model: &StatusBarViewModel, has_agent_summary: bool) -> f32 {
+    ROW_HEIGHT * visible_row_count(view_model, has_agent_summary) as f32
 }
 
 /// Render the status bar. Returns immediately (no panel inserted)
@@ -73,13 +131,17 @@ pub fn panel_height_logical(view_model: &StatusBarViewModel) -> f32 {
 ///
 /// `emoji` is `Some` in production so color-emoji clusters render via
 /// swash-rasterized images; tests pass `None` to keep the egui-only
-/// text path in play.
+/// text path in play. `agent_summary` (task0006 AC-3) is the
+/// blocked/working/done/idle dot+count segment rendered on App Line 1's
+/// right edge; an empty slice hides it entirely.
 pub fn draw(
     ctx: &egui::Context,
     view_model: &StatusBarViewModel,
     emoji: Option<&EmojiResources<'_>>,
+    agent_summary: &[AgentSummarySegment],
 ) {
-    let visible_rows = visible_row_count(view_model);
+    let has_agent_summary = !agent_summary.is_empty();
+    let visible_rows = visible_row_count(view_model, has_agent_summary);
     if visible_rows == 0 {
         return;
     }
@@ -95,7 +157,7 @@ pub fn draw(
         .show_separator_line(false)
         .exact_height(ROW_HEIGHT * visible_rows as f32);
 
-    let app1_visible = view_model.app_line1.has_content();
+    let app1_visible = view_model.app_line1.has_content() || has_agent_summary;
     let app2_visible = view_model.app_line2.has_content();
     let osc_visible = view_model.osc.should_render();
 
@@ -109,54 +171,104 @@ pub fn draw(
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
             // FR1 layer order: OSC layer, App Line 1, App Line 2
-            // (top-to-bottom, regardless of panel placement).
+            // (top-to-bottom, regardless of panel placement). The agent
+            // summary rides App Line 1 only (task0006 AC-3).
             if osc_visible {
                 draw_osc_row(ui, &view_model.osc, font_size, emoji);
             }
             if app1_visible {
-                draw_app_row(ui, &view_model.app_line1, font_size, emoji);
+                draw_app_row(ui, &view_model.app_line1, font_size, emoji, agent_summary);
             }
             if app2_visible {
-                draw_app_row(ui, &view_model.app_line2, font_size, emoji);
+                draw_app_row(ui, &view_model.app_line2, font_size, emoji, &[]);
             }
         });
     });
 }
 
 /// Render an App row: left runs flow left-to-right, right runs flow
-/// right-to-left. Shared with App Line 1 / 2.
+/// right-to-left. Shared with App Line 1 / 2. `agent_summary` paints as an
+/// independent overlay anchored to this row's right edge (task0006 AC-3;
+/// App Line 2's call site always passes `&[]`).
 fn draw_app_row(
     ui: &mut egui::Ui,
     row: &AppRow,
     font_size: f32,
     emoji: Option<&EmojiResources<'_>>,
+    agent_summary: &[AgentSummarySegment],
 ) {
     let font = FontId::new(font_size, FontFamily::Monospace);
-    ui.horizontal(|ui| {
-        ui.set_min_height(ROW_HEIGHT);
-        // No inter-widget spacing: a row's runs / text / emoji segments
-        // form one continuous string (like the WebView, where a layer's
-        // left/right section is a single text node). Separators such as
-        // " | " already live in the template text, so an extra 8px gap
-        // between every segment — and especially around each emoji
-        // `Image` — would make the row read as disjoint chips.
-        ui.spacing_mut().item_spacing.x = 0.0;
-        // Split the row into two fixed half-width slots. Each section is
-        // left-aligned inside its slot and truncates its tail with `…`
-        // (mirrors the WebView's `max-width: 50%`). The left slot starts
-        // at the row start; the right slot starts at the centre, so the
-        // right section's left edge is pinned to the middle and its
-        // overflow drops off the right — keeping `🤖 5h …` visible.
-        let section_w = ui.available_width() * 0.5;
-        // Left section: left-aligned at the row start, capped at half
-        // the row, tail-truncated.
-        draw_section(ui, runs_to_atoms(&row.left), &font, section_w, false, emoji);
-        // Right section: fills the remaining width and right-aligns
-        // against the panel edge (`draw_section` wraps it in a
-        // right-to-left layout). Capped at the same half-row width so it
-        // cannot cross the centre into the left section.
-        draw_section(ui, runs_to_atoms(&row.right), &font, section_w, true, emoji);
-    });
+    let row_rect = ui
+        .horizontal(|ui| {
+            draw_app_row_content(ui, row, &font, emoji);
+        })
+        .response
+        .rect;
+    if !agent_summary.is_empty() {
+        draw_agent_summary(ui, row_rect, agent_summary);
+    }
+}
+
+/// The App row's own template-driven content (left/right sections). Split
+/// out of [`draw_app_row`] so the horizontal `ui` closure only ever
+/// contains the pre-existing section-drawing logic — the agent summary is
+/// painted separately, after the row's rect is known, avoiding any change
+/// to the section truncation/layout math below.
+fn draw_app_row_content(
+    ui: &mut egui::Ui,
+    row: &AppRow,
+    font: &FontId,
+    emoji: Option<&EmojiResources<'_>>,
+) {
+    ui.set_min_height(ROW_HEIGHT);
+    // No inter-widget spacing: a row's runs / text / emoji segments
+    // form one continuous string (like the WebView, where a layer's
+    // left/right section is a single text node). Separators such as
+    // " | " already live in the template text, so an extra 8px gap
+    // between every segment — and especially around each emoji
+    // `Image` — would make the row read as disjoint chips.
+    ui.spacing_mut().item_spacing.x = 0.0;
+    // Split the row into two fixed half-width slots. Each section is
+    // left-aligned inside its slot and truncates its tail with `…`
+    // (mirrors the WebView's `max-width: 50%`). The left slot starts
+    // at the row start; the right slot starts at the centre, so the
+    // right section's left edge is pinned to the middle and its
+    // overflow drops off the right — keeping `🤖 5h …` visible.
+    let section_w = ui.available_width() * 0.5;
+    // Left section: left-aligned at the row start, capped at half
+    // the row, tail-truncated.
+    draw_section(ui, runs_to_atoms(&row.left), font, section_w, false, emoji);
+    // Right section: fills the remaining width and right-aligns
+    // against the panel edge (`draw_section` wraps it in a
+    // right-to-left layout). Capped at the same half-row width so it
+    // cannot cross the centre into the left section.
+    draw_section(ui, runs_to_atoms(&row.right), font, section_w, true, emoji);
+}
+
+/// Paint the agent-status summary (task0006 AC-3) right-aligned within
+/// `row_rect`, anchored against its right edge and vertically centred.
+/// Thin paint-only wrapper — the segment list (which states appear, in
+/// what order, which color) is already the pure [`agent_summary_segments`]
+/// output; this function only lays glyphs and dots out from the right.
+fn draw_agent_summary(ui: &egui::Ui, row_rect: Rect, segments: &[AgentSummarySegment]) {
+    let font = FontId::proportional(AGENT_SUMMARY_FONT_SIZE);
+    let mut x = row_rect.right() - AGENT_SUMMARY_EDGE_GAP;
+    for (i, seg) in segments.iter().enumerate().rev() {
+        let galley = ui.fonts(|f| f.layout_no_wrap(seg.count.to_string(), font.clone(), seg.color));
+        x -= galley.size().x;
+        let text_pos = egui::pos2(x, row_rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(text_pos, galley, seg.color);
+
+        x -= AGENT_SUMMARY_DOT_GAP;
+        x -= AGENT_SUMMARY_DOT_DIAMETER;
+        let dot_center = egui::pos2(x + AGENT_SUMMARY_DOT_DIAMETER / 2.0, row_rect.center().y);
+        ui.painter()
+            .circle_filled(dot_center, AGENT_SUMMARY_DOT_DIAMETER / 2.0, seg.color);
+
+        if i > 0 {
+            x -= AGENT_SUMMARY_SEGMENT_GAP;
+        }
+    }
 }
 
 /// Render the OSC row.
@@ -802,7 +914,7 @@ mod tests {
             egui::vec2(800.0, 200.0),
         ));
         let output = ctx.run(input, |ctx| {
-            draw(ctx, vm, None);
+            draw(ctx, vm, None, &[]);
             egui::CentralPanel::default().show(ctx, |_ui| {});
         });
         output.shapes
@@ -817,7 +929,7 @@ mod tests {
         input.screen_rect = Some(screen);
         let mut central_rect = egui::Rect::NOTHING;
         let output = ctx.run(input, |ctx| {
-            draw(ctx, vm, None);
+            draw(ctx, vm, None, &[]);
             egui::CentralPanel::default().show(ctx, |ui| {
                 central_rect = ui.max_rect();
             });
@@ -1166,8 +1278,8 @@ mod tests {
         let mut vm = StatusBarViewModel::default();
         vm.enabled = true;
         // app_line1 / app_line2 / osc stay at their empty defaults.
-        assert_eq!(visible_row_count(&vm), 0);
-        assert_eq!(panel_height_logical(&vm), 0.0);
+        assert_eq!(visible_row_count(&vm, false), 0);
+        assert_eq!(panel_height_logical(&vm, false), 0.0);
     }
 
     // AC-2: App Line 1 empty, OSC row forced visible with content ->
@@ -1182,7 +1294,7 @@ mod tests {
             right: String::new(),
             forced_visible: Some(true),
         };
-        assert_eq!(visible_row_count(&vm), 1);
+        assert_eq!(visible_row_count(&vm, false), 1);
         let shapes = run_one_frame(&vm);
         let text = collected_text(&shapes);
         assert!(text.contains("osc-only"), "OSC text missing: {text:?}");
@@ -1195,7 +1307,7 @@ mod tests {
         let mut vm = StatusBarViewModel::default();
         vm.enabled = true;
         vm.app_line1.left = vec![make_text_run("L1-content")];
-        assert_eq!(visible_row_count(&vm), 1);
+        assert_eq!(visible_row_count(&vm, false), 1);
         let shapes = run_one_frame(&vm);
         let text = collected_text(&shapes);
         assert!(text.contains("L1-content"), "L1 text missing: {text:?}");
@@ -1209,7 +1321,7 @@ mod tests {
         vm.enabled = true;
         // app_line1 stays empty.
         vm.app_line2.left = vec![make_text_run("L2-content")];
-        assert_eq!(visible_row_count(&vm), 1);
+        assert_eq!(visible_row_count(&vm, false), 1);
         let shapes = run_one_frame(&vm);
         let text = collected_text(&shapes);
         assert!(text.contains("L2-content"), "L2 text missing: {text:?}");
@@ -1232,8 +1344,8 @@ mod tests {
             right: String::new(),
             forced_visible: Some(true),
         };
-        assert_eq!(visible_row_count(&vm), 0);
-        assert_eq!(panel_height_logical(&vm), 0.0);
+        assert_eq!(visible_row_count(&vm, false), 0);
+        assert_eq!(panel_height_logical(&vm, false), 0.0);
     }
 
     // Edge case (Test Notes): a run list containing only empty-text,
@@ -1246,7 +1358,144 @@ mod tests {
         vm.app_line1.left = vec![make_text_run("")];
         // app_line2 / osc stay empty too, so a wrongly-counted App
         // Line 1 would be the only thing keeping the count above 0.
-        assert_eq!(visible_row_count(&vm), 0);
-        assert_eq!(panel_height_logical(&vm), 0.0);
+        assert_eq!(visible_row_count(&vm, false), 0);
+        assert_eq!(panel_height_logical(&vm, false), 0.0);
+    }
+
+    // ── task0006 AC-3: agent-status summary segment ─────────────────────
+
+    fn counts(idle: u32, working: u32, blocked: u32, done: u32) -> Counts {
+        Counts {
+            idle,
+            working,
+            blocked,
+            done,
+        }
+    }
+
+    #[test]
+    fn agent_summary_segments_empty_counts_yields_empty_list() {
+        assert_eq!(agent_summary_segments(Counts::default()), Vec::new());
+    }
+
+    #[test]
+    fn agent_summary_segments_orders_blocked_working_done_idle_and_omits_zeros() {
+        let segs = agent_summary_segments(counts(3, 2, 1, 4));
+        let ordered_counts: Vec<u32> = segs.iter().map(|s| s.count).collect();
+        assert_eq!(
+            ordered_counts,
+            vec![1, 2, 4, 3],
+            "expected blocked/working/done/idle order"
+        );
+    }
+
+    #[test]
+    fn agent_summary_segments_omits_zero_count_groups() {
+        // Only working and idle are non-zero; blocked/done must not appear.
+        let segs = agent_summary_segments(counts(5, 2, 0, 0));
+        assert_eq!(segs.len(), 2);
+        let vals: Vec<u32> = segs.iter().map(|s| s.count).collect();
+        assert_eq!(vals, vec![2, 5]);
+    }
+
+    #[test]
+    fn agent_summary_segments_colors_match_agent_state_color() {
+        use crate::agent_status::AgentState;
+        let segs = agent_summary_segments(counts(1, 1, 1, 1));
+        let by_count: std::collections::HashMap<u32, Color32> =
+            segs.iter().map(|s| (s.count, s.color)).collect();
+        // All counts are 1 here, so instead assert order-indexed colors
+        // directly against the fixed blocked/working/done/idle order.
+        assert_eq!(segs[0].color, agent_state_color(AgentState::Blocked));
+        assert_eq!(segs[1].color, agent_state_color(AgentState::Working));
+        assert_eq!(segs[2].color, agent_state_color(AgentState::Done));
+        assert_eq!(segs[3].color, agent_state_color(AgentState::Idle));
+        assert_eq!(by_count.len(), 1); // sanity: all four share count=1
+    }
+
+    #[test]
+    fn visible_row_count_agent_summary_makes_app_line1_visible_with_no_template() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        // app_line1 / app_line2 / osc all stay empty.
+        assert_eq!(visible_row_count(&vm, false), 0);
+        assert_eq!(visible_row_count(&vm, true), 1);
+        assert_eq!(panel_height_logical(&vm, true), ROW_HEIGHT);
+    }
+
+    #[test]
+    fn draw_with_empty_agent_summary_paints_no_extra_dot_and_matches_baseline() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        vm.app_line1.left = vec![make_text_run("L1")];
+        let baseline = run_one_frame(&vm);
+
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(800.0, 200.0),
+        ));
+        let output = ctx.run(input, |ctx| {
+            draw(ctx, &vm, None, &[]);
+            egui::CentralPanel::default().show(ctx, |_ui| {});
+        });
+        assert_eq!(
+            collected_text(&output.shapes),
+            collected_text(&baseline),
+            "an empty agent_summary slice must render identically to the pre-feature draw()"
+        );
+    }
+
+    #[test]
+    fn draw_with_agent_summary_shows_the_count_text_and_is_absent_when_empty() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        vm.app_line1.left = vec![make_text_run("L1")];
+
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(800.0, 200.0),
+        ));
+        let segments = agent_summary_segments(counts(0, 0, 7, 0));
+        let output = ctx.run(input, |ctx| {
+            draw(ctx, &vm, None, &segments);
+            egui::CentralPanel::default().show(ctx, |_ui| {});
+        });
+        let text = collected_text(&output.shapes);
+        assert!(text.contains('7'), "blocked count missing: {text:?}");
+    }
+
+    #[test]
+    fn draw_agent_summary_alone_reserves_a_visible_row_when_app_line1_template_is_empty() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        // No template content anywhere.
+        let segments = agent_summary_segments(counts(0, 3, 0, 0));
+        let (_shapes, central) = {
+            let ctx = egui::Context::default();
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 200.0));
+            let mut input = RawInput::default();
+            input.screen_rect = Some(screen);
+            let mut central_rect = egui::Rect::NOTHING;
+            let output = ctx.run(input, |ctx| {
+                draw(ctx, &vm, None, &segments);
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    central_rect = ui.max_rect();
+                });
+            });
+            (output.shapes, central_rect)
+        };
+        let (_shapes_off, central_off) = run_with_central_rect(&StatusBarViewModel {
+            enabled: false,
+            ..vm.clone()
+        });
+        assert!(
+            central.height() < central_off.height(),
+            "a non-empty agent summary must reserve a status-bar row even with no template \
+             content: on={central:?}, off={central_off:?}"
+        );
     }
 }
