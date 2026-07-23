@@ -213,8 +213,8 @@ tasks:
     domains: [api-contract]
     complexity: medium
     requirements: [NFR2]
-    status: in_progress
-    notes: "rework task: protocol_v1_v2_break — codex architecture high"
+    status: merged
+    notes: "rework task: protocol_v1_v2_break — merged with strategy B (version-probing discovery + graceful handoff)"
     branch: em-workflow/mux-agent-status-api/task0010
   task0011:
     title: "mux read renders rows + send_text drops manager lock before PTY write"
