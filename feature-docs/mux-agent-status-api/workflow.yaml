@@ -199,8 +199,8 @@ tasks:
     domains: [ui, input-handling, concurrency]
     complexity: medium
     requirements: [FR9, FR6, NFR3]
-    status: in_progress
-    notes: "rework task: 5-reviewer consensus on missing task0005/task0007 integration seam"
+    status: merged
+    notes: "rework task: drain_wiring — merged; critical FR9/US2 bug resolved"
     branch: em-workflow/mux-agent-status-api/task0009
   task0010:
     title: "safe PROTOCOL_VERSION upgrade path (v1 daemon survives)"
