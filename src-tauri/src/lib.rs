@@ -191,6 +191,8 @@ pub mod windows_exec;
 // === GUI-only modules (gated behind the `gui` feature) ===
 
 #[cfg(feature = "gui")]
+pub mod agent_status_model;
+#[cfg(feature = "gui")]
 pub mod app;
 #[cfg(feature = "gui")]
 pub mod bell;
