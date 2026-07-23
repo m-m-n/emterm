@@ -684,10 +684,22 @@ async fn run_agent_status_task(
 }
 
 /// Broadcast one `AgentStatusUpdate` (`replay_derived: true`) per pane in
-/// `session_id` that currently has a reported state (SPEC FR4/FR5,
-/// task0003 AC-5). Called after a client receives a snapshot (attach /
-/// window switch) so state — stripped from the replayed bytes — is
-/// resynced out-of-band. Panes with no reported state produce no message.
+/// `session_id` whose GUI-visible state may need replacement after a
+/// snapshot (SPEC FR4/FR5, task0003 AC-5, task0013 AC-1/AC-2/AC-3). Called
+/// after a client receives a snapshot (attach / window switch) so state —
+/// stripped from the replayed bytes — is resynced out-of-band.
+///
+/// Emits for every pane with `revision > 0`, i.e. every pane that has ever
+/// had an accepted report, REGARDLESS of whether its current `state` is
+/// `Some` or `None`: revision starts at 0 and only increments on an
+/// accepted report (set, clear, or same-state re-report — see
+/// `AgentStatus`), so `revision > 0` is exactly "this pane's GUI-visible
+/// state may be stale" without an extra flag. This covers a pane that was
+/// cleared while the GUI was detached (state is `None` here, but the GUI
+/// may still show a stale badge) — the message carries `state: None` in
+/// that case so the GUI clears it. Panes that have never reported
+/// (`revision == 0`) produce no message, since the GUI has no stale state
+/// to clear for them.
 pub(in crate::mux) async fn sync_agent_status_after_snapshot(
     session_manager: &Arc<Mutex<SessionManager>>,
     session_id: u32,
@@ -699,7 +711,7 @@ pub(in crate::mux) async fn sync_agent_status_after_snapshot(
     let mut updates = Vec::new();
     for (_wid, pane) in session.panes_iter() {
         let status = pane.agent_status.lock().unwrap();
-        if status.state.is_none() {
+        if status.revision == 0 {
             continue;
         }
         updates.push(AgentStatusUpdateMsg {
@@ -726,9 +738,11 @@ pub(in crate::mux) async fn sync_agent_status_after_snapshot(
 }
 
 /// Single-pane counterpart of [`sync_agent_status_after_snapshot`] (SPEC
-/// FR4/FR5, task0003 AC-5): broadcasts one `AgentStatusUpdate`
-/// (`replay_derived: true`) for `pane_id` if it currently has a reported
-/// state. Used after an on-demand per-pane snapshot (`RequestPaneSnapshot`,
+/// FR4/FR5, task0003 AC-5, task0013 AC-1/AC-2/AC-3): broadcasts one
+/// `AgentStatusUpdate` (`replay_derived: true`) for `pane_id` if it has
+/// `revision > 0` (ever had an accepted report — see the doc comment on
+/// `sync_agent_status_after_snapshot` for why this covers cleared state
+/// too). Used after an on-demand per-pane snapshot (`RequestPaneSnapshot`,
 /// the same-session window-switch path) rather than a full session attach.
 pub(in crate::mux) async fn sync_agent_status_after_pane_snapshot(
     session_manager: &Arc<Mutex<SessionManager>>,
@@ -746,7 +760,7 @@ pub(in crate::mux) async fn sync_agent_status_after_pane_snapshot(
         return;
     };
     let status = pane.agent_status.lock().unwrap();
-    if status.state.is_none() {
+    if status.revision == 0 {
         return;
     }
     let update = AgentStatusUpdateMsg {
@@ -1577,6 +1591,62 @@ mod tests {
         sync_agent_status_after_snapshot(&mgr, 9999).await;
     }
 
+    /// task0013 AC-1 (rework, review round 1 `replay_clear_lost`): a pane
+    /// that transitioned blocked -> cleared (revision now 2, state now
+    /// None) while the GUI was detached must still produce a
+    /// replay-derived `AgentStatusUpdate` with `state: None` on reattach,
+    /// so the stale badge/summary from before the clear is replaced.
+    #[tokio::test]
+    async fn test_sync_agent_status_after_snapshot_cleared_pane_emits_state_none() {
+        let (mgr, sid, _wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+        {
+            let m = mgr.lock().await;
+            let pane = m
+                .get_session(m.find_pane(pane_id).unwrap().0)
+                .and_then(|s| s.windows.values().next())
+                .and_then(|w| w.panes.get(&pane_id))
+                .unwrap();
+            pane.apply_agent_status_event(crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Blocked,
+                name: Some("agent".to_string()),
+            });
+            pane.apply_agent_status_event(crate::agent_status::AgentStatusEvent::Clear);
+        }
+
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+        sync_agent_status_after_snapshot(&mgr, sid).await;
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(1), notify_rx.recv())
+            .await
+            .expect("must receive a replay-derived AgentStatusUpdate for the cleared pane")
+            .unwrap();
+        assert_eq!(msg.msg_type, MessageType::AgentStatusUpdate);
+        let payload: AgentStatusUpdateMsg = msg.decode_payload().unwrap();
+        assert_eq!(payload.pane_id, pane_id);
+        assert!(payload.replay_derived);
+        assert_eq!(payload.state, None, "cleared pane must sync as state=None");
+        assert_eq!(payload.name, None);
+        assert_eq!(payload.revision, 2);
+    }
+
+    /// task0013 AC-2: a pane that has never reported any state (revision
+    /// still 0) must not produce a sync message on reattach — no
+    /// unnecessary state=None update for a pane that never had state.
+    #[tokio::test]
+    async fn test_sync_agent_status_after_snapshot_never_reported_pane_no_broadcast() {
+        let (mgr, sid, _wid, _pane_id, _pane_tx) = setup_single_pane_manager().await;
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        sync_agent_status_after_snapshot(&mgr, sid).await;
+
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+        assert!(
+            timeout.is_err(),
+            "a pane that never reported must not produce a sync message"
+        );
+    }
+
     /// AC-5 (per-pane / window-switch counterpart): a stateful pane
     /// produces one `AgentStatusUpdate` with `replay_derived = true`.
     #[tokio::test]
@@ -1611,7 +1681,8 @@ mod tests {
         );
     }
 
-    /// AC-5: a stateless pane produces no message.
+    /// AC-5: a stateless (never-reported, revision == 0) pane produces no
+    /// message (task0013 AC-2).
     #[tokio::test]
     async fn test_sync_agent_status_after_pane_snapshot_stateless_pane_no_broadcast() {
         let (mgr, _sid, _wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
@@ -1628,5 +1699,40 @@ mod tests {
     async fn test_sync_agent_status_after_pane_snapshot_unknown_pane_no_panic() {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
         sync_agent_status_after_pane_snapshot(&mgr, 9999).await;
+    }
+
+    /// task0013 AC-1 (per-pane / window-switch counterpart): a pane that
+    /// transitioned blocked -> cleared while the GUI was detached must
+    /// still produce a replay-derived `AgentStatusUpdate` with
+    /// `state: None` on the per-pane snapshot sync path.
+    #[tokio::test]
+    async fn test_sync_agent_status_after_pane_snapshot_cleared_pane_emits_state_none() {
+        let (mgr, _sid, _wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+        {
+            let m = mgr.lock().await;
+            let pane = m
+                .get_session(m.find_pane(pane_id).unwrap().0)
+                .and_then(|s| s.windows.values().next())
+                .and_then(|w| w.panes.get(&pane_id))
+                .unwrap();
+            pane.apply_agent_status_event(crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Working,
+                name: Some("agent".to_string()),
+            });
+            pane.apply_agent_status_event(crate::agent_status::AgentStatusEvent::Clear);
+        }
+
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+        sync_agent_status_after_pane_snapshot(&mgr, pane_id).await;
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(1), notify_rx.recv())
+            .await
+            .expect("must receive a replay-derived AgentStatusUpdate for the cleared pane")
+            .unwrap();
+        let payload: AgentStatusUpdateMsg = msg.decode_payload().unwrap();
+        assert_eq!(payload.pane_id, pane_id);
+        assert!(payload.replay_derived);
+        assert_eq!(payload.state, None, "cleared pane must sync as state=None");
+        assert_eq!(payload.revision, 2);
     }
 }
