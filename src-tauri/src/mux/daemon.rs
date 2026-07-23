@@ -4,10 +4,9 @@
 //! and manages PTY sessions. Auto-exits when all sessions end.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use super::ipc::connection::handle_connection;
-use super::ipc::handlers::handle_destroy_pane;
+use super::ipc::handlers::{handle_destroy_pane, reevaluate_agent_waiters};
 use super::ipc::protocol::{
     AgentStatusUpdateMsg, MessageType, MuxMessage, NotifyMsg, RenameWindowMsg,
 };
@@ -19,63 +18,6 @@ use super::session::pane::{
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
-
-/// Process-global daemon incarnation token (IMPLEMENTATION.md "Public pane
-/// ID format"): a lowercase-hex token minted once per daemon process,
-/// combined with the wire `pane_id` (u32) to form the public, opaque,
-/// non-reusable-across-restarts pane ID. Lazily generated on first use so
-/// every code path (production daemon, unit tests) shares one instance for
-/// the lifetime of the process.
-///
-/// This is task0004-provisional infrastructure: IMPLEMENTATION.md assigns
-/// incarnation-token GENERATION to task0003 (`session/manager.rs`, at
-/// daemon start) and compose/parse helpers to task0002 (`mux_ipc`). A
-/// process-global static here satisfies "generated once per daemon start"
-/// without task0004 needing to touch either of those files ahead of their
-/// owners landing; reconciliation is expected via parent-side adoption.
-static DAEMON_INCARNATION: OnceLock<String> = OnceLock::new();
-
-/// Return this daemon process's incarnation token, generating it on first
-/// call. Dependency-free (no external RNG crate): mixes the current time,
-/// the process ID, and a stack-address salt into a 64-bit value rendered as
-/// lowercase hex.
-pub fn daemon_incarnation() -> &'static str {
-    DAEMON_INCARNATION.get_or_init(|| {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let pid = std::process::id() as u128;
-        // A stack-local address as a lightweight, dependency-free salt —
-        // not cryptographic, just enough entropy to avoid same-nanosecond
-        // collisions across processes started in a tight loop (e.g. tests).
-        let local = 0u8;
-        let salt = std::ptr::addr_of!(local) as u128;
-        let mixed = nanos ^ (pid << 32) ^ salt;
-        format!("{:016x}", mixed as u64)
-    })
-}
-
-/// Build the public (API-facing, opaque) pane ID for `pane_id` in this
-/// daemon's incarnation. See [`daemon_incarnation`] and
-/// `mux_ipc::protocol::PublicPaneId::compose`.
-pub fn public_pane_id(pane_id: PaneId) -> String {
-    super::ipc::protocol::PublicPaneId::compose(daemon_incarnation(), pane_id)
-}
-
-/// Parse a public pane ID, returning the internal [`PaneId`] only when the
-/// embedded incarnation token matches this daemon's CURRENT incarnation.
-/// A syntactically valid but stale (previous-daemon-run) incarnation, or
-/// any malformed input, returns `None` — callers map that uniformly to
-/// `unknown_pane` per IMPLEMENTATION.md's shared error contract.
-pub fn resolve_public_pane_id(public_id: &str) -> Option<PaneId> {
-    let parsed = super::ipc::protocol::PublicPaneId::parse(public_id).ok()?;
-    if parsed.incarnation != daemon_incarnation() {
-        return None;
-    }
-    Some(parsed.pane_id)
-}
 
 /// Daemon-level title channel capacity.
 const TITLE_CHANNEL_CAPACITY: usize = 64;
@@ -631,9 +573,14 @@ async fn run_notification_task(
 
 /// Map the core (build-agnostic) `AgentState` to the `mux_ipc` wire mirror
 /// enum. Two distinct types by design: `mux_ipc` must not depend on the
-/// binary crate (task0002 IMPLEMENTATION.md), so this conversion is the
-/// only place the two ever meet.
-fn to_wire_state(state: crate::agent_status::AgentState) -> crate::mux::ipc::protocol::AgentState {
+/// binary crate (task0002 IMPLEMENTATION.md), so this conversion (and its
+/// inverse, [`from_wire_state`]) is the only place the two ever meet.
+/// Widened beyond this module (`pub(in crate::mux)`) so the agent API
+/// handlers (task0004, `mux::ipc::handlers`) share the same conversion
+/// rather than re-deriving it.
+pub(in crate::mux) fn to_wire_state(
+    state: crate::agent_status::AgentState,
+) -> crate::mux::ipc::protocol::AgentState {
     use crate::agent_status::AgentState as Core;
     use crate::mux::ipc::protocol::AgentState as Wire;
     match state {
@@ -641,6 +588,23 @@ fn to_wire_state(state: crate::agent_status::AgentState) -> crate::mux::ipc::pro
         Core::Working => Wire::Working,
         Core::Blocked => Wire::Blocked,
         Core::Done => Wire::Done,
+    }
+}
+
+/// Inverse of [`to_wire_state`]: map the `mux_ipc` wire `AgentState` to the
+/// core (build-agnostic) enum. Used by the agent API's `WaitAgentState`
+/// handler to match a request's wire `states` set against pane state held
+/// in the core type.
+pub(in crate::mux) fn from_wire_state(
+    state: crate::mux::ipc::protocol::AgentState,
+) -> crate::agent_status::AgentState {
+    use crate::agent_status::AgentState as Core;
+    use crate::mux::ipc::protocol::AgentState as Wire;
+    match state {
+        Wire::Idle => Core::Idle,
+        Wire::Working => Core::Working,
+        Wire::Blocked => Core::Blocked,
+        Wire::Done => Core::Done,
     }
 }
 
@@ -676,6 +640,10 @@ async fn apply_agent_status_report(
     };
 
     let revision = pane.apply_agent_status_event(event);
+    // task0004 "Wait implementation": every accepted report (set, clear,
+    // same-state re-report) re-evaluates this pane's registered
+    // `WaitAgentState` waiters (level-triggered, no polling).
+    reevaluate_agent_waiters(pane);
     let (state, name) = {
         let status = pane.agent_status.lock().unwrap();
         (status.state, status.name.clone())
@@ -869,51 +837,6 @@ mod tests {
     fn test_cleanup_stale_nonexistent() {
         let path = PathBuf::from("/tmp/emterm-test-nonexistent.sock");
         assert!(cleanup_stale_socket(&path).is_ok());
-    }
-
-    // ---- daemon incarnation / public pane ID (task0004, IMPLEMENTATION.md
-    // "Public pane ID format") ----
-
-    /// AC-6/AC-7 support: the incarnation token is stable across calls
-    /// within one process (the `OnceLock` is generated once), so all public
-    /// IDs minted in this test binary's run share it.
-    #[test]
-    fn daemon_incarnation_is_stable_across_calls() {
-        let a = daemon_incarnation();
-        let b = daemon_incarnation();
-        assert_eq!(a, b);
-        assert!(!a.is_empty());
-        assert!(
-            a.bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-            "incarnation must be lowercase hex, got {a:?}"
-        );
-    }
-
-    #[test]
-    fn public_pane_id_round_trips_through_resolve() {
-        let id = public_pane_id(42);
-        assert!(id.starts_with(daemon_incarnation()));
-        assert_eq!(resolve_public_pane_id(&id), Some(42));
-    }
-
-    #[test]
-    fn resolve_public_pane_id_rejects_stale_incarnation() {
-        // A syntactically valid public pane ID minted under a DIFFERENT
-        // (stale) incarnation must resolve to None, not to the numeric
-        // pane_id — this is what makes a pane ID non-reusable across
-        // daemon restarts (a request "unknown_pane"s instead of silently
-        // targeting a same-numbered pane from a fresh daemon run).
-        let stale = super::super::ipc::protocol::PublicPaneId::compose("deadbeef00000000", 7);
-        assert_ne!(stale.split('-').next().unwrap(), daemon_incarnation());
-        assert_eq!(resolve_public_pane_id(&stale), None);
-    }
-
-    #[test]
-    fn resolve_public_pane_id_rejects_malformed_input() {
-        assert_eq!(resolve_public_pane_id(""), None);
-        assert_eq!(resolve_public_pane_id("no-separator-here-notanumber"), None);
-        assert_eq!(resolve_public_pane_id("not_mux_pane_at_all"), None);
     }
 
     #[cfg(unix)]

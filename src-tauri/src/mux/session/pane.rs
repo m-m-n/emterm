@@ -84,6 +84,36 @@ pub struct AgentStatus {
 /// Thread-safe shared reference to a pane's agent-status state.
 pub type SharedAgentStatus = Arc<StdMutex<AgentStatus>>;
 
+/// A registered `WaitAgentState` request awaiting a qualifying state change
+/// (task0004, IMPLEMENTATION.md "Wait implementation"). Level-triggered:
+/// fires when `states` contains the pane's current
+/// [`AgentStatus::state`] AND (if set) the current revision exceeds
+/// `after_revision`. `states` is stored in the CORE `AgentState` type (this
+/// module's `AgentStatus::state` type) so matching needs no per-check wire
+/// conversion; the wire `mux_ipc::protocol::AgentState` only appears at the
+/// request/response boundary in `mux::ipc::handlers`.
+///
+/// `responder` is `Option` so a firing/cleanup pass can `.take()` the
+/// owned `Sender` out of a `&mut` iteration (`oneshot::Sender::send`
+/// consumes `self`).
+pub struct AgentWaiter {
+    pub states: Vec<AgentState>,
+    pub after_revision: Option<u64>,
+    pub responder: Option<tokio::sync::oneshot::Sender<AgentWaitOutcome>>,
+}
+
+/// Outcome delivered to a registered [`AgentWaiter`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentWaitOutcome {
+    /// The waiter's condition was satisfied.
+    Matched { state: AgentState, revision: u64 },
+    /// The pane was destroyed while the waiter was pending.
+    PaneGone,
+}
+
+/// Thread-safe shared reference to a pane's registered agent-state waiters.
+pub type SharedAgentWaiters = Arc<StdMutex<Vec<AgentWaiter>>>;
+
 /// Callback sink recording the most recent OSC 0/2 window title.
 ///
 /// vt100 0.16 removed `Screen::title()` in favor of the callback API;
@@ -539,6 +569,9 @@ pub struct MuxPane {
     /// raw agent-status OSC payload strings through this channel (regardless
     /// of attach state) so the daemon can validate, apply, and broadcast them.
     pub agent_status_report_sender: SharedAgentStatusReportSender,
+    /// Registered `WaitAgentState` waiters for this pane (task0004). See
+    /// [`AgentWaiter`].
+    pub agent_waiters: SharedAgentWaiters,
     /// Per-pane raw passthrough buffer for image / Markdown OSC sequences
     /// captured while the pane is detached (network detach OR client hidden).
     /// Drained into the reattach / resume snapshot.
@@ -579,6 +612,7 @@ impl MuxPane {
             notification_sender: Arc::new(StdMutex::new(None)),
             agent_status: Arc::new(StdMutex::new(AgentStatus::default())),
             agent_status_report_sender: Arc::new(StdMutex::new(None)),
+            agent_waiters: Arc::new(StdMutex::new(Vec::new())),
             raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),
@@ -667,7 +701,20 @@ impl MuxPane {
     /// Create a pane without a PTY master, for testing only.
     #[cfg(test)]
     pub fn new_test(id: PaneId, cols: u16, rows: u16, output_target: SharedOutputTarget) -> Self {
-        let writer: Box<dyn Write + Send> = Box::new(std::io::sink());
+        Self::new_test_with_writer(id, cols, rows, output_target, Box::new(std::io::sink()))
+    }
+
+    /// Like [`Self::new_test`], but with a caller-supplied writer so tests
+    /// can capture exactly what `write_input` sends (e.g. `SendText`'s "no
+    /// trailing newline added" contract, task0004 AC-2).
+    #[cfg(test)]
+    pub fn new_test_with_writer(
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        output_target: SharedOutputTarget,
+        writer: Box<dyn Write + Send>,
+    ) -> Self {
         Self {
             id,
             cols,
@@ -683,6 +730,7 @@ impl MuxPane {
             notification_sender: Arc::new(StdMutex::new(None)),
             agent_status: Arc::new(StdMutex::new(AgentStatus::default())),
             agent_status_report_sender: Arc::new(StdMutex::new(None)),
+            agent_waiters: Arc::new(StdMutex::new(Vec::new())),
             raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),

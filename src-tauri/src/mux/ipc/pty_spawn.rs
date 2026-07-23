@@ -53,29 +53,30 @@ pub(super) struct SpawnedPty {
 /// testable without spawning a real PTY (AC-6, IMPLEMENTATION.md FR13:
 /// mux pane spawn injects `EMTERM_PANE_ID` into the pane's environment,
 /// resolved by `emterm mux read|send|wait --pane current`).
-fn pane_env_vars(pane_id: PaneId) -> Vec<(&'static str, String)> {
+///
+/// `public_pane_id` is minted by the caller via
+/// `SessionManager::public_pane_id` (SPEC FR13) before `spawn_pty` runs —
+/// this module has no direct dependency on `SessionManager`'s incarnation
+/// state.
+fn pane_env_vars(public_pane_id: &str) -> Vec<(&'static str, String)> {
     vec![
         ("TERM", "xterm-256color".to_string()),
         ("COLORTERM", "truecolor".to_string()),
         ("TERM_PROGRAM", "emterm".to_string()),
         ("EMTERM_MUX", "1".to_string()),
-        (
-            "EMTERM_PANE_ID",
-            crate::mux::daemon::public_pane_id(pane_id),
-        ),
+        ("EMTERM_PANE_ID", public_pane_id.to_string()),
     ]
 }
 
 /// Spawn a PTY with a shell process at the given size.
 ///
-/// `pane_id` is the pane's pre-allocated internal wire ID
-/// (`SessionManager::alloc_pane_id`, called by the caller BEFORE spawn —
-/// environment variables must be set before the shell process starts, so
-/// the ID cannot be injected after the fact). Sets `EMTERM_PANE_ID` to the
-/// pane's public (opaque, daemon-incarnation-scoped) ID so
-/// `emterm mux read|send|wait --pane current` can resolve it client-side
-/// (IMPLEMENTATION.md FR13 / "Public pane ID format").
-pub(super) fn spawn_pty(cols: u16, rows: u16, pane_id: PaneId) -> Result<SpawnedPty, String> {
+/// `public_pane_id` is the pane's public (opaque, daemon-incarnation-
+/// scoped) ID, minted by the caller (`SessionManager::public_pane_id`)
+/// BEFORE spawn — environment variables must be set before the shell
+/// process starts, so the ID cannot be injected after the fact. Resolved
+/// client-side by `emterm mux read|send|wait --pane current` via
+/// `EMTERM_PANE_ID` (IMPLEMENTATION.md FR13 / "Public pane ID format").
+pub(super) fn spawn_pty(cols: u16, rows: u16, public_pane_id: &str) -> Result<SpawnedPty, String> {
     let pty_system = portable_pty::native_pty_system();
     let pty_size = portable_pty::PtySize {
         rows,
@@ -90,7 +91,7 @@ pub(super) fn spawn_pty(cols: u16, rows: u16, pane_id: PaneId) -> Result<Spawned
 
     let shell = detect_default_shell();
     let mut cmd = portable_pty::CommandBuilder::new(&shell);
-    for (key, value) in pane_env_vars(pane_id) {
+    for (key, value) in pane_env_vars(public_pane_id) {
         cmd.env(key, value);
     }
     cmd.env_remove("TMUX");
@@ -805,12 +806,10 @@ mod tests {
     // ── pane_env_vars (EMTERM_PANE_ID injection, AC-6) ─────────────────────
 
     #[test]
-    fn pane_env_vars_includes_emterm_pane_id_matching_daemon_public_id() {
-        let pane_id = 7;
-        let vars = pane_env_vars(pane_id);
-        let expected = crate::mux::daemon::public_pane_id(pane_id);
+    fn pane_env_vars_includes_emterm_pane_id_matching_the_given_public_id() {
+        let vars = pane_env_vars("abc123-7");
         let found = vars.iter().find(|(k, _)| *k == "EMTERM_PANE_ID");
-        assert_eq!(found.map(|(_, v)| v.as_str()), Some(expected.as_str()));
+        assert_eq!(found.map(|(_, v)| v.as_str()), Some("abc123-7"));
     }
 
     #[test]
@@ -822,14 +821,14 @@ mod tests {
                 .1
                 .clone()
         };
-        let a = get(&pane_env_vars(1));
-        let b = get(&pane_env_vars(2));
-        assert_ne!(a, b, "distinct pane_ids must yield distinct public IDs");
+        let a = get(&pane_env_vars("abc123-1"));
+        let b = get(&pane_env_vars("abc123-2"));
+        assert_ne!(a, b, "distinct public pane ids must round-trip distinctly");
     }
 
     #[test]
     fn pane_env_vars_keeps_existing_fixed_vars() {
-        let vars = pane_env_vars(1);
+        let vars = pane_env_vars("abc123-1");
         let get = |key: &str| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
         assert_eq!(get("TERM"), Some("xterm-256color".to_string()));
         assert_eq!(get("COLORTERM"), Some("truecolor".to_string()));
