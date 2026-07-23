@@ -47,8 +47,7 @@ workflow:
     status: completed
     completed_at_commit: a9d88f1cd93d60b71571d666416e1b596a114ae3
   - id: implement
-    status: completed
-    completed_at_commit: 10059773cc26aea8052d77dac473ca1600adb93e
+    status: pending
     base_commit: 06d795b6698952176a743a86d6f13fbfb6633105
   - id: review
     status: pending
@@ -189,6 +188,69 @@ tasks:
     requirements: [NFR1]
     status: merged
     notes: null
+  task0009:
+    title: "wire agent-status transition drain into notification pipeline"
+    plan: tasks/task0009.md
+    files:
+      - src-tauri/src/app.rs
+      - src-tauri/src/notifications.rs
+      - src-tauri/src/agent_status_model.rs
+    skills: [backend-impl]
+    domains: [ui, input-handling, concurrency]
+    complexity: medium
+    requirements: [FR9, FR6, NFR3]
+    status: pending
+    notes: "rework task: 5-reviewer consensus on missing task0005/task0007 integration seam"
+  task0010:
+    title: "safe PROTOCOL_VERSION upgrade path (v1 daemon survives)"
+    plan: tasks/task0010.md
+    files:
+      - crates/mux_ipc/src/protocol.rs
+      - src-tauri/src/mux/cli.rs
+      - src-tauri/src/mux/daemon.rs
+    skills: [backend-impl]
+    domains: [api-contract]
+    complexity: medium
+    requirements: [NFR2]
+    status: pending
+    notes: "rework task: protocol_v1_v2_break — codex architecture high"
+  task0011:
+    title: "mux read renders rows + send_text drops manager lock before PTY write"
+    plan: tasks/task0011.md
+    files:
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/session/pane.rs
+    skills: [backend-impl]
+    domains: [concurrency, api-contract, input-handling]
+    complexity: medium
+    requirements: [FR10, FR11, NFR3]
+    status: pending
+    notes: "rework task: mux_read_render_missing + send_text_lock_held"
+  task0012:
+    title: "per-pane stateful OSC scanner (agent-status reports survive chunk boundaries)"
+    plan: tasks/task0012.md
+    files:
+      - src-tauri/src/mux/scrollback_filter.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/mux/session/pane.rs
+    skills: [backend-impl]
+    domains: [input-handling, concurrency]
+    complexity: medium
+    requirements: [FR1, FR3, NFR2, NFR3]
+    status: pending
+    notes: "rework task: osc_split_lost — spec+architecture codex agreement"
+  task0013:
+    title: "post-snapshot replay synchronizes cleared states"
+    plan: tasks/task0013.md
+    files:
+      - src-tauri/src/mux/daemon.rs
+      - src-tauri/src/mux/session/pane.rs
+    skills: [backend-impl]
+    domains: [input-handling, concurrency]
+    complexity: medium
+    requirements: [FR4, FR5, NFR2]
+    status: pending
+    notes: "rework task: replay_clear_lost — codex spec high"
     branch: em-workflow/mux-agent-status-api/task0008
 
 review:
@@ -312,5 +374,5 @@ requirements:
     tests: [TS-6, TS-13]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework_count: 0
