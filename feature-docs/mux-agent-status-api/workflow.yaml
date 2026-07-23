@@ -73,8 +73,9 @@ tasks:
     domains: [input-handling, api-contract]
     complexity: medium
     requirements: [FR1, FR2, NFR1, NFR2]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/mux-agent-status-api/task0001
   task0002:
     title: "mux_ipc protocol extension (AgentStatusUpdate + API messages + pane ID)"
     plan: tasks/task0002.md
@@ -85,8 +86,9 @@ tasks:
     domains: [api-contract, input-handling]
     complexity: high
     requirements: [FR5, FR10, FR11, FR12, FR13, NFR2]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/mux-agent-status-api/task0002
   task0003:
     title: "daemon agent-state store, OSC intercept, replay strip, broadcast"
     plan: tasks/task0003.md
@@ -102,8 +104,9 @@ tasks:
     domains: [input-handling, concurrency]
     complexity: high
     requirements: [FR1, FR3, FR4, FR5, NFR2, NFR3]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-agent-status-api/task0003
   task0004:
     title: "agent API daemon handlers + EMTERM_PANE_ID injection + emterm mux CLI"
     plan: tasks/task0004.md
@@ -117,8 +120,9 @@ tasks:
     domains: [concurrency, api-contract, input-handling]
     complexity: high
     requirements: [FR10, FR11, FR12, FR13, NFR1, NFR3]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-agent-status-api/task0004
   task0005:
     title: "GUI AgentStatusModel + plain-tab OSC path + update ingestion"
     plan: tasks/task0005.md
@@ -133,8 +137,9 @@ tasks:
     domains: [input-handling, concurrency]
     complexity: medium
     requirements: [FR5, FR6, NFR3]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-agent-status-api/task0005
   task0006:
     title: "tab/window badges, status-bar summary, pane-ID copy UI"
     plan: tasks/task0006.md
@@ -149,8 +154,9 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR7, FR8, FR13, NFR4]
-    status: pending
-    notes: null
+    status: failed
+    notes: "implementer stopped without merged event (claimed to wait on a background poll); no commits on task branch; batch auto-retry pending after drain"
+    branch: em-workflow/mux-agent-status-api/task0006
   task0007:
     title: "agent notifications + settings toggle"
     plan: tasks/task0007.md
@@ -168,8 +174,9 @@ tasks:
     domains: [ui, input-handling]
     complexity: medium
     requirements: [FR9, NFR1, NFR4]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-agent-status-api/task0007
   task0008:
     title: "user documentation (doc/AGENT-STATUS.md)"
     plan: tasks/task0008.md

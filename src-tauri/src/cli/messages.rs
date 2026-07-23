@@ -230,6 +230,27 @@ pub fn cli_image_protocol(loc: Locale) -> &'static str {
     }
 }
 
+pub fn cli_agent_status_about(loc: Locale) -> &'static str {
+    match loc {
+        Locale::En => "Report or clear this pane's agent status",
+        Locale::Ja => "このペインのエージェント状態を報告・クリア",
+    }
+}
+
+pub fn cli_agent_status_state(loc: Locale) -> &'static str {
+    match loc {
+        Locale::En => "State to report (idle|working|blocked|done), or clear",
+        Locale::Ja => "報告する状態 (idle|working|blocked|done)、またはclear",
+    }
+}
+
+pub fn cli_agent_status_name(loc: Locale) -> &'static str {
+    match loc {
+        Locale::En => "Agent name to attach to the report",
+        Locale::Ja => "報告に添付するエージェント名",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

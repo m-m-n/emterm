@@ -430,6 +430,12 @@ pub struct App {
     /// Binary-mismatch restart toast (armed by a failed self-spawn, drawn by
     /// the render path, auto-dismissed by [`App::pump_sftp`]).
     pub restart_toast: RestartToast,
+    /// Per-pane rate limiter for agent-status (blocked/done) desktop
+    /// notifications (task0007 AC-4). Keyed by whatever stable pane
+    /// identity the caller of [`App::maybe_notify_agent_transition`]
+    /// supplies (a mux pane's `public_pane_id`, or a caller-chosen key for
+    /// plain tabs).
+    agent_notification_rate_limiter: crate::notifications::AgentNotificationRateLimiter<String>,
 }
 
 /// How long (in egui frame-time seconds) the binary-mismatch restart toast
@@ -719,6 +725,8 @@ impl App {
             sftp_progress_rx,
             sftp_result_rx,
             restart_toast: RestartToast::default(),
+            agent_notification_rate_limiter:
+                crate::notifications::AgentNotificationRateLimiter::default(),
         }
     }
 
@@ -4227,6 +4235,57 @@ impl App {
     pub fn notify(&self, title: &str, body: &str) {
         self.notification_sink.send(title, body);
     }
+
+    /// Fire (or suppress) a desktop notification for one drained
+    /// agent-status transition (task0007 / FR9).
+    ///
+    /// `pane_key` identifies the pane for the per-pane rate limit
+    /// (task0005's mux `public_pane_id`, or a caller-chosen stable key for
+    /// plain tabs). `pane_visible` is `true` when the pane is the one
+    /// currently shown in the foreground OS window — the caller computes
+    /// this (it owns the tab/pane visibility model; this method only
+    /// applies the gating rule). `tab_title` feeds the notification body.
+    ///
+    /// This is the integration point IMPLEMENTATION.md assigns to
+    /// task0007 ("read the model from app state"): once `AgentStatusModel`
+    /// (task0005) is wired into `App`, its per-frame
+    /// `drain_transitions()` calls this method once per drained event.
+    /// Returns whether the notification fired, for tests.
+    pub fn maybe_notify_agent_transition(
+        &mut self,
+        pane_key: impl Into<String>,
+        pane_visible: bool,
+        transition: &crate::notifications::AgentTransition,
+        tab_title: &str,
+    ) -> bool {
+        let pane_key = pane_key.into();
+        let now = Instant::now();
+        let rate_limit_ok = self
+            .agent_notification_rate_limiter
+            .is_within_limit(&pane_key, now);
+        let fire = crate::notifications::should_fire_agent_notification(
+            transition.new_state,
+            pane_visible,
+            self.settings.agent_status_notifications,
+            self.settings.notification_enabled,
+            rate_limit_ok,
+        );
+        if fire {
+            self.agent_notification_rate_limiter.record(pane_key, now);
+            let body =
+                crate::notifications::agent_notification_body(transition, tab_title, self.locale);
+            self.notify(crate::notifications::NOTIFICATION_TITLE, &body);
+        }
+        fire
+    }
+
+    /// Discard agent-notification rate-limit bookkeeping for a pane that
+    /// closed (mirrors `AgentStatusModel`'s "discard on tab/pane close"
+    /// contract — see [`App::maybe_notify_agent_transition`]).
+    pub fn discard_agent_notification_state(&mut self, pane_key: &str) {
+        self.agent_notification_rate_limiter
+            .discard(&pane_key.to_string());
+    }
 }
 
 impl Default for App {
@@ -4273,6 +4332,167 @@ mod tests {
         // exercise the union logic rather than the bypass.
         app.record_render_state(core);
         app
+    }
+
+    // ── Agent-status notifications (task0007) ───────────────────────
+
+    /// Capturing `NotificationSink` for [`App::maybe_notify_agent_transition`]
+    /// tests — mirrors `callbacks::tests::TestSink`.
+    #[derive(Default)]
+    struct TestNotifySink {
+        calls: parking_lot::Mutex<Vec<(String, String)>>,
+    }
+
+    impl TestNotifySink {
+        fn calls(&self) -> Vec<(String, String)> {
+            self.calls.lock().clone()
+        }
+    }
+
+    impl NotificationSink for TestNotifySink {
+        fn send(&self, title: &str, body: &str) {
+            self.calls
+                .lock()
+                .push((title.to_string(), body.to_string()));
+        }
+    }
+
+    fn agent_transition(
+        new_state: crate::notifications::AgentState,
+    ) -> crate::notifications::AgentTransition {
+        crate::notifications::AgentTransition {
+            old_state: crate::notifications::AgentState::Working,
+            new_state,
+            name: Some("claude".to_string()),
+        }
+    }
+
+    /// `App::new()` already defaults `agent_status_notifications` and
+    /// `notification_enabled` to `true` (see `settings.rs`), so this
+    /// starts every test from the "both switches on" baseline.
+    fn app_with_test_sink() -> (App, Arc<TestNotifySink>) {
+        let app = App::new();
+        assert!(app.settings.agent_status_notifications);
+        assert!(app.settings.notification_enabled);
+        let sink: Arc<TestNotifySink> = Arc::new(TestNotifySink::default());
+        let mut app = app;
+        app.notification_sink = sink.clone() as Arc<dyn NotificationSink>;
+        (app, sink)
+    }
+
+    /// Clone-and-flip one bool field on `app.settings` (an `Arc<Settings>`)
+    /// — mirrors the existing `sidebar_hidden_on_local_tab_regardless_of_mode`-
+    /// style pattern elsewhere in this test module.
+    fn with_setting(app: &mut App, set: impl FnOnce(&mut Settings)) {
+        app.settings = Arc::new({
+            let mut s = (*app.settings).clone();
+            set(&mut s);
+            s
+        });
+    }
+
+    // AC-1/AC-2: a qualifying transition on a non-visible pane fires
+    // exactly one notification.
+    #[test]
+    fn maybe_notify_agent_transition_ac1_fires_for_blocked_on_non_visible_pane() {
+        let (mut app, sink) = app_with_test_sink();
+        let fired = app.maybe_notify_agent_transition(
+            "pane-1",
+            false,
+            &agent_transition(crate::notifications::AgentState::Blocked),
+            "my-tab",
+        );
+        assert!(fired);
+        assert_eq!(sink.calls().len(), 1);
+    }
+
+    // AC-1: working/idle transitions never fire.
+    #[test]
+    fn maybe_notify_agent_transition_ac1_working_and_idle_never_fire() {
+        let (mut app, sink) = app_with_test_sink();
+        for state in [
+            crate::notifications::AgentState::Working,
+            crate::notifications::AgentState::Idle,
+        ] {
+            let fired = app.maybe_notify_agent_transition(
+                "pane-1",
+                false,
+                &agent_transition(state),
+                "my-tab",
+            );
+            assert!(!fired);
+        }
+        assert!(sink.calls().is_empty());
+    }
+
+    // AC-2: a transition on the visible pane does not fire.
+    #[test]
+    fn maybe_notify_agent_transition_ac2_visible_pane_does_not_fire() {
+        let (mut app, sink) = app_with_test_sink();
+        let fired = app.maybe_notify_agent_transition(
+            "pane-1",
+            true,
+            &agent_transition(crate::notifications::AgentState::Done),
+            "my-tab",
+        );
+        assert!(!fired);
+        assert!(sink.calls().is_empty());
+    }
+
+    // AC-3: either settings switch off suppresses the notification.
+    #[test]
+    fn maybe_notify_agent_transition_ac3_settings_off_suppress() {
+        let (mut app, sink) = app_with_test_sink();
+        with_setting(&mut app, |s| s.agent_status_notifications = false);
+        let fired = app.maybe_notify_agent_transition(
+            "pane-1",
+            false,
+            &agent_transition(crate::notifications::AgentState::Blocked),
+            "my-tab",
+        );
+        assert!(!fired);
+
+        with_setting(&mut app, |s| {
+            s.agent_status_notifications = true;
+            s.notification_enabled = false;
+        });
+        let fired = app.maybe_notify_agent_transition(
+            "pane-1",
+            false,
+            &agent_transition(crate::notifications::AgentState::Blocked),
+            "my-tab",
+        );
+        assert!(!fired);
+        assert!(sink.calls().is_empty());
+    }
+
+    // AC-4: a second qualifying transition on the same pane inside the
+    // rate-limit interval does not fire; a suppressed (visible-pane)
+    // attempt in between does not consume the window either.
+    #[test]
+    fn maybe_notify_agent_transition_ac4_rate_limits_per_pane() {
+        let (mut app, sink) = app_with_test_sink();
+        let t = agent_transition(crate::notifications::AgentState::Blocked);
+
+        assert!(app.maybe_notify_agent_transition("pane-1", false, &t, "my-tab"));
+        // Immediately after: still inside the rate-limit window.
+        assert!(!app.maybe_notify_agent_transition("pane-1", false, &t, "my-tab"));
+        // A different pane is unaffected by pane-1's window.
+        assert!(app.maybe_notify_agent_transition("pane-2", false, &t, "my-tab"));
+
+        assert_eq!(sink.calls().len(), 2);
+    }
+
+    #[test]
+    fn discard_agent_notification_state_reopens_the_rate_limit_window() {
+        let (mut app, sink) = app_with_test_sink();
+        let t = agent_transition(crate::notifications::AgentState::Done);
+        assert!(app.maybe_notify_agent_transition("pane-1", false, &t, "my-tab"));
+        assert!(!app.maybe_notify_agent_transition("pane-1", false, &t, "my-tab"));
+
+        app.discard_agent_notification_state("pane-1");
+        assert!(app.maybe_notify_agent_transition("pane-1", false, &t, "my-tab"));
+        assert_eq!(sink.calls().len(), 2);
     }
 
     // TS-5: arm(now) sets the dismissal instant to now + linger window.
