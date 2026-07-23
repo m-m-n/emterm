@@ -86,7 +86,7 @@ tasks:
     domains: [api-contract, input-handling]
     complexity: high
     requirements: [FR5, FR10, FR11, FR12, FR13, NFR2]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-agent-status-api/task0002
   task0003:
