@@ -8,7 +8,7 @@ use std::sync::Mutex as StdMutex;
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
-use crate::mux::scrollback_filter::{scan_agent_status_reports, strip_replayable_rich_content};
+use crate::mux::scrollback_filter::{AgentStatusOscScanner, strip_replayable_rich_content};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatusReportSender, DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget,
@@ -492,6 +492,11 @@ fn pty_reader_loop(
     // why a stateless per-chunk stripper is insufficient (128 KiB CLI chunks
     // straddle the 64 KiB PTY read buffer).
     let mut scrollback_filter = ScrollbackWriteFilter::new();
+    // Per-pane stateful agent-status OSC decoder: retains a partial
+    // `agent-status` OSC 777 sequence across PTY read boundaries so a
+    // report split across reads is still detected exactly once (SPEC
+    // FR1/FR3; review round-1 rework, stable_id `osc_split_lost`).
+    let mut agent_status_scanner = AgentStatusOscScanner::new();
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
@@ -618,12 +623,12 @@ fn pty_reader_loop(
                 // firing with the GUI's own live parse), this runs
                 // regardless of attach state: the daemon owns per-pane
                 // agent-status state unconditionally, and the GUI never
-                // parses this OSC itself for mux panes.
-                for report in scan_agent_status_reports(data) {
-                    if let Some(tx) = agent_status_report_sender.lock().unwrap().as_ref() {
-                        let _ = tx.try_send((pane_id, report));
-                    }
-                }
+                // parses this OSC itself for mux panes. The scanner is
+                // per-pane stateful (see `agent_status_scanner` above) so a
+                // report split across this read and the next is still
+                // detected.
+                let reports = agent_status_scanner.feed(data);
+                forward_agent_status_reports(pane_id, reports, &agent_status_report_sender);
 
                 // Detect OSC 7 (cwd reporting) and cache the path
                 if let Some(cwd) = crate::mux::ipc::statusbar::detect_osc7_cwd(data) {
@@ -795,6 +800,59 @@ fn capture_passthrough(
             "[WARN][BACKEND] mux pane {} raw_passthrough capacity exceeded; oldest captured bytes dropped",
             pane_id
         );
+    }
+}
+
+/// Forward each decoded agent-status report to the daemon-level agent-status
+/// task via `agent_status_report_sender`.
+///
+/// Unlike the best-effort PTY-output passthrough, an accepted report MUST
+/// reach the daemon — SPEC FR3 requires every accepted report to advance the
+/// pane's revision, so silently dropping one on a full channel would be a
+/// spec bug. A full channel therefore falls back to a blocking send instead
+/// of dropping (review round-1 stable_id `try_send_drops_reports`, addressed
+/// alongside the per-pane statefulness rework since the fix naturally
+/// extends here).
+///
+/// Runs OUTSIDE the `agent_status_report_sender` lock (the sender is cloned
+/// out and the lock released before any send), mirroring the "release lock
+/// before blocking_send" discipline the PTY-output backpressure path above
+/// already follows — a blocked send here cannot deadlock against the
+/// session-manager lock the consuming `run_agent_status_task` also needs.
+fn forward_agent_status_reports(
+    pane_id: PaneId,
+    reports: Vec<String>,
+    agent_status_report_sender: &SharedAgentStatusReportSender,
+) {
+    if reports.is_empty() {
+        return;
+    }
+    let sender = agent_status_report_sender.lock().unwrap().clone();
+    let Some(tx) = sender else {
+        return;
+    };
+    for report in reports {
+        match tx.try_send((pane_id, report)) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(msg)) => {
+                log::debug!(
+                    "pane {} agent-status channel full; falling back to blocking send",
+                    pane_id
+                );
+                if tx.blocking_send(msg).is_err() {
+                    log::warn!(
+                        "pane {} agent-status report not delivered: receiver dropped",
+                        pane_id
+                    );
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                log::debug!(
+                    "pane {} agent-status channel closed; report not delivered",
+                    pane_id
+                );
+            }
+        }
     }
 }
 
@@ -1053,6 +1111,27 @@ mod tests {
         assert_eq!(scrollback.lock().unwrap().read_all(), &chunk[..]);
     }
 
+    /// task0012 AC-5: an `agent-status` OSC report split across chunk
+    /// boundaries must never land in scrollback. `ScrollbackWriteFilter`
+    /// already holds ANY unterminated OSC introducer (not just viewer
+    /// kinds) pending until a terminator arrives — this is a regression /
+    /// confirmation test that the same guarantee covers `agent-status`
+    /// reports now that the extraction side is stateful too.
+    #[test]
+    fn scrollback_filter_strips_agent_status_report_split_across_reads() {
+        let scrollback = new_scrollback(4096);
+        let full =
+            b"pre\x1b]777;emterm;agent-status;v=1;state=working;name=claude\x07post".as_slice();
+        let split = full
+            .windows(4)
+            .position(|w| w == b"stat")
+            .expect("marker present");
+        let (head, tail) = full.split_at(split);
+        let filter = feed_all(&scrollback, &[head, tail]);
+        assert_eq!(filter.pending_len(), 0);
+        assert_eq!(scrollback.lock().unwrap().read_all(), b"prepost");
+    }
+
     type TestRig = (
         SharedRawPassthrough,
         SharedPassthroughScanner,
@@ -1153,5 +1232,67 @@ mod tests {
         capture_passthrough(7, b"message\x1b\\", &buf, &scanner, &notif);
         let (_pane_id, message) = rx.try_recv().expect("notification after closing chunk");
         assert_eq!(message, "long message");
+    }
+
+    // ── forward_agent_status_reports (task0012 AC-6 / try_send_drops_reports) ─
+
+    /// Baseline: a healthy channel delivers via the `try_send` fast path,
+    /// no blocking.
+    #[test]
+    fn forward_agent_status_reports_delivers_via_try_send_when_channel_has_room() {
+        let (tx, mut rx) = mpsc::channel::<(PaneId, String)>(4);
+        let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(Some(tx)));
+        forward_agent_status_reports(3, vec!["emterm;agent-status;clear".to_string()], &sender);
+        let (pane_id, report) = rx.try_recv().expect("report must be delivered");
+        assert_eq!(pane_id, 3);
+        assert_eq!(report, "emterm;agent-status;clear");
+    }
+
+    /// Empty report list is a no-op — no send attempted, no panic on a
+    /// `None` sender either.
+    #[test]
+    fn forward_agent_status_reports_empty_list_is_noop() {
+        let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(None));
+        // Must not panic even though the sender is unset.
+        forward_agent_status_reports(1, Vec::new(), &sender);
+    }
+
+    /// AC-6: a full channel must NOT silently drop an accepted report
+    /// (review round-1 stable_id `try_send_drops_reports`). This proves the
+    /// blocking-send fallback actually delivers once capacity frees, rather
+    /// than the old best-effort `try_send` that discarded on `Full`.
+    #[test]
+    fn forward_agent_status_reports_blocks_instead_of_dropping_on_full_channel() {
+        let (tx, mut rx) = mpsc::channel::<(PaneId, String)>(1);
+        // Fill the one available slot directly so the channel is Full.
+        tx.try_send((1, "first".to_string())).unwrap();
+        let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(Some(tx)));
+
+        let sender_for_thread = sender.clone();
+        let handle = std::thread::spawn(move || {
+            forward_agent_status_reports(1, vec!["second".to_string()], &sender_for_thread);
+        });
+
+        // Drain the first item, freeing the slot the blocked send is
+        // waiting on.
+        let first = rx.blocking_recv().expect("first item must still arrive");
+        assert_eq!(first, (1, "first".to_string()));
+
+        // The blocking send only completes once the slot is free, so this
+        // recv is what proves "second" was not dropped.
+        let second = rx.blocking_recv().expect("second item must not be dropped");
+        assert_eq!(second, (1, "second".to_string()));
+
+        handle.join().expect("forwarding thread must not panic");
+    }
+
+    /// A closed channel (receiver dropped) is handled gracefully — the send
+    /// is a no-op, no panic, no hang.
+    #[test]
+    fn forward_agent_status_reports_closed_channel_does_not_panic() {
+        let (tx, rx) = mpsc::channel::<(PaneId, String)>(1);
+        drop(rx);
+        let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(Some(tx)));
+        forward_agent_status_reports(1, vec!["orphaned".to_string()], &sender);
     }
 }
