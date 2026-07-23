@@ -8,12 +8,13 @@ use std::sync::Mutex as StdMutex;
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
-use crate::mux::scrollback_filter::strip_replayable_rich_content;
+use crate::mux::scrollback_filter::{scan_agent_status_reports, strip_replayable_rich_content};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget, PtyOutputChunk,
-    SharedNotificationSender, SharedOutputTarget, SharedPaneExitSender, SharedScrollback,
-    SharedShadowParser, SharedTitleSender, TitleChangeSender, lock_shadow_parser,
+    AgentStatusReportSender, DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget,
+    PtyOutputChunk, SharedAgentStatusReportSender, SharedNotificationSender, SharedOutputTarget,
+    SharedPaneExitSender, SharedScrollback, SharedShadowParser, SharedTitleSender,
+    TitleChangeSender, lock_shadow_parser,
 };
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::RawPassthroughBuffer;
@@ -143,6 +144,7 @@ pub(super) fn register_pane_and_start_reader(
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     title_tx: &TitleChangeSender,
     notification_tx: &NotificationSender,
+    agent_status_tx: &AgentStatusReportSender,
     pane_exit_sender: &SharedPaneExitSender,
 ) -> Option<PaneId> {
     // Verify session/window still exist (pane_id was already allocated by
@@ -171,6 +173,7 @@ pub(super) fn register_pane_and_start_reader(
     let pane_title = pane.title.clone();
     let title_sender = pane.title_sender.clone();
     let notification_sender = pane.notification_sender.clone();
+    let agent_status_report_sender = pane.agent_status_report_sender.clone();
     let raw_passthrough = pane.raw_passthrough.clone();
     let passthrough_scanner = pane.passthrough_scanner.clone();
     let scrollback = pane.scrollback.clone();
@@ -178,6 +181,9 @@ pub(super) fn register_pane_and_start_reader(
     *title_sender.lock().unwrap() = Some(title_tx.clone());
     // The notification channel lives for the daemon lifetime; populate it once.
     *notification_sender.lock().unwrap() = Some(notification_tx.clone());
+    // The agent-status channel lives for the daemon lifetime; populate it
+    // once (SPEC FR3 — never swapped, mirrors notification_sender).
+    *agent_status_report_sender.lock().unwrap() = Some(agent_status_tx.clone());
     window.add_pane(pane);
 
     // The pane-exit sender is fixed at pane creation and never swapped on
@@ -195,6 +201,7 @@ pub(super) fn register_pane_and_start_reader(
             pane_title,
             title_sender,
             notification_sender,
+            agent_status_report_sender,
             raw_passthrough,
             passthrough_scanner,
             scrollback,
@@ -472,6 +479,7 @@ fn pty_reader_loop(
     last_title: Arc<std::sync::Mutex<Option<String>>>,
     title_sender: SharedTitleSender,
     notification_sender: SharedNotificationSender,
+    agent_status_report_sender: SharedAgentStatusReportSender,
     raw_passthrough: SharedRawPassthrough,
     passthrough_scanner: SharedPassthroughScanner,
     scrollback: SharedScrollback,
@@ -600,6 +608,19 @@ fn pty_reader_loop(
                 if let Some(new_title) = title_changed {
                     if let Some(tx) = title_sender.lock().unwrap().as_ref() {
                         let _ = tx.try_send((pane_id, new_title));
+                    }
+                }
+
+                // Detect agent-status OSC 777 reports (SPEC FR3) and forward
+                // each to the daemon-level agent-status task. Unlike OSC 9
+                // notification scanning (Detached-only, to avoid double-
+                // firing with the GUI's own live parse), this runs
+                // regardless of attach state: the daemon owns per-pane
+                // agent-status state unconditionally, and the GUI never
+                // parses this OSC itself for mux panes.
+                for report in scan_agent_status_reports(data) {
+                    if let Some(tx) = agent_status_report_sender.lock().unwrap().as_ref() {
+                        let _ = tx.try_send((pane_id, report));
                     }
                 }
 

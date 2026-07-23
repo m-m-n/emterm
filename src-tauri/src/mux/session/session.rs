@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use tokio::sync::oneshot;
 
+use super::pane::MuxPane;
 use super::window::{MuxWindow, WindowId};
 
 /// Session identifier.
@@ -99,6 +100,19 @@ impl MuxSession {
         self.windows.len()
     }
 
+    /// Iterate over every pane in this session, across all windows, paired
+    /// with its window id.
+    ///
+    /// Used by the post-snapshot agent-status sync (SPEC FR4/FR5): after a
+    /// client receives a snapshot (attach / window switch), the daemon walks
+    /// every pane in the session to find the ones with a reported state and
+    /// resends their status out-of-band (`replay_derived: true`).
+    pub fn panes_iter(&self) -> impl Iterator<Item = (WindowId, &MuxPane)> {
+        self.windows
+            .iter()
+            .flat_map(|(&wid, w)| w.panes.values().map(move |p| (wid, p)))
+    }
+
     /// Reorder an existing window to `target_index` within `window_order`.
     ///
     /// Semantics (remove-then-insert):
@@ -137,6 +151,37 @@ mod tests {
 
     fn make_window(id: WindowId, name: &str) -> MuxWindow {
         MuxWindow::new(id, name.to_string())
+    }
+
+    #[test]
+    fn test_panes_iter_covers_all_windows() {
+        use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+        use tokio::sync::mpsc;
+
+        fn test_pane(id: u32) -> MuxPane {
+            let (tx, _rx) = mpsc::channel(1);
+            let target: SharedOutputTarget =
+                StdArc::new(StdMutex::new(PaneOutputTarget::Connected(tx)));
+            MuxPane::new_test(id, 80, 24, target)
+        }
+
+        let mut s = MuxSession::new(1, "s".to_string());
+        let w1 = s.add_window(make_window(10, "a"));
+        let w2 = s.add_window(make_window(20, "b"));
+        s.windows.get_mut(&w1).unwrap().add_pane(test_pane(100));
+        s.windows.get_mut(&w2).unwrap().add_pane(test_pane(200));
+        s.windows.get_mut(&w2).unwrap().add_pane(test_pane(201));
+
+        let mut found: Vec<(WindowId, u32)> = s.panes_iter().map(|(wid, p)| (wid, p.id)).collect();
+        found.sort();
+        assert_eq!(found, vec![(10, 100), (20, 200), (20, 201)]);
+    }
+
+    #[test]
+    fn test_panes_iter_empty_session() {
+        let s = MuxSession::new(1, "s".to_string());
+        assert_eq!(s.panes_iter().count(), 0);
     }
 
     #[test]
