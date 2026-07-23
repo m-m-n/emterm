@@ -154,8 +154,8 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR7, FR8, FR13, NFR4]
-    status: in_progress
-    notes: null
+    status: failed
+    notes: "implementer stopped without merged event (claimed to wait on a background poll); no commits on task branch; batch auto-retry pending after drain"
     branch: em-workflow/mux-agent-status-api/task0006
   task0007:
     title: "agent notifications + settings toggle"
