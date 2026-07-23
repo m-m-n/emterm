@@ -260,6 +260,16 @@ pub struct App {
     /// so the UI (task0006) and notification (task0007) layers can read it;
     /// `pump_all` is the only writer.
     pub agent_status: crate::agent_status_model::AgentStatusModel,
+    /// pane_id -> daemon-minted public pane ID (task0006 AC-5, `mux_ipc`'s
+    /// "Public pane ID format" shared component). The GUI only LEARNS a
+    /// pane's public ID when the daemon pushes an `AgentStatusUpdate` for
+    /// it (a real report or a replay-on-attach restatement) — there is no
+    /// separate wire message that hands it over. Populated alongside
+    /// `Self::agent_status` in `pump_all` from the same
+    /// `AgentStatusUpdateMsg` batch and cleared on the same closed-pane
+    /// list, so a pane with no entry here (never reported) simply hides
+    /// the sidebar's copy-to-clipboard row (`ui::mux_sidebar` AC-5).
+    mux_public_pane_ids: std::collections::HashMap<u32, String>,
     /// Display locale resolved once from `settings.language` at
     /// construction (`Auto` consults the OS locale). Consumed by the
     /// desktop-notification body formatting in `pump_all`.
@@ -697,6 +707,7 @@ impl App {
             mux_sidebar_overlay_open: false,
             active_mux_attached_prev_pump: None,
             agent_status: crate::agent_status_model::AgentStatusModel::new(),
+            mux_public_pane_ids: std::collections::HashMap::new(),
             settings_launcher: Box::new(crate::settings_launcher::ProcessSettingsLauncher::new()),
             cell_size: GridDims::default(),
             selection: None,
@@ -2220,6 +2231,51 @@ impl App {
         self.tabs.get(self.active)
     }
 
+    // ── task0006: agent-status query surface for the UI layer ──────────
+    // Read-only projections of `Self::agent_status` /
+    // `Self::mux_public_pane_ids` for `ui::tab_bar` / `ui::mux_sidebar` /
+    // `ui::status_bar`. The render pipeline calls these once per frame;
+    // none of them mutate state (mirrors `status_bar_view_model`'s
+    // read-only contract).
+
+    /// `tab`'s aggregated agent-status badge (task0006 AC-1/AC-2):
+    /// highest-priority state across the tab's own plain-tab status and
+    /// every pane in its mux window group (if attached), or `None` when
+    /// nothing has ever reported a state — the caller renders no badge and
+    /// reserves no layout space for it in that case.
+    pub fn agent_status_badge_for(
+        &self,
+        tab: &Tab,
+    ) -> Option<crate::agent_status_model::Aggregated> {
+        let keys = agent_status_keys_for_tab(tab);
+        self.agent_status.aggregate(keys.iter())
+    }
+
+    /// A single mux pane's aggregated badge, by wire `pane_id` (task0006:
+    /// `ui::mux_sidebar` window-entry badge — one pane per window entry).
+    pub fn agent_status_pane_badge(
+        &self,
+        pane_id: u32,
+    ) -> Option<crate::agent_status_model::Aggregated> {
+        self.agent_status
+            .aggregate([&crate::agent_status_model::PaneKey::MuxPane(pane_id)])
+    }
+
+    /// Per-state counts across every tracked pane/tab (task0006 AC-3: the
+    /// status-bar summary segment). Delegates to
+    /// [`crate::agent_status_model::AgentStatusModel::counts`].
+    pub fn agent_status_counts(&self) -> crate::agent_status_model::Counts {
+        self.agent_status.counts()
+    }
+
+    /// The daemon-minted public ID for mux pane `pane_id`, if the GUI has
+    /// learned it yet (task0006 AC-5). `None` until the daemon pushes at
+    /// least one `AgentStatusUpdate` for the pane — see
+    /// [`Self::mux_public_pane_ids`].
+    pub fn mux_public_pane_id(&self, pane_id: u32) -> Option<&str> {
+        self.mux_public_pane_ids.get(&pane_id).map(String::as_str)
+    }
+
     /// Whether the active tab carries an attached mux window group with at
     /// least one window (`MuxWindowGroup::is_group`). Shared predicate for
     /// [`Self::mux_sidebar_visibility`] and the tab-bar label (task0005
@@ -3291,6 +3347,11 @@ impl App {
                 .apply_plain_tab_event(tab_stable_id, event);
         }
         for update in agent_status_updates {
+            // task0006 AC-5: learn/refresh this pane's public ID from the
+            // same message before applying it to the model — the daemon is
+            // the only source for it (see `Self::mux_public_pane_ids`).
+            self.mux_public_pane_ids
+                .insert(update.pane_id, update.public_pane_id.clone());
             self.agent_status.apply_daemon_update(
                 update.pane_id,
                 update.state.map(crate::agent_status_model::state_from_wire),
@@ -3300,6 +3361,7 @@ impl App {
             );
         }
         for pane_id in agent_status_closed_panes {
+            self.mux_public_pane_ids.remove(&pane_id);
             self.agent_status
                 .discard(&crate::agent_status_model::PaneKey::MuxPane(pane_id));
         }
@@ -6617,6 +6679,187 @@ mod tests {
                 .status(&crate::agent_status_model::PaneKey::Tab(tab_stable_id))
                 .unwrap()
                 .unseen
+        );
+    }
+
+    // ── task0006: agent-status query surface + public-pane-ID map ────
+
+    /// AC-5: `pump_all` learns a mux pane's public ID from the daemon's
+    /// `AgentStatusUpdate` payload, queryable via `App::mux_public_pane_id`.
+    #[test]
+    fn pump_all_learns_public_pane_id_from_daemon_agent_status_update() {
+        use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        assert_eq!(app.mux_public_pane_id(42), None);
+
+        let update = AgentStatusUpdateMsg {
+            pane_id: 42,
+            public_pane_id: "abc-42".to_string(),
+            state: Some(WireState::Working),
+            name: None,
+            revision: 1,
+            replay_derived: false,
+        };
+        let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 42, &update);
+        app.on_mux_message(0, msg);
+        app.pump_all();
+
+        assert_eq!(app.mux_public_pane_id(42), Some("abc-42"));
+    }
+
+    /// A closed mux pane's public ID is forgotten alongside its
+    /// `agent_status` entry (mirrors `discard_removes_entry_and_updates_
+    /// aggregate_and_counts` in `agent_status_model`, at the `App` layer).
+    /// Drives the real `Welcome` -> `AgentStatusUpdate` -> `PtyExited`
+    /// sequence rather than reaching into `Tab` internals, matching the
+    /// existing `on_mux_message`-based tests in this module.
+    #[test]
+    fn closing_a_mux_pane_forgets_its_public_pane_id() {
+        use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let welcome = MuxMessage::control(
+            MessageType::Welcome,
+            0,
+            &WelcomeMsg::Accepted {
+                server_version: 1,
+                sessions: vec![SessionInfo {
+                    id: 1,
+                    name: "main".to_string(),
+                    window_count: 1,
+                    pane_count: 1,
+                    active_window_index: 0,
+                    windows: vec![WindowInfo {
+                        id: 0,
+                        name: "w0".to_string(),
+                        active_pane_id: 7,
+                    }],
+                }],
+            },
+        );
+        app.on_mux_message(0, welcome);
+
+        let update = AgentStatusUpdateMsg {
+            pane_id: 7,
+            public_pane_id: "xyz-7".to_string(),
+            state: Some(WireState::Idle),
+            name: None,
+            revision: 1,
+            replay_derived: false,
+        };
+        let update_msg = MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update);
+        app.on_mux_message(0, update_msg);
+        app.pump_all();
+        assert_eq!(app.mux_public_pane_id(7), Some("xyz-7"));
+
+        let pty_exited = MuxMessage {
+            msg_type: MessageType::PtyExited,
+            pane_id: 7,
+            payload: Vec::new(),
+        };
+        app.on_mux_message(0, pty_exited);
+        app.pump_all();
+
+        assert_eq!(app.mux_public_pane_id(7), None);
+    }
+
+    /// `agent_status_pane_badge` is a thin, single-pane wrapper over
+    /// `AgentStatusModel::aggregate` — returns `None` for an unreported
+    /// pane and the pane's own state once reported.
+    #[test]
+    fn agent_status_pane_badge_reflects_the_single_pane_queried() {
+        let mut app = App::new();
+        assert_eq!(app.agent_status_pane_badge(1), None);
+
+        app.agent_status.apply_daemon_update(
+            1,
+            Some(crate::agent_status::AgentState::Blocked),
+            None,
+            1,
+            false,
+        );
+        let badge = app.agent_status_pane_badge(1).expect("pane 1 has status");
+        assert_eq!(badge.state, crate::agent_status::AgentState::Blocked);
+        assert!(badge.unseen);
+    }
+
+    /// `agent_status_badge_for` aggregates across a mux-attached tab's own
+    /// plain-tab key AND every pane in its window group (task0006 AC-1),
+    /// delegating to the same `agent_status_keys_for_tab` set `pump_all`'s
+    /// mark_seen path already uses.
+    #[test]
+    fn agent_status_badge_for_aggregates_across_a_tabs_mux_panes() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        {
+            let tab = app.active_tab_mut().unwrap();
+            let mut group = crate::mux::window_group::MuxWindowGroup::new();
+            group.seed(
+                vec![
+                    crate::mux::window_group::MuxWindow {
+                        id: 0,
+                        name: "w0".to_string(),
+                    },
+                    crate::mux::window_group::MuxWindow {
+                        id: 1,
+                        name: "w1".to_string(),
+                    },
+                ],
+                vec![10, 11],
+                0,
+            );
+            tab.mux_group = Some(group);
+        }
+        app.agent_status.apply_daemon_update(
+            11,
+            Some(crate::agent_status::AgentState::Blocked),
+            None,
+            1,
+            false,
+        );
+
+        let tab = app.active_tab().unwrap();
+        let badge = app
+            .agent_status_badge_for(tab)
+            .expect("group's pane 11 has status");
+        assert_eq!(badge.state, crate::agent_status::AgentState::Blocked);
+    }
+
+    /// `agent_status_badge_for` returns `None` when neither the tab itself
+    /// nor any pane in its group has ever reported a state (task0006 AC-2).
+    #[test]
+    fn agent_status_badge_for_is_none_when_nothing_reported() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let tab = app.active_tab().unwrap();
+        assert_eq!(app.agent_status_badge_for(tab), None);
+    }
+
+    /// `agent_status_counts` is a thin passthrough to
+    /// `AgentStatusModel::counts` (task0006 AC-3).
+    #[test]
+    fn agent_status_counts_passthrough() {
+        let mut app = App::new();
+        assert_eq!(
+            app.agent_status_counts(),
+            crate::agent_status_model::Counts::default()
+        );
+        app.agent_status.apply_daemon_update(
+            1,
+            Some(crate::agent_status::AgentState::Working),
+            None,
+            1,
+            false,
+        );
+        assert_eq!(
+            app.agent_status_counts(),
+            crate::agent_status_model::Counts {
+                working: 1,
+                ..Default::default()
+            }
         );
     }
 

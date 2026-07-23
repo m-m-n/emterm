@@ -155,6 +155,13 @@ pub struct FrameEvents {
     /// post-frame by `window_host` against `App` (confirm upload / overwrite,
     /// cancel a session). `None` when nothing was interacted with.
     pub sftp: Option<SftpFrameEvent>,
+    /// A pane's public ID to place on the system clipboard, from the mux
+    /// sidebar's copy-to-clipboard row (task0006 AC-5). Applied post-frame
+    /// by `window_host` via the same `WindowHost::set_clipboard` path the
+    /// selection-copy keybind uses — `draw_terminal` only holds `&App`, so
+    /// it cannot reach the OS clipboard itself (`arboard::Clipboard` lives
+    /// on `WindowHost`, not `App`).
+    pub clipboard_copy: Option<String>,
 }
 
 impl FrameEvents {
@@ -170,6 +177,7 @@ impl FrameEvents {
             || self.search.is_some()
             || self.profile.is_some()
             || self.sftp.is_some()
+            || self.clipboard_copy.is_some()
     }
 }
 
@@ -257,6 +265,9 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             // tracked regardless — WebView `main.ts` parity.
             item =
                 item.with_activity(app.settings.tab_activity_indicator && t.activity.has_activity);
+            // task0006 AC-1/AC-2: aggregated agent-status badge across the
+            // tab's own status and every pane in its mux group (if any).
+            item = item.with_agent_badge(app.agent_status_badge_for(t));
             item
         })
         .collect();
@@ -288,26 +299,46 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             .active_tab()
             .and_then(|t| t.mux_group.as_ref())
             .map(crate::ui::mux_sidebar::build_entries)
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .into_iter()
+            // task0006 AC-1/AC-5: attach each window's pane badge + known
+            // public ID from `App::agent_status` / `App::mux_public_pane_id`
+            // — `build_entries` stays pure over the mux group alone.
+            .map(|mut e| {
+                e.badge = app.agent_status_pane_badge(e.pane_id);
+                e.public_pane_id = app.mux_public_pane_id(e.pane_id).map(str::to_string);
+                e
+            })
+            .collect(),
     };
     let sidebar_width = crate::ui::mux_sidebar::sidebar_width(ctx.screen_rect().width());
+    // task0006 AC-5: at most one copy-to-clipboard request per frame,
+    // across BOTH placement variants (only one is ever drawn per frame, so
+    // this never double-fires) — routed into `FrameEvents::clipboard_copy`
+    // for `window_host` to apply against the OS clipboard post-frame.
+    let mut clipboard_copy_request: Option<String> = None;
     if sidebar_visibility == crate::app::MuxSidebarVisibility::Persistent {
         // The sidebar's click result routes into the SAME
         // `TabEvent::MuxSwitch` application path the (now-collapsed) inline
         // sub-tab click used (`App::apply_tab_event`'s existing arm) — the
         // widget itself never sends mux messages (task0005 AC-2).
-        if let Some(window) = crate::ui::mux_sidebar::draw(
+        let outcome = crate::ui::mux_sidebar::draw(
             ctx,
             &sidebar_entries,
             crate::ui::mux_sidebar::Placement::Persistent,
             sidebar_width,
-        ) {
+            app.locale,
+        );
+        if let Some(window) = outcome.switch_to_window {
             if tab_event.is_none() {
                 tab_event = Some(crate::ui::TabEvent::MuxSwitch {
                     tab: app.active,
                     window,
                 });
             }
+        }
+        if clipboard_copy_request.is_none() {
+            clipboard_copy_request = outcome.copy_pane_id;
         }
     }
 
@@ -321,7 +352,11 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
         fallback: &app.font_fallback,
         cache: &app.emoji_texture_cache,
     };
-    crate::ui::status_bar::draw(ctx, &status_vm, Some(&emoji_resources));
+    // task0006 AC-3: the agent-status summary segment, built fresh each
+    // frame from `App::agent_status_counts` — pure over the model's
+    // per-state counts, no separate `App` write path needed.
+    let agent_summary = crate::ui::status_bar::agent_summary_segments(app.agent_status_counts());
+    crate::ui::status_bar::draw(ctx, &status_vm, Some(&emoji_resources), &agent_summary);
 
     let mut scroll_to = None;
     egui::CentralPanel::default()
@@ -385,18 +420,23 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
     // inset — NFR1). Same click-routing contract as the persistent variant
     // above.
     if sidebar_visibility == crate::app::MuxSidebarVisibility::Overlay {
-        if let Some(window) = crate::ui::mux_sidebar::draw(
+        let outcome = crate::ui::mux_sidebar::draw(
             ctx,
             &sidebar_entries,
             crate::ui::mux_sidebar::Placement::Overlay,
             sidebar_width,
-        ) {
+            app.locale,
+        );
+        if let Some(window) = outcome.switch_to_window {
             if tab_event.is_none() {
                 tab_event = Some(crate::ui::TabEvent::MuxSwitch {
                     tab: app.active,
                     window,
                 });
             }
+        }
+        if clipboard_copy_request.is_none() {
+            clipboard_copy_request = outcome.copy_pane_id;
         }
     }
 
@@ -433,6 +473,7 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
         profile: None,
         // Likewise drawn separately by `draw_sftp_overlay`.
         sftp: None,
+        clipboard_copy: clipboard_copy_request,
     }
 }
 
