@@ -17,8 +17,9 @@ use tokio_util::codec::Framed;
 use super::codec::MuxCodec;
 use super::handlers::{
     handle_attach, handle_create_window, handle_destroy_pane, handle_destroy_window,
-    handle_move_window, handle_rename_window, handle_request_pane_snapshot, handle_resize,
-    handle_set_visibility, handle_switch_window,
+    handle_move_window, handle_read_pane, handle_rename_window, handle_request_pane_snapshot,
+    handle_resize, handle_send_text, handle_set_visibility, handle_switch_window,
+    handle_wait_agent_state,
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
@@ -650,6 +651,43 @@ async fn handle_cli_client<S>(
                 }
             } else {
                 log::warn!("CLI send-keys: pane {} not found", pane_id);
+            }
+        }
+        MessageType::ReadPane => match handle_read_pane(&msg, session_manager).await {
+            Ok(result) => {
+                let resp = MuxMessage::control(MessageType::ReadPaneResult, 0, &result);
+                let _ = framed.send(resp).await;
+            }
+            Err(err) => {
+                let resp = MuxMessage::control(MessageType::AgentApiError, 0, &err);
+                let _ = framed.send(resp).await;
+            }
+        },
+        MessageType::SendText => match handle_send_text(&msg, session_manager).await {
+            Ok(result) => {
+                let resp = MuxMessage::control(MessageType::SendTextResult, 0, &result);
+                let _ = framed.send(resp).await;
+            }
+            Err(err) => {
+                let resp = MuxMessage::control(MessageType::AgentApiError, 0, &err);
+                let _ = framed.send(resp).await;
+            }
+        },
+        MessageType::WaitAgentState => {
+            // May block (server-side, bounded by the request's own
+            // `timeout_ms`) awaiting a qualifying state change — safe here
+            // because each connection runs in its own spawned task
+            // (`daemon::run_daemon`'s accept loop), so this does not stall
+            // other clients.
+            match handle_wait_agent_state(&msg, session_manager).await {
+                Ok(result) => {
+                    let resp = MuxMessage::control(MessageType::WaitAgentStateResult, 0, &result);
+                    let _ = framed.send(resp).await;
+                }
+                Err(err) => {
+                    let resp = MuxMessage::control(MessageType::AgentApiError, 0, &err);
+                    let _ = framed.send(resp).await;
+                }
             }
         }
         MessageType::Shutdown => {
