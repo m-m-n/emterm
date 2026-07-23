@@ -56,9 +56,9 @@ pub fn daemon_incarnation() -> &'static str {
 
 /// Build the public (API-facing, opaque) pane ID for `pane_id` in this
 /// daemon's incarnation. See [`daemon_incarnation`] and
-/// `mux_ipc::protocol::compose_public_pane_id`.
+/// `mux_ipc::protocol::PublicPaneId::compose`.
 pub fn public_pane_id(pane_id: PaneId) -> String {
-    super::ipc::protocol::compose_public_pane_id(daemon_incarnation(), pane_id)
+    super::ipc::protocol::PublicPaneId::compose(daemon_incarnation(), pane_id)
 }
 
 /// Parse a public pane ID, returning the internal [`PaneId`] only when the
@@ -67,11 +67,11 @@ pub fn public_pane_id(pane_id: PaneId) -> String {
 /// any malformed input, returns `None` — callers map that uniformly to
 /// `unknown_pane` per IMPLEMENTATION.md's shared error contract.
 pub fn resolve_public_pane_id(public_id: &str) -> Option<PaneId> {
-    let (incarnation, pane_id) = super::ipc::protocol::parse_public_pane_id(public_id)?;
-    if incarnation != daemon_incarnation() {
+    let parsed = super::ipc::protocol::PublicPaneId::parse(public_id).ok()?;
+    if parsed.incarnation != daemon_incarnation() {
         return None;
     }
-    Some(pane_id)
+    Some(parsed.pane_id)
 }
 
 /// Daemon-level title channel capacity.
@@ -699,7 +699,7 @@ mod tests {
         // pane_id — this is what makes a pane ID non-reusable across
         // daemon restarts (a request "unknown_pane"s instead of silently
         // targeting a same-numbered pane from a fresh daemon run).
-        let stale = super::super::ipc::protocol::compose_public_pane_id("deadbeef00000000", 7);
+        let stale = super::super::ipc::protocol::PublicPaneId::compose("deadbeef00000000", 7);
         assert_ne!(stale.split('-').next().unwrap(), daemon_incarnation());
         assert_eq!(resolve_public_pane_id(&stale), None);
     }

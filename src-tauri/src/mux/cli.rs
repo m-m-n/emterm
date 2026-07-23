@@ -905,7 +905,7 @@ where
 }
 
 /// Decode `resp` as either the expected success payload `T` (`on_success`,
-/// exit 0) or a shared `AgentApiErrorMsg` (mapped via
+/// exit 0) or a shared `AgentApiError` (mapped via
 /// [`agent_api_error_exit_code`]). Any other response shape is an exit-1
 /// protocol error.
 fn handle_agent_response<T: for<'a> Deserialize<'a>>(
@@ -925,7 +925,7 @@ fn handle_agent_response<T: for<'a> Deserialize<'a>>(
             }
         }
     } else if resp.msg_type == MessageType::AgentApiError {
-        match resp.decode_payload::<AgentApiErrorMsg>() {
+        match resp.decode_payload::<AgentApiError>() {
             Some(err) => {
                 eprintln!("Error: {}", err.message);
                 agent_api_error_exit_code(err.kind)
