@@ -253,8 +253,8 @@ tasks:
     domains: [input-handling, concurrency]
     complexity: medium
     requirements: [FR4, FR5, NFR2]
-    status: in_progress
-    notes: "rework task: replay_clear_lost — codex spec high"
+    status: merged
+    notes: "rework task: replay_clear_lost — merged via revision > 0 filter"
     branch: em-workflow/mux-agent-status-api/task0013
     branch: em-workflow/mux-agent-status-api/task0008
 
