@@ -47,7 +47,8 @@ workflow:
     status: completed
     completed_at_commit: a9d88f1cd93d60b71571d666416e1b596a114ae3
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 10059773cc26aea8052d77dac473ca1600adb93e
     base_commit: 06d795b6698952176a743a86d6f13fbfb6633105
   - id: review
     status: pending
@@ -154,8 +155,8 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR7, FR8, FR13, NFR4]
-    status: in_progress
-    notes: "batch retry #1 (consumed): kept empty worktree (no prior commits); re-launching implementer from scratch"
+    status: merged
+    notes: "batch retry #1 (consumed): first attempt did no code work (background-poll wait); retry from scratch"
     branch: em-workflow/mux-agent-status-api/task0006
   task0007:
     title: "agent notifications + settings toggle"
