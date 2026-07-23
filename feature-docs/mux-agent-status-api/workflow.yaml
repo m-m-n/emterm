@@ -240,8 +240,8 @@ tasks:
     domains: [input-handling, concurrency]
     complexity: medium
     requirements: [FR1, FR3, NFR2, NFR3]
-    status: in_progress
-    notes: "rework task: osc_split_lost — spec+architecture codex agreement"
+    status: merged
+    notes: "rework task: osc_split_lost + try_send_drops (bonus) — merged with per-pane stateful scanner"
     branch: em-workflow/mux-agent-status-api/task0012
   task0013:
     title: "post-snapshot replay synchronizes cleared states"
