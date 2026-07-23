@@ -442,6 +442,10 @@ pub struct AppSettings {
     pub notify_on_output: bool,
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub notify_on_bell: bool,
+    /// task0007: desktop notification for a blocked/done agent-status
+    /// transition on a non-visible pane.
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub agent_status_notifications: bool,
 
     // Keybinds
     #[serde(default, deserialize_with = "deserialize_null_default")]
@@ -773,6 +777,7 @@ impl Default for AppSettings {
             notify_on_process_exit: default_true(),
             notify_on_output: false,
             notify_on_bell: default_true(),
+            agent_status_notifications: default_true(),
             clipboard_read_osc52: default_true(),
             clipboard_max_size_osc52: default_clipboard_max_size_osc52(),
             log_recording_enabled: false,
@@ -977,6 +982,7 @@ mod tests {
             notify_on_process_exit: false,
             notify_on_output: true,
             notify_on_bell: false,
+            agent_status_notifications: false,
             mux: MuxSettings::default(),
             statusbar_enabled: true,
             statusbar_app_line1_left: "{git_branch}".to_string(),
@@ -1033,6 +1039,7 @@ mod tests {
         assert!(!restored.notify_on_process_exit);
         assert!(restored.notify_on_output);
         assert!(!restored.notify_on_bell);
+        assert!(!restored.agent_status_notifications);
         assert_eq!(restored.profiles.len(), 1);
         assert_eq!(restored.profiles[0].name, "Dev");
         assert_eq!(restored.profiles[0].shell_path, "/bin/zsh");
@@ -1095,6 +1102,33 @@ mod tests {
     fn shift_enter_behavior_null_resolves_to_default() {
         let s: AppSettings = serde_json::from_str(r#"{"shift_enter_behavior": null}"#).unwrap();
         assert_eq!(s.shift_enter_behavior, ShiftEnterBehavior::AltEnter);
+    }
+
+    // ── agent_status_notifications (task0007 AC-5) ──────────────────────
+
+    #[test]
+    fn agent_status_notifications_defaults_to_true() {
+        assert!(AppSettings::default().agent_status_notifications);
+    }
+
+    #[test]
+    fn agent_status_notifications_missing_key_resolves_to_default_true() {
+        let s: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(s.agent_status_notifications);
+    }
+
+    #[test]
+    fn agent_status_notifications_null_resolves_to_default_true() {
+        let s: AppSettings =
+            serde_json::from_str(r#"{"agent_status_notifications": null}"#).unwrap();
+        assert!(s.agent_status_notifications);
+    }
+
+    #[test]
+    fn agent_status_notifications_explicit_false_deserializes() {
+        let s: AppSettings =
+            serde_json::from_str(r#"{"agent_status_notifications": false}"#).unwrap();
+        assert!(!s.agent_status_notifications);
     }
 
     #[test]
