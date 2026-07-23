@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use super::pane::PaneId;
 use super::session::{MuxSession, SessionId};
 use super::window::WindowId;
-use crate::mux::ipc::protocol::{MuxMessage, SessionInfo, WindowInfo};
+use crate::mux::ipc::protocol::{MuxMessage, PublicPaneId, SessionInfo, WindowInfo};
 
 /// Daemon incarnation token (SPEC FR13): a lowercase-hex string generated
 /// once per daemon start, embedded in every public pane ID minted during
@@ -64,7 +64,7 @@ impl SessionManager {
     /// `"{incarnation}-{pane_id}"` string (SPEC FR13). The daemon is the
     /// only minter; clients treat the result as opaque.
     pub fn public_pane_id(&self, pane_id: PaneId) -> String {
-        format!("{}-{}", self.incarnation, pane_id)
+        PublicPaneId::compose(&self.incarnation, pane_id)
     }
 
     /// Get a broadcast sender for cross-client notifications.
