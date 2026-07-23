@@ -237,6 +237,11 @@ pub struct NativeCallbackState {
     /// `TerminalCore::mark_all_dirty` so the next frame repaints with
     /// the new palette.
     pub theme_dirty: bool,
+    /// Parsed plain-tab `agent-status` OSC 777 events (SPEC FR5, task0005).
+    /// `Tab::pump` drains this into its own per-pump latch
+    /// (`pending_agent_status_events`); `App::pump_all` then applies each
+    /// event to `App::agent_status` keyed by the tab's `stable_id`.
+    pub pending_agent_status: Vec<crate::agent_status::AgentStatusEvent>,
 }
 
 /// `TerminalCallbacks` implementation for native consumers.
@@ -490,6 +495,20 @@ impl TerminalCallbacks for NativeCallbacks {
                 // WebView `src/markdown/session.ts` contract. `strip_prefix`
                 // is a no-op for payloads that were already pre-stripped.
                 let payload = data.strip_prefix("emterm;").unwrap_or(data);
+                // Agent-status reports (SPEC FR1/FR5, task0005): recognized
+                // before the statusbar dispatcher and the legacy viewer
+                // queue since `agent-status;` shares the OSC 777 `emterm`
+                // namespace but is consumed by a different model
+                // (`agent_status_model`), not the markdown/JSON/YAML
+                // viewer pipeline. `crate::agent_status::parse` expects the
+                // full `emterm;agent-status;…` string (not yet stripped of
+                // the namespace token), matching `data` here — it returns
+                // `None` for any other OSC 777 kind, so this is a no-op
+                // fall-through for everything else.
+                if let Some(event) = crate::agent_status::parse(data) {
+                    self.state.lock().pending_agent_status.push(event);
+                    return;
+                }
                 if let Some(dispatcher) = self.statusbar_dispatcher.as_ref() {
                     if try_dispatch_statusbar(dispatcher, payload) {
                         return;
@@ -951,6 +970,50 @@ mod tests {
         let s = h.state.lock();
         assert_eq!(s.osc_queue.len(), 1);
         assert_eq!(s.osc_queue[0].payload, "markdown;begin;id=x;format=gfm");
+    }
+
+    // ── task0005: OSC 777 agent-status routing ────────────────────────
+
+    #[test]
+    fn osc_100_agent_status_set_routes_to_pending_agent_status_not_osc_queue() {
+        let h = default_harness();
+        h.cb.on_osc(
+            OSC_EMTERM_EXTENSION,
+            "emterm;agent-status;v=1;state=working;name=claude",
+        );
+        let s = h.state.lock();
+        assert_eq!(
+            s.pending_agent_status,
+            vec![crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Working,
+                name: Some("claude".to_string()),
+            }]
+        );
+        assert!(s.osc_queue.is_empty());
+    }
+
+    #[test]
+    fn osc_100_agent_status_clear_routes_to_pending_agent_status() {
+        let h = default_harness();
+        h.cb.on_osc(OSC_EMTERM_EXTENSION, "emterm;agent-status;clear");
+        let s = h.state.lock();
+        assert_eq!(
+            s.pending_agent_status,
+            vec![crate::agent_status::AgentStatusEvent::Clear]
+        );
+    }
+
+    #[test]
+    fn osc_100_agent_status_invalid_payload_falls_through_to_osc_queue() {
+        // A malformed agent-status payload (missing `state`) is rejected by
+        // `crate::agent_status::parse`, so the extension arm falls through
+        // to the legacy viewer queue exactly as any other unrecognized OSC
+        // 777 payload would — it is not silently dropped.
+        let h = default_harness();
+        h.cb.on_osc(OSC_EMTERM_EXTENSION, "emterm;agent-status;v=1");
+        let s = h.state.lock();
+        assert!(s.pending_agent_status.is_empty());
+        assert_eq!(s.osc_queue.len(), 1);
     }
 
     // ── Phase D: OSC 777 statusbar routing ────────────────────────────
