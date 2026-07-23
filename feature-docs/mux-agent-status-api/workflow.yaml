@@ -47,7 +47,7 @@ workflow:
     status: completed
     completed_at_commit: a9d88f1cd93d60b71571d666416e1b596a114ae3
   - id: implement
-    status: pending
+    status: in_progress
     base_commit: 06d795b6698952176a743a86d6f13fbfb6633105
   - id: review
     status: pending
@@ -199,8 +199,9 @@ tasks:
     domains: [ui, input-handling, concurrency]
     complexity: medium
     requirements: [FR9, FR6, NFR3]
-    status: pending
+    status: in_progress
     notes: "rework task: 5-reviewer consensus on missing task0005/task0007 integration seam"
+    branch: em-workflow/mux-agent-status-api/task0009
   task0010:
     title: "safe PROTOCOL_VERSION upgrade path (v1 daemon survives)"
     plan: tasks/task0010.md
@@ -212,8 +213,9 @@ tasks:
     domains: [api-contract]
     complexity: medium
     requirements: [NFR2]
-    status: pending
+    status: in_progress
     notes: "rework task: protocol_v1_v2_break — codex architecture high"
+    branch: em-workflow/mux-agent-status-api/task0010
   task0011:
     title: "mux read renders rows + send_text drops manager lock before PTY write"
     plan: tasks/task0011.md
@@ -224,8 +226,9 @@ tasks:
     domains: [concurrency, api-contract, input-handling]
     complexity: medium
     requirements: [FR10, FR11, NFR3]
-    status: pending
+    status: in_progress
     notes: "rework task: mux_read_render_missing + send_text_lock_held"
+    branch: em-workflow/mux-agent-status-api/task0011
   task0012:
     title: "per-pane stateful OSC scanner (agent-status reports survive chunk boundaries)"
     plan: tasks/task0012.md
@@ -237,8 +240,9 @@ tasks:
     domains: [input-handling, concurrency]
     complexity: medium
     requirements: [FR1, FR3, NFR2, NFR3]
-    status: pending
+    status: in_progress
     notes: "rework task: osc_split_lost — spec+architecture codex agreement"
+    branch: em-workflow/mux-agent-status-api/task0012
   task0013:
     title: "post-snapshot replay synchronizes cleared states"
     plan: tasks/task0013.md
@@ -249,8 +253,9 @@ tasks:
     domains: [input-handling, concurrency]
     complexity: medium
     requirements: [FR4, FR5, NFR2]
-    status: pending
+    status: in_progress
     notes: "rework task: replay_clear_lost — codex spec high"
+    branch: em-workflow/mux-agent-status-api/task0013
     branch: em-workflow/mux-agent-status-api/task0008
 
 review:
