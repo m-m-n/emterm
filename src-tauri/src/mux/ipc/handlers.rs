@@ -18,8 +18,9 @@ use super::reattach::{
 };
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    NotificationSender, PaneId, PtyOutputChunk, SharedPaneExitSender, SharedScrollback,
-    SharedShadowParser, TitleChangeSender, evaluate_output_target, resume_pane_with_permit,
+    AgentStatusReportSender, NotificationSender, PaneId, PtyOutputChunk, SharedPaneExitSender,
+    SharedScrollback, SharedShadowParser, TitleChangeSender, evaluate_output_target,
+    resume_pane_with_permit,
 };
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.
@@ -36,6 +37,7 @@ pub(super) async fn handle_create_window<S>(
     active_session_id: u32,
     title_tx: &TitleChangeSender,
     notification_tx: &NotificationSender,
+    agent_status_tx: &AgentStatusReportSender,
     pane_exit_sender: &SharedPaneExitSender,
 ) -> Result<(), bool>
 where
@@ -91,6 +93,7 @@ where
         pane_output_tx,
         title_tx,
         notification_tx,
+        agent_status_tx,
         pane_exit_sender,
     ) {
         Some(id) => id,
@@ -525,6 +528,12 @@ pub(super) async fn handle_request_pane_snapshot(
             e
         );
     }
+
+    // SPEC FR4/FR5 (task0003 AC-5): the on-demand snapshot just enqueued had
+    // agent-status OSC stripped; resync this pane's current state
+    // out-of-band (window-switch counterpart of the attach-time sync).
+    crate::mux::daemon::sync_agent_status_after_pane_snapshot(session_manager, pane_id).await;
+
     Ok(())
 }
 
@@ -617,6 +626,12 @@ where
     if send_reattach_data(framed, &reattach_data).await.is_err() {
         return Err(true);
     }
+
+    // SPEC FR4/FR5 (task0003 AC-5): the snapshot bytes just delivered had
+    // agent-status OSC stripped (scrollback_filter); resync current state
+    // out-of-band, one `AgentStatusUpdate` (`replay_derived: true`) per
+    // stateful pane in the session.
+    crate::mux::daemon::sync_agent_status_after_snapshot(session_manager, new_session_id).await;
 
     log::info!(
         "Attached to session {} with {} pane(s)",
