@@ -120,8 +120,8 @@ tasks:
     domains: [concurrency, api-contract, input-handling]
     complexity: high
     requirements: [FR10, FR11, FR12, FR13, NFR1, NFR3]
-    status: failed
-    notes: "user-initiated stop mid-implementation (parent-side-adoption round 2 in progress); task branch has 3 uncommitted-parent commits, no merge to integration; worktree kept for retry"
+    status: in_progress
+    notes: "batch retry #1 (consumed): kept worktree with 4 branch commits and uncommitted parent-adoption changes; re-launching implementer to continue"
     branch: em-workflow/mux-agent-status-api/task0004
   task0005:
     title: "GUI AgentStatusModel + plain-tab OSC path + update ingestion"
@@ -154,8 +154,8 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR7, FR8, FR13, NFR4]
-    status: failed
-    notes: "implementer stopped without merged event (claimed to wait on a background poll); no commits on task branch; batch auto-retry pending after drain"
+    status: in_progress
+    notes: "batch retry #1 (consumed): kept empty worktree (no prior commits); re-launching implementer from scratch"
     branch: em-workflow/mux-agent-status-api/task0006
   task0007:
     title: "agent notifications + settings toggle"
@@ -186,8 +186,9 @@ tasks:
     domains: []
     complexity: low
     requirements: [NFR1]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-agent-status-api/task0008
 
 review:
   status: pending
