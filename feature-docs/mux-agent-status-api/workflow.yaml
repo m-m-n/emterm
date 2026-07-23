@@ -39,7 +39,8 @@ workflow:
     completed_at_commit: 2742ad41c8e1e3ae0afecce0c966d75445c0ff1a
   - id: design
     artifacts: [DESIGN.md, design/]
-    status: in_progress
+    status: completed
+    completed_at_commit: 151d21e5046812f9d183f9c0de3eb97cc9522ffb
     skipped_reason: null
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
