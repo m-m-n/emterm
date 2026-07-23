@@ -70,6 +70,7 @@ export interface AppSettings {
   notify_on_process_exit: boolean;
   notify_on_output: boolean;
   notify_on_bell: boolean;
+  agent_status_notifications: boolean;
 
   // Keybinds
   keybinds: KeybindSettings;
