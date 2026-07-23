@@ -194,9 +194,17 @@ pub fn notification_body(sanitized_title: &str, kind: ActivityKind, locale: Loca
 /// `{pane, old_state, new_state, name}`). Pane identity lives in the
 /// caller's own rate-limit / visibility key, not here — this struct
 /// carries only the fields the gating decision and notification body need.
+///
+/// `old_state` mirrors `AgentStatusModel::Transition::old_state`'s
+/// `Option<AgentState>` shape (task0009 wiring): a pane's very first
+/// report has no prior state, so a non-optional `AgentState` would force
+/// an arbitrary default at the wire-up site. Not read by
+/// [`should_fire_agent_notification`] or [`agent_notification_body`]
+/// today — kept for parity with the drained model event and any future
+/// consumer.
 #[derive(Debug, Clone)]
 pub struct AgentTransition {
-    pub old_state: AgentState,
+    pub old_state: Option<AgentState>,
     pub new_state: AgentState,
     /// Sanitized agent name (sanitization is guaranteed upstream by the
     /// core `agent_status` module); `None` when the pane never reported
@@ -493,7 +501,7 @@ mod tests {
 
     fn transition(new_state: AgentState) -> AgentTransition {
         AgentTransition {
-            old_state: AgentState::Working,
+            old_state: Some(AgentState::Working),
             new_state,
             name: Some("claude".to_string()),
         }
