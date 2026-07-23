@@ -702,6 +702,11 @@ pub struct Settings {
     pub notify_on_output: bool,
     /// Notify when an inactive tab receives BEL (`0x07`).
     pub notify_on_bell: bool,
+    /// task0007: desktop notification for a blocked/done agent-status
+    /// transition on a pane the user is not looking at (FR9). Read at
+    /// notification-fire time (no restart needed on change) alongside the
+    /// master [`Settings::notification_enabled`] switch.
+    pub agent_status_notifications: bool,
     /// UI language: `Auto` (OS locale), `En`, or `Ja`. Resolved to a
     /// concrete [`crate::i18n::Locale`] once at startup
     /// (`App::with_settings`); `Auto` consults the system locale and
@@ -1087,6 +1092,7 @@ impl Default for Settings {
             notify_on_process_exit: true,
             notify_on_output: false,
             notify_on_bell: true,
+            agent_status_notifications: true,
             language: Language::default(),
             log_recording_enabled: false,
             markdown_theme_follow_ui: true,
@@ -1310,6 +1316,7 @@ struct RawSettings {
     notify_on_process_exit: Option<bool>,
     notify_on_output: Option<bool>,
     notify_on_bell: Option<bool>,
+    agent_status_notifications: Option<bool>,
 
     // ── Language / logging ──
     language: Option<String>,
@@ -1777,6 +1784,9 @@ impl RawSettings {
         }
         if let Some(v) = self.notify_on_bell {
             dst.notify_on_bell = v;
+        }
+        if let Some(v) = self.agent_status_notifications {
+            dst.agent_status_notifications = v;
         }
 
         // ── Language / logging ──
@@ -2360,6 +2370,28 @@ mod tests {
         assert_eq!(s.notify_on_process_exit, d.notify_on_process_exit);
         assert_eq!(s.notify_on_output, d.notify_on_output);
         assert_eq!(s.notify_on_bell, d.notify_on_bell);
+    }
+
+    // ── agent_status_notifications (task0007 AC-5) ───────────────────────
+
+    #[test]
+    fn default_agent_status_notifications_is_true() {
+        assert!(Settings::new().agent_status_notifications);
+    }
+
+    #[test]
+    fn loader_agent_status_notifications_flat_key_is_applied() {
+        let s = load_json(r#"{"agent_status_notifications": false}"#);
+        assert!(!s.agent_status_notifications);
+    }
+
+    #[test]
+    fn loader_agent_status_notifications_null_keeps_default() {
+        let s = load_json(r#"{"agent_status_notifications": null}"#);
+        assert_eq!(
+            s.agent_status_notifications,
+            Settings::default().agent_status_notifications
+        );
     }
 
     // ── language / log recording / skk_mode ─────────────────────────

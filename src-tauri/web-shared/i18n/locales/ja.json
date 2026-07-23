@@ -218,6 +218,8 @@
       "notifyOnOutputDesc": "バックグラウンドタブに新しい出力が表示された時に通知します",
       "notifyOnBell": "ベル",
       "notifyOnBellDesc": "バックグラウンドタブでベル文字を受信した時に通知します",
+      "agentStatusNotifications": "エージェントステータス通知",
+      "agentStatusNotificationsDesc": "バックグラウンドのペインでエージェントがブロック中または完了になった時に通知します",
       "body": {
         "processExit": "プロセスが終了しました",
         "newOutput": "新しい出力",
