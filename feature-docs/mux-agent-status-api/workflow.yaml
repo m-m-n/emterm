@@ -120,8 +120,8 @@ tasks:
     domains: [concurrency, api-contract, input-handling]
     complexity: high
     requirements: [FR10, FR11, FR12, FR13, NFR1, NFR3]
-    status: in_progress
-    notes: "batch retry #1 (consumed): kept worktree with 4 branch commits and uncommitted parent-adoption changes; re-launching implementer to continue"
+    status: merged
+    notes: "batch retry #1 (consumed): recovered after user-stop mid parent-adoption; retry completed handler impl + waiter registry"
     branch: em-workflow/mux-agent-status-api/task0004
   task0005:
     title: "GUI AgentStatusModel + plain-tab OSC path + update ingestion"
