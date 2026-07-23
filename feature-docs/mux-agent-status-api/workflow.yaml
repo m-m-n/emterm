@@ -192,12 +192,20 @@ tasks:
     branch: em-workflow/mux-agent-status-api/task0008
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
+  needs_rework: true
+  residual_critical_high: 10
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
     codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
 
 requirements:
   FR1:
