@@ -140,6 +140,21 @@ fn build_mux_latch(settings: &Settings) -> crate::mux::prefix::Latch {
     Latch::with_bindings(chord, crate::mux::prefix::DEFAULT_ARMED_TIMEOUT, bindings)
 }
 
+/// The `App::agent_status` keys `tab` occupies: its own plain-tab key
+/// (`PaneKey::Tab`, harmless to include even when unoccupied — `discard` /
+/// `mark_seen` on a missing key are no-ops) plus one `PaneKey::MuxPane` per
+/// pane in its window group, if attached (task0005). Shared by the
+/// tab-close (AC-6) and mark_seen-on-foreground-display (AC-5) call sites so
+/// "which panes belong to this tab" is defined in exactly one place.
+fn agent_status_keys_for_tab(tab: &crate::tabs::Tab) -> Vec<crate::agent_status_model::PaneKey> {
+    use crate::agent_status_model::PaneKey;
+    let mut keys = vec![PaneKey::Tab(tab.stable_id)];
+    if let Some(group) = tab.mux_group.as_ref() {
+        keys.extend(group.pane_ids().iter().map(|&id| PaneKey::MuxPane(id)));
+    }
+    keys
+}
+
 pub struct App {
     pub tabs: Vec<Tab>,
     pub active: usize,
@@ -238,6 +253,13 @@ pub struct App {
     /// "active tab is mux-attached" separately — see the Shared Components
     /// contract in IMPLEMENTATION.md).
     active_mux_attached_prev_pump: Option<usize>,
+    /// Merged agent-status store (mux-agent-status-api task0005, SPEC FR5 /
+    /// FR6 / NFR3): one [`crate::agent_status_model::AgentStatusModel`]
+    /// covering both plain tabs (this tab's own OSC 777 `agent-status`
+    /// events) and mux panes (daemon-pushed `AgentStatusUpdate`). Owned here
+    /// so the UI (task0006) and notification (task0007) layers can read it;
+    /// `pump_all` is the only writer.
+    pub agent_status: crate::agent_status_model::AgentStatusModel,
     /// Display locale resolved once from `settings.language` at
     /// construction (`Auto` consults the OS locale). Consumed by the
     /// desktop-notification body formatting in `pump_all`.
@@ -668,6 +690,7 @@ impl App {
             mux_dialog: crate::mux::dialog::MuxDialogState::Closed,
             mux_sidebar_overlay_open: false,
             active_mux_attached_prev_pump: None,
+            agent_status: crate::agent_status_model::AgentStatusModel::new(),
             settings_launcher: Box::new(crate::settings_launcher::ProcessSettingsLauncher::new()),
             cell_size: GridDims::default(),
             selection: None,
@@ -1588,6 +1611,12 @@ impl App {
     pub fn close_tab(&mut self, idx: usize) -> bool {
         if idx >= self.tabs.len() {
             return self.tabs.is_empty();
+        }
+        // task0005 AC-6: discard this tab's agent-status entries before
+        // removal (its own plain-tab key plus every mux pane in its window
+        // group, if attached).
+        for key in agent_status_keys_for_tab(&self.tabs[idx]) {
+            self.agent_status.discard(&key);
         }
         // Drop the tab — its `PtySession::Drop` impl kills the child
         // and joins reader/writer threads.
@@ -3023,6 +3052,15 @@ impl App {
         // router after it. Every tab is drained — like the WebView build,
         // any tab's `emterm image` opens a viewer window.
         let mut image_events: Vec<term_images::image_proc::ImageEvent> = Vec::new();
+        // Agent-status inputs collected across every tab this pass (task0005),
+        // applied to `self.agent_status` after the `&mut self.tabs` borrow
+        // ends: plain-tab OSC events (tagged with the originating tab's
+        // `stable_id`), daemon-pushed `AgentStatusUpdate` messages, and mux
+        // pane ids a `PtyExited` arm removed this pump.
+        let mut agent_status_plain_events: Vec<(u64, crate::agent_status::AgentStatusEvent)> =
+            Vec::new();
+        let mut agent_status_updates: Vec<mux_ipc::protocol::AgentStatusUpdateMsg> = Vec::new();
+        let mut agent_status_closed_panes: Vec<u32> = Vec::new();
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             // Phase 4-C (APC redesign): `Tab::pump` already routes
             // APC-encoded mux messages into the tab's own state via
@@ -3036,6 +3074,16 @@ impl App {
                     active_changed = true;
                 }
             }
+            // task0005: drain this tab's agent-status latches (plain-tab OSC
+            // events, daemon `AgentStatusUpdate` pushes, closed mux pane
+            // ids) every pump, not just the active tab — a background tab's
+            // agent can report status too.
+            let tab_stable_id = tab.stable_id;
+            for event in tab.take_pending_agent_status_events() {
+                agent_status_plain_events.push((tab_stable_id, event));
+            }
+            agent_status_updates.extend(tab.take_pending_agent_status_updates());
+            agent_status_closed_panes.extend(tab.take_closed_agent_status_panes());
             // FR6 (mux): drain every tab's one-shot "window appended this pump"
             // latch (set at the `PaneCreated` push site) to avoid stale
             // carry-over; act on it only for the active tab, where the freshly
@@ -3225,6 +3273,39 @@ impl App {
         if !image_events.is_empty() {
             self.image_viewer.handle_events(image_events);
         }
+        // Apply this pass' collected agent-status inputs now that the
+        // `&mut self.tabs` borrow has ended (task0005). Order does not
+        // matter across the three kinds since they key disjoint pane sets
+        // (`PaneKey::Tab` for plain-tab events, `PaneKey::MuxPane` for
+        // daemon updates and pane closes).
+        for (tab_stable_id, event) in agent_status_plain_events {
+            self.agent_status
+                .apply_plain_tab_event(tab_stable_id, event);
+        }
+        for update in agent_status_updates {
+            self.agent_status.apply_daemon_update(
+                update.pane_id,
+                update.state.map(crate::agent_status_model::state_from_wire),
+                update.name,
+                update.revision,
+                update.replay_derived,
+            );
+        }
+        for pane_id in agent_status_closed_panes {
+            self.agent_status
+                .discard(&crate::agent_status_model::PaneKey::MuxPane(pane_id));
+        }
+        // mark_seen (task0005 AC-5): the active tab's panes are "displayed"
+        // whenever the OS window is focused, regardless of whether this
+        // pump produced any other change — the user could simply be looking
+        // at an already-idle screen. Re-running every pump is intentionally
+        // idempotent (`mark_seen` on an already-seen entry is a no-op).
+        if self.window_focused {
+            if let Some(active_tab) = self.tabs.get(self.active) {
+                let panes = agent_status_keys_for_tab(active_tab);
+                self.agent_status.mark_seen(panes.iter());
+            }
+        }
         // Apply the active tab's absolute-row selection bookkeeping now that
         // the `&mut self.tabs` borrow has ended. A frame reset drops the
         // selection outright (its rows belong to the discarded frame); an
@@ -3394,6 +3475,14 @@ impl App {
         }
         // Reap exited tabs (Phase 5 will refine the policy).
         let before = self.tabs.len();
+        // task0005 AC-6: discard every reaped tab's agent-status entries
+        // before removal (a mux tab whose last pane exited reaches this
+        // path via `exited = true` rather than `close_tab`).
+        for tab in self.tabs.iter().filter(|t| t.exited) {
+            for key in agent_status_keys_for_tab(tab) {
+                self.agent_status.discard(&key);
+            }
+        }
         self.tabs.retain(|t| !t.exited);
         if self.tabs.len() != before {
             if self.active >= self.tabs.len() && !self.tabs.is_empty() {
@@ -6192,6 +6281,123 @@ mod tests {
             payload: b"hello".to_vec(),
         };
         assert!(!app.on_mux_message(0, msg));
+    }
+
+    // ── task0005: agent-status pump_all wiring ────────────────────────
+
+    /// AC-1: a plain-tab `agent-status` OSC event (buffered by
+    /// `NativeCallbacks::on_osc` into `cb_state.pending_agent_status`, as
+    /// the real OSC dispatch path would) reaches `App::agent_status` via
+    /// `pump_all`'s latch-drain, keyed by the tab's `stable_id`.
+    #[test]
+    fn pump_all_applies_plain_tab_agent_status_event_to_model() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let tab_stable_id = app.active_tab().unwrap().stable_id;
+        app.active_tab()
+            .unwrap()
+            .cb_state
+            .lock()
+            .pending_agent_status
+            .push(crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Working,
+                name: Some("claude".to_string()),
+            });
+
+        app.pump_all();
+
+        let status = app
+            .agent_status
+            .status(&crate::agent_status_model::PaneKey::Tab(tab_stable_id))
+            .expect("plain-tab event applied to the model");
+        assert_eq!(status.state, Some(crate::agent_status::AgentState::Working));
+        assert_eq!(status.name, Some("claude".to_string()));
+    }
+
+    /// AC-2: a daemon `AgentStatusUpdate` decoded by `Tab::apply_mux_message`
+    /// reaches `App::agent_status` via `pump_all`, with the wire-level
+    /// `mux_ipc::protocol::AgentState` converted to the core
+    /// `crate::agent_status::AgentState` the model stores.
+    #[test]
+    fn pump_all_applies_daemon_agent_status_update_to_model() {
+        use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let update = AgentStatusUpdateMsg {
+            pane_id: 42,
+            public_pane_id: "abc-42".to_string(),
+            state: Some(WireState::Blocked),
+            name: Some("agent".to_string()),
+            revision: 7,
+            replay_derived: false,
+        };
+        let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 42, &update);
+        app.on_mux_message(0, msg);
+
+        app.pump_all();
+
+        let status = app
+            .agent_status
+            .status(&crate::agent_status_model::PaneKey::MuxPane(42))
+            .expect("daemon update applied to the model");
+        assert_eq!(status.state, Some(crate::agent_status::AgentState::Blocked));
+        assert_eq!(status.revision, 7);
+    }
+
+    /// AC-6: closing a tab discards its plain-tab `App::agent_status` entry.
+    #[test]
+    fn close_tab_discards_agent_status_entry() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let tab_stable_id = app.active_tab().unwrap().stable_id;
+        app.agent_status.apply_plain_tab_event(
+            tab_stable_id,
+            crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Done,
+                name: None,
+            },
+        );
+
+        app.close_tab(0);
+
+        assert!(
+            app.agent_status
+                .status(&crate::agent_status_model::PaneKey::Tab(tab_stable_id))
+                .is_none()
+        );
+    }
+
+    /// AC-5: `pump_all` marks the active tab's panes seen when the OS
+    /// window is focused.
+    #[test]
+    fn pump_all_marks_active_tab_seen_when_window_focused() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let tab_stable_id = app.active_tab().unwrap().stable_id;
+        app.agent_status.apply_plain_tab_event(
+            tab_stable_id,
+            crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Blocked,
+                name: None,
+            },
+        );
+        assert!(
+            app.agent_status
+                .status(&crate::agent_status_model::PaneKey::Tab(tab_stable_id))
+                .unwrap()
+                .unseen
+        );
+        app.window_focused = true;
+
+        app.pump_all();
+
+        assert!(
+            !app.agent_status
+                .status(&crate::agent_status_model::PaneKey::Tab(tab_stable_id))
+                .unwrap()
+                .unseen
+        );
     }
 
     // ── Phase 3/4: mux action dispatch (TS-12, TS-13, TS-14) ──────────
