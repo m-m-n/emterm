@@ -8,6 +8,11 @@
 
 use crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS;
 
+/// The OSC 777 `<kind>` token for agent-status reports (SPEC FR1/FR4).
+/// Kept as a named constant so the strip predicate and the extraction scan
+/// ([`scan_agent_status_reports`]) share one literal.
+const AGENT_STATUS_OSC_KIND: &str = "agent-status";
+
 /// Remove rich-content viewer launch sequences from a completed byte run so a
 /// reattach / window-switch snapshot replays plain-text history WITHOUT
 /// re-spawning child WebView viewers or re-rendering inline images.
@@ -209,9 +214,14 @@ fn dcs_is_sixel(body: &[u8]) -> bool {
 /// is a replayable rich-content launch sequence that must be stripped.
 fn is_replayable_osc_body(body: &[u8]) -> bool {
     // OSC 777 viewer launch: `777;emterm;<kind>;…`. Strip only the viewer
-    // kinds; keep `fold` (fold marks) and any other kind (status-bar, …).
+    // kinds and `agent-status` (SPEC FR4: the OSC report itself is never
+    // replayed — the daemon resyncs current state out-of-band after a
+    // snapshot); keep `fold` (fold marks) and any other kind (status-bar, …).
     if let Some(rest) = body.strip_prefix(b"777;emterm;") {
         let kind = rest.split(|&c| c == b';').next().unwrap_or(rest);
+        if kind == AGENT_STATUS_OSC_KIND.as_bytes() {
+            return true;
+        }
         return REPLAYABLE_VIEWER_KINDS.iter().any(|k| kind == k.as_bytes());
     }
     // emterm Markdown OSC 9999: `9999;emterm-md;…`. Keep `emterm-mux;` (mux
@@ -220,6 +230,54 @@ fn is_replayable_osc_body(body: &[u8]) -> bool {
         return true;
     }
     false
+}
+
+/// Scan `bytes` (a single PTY reader chunk, NOT a stateful cross-chunk
+/// scan) for complete agent-status OSC 777 sequences and return their raw
+/// payload strings — `"emterm;agent-status;…"`, [`crate::agent_status::parse`]'s
+/// input contract — in the order they appear.
+///
+/// This mirrors the OSC scan in [`strip_replayable_rich_content`] /
+/// [`is_replayable_osc_body`] but EXTRACTS rather than strips, and is
+/// intentionally simpler: it operates on one already-available chunk, not
+/// the stateful cross-read-boundary machinery `ScrollbackWriteFilter`
+/// (`mux::ipc::pty_spawn`) uses for viewer-launch OSCs. An agent-status
+/// report split exactly across a PTY read boundary is not detected — an
+/// accepted trade-off given the payload (state + up to an 80-char
+/// percent-encoded name) is always far under the 64 KiB PTY read size.
+///
+/// A non-UTF-8 body is skipped (lossy-decoded) rather than aborting the
+/// whole scan, so a malformed/foreign OSC elsewhere in the chunk cannot
+/// hide a well-formed report before or after it.
+pub(in crate::mux) fn scan_agent_status_reports(bytes: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let n = bytes.len();
+    while i < n {
+        if bytes[i] != 0x1b || i + 1 >= n || bytes[i + 1] != b']' {
+            i += 1;
+            continue;
+        }
+        match find_osc_terminator(bytes, i + 2) {
+            Some(end) => {
+                let body = &bytes[i + 2..osc_body_end(bytes, end)];
+                if let Some(rest) = body.strip_prefix(b"777;emterm;agent-status;") {
+                    let mut payload = String::from("emterm;agent-status;");
+                    payload.push_str(&String::from_utf8_lossy(rest));
+                    out.push(payload);
+                }
+                i = end;
+            }
+            None => {
+                // This OSC introducer has no terminator within the chunk
+                // (split across a read boundary, or genuinely not an OSC 777
+                // agent-status report). Skip past it and keep scanning — a
+                // later, independent OSC introducer may still be complete.
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 /// A matched (strippable) CSI device query: where scanning resumes, and any
@@ -417,6 +475,90 @@ fn csi_is_device_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── agent-status strip (task0003 AC-3) ───────────────────────────────
+
+    #[test]
+    fn strip_removes_agent_status_set_report() {
+        let input = b"before\x1b]777;emterm;agent-status;v=1;state=working;name=claude\x07after";
+        let out = strip_replayable_rich_content(input);
+        assert_eq!(out, b"beforeafter");
+    }
+
+    #[test]
+    fn strip_removes_agent_status_clear_report() {
+        let input = b"L\x1b]777;emterm;agent-status;clear\x1b\\R";
+        let out = strip_replayable_rich_content(input);
+        assert_eq!(out, b"LR");
+    }
+
+    #[test]
+    fn strip_preserves_other_bytes_around_agent_status_report() {
+        let mut input = Vec::new();
+        input.extend_from_slice(b"$ emterm agent-status working\r\n");
+        input.extend_from_slice(b"\x1b]777;emterm;agent-status;v=1;state=working\x07");
+        input.extend_from_slice(b"$ next prompt");
+        let out = strip_replayable_rich_content(&input);
+        assert_eq!(
+            out,
+            b"$ emterm agent-status working\r\n$ next prompt".as_slice()
+        );
+    }
+
+    // ── scan_agent_status_reports (task0003 AC-3 / OSC detection) ───────
+
+    #[test]
+    fn scan_extracts_single_set_report() {
+        let input = b"pre\x1b]777;emterm;agent-status;v=1;state=blocked;name=claude\x07post";
+        let out = scan_agent_status_reports(input);
+        assert_eq!(
+            out,
+            vec!["emterm;agent-status;v=1;state=blocked;name=claude".to_string()]
+        );
+    }
+
+    #[test]
+    fn scan_extracts_clear_report_st_terminated() {
+        let input = b"\x1b]777;emterm;agent-status;clear\x1b\\";
+        let out = scan_agent_status_reports(input);
+        assert_eq!(out, vec!["emterm;agent-status;clear".to_string()]);
+    }
+
+    #[test]
+    fn scan_extracts_multiple_reports_in_order() {
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1b]777;emterm;agent-status;v=1;state=working\x07");
+        input.extend_from_slice(b"mid");
+        input.extend_from_slice(b"\x1b]777;emterm;agent-status;v=1;state=done\x07");
+        let out = scan_agent_status_reports(&input);
+        assert_eq!(
+            out,
+            vec![
+                "emterm;agent-status;v=1;state=working".to_string(),
+                "emterm;agent-status;v=1;state=done".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn scan_ignores_non_agent_status_osc() {
+        let input = b"\x1b]777;emterm;markdown;begin\x07\x1b]0;title\x07";
+        let out = scan_agent_status_reports(input);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn scan_ignores_unterminated_agent_status_osc() {
+        let input = b"text\x1b]777;emterm;agent-status;v=1;state=working";
+        let out = scan_agent_status_reports(input);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn scan_empty_input_returns_empty() {
+        assert!(scan_agent_status_reports(b"").is_empty());
+        assert!(scan_agent_status_reports(b"plain text, no escapes").is_empty());
+    }
 
     // ── strip_replayable_rich_content unit tests ────────────────────────
 
