@@ -160,6 +160,7 @@ pub mod backend_select {
 
 // === CLI-shared modules (always built) ===
 
+pub mod agent_status;
 pub mod cli;
 pub mod i18n;
 pub mod localtime;
