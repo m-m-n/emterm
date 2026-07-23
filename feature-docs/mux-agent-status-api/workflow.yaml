@@ -47,7 +47,8 @@ workflow:
     status: completed
     completed_at_commit: a9d88f1cd93d60b71571d666416e1b596a114ae3
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 768e2e14a49d37ae3f1a4c2c8e0ba9ddb849913d
     base_commit: 06d795b6698952176a743a86d6f13fbfb6633105
   - id: review
     status: pending
@@ -226,8 +227,8 @@ tasks:
     domains: [concurrency, api-contract, input-handling]
     complexity: medium
     requirements: [FR10, FR11, NFR3]
-    status: in_progress
-    notes: "rework task: mux_read_render_missing + send_text_lock_held"
+    status: merged
+    notes: "rework task: mux_read_render_missing + send_text_lock_held — merged"
     branch: em-workflow/mux-agent-status-api/task0011
   task0012:
     title: "per-pane stateful OSC scanner (agent-status reports survive chunk boundaries)"
