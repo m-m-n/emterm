@@ -324,6 +324,23 @@ pub struct Tab {
     /// so a same-pump `PtyExited` removing another pane, or a `Welcome` reseed,
     /// can neither mask nor fake the signal.
     pending_window_appended: bool,
+    /// Plain-tab `agent-status` OSC events drained from
+    /// `cb_state.pending_agent_status` this pump (task0005 AC-1).
+    /// `App::pump_all` drains it via
+    /// [`Tab::take_pending_agent_status_events`] and applies each event to
+    /// `App::agent_status`, keyed by [`Self::stable_id`].
+    pending_agent_status_events: Vec<crate::agent_status::AgentStatusEvent>,
+    /// Daemon-pushed `AgentStatusUpdate` messages decoded by
+    /// [`Self::apply_mux_message`]'s `MessageType::AgentStatusUpdate` arm
+    /// this pump (task0005 AC-2). `App::pump_all` drains it via
+    /// [`Tab::take_pending_agent_status_updates`] and applies each update to
+    /// `App::agent_status`.
+    pending_agent_status_updates: Vec<mux_ipc::protocol::AgentStatusUpdateMsg>,
+    /// Mux pane ids removed by a `PtyExited` arm this pump (task0005 AC-6).
+    /// `App::pump_all` drains it via
+    /// [`Tab::take_closed_agent_status_panes`] to discard the matching
+    /// `App::agent_status` entries.
+    pending_closed_agent_status_panes: Vec<u32>,
     /// In-flight off-thread snapshot replay for this tab (the mux
     /// off-thread switch). `Some` while a large snapshot is being reparsed
     /// on a worker thread; `App::pump_all` polls it each pump and swaps the
@@ -500,6 +517,9 @@ impl Tab {
             scroll_position: crate::app::ScrollPosition::default(),
             pending_pane_switch_from: None,
             pending_window_appended: false,
+            pending_agent_status_events: Vec::new(),
+            pending_agent_status_updates: Vec::new(),
+            pending_closed_agent_status_panes: Vec::new(),
             pending_switch: None,
             pending_scrollback_restore: None,
             pending_bypass_b_mark_texts: std::collections::HashMap::new(),
@@ -595,6 +615,31 @@ impl Tab {
     /// carry-over and acts on it only for the active tab.
     pub fn take_pending_window_appended(&mut self) -> bool {
         std::mem::take(&mut self.pending_window_appended)
+    }
+
+    /// Drain the plain-tab `agent-status` OSC events parsed this pump
+    /// (task0005 AC-1). `App::pump_all` applies each to `App::agent_status`
+    /// keyed by [`Self::stable_id`].
+    pub fn take_pending_agent_status_events(
+        &mut self,
+    ) -> Vec<crate::agent_status::AgentStatusEvent> {
+        std::mem::take(&mut self.pending_agent_status_events)
+    }
+
+    /// Drain the daemon-pushed `AgentStatusUpdate` messages decoded this
+    /// pump (task0005 AC-2). `App::pump_all` applies each to
+    /// `App::agent_status`.
+    pub fn take_pending_agent_status_updates(
+        &mut self,
+    ) -> Vec<mux_ipc::protocol::AgentStatusUpdateMsg> {
+        std::mem::take(&mut self.pending_agent_status_updates)
+    }
+
+    /// Drain the mux pane ids a `PtyExited` arm removed this pump
+    /// (task0005 AC-6). `App::pump_all` discards the matching
+    /// `App::agent_status` entries.
+    pub fn take_closed_agent_status_panes(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.pending_closed_agent_status_panes)
     }
 
     /// Pause the native PTY reader. Subsequent PTY output goes into the
@@ -1394,6 +1439,24 @@ impl Tab {
                     false
                 }
             },
+            MessageType::AgentStatusUpdate => {
+                // Daemon → GUI unsolicited push (task0005 AC-2). Applying it
+                // to `App::agent_status` needs `&mut App`, which this method
+                // does not have — latch the decoded payload for
+                // `App::pump_all` to apply after the per-tab loop, mirroring
+                // the `pending_pane_switch_from` / `pending_window_appended`
+                // latch pattern used elsewhere in this match.
+                match msg.decode_payload::<mux_ipc::protocol::AgentStatusUpdateMsg>() {
+                    Some(update) => {
+                        self.pending_agent_status_updates.push(update);
+                        true
+                    }
+                    None => {
+                        log::warn!("mux apc: malformed AgentStatusUpdate payload");
+                        false
+                    }
+                }
+            }
             MessageType::Welcome => match msg.decode_payload::<WelcomeMsg>() {
                 Some(WelcomeMsg::Accepted { sessions, .. }) => {
                     match sessions.first() {
@@ -1750,6 +1813,11 @@ impl Tab {
                                 idx,
                                 self.title
                             );
+                            // task0005 AC-6: latch the removed pane id for
+                            // `App::pump_all` to discard the matching
+                            // `App::agent_status` entry (this method has no
+                            // `&mut App` access).
+                            self.pending_closed_agent_status_panes.push(msg.pane_id);
                             if group.is_empty() {
                                 self.mux_group = None;
                                 self.exited = true;
@@ -2108,6 +2176,13 @@ impl Tab {
             // — see comment in `drain_and_decode_images` below).
             let pending_apc: Vec<Vec<u8>> = std::mem::take(&mut s.pending_apc);
             let pending_dcs: Vec<Vec<u8>> = std::mem::take(&mut s.pending_dcs);
+            // Plain-tab `agent-status` OSC events parsed by
+            // `NativeCallbacks::on_osc` (task0005 AC-1). Moved into this
+            // tab's own per-pump latch since `App::pump_all` (which owns
+            // `App::agent_status`) drains `Tab` after the `&mut self.tabs`
+            // borrow used by the per-tab loop ends.
+            let agent_status_events: Vec<crate::agent_status::AgentStatusEvent> =
+                std::mem::take(&mut s.pending_agent_status);
             // Phase 6: drain the theme-dirty latch. When an OSC 4/10/11/12/
             // 22/104/110/111/112 mutated the shared `Theme`, every row
             // must repaint with the new palette on the next frame.
@@ -2115,6 +2190,10 @@ impl Tab {
             drop(s);
             if theme_changed {
                 self.core.lock().mark_all_dirty();
+                changed = true;
+            }
+            if !agent_status_events.is_empty() {
+                self.pending_agent_status_events.extend(agent_status_events);
                 changed = true;
             }
             if !responses.is_empty() {
@@ -4342,6 +4421,64 @@ mod tests {
         // The last window's shell exited: the tab closes (reaped by
         // `App::pump_all`), unlike an explicit detach which keeps it alive.
         assert!(tab.exited);
+    }
+
+    // ── task0005 AC-6: PtyExited latches the closed pane id ────────────────
+
+    #[test]
+    fn pty_exited_latches_closed_pane_for_agent_status_discard() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        tab.apply_mux_message(pty_exited(10));
+        assert_eq!(tab.take_closed_agent_status_panes(), vec![10]);
+    }
+
+    #[test]
+    fn pty_exited_unknown_pane_does_not_latch() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10)], 0));
+        tab.apply_mux_message(pty_exited(999));
+        assert!(tab.take_closed_agent_status_panes().is_empty());
+    }
+
+    // ── task0005 AC-2: daemon AgentStatusUpdate is decoded and latched ─────
+
+    #[test]
+    fn agent_status_update_decodes_and_latches_for_app_pump_all() {
+        let mut tab = test_tab();
+        let update = mux_ipc::protocol::AgentStatusUpdateMsg {
+            pane_id: 10,
+            public_pane_id: "abc-10".to_string(),
+            state: Some(mux_ipc::protocol::AgentState::Blocked),
+            name: Some("claude".to_string()),
+            revision: 3,
+            replay_derived: false,
+        };
+        let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 10, &update);
+        let changed = tab.apply_mux_message(msg);
+        assert!(changed);
+        let latched = tab.take_pending_agent_status_updates();
+        assert_eq!(latched.len(), 1);
+        assert_eq!(latched[0].pane_id, 10);
+        assert_eq!(
+            latched[0].state,
+            Some(mux_ipc::protocol::AgentState::Blocked)
+        );
+        assert_eq!(latched[0].revision, 3);
+        assert!(!latched[0].replay_derived);
+    }
+
+    #[test]
+    fn agent_status_update_malformed_payload_is_rejected() {
+        let mut tab = test_tab();
+        let msg = MuxMessage {
+            msg_type: MessageType::AgentStatusUpdate,
+            pane_id: 10,
+            payload: vec![0xFF, 0xFF, 0xFF], // not a valid bincode AgentStatusUpdateMsg
+        };
+        let changed = tab.apply_mux_message(msg);
+        assert!(!changed);
+        assert!(tab.take_pending_agent_status_updates().is_empty());
     }
 
     // ── close-reconcile decision (FR1/FR2/FR3) ────────────────────────────

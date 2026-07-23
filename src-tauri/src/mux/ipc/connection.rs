@@ -26,7 +26,8 @@ use super::reattach::detach_session_panes;
 use super::statusbar::{StatusBarEngine, execute_command};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    ChunkKind, NotificationSender, PtyOutputChunk, SharedPaneExitSender, TitleChangeSender,
+    AgentStatusReportSender, ChunkKind, NotificationSender, PtyOutputChunk, SharedPaneExitSender,
+    TitleChangeSender,
 };
 
 /// Handshake timeout: client must send Hello within this duration.
@@ -46,6 +47,7 @@ pub async fn handle_connection<S>(
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     daemon_title_tx: TitleChangeSender,
     daemon_notification_tx: NotificationSender,
+    daemon_agent_status_tx: AgentStatusReportSender,
     daemon_pane_exit_sender: SharedPaneExitSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -126,6 +128,7 @@ pub async fn handle_connection<S>(
             &shutdown_tx,
             &daemon_title_tx,
             &daemon_notification_tx,
+            &daemon_agent_status_tx,
             &daemon_pane_exit_sender,
         )
         .await;
@@ -153,6 +156,10 @@ pub async fn handle_connection<S>(
     // forward Detached-pane OSC 9 notifications through it; the daemon
     // notification task relays them to the GUI client (FR2).
     let notification_tx = daemon_notification_tx;
+    // Daemon-lifetime agent-status report sender: panes created on this
+    // connection forward raw agent-status OSC payloads through it,
+    // regardless of attach state (SPEC FR3).
+    let agent_status_tx = daemon_agent_status_tx;
     // Daemon-lifetime pane-exit sender: panes created on this connection emit
     // their pane_id here on PTY EOF (regardless of attach state) so the daemon
     // reap task can reap them authoritatively (FR1/FR2). Fixed at pane
@@ -282,6 +289,7 @@ pub async fn handle_connection<S>(
                             &pane_cwd_map,
                             &title_tx,
                             &notification_tx,
+                            &agent_status_tx,
                             &pane_exit_sender,
                             &mut kick_rx,
                             &visible_state,
@@ -542,6 +550,7 @@ async fn handle_cli_client<S>(
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
     daemon_title_tx: &TitleChangeSender,
     daemon_notification_tx: &NotificationSender,
+    daemon_agent_status_tx: &AgentStatusReportSender,
     daemon_pane_exit_sender: &SharedPaneExitSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -585,6 +594,7 @@ async fn handle_cli_client<S>(
                 active_session_id,
                 daemon_title_tx,
                 daemon_notification_tx,
+                daemon_agent_status_tx,
                 daemon_pane_exit_sender,
             )
             .await;
@@ -730,6 +740,7 @@ async fn route_message<S>(
     pane_cwd_map: &super::statusbar::SharedPaneCwdMap,
     title_tx: &TitleChangeSender,
     notification_tx: &NotificationSender,
+    agent_status_tx: &AgentStatusReportSender,
     pane_exit_sender: &SharedPaneExitSender,
     kick_rx: &mut Option<oneshot::Receiver<()>>,
     visible_state: &Arc<AtomicBool>,
@@ -747,6 +758,7 @@ where
                 *active_session_id,
                 title_tx,
                 notification_tx,
+                agent_status_tx,
                 pane_exit_sender,
             )
             .await?;

@@ -8,10 +8,13 @@ use std::sync::OnceLock;
 
 use super::ipc::connection::handle_connection;
 use super::ipc::handlers::handle_destroy_pane;
-use super::ipc::protocol::{MessageType, MuxMessage, NotifyMsg, RenameWindowMsg};
+use super::ipc::protocol::{
+    AgentStatusUpdateMsg, MessageType, MuxMessage, NotifyMsg, RenameWindowMsg,
+};
 use super::session::manager::SessionManager;
 use super::session::pane::{
-    NotificationSender, PaneExitSender, PaneId, SharedPaneExitSender, TitleChangeSender,
+    AgentStatusReportSender, NotificationSender, PaneExitSender, PaneId, SharedPaneExitSender,
+    TitleChangeSender,
 };
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
@@ -80,6 +83,11 @@ const TITLE_CHANNEL_CAPACITY: usize = 64;
 /// Daemon-level notification channel capacity (OSC 9 desktop notifications
 /// detected on Detached panes).
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 64;
+
+/// Daemon-level agent-status report channel capacity (SPEC FR3): raw OSC
+/// payload strings forwarded from every pane's reader thread, regardless of
+/// attach state.
+const AGENT_STATUS_CHANNEL_CAPACITY: usize = 64;
 
 /// Daemon-level pane-exit channel capacity. Reader threads enqueue a bare
 /// `PaneId` here on PTY EOF; the reap task drains it. EOF is one-shot per
@@ -336,6 +344,19 @@ pub async fn run_daemon() -> anyhow::Result<()> {
         notification_rx,
     ));
 
+    // Daemon-level agent-status channel (SPEC FR3): pane reader threads
+    // forward raw agent-status OSC payload strings here REGARDLESS of
+    // attach state (unlike notifications, which only scan while Detached) —
+    // the daemon owns per-pane agent-status state unconditionally.
+    let (agent_status_tx, agent_status_rx): (
+        AgentStatusReportSender,
+        mpsc::Receiver<(u32, String)>,
+    ) = mpsc::channel(AGENT_STATUS_CHANNEL_CAPACITY);
+    tokio::spawn(run_agent_status_task(
+        session_manager.clone(),
+        agent_status_rx,
+    ));
+
     // Shutdown signal: sent by handle_destroy_pane/handle_destroy_window when all sessions empty
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -366,7 +387,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             result = listener.accept() => {
                 match result {
                     Ok((stream, _addr)) => {
-                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), pane_exit_sender.clone()));
+                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), agent_status_tx.clone(), pane_exit_sender.clone()));
                     }
                     Err(e) => {
                         log::error!("Accept error: {}", e);
@@ -441,6 +462,18 @@ pub async fn run_daemon() -> anyhow::Result<()> {
         notification_rx,
     ));
 
+    // Daemon-level agent-status channel (SPEC FR3, same wiring as the Unix
+    // run loop): pane reader threads forward raw agent-status OSC payload
+    // strings here regardless of attach state.
+    let (agent_status_tx, agent_status_rx): (
+        AgentStatusReportSender,
+        mpsc::Receiver<(u32, String)>,
+    ) = mpsc::channel(AGENT_STATUS_CHANNEL_CAPACITY);
+    tokio::spawn(run_agent_status_task(
+        session_manager.clone(),
+        agent_status_rx,
+    ));
+
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
     // Daemon-level pane-exit channel (same wiring as the Unix run loop, FR7):
@@ -469,7 +502,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             result = server.connect() => {
                 match result {
                     Ok(()) => {
-                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), pane_exit_sender.clone()));
+                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), agent_status_tx.clone(), pane_exit_sender.clone()));
                     }
                     Err(e) => {
                         log::error!("Pipe accept error: {}", e);
@@ -594,6 +627,178 @@ async fn run_notification_task(
         relay_notification(&session_manager, pane_id, message).await;
     }
     log::info!("Notification relay task exiting");
+}
+
+/// Map the core (build-agnostic) `AgentState` to the `mux_ipc` wire mirror
+/// enum. Two distinct types by design: `mux_ipc` must not depend on the
+/// binary crate (task0002 IMPLEMENTATION.md), so this conversion is the
+/// only place the two ever meet.
+fn to_wire_state(state: crate::agent_status::AgentState) -> crate::mux::ipc::protocol::AgentState {
+    use crate::agent_status::AgentState as Core;
+    use crate::mux::ipc::protocol::AgentState as Wire;
+    match state {
+        Core::Idle => Wire::Idle,
+        Core::Working => Wire::Working,
+        Core::Blocked => Wire::Blocked,
+        Core::Done => Wire::Done,
+    }
+}
+
+/// Apply one raw agent-status OSC report to its pane and broadcast the
+/// result (SPEC FR3 / FR5, task0003 AC-1/AC-2/AC-4).
+///
+/// Validates `raw_payload` via [`crate::agent_status::parse`]; a rejected
+/// (`None`) parse leaves ALL state untouched and broadcasts nothing (AC-2).
+/// An accepted event is applied to the pane (revision increments) and
+/// exactly one `AgentStatusUpdate` (`replay_derived: false`) is broadcast
+/// with the pane's current public ID (AC-4).
+async fn apply_agent_status_report(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    pane_id: u32,
+    raw_payload: String,
+) {
+    let Some(event) = crate::agent_status::parse(&raw_payload) else {
+        // Rejected sequence: no state change, no broadcast (AC-2).
+        return;
+    };
+
+    let mgr = session_manager.lock().await;
+    let Some((sid, wid)) = mgr.find_pane(pane_id) else {
+        log::warn!("apply_agent_status_report: pane {} not found", pane_id);
+        return;
+    };
+    let Some(pane) = mgr
+        .get_session(sid)
+        .and_then(|s| s.windows.get(&wid))
+        .and_then(|w| w.panes.get(&pane_id))
+    else {
+        return;
+    };
+
+    let revision = pane.apply_agent_status_event(event);
+    let (state, name) = {
+        let status = pane.agent_status.lock().unwrap();
+        (status.state, status.name.clone())
+    };
+    let public_pane_id = mgr.public_pane_id(pane_id);
+    let notify_tx = mgr.notify_tx().clone();
+    drop(mgr);
+
+    let payload = AgentStatusUpdateMsg {
+        pane_id,
+        public_pane_id,
+        state: state.map(to_wire_state),
+        name,
+        revision,
+        replay_derived: false,
+    };
+    let msg = MuxMessage::control(MessageType::AgentStatusUpdate, pane_id, &payload);
+    if let Err(e) = notify_tx.send(msg) {
+        log::debug!("apply_agent_status_report: no active subscribers: {}", e);
+    }
+}
+
+/// Run the daemon-level agent-status task.
+///
+/// Consumes `(pane_id, raw_payload)` from every pane's reader thread
+/// (regardless of attach state, SPEC FR3) and applies + broadcasts each via
+/// [`apply_agent_status_report`]. Exits when all senders are dropped
+/// (daemon shutdown).
+async fn run_agent_status_task(
+    session_manager: Arc<Mutex<SessionManager>>,
+    mut agent_status_rx: mpsc::Receiver<(u32, String)>,
+) {
+    log::info!("Agent-status task started");
+    while let Some((pane_id, raw_payload)) = agent_status_rx.recv().await {
+        apply_agent_status_report(&session_manager, pane_id, raw_payload).await;
+    }
+    log::info!("Agent-status task exiting");
+}
+
+/// Broadcast one `AgentStatusUpdate` (`replay_derived: true`) per pane in
+/// `session_id` that currently has a reported state (SPEC FR4/FR5,
+/// task0003 AC-5). Called after a client receives a snapshot (attach /
+/// window switch) so state — stripped from the replayed bytes — is
+/// resynced out-of-band. Panes with no reported state produce no message.
+pub(in crate::mux) async fn sync_agent_status_after_snapshot(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    session_id: u32,
+) {
+    let mgr = session_manager.lock().await;
+    let Some(session) = mgr.get_session(session_id) else {
+        return;
+    };
+    let mut updates = Vec::new();
+    for (_wid, pane) in session.panes_iter() {
+        let status = pane.agent_status.lock().unwrap();
+        if status.state.is_none() {
+            continue;
+        }
+        updates.push(AgentStatusUpdateMsg {
+            pane_id: pane.id,
+            public_pane_id: mgr.public_pane_id(pane.id),
+            state: status.state.map(to_wire_state),
+            name: status.name.clone(),
+            revision: status.revision,
+            replay_derived: true,
+        });
+    }
+    let notify_tx = mgr.notify_tx().clone();
+    drop(mgr);
+    for update in updates {
+        let pane_id = update.pane_id;
+        let msg = MuxMessage::control(MessageType::AgentStatusUpdate, pane_id, &update);
+        if let Err(e) = notify_tx.send(msg) {
+            log::debug!(
+                "sync_agent_status_after_snapshot: no active subscribers: {}",
+                e
+            );
+        }
+    }
+}
+
+/// Single-pane counterpart of [`sync_agent_status_after_snapshot`] (SPEC
+/// FR4/FR5, task0003 AC-5): broadcasts one `AgentStatusUpdate`
+/// (`replay_derived: true`) for `pane_id` if it currently has a reported
+/// state. Used after an on-demand per-pane snapshot (`RequestPaneSnapshot`,
+/// the same-session window-switch path) rather than a full session attach.
+pub(in crate::mux) async fn sync_agent_status_after_pane_snapshot(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    pane_id: PaneId,
+) {
+    let mgr = session_manager.lock().await;
+    let Some((sid, wid)) = mgr.find_pane(pane_id) else {
+        return;
+    };
+    let Some(pane) = mgr
+        .get_session(sid)
+        .and_then(|s| s.windows.get(&wid))
+        .and_then(|w| w.panes.get(&pane_id))
+    else {
+        return;
+    };
+    let status = pane.agent_status.lock().unwrap();
+    if status.state.is_none() {
+        return;
+    }
+    let update = AgentStatusUpdateMsg {
+        pane_id,
+        public_pane_id: mgr.public_pane_id(pane_id),
+        state: status.state.map(to_wire_state),
+        name: status.name.clone(),
+        revision: status.revision,
+        replay_derived: true,
+    };
+    drop(status);
+    let notify_tx = mgr.notify_tx().clone();
+    drop(mgr);
+    let msg = MuxMessage::control(MessageType::AgentStatusUpdate, pane_id, &update);
+    if let Err(e) = notify_tx.send(msg) {
+        log::debug!(
+            "sync_agent_status_after_pane_snapshot: no active subscribers: {}",
+            e
+        );
+    }
 }
 
 /// Run the daemon-level pane-exit reap task.
@@ -1266,5 +1471,239 @@ mod tests {
         assert_eq!(msg.pane_id, wid);
         let payload: RenameWindowMsg = msg.decode_payload().unwrap();
         assert_eq!(payload.name, "raced-title");
+    }
+
+    // ── apply_agent_status_report / sync_agent_status_after_snapshot ─────
+    // (SPEC FR3/FR4/FR5, task0003 AC-1/AC-2/AC-4/AC-5)
+
+    /// AC-4: an accepted report updates the pane and broadcasts exactly one
+    /// `AgentStatusUpdate` with `replay_derived = false` and the pane's
+    /// current public ID.
+    #[tokio::test]
+    async fn test_apply_agent_status_report_accepted_broadcasts_update() {
+        let (mgr, _sid, _wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        apply_agent_status_report(
+            &mgr,
+            pane_id,
+            "emterm;agent-status;v=1;state=working;name=claude".to_string(),
+        )
+        .await;
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(1), notify_rx.recv())
+            .await
+            .expect("must receive AgentStatusUpdate")
+            .unwrap();
+        assert_eq!(msg.msg_type, MessageType::AgentStatusUpdate);
+        assert_eq!(msg.pane_id, pane_id);
+        let payload: AgentStatusUpdateMsg = msg.decode_payload().unwrap();
+        assert_eq!(payload.pane_id, pane_id);
+        let expected_public_id = { mgr.lock().await.public_pane_id(pane_id) };
+        assert_eq!(payload.public_pane_id, expected_public_id);
+        assert_eq!(
+            payload.state,
+            Some(crate::mux::ipc::protocol::AgentState::Working)
+        );
+        assert_eq!(payload.name.as_deref(), Some("claude"));
+        assert_eq!(payload.revision, 1);
+        assert!(!payload.replay_derived);
+
+        // No further message pending (exactly one broadcast).
+        let none =
+            tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+        assert!(none.is_err(), "exactly one AgentStatusUpdate expected");
+    }
+
+    /// AC-2: a rejected sequence leaves state and revision untouched and
+    /// broadcasts nothing.
+    #[tokio::test]
+    async fn test_apply_agent_status_report_rejected_no_broadcast_no_mutation() {
+        let (mgr, _sid, _wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        apply_agent_status_report(
+            &mgr,
+            pane_id,
+            "emterm;agent-status;v=1;state=bogus".to_string(),
+        )
+        .await;
+
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+        assert!(timeout.is_err(), "rejected report must not broadcast");
+
+        let m = mgr.lock().await;
+        let pane = m
+            .get_session(m.find_pane(pane_id).unwrap().0)
+            .and_then(|s| s.windows.values().next())
+            .and_then(|w| w.panes.get(&pane_id))
+            .unwrap();
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.state, None);
+        assert_eq!(status.revision, 0);
+    }
+
+    /// AC-2: same-state re-report is accepted (revision increments) and
+    /// broadcasts again.
+    #[tokio::test]
+    async fn test_apply_agent_status_report_same_state_re_report_broadcasts_again() {
+        let (mgr, _sid, _wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        apply_agent_status_report(
+            &mgr,
+            pane_id,
+            "emterm;agent-status;v=1;state=idle".to_string(),
+        )
+        .await;
+        apply_agent_status_report(
+            &mgr,
+            pane_id,
+            "emterm;agent-status;v=1;state=idle".to_string(),
+        )
+        .await;
+
+        let msg1 = notify_rx.recv().await.unwrap();
+        let p1: AgentStatusUpdateMsg = msg1.decode_payload().unwrap();
+        let msg2 = notify_rx.recv().await.unwrap();
+        let p2: AgentStatusUpdateMsg = msg2.decode_payload().unwrap();
+        assert_eq!(p1.revision, 1);
+        assert_eq!(p2.revision, 2);
+    }
+
+    /// AC-4: an unknown pane_id is a no-op (no broadcast, no panic).
+    #[tokio::test]
+    async fn test_apply_agent_status_report_unknown_pane_no_broadcast() {
+        let (mgr, _sid, _wid, _pane_id, _pane_tx) = setup_single_pane_manager().await;
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        apply_agent_status_report(
+            &mgr,
+            9999,
+            "emterm;agent-status;v=1;state=working".to_string(),
+        )
+        .await;
+
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+        assert!(timeout.is_err(), "unknown pane must not broadcast");
+    }
+
+    /// AC-5: after a snapshot, each stateful pane produces one
+    /// `AgentStatusUpdate` with `replay_derived = true`; a stateless pane
+    /// produces none.
+    #[tokio::test]
+    async fn test_sync_agent_status_after_snapshot_only_stateful_panes() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (sid, stateful_id, stateless_id) = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            let (stateful_pane, _tx1) = make_title_test_pane(1);
+            let (stateless_pane, _tx2) = make_title_test_pane(2);
+            stateful_pane.apply_agent_status_event(crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Blocked,
+                name: Some("agent".to_string()),
+            });
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(stateful_pane);
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(stateless_pane);
+            (sid, 1u32, 2u32)
+        };
+
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+        sync_agent_status_after_snapshot(&mgr, sid).await;
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(1), notify_rx.recv())
+            .await
+            .expect("must receive one AgentStatusUpdate")
+            .unwrap();
+        assert_eq!(msg.msg_type, MessageType::AgentStatusUpdate);
+        let payload: AgentStatusUpdateMsg = msg.decode_payload().unwrap();
+        assert_eq!(payload.pane_id, stateful_id);
+        assert!(payload.replay_derived);
+        assert_eq!(
+            payload.state,
+            Some(crate::mux::ipc::protocol::AgentState::Blocked)
+        );
+
+        // Nothing further: the stateless pane produces no message.
+        let none =
+            tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+        assert!(
+            none.is_err(),
+            "stateless pane {} must not produce a message",
+            stateless_id
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sync_agent_status_after_snapshot_unknown_session_no_panic() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        // Should not panic on an unknown session id.
+        sync_agent_status_after_snapshot(&mgr, 9999).await;
+    }
+
+    /// AC-5 (per-pane / window-switch counterpart): a stateful pane
+    /// produces one `AgentStatusUpdate` with `replay_derived = true`.
+    #[tokio::test]
+    async fn test_sync_agent_status_after_pane_snapshot_stateful_pane_broadcasts() {
+        let (mgr, _sid, _wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+        {
+            let m = mgr.lock().await;
+            let pane = m
+                .get_session(m.find_pane(pane_id).unwrap().0)
+                .and_then(|s| s.windows.values().next())
+                .and_then(|w| w.panes.get(&pane_id))
+                .unwrap();
+            pane.apply_agent_status_event(crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Done,
+                name: None,
+            });
+        }
+
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+        sync_agent_status_after_pane_snapshot(&mgr, pane_id).await;
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(1), notify_rx.recv())
+            .await
+            .expect("must receive AgentStatusUpdate")
+            .unwrap();
+        let payload: AgentStatusUpdateMsg = msg.decode_payload().unwrap();
+        assert_eq!(payload.pane_id, pane_id);
+        assert!(payload.replay_derived);
+        assert_eq!(
+            payload.state,
+            Some(crate::mux::ipc::protocol::AgentState::Done)
+        );
+    }
+
+    /// AC-5: a stateless pane produces no message.
+    #[tokio::test]
+    async fn test_sync_agent_status_after_pane_snapshot_stateless_pane_no_broadcast() {
+        let (mgr, _sid, _wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        sync_agent_status_after_pane_snapshot(&mgr, pane_id).await;
+
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+        assert!(timeout.is_err(), "stateless pane must not broadcast");
+    }
+
+    #[tokio::test]
+    async fn test_sync_agent_status_after_pane_snapshot_unknown_pane_no_panic() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        sync_agent_status_after_pane_snapshot(&mgr, 9999).await;
     }
 }

@@ -9,7 +9,26 @@ use std::collections::HashMap;
 use super::pane::PaneId;
 use super::session::{MuxSession, SessionId};
 use super::window::WindowId;
-use crate::mux::ipc::protocol::{MuxMessage, SessionInfo, WindowInfo};
+use crate::mux::ipc::protocol::{MuxMessage, PublicPaneId, SessionInfo, WindowInfo};
+
+/// Daemon incarnation token (SPEC FR13): a lowercase-hex string generated
+/// once per daemon start, embedded in every public pane ID minted during
+/// this run so pane IDs never collide across daemon restarts.
+///
+/// Mixes wall-clock time with the process ID (std-only — no `rand`
+/// dependency; NFR: no new external dependencies). This is a uniqueness
+/// mechanism, not a cryptographic one: the goal is "never reused across
+/// restarts of the same daemon on the same machine", not unpredictability.
+fn generate_incarnation_token() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let pid = std::process::id() as u64;
+    let mixed = nanos ^ pid.rotate_left(21) ^ pid;
+    format!("{:x}", mixed)
+}
 
 /// The session manager owns all sessions.
 pub struct SessionManager {
@@ -19,6 +38,9 @@ pub struct SessionManager {
     /// Broadcast channel for cross-client notifications (e.g., CLI → GUI).
     /// GUI connections subscribe to receive notifications triggered by CLI commands.
     notify_tx: tokio::sync::broadcast::Sender<MuxMessage>,
+    /// This daemon run's incarnation token (SPEC FR13), generated once at
+    /// construction (daemon start).
+    incarnation: String,
 }
 
 impl SessionManager {
@@ -29,7 +51,20 @@ impl SessionManager {
             next_session_id: 1,
             next_pane_id: 1,
             notify_tx,
+            incarnation: generate_incarnation_token(),
         }
+    }
+
+    /// This daemon run's incarnation token (SPEC FR13).
+    pub fn incarnation(&self) -> &str {
+        &self.incarnation
+    }
+
+    /// Mint the public (API-facing) pane ID for `pane_id`: an opaque
+    /// `"{incarnation}-{pane_id}"` string (SPEC FR13). The daemon is the
+    /// only minter; clients treat the result as opaque.
+    pub fn public_pane_id(&self, pane_id: PaneId) -> String {
+        PublicPaneId::compose(&self.incarnation, pane_id)
     }
 
     /// Get a broadcast sender for cross-client notifications.
@@ -479,6 +514,39 @@ mod tests {
         assert_eq!(list[0].windows[0].name, "a");
         assert_eq!(list[0].windows[1].name, "b");
         assert_eq!(list[0].windows[2].name, "c");
+    }
+
+    // ── incarnation token / public pane ID (SPEC FR13, task0003 AC-7) ────
+
+    #[test]
+    fn test_incarnation_is_nonempty_lowercase_hex() {
+        let mgr = SessionManager::new();
+        let token = mgr.incarnation();
+        assert!(!token.is_empty());
+        assert!(
+            token
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "incarnation token must be lowercase hex, got {token:?}"
+        );
+    }
+
+    #[test]
+    fn test_public_pane_id_format_and_shared_incarnation() {
+        let mgr = SessionManager::new();
+        let id1 = mgr.public_pane_id(1);
+        let id2 = mgr.public_pane_id(42);
+
+        let incarnation = mgr.incarnation();
+        assert_eq!(id1, format!("{incarnation}-1"));
+        assert_eq!(id2, format!("{incarnation}-42"));
+
+        // All public IDs minted by one manager share the same incarnation
+        // prefix.
+        let prefix1 = id1.rsplit_once('-').unwrap().0;
+        let prefix2 = id2.rsplit_once('-').unwrap().0;
+        assert_eq!(prefix1, prefix2);
+        assert_eq!(prefix1, incarnation);
     }
 
     #[test]
