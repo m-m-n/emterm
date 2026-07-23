@@ -1181,12 +1181,16 @@ pub fn execute_ls() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Execute the `emterm mux kill` command.
 ///
-/// Sends a Shutdown message to the daemon via IPC, triggering graceful shutdown
-/// of all PTY sessions. Falls back to socket file removal if the daemon is unreachable.
-#[cfg(unix)]
+/// Sends a Shutdown message to the daemon, regardless of the protocol
+/// version it happens to be running (AC-2, task0010 rework): a presence
+/// check alone can't tell a long-lived adjacent-version daemon from a
+/// compatible one, and the old server rejects a v2 Hello before ever
+/// reading Shutdown — `daemon::shutdown_daemon_any_version` retries with
+/// the previous protocol version so that legacy daemon can still be asked
+/// to exit. Falls back to stale socket/marker-file removal if the daemon is
+/// unreachable outright.
+#[cfg(any(unix, windows))]
 pub fn execute_kill(session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::Write;
-
     if session.is_some() {
         eprintln!(
             "Killing specific sessions is not yet supported. Use 'emterm mux kill' to kill the daemon."
@@ -1200,109 +1204,14 @@ pub fn execute_kill(session: Option<&str>) -> Result<(), Box<dyn std::error::Err
         return Ok(());
     }
 
-    // Try to connect and send Shutdown message
-    match std::os::unix::net::UnixStream::connect(&sock_path) {
-        Ok(mut stream) => {
-            stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))?;
-
-            // Send Hello
-            let hello = HelloMsg {
-                client_type: ClientType::Cli,
-                protocol_version: PROTOCOL_VERSION,
-            };
-            let hello_msg = MuxMessage::control(MessageType::Hello, 0, &hello);
-            let body = hello_msg.to_frame_body();
-            let len = (body.len() as u32).to_be_bytes();
-            stream.write_all(&len)?;
-            stream.write_all(&body)?;
-
-            // Send Shutdown (fire-and-forget)
-            let shutdown_msg = MuxMessage {
-                msg_type: MessageType::Shutdown,
-                pane_id: 0,
-                payload: vec![],
-            };
-            let body = shutdown_msg.to_frame_body();
-            let len = (body.len() as u32).to_be_bytes();
-            stream.write_all(&len)?;
-            stream.write_all(&body)?;
-            stream.flush()?;
-
-            println!("Mux daemon shutting down");
+    match daemon::shutdown_daemon_any_version(&sock_path) {
+        Ok(daemon::ShutdownOutcome::ShutDown(msg))
+        | Ok(daemon::ShutdownOutcome::StaleSocketRemoved(msg)) => {
+            println!("{msg}");
+            Ok(())
         }
-        Err(_) => {
-            // Daemon unreachable — clean up stale socket
-            let _ = std::fs::remove_file(&sock_path);
-            println!("Mux daemon not reachable (stale socket removed)");
-        }
+        Err(msg) => Err(msg.into()),
     }
-
-    Ok(())
-}
-
-/// Execute the `emterm mux kill` command (Windows).
-///
-/// Sends a Shutdown message to the daemon via Named Pipe, triggering graceful shutdown
-/// of all PTY sessions. Falls back to marker file removal if the daemon is unreachable.
-#[cfg(windows)]
-pub fn execute_kill(session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::Write;
-
-    if session.is_some() {
-        eprintln!(
-            "Killing specific sessions is not yet supported. Use 'emterm mux kill' to kill the daemon."
-        );
-        return Ok(());
-    }
-
-    let sock_path = daemon::socket_path();
-    if !daemon::is_daemon_running(&sock_path) {
-        println!("No mux daemon running");
-        return Ok(());
-    }
-
-    let pipe_name = daemon::pipe_name();
-
-    // Try to connect and send Shutdown message
-    match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&pipe_name)
-    {
-        Ok(mut stream) => {
-            // Send Hello
-            let hello = HelloMsg {
-                client_type: ClientType::Cli,
-                protocol_version: PROTOCOL_VERSION,
-            };
-            let hello_msg = MuxMessage::control(MessageType::Hello, 0, &hello);
-            let body = hello_msg.to_frame_body();
-            let len = (body.len() as u32).to_be_bytes();
-            stream.write_all(&len)?;
-            stream.write_all(&body)?;
-
-            // Send Shutdown (fire-and-forget)
-            let shutdown_msg = MuxMessage {
-                msg_type: MessageType::Shutdown,
-                pane_id: 0,
-                payload: vec![],
-            };
-            let body = shutdown_msg.to_frame_body();
-            let len = (body.len() as u32).to_be_bytes();
-            stream.write_all(&len)?;
-            stream.write_all(&body)?;
-            stream.flush()?;
-
-            println!("Mux daemon shutting down");
-        }
-        Err(_) => {
-            // Daemon unreachable — clean up stale marker file
-            let _ = std::fs::remove_file(&sock_path);
-            println!("Mux daemon not reachable (stale marker removed)");
-        }
-    }
-
-    Ok(())
 }
 
 /// Execute the `emterm mux kill` command (unsupported platform).
