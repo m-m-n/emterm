@@ -145,6 +145,44 @@ fn html_subcommand_unsupported_extension_returns_one() {
     assert_eq!(code, 1, "unsupported extension should map to exit code 1");
 }
 
+// --- agent-status subcommand ---
+// References task0001 AC-6 (dispatcher plumbing + exit code) and AC-8
+// (invalid state -> usage exit code). Byte-exact wire-format coverage
+// lives in `emterm::agent_status`'s unit tests; tmux DCS-passthrough
+// composition is covered in `emterm::cli::agent_status`'s unit tests.
+
+#[test]
+fn agent_status_subcommand_working_with_name_returns_zero() {
+    let code = cli::run(&args(&["agent-status", "working", "--name", "claude"]));
+    assert_eq!(code, 0, "agent-status working --name should succeed");
+}
+
+#[test]
+fn agent_status_subcommand_all_states_return_zero() {
+    for state in ["idle", "working", "blocked", "done"] {
+        let code = cli::run(&args(&["agent-status", state]));
+        assert_eq!(code, 0, "agent-status {state} should succeed");
+    }
+}
+
+#[test]
+fn agent_status_subcommand_clear_returns_zero() {
+    let code = cli::run(&args(&["agent-status", "clear"]));
+    assert_eq!(code, 0, "agent-status clear should succeed");
+}
+
+#[test]
+fn agent_status_subcommand_invalid_state_returns_two() {
+    let code = cli::run(&args(&["agent-status", "sleeping"]));
+    assert_eq!(code, 2, "invalid state should map to the usage exit code");
+}
+
+#[test]
+fn agent_status_subcommand_missing_state_returns_two() {
+    let code = cli::run(&args(&["agent-status"]));
+    assert_eq!(code, 2, "missing state argument should be a usage error");
+}
+
 #[test]
 fn image_subcommand_unsupported_format_returns_one() {
     // A plain text file is not a recognized image format; magic-byte
