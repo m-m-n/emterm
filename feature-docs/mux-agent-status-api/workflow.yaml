@@ -1,0 +1,171 @@
+schema_version: 1
+feature: mux-agent-status-api
+created: 2026-07-23
+base_branch: main
+parent_branch: em-workflow/mux-agent-status-api/integration
+
+project:
+  license: MIT
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    mux-ipc:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/mux_ipc/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/mux_ipc/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 2742ad41c8e1e3ae0afecce0c966d75445c0ff1a
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: pending
+    skipped_reason: null
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: 06d795b6698952176a743a86d6f13fbfb6633105
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "agent-status OSC sequence (set/clear, validation, last-report-wins)"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "emterm agent-status CLI subcommand (stdout OSC, tmux passthrough, both builds)"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "daemon per-pane state store with revision semantics and lifecycle discard"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "replay stripping and post-snapshot state sync (no notify)"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: "AgentStatusUpdate mux_ipc message with PROTOCOL_VERSION handling"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: "unified GUI AgentStatus model (plain tab GUI-owned / mux pane daemon-owned)"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: "tab/window aggregated state badges with seen/unseen separation"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: "status-bar per-state count summary"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR9:
+    title: "OS notifications on blocked/done transitions with gating and rate limit"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR10:
+    title: "emterm mux read (rendered-row tail, ANSI-stripped, capped)"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR11:
+    title: "emterm mux send (raw UTF-8, atomic, revision watermark response)"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR12:
+    title: "emterm mux wait (level-triggered, --after, timeout exit code)"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR13:
+    title: "opaque pane ID system with incarnation, EMTERM_PANE_ID, GUI copy"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "security: trust boundary, name sanitization, socket privilege"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "compatibility: IPC versioning, unchanged snapshot format, CLI-only build"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "performance: event-driven state handling, capped responses"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "UI/i18n: MD3 tokens and inline t(ja,en)"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
