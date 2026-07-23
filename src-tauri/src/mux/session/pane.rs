@@ -148,6 +148,27 @@ pub fn new_shadow_parser(rows: u16, cols: u16) -> ShadowParser {
     vt100::Parser::new_with_callbacks(rows, cols, 0, TitleSink::default())
 }
 
+/// Write `data` to a PTY through a cloned writer handle (see
+/// [`MuxPane::writer_handle`]), without going through a `MuxPane`
+/// reference or any surrounding lock.
+///
+/// Locks `writer`'s `std::sync::Mutex` for the full `write_all` + `flush`
+/// (matching `MuxPane::write_input`'s atomicity contract exactly — this is
+/// the shared implementation both go through). Because handle clones share
+/// the same underlying mutex, two concurrent calls against handles cloned
+/// from the same pane still serialize here (task0011 AC-5: no interleaving
+/// between concurrent sends to the same pane).
+pub fn write_via_writer_handle(
+    writer: &Arc<StdMutex<Box<dyn Write + Send>>>,
+    data: &[u8],
+) -> std::io::Result<()> {
+    let mut w = writer
+        .lock()
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    w.write_all(data)?;
+    w.flush()
+}
+
 /// Lock the shadow parser, recovering from a poisoned mutex.
 ///
 /// vt100 has internal panics (wide-character bookkeeping can `unwrap` a
@@ -629,11 +650,23 @@ impl MuxPane {
             .writer
             .as_ref()
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "writer closed"))?;
-        let mut w = writer
-            .lock()
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        w.write_all(data)?;
-        w.flush()
+        write_via_writer_handle(writer, data)
+    }
+
+    /// Clone this pane's PTY-writer handle, if the pane still has one
+    /// (`None` once [`MuxPane::mark_exited`] has run).
+    ///
+    /// task0011 lock hygiene: callers that need to perform a synchronous
+    /// PTY write WITHOUT holding the `SessionManager` lock for the
+    /// duration (e.g. `handle_send_text`) resolve the pane under the
+    /// manager lock, clone this handle, release the manager lock, and
+    /// write through the cloned handle via [`write_via_writer_handle`].
+    /// Because the clone is an `Arc` over the SAME `std::sync::Mutex` as
+    /// `self.writer`, concurrent writes — whether via `write_input` or via
+    /// a cloned handle — still serialize on that mutex for the full
+    /// write+flush, preserving atomic-per-request write semantics.
+    pub fn writer_handle(&self) -> Option<Arc<StdMutex<Box<dyn Write + Send>>>> {
+        self.writer.clone()
     }
 
     /// Resize the PTY to the given dimensions.
