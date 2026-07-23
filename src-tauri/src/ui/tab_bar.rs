@@ -26,7 +26,10 @@
 //! drawn with `Painter::line_segment` so the visual is font-independent.
 
 use egui::scroll_area::ScrollBarVisibility;
-use egui::{Align, FontId, Layout, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2};
+use egui::{Align, Color32, FontId, Layout, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2};
+
+use crate::agent_status::AgentState;
+use crate::agent_status_model::Aggregated;
 
 use super::TabEvent;
 use super::md3;
@@ -85,6 +88,16 @@ const ACTIVITY_DOT_ANIM_SECS: f32 = 0.25;
 /// 8 % overlay forms a circle inside the 40 px square.
 const ICON_BUTTON_RADIUS: f32 = NEW_TAB_BUTTON_SIZE / 2.0;
 
+/// Agent-status badge dot diameter (task0006, `IMPLEMENTATION.md`
+/// Conventions: "Badge: 8px dot, 6px gap before title").
+const AGENT_BADGE_DIAMETER: f32 = 8.0;
+/// Gap between the agent badge and whatever follows it (the activity dot,
+/// or directly the title when no activity dot is present).
+const AGENT_BADGE_GAP: f32 = 6.0;
+/// Ring stroke width for a *seen* blocked/done badge (AC-1: "seen render
+/// as ring"). `IMPLEMENTATION.md` Conventions pins 1.5px.
+const AGENT_BADGE_RING_WIDTH: f32 = 1.5;
+
 /// Minimal projection of [`crate::tabs::Tab`] used by the tab bar.
 ///
 /// Constructed once per frame by the app loop. Tests construct these
@@ -127,6 +140,14 @@ pub struct TabBarItem {
     ///
     /// [`with_mux_cells`]: Self::with_mux_cells
     pub mux_cells: Option<Vec<MuxSubTabCell>>,
+    /// task0006 AC-1/AC-2: this tab's aggregated agent-status badge —
+    /// highest-priority state across the tab's own status and (for a
+    /// mux-attached tab) every pane in its window group. `None` when
+    /// nothing has ever reported a state: no badge renders and no layout
+    /// space is reserved for it (unlike [`Self::has_activity`]'s dot,
+    /// which always occupies its slot). The view-model builder sets this
+    /// via [`with_agent_badge`](Self::with_agent_badge).
+    pub agent_badge: Option<Aggregated>,
     /// When `Some(name)`, this tab is a mux tab group collapsed to a single
     /// cell (task0005 AC-1): the rendered label becomes `mux: <name>`,
     /// overriding both the plain `title` and the `mux_session_name` prefix
@@ -144,6 +165,7 @@ impl TabBarItem {
             has_activity: false,
             stable_id: 0,
             mux_cells: None,
+            agent_badge: None,
             mux_active_window_name: None,
         }
     }
@@ -175,6 +197,56 @@ impl TabBarItem {
     pub fn with_mux_active_window_name(mut self, name: impl Into<String>) -> Self {
         self.mux_active_window_name = Some(name.into());
         self
+    }
+
+    /// Attach this tab's aggregated agent-status badge (task0006 AC-1).
+    pub fn with_agent_badge(mut self, badge: Option<Aggregated>) -> Self {
+        self.agent_badge = badge;
+        self
+    }
+}
+
+/// Color role for a semantic agent state (task0006 AC-4, `IMPLEMENTATION.md`
+/// Conventions): blocked -> `on_error_container`, working -> `primary`,
+/// done -> `on_secondary_container`, idle -> `on_surface_variant`. Shared by
+/// [`ui::mux_sidebar`](super::mux_sidebar) and
+/// [`ui::status_bar`](super::status_bar) so the mapping lives in one place.
+pub fn agent_state_color(state: AgentState) -> Color32 {
+    match state {
+        AgentState::Blocked => md3::on_error_container(),
+        AgentState::Working => md3::primary(),
+        AgentState::Done => md3::on_secondary_container(),
+        AgentState::Idle => md3::on_surface_variant(),
+    }
+}
+
+/// Whether a badge for `agg` renders as a filled dot (`true`) or a
+/// [`AGENT_BADGE_RING_WIDTH`] ring (`false`) — task0006 AC-1: "unseen
+/// blocked/done render filled, seen render as ring; working / idle have a
+/// single (filled / muted) form" (idle's "muted" look comes from its color,
+/// `on_surface_variant`, not from a different dot shape — both working and
+/// idle always render filled).
+pub fn agent_badge_filled(agg: Aggregated) -> bool {
+    match agg.state {
+        AgentState::Blocked | AgentState::Done => agg.unseen,
+        AgentState::Working | AgentState::Idle => true,
+    }
+}
+
+/// Paint one badge dot (filled or ring, per [`agent_badge_filled`]) at
+/// `center`. Thin paint-only wrapper; the fill/ring/color decision is the
+/// pure [`agent_badge_filled`] / [`agent_state_color`] pair above.
+pub fn paint_agent_badge(ui: &Ui, center: egui::Pos2, agg: Aggregated) {
+    let color = agent_state_color(agg.state);
+    let radius = AGENT_BADGE_DIAMETER / 2.0;
+    if agent_badge_filled(agg) {
+        ui.painter().circle_filled(center, radius, color);
+    } else {
+        ui.painter().circle_stroke(
+            center,
+            radius - AGENT_BADGE_RING_WIDTH / 2.0,
+            Stroke::new(AGENT_BADGE_RING_WIDTH, color),
+        );
     }
 }
 
@@ -650,6 +722,15 @@ fn layout_tab_strip(
             md3::on_surface_variant()
         };
         let font_id = FontId::proportional(TAB_FONT_SIZE);
+        // Agent-status badge slot (task0006 AC-1/AC-2): unlike the activity
+        // dot below, this slot is only reserved when a badge is present —
+        // no reserved space and no layout shift for a tab that has never
+        // reported a state.
+        let agent_dot_space = if item.agent_badge.is_some() {
+            AGENT_BADGE_DIAMETER + AGENT_BADGE_GAP
+        } else {
+            0.0
+        };
         // Activity-dot slot. Like the WebView flexbox (`.tab-activity-dot`
         // hides via opacity/scale, not display:none), the 8 px dot +
         // 6 px gap always occupy layout space so the title does not
@@ -658,13 +739,22 @@ fn layout_tab_strip(
         // egui has no native truncation helper for direct painter text,
         // so we measure with `Fonts::layout_no_wrap` and ellipsize when
         // the result overflows the label rect.
-        let max_w = (label_rect.width() - dot_space).max(0.0);
+        let max_w = (label_rect.width() - agent_dot_space - dot_space).max(0.0);
         let galley =
             ui.fonts(|fonts| layout_ellipsized(fonts, &label_text, &font_id, text_color, max_w));
-        // Centre the [dot][gap][title] group as one unit, mirroring the
-        // WebView's `justify-content: center` flex row.
-        let group_w = dot_space + galley.size().x;
+        // Centre the [agent badge][dot][gap][title] group as one unit,
+        // mirroring the WebView's `justify-content: center` flex row.
+        let group_w = agent_dot_space + dot_space + galley.size().x;
         let group_left = label_rect.center().x - group_w / 2.0;
+
+        if let Some(badge) = item.agent_badge {
+            let badge_center = egui::pos2(
+                group_left + AGENT_BADGE_DIAMETER / 2.0,
+                label_rect.center().y,
+            );
+            paint_agent_badge(ui, badge_center, badge);
+        }
+        let after_agent_badge = group_left + agent_dot_space;
 
         // Dot show/hide animates scale + opacity over 250 ms — the
         // `.tab-activity-dot` transition. `animate_bool_with_time`
@@ -679,7 +769,7 @@ fn layout_tab_strip(
         );
         if dot_t > 0.0 {
             let dot_center = egui::pos2(
-                group_left + ACTIVITY_DOT_DIAMETER / 2.0,
+                after_agent_badge + ACTIVITY_DOT_DIAMETER / 2.0,
                 label_rect.center().y,
             );
             ui.painter().circle_filled(
@@ -689,7 +779,7 @@ fn layout_tab_strip(
             );
         }
 
-        let text_x = group_left + dot_space;
+        let text_x = after_agent_badge + dot_space;
         let text_y = label_rect.center().y - galley.size().y / 2.0;
         ui.painter()
             .galley(egui::pos2(text_x, text_y), galley, text_color);
@@ -1064,6 +1154,137 @@ mod tests {
         // window list (and thus `mux_active_window_name`) is populated.
         let it = TabBarItem::new("nvim").with_mux_session("main");
         assert_eq!(render_label(&it), "[mux:main] nvim");
+    }
+
+    // ── task0006 AC-1/AC-4: agent-status badge color / form ─────────────
+
+    #[test]
+    fn agent_state_color_maps_every_variant_to_its_md3_role() {
+        assert_eq!(
+            agent_state_color(AgentState::Blocked),
+            md3::on_error_container()
+        );
+        assert_eq!(agent_state_color(AgentState::Working), md3::primary());
+        assert_eq!(
+            agent_state_color(AgentState::Done),
+            md3::on_secondary_container()
+        );
+        assert_eq!(
+            agent_state_color(AgentState::Idle),
+            md3::on_surface_variant()
+        );
+    }
+
+    #[test]
+    fn agent_badge_filled_blocked_and_done_follow_unseen() {
+        assert!(agent_badge_filled(Aggregated {
+            state: AgentState::Blocked,
+            unseen: true
+        }));
+        assert!(!agent_badge_filled(Aggregated {
+            state: AgentState::Blocked,
+            unseen: false
+        }));
+        assert!(agent_badge_filled(Aggregated {
+            state: AgentState::Done,
+            unseen: true
+        }));
+        assert!(!agent_badge_filled(Aggregated {
+            state: AgentState::Done,
+            unseen: false
+        }));
+    }
+
+    #[test]
+    fn agent_badge_filled_working_and_idle_are_always_filled_regardless_of_unseen() {
+        for unseen in [true, false] {
+            assert!(agent_badge_filled(Aggregated {
+                state: AgentState::Working,
+                unseen
+            }));
+            assert!(agent_badge_filled(Aggregated {
+                state: AgentState::Idle,
+                unseen
+            }));
+        }
+    }
+
+    // ── task0006 AC-2: badge absence reserves no layout space ───────────
+
+    fn collect_text_shapes_by_x(shapes: &[egui::epaint::ClippedShape]) -> Vec<(f32, String)> {
+        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(f32, String)>) {
+            use egui::epaint::Shape;
+            match shape {
+                Shape::Text(t) => {
+                    let mut s = String::new();
+                    for row in &t.galley.rows {
+                        for g in &row.glyphs {
+                            s.push(g.chr);
+                        }
+                    }
+                    if !s.is_empty() {
+                        out.push((t.pos.x, s));
+                    }
+                }
+                Shape::Vec(v) => {
+                    for s in v {
+                        walk(s, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for cs in shapes {
+            walk(&cs.shape, &mut out);
+        }
+        out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        out
+    }
+
+    fn title_text_x(items: &[TabBarItem]) -> f32 {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(screen_rect());
+        let output = ctx.run(input, |ctx| {
+            let _ = draw(ctx, items, 0, false);
+        });
+        collect_text_shapes_by_x(&output.shapes)
+            .into_iter()
+            .find(|(_, s)| s.contains("shell"))
+            .map(|(x, _)| x)
+            .expect("title text shape present")
+    }
+
+    #[test]
+    fn agent_badge_present_shifts_title_right_when_reserving_its_space() {
+        let without = title_text_x(&[item("shell")]);
+        let with = title_text_x(&[item("shell").with_agent_badge(Some(Aggregated {
+            state: AgentState::Working,
+            unseen: true,
+        }))]);
+        // The `[badge][dot][gap][title]` group is centred as a unit, so
+        // reserving `agent_dot_space` extra width shifts the group's
+        // (and thus the title's) center by half that amount — the other
+        // half is absorbed by the group's left edge moving left.
+        let expected_shift = (AGENT_BADGE_DIAMETER + AGENT_BADGE_GAP) / 2.0;
+        assert!(
+            (with - without - expected_shift).abs() < 0.5,
+            "badge presence should shift the title right by half its reserved space \
+             ({expected_shift}px): \
+             without={without}, with={with}"
+        );
+    }
+
+    #[test]
+    fn agent_badge_absent_matches_pre_feature_title_position_across_two_renders() {
+        // AC-2: two independently-built items with no agent badge (one
+        // freshly constructed, one via the builder passing `None`
+        // explicitly) must paint the title at the identical x — proving
+        // `agent_dot_space` contributes nothing when the badge is absent.
+        let plain = title_text_x(&[item("shell")]);
+        let explicit_none = title_text_x(&[item("shell").with_agent_badge(None)]);
+        assert_eq!(plain, explicit_none);
     }
 
     // ── TS-tab-1: simulated interaction → TabEvent ──────────
