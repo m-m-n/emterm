@@ -7,6 +7,7 @@
 //! here when one of these matches, so `--`-prefixed child-process flags
 //! retain their existing hand-rolled path.
 
+pub mod agent_status;
 pub mod encoding;
 pub mod error;
 pub mod html;
@@ -125,6 +126,11 @@ pub fn run(args: &[String]) -> i32 {
                 Err(e) => Err(e),
             }
         }
+        Some(("agent-status", sub)) => {
+            let state: &String = sub.get_one("state").expect("required by clap");
+            let name: Option<&String> = sub.get_one("name");
+            agent_status::execute_agent_status_command(state, name.map(String::as_str))
+        }
         _ => {
             // Should be unreachable: clap requires a subcommand. Treat
             // as a usage error.
@@ -207,6 +213,24 @@ fn build_command(loc: Locale) -> clap::Command {
                         .value_parser(clap::builder::NonEmptyStringValueParser::new()),
                 ),
         )
+        .subcommand(
+            Command::new("agent-status")
+                .about(messages::cli_agent_status_about(loc))
+                .arg(
+                    Arg::new("state")
+                        .help(messages::cli_agent_status_state(loc))
+                        .required(true)
+                        .value_parser(clap::builder::PossibleValuesParser::new([
+                            "idle", "working", "blocked", "done", "clear",
+                        ])),
+                )
+                .arg(
+                    Arg::new("name")
+                        .long("name")
+                        .help(messages::cli_agent_status_name(loc))
+                        .value_parser(clap::builder::NonEmptyStringValueParser::new()),
+                ),
+        )
 }
 
 #[cfg(test)]
@@ -253,5 +277,43 @@ mod tests {
     fn build_command_rejects_unknown_subcommand() {
         let result = build_command(Locale::En).try_get_matches_from(["emterm", "explode", "foo"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_command_accepts_agent_status_with_name() {
+        let m = build_command(Locale::En)
+            .try_get_matches_from(["emterm", "agent-status", "working", "--name", "claude"])
+            .expect("parse should succeed");
+        let sub = m.subcommand_matches("agent-status").unwrap();
+        let state: &String = sub.get_one("state").unwrap();
+        let name: &String = sub.get_one("name").unwrap();
+        assert_eq!(state, "working");
+        assert_eq!(name, "claude");
+    }
+
+    #[test]
+    fn build_command_accepts_agent_status_clear() {
+        let m = build_command(Locale::En)
+            .try_get_matches_from(["emterm", "agent-status", "clear"])
+            .expect("parse should succeed");
+        let sub = m.subcommand_matches("agent-status").unwrap();
+        let state: &String = sub.get_one("state").unwrap();
+        assert_eq!(state, "clear");
+        assert!(sub.get_one::<String>("name").is_none());
+    }
+
+    // AC-8: an invalid state value is a usage error (clap rejects it
+    // during argument parsing, before dispatch ever runs).
+    #[test]
+    fn build_command_rejects_invalid_agent_status_state() {
+        let result =
+            build_command(Locale::En).try_get_matches_from(["emterm", "agent-status", "sleeping"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_agent_status_invalid_state_returns_usage_exit_code() {
+        let code = run(&["agent-status".to_string(), "sleeping".to_string()]);
+        assert_eq!(code, 2, "invalid state should map to the usage exit code");
     }
 }

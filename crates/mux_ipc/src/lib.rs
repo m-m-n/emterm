@@ -5,5 +5,11 @@
 //! same wire format without dragging server-side tokio_util glue across the
 //! crate boundary. Server framing (`codec`, `connection`) intentionally
 //! remains in `src-tauri/src/mux/ipc/`.
+//!
+//! Includes the mux agent-status / agent-API message additions
+//! (`AgentStatusUpdate`, `ReadPane`/`ReadPaneResult`, `SendText`/
+//! `SendTextResult`, `WaitAgentState`/`WaitAgentStateResult`,
+//! `AgentApiError`) and the public pane ID helpers (`PublicPaneId`); see
+//! `protocol` for the full type list.
 
 pub mod protocol;

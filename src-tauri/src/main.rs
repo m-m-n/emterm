@@ -67,7 +67,10 @@ fn main() {
     // a global logger was already installed). Subcommands that need a
     // logger install one themselves; the rest run unlogged.
     if let Some(sub) = args.get(1).map(|s| s.as_str()) {
-        if matches!(sub, "markdown" | "json" | "yaml" | "image" | "html") {
+        if matches!(
+            sub,
+            "markdown" | "json" | "yaml" | "image" | "html" | "agent-status"
+        ) {
             let code = emterm::cli::run(&args[1..]);
             std::process::exit(code);
         }
@@ -94,6 +97,7 @@ fn main() {
         eprintln!(
             "emterm: this build provides only CLI subcommands.\n\
              Usage: emterm <markdown|json|yaml|html|image> <file> [options]\n\
+             \x20      emterm agent-status <idle|working|blocked|done|clear> [--name <n>]\n\
              Run `emterm <subcommand> --help` for details."
         );
         std::process::exit(2);

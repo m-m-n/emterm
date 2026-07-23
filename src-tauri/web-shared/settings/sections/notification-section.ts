@@ -83,4 +83,17 @@ export function renderNotificationSection(
     },
     ctx.addContentListener,
   );
+
+  // Agent Status Notifications (toggle) — task0007
+  renderToggle(
+    panel,
+    {
+      key: "agent-status-notifications",
+      label: t("settings.notification.agentStatusNotifications"),
+      value: settings.agent_status_notifications,
+      description: t("settings.notification.agentStatusNotificationsDesc"),
+      onSave: (v) => ctx.saveSetting("agent_status_notifications", v),
+    },
+    ctx.addContentListener,
+  );
 }
