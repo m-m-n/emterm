@@ -21,10 +21,18 @@
 //!   [`crate::i18n::Locale`] (the `language` setting); the strings
 //!   match the WebView locales' `settings.notification.body.*`.
 
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::time::{Duration, Instant};
 
 use crate::i18n::Locale;
 use crate::settings::Settings;
+
+// Re-exported so callers building [`AgentTransition`] values need only
+// `crate::notifications` — the wire state enum is owned by `mux_ipc`
+// (shared with the daemon/GUI protocol and the core `agent_status` module
+// per IMPLEMENTATION.md's shared-component contract).
+pub use mux_ipc::protocol::AgentState;
 
 /// Activity types, mirroring the WebView `ActivityType` union
 /// (`src/tab-bar/types.ts`).
@@ -163,6 +171,156 @@ pub fn notification_body(sanitized_title: &str, kind: ActivityKind, locale: Loca
         (Locale::Ja, ActivityKind::Bell) => "ベル",
     };
     format!("{sanitized_title}: {msg}")
+}
+
+// ── Agent-status notifications (task0007 / FR9) ──────────────────────────
+//
+// blocked/done transitions on panes the user is not looking at fire OS
+// notifications, gated by (IMPLEMENTATION.md "Notification gating"):
+// qualifying transition (blocked/done) -> pane not visible (foreground
+// window + displayed tab) -> both `Settings::agent_status_notifications`
+// and the existing global `Settings::notification_enabled` on -> the
+// per-pane rate limit not exceeded.
+//
+// The gating decision ([`should_fire_agent_notification`]) is a pure
+// function so it is testable without the GUI event loop or the
+// `AgentStatusModel` (task0005) that owns the drained transition queue —
+// every input (transition, visibility, settings, rate-limit state) is
+// passed in explicitly, matching this module's existing
+// [`TabActivityState`] / [`kind_enabled`] pattern above.
+
+/// One transition drained from `AgentStatusModel`'s transition queue
+/// (IMPLEMENTATION.md's GUI `AgentStatusModel` contract:
+/// `{pane, old_state, new_state, name}`). Pane identity lives in the
+/// caller's own rate-limit / visibility key, not here — this struct
+/// carries only the fields the gating decision and notification body need.
+#[derive(Debug, Clone)]
+pub struct AgentTransition {
+    pub old_state: AgentState,
+    pub new_state: AgentState,
+    /// Sanitized agent name (sanitization is guaranteed upstream by the
+    /// core `agent_status` module); `None` when the pane never reported
+    /// one.
+    pub name: Option<String>,
+}
+
+/// Minimum interval between fired agent-status notifications for one pane
+/// (AC-4). Distinct from [`NOTIFICATION_THROTTLE`] (tab-activity
+/// notifications key on output/bell cadence; agent-status notifications
+/// key on state transitions, which are far less frequent).
+pub const AGENT_NOTIFICATION_RATE_LIMIT: Duration = Duration::from_secs(30);
+
+/// Whether `state` is a qualifying transition target for an agent
+/// notification (AC-1): only `Blocked` and `Done` fire; `Working`/`Idle`
+/// never do.
+pub fn is_qualifying_agent_state(state: AgentState) -> bool {
+    matches!(state, AgentState::Blocked | AgentState::Done)
+}
+
+/// Pure gating decision for one drained agent-status transition
+/// (AC-1..AC-4). `rate_limit_ok` is a read-only check the caller obtains
+/// from [`AgentNotificationRateLimiter::is_within_limit`] *before* calling
+/// this function; the caller then records the fire (if any) via
+/// [`AgentNotificationRateLimiter::record`] — this function performs no
+/// mutation itself.
+pub fn should_fire_agent_notification(
+    new_state: AgentState,
+    pane_visible: bool,
+    agent_notifications_enabled: bool,
+    global_notifications_enabled: bool,
+    rate_limit_ok: bool,
+) -> bool {
+    is_qualifying_agent_state(new_state)
+        && !pane_visible
+        && agent_notifications_enabled
+        && global_notifications_enabled
+        && rate_limit_ok
+}
+
+/// Per-pane rate limiter for agent-status notifications (AC-4). Generic
+/// over the caller's own pane-key type — the concrete key (a plain tab's
+/// stable id vs. a mux pane's `public_pane_id`) is owned by the
+/// integration wiring that drains `AgentStatusModel`, not this module.
+///
+/// Only a notification that actually fires re-arms the window: a
+/// transition suppressed by another gate (visibility, either settings
+/// switch) is dropped, not queued, and must not extend the limiter window
+/// (IMPLEMENTATION.md: "suppressed notifications are dropped (not
+/// queued)"). Callers therefore consult [`Self::is_within_limit`] (a pure
+/// read) as one input to [`should_fire_agent_notification`], and only call
+/// [`Self::record`] once that combined decision is `true`.
+#[derive(Debug)]
+pub struct AgentNotificationRateLimiter<K> {
+    last_fired: HashMap<K, Instant>,
+}
+
+impl<K> Default for AgentNotificationRateLimiter<K> {
+    fn default() -> Self {
+        Self {
+            last_fired: HashMap::new(),
+        }
+    }
+}
+
+impl<K: Eq + Hash + Clone> AgentNotificationRateLimiter<K> {
+    /// Read-only check: `true` when `key` is outside the rate-limit window
+    /// (never fired, or its last fire is old enough). Does not record
+    /// anything.
+    pub fn is_within_limit(&self, key: &K, now: Instant) -> bool {
+        match self.last_fired.get(key) {
+            Some(prev) => now.duration_since(*prev) >= AGENT_NOTIFICATION_RATE_LIMIT,
+            None => true,
+        }
+    }
+
+    /// Record a fired notification's timestamp, (re)arming the window.
+    pub fn record(&mut self, key: K, now: Instant) {
+        self.last_fired.insert(key, now);
+    }
+
+    /// Drop bookkeeping for a pane that closed, mirroring
+    /// `AgentStatusModel`'s "discard on tab/pane close" contract so a
+    /// reused key does not inherit a stale window.
+    pub fn discard(&mut self, key: &K) {
+        self.last_fired.remove(key);
+    }
+}
+
+/// Neutral fallback used in [`agent_notification_body`] when a transition's
+/// pane never reported an agent name.
+fn agent_name_fallback(locale: Locale) -> &'static str {
+    match locale {
+        Locale::En => "Agent",
+        Locale::Ja => "エージェント",
+    }
+}
+
+/// Notification body for a qualifying agent-status transition: the
+/// sanitized agent name (or the neutral fallback) plus the tab title, per
+/// the task plan's body format ("uses the model's name ... or a neutral
+/// fallback, plus the tab title").
+pub fn agent_notification_body(
+    transition: &AgentTransition,
+    tab_title: &str,
+    locale: Locale,
+) -> String {
+    let name = transition
+        .name
+        .as_deref()
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| agent_name_fallback(locale));
+    let state_msg = match (locale, transition.new_state) {
+        (Locale::En, AgentState::Blocked) => "blocked",
+        (Locale::En, AgentState::Done) => "done",
+        (Locale::Ja, AgentState::Blocked) => "ブロック中",
+        (Locale::Ja, AgentState::Done) => "完了",
+        // Working/Idle never reach here in practice (the caller gates on
+        // `is_qualifying_agent_state` first) — matched exhaustively rather
+        // than panicking on an unexpected state.
+        (Locale::En, AgentState::Working | AgentState::Idle) => "active",
+        (Locale::Ja, AgentState::Working | AgentState::Idle) => "実行中",
+    };
+    format!("{name}: {tab_title} ({state_msg})")
 }
 
 #[cfg(test)]
@@ -328,6 +486,176 @@ mod tests {
         assert_eq!(
             notification_body("tab", ActivityKind::Bell, Locale::Ja),
             "tab: ベル"
+        );
+    }
+
+    // ── Agent-status notifications (task0007) ───────────────────────
+
+    fn transition(new_state: AgentState) -> AgentTransition {
+        AgentTransition {
+            old_state: AgentState::Working,
+            new_state,
+            name: Some("claude".to_string()),
+        }
+    }
+
+    // AC-1: qualifying transition target.
+    #[test]
+    fn is_qualifying_agent_state_ac1_blocked_and_done_only() {
+        assert!(is_qualifying_agent_state(AgentState::Blocked));
+        assert!(is_qualifying_agent_state(AgentState::Done));
+        assert!(!is_qualifying_agent_state(AgentState::Working));
+        assert!(!is_qualifying_agent_state(AgentState::Idle));
+    }
+
+    // AC-1: a non-visible pane fires exactly one notification for
+    // blocked/done; working/idle never fire, regardless of visibility.
+    #[test]
+    fn should_fire_ac1_blocked_and_done_fire_working_idle_never_fire() {
+        for state in [AgentState::Blocked, AgentState::Done] {
+            assert!(should_fire_agent_notification(
+                state, false, true, true, true
+            ));
+        }
+        for state in [AgentState::Working, AgentState::Idle] {
+            assert!(!should_fire_agent_notification(
+                state, false, true, true, true
+            ));
+        }
+    }
+
+    // AC-2: a qualifying transition on the visible pane does not fire.
+    #[test]
+    fn should_fire_ac2_visible_pane_does_not_fire() {
+        assert!(!should_fire_agent_notification(
+            AgentState::Blocked,
+            true,
+            true,
+            true,
+            true
+        ));
+        assert!(!should_fire_agent_notification(
+            AgentState::Done,
+            true,
+            true,
+            true,
+            true
+        ));
+    }
+
+    // AC-3: either settings switch off suppresses the notification.
+    #[test]
+    fn should_fire_ac3_either_settings_switch_off_suppresses() {
+        // Agent-notification setting off.
+        assert!(!should_fire_agent_notification(
+            AgentState::Blocked,
+            false,
+            false,
+            true,
+            true
+        ));
+        // Global notification switch off.
+        assert!(!should_fire_agent_notification(
+            AgentState::Blocked,
+            false,
+            true,
+            false,
+            true
+        ));
+        // Both off.
+        assert!(!should_fire_agent_notification(
+            AgentState::Done,
+            false,
+            false,
+            false,
+            true
+        ));
+    }
+
+    // AC-4: the rate-limit input gate suppresses when exceeded.
+    #[test]
+    fn should_fire_ac4_rate_limit_not_ok_suppresses() {
+        assert!(!should_fire_agent_notification(
+            AgentState::Blocked,
+            false,
+            true,
+            true,
+            false
+        ));
+    }
+
+    // AC-4: two qualifying transitions on one pane inside the rate-limit
+    // interval fire only the first; a transition after the interval fires.
+    #[test]
+    fn rate_limiter_ac4_throttles_within_window_then_allows_after() {
+        let mut limiter: AgentNotificationRateLimiter<&str> =
+            AgentNotificationRateLimiter::default();
+        let now = Instant::now();
+
+        // First transition: never fired for this key -> within limit.
+        assert!(limiter.is_within_limit(&"pane-1", now));
+        limiter.record("pane-1", now);
+
+        // Second transition, just inside the window: throttled.
+        let second = now + AGENT_NOTIFICATION_RATE_LIMIT - Duration::from_millis(1);
+        assert!(!limiter.is_within_limit(&"pane-1", second));
+
+        // A transition on a DIFFERENT pane is unaffected.
+        assert!(limiter.is_within_limit(&"pane-2", second));
+
+        // Third transition, exactly at the interval boundary: allowed.
+        let third = now + AGENT_NOTIFICATION_RATE_LIMIT;
+        assert!(limiter.is_within_limit(&"pane-1", third));
+    }
+
+    // AC-4 (design note): a notification suppressed by another gate must
+    // not consume/extend the rate-limit window — only an actual fire calls
+    // `record`.
+    #[test]
+    fn rate_limiter_suppressed_attempt_does_not_arm_window() {
+        let limiter: AgentNotificationRateLimiter<&str> = AgentNotificationRateLimiter::default();
+        let now = Instant::now();
+
+        // Simulate a transition that was suppressed by visibility (the
+        // caller never calls `record` because `should_fire_*` was false).
+        let visible = true;
+        let fire = should_fire_agent_notification(AgentState::Blocked, visible, true, true, true);
+        assert!(!fire);
+        // No `record` call — the window must still be open.
+        assert!(limiter.is_within_limit(&"pane-1", now));
+    }
+
+    #[test]
+    fn rate_limiter_discard_drops_bookkeeping_for_closed_pane() {
+        let mut limiter: AgentNotificationRateLimiter<&str> =
+            AgentNotificationRateLimiter::default();
+        let now = Instant::now();
+        limiter.record("pane-1", now);
+        assert!(!limiter.is_within_limit(&"pane-1", now));
+        limiter.discard(&"pane-1");
+        assert!(limiter.is_within_limit(&"pane-1", now));
+    }
+
+    #[test]
+    fn agent_notification_body_uses_sanitized_name_and_tab_title() {
+        let body = agent_notification_body(&transition(AgentState::Blocked), "my-tab", Locale::En);
+        assert_eq!(body, "claude: my-tab (blocked)");
+
+        let body = agent_notification_body(&transition(AgentState::Done), "my-tab", Locale::Ja);
+        assert_eq!(body, "claude: my-tab (完了)");
+    }
+
+    #[test]
+    fn agent_notification_body_falls_back_to_neutral_name_when_absent() {
+        let mut t = transition(AgentState::Blocked);
+        t.name = None;
+        assert_eq!(
+            agent_notification_body(&t, "my-tab", Locale::En),
+            "Agent: my-tab (blocked)"
+        );
+        assert_eq!(
+            agent_notification_body(&t, "my-tab", Locale::Ja),
+            "エージェント: my-tab (ブロック中)"
         );
     }
 }

@@ -218,6 +218,8 @@
       "notifyOnOutputDesc": "Notify when new output appears in a background tab",
       "notifyOnBell": "Bell",
       "notifyOnBellDesc": "Notify when a bell character is received in a background tab",
+      "agentStatusNotifications": "Agent Status Notifications",
+      "agentStatusNotificationsDesc": "Notify when an agent on a background pane becomes blocked or done",
       "body": {
         "processExit": "Process exited",
         "newOutput": "New output",
