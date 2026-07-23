@@ -174,8 +174,9 @@ tasks:
     domains: [ui, input-handling]
     complexity: medium
     requirements: [FR9, NFR1, NFR4]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-agent-status-api/task0007
   task0008:
     title: "user documentation (doc/AGENT-STATUS.md)"
     plan: tasks/task0008.md
