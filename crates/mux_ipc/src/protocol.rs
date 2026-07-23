@@ -9,7 +9,12 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 
 /// Protocol version for handshake compatibility check.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// Bumped to 2 for the `AgentStatusUpdate` message addition (SPEC FR5 /
+/// NFR2): an old GUI talking to a new daemon (or vice versa) fails the
+/// handshake cleanly via the existing `WelcomeMsg::Rejected` path rather
+/// than misparsing the new message type.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// APC prefix for identifying emterm mux APC sequences.
 pub const APC_PREFIX: &str = "emterm-mux;";
@@ -71,6 +76,10 @@ pub enum MessageType {
     /// Daemon-originated desktop notification (OSC 9) detected on a Detached
     /// pane. Forwarded to the GUI client, which fires the OS notification.
     Notify = 0x1C,
+    /// Daemon-originated, unsolicited agent-status update (SPEC FR5): a
+    /// pane's `{state, name, revision}` changed (an accepted OSC report) or
+    /// is being resynced after a snapshot (`replay_derived = true`).
+    AgentStatusUpdate = 0x1D,
 }
 
 impl MessageType {
@@ -103,6 +112,7 @@ impl MessageType {
             0x1A => Some(Self::MoveWindow),
             0x1B => Some(Self::SetVisibility),
             0x1C => Some(Self::Notify),
+            0x1D => Some(Self::AgentStatusUpdate),
             _ => None,
         }
     }
@@ -237,6 +247,38 @@ impl SetVisibilityPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoveWindowMsg {
     pub target_index: u32,
+}
+
+/// Agent-reported state (SPEC FR1), mirrored here so `mux_ipc` (a
+/// standalone crate the `emterm` binary depends on) carries the wire enum
+/// without depending on the binary crate's `agent_status` module. The wire
+/// string values (`idle|working|blocked|done`) are the shared contract
+/// with `src-tauri/src/agent_status.rs`; this type's own serde encoding is
+/// bincode's default enum-discriminant form, used only on this crate's own
+/// wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentState {
+    Idle,
+    Working,
+    Blocked,
+    Done,
+}
+
+/// Daemon -> GUI unsolicited update for a pane's agent-status (FR5).
+///
+/// `state = None` / `name = None` means "no report yet, or cleared".
+/// `replay_derived = true` marks a post-snapshot resync message (FR4): the
+/// GUI applies it silently, never as a notification-worthy transition.
+/// `revision` is the pane's monotonically increasing accepted-report
+/// counter (FR3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentStatusUpdateMsg {
+    pub pane_id: u32,
+    pub public_pane_id: String,
+    pub state: Option<AgentState>,
+    pub name: Option<String>,
+    pub revision: u64,
+    pub replay_derived: bool,
 }
 
 /// Payload for CreateWindow message.
@@ -424,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_message_type_round_trip() {
-        for i in 0x01..=0x1Cu8 {
+        for i in 0x01..=0x1Du8 {
             if i == 0x11 {
                 // 0x11 (SplitPane) was removed -- must return None
                 continue;
@@ -436,7 +478,11 @@ mod tests {
         assert!(MessageType::from_u8(0x11).is_none());
         assert_eq!(MessageType::from_u8(0x1B), Some(MessageType::SetVisibility));
         assert_eq!(MessageType::from_u8(0x1C), Some(MessageType::Notify));
-        assert!(MessageType::from_u8(0x1d).is_none());
+        assert_eq!(
+            MessageType::from_u8(0x1D),
+            Some(MessageType::AgentStatusUpdate)
+        );
+        assert!(MessageType::from_u8(0x1e).is_none());
         assert!(MessageType::from_u8(0xff).is_none());
     }
 
@@ -799,7 +845,7 @@ mod tests {
 
     #[test]
     fn test_apc_round_trip_all_message_types() {
-        for i in 0x01..=0x1Cu8 {
+        for i in 0x01..=0x1Du8 {
             if i == 0x11 {
                 // 0x11 (SplitPane) was removed
                 continue;
@@ -1168,6 +1214,86 @@ mod tests {
             .and_then(|s| s.strip_suffix('\r'))
             .unwrap();
         assert_eq!(apc_body, pt_body, "base64 frame body must be identical");
+    }
+
+    // ── AgentStatusUpdateMsg (FR5) ───────────────────────────────────────
+
+    #[test]
+    fn test_agent_status_update_msg_round_trip_set() {
+        let payload = AgentStatusUpdateMsg {
+            pane_id: 7,
+            public_pane_id: "abc123-7".to_string(),
+            state: Some(AgentState::Working),
+            name: Some("claude".to_string()),
+            revision: 3,
+            replay_derived: false,
+        };
+        let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 7, &payload);
+        let parsed = MuxMessage::from_frame_body(&msg.to_frame_body()).unwrap();
+        assert_eq!(parsed.msg_type, MessageType::AgentStatusUpdate);
+        assert_eq!(parsed.pane_id, 7);
+        let decoded: AgentStatusUpdateMsg = parsed.decode_payload().unwrap();
+        assert_eq!(decoded.pane_id, 7);
+        assert_eq!(decoded.public_pane_id, "abc123-7");
+        assert_eq!(decoded.state, Some(AgentState::Working));
+        assert_eq!(decoded.name.as_deref(), Some("claude"));
+        assert_eq!(decoded.revision, 3);
+        assert!(!decoded.replay_derived);
+    }
+
+    #[test]
+    fn test_agent_status_update_msg_round_trip_cleared_and_replay_derived() {
+        let payload = AgentStatusUpdateMsg {
+            pane_id: 9,
+            public_pane_id: "abc123-9".to_string(),
+            state: None,
+            name: None,
+            revision: 5,
+            replay_derived: true,
+        };
+        let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 9, &payload);
+        let decoded: AgentStatusUpdateMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
+            .unwrap()
+            .decode_payload()
+            .unwrap();
+        assert_eq!(decoded.state, None);
+        assert_eq!(decoded.name, None);
+        assert_eq!(decoded.revision, 5);
+        assert!(decoded.replay_derived);
+    }
+
+    #[test]
+    fn test_agent_status_update_msg_apc_round_trip() {
+        let payload = AgentStatusUpdateMsg {
+            pane_id: 1,
+            public_pane_id: "deadbeef-1".to_string(),
+            state: Some(AgentState::Blocked),
+            name: None,
+            revision: 1,
+            replay_derived: false,
+        };
+        let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 1, &payload);
+        let apc = msg.to_apc();
+        let body = &apc[2..apc.len() - 2];
+        let decoded = MuxMessage::from_apc(body).unwrap();
+        assert_eq!(decoded.msg_type, MessageType::AgentStatusUpdate);
+        let payload_back: AgentStatusUpdateMsg = decoded.decode_payload().unwrap();
+        assert_eq!(payload_back.state, Some(AgentState::Blocked));
+        assert_eq!(payload_back.public_pane_id, "deadbeef-1");
+    }
+
+    #[test]
+    fn test_agent_state_all_variants_round_trip_bincode() {
+        for state in [
+            AgentState::Idle,
+            AgentState::Working,
+            AgentState::Blocked,
+            AgentState::Done,
+        ] {
+            let bytes = bincode::serialize(&state).unwrap();
+            let decoded: AgentState = bincode::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, state);
+        }
     }
 
     #[test]
