@@ -186,7 +186,7 @@ tasks:
     domains: []
     complexity: low
     requirements: [NFR1]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-agent-status-api/task0008
 
