@@ -3,12 +3,15 @@
 //! Listens on a Unix domain socket, accepts client connections,
 //! and manages PTY sessions. Auto-exits when all sessions end.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use super::ipc::connection::handle_connection;
 use super::ipc::handlers::{handle_destroy_pane, reevaluate_agent_waiters};
 use super::ipc::protocol::{
-    AgentStatusUpdateMsg, MessageType, MuxMessage, NotifyMsg, RenameWindowMsg,
+    AgentStatusUpdateMsg, ClientType, HelloMsg, MAX_FRAME_LENGTH, MessageType, MuxMessage,
+    NotifyMsg, PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, RenameWindowMsg, WelcomeMsg,
+    parse_rejected_server_version,
 };
 use super::session::manager::SessionManager;
 use super::session::pane::{
@@ -142,11 +145,25 @@ pub fn ensure_daemon_running() -> Result<PathBuf, String> {
     cleanup_stale_socket(&sock_path)
         .map_err(|e| format!("Failed to clean up stale socket: {}", e))?;
 
-    let daemon_running = if cfg!(unix) {
+    let mut daemon_running = if cfg!(unix) {
         sock_path.exists()
     } else {
         is_daemon_running(&sock_path)
     };
+
+    if daemon_running {
+        // Strategy B (task0010 rework): a presence check alone cannot tell
+        // an old-protocol daemon from a compatible one — every mux client
+        // would fail against a long-lived v1 daemon after an eMterm
+        // upgrade. Probe the real protocol version and, on the adjacent
+        // older version, shut the legacy daemon down automatically so a
+        // compatible one can start in its place.
+        match recover_from_legacy_daemon(&sock_path)? {
+            LegacyRecovery::Compatible => {}
+            LegacyRecovery::Recovered => daemon_running = false,
+        }
+    }
+
     if !daemon_running {
         // Ensure parent directory exists with restricted permissions
         if let Some(parent) = sock_path.parent() {
@@ -235,6 +252,282 @@ pub fn ensure_daemon_running() -> Result<PathBuf, String> {
     }
 
     Ok(sock_path)
+}
+
+// ============================================================================
+// task0010 rework: safe PROTOCOL_VERSION upgrade path (strategy B)
+//
+// A version bump alone left a running v1 daemon stranded after an eMterm
+// upgrade: `ensure_daemon_running` only checked socket presence, and even
+// `mux kill` couldn't recover it (the old server rejects a v2 Hello before
+// ever reading Shutdown). The helpers below open a short handshake to
+// probe the real protocol version and, on the adjacent older version
+// (`PREVIOUS_PROTOCOL_VERSION`), send a version-tolerant Shutdown so the
+// legacy daemon exits and a compatible one can take its place.
+// ============================================================================
+
+/// Outcome of [`recover_from_legacy_daemon`]'s handshake probe.
+#[derive(Debug)]
+enum LegacyRecovery {
+    /// The running daemon already accepted a [`PROTOCOL_VERSION`] Hello —
+    /// nothing to recover.
+    Compatible,
+    /// A daemon speaking [`PREVIOUS_PROTOCOL_VERSION`] was found and asked
+    /// to exit; the caller should now spawn a fresh daemon.
+    Recovered,
+}
+
+/// Connect to the daemon's control channel with read/write timeouts, ready
+/// for a [`handshake_with_version`] call. Unix: the `AF_UNIX` socket at
+/// `sock_path`. Windows: the daemon's Named Pipe (`sock_path` is unused
+/// there, matching [`is_daemon_running`]'s existing `_path` convention).
+#[cfg(unix)]
+fn connect_daemon(sock_path: &Path) -> std::io::Result<std::os::unix::net::UnixStream> {
+    let stream = std::os::unix::net::UnixStream::connect(sock_path)?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    Ok(stream)
+}
+
+#[cfg(windows)]
+fn connect_daemon(_sock_path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(pipe_name())
+}
+
+/// Send a `Hello` advertising `protocol_version` and read back the decoded
+/// `Welcome`. Generic over the platform stream type returned by
+/// [`connect_daemon`] (`UnixStream` / Windows `File`), both `Read + Write`.
+/// Never panics on a malformed reply — any framing/decode problem surfaces
+/// as an `io::Error` so callers can produce a short user-facing message
+/// instead of an opaque bincode error (AC-3).
+fn handshake_with_version<S: std::io::Read + std::io::Write>(
+    stream: &mut S,
+    protocol_version: u32,
+) -> std::io::Result<WelcomeMsg> {
+    let hello = HelloMsg {
+        client_type: ClientType::Cli,
+        protocol_version,
+    };
+    let msg = MuxMessage::control(MessageType::Hello, 0, &hello);
+    let body = msg.to_frame_body();
+    stream.write_all(&(body.len() as u32).to_be_bytes())?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf)?;
+    let frame_len = u32::from_be_bytes(len_buf) as usize;
+    if frame_len > MAX_FRAME_LENGTH {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "daemon frame exceeds the maximum frame length",
+        ));
+    }
+    let mut frame_buf = vec![0u8; frame_len];
+    stream.read_exact(&mut frame_buf)?;
+    let welcome_msg = MuxMessage::from_frame_body(&frame_buf).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid daemon frame")
+    })?;
+    welcome_msg.decode_payload::<WelcomeMsg>().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid Welcome payload from daemon",
+        )
+    })
+}
+
+/// Send a bare `Shutdown` control message. `Shutdown`'s wire shape (message
+/// type only, empty payload) has never changed, which is what lets a v2
+/// client ask an adjacent-version daemon to exit once the Hello handshake
+/// has admitted the connection.
+fn send_shutdown<S: std::io::Write>(stream: &mut S) -> std::io::Result<()> {
+    let msg = MuxMessage {
+        msg_type: MessageType::Shutdown,
+        pane_id: 0,
+        payload: Vec::new(),
+    };
+    let body = msg.to_frame_body();
+    stream.write_all(&(body.len() as u32).to_be_bytes())?;
+    stream.write_all(&body)?;
+    stream.flush()
+}
+
+/// Poll until the daemon at `sock_path` is no longer reachable (bounded to
+/// ~5s), then remove any leftover socket/marker file. Used after sending a
+/// `Shutdown` to a legacy daemon so the caller can safely spawn a
+/// replacement without racing the exiting process for the socket.
+fn wait_for_daemon_exit(sock_path: &Path) -> Result<(), String> {
+    for _ in 0..50 {
+        if !is_daemon_running(sock_path) {
+            let _ = std::fs::remove_file(sock_path);
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(
+        "The legacy mux daemon did not exit after a shutdown request within 5 \
+         seconds. Stop it manually (e.g. `pkill -f 'emterm mux --daemon'`) and \
+         retry."
+            .to_string(),
+    )
+}
+
+/// Probe the daemon already occupying `sock_path` and recover automatically
+/// when it is running the adjacent older protocol version (AC-1, task0010
+/// rework — see IMPLEMENTATION.md "Old GUI × new daemon pairing").
+///
+/// Performs a real handshake first; only on a version mismatch does it
+/// retry with [`PREVIOUS_PROTOCOL_VERSION`] (which the legacy daemon
+/// accepts) and send a `Shutdown` there.
+///
+/// Returns `Ok(LegacyRecovery::Compatible)` when the running daemon already
+/// speaks [`PROTOCOL_VERSION`] (nothing to do), `Ok(LegacyRecovery::Recovered)`
+/// once a legacy daemon has been asked to exit and has released the socket,
+/// or `Err` with a short, human-readable message (never a bincode/decode
+/// error, per AC-3) when recovery could not complete.
+fn recover_from_legacy_daemon(sock_path: &Path) -> Result<LegacyRecovery, String> {
+    let mut probe = connect_daemon(sock_path)
+        .map_err(|e| format!("Could not connect to the existing mux daemon: {e}"))?;
+    match handshake_with_version(&mut probe, PROTOCOL_VERSION) {
+        Ok(WelcomeMsg::Accepted { .. }) => Ok(LegacyRecovery::Compatible),
+        Ok(WelcomeMsg::Rejected { reason }) => {
+            drop(probe); // the daemon already closed its side after rejecting
+            let reported = parse_rejected_server_version(&reason)
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            log::warn!(
+                "mux daemon at {:?} reports protocol version {} (this build is {}); \
+                 attempting automatic recovery",
+                sock_path,
+                reported,
+                PROTOCOL_VERSION
+            );
+
+            let mut legacy = connect_daemon(sock_path).map_err(|e| {
+                format!(
+                    "Detected an incompatible mux daemon (protocol version {reported}) \
+                     but it became unreachable while recovering: {e}"
+                )
+            })?;
+            match handshake_with_version(&mut legacy, PREVIOUS_PROTOCOL_VERSION) {
+                Ok(WelcomeMsg::Accepted { .. }) => {
+                    send_shutdown(&mut legacy).map_err(|e| {
+                        format!(
+                            "Detected an incompatible mux daemon (protocol version \
+                             {reported}) but failed to send its shutdown request: {e}"
+                        )
+                    })?;
+                    drop(legacy);
+                    wait_for_daemon_exit(sock_path)?;
+                    log::info!(
+                        "Recovered mux socket from a protocol version {} daemon; a \
+                         compatible daemon can now start",
+                        reported
+                    );
+                    Ok(LegacyRecovery::Recovered)
+                }
+                Ok(WelcomeMsg::Rejected {
+                    reason: retry_reason,
+                }) => Err(format!(
+                    "The running mux daemon (protocol version {reported}) could not \
+                     be recovered automatically: {retry_reason}. Stop it manually \
+                     (e.g. `pkill -f 'emterm mux --daemon'`) and retry."
+                )),
+                Err(e) => Err(format!(
+                    "Detected an incompatible mux daemon (protocol version {reported}) \
+                     but failed to negotiate a compatible shutdown: {e}"
+                )),
+            }
+        }
+        Err(e) => Err(format!(
+            "Failed to communicate with the existing mux daemon: {e}"
+        )),
+    }
+}
+
+/// Result of [`shutdown_daemon_any_version`], used by `emterm mux kill`
+/// (AC-2/AC-3, task0010 rework).
+#[derive(Debug)]
+pub enum ShutdownOutcome {
+    /// A Shutdown request was accepted by the daemon. Carries a short
+    /// user-facing status line (e.g. noting when a legacy protocol version
+    /// was detected and handled automatically).
+    ShutDown(String),
+    /// The daemon was unreachable outright (process already gone); the
+    /// stale socket/marker file was removed. Mirrors the pre-task0010
+    /// `execute_kill` fallback behavior.
+    StaleSocketRemoved(String),
+}
+
+/// Shut down whatever daemon is occupying `sock_path`, regardless of
+/// protocol version (AC-2). Tries [`PROTOCOL_VERSION`] first; on a version
+/// mismatch it retries with [`PREVIOUS_PROTOCOL_VERSION`] so an adjacent
+/// legacy daemon accepts the connection and can be asked to exit. Every
+/// failure path returns a short explanatory message — never an opaque
+/// bincode/decode error (AC-3).
+pub fn shutdown_daemon_any_version(sock_path: &Path) -> Result<ShutdownOutcome, String> {
+    let mut stream = match connect_daemon(sock_path) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = std::fs::remove_file(sock_path);
+            return Ok(ShutdownOutcome::StaleSocketRemoved(
+                "Mux daemon not reachable (stale socket removed)".to_string(),
+            ));
+        }
+    };
+
+    match handshake_with_version(&mut stream, PROTOCOL_VERSION) {
+        Ok(WelcomeMsg::Accepted { .. }) => {
+            send_shutdown(&mut stream)
+                .map_err(|e| format!("Failed to send shutdown request: {e}"))?;
+            Ok(ShutdownOutcome::ShutDown(
+                "Mux daemon shutting down".to_string(),
+            ))
+        }
+        Ok(WelcomeMsg::Rejected { reason }) => {
+            drop(stream);
+            let reported = parse_rejected_server_version(&reason)
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let mut legacy = connect_daemon(sock_path).map_err(|e| {
+                format!(
+                    "Detected an incompatible mux daemon (protocol version {reported}) \
+                     but it became unreachable while retrying: {e}"
+                )
+            })?;
+            match handshake_with_version(&mut legacy, PREVIOUS_PROTOCOL_VERSION) {
+                Ok(WelcomeMsg::Accepted { .. }) => {
+                    send_shutdown(&mut legacy).map_err(|e| {
+                        format!(
+                            "Detected an incompatible mux daemon (protocol version \
+                             {reported}) but failed to send its shutdown request: {e}"
+                        )
+                    })?;
+                    Ok(ShutdownOutcome::ShutDown(format!(
+                        "Detected a mux daemon on an older protocol version ({reported}); \
+                         sent a compatible shutdown request. Run `emterm mux` to start \
+                         the current version."
+                    )))
+                }
+                Ok(WelcomeMsg::Rejected {
+                    reason: retry_reason,
+                }) => Err(format!(
+                    "The running mux daemon (protocol version {reported}) could not be \
+                     shut down automatically: {retry_reason}. Stop it manually (e.g. \
+                     `pkill -f 'emterm mux --daemon'`) and retry."
+                )),
+                Err(e) => Err(format!(
+                    "Detected an incompatible mux daemon (protocol version {reported}) \
+                     but failed to negotiate a compatible shutdown: {e}"
+                )),
+            }
+        }
+        Err(e) => Err(format!("Failed to communicate with the mux daemon: {e}")),
+    }
 }
 
 /// Run the mux daemon.
@@ -851,6 +1144,193 @@ mod tests {
     fn test_cleanup_stale_nonexistent() {
         let path = PathBuf::from("/tmp/emterm-test-nonexistent.sock");
         assert!(cleanup_stale_socket(&path).is_ok());
+    }
+
+    // ---- task0010 rework: legacy-daemon recovery (strategy B) ----
+    //
+    // A fake v1 daemon is a bare `UnixListener` thread rather than a real
+    // spawned process, per the task's Test Notes ("Simulate a v1 server ...
+    // by manually crafting the handshake bytes"). It speaks the exact wire
+    // shapes (`HelloMsg`/`WelcomeMsg`/`Shutdown`) the real daemon does, with
+    // a hardcoded `server_version = 1` and no session/PTY machinery.
+
+    #[cfg(unix)]
+    const FAKE_LEGACY_VERSION: u32 = 1;
+
+    #[cfg(unix)]
+    fn read_frame<S: std::io::Read>(stream: &mut S) -> MuxMessage {
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).expect("read frame length");
+        let frame_len = u32::from_be_bytes(len_buf) as usize;
+        let mut frame_buf = vec![0u8; frame_len];
+        stream.read_exact(&mut frame_buf).expect("read frame body");
+        MuxMessage::from_frame_body(&frame_buf).expect("valid frame")
+    }
+
+    #[cfg(unix)]
+    fn write_welcome<S: std::io::Write>(stream: &mut S, welcome: &WelcomeMsg) {
+        let msg = MuxMessage::control(MessageType::Welcome, 0, welcome);
+        let body = msg.to_frame_body();
+        stream
+            .write_all(&(body.len() as u32).to_be_bytes())
+            .expect("write frame length");
+        stream.write_all(&body).expect("write frame body");
+        stream.flush().expect("flush");
+    }
+
+    /// Spawn a thread that behaves like a single-instance legacy (v1) mux
+    /// daemon on `sock_path`: rejects any Hello whose `protocol_version`
+    /// isn't [`FAKE_LEGACY_VERSION`] with the exact reason text the real
+    /// daemon produces, accepts a matching Hello, waits for `Shutdown`, then
+    /// removes the socket file and exits — mirroring the real daemon's
+    /// Shutdown -> `graceful_shutdown` -> `remove_file` sequence.
+    #[cfg(unix)]
+    fn spawn_fake_legacy_daemon(sock_path: std::path::PathBuf) -> std::thread::JoinHandle<()> {
+        use std::os::unix::net::UnixListener;
+
+        let listener = UnixListener::bind(&sock_path).expect("bind fake daemon socket");
+        std::thread::spawn(move || {
+            loop {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let hello_frame = read_frame(&mut stream);
+                assert_eq!(hello_frame.msg_type, MessageType::Hello);
+                let hello: HelloMsg = hello_frame.decode_payload().expect("Hello payload");
+
+                if hello.protocol_version != FAKE_LEGACY_VERSION {
+                    let reject = WelcomeMsg::Rejected {
+                        reason: format!(
+                            "Protocol version mismatch: client={}, server={}",
+                            hello.protocol_version, FAKE_LEGACY_VERSION
+                        ),
+                    };
+                    write_welcome(&mut stream, &reject);
+                    // Connection closes here (stream dropped) — the real
+                    // daemon's handshake path returns immediately after
+                    // sending Rejected too.
+                    continue;
+                }
+
+                let accept = WelcomeMsg::Accepted {
+                    server_version: FAKE_LEGACY_VERSION,
+                    sessions: Vec::<crate::mux::ipc::protocol::SessionInfo>::new(),
+                };
+                write_welcome(&mut stream, &accept);
+
+                let shutdown_frame = read_frame(&mut stream);
+                assert_eq!(shutdown_frame.msg_type, MessageType::Shutdown);
+
+                // Simulate process exit: release the socket like the real
+                // daemon's shutdown path does.
+                let _ = std::fs::remove_file(&sock_path);
+                break;
+            }
+        })
+    }
+
+    /// AC-1: a v2 client recovers from encountering a running v1 daemon —
+    /// `recover_from_legacy_daemon` detects the mismatch, sends a
+    /// version-tolerant Shutdown, waits for the legacy daemon to release
+    /// the socket, and reports `Recovered`.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_shuts_down_v1_and_reports_recovered() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("legacy.sock");
+        let server = spawn_fake_legacy_daemon(sock_path.clone());
+
+        let result = recover_from_legacy_daemon(&sock_path);
+        server.join().expect("fake daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Recovered) => {}
+            other => panic!("expected Ok(Recovered), got {other:?}"),
+        }
+        assert!(
+            !sock_path.exists(),
+            "legacy daemon's socket file must be removed after recovery"
+        );
+    }
+
+    /// AC-4: a compatible (current-version) daemon is left untouched —
+    /// `recover_from_legacy_daemon` performs exactly one Hello/Welcome
+    /// round trip and reports `Compatible` without sending Shutdown.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_is_noop_against_a_compatible_daemon() {
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("compatible.sock");
+        let listener = UnixListener::bind(&sock_path).expect("bind fake v2 daemon socket");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let hello_frame = read_frame(&mut stream);
+            let hello: HelloMsg = hello_frame.decode_payload().expect("Hello payload");
+            assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
+            let accept = WelcomeMsg::Accepted {
+                server_version: PROTOCOL_VERSION,
+                sessions: Vec::<crate::mux::ipc::protocol::SessionInfo>::new(),
+            };
+            write_welcome(&mut stream, &accept);
+        });
+
+        let result = recover_from_legacy_daemon(&sock_path);
+        server.join().expect("fake daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert!(sock_path.exists(), "a compatible daemon is left untouched");
+    }
+
+    /// AC-2: `emterm mux kill`'s underlying helper succeeds against a v1
+    /// daemon. AC-3: the resulting message is plain, human-readable text —
+    /// never an opaque bincode/decode error.
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_daemon_any_version_succeeds_against_v1_daemon() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("legacy.sock");
+        let server = spawn_fake_legacy_daemon(sock_path.clone());
+
+        let result = shutdown_daemon_any_version(&sock_path);
+        server.join().expect("fake daemon thread panicked");
+
+        match result {
+            Ok(ShutdownOutcome::ShutDown(msg)) => {
+                assert!(
+                    msg.is_ascii(),
+                    "expected a plain-text status message, got {msg:?}"
+                );
+                assert!(
+                    msg.to_lowercase().contains("protocol version"),
+                    "expected the message to explain the protocol mismatch, got {msg:?}"
+                );
+            }
+            other => panic!("expected Ok(ShutDown(_)), got {other:?}"),
+        }
+    }
+
+    /// `shutdown_daemon_any_version` falls back to stale-file cleanup when
+    /// the daemon is unreachable outright (process already gone), mirroring
+    /// the pre-task0010 `execute_kill` behavior.
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_daemon_any_version_removes_stale_socket_when_unreachable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // No listener bound at this path: connect() fails immediately.
+        let sock_path = dir.path().join("nothing-here.sock");
+
+        let result = shutdown_daemon_any_version(&sock_path);
+        match result {
+            Ok(ShutdownOutcome::StaleSocketRemoved(msg)) => {
+                assert!(msg.contains("not reachable"));
+            }
+            other => panic!("expected Ok(StaleSocketRemoved(_)), got {other:?}"),
+        }
     }
 
     #[cfg(unix)]
