@@ -757,15 +757,15 @@ const SCROLLBACK_READ_TAIL_BYTES: usize = 512 * 1024;
 /// Cap on `SendText` payload size (NFR1: request validation).
 const SEND_MAX_BYTES: usize = 1024 * 1024;
 
-fn unknown_pane_error(public_pane_id: &str) -> AgentApiErrorMsg {
-    AgentApiErrorMsg {
+fn unknown_pane_error(public_pane_id: &str) -> AgentApiError {
+    AgentApiError {
         kind: AgentApiErrorKind::UnknownPane,
         message: format!("unknown pane: {public_pane_id}"),
     }
 }
 
-fn invalid_payload_error() -> AgentApiErrorMsg {
-    AgentApiErrorMsg {
+fn invalid_payload_error() -> AgentApiError {
+    AgentApiError {
         kind: AgentApiErrorKind::InvalidInput,
         message: "invalid request payload".to_string(),
     }
@@ -865,7 +865,7 @@ fn render_pane_tail(scrollback_tail: &[u8], screen_contents: &str, lines: u32) -
 async fn resolve_read_targets(
     public_pane_id: &str,
     session_manager: &Arc<Mutex<SessionManager>>,
-) -> Result<(SharedShadowParser, SharedScrollback), AgentApiErrorMsg> {
+) -> Result<(SharedShadowParser, SharedScrollback), AgentApiError> {
     let pane_id = crate::mux::daemon::resolve_public_pane_id(public_pane_id)
         .ok_or_else(|| unknown_pane_error(public_pane_id))?;
     let mgr = session_manager.lock().await;
@@ -887,7 +887,7 @@ async fn resolve_read_targets(
 pub(super) async fn handle_read_pane(
     msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-) -> Result<ReadPaneResultMsg, AgentApiErrorMsg> {
+) -> Result<ReadPaneResultMsg, AgentApiError> {
     let req: ReadPaneMsg = msg.decode_payload().ok_or_else(invalid_payload_error)?;
     let lines = req.lines.clamp(1, READ_LINES_MAX);
 
@@ -915,17 +915,17 @@ pub(super) async fn handle_read_pane(
 pub(super) async fn handle_send_text(
     msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-) -> Result<SendTextResultMsg, AgentApiErrorMsg> {
+) -> Result<SendTextResultMsg, AgentApiError> {
     let req: SendTextMsg = msg.decode_payload().ok_or_else(invalid_payload_error)?;
 
     if req.bytes.contains(&0) {
-        return Err(AgentApiErrorMsg {
+        return Err(AgentApiError {
             kind: AgentApiErrorKind::InvalidInput,
             message: "input must not contain NUL bytes".to_string(),
         });
     }
     if req.bytes.len() > SEND_MAX_BYTES {
-        return Err(AgentApiErrorMsg {
+        return Err(AgentApiError {
             kind: AgentApiErrorKind::InvalidInput,
             message: format!("input exceeds the {SEND_MAX_BYTES}-byte cap"),
         });
@@ -951,7 +951,7 @@ pub(super) async fn handle_send_text(
     // pane's writer mutex for the whole write+flush, matching the
     // atomicity every other PtyInput write already relies on.
     let watermark = pane.agent_status.lock().unwrap().revision;
-    pane.write_input(&req.bytes).map_err(|e| AgentApiErrorMsg {
+    pane.write_input(&req.bytes).map_err(|e| AgentApiError {
         kind: AgentApiErrorKind::InvalidInput,
         message: format!("failed to write to pane: {e}"),
     })?;
@@ -1036,10 +1036,10 @@ pub(in crate::mux) fn fail_agent_waiters_pane_gone(pane: &MuxPane) {
 pub(super) async fn handle_wait_agent_state(
     msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-) -> Result<WaitAgentStateResultMsg, AgentApiErrorMsg> {
+) -> Result<WaitAgentStateResultMsg, AgentApiError> {
     let req: WaitAgentStateMsg = msg.decode_payload().ok_or_else(invalid_payload_error)?;
     if req.states.is_empty() {
-        return Err(AgentApiErrorMsg {
+        return Err(AgentApiError {
             kind: AgentApiErrorKind::InvalidInput,
             message: "states must not be empty".to_string(),
         });
@@ -1086,15 +1086,15 @@ pub(super) async fn handle_wait_agent_state(
         Ok(Ok(AgentWaitOutcome::Matched { state, revision })) => {
             Ok(WaitAgentStateResultMsg { state, revision })
         }
-        Ok(Ok(AgentWaitOutcome::PaneGone)) => Err(AgentApiErrorMsg {
+        Ok(Ok(AgentWaitOutcome::PaneGone)) => Err(AgentApiError {
             kind: AgentApiErrorKind::PaneGone,
             message: format!("pane {} was destroyed while waiting", req.public_pane_id),
         }),
-        Ok(Err(_)) => Err(AgentApiErrorMsg {
+        Ok(Err(_)) => Err(AgentApiError {
             kind: AgentApiErrorKind::PaneGone,
             message: "waiter channel closed unexpectedly".to_string(),
         }),
-        Err(_elapsed) => Err(AgentApiErrorMsg {
+        Err(_elapsed) => Err(AgentApiError {
             kind: AgentApiErrorKind::Timeout,
             message: "wait timed out".to_string(),
         }),
