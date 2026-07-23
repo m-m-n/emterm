@@ -18,8 +18,30 @@ use serde::{Deserialize, Serialize};
 /// The handshake path (`HelloMsg::protocol_version` vs this constant,
 /// checked in `mux/ipc/connection.rs`) rejects a mismatched client
 /// cleanly via `WelcomeMsg::Rejected` — there is no silent compatibility
-/// shim between protocol versions.
+/// shim between protocol versions on the daemon side.
+///
+/// Client-side recovery (task0010 rework, strategy B): a hard version bump
+/// alone would strand a long-lived old daemon after an eMterm upgrade, since
+/// daemon discovery (`ensure_daemon_running`) was presence-based and never
+/// probed compatibility. `mux/daemon.rs` now performs a real handshake
+/// before trusting an already-running daemon; on a version mismatch it
+/// retries with [`PREVIOUS_PROTOCOL_VERSION`] (which the older daemon
+/// accepts) and sends a version-tolerant `Shutdown`, then relaunches a
+/// current-version daemon. See IMPLEMENTATION.md "Old GUI × new daemon
+/// pairing".
 pub const PROTOCOL_VERSION: u32 = 2;
+
+/// The protocol version immediately preceding [`PROTOCOL_VERSION`].
+///
+/// Used only for the client-side legacy-daemon recovery handshake retry
+/// (`mux/daemon.rs::recover_from_legacy_daemon` /
+/// `shutdown_daemon_any_version`, task0010 rework): a v2 client that meets a
+/// daemon rejecting its v2 Hello retries with this version so an adjacent
+/// older daemon accepts the connection and can be sent a `Shutdown`.
+/// Deliberately supports only one version back — recovering a daemon more
+/// than one bump behind is out of scope (see task0010's plan "Out of
+/// Scope").
+pub const PREVIOUS_PROTOCOL_VERSION: u32 = PROTOCOL_VERSION - 1;
 
 /// APC prefix for identifying emterm mux APC sequences.
 pub const APC_PREFIX: &str = "emterm-mux;";
@@ -193,6 +215,32 @@ pub enum WelcomeMsg {
     Rejected {
         reason: String,
     },
+}
+
+/// Best-effort parse of the daemon's reported protocol version out of a
+/// `WelcomeMsg::Rejected` reason string produced by the version-mismatch
+/// path in `mux/ipc/connection.rs`
+/// (`"Protocol version mismatch: client={client}, server={server}"`).
+///
+/// This is deliberately NOT part of the `WelcomeMsg` wire shape: an older
+/// daemon's `Rejected { reason }` bincode payload must decode against the
+/// CURRENT `WelcomeMsg` definition unchanged (bincode has no
+/// forward/backward field tolerance), so the recovery path
+/// (task0010 rework) reads the server version out of the free-form reason
+/// text instead of adding a structured field. Returns `None` for any other
+/// reason text (a rejection for a different cause, or a future daemon that
+/// changes this wording) — callers must treat that as "version unknown",
+/// never panic, and fall back to a generic message (AC-3).
+pub fn parse_rejected_server_version(reason: &str) -> Option<u32> {
+    let after_marker = reason.rsplit_once("server=")?.1;
+    let digits: String = after_marker
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u32>().ok()
 }
 
 /// Resize request for a pane.
@@ -1761,5 +1809,49 @@ mod tests {
     #[test]
     fn test_protocol_version_bumped_for_agent_api_additions() {
         assert_eq!(PROTOCOL_VERSION, 2);
+    }
+
+    // ---- task0010 rework: safe PROTOCOL_VERSION upgrade path (strategy B) ----
+
+    /// AC-1: the adjacent-version constant tracks `PROTOCOL_VERSION - 1`
+    /// exactly, so a future bump keeps the recovery retry one version back.
+    #[test]
+    fn test_previous_protocol_version_is_adjacent() {
+        assert_eq!(PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION - 1);
+        assert_eq!(PREVIOUS_PROTOCOL_VERSION, 1);
+    }
+
+    /// AC-1: parses the exact reason text the daemon's version-mismatch
+    /// path produces.
+    #[test]
+    fn test_parse_rejected_server_version_matches_daemon_format() {
+        let reason = format!(
+            "Protocol version mismatch: client={}, server={}",
+            PROTOCOL_VERSION, PREVIOUS_PROTOCOL_VERSION
+        );
+        assert_eq!(
+            parse_rejected_server_version(&reason),
+            Some(PREVIOUS_PROTOCOL_VERSION)
+        );
+    }
+
+    /// AC-3: a rejection for any other reason never gets misread as a
+    /// version number — no panic, just `None`.
+    #[test]
+    fn test_parse_rejected_server_version_returns_none_for_unrelated_reason() {
+        assert_eq!(parse_rejected_server_version("Connection refused"), None);
+        assert_eq!(parse_rejected_server_version(""), None);
+        assert_eq!(parse_rejected_server_version("server=not-a-number"), None);
+        assert_eq!(parse_rejected_server_version("server="), None);
+    }
+
+    /// AC-1: only the digits immediately after `server=` are consumed, so
+    /// trailing text in a future reason format doesn't corrupt the parse.
+    #[test]
+    fn test_parse_rejected_server_version_stops_at_non_digit() {
+        assert_eq!(
+            parse_rejected_server_version("client=2, server=1 (extra info)"),
+            Some(1)
+        );
     }
 }
