@@ -1,0 +1,74 @@
+<!doctype html>
+<!-- Design spec mockup — NOT implementation. Token values mirror
+     src-tauri/src/ui/md3.rs PALETTE_PURPLE (dark). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>mux-agent-status-api — status-bar summary</title>
+<style>
+  :root {
+    --color-surface: #141218;
+    --color-surface-container: #211F26;
+    --color-on-surface: #E6E0E9;
+    --color-on-surface-variant: #CAC4D0;
+    --color-outline-variant: #49454F;
+    --color-primary: #D0BCFF;
+    --color-on-secondary-container: #E8DEF8;
+    --color-on-error-container: #F9DEDC;
+  }
+  body { background: var(--color-surface); color: var(--color-on-surface);
+         font-family: sans-serif; margin: 24px; }
+  h2 { font-size: 14px; color: var(--color-on-surface-variant); font-weight: 500; }
+  .statusbar { display: flex; align-items: center; justify-content: space-between;
+               background: var(--color-surface-container);
+               border-top: 1px solid var(--color-outline-variant);
+               padding: 2px 12px; font-size: 12px;
+               color: var(--color-on-surface-variant); }
+  /* Agent summary: right-aligned segment of the app row (row 1 of 3).
+     Per-state group = 8px dot + count, label-extra-small (11px/16, w500).
+     Order: blocked, working, done, idle. Zero-count states omitted.
+     Whole segment hidden when no pane has a reported state. */
+  .agents { display: flex; align-items: center; gap: 8px;
+            font-size: 11px; line-height: 16px; font-weight: 500; }
+  .group { display: inline-flex; align-items: center; gap: 4px; }
+  .dot { width: 8px; height: 8px; border-radius: 9999px; }
+  .dot.blocked { background: var(--color-on-error-container); }
+  .dot.working { background: var(--color-primary); }
+  .dot.done    { background: var(--color-on-secondary-container); }
+  .dot.idle    { background: var(--color-on-surface-variant); }
+  section { margin-bottom: 28px; }
+</style>
+</head>
+<body>
+
+<section data-state="default">
+  <h2>App row with agent summary (right-aligned; counts by semantic state)</h2>
+  <div class="statusbar">
+    <span>~/src/my_projects — zsh</span>
+    <span class="agents">
+      <span class="group"><span class="dot blocked"></span>2</span>
+      <span class="group"><span class="dot working"></span>1</span>
+      <span class="group"><span class="dot done"></span>1</span>
+    </span>
+  </div>
+</section>
+
+<section data-state="partial">
+  <h2>Zero-count states omitted (only working panes exist)</h2>
+  <div class="statusbar">
+    <span>~/src/my_projects — zsh</span>
+    <span class="agents">
+      <span class="group"><span class="dot working"></span>3</span>
+    </span>
+  </div>
+</section>
+
+<section data-state="empty">
+  <h2>Empty — no reported states: segment fully hidden, row unchanged from today</h2>
+  <div class="statusbar">
+    <span>~/src/my_projects — zsh</span>
+  </div>
+</section>
+
+</body>
+</html>
