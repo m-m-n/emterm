@@ -262,6 +262,21 @@ pub fn state_from_wire(state: mux_ipc::protocol::AgentState) -> AgentState {
     }
 }
 
+/// The inverse of [`state_from_wire`]: convert the core
+/// `crate::agent_status::AgentState` this model stores back into the
+/// wire-level `mux_ipc::protocol::AgentState` mirror. Used by the
+/// notification wiring (task0009) to build a
+/// `crate::notifications::AgentTransition` from a drained [`Transition`],
+/// whose `old_state`/`new_state` are core-enum values.
+pub fn state_to_wire(state: AgentState) -> mux_ipc::protocol::AgentState {
+    match state {
+        AgentState::Idle => mux_ipc::protocol::AgentState::Idle,
+        AgentState::Working => mux_ipc::protocol::AgentState::Working,
+        AgentState::Blocked => mux_ipc::protocol::AgentState::Blocked,
+        AgentState::Done => mux_ipc::protocol::AgentState::Done,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -612,5 +627,37 @@ mod tests {
             state_from_wire(mux_ipc::protocol::AgentState::Done),
             AgentState::Done
         );
+    }
+
+    #[test]
+    fn state_to_wire_maps_every_variant() {
+        assert_eq!(
+            state_to_wire(AgentState::Idle),
+            mux_ipc::protocol::AgentState::Idle
+        );
+        assert_eq!(
+            state_to_wire(AgentState::Working),
+            mux_ipc::protocol::AgentState::Working
+        );
+        assert_eq!(
+            state_to_wire(AgentState::Blocked),
+            mux_ipc::protocol::AgentState::Blocked
+        );
+        assert_eq!(
+            state_to_wire(AgentState::Done),
+            mux_ipc::protocol::AgentState::Done
+        );
+    }
+
+    #[test]
+    fn state_to_wire_and_state_from_wire_round_trip() {
+        for state in [
+            AgentState::Idle,
+            AgentState::Working,
+            AgentState::Blocked,
+            AgentState::Done,
+        ] {
+            assert_eq!(state_from_wire(state_to_wire(state)), state);
+        }
     }
 }
