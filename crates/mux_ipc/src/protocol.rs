@@ -9,7 +9,17 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 
 /// Protocol version for handshake compatibility check.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// Bumped 1 -> 2 for the mux-agent-status-api feature's new message types
+/// (`ReadPane` / `SendText` / `WaitAgentState` and their result / error
+/// payloads, task0004's provisional addition pending task0002's canonical
+/// landing — see IMPLEMENTATION.md "mux_ipc protocol additions"). Existing
+/// message encodings, `StatusUpdate`, and `Snapshot` payload bytes are
+/// unchanged; a client/daemon pairing with mismatched
+/// `PROTOCOL_VERSION` fails the handshake cleanly via the existing
+/// `WelcomeMsg::Rejected` path (see `mux::ipc::connection::handle_connection`)
+/// rather than misparsing.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// APC prefix for identifying emterm mux APC sequences.
 pub const APC_PREFIX: &str = "emterm-mux;";
@@ -71,6 +81,28 @@ pub enum MessageType {
     /// Daemon-originated desktop notification (OSC 9) detected on a Detached
     /// pane. Forwarded to the GUI client, which fires the OS notification.
     Notify = 0x1C,
+    // mux-agent-status-api additions (task0004 provisional; see
+    // IMPLEMENTATION.md "mux_ipc protocol additions" / "Public pane ID
+    // format"). Requests are CLI -> daemon; results/error are daemon ->
+    // CLI. `AgentStatusUpdate` (daemon -> GUI, unsolicited) is reserved
+    // for task0003/task0005 and intentionally not defined here.
+    /// Request: read the tail N rendered rows of a mux pane
+    /// (`ReadPaneMsg` -> `ReadPaneResultMsg` | `AgentApiErrorMsg`).
+    ReadPane = 0x1D,
+    /// Request: write bytes to a mux pane's PTY
+    /// (`SendTextMsg` -> `SendTextResultMsg` | `AgentApiErrorMsg`).
+    SendText = 0x1E,
+    /// Request: block until a mux pane's agent state enters a given set
+    /// (`WaitAgentStateMsg` -> `WaitAgentStateResultMsg` | `AgentApiErrorMsg`).
+    WaitAgentState = 0x1F,
+    /// Response payload for `ReadPane`.
+    ReadPaneResult = 0x20,
+    /// Response payload for `SendText`.
+    SendTextResult = 0x21,
+    /// Response payload for `WaitAgentState`.
+    WaitAgentStateResult = 0x22,
+    /// Shared error response for `ReadPane` / `SendText` / `WaitAgentState`.
+    AgentApiError = 0x23,
 }
 
 impl MessageType {
@@ -103,6 +135,13 @@ impl MessageType {
             0x1A => Some(Self::MoveWindow),
             0x1B => Some(Self::SetVisibility),
             0x1C => Some(Self::Notify),
+            0x1D => Some(Self::ReadPane),
+            0x1E => Some(Self::SendText),
+            0x1F => Some(Self::WaitAgentState),
+            0x20 => Some(Self::ReadPaneResult),
+            0x21 => Some(Self::SendTextResult),
+            0x22 => Some(Self::WaitAgentStateResult),
+            0x23 => Some(Self::AgentApiError),
             _ => None,
         }
     }
@@ -245,6 +284,132 @@ pub struct MoveWindowMsg {
 pub struct CreateWindowPayload {
     pub name: Option<String>,
     pub command: Option<String>,
+}
+
+// ---- mux-agent-status-api: agent-facing API messages (task0004 provisional) ----
+//
+// These types implement the wire contract pinned in IMPLEMENTATION.md
+// ("mux_ipc protocol additions" / "Public pane ID format" / "Revision
+// semantics"). They are declared here — ahead of task0002, which formally
+// owns this file — because task0004 (daemon handlers + `emterm mux`
+// CLI) cannot compile without them; task0002 landing its own version is
+// expected to produce a merge conflict resolved via parent-side adoption
+// (re-implementing task0004's handler code against task0002's canonical
+// shapes, which are pinned to be identical to these).
+
+/// Agent state reported via `OSC 777;emterm;agent-status`. Local mirror of
+/// the core module's enum (`src-tauri/src/agent_status.rs`, task0001):
+/// `mux_ipc` must not depend on the binary crate, so this crate hosts the
+/// plain wire-representation type and the core module is expected to reuse
+/// it. The string wire values (`idle|working|blocked|done`) are the FR1
+/// contract; this enum's variant order is NOT the wire encoding (bincode
+/// encodes by discriminant, never observed off-process).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentState {
+    Idle,
+    Working,
+    Blocked,
+    Done,
+}
+
+/// Request: read the tail `lines` rendered rows of a mux pane (current
+/// screen + scrollback tail), ANSI-stripped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadPaneMsg {
+    pub public_pane_id: String,
+    pub lines: u32,
+}
+
+/// Response to `ReadPaneMsg`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadPaneResultMsg {
+    pub text: String,
+}
+
+/// Request: write `bytes` verbatim to a mux pane's PTY (no implicit Enter,
+/// no key interpretation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendTextMsg {
+    pub public_pane_id: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Response to `SendTextMsg`: the pane's revision as observed immediately
+/// before the successful write (the watermark).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendTextResultMsg {
+    pub revision_watermark: u64,
+}
+
+/// Request: block (server-side) until the pane's agent state enters
+/// `states`, optionally requiring `revision > after_revision`
+/// (send-then-wait linearization). Level-triggered: an already-qualifying
+/// state at request time resolves immediately.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaitAgentStateMsg {
+    pub public_pane_id: String,
+    pub states: Vec<AgentState>,
+    pub timeout_ms: u64,
+    pub after_revision: Option<u64>,
+}
+
+/// Response to `WaitAgentStateMsg` on success.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaitAgentStateResultMsg {
+    pub state: AgentState,
+    pub revision: u64,
+}
+
+/// Error kinds shared by `ReadPane` / `SendText` / `WaitAgentState`.
+///
+/// `NotMuxPane` is the CLI-facing name reserved for targets outside the
+/// daemon's pane set (e.g. plain tabs). Per task0004's design decision the
+/// daemon currently resolves that case identically to `UnknownPane` on the
+/// wire (both wire-identical per the shared error contract); the CLI's
+/// exit-code mapping still keys off this variant so a future daemon
+/// revision can emit it distinctly without a CLI change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentApiErrorKind {
+    UnknownPane,
+    NotMuxPane,
+    Timeout,
+    PaneGone,
+    InvalidInput,
+}
+
+/// Error response for `ReadPane` / `SendText` / `WaitAgentState`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentApiErrorMsg {
+    pub kind: AgentApiErrorKind,
+    pub message: String,
+}
+
+/// Compose a public (API-facing, opaque) pane ID from a daemon incarnation
+/// token and the internal wire pane ID. See IMPLEMENTATION.md "Public pane
+/// ID format": `"{incarnation}-{pane_id}"`. Pure — the incarnation token
+/// itself is minted daemon-side (task0003/task0004), not by this crate.
+pub fn compose_public_pane_id(incarnation: &str, pane_id: u32) -> String {
+    format!("{incarnation}-{pane_id}")
+}
+
+/// Parse a public pane ID back into its `(incarnation, pane_id)` parts.
+///
+/// Returns `None` — never panics — for any malformed input: missing
+/// separator, empty/non-lowercase-hex incarnation, or a pane-id segment
+/// that fails to parse as `u32` (non-numeric or overflow). Splits on the
+/// LAST `-` so a hypothetical future incarnation scheme containing `-` still
+/// resolves correctly against the purely-numeric pane-id suffix.
+pub fn parse_public_pane_id(s: &str) -> Option<(String, u32)> {
+    let (incarnation, pane_id_str) = s.rsplit_once('-')?;
+    if incarnation.is_empty()
+        || !incarnation
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() && b.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let pane_id = pane_id_str.parse::<u32>().ok()?;
+    Some((incarnation.to_string(), pane_id))
 }
 
 /// A complete IPC message with header and payload.
@@ -424,7 +589,7 @@ mod tests {
 
     #[test]
     fn test_message_type_round_trip() {
-        for i in 0x01..=0x1Cu8 {
+        for i in 0x01..=0x23u8 {
             if i == 0x11 {
                 // 0x11 (SplitPane) was removed -- must return None
                 continue;
@@ -436,7 +601,7 @@ mod tests {
         assert!(MessageType::from_u8(0x11).is_none());
         assert_eq!(MessageType::from_u8(0x1B), Some(MessageType::SetVisibility));
         assert_eq!(MessageType::from_u8(0x1C), Some(MessageType::Notify));
-        assert!(MessageType::from_u8(0x1d).is_none());
+        assert!(MessageType::from_u8(0x24).is_none());
         assert!(MessageType::from_u8(0xff).is_none());
     }
 
@@ -799,7 +964,7 @@ mod tests {
 
     #[test]
     fn test_apc_round_trip_all_message_types() {
-        for i in 0x01..=0x1Cu8 {
+        for i in 0x01..=0x23u8 {
             if i == 0x11 {
                 // 0x11 (SplitPane) was removed
                 continue;
@@ -1199,5 +1364,205 @@ mod tests {
             }
             _ => panic!("Expected Accepted"),
         }
+    }
+
+    // ---- mux-agent-status-api: agent API message round-trips (task0004) ----
+
+    #[test]
+    fn test_read_pane_msg_via_mux_message() {
+        let req = ReadPaneMsg {
+            public_pane_id: "abc123-7".to_string(),
+            lines: 100,
+        };
+        let msg = MuxMessage::control(MessageType::ReadPane, 0, &req);
+        let parsed = MuxMessage::from_frame_body(&msg.to_frame_body()).unwrap();
+        assert_eq!(parsed.msg_type, MessageType::ReadPane);
+        let decoded: ReadPaneMsg = parsed.decode_payload().unwrap();
+        assert_eq!(decoded.public_pane_id, "abc123-7");
+        assert_eq!(decoded.lines, 100);
+    }
+
+    #[test]
+    fn test_read_pane_result_msg_round_trip() {
+        let result = ReadPaneResultMsg {
+            text: "line1\nline2\n日本語".to_string(),
+        };
+        let msg = MuxMessage::control(MessageType::ReadPaneResult, 0, &result);
+        let decoded: ReadPaneResultMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
+            .unwrap()
+            .decode_payload()
+            .unwrap();
+        assert_eq!(decoded.text, "line1\nline2\n日本語");
+    }
+
+    #[test]
+    fn test_send_text_msg_round_trip_with_bytes() {
+        let req = SendTextMsg {
+            public_pane_id: "abc123-7".to_string(),
+            bytes: b"hello\n".to_vec(),
+        };
+        let msg = MuxMessage::control(MessageType::SendText, 0, &req);
+        let decoded: SendTextMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
+            .unwrap()
+            .decode_payload()
+            .unwrap();
+        assert_eq!(decoded.public_pane_id, "abc123-7");
+        assert_eq!(decoded.bytes, b"hello\n");
+    }
+
+    #[test]
+    fn test_send_text_result_msg_round_trip() {
+        let result = SendTextResultMsg {
+            revision_watermark: 42,
+        };
+        let msg = MuxMessage::control(MessageType::SendTextResult, 0, &result);
+        let decoded: SendTextResultMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
+            .unwrap()
+            .decode_payload()
+            .unwrap();
+        assert_eq!(decoded.revision_watermark, 42);
+    }
+
+    #[test]
+    fn test_wait_agent_state_msg_round_trip() {
+        let req = WaitAgentStateMsg {
+            public_pane_id: "abc123-7".to_string(),
+            states: vec![AgentState::Blocked, AgentState::Done],
+            timeout_ms: 30_000,
+            after_revision: Some(5),
+        };
+        let msg = MuxMessage::control(MessageType::WaitAgentState, 0, &req);
+        let decoded: WaitAgentStateMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
+            .unwrap()
+            .decode_payload()
+            .unwrap();
+        assert_eq!(decoded.public_pane_id, "abc123-7");
+        assert_eq!(decoded.states, vec![AgentState::Blocked, AgentState::Done]);
+        assert_eq!(decoded.timeout_ms, 30_000);
+        assert_eq!(decoded.after_revision, Some(5));
+    }
+
+    #[test]
+    fn test_wait_agent_state_msg_no_after_revision() {
+        let req = WaitAgentStateMsg {
+            public_pane_id: "x-1".to_string(),
+            states: vec![AgentState::Idle],
+            timeout_ms: 0,
+            after_revision: None,
+        };
+        let msg = MuxMessage::control(MessageType::WaitAgentState, 0, &req);
+        let decoded: WaitAgentStateMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
+            .unwrap()
+            .decode_payload()
+            .unwrap();
+        assert_eq!(decoded.after_revision, None);
+    }
+
+    #[test]
+    fn test_wait_agent_state_result_msg_round_trip() {
+        let result = WaitAgentStateResultMsg {
+            state: AgentState::Working,
+            revision: 3,
+        };
+        let msg = MuxMessage::control(MessageType::WaitAgentStateResult, 0, &result);
+        let decoded: WaitAgentStateResultMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
+            .unwrap()
+            .decode_payload()
+            .unwrap();
+        assert_eq!(decoded.state, AgentState::Working);
+        assert_eq!(decoded.revision, 3);
+    }
+
+    #[test]
+    fn test_agent_api_error_msg_round_trip_all_kinds() {
+        for kind in [
+            AgentApiErrorKind::UnknownPane,
+            AgentApiErrorKind::NotMuxPane,
+            AgentApiErrorKind::Timeout,
+            AgentApiErrorKind::PaneGone,
+            AgentApiErrorKind::InvalidInput,
+        ] {
+            let err = AgentApiErrorMsg {
+                kind,
+                message: "boom".to_string(),
+            };
+            let msg = MuxMessage::control(MessageType::AgentApiError, 0, &err);
+            let decoded: AgentApiErrorMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
+                .unwrap()
+                .decode_payload()
+                .unwrap();
+            assert_eq!(decoded.kind, kind);
+            assert_eq!(decoded.message, "boom");
+        }
+    }
+
+    #[test]
+    fn test_read_send_wait_message_types_discriminants() {
+        assert_eq!(MessageType::ReadPane as u8, 0x1D);
+        assert_eq!(MessageType::SendText as u8, 0x1E);
+        assert_eq!(MessageType::WaitAgentState as u8, 0x1F);
+        assert_eq!(MessageType::ReadPaneResult as u8, 0x20);
+        assert_eq!(MessageType::SendTextResult as u8, 0x21);
+        assert_eq!(MessageType::WaitAgentStateResult as u8, 0x22);
+        assert_eq!(MessageType::AgentApiError as u8, 0x23);
+    }
+
+    // ---- public pane ID compose/parse (task0004 provisional, IMPLEMENTATION.md
+    // "Public pane ID format") ----
+
+    #[test]
+    fn public_pane_id_compose_parse_round_trip() {
+        let composed = compose_public_pane_id("a1b2c3d4", 42);
+        assert_eq!(composed, "a1b2c3d4-42");
+        let (incarnation, pane_id) = parse_public_pane_id(&composed).unwrap();
+        assert_eq!(incarnation, "a1b2c3d4");
+        assert_eq!(pane_id, 42);
+    }
+
+    #[test]
+    fn public_pane_id_compose_parse_round_trip_pane_id_zero() {
+        let composed = compose_public_pane_id("00", 0);
+        let (incarnation, pane_id) = parse_public_pane_id(&composed).unwrap();
+        assert_eq!(incarnation, "00");
+        assert_eq!(pane_id, 0);
+    }
+
+    #[test]
+    fn public_pane_id_parse_rejects_empty() {
+        assert!(parse_public_pane_id("").is_none());
+    }
+
+    #[test]
+    fn public_pane_id_parse_rejects_missing_separator() {
+        assert!(parse_public_pane_id("nodash").is_none());
+    }
+
+    #[test]
+    fn public_pane_id_parse_rejects_non_hex_incarnation() {
+        assert!(parse_public_pane_id("not-hex-42").is_none());
+        assert!(parse_public_pane_id("zz-1").is_none());
+    }
+
+    #[test]
+    fn public_pane_id_parse_rejects_uppercase_incarnation() {
+        // "lowercase-hex token" per IMPLEMENTATION.md: uppercase hex digits
+        // are rejected even though they are valid hex.
+        assert!(parse_public_pane_id("ABCD-1").is_none());
+    }
+
+    #[test]
+    fn public_pane_id_parse_rejects_pane_id_overflow() {
+        // u32::MAX + 1
+        assert!(parse_public_pane_id("abcd-4294967296").is_none());
+    }
+
+    #[test]
+    fn public_pane_id_parse_rejects_non_numeric_pane_id() {
+        assert!(parse_public_pane_id("abcd-notanumber").is_none());
+    }
+
+    #[test]
+    fn public_pane_id_parse_rejects_empty_incarnation() {
+        assert!(parse_public_pane_id("-42").is_none());
     }
 }

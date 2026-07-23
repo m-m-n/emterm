@@ -6,10 +6,55 @@ use std::sync::{Arc, Mutex as StdMutex};
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
+use crate::mux::ipc::protocol::AgentState;
 use crate::mux::scrollback_buffer::{DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer};
 use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
+
+/// Per-pane agent-status snapshot (IMPLEMENTATION.md "Revision semantics").
+///
+/// Provisional infrastructure introduced by task0004 (read/send/wait API),
+/// which needs a place to read the pre-write revision watermark (`send`)
+/// and the current state (`wait`). task0003 owns the OSC-driven ingestion
+/// that mutates `state` / `name` and increments `revision` on every
+/// accepted report (set, clear, same-state re-report); task0004 only reads
+/// this field and appends to `agent_waiters` below.
+#[derive(Debug, Clone, Default)]
+pub struct AgentPaneStatus {
+    pub state: Option<AgentState>,
+    pub name: Option<String>,
+    pub revision: u64,
+}
+
+/// Thread-safe shared reference to a pane's agent-status snapshot.
+pub type SharedAgentPaneStatus = Arc<StdMutex<AgentPaneStatus>>;
+
+/// A registered `WaitAgentState` request awaiting a qualifying state change
+/// (IMPLEMENTATION.md "Wait implementation"). Level-triggered: fires when
+/// `states` contains the pane's current state AND (if set) the current
+/// revision exceeds `after_revision`.
+///
+/// `responder` is `Option` so a firing/cleanup pass can `.take()` the
+/// owned `Sender` out of a `&mut` iteration (`oneshot::Sender::send`
+/// consumes `self`).
+pub struct AgentWaiter {
+    pub states: Vec<AgentState>,
+    pub after_revision: Option<u64>,
+    pub responder: Option<tokio::sync::oneshot::Sender<AgentWaitOutcome>>,
+}
+
+/// Outcome delivered to a registered [`AgentWaiter`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentWaitOutcome {
+    /// The waiter's condition was satisfied.
+    Matched { state: AgentState, revision: u64 },
+    /// The pane was destroyed while the waiter was pending.
+    PaneGone,
+}
+
+/// Thread-safe shared reference to a pane's registered agent-state waiters.
+pub type SharedAgentWaiters = Arc<StdMutex<Vec<AgentWaiter>>>;
 
 /// Pane identifier.
 pub type PaneId = u32;
@@ -510,6 +555,12 @@ pub struct MuxPane {
     /// detached; Phase C will switch to always-on writes so pre-detach
     /// scrollback is also retained.
     pub scrollback: SharedScrollback,
+    /// Current agent-status snapshot (state/name/revision). See
+    /// [`AgentPaneStatus`].
+    pub agent_status: SharedAgentPaneStatus,
+    /// Registered `WaitAgentState` waiters for this pane. See
+    /// [`AgentWaiter`].
+    pub agent_waiters: SharedAgentWaiters,
 }
 
 impl MuxPane {
@@ -542,6 +593,8 @@ impl MuxPane {
             scrollback: Arc::new(StdMutex::new(ScrollbackRingBuffer::new(
                 DEFAULT_SCROLLBACK_CAPACITY,
             ))),
+            agent_status: Arc::new(StdMutex::new(AgentPaneStatus::default())),
+            agent_waiters: Arc::new(StdMutex::new(Vec::new())),
         }
     }
 
@@ -600,7 +653,20 @@ impl MuxPane {
     /// Create a pane without a PTY master, for testing only.
     #[cfg(test)]
     pub fn new_test(id: PaneId, cols: u16, rows: u16, output_target: SharedOutputTarget) -> Self {
-        let writer: Box<dyn Write + Send> = Box::new(std::io::sink());
+        Self::new_test_with_writer(id, cols, rows, output_target, Box::new(std::io::sink()))
+    }
+
+    /// Like [`Self::new_test`], but with a caller-supplied writer so tests
+    /// can capture exactly what `write_input` sends (e.g. `SendText`'s "no
+    /// trailing newline added" contract).
+    #[cfg(test)]
+    pub fn new_test_with_writer(
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        output_target: SharedOutputTarget,
+        writer: Box<dyn Write + Send>,
+    ) -> Self {
         Self {
             id,
             cols,
@@ -621,6 +687,8 @@ impl MuxPane {
             scrollback: Arc::new(StdMutex::new(ScrollbackRingBuffer::new(
                 DEFAULT_SCROLLBACK_CAPACITY,
             ))),
+            agent_status: Arc::new(StdMutex::new(AgentPaneStatus::default())),
+            agent_waiters: Arc::new(StdMutex::new(Vec::new())),
         }
     }
 }
