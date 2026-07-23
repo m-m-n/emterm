@@ -10,7 +10,7 @@ use crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS;
 
 /// The OSC 777 `<kind>` token for agent-status reports (SPEC FR1/FR4).
 /// Kept as a named constant so the strip predicate and the extraction scan
-/// ([`scan_agent_status_reports`]) share one literal.
+/// ([`AgentStatusOscScanner`]) share one literal.
 const AGENT_STATUS_OSC_KIND: &str = "agent-status";
 
 /// Remove rich-content viewer launch sequences from a completed byte run so a
@@ -232,52 +232,190 @@ fn is_replayable_osc_body(body: &[u8]) -> bool {
     false
 }
 
-/// Scan `bytes` (a single PTY reader chunk, NOT a stateful cross-chunk
-/// scan) for complete agent-status OSC 777 sequences and return their raw
-/// payload strings — `"emterm;agent-status;…"`, [`crate::agent_status::parse`]'s
-/// input contract — in the order they appear.
+/// Cap on the carry-over held by [`AgentStatusOscScanner`] for an in-flight
+/// (not-yet-terminated) OSC body. A legitimate `agent-status` payload
+/// (state + up to an 80-char percent-encoded name, SPEC NFR1) is always far
+/// smaller than this; the cap exists purely to bound an adversarial or
+/// wedged stream's memory footprint — an unterminated OSC introducer can
+/// never pin unbounded bytes (task0012 AC-3/AC-4, review round-1 rework).
+const AGENT_STATUS_SCANNER_CARRY_OVER_CAP: usize = 8 * 1024;
+
+/// Decode state for [`AgentStatusOscScanner`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AgentStatusScanState {
+    /// No partial OSC sequence in flight.
+    Idle,
+    /// Just consumed an ESC while `Idle`; waiting to see if the next byte is
+    /// `]` (OSC introducer).
+    SeenEsc,
+    /// Inside `ESC ] <body>`, accumulating body bytes in `partial` (the
+    /// introducer itself is not stored — `partial` holds body bytes only).
+    InsideOsc,
+    /// The most recent body byte was ESC, not yet pushed into `partial`,
+    /// pending disambiguation: `\` completes ST, `]` reopens as a fresh OSC
+    /// introducer (the just-seen ESC becomes ITS introducer), anything else
+    /// aborts the in-flight OSC without emitting.
+    InsideOscPendingSt,
+}
+
+/// Per-pane stateful decoder for the `agent-status` OSC 777 sequence (SPEC
+/// FR1/FR3).
 ///
-/// This mirrors the OSC scan in [`strip_replayable_rich_content`] /
-/// [`is_replayable_osc_body`] but EXTRACTS rather than strips, and is
-/// intentionally simpler: it operates on one already-available chunk, not
-/// the stateful cross-read-boundary machinery `ScrollbackWriteFilter`
-/// (`mux::ipc::pty_spawn`) uses for viewer-launch OSCs. An agent-status
-/// report split exactly across a PTY read boundary is not detected — an
-/// accepted trade-off given the payload (state + up to an 80-char
-/// percent-encoded name) is always far under the 64 KiB PTY read size.
+/// Unlike a stateless per-chunk scan, this scanner retains any incomplete
+/// OSC sequence across [`Self::feed`] calls, so a report split across an
+/// arbitrary PTY read boundary is still detected exactly once — the fix for
+/// review round-1 stable_id `osc_split_lost` (a report could previously be
+/// lost entirely if its terminator landed in a later `read()`).
 ///
-/// A non-UTF-8 body is skipped (lossy-decoded) rather than aborting the
-/// whole scan, so a malformed/foreign OSC elsewhere in the chunk cannot
-/// hide a well-formed report before or after it.
-pub(in crate::mux) fn scan_agent_status_reports(bytes: &[u8]) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut i = 0;
-    let n = bytes.len();
-    while i < n {
-        if bytes[i] != 0x1b || i + 1 >= n || bytes[i + 1] != b']' {
-            i += 1;
-            continue;
-        }
-        match find_osc_terminator(bytes, i + 2) {
-            Some(end) => {
-                let body = &bytes[i + 2..osc_body_end(bytes, end)];
-                if let Some(rest) = body.strip_prefix(b"777;emterm;agent-status;") {
-                    let mut payload = String::from("emterm;agent-status;");
-                    payload.push_str(&String::from_utf8_lossy(rest));
-                    out.push(payload);
-                }
-                i = end;
-            }
-            None => {
-                // This OSC introducer has no terminator within the chunk
-                // (split across a read boundary, or genuinely not an OSC 777
-                // agent-status report). Skip past it and keep scanning — a
-                // later, independent OSC introducer may still be complete.
-                i += 1;
-            }
+/// One instance is owned per pane's reader thread ([`crate::mux::ipc::pty_spawn::pty_reader_loop`]),
+/// mirroring how `ScrollbackWriteFilter` in that module owns its own
+/// per-pane cross-chunk state.
+///
+/// Behavior:
+/// - Both OSC terminators are recognized: BEL (`0x07`) and ST (`ESC \`).
+/// - Only a complete body starting `777;emterm;agent-status;` produces an
+///   event; any other OSC (a different `emterm` kind, or a foreign OSC
+///   entirely) is recognized as *not our concern* and silently discarded
+///   once terminated — no event, no error.
+/// - A bare ESC encountered mid-body that is not the start of ST aborts the
+///   in-flight OSC (nothing is emitted for it) and is immediately
+///   re-examined as a fresh candidate introducer, so a following complete
+///   `agent-status` OSC is still detected in the same `feed` call (mirrors
+///   the position-independent semantics the previous stateless scan had
+///   within one chunk).
+/// - The body carry-over is capped at [`AGENT_STATUS_SCANNER_CARRY_OVER_CAP`]:
+///   past that, the in-flight sequence is DROPPED (not emitted as a garbage
+///   event) and the scanner resets to `Idle`, so it recovers cleanly on the
+///   next well-formed sequence.
+pub(in crate::mux) struct AgentStatusOscScanner {
+    state: AgentStatusScanState,
+    /// Body bytes accumulated for the in-flight OSC (introducer and
+    /// terminator excluded).
+    partial: Vec<u8>,
+    /// True once a single carry-over-overflow warning has fired. Never
+    /// re-armed, matching `PassthroughScanner`'s "warn once" behavior so a
+    /// wedged/adversarial stream cannot spam the log.
+    overflow_warned: bool,
+}
+
+impl AgentStatusOscScanner {
+    pub(in crate::mux) fn new() -> Self {
+        Self {
+            state: AgentStatusScanState::Idle,
+            partial: Vec::new(),
+            overflow_warned: false,
         }
     }
-    out
+
+    /// Feed one PTY reader chunk. Returns every complete `agent-status`
+    /// report payload (`"emterm;agent-status;…"`,
+    /// [`crate::agent_status::parse`]'s input contract) that completed
+    /// during this call, in stream order. Any trailing incomplete OSC
+    /// sequence is retained in `self` and resumed on the next `feed` call.
+    pub(in crate::mux) fn feed(&mut self, chunk: &[u8]) -> Vec<String> {
+        let mut out = Vec::new();
+        for &b in chunk {
+            self.step(b, &mut out);
+            if self.partial.len() > AGENT_STATUS_SCANNER_CARRY_OVER_CAP {
+                if !self.overflow_warned {
+                    log::warn!(
+                        "agent-status OSC scanner: carry-over exceeded {} bytes; dropping in-flight sequence",
+                        AGENT_STATUS_SCANNER_CARRY_OVER_CAP
+                    );
+                    self.overflow_warned = true;
+                }
+                self.reset();
+            }
+        }
+        out
+    }
+
+    fn step(&mut self, b: u8, out: &mut Vec<String>) {
+        match self.state {
+            AgentStatusScanState::Idle => {
+                if b == 0x1b {
+                    self.state = AgentStatusScanState::SeenEsc;
+                }
+            }
+            AgentStatusScanState::SeenEsc => match b {
+                b']' => {
+                    self.partial.clear();
+                    self.state = AgentStatusScanState::InsideOsc;
+                }
+                0x1b => {
+                    // Consecutive ESC: keep the latest one as the candidate
+                    // introducer, stay in SeenEsc.
+                }
+                _ => {
+                    // Not an OSC introducer; abandon the candidate.
+                    self.state = AgentStatusScanState::Idle;
+                }
+            },
+            AgentStatusScanState::InsideOsc => {
+                if b == 0x07 {
+                    // BEL terminator.
+                    self.commit(out);
+                } else if b == 0x1b {
+                    // Could be the start of ST — hold it without pushing to
+                    // `partial` until the next byte disambiguates.
+                    self.state = AgentStatusScanState::InsideOscPendingSt;
+                } else {
+                    self.partial.push(b);
+                }
+            }
+            AgentStatusScanState::InsideOscPendingSt => match b {
+                b'\\' => {
+                    // ST terminator (ESC \).
+                    self.commit(out);
+                }
+                b']' => {
+                    // The held ESC + this byte form a NEW OSC introducer —
+                    // the old in-flight body is abandoned (never emitted),
+                    // scanning restarts fresh from here.
+                    self.partial.clear();
+                    self.state = AgentStatusScanState::InsideOsc;
+                }
+                0x1b => {
+                    // Still ambiguous; keep the latest ESC as the pending
+                    // candidate.
+                }
+                _ => {
+                    // The held ESC aborts the in-flight OSC (not the start
+                    // of ST, not a fresh introducer); this byte itself is
+                    // plain and starts nothing.
+                    self.reset();
+                }
+            },
+        }
+    }
+
+    /// Complete the in-flight OSC: emit an event only if the body is an
+    /// `agent-status` report, then reset to `Idle` either way.
+    fn commit(&mut self, out: &mut Vec<String>) {
+        if let Some(rest) = self.partial.strip_prefix(b"777;emterm;agent-status;") {
+            let mut payload = String::from("emterm;agent-status;");
+            payload.push_str(&String::from_utf8_lossy(rest));
+            out.push(payload);
+        }
+        self.reset();
+    }
+
+    fn reset(&mut self) {
+        self.partial.clear();
+        self.state = AgentStatusScanState::Idle;
+    }
+
+    /// Current size of the in-flight carry-over buffer. Test-only observer.
+    #[cfg(test)]
+    fn carry_over_len(&self) -> usize {
+        self.partial.len()
+    }
+}
+
+impl Default for AgentStatusOscScanner {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// A matched (strippable) CSI device query: where scanning resumes, and any
@@ -505,12 +643,13 @@ mod tests {
         );
     }
 
-    // ── scan_agent_status_reports (task0003 AC-3 / OSC detection) ───────
+    // ── AgentStatusOscScanner (task0003 AC-3 / OSC detection; task0012
+    //    per-pane statefulness rework) ─────────────────────────────────
 
     #[test]
     fn scan_extracts_single_set_report() {
         let input = b"pre\x1b]777;emterm;agent-status;v=1;state=blocked;name=claude\x07post";
-        let out = scan_agent_status_reports(input);
+        let out = AgentStatusOscScanner::new().feed(input);
         assert_eq!(
             out,
             vec!["emterm;agent-status;v=1;state=blocked;name=claude".to_string()]
@@ -520,7 +659,7 @@ mod tests {
     #[test]
     fn scan_extracts_clear_report_st_terminated() {
         let input = b"\x1b]777;emterm;agent-status;clear\x1b\\";
-        let out = scan_agent_status_reports(input);
+        let out = AgentStatusOscScanner::new().feed(input);
         assert_eq!(out, vec!["emterm;agent-status;clear".to_string()]);
     }
 
@@ -530,7 +669,7 @@ mod tests {
         input.extend_from_slice(b"\x1b]777;emterm;agent-status;v=1;state=working\x07");
         input.extend_from_slice(b"mid");
         input.extend_from_slice(b"\x1b]777;emterm;agent-status;v=1;state=done\x07");
-        let out = scan_agent_status_reports(&input);
+        let out = AgentStatusOscScanner::new().feed(&input);
         assert_eq!(
             out,
             vec![
@@ -543,21 +682,137 @@ mod tests {
     #[test]
     fn scan_ignores_non_agent_status_osc() {
         let input = b"\x1b]777;emterm;markdown;begin\x07\x1b]0;title\x07";
-        let out = scan_agent_status_reports(input);
+        let out = AgentStatusOscScanner::new().feed(input);
         assert!(out.is_empty());
     }
 
     #[test]
     fn scan_ignores_unterminated_agent_status_osc() {
         let input = b"text\x1b]777;emterm;agent-status;v=1;state=working";
-        let out = scan_agent_status_reports(input);
+        let out = AgentStatusOscScanner::new().feed(input);
         assert!(out.is_empty());
     }
 
     #[test]
     fn scan_empty_input_returns_empty() {
-        assert!(scan_agent_status_reports(b"").is_empty());
-        assert!(scan_agent_status_reports(b"plain text, no escapes").is_empty());
+        assert!(AgentStatusOscScanner::new().feed(b"").is_empty());
+        assert!(
+            AgentStatusOscScanner::new()
+                .feed(b"plain text, no escapes")
+                .is_empty()
+        );
+    }
+
+    // ── task0012 AC-1: a report split across two chunks at every possible
+    //    byte boundary results in exactly one decoded event ────────────
+
+    #[test]
+    fn scanner_feed_split_at_every_byte_boundary_yields_exactly_one_event() {
+        let cases: [(&[u8], &str); 4] = [
+            (
+                b"\x1b]777;emterm;agent-status;v=1;state=working\x07",
+                "emterm;agent-status;v=1;state=working",
+            ),
+            (
+                b"\x1b]777;emterm;agent-status;v=1;state=blocked;name=claude\x1b\\",
+                "emterm;agent-status;v=1;state=blocked;name=claude",
+            ),
+            (
+                b"\x1b]777;emterm;agent-status;clear\x07",
+                "emterm;agent-status;clear",
+            ),
+            (
+                b"\x1b]777;emterm;agent-status;clear\x1b\\",
+                "emterm;agent-status;clear",
+            ),
+        ];
+        for (full, expected) in cases {
+            for split in 1..full.len() {
+                let mut scanner = AgentStatusOscScanner::new();
+                let (head, tail) = full.split_at(split);
+                let mut out = scanner.feed(head);
+                out.extend(scanner.feed(tail));
+                assert_eq!(
+                    out,
+                    vec![expected.to_string()],
+                    "split at {split} of {full:?} must yield exactly one event"
+                );
+            }
+        }
+    }
+
+    /// AC-1 variant: the split lands exactly on the two-byte ST terminator
+    /// (`ESC \`) itself, so the first `feed` ends with a bare trailing ESC
+    /// and the second `feed` begins with the lone `\`.
+    #[test]
+    fn scanner_feed_split_exactly_between_st_terminator_bytes() {
+        let full = b"\x1b]777;emterm;agent-status;v=1;state=done\x1b\\";
+        let split = full.len() - 1; // right before the trailing '\\'
+        let (head, tail) = full.split_at(split);
+        assert!(head.ends_with(b"\x1b"));
+        let mut scanner = AgentStatusOscScanner::new();
+        let mut out = scanner.feed(head);
+        assert!(out.is_empty(), "no event before the ST terminator lands");
+        out.extend(scanner.feed(tail));
+        assert_eq!(out, vec!["emterm;agent-status;v=1;state=done".to_string()]);
+    }
+
+    // ── task0012 AC-3 / AC-4: bounded carry-over + clean recovery ───────
+
+    #[test]
+    fn scanner_bounds_carry_over_on_unterminated_prefix_plus_large_burst() {
+        let mut scanner = AgentStatusOscScanner::new();
+        let intro = b"\x1b]777;emterm;agent-status;v=1;state=working;name=";
+        assert!(scanner.feed(intro).is_empty());
+        // A large burst of plain (non-ESC) bytes with no terminator anywhere.
+        let burst: Vec<u8> = std::iter::repeat_n(b'A', 200_000).collect();
+        let out = scanner.feed(&burst);
+        assert!(out.is_empty(), "still unterminated, so no event");
+        assert!(
+            scanner.carry_over_len() <= AGENT_STATUS_SCANNER_CARRY_OVER_CAP,
+            "carry-over must stay bounded by the cap: got {}",
+            scanner.carry_over_len()
+        );
+    }
+
+    #[test]
+    fn scanner_drops_overflowed_carry_over_without_garbage_event_and_recovers() {
+        let mut scanner = AgentStatusOscScanner::new();
+        let intro = b"\x1b]777;emterm;agent-status;v=1;state=working;name=";
+        scanner.feed(intro);
+        let burst: Vec<u8> =
+            std::iter::repeat_n(b'A', AGENT_STATUS_SCANNER_CARRY_OVER_CAP + 1024).collect();
+        let out = scanner.feed(&burst);
+        assert!(
+            out.is_empty(),
+            "overflow must drop the in-flight sequence, not emit a garbage event"
+        );
+        assert_eq!(
+            scanner.carry_over_len(),
+            0,
+            "carry-over must be reset after overflow"
+        );
+
+        // The scanner recovers cleanly: a subsequent well-formed report is
+        // still detected in the same `feed` call.
+        let out2 = scanner.feed(b"\x1b]777;emterm;agent-status;v=1;state=done\x07");
+        assert_eq!(out2, vec!["emterm;agent-status;v=1;state=done".to_string()]);
+    }
+
+    // ── task0012: bare ESC mid-body aborts and is re-examined as a fresh
+    //    introducer (matches the old stateless scan's per-position search) ─
+
+    #[test]
+    fn scanner_aborted_report_does_not_hide_a_following_complete_report() {
+        // The first candidate never terminates (a CSI SGR sequence
+        // interrupts it); the second, independent report must still be
+        // detected in the same feed call.
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1b]777;emterm;agent-status;v=1;state=work");
+        input.extend_from_slice(b"\x1b[31m"); // unrelated CSI aborts the OSC body
+        input.extend_from_slice(b"\x1b]777;emterm;agent-status;v=1;state=done\x07");
+        let out = AgentStatusOscScanner::new().feed(&input);
+        assert_eq!(out, vec!["emterm;agent-status;v=1;state=done".to_string()]);
     }
 
     // ── strip_replayable_rich_content unit tests ────────────────────────
