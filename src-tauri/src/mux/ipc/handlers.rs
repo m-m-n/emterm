@@ -769,9 +769,10 @@ pub(super) async fn handle_set_visibility(
 /// Caps and defaults for `ReadPane` (NFR3: read responses are size-capped).
 const READ_LINES_MAX: u32 = 2000;
 const READ_MAX_BYTES: usize = 256 * 1024;
-/// Raw scrollback bytes considered for the tail before ANSI-stripping and
-/// line-splitting. Sized generously above `READ_LINES_MAX` lines worth of
-/// typical terminal output so line-splitting rarely runs short.
+/// Raw scrollback bytes considered for the tail before VT100 rendering
+/// (see `render_scrollback_rows`). Sized generously above `READ_LINES_MAX`
+/// lines worth of typical terminal output so the rendered tail rarely
+/// runs short.
 const SCROLLBACK_READ_TAIL_BYTES: usize = 512 * 1024;
 
 /// Cap on `SendText` payload size (NFR1: request validation).
@@ -826,78 +827,62 @@ fn resolve_pane<'a>(
     find_pane(mgr, pane_id).ok_or_else(|| unknown_pane_error(public_pane_id))
 }
 
-/// Strip ANSI/VT escape sequences (CSI, OSC, DCS/APC/PM/SOS, and other
-/// two-byte ESC sequences) from raw PTY bytes, returning the remainder
-/// decoded as UTF-8 (lossy). Used only for `ReadPane`'s scrollback-tail
-/// portion — the current-screen portion already comes pre-stripped from
-/// `vt100::Screen::contents()`. An unterminated sequence at the very end of
-/// `bytes` is dropped rather than causing a panic or infinite loop.
-fn strip_ansi_escapes(bytes: &[u8]) -> String {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != 0x1b {
-            out.push(bytes[i]);
-            i += 1;
-            continue;
-        }
-        if i + 1 >= bytes.len() {
-            break; // dangling ESC at the very end; drop it.
-        }
-        match bytes[i + 1] {
-            b'[' => {
-                // CSI: ESC [ params... final-byte (0x40..=0x7E)
-                let mut j = i + 2;
-                while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
-                    j += 1;
-                }
-                i = if j < bytes.len() { j + 1 } else { bytes.len() };
-            }
-            b']' => {
-                // OSC: ESC ] ... terminated by BEL or ESC \
-                let mut j = i + 2;
-                let mut end = bytes.len();
-                while j < bytes.len() {
-                    if bytes[j] == 0x07 {
-                        end = j + 1;
-                        break;
-                    }
-                    if bytes[j] == 0x1b && j + 1 < bytes.len() && bytes[j + 1] == b'\\' {
-                        end = j + 2;
-                        break;
-                    }
-                    j += 1;
-                }
-                i = end;
-            }
-            b'P' | b'_' | b'^' | b'X' => {
-                // DCS / APC / PM / SOS: terminated by ST (ESC \)
-                let mut j = i + 2;
-                let mut end = bytes.len();
-                while j + 1 < bytes.len() {
-                    if bytes[j] == 0x1b && bytes[j + 1] == b'\\' {
-                        end = j + 2;
-                        break;
-                    }
-                    j += 1;
-                }
-                i = end;
-            }
-            _ => {
-                // Two-byte escape (e.g. ESC 7 / ESC 8 / ESC c / ESC =).
-                i += 2;
-            }
-        }
+/// Render raw scrollback PTY bytes into plain-text rows by feeding them
+/// through a scratch VT100 parser (task0011 REWORK, FR10 / AC-1): CR-based
+/// overwrites, cursor movement, and erasure are honored exactly as a real
+/// terminal would render them. The previous implementation only stripped
+/// ANSI escape bytes and split on `\n`, which does not reproduce those
+/// effects (an embedded `\r` was left as a literal character rather than
+/// resetting the column, so an overwritten progress-bar line rendered as
+/// concatenated garbage instead of its final state).
+///
+/// The scratch grid is sized `lines + 1` rows (not exactly `lines`): with
+/// exactly `lines` rows, the terminal's own scroll-on-overflow would
+/// discard one real content row to make room for the blank line the
+/// cursor lands on after a trailing `\r\n` — the common case, since PTY
+/// output almost always ends with a newline. The `+1` margin absorbs that
+/// artifact (trimmed back off below); beyond `lines + 1` rows of history
+/// the scratch parser's own terminal semantics naturally scroll older
+/// content off the top, which is exactly the "last N rendered rows" tail
+/// behavior FR10 asks for, without an unbounded intermediate buffer.
+///
+/// Only the row the cursor currently sits on is dropped, and only when it
+/// is genuinely empty (the trailing-newline artifact) — real blank lines
+/// earlier in the content are preserved.
+fn render_scrollback_rows(scrollback_tail: &[u8], lines: u32, cols: u16) -> Vec<String> {
+    let rows = lines
+        .clamp(1, READ_LINES_MAX)
+        .saturating_add(1)
+        .min(u32::from(u16::MAX)) as u16;
+    let cols = cols.max(1);
+    let mut scratch = vt100::Parser::new(rows, cols, 0);
+    scratch.process(scrollback_tail);
+    let screen = scratch.screen();
+    let (cursor_row, _cursor_col) = screen.cursor_position();
+    let mut rendered: Vec<String> = screen
+        .rows(0, cols)
+        .take(usize::from(cursor_row) + 1)
+        .collect();
+    if matches!(rendered.last(), Some(r) if r.is_empty()) {
+        rendered.pop();
     }
-    String::from_utf8_lossy(&out).into_owned()
+    rendered
 }
 
-/// Combine the (ANSI-stripped) scrollback tail with the current screen's
+/// Combine the rendered scrollback tail (AC-1) with the current screen's
 /// plain-text contents and return the last `lines` lines, capped at
-/// `READ_MAX_BYTES` (AC-1).
-fn render_pane_tail(scrollback_tail: &[u8], screen_contents: &str, lines: u32) -> String {
-    let stripped_scrollback = strip_ansi_escapes(scrollback_tail);
-    let mut all_lines: Vec<&str> = stripped_scrollback.lines().collect();
+/// `READ_MAX_BYTES` by retaining the UTF-8-safe NEWEST suffix (AC-2) — the
+/// previous implementation truncated from the end, keeping the oldest
+/// prefix and dropping the newest output, which is backwards for a "tail"
+/// read.
+fn render_pane_tail(
+    scrollback_tail: &[u8],
+    screen_contents: &str,
+    lines: u32,
+    cols: u16,
+) -> String {
+    let rendered_scrollback = render_scrollback_rows(scrollback_tail, lines, cols);
+    let mut all_lines: Vec<&str> = rendered_scrollback.iter().map(String::as_str).collect();
     all_lines.extend(screen_contents.lines());
 
     let take = lines as usize;
@@ -905,17 +890,19 @@ fn render_pane_tail(scrollback_tail: &[u8], screen_contents: &str, lines: u32) -
     let mut text = all_lines[start..].join("\n");
 
     if text.len() > READ_MAX_BYTES {
-        let mut end = READ_MAX_BYTES;
-        while end > 0 && !text.is_char_boundary(end) {
-            end -= 1;
+        let drop = text.len() - READ_MAX_BYTES;
+        let mut cut = drop;
+        while cut < text.len() && !text.is_char_boundary(cut) {
+            cut += 1;
         }
-        text.truncate(end);
+        text = text[cut..].to_string();
     }
     text
 }
 
-/// Handle `ReadPane`: return the tail `lines` rendered rows of a mux pane
-/// (current screen + scrollback tail), ANSI-stripped (AC-1, FR10).
+/// Handle `ReadPane`: return the tail `lines` RENDERED rows of a mux pane
+/// (current screen + rendered scrollback tail), plain text with no
+/// formatting/escape bytes (AC-1, FR10).
 pub(super) async fn handle_read_pane(
     msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
@@ -923,10 +910,14 @@ pub(super) async fn handle_read_pane(
     let req: ReadPaneMsg = msg.decode_payload().ok_or_else(invalid_payload_error)?;
     let lines = req.lines.clamp(1, READ_LINES_MAX);
 
-    let (shadow_parser, scrollback) = {
+    let (shadow_parser, scrollback, cols) = {
         let mgr = session_manager.lock().await;
         let pane = resolve_pane(&mgr, &req.public_pane_id)?;
-        (pane.shadow_parser.clone(), pane.scrollback.clone())
+        (
+            pane.shadow_parser.clone(),
+            pane.scrollback.clone(),
+            pane.cols,
+        )
     };
 
     let screen_contents = {
@@ -940,7 +931,7 @@ pub(super) async fn handle_read_pane(
         all[start..].to_vec()
     };
 
-    let text = render_pane_tail(&scrollback_tail, &screen_contents, lines);
+    let text = render_pane_tail(&scrollback_tail, &screen_contents, lines, cols);
     Ok(ReadPaneResultMsg { text })
 }
 
@@ -966,15 +957,50 @@ pub(super) async fn handle_send_text(
         });
     }
 
-    let mgr = session_manager.lock().await;
-    let pane = resolve_pane(&mgr, &req.public_pane_id)?;
+    // Lock hygiene (task0011 REWORK): resolve the pane and clone the two
+    // handles the write needs — the PTY writer and the `agent_status` Arc
+    // for the watermark — then release the manager lock BEFORE performing
+    // the (potentially slow) synchronous PTY write. A stalled/non-
+    // consuming child on THIS pane must not stall ReadPane /
+    // WaitAgentState / pane lifecycle operations on every OTHER pane,
+    // which all also need this lock (AC-3).
+    let (writer_handle, agent_status) = {
+        let mgr = session_manager.lock().await;
+        let pane = resolve_pane(&mgr, &req.public_pane_id)?;
+        let writer_handle = pane.writer_handle().ok_or_else(|| AgentApiError {
+            kind: AgentApiErrorKind::PaneGone,
+            message: format!("pane {} has no active writer", req.public_pane_id),
+        })?;
+        (writer_handle, pane.agent_status.clone())
+    };
+    // `mgr` (the manager MutexGuard) is dropped here, at scope end.
 
     // Watermark: the revision observed immediately before the write
-    // (IMPLEMENTATION.md "Revision semantics"). `write_input` takes the
-    // pane's writer mutex for the whole write+flush, matching the
-    // atomicity every other PtyInput write already relies on.
-    let watermark = pane.agent_status.lock().unwrap().revision;
-    pane.write_input(&req.bytes).map_err(|e| AgentApiError {
+    // (IMPLEMENTATION.md "Revision semantics"). `agent_status` is a
+    // separate `std::sync::Mutex` from the manager lock, so reading it
+    // after the manager lock is released observes the same value it would
+    // have under the old lock-held-throughout scheme — only the manager
+    // lock's scope has changed, not what this read synchronizes with.
+    let watermark = agent_status.lock().unwrap().revision;
+
+    // Perform the write on the blocking thread pool rather than inline in
+    // this async fn: `write_all` + `flush` are synchronous and can block
+    // on a non-consuming child, which must not stall the Tokio worker
+    // thread driving other tasks. Atomicity per request (AC-5) is
+    // preserved because `writer_handle` still points at the pane's single
+    // `std::sync::Mutex`-guarded writer (see `write_via_writer_handle`) —
+    // concurrent sends to the SAME pane serialize on that mutex exactly as
+    // they did when the write ran inline under the manager lock.
+    let bytes = req.bytes;
+    tokio::task::spawn_blocking(move || {
+        crate::mux::session::pane::write_via_writer_handle(&writer_handle, &bytes)
+    })
+    .await
+    .map_err(|e| AgentApiError {
+        kind: AgentApiErrorKind::InvalidInput,
+        message: format!("write task failed: {e}"),
+    })?
+    .map_err(|e| AgentApiError {
         kind: AgentApiErrorKind::InvalidInput,
         message: format!("failed to write to pane: {e}"),
     })?;
@@ -1702,47 +1728,64 @@ mod tests {
     // ---- ReadPane (AC-1) ----
 
     #[test]
-    fn strip_ansi_escapes_removes_two_byte_escape_sequences() {
-        // ESC 7 (DECSC, save cursor) is a two-byte escape with no CSI/OSC
-        // introducer; it must be dropped without disturbing surrounding text.
-        let input = b"before\x1b7after";
-        assert_eq!(strip_ansi_escapes(input), "beforeafter");
-    }
-
-    #[test]
-    fn strip_ansi_escapes_removes_sgr_and_osc_keeps_text() {
-        let input = b"\x1b[31mred\x1b[0m plain \x1b]0;title\x07tail";
-        assert_eq!(strip_ansi_escapes(input), "red plain tail");
-    }
-
-    #[test]
-    fn strip_ansi_escapes_drops_dangling_unterminated_sequence() {
-        let input = b"before\x1b[31";
-        assert_eq!(strip_ansi_escapes(input), "before");
-    }
-
-    #[test]
-    fn strip_ansi_escapes_plain_text_is_unchanged() {
-        assert_eq!(strip_ansi_escapes(b"hello world"), "hello world");
-    }
-
-    #[test]
     fn render_pane_tail_combines_scrollback_and_screen_in_order() {
-        let text = render_pane_tail(b"line1\nline2\n", "line3\nline4", 10);
+        // Realistic PTY scrollback bytes: `\r\n` line endings (a real PTY's
+        // ONLCR translation turns every program `\n` into `\r\n`).
+        let text = render_pane_tail(b"line1\r\nline2\r\n", "line3\nline4", 10, 80);
         assert_eq!(text, "line1\nline2\nline3\nline4");
     }
 
     #[test]
     fn render_pane_tail_returns_only_the_last_n_lines() {
-        let text = render_pane_tail(b"a\nb\nc\n", "d\ne", 2);
+        let text = render_pane_tail(b"a\r\nb\r\nc\r\n", "d\ne", 2, 80);
         assert_eq!(text, "d\ne");
     }
 
     #[test]
     fn render_pane_tail_caps_total_bytes() {
         let huge_screen = "x".repeat(READ_MAX_BYTES + 1000);
-        let text = render_pane_tail(b"", &huge_screen, 1);
+        let text = render_pane_tail(b"", &huge_screen, 1, 80);
         assert!(text.len() <= READ_MAX_BYTES);
+    }
+
+    /// AC-2: when the byte cap is exceeded, the response is the NEWEST
+    /// suffix (not the oldest prefix, which the previous `truncate`-based
+    /// implementation kept).
+    #[test]
+    fn render_pane_tail_byte_cap_retains_newest_suffix_not_oldest_prefix() {
+        let screen = format!("{}TAIL-MARKER", "a".repeat(READ_MAX_BYTES + 10));
+        let text = render_pane_tail(b"", &screen, 1, 80);
+        assert!(text.len() <= READ_MAX_BYTES);
+        assert!(
+            text.ends_with("TAIL-MARKER"),
+            "byte cap must retain the newest suffix, got tail: {:?}",
+            &text[text.len().saturating_sub(30)..]
+        );
+    }
+
+    /// AC-1: a CR-based overwrite (e.g. a progress bar redrawn in place)
+    /// must render to its FINAL state, not the raw concatenated byte
+    /// stream. The previous ANSI-strip + `.lines()` implementation left
+    /// the embedded `\r` as a literal character (since `str::lines()`
+    /// only splits on `\n`), so "10%" would still appear in the output.
+    #[test]
+    fn render_pane_tail_renders_cr_overwrite_to_final_state() {
+        let scrollback = b"Progress: 10%\rProgress: 100%\r\n";
+        let text = render_pane_tail(scrollback, "", 5, 80);
+        assert_eq!(text, "Progress: 100%");
+        assert!(!text.contains("10%"), "got {text:?}");
+    }
+
+    /// AC-1: cursor-movement escapes (here, CUB — cursor-backward) must
+    /// also be honored: overwriting the tail of a line in place must
+    /// reflect the FINAL rendered text, not the raw byte stream.
+    #[test]
+    fn render_pane_tail_renders_cursor_movement_overwrite_to_final_state() {
+        // "Hello World" then move left 5 columns (CSI 5 D) and overwrite
+        // "World" with "Earth".
+        let scrollback = b"Hello World\x1b[5DEarth\r\n";
+        let text = render_pane_tail(scrollback, "", 5, 80);
+        assert_eq!(text, "Hello Earth");
     }
 
     #[tokio::test]
@@ -1838,6 +1881,47 @@ mod tests {
         );
     }
 
+    /// AC-1 (task0011 REWORK), full handler round trip: a pane whose
+    /// scrollback contains a CR-based overwrite (simulating a redrawn
+    /// progress bar) must read back as its FINAL rendered state. The
+    /// previous ANSI-strip + `.lines()` implementation left the embedded
+    /// `\r` as a literal character, so the overwritten "10%" text would
+    /// still appear verbatim in the response.
+    #[tokio::test]
+    async fn handle_read_pane_renders_cr_overwrite_to_final_state_via_handler() {
+        let pane_id = 102;
+        let (mgr, sid, wid) = setup_session_with_pane(pane_id).await;
+        let public_pane_id = {
+            let m = mgr.lock().await;
+            let pane = get_pane(&m, sid, wid, pane_id);
+            pane.scrollback
+                .lock()
+                .unwrap()
+                .write(b"Progress: 10%\rProgress: 100%\r\n");
+            m.public_pane_id(pane_id)
+        };
+
+        let req = ReadPaneMsg {
+            public_pane_id,
+            lines: 50,
+        };
+        let msg = MuxMessage::control(MessageType::ReadPane, 0, &req);
+        let result = handle_read_pane(&msg, &mgr)
+            .await
+            .expect("read should succeed");
+
+        assert!(
+            result.text.contains("Progress: 100%"),
+            "got {:?}",
+            result.text
+        );
+        assert!(
+            !result.text.contains("10%"),
+            "overwritten content must not leak through, got {:?}",
+            result.text
+        );
+    }
+
     // ---- SendText (AC-2) ----
 
     #[tokio::test]
@@ -1920,6 +2004,234 @@ mod tests {
         let msg = MuxMessage::control(MessageType::SendText, 0, &req);
         let err = handle_send_text(&msg, &mgr).await.unwrap_err();
         assert_eq!(err.kind, AgentApiErrorKind::UnknownPane);
+    }
+
+    /// A `Write` impl that signals `started` (a oneshot the async test can
+    /// `.await`) the moment it is entered, then BLOCKS synchronously on
+    /// `unblock_rx` until the test releases it — simulating a stalled /
+    /// non-consuming child on the other end of the PTY.
+    struct StallingWriter {
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+        unblock_rx: std::sync::mpsc::Receiver<()>,
+    }
+    impl std::io::Write for StallingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if let Some(tx) = self.started.take() {
+                let _ = tx.send(());
+            }
+            let _ = self.unblock_rx.recv();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// AC-3 (task0011 REWORK): `handle_send_text` releases the
+    /// session-manager lock BEFORE performing the PTY write. Pane A's
+    /// writer blocks synchronously until the test releases it; while it
+    /// is blocked, a concurrent `handle_read_pane` on a DIFFERENT pane
+    /// (same session, same manager lock) must complete well inside a
+    /// bounded timeout — proving the manager lock was already free. Under
+    /// the old implementation (lock held across `write_input`), this
+    /// would hang until the timeout fired.
+    #[tokio::test]
+    async fn handle_send_text_releases_manager_lock_before_slow_write() {
+        let pane_a = 210;
+        let pane_b = 211;
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let (unblock_tx, unblock_rx) = std::sync::mpsc::channel::<()>();
+
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+
+            let (tx_a, _rx_a) = mpsc::channel(1);
+            let target_a: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx_a)));
+            let pane_a_obj = MuxPane::new_test_with_writer(
+                pane_a,
+                80,
+                24,
+                target_a,
+                Box::new(StallingWriter {
+                    started: Some(started_tx),
+                    unblock_rx,
+                }),
+            );
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_a_obj);
+
+            let (tx_b, _rx_b) = mpsc::channel(1);
+            let target_b: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx_b)));
+            add_pane(&mut m, sid, wid, pane_b, target_b);
+        }
+
+        let public_a = mgr.lock().await.public_pane_id(pane_a);
+        let public_b = mgr.lock().await.public_pane_id(pane_b);
+
+        let send_req = SendTextMsg {
+            public_pane_id: public_a,
+            bytes: b"hi".to_vec(),
+        };
+        let send_msg = MuxMessage::control(MessageType::SendText, 0, &send_req);
+        let mgr_for_send = mgr.clone();
+        let send_task =
+            tokio::spawn(async move { handle_send_text(&send_msg, &mgr_for_send).await });
+
+        // Wait until the write has actually started — the manager lock is
+        // dropped BEFORE the write is invoked (see `handle_send_text`), so
+        // this also proves the lock is already free by this point.
+        started_rx.await.expect("write must start");
+
+        // While pane A's write is still blocked, ReadPane on the
+        // DIFFERENT pane B must complete promptly: it needs the same
+        // manager lock, which must be free.
+        let read_req = ReadPaneMsg {
+            public_pane_id: public_b,
+            lines: 10,
+        };
+        let read_msg = MuxMessage::control(MessageType::ReadPane, 0, &read_req);
+        tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            handle_read_pane(&read_msg, &mgr),
+        )
+        .await
+        .expect("ReadPane on a different pane must not be blocked by pane A's stalled write")
+        .expect("read should succeed");
+
+        // Release the stalled write and let SendText finish.
+        unblock_tx.send(()).expect("unblock writer");
+        send_task
+            .await
+            .expect("task join")
+            .expect("send should succeed");
+    }
+
+    /// AC-5 (task0011 REWORK): `handle_send_text` still writes bytes
+    /// atomically per request — two concurrent sends to the SAME pane
+    /// must not interleave. `writer_handle` clones share the pane's
+    /// single `std::sync::Mutex`-guarded writer, so the second send's
+    /// `write_via_writer_handle` call blocks on that mutex until the
+    /// first send's write+flush fully completes, even though both calls
+    /// run on the (lock-free, per task0011 AC-3) blocking-pool write path.
+    #[tokio::test]
+    async fn handle_send_text_concurrent_sends_to_same_pane_do_not_interleave() {
+        struct BlockFirstWriter {
+            first_call_done: bool,
+            started_first: Option<tokio::sync::oneshot::Sender<()>>,
+            unblock_first_rx: Option<std::sync::mpsc::Receiver<()>>,
+            started_second: Option<tokio::sync::oneshot::Sender<()>>,
+            captured: Arc<StdMutex<Vec<u8>>>,
+        }
+        impl std::io::Write for BlockFirstWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                if !self.first_call_done {
+                    self.first_call_done = true;
+                    if let Some(tx) = self.started_first.take() {
+                        let _ = tx.send(());
+                    }
+                    if let Some(rx) = self.unblock_first_rx.take() {
+                        let _ = rx.recv();
+                    }
+                } else if let Some(tx) = self.started_second.take() {
+                    let _ = tx.send(());
+                }
+                self.captured.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let pane_id = 212;
+        let (started_first_tx, started_first_rx) = tokio::sync::oneshot::channel::<()>();
+        let (unblock_first_tx, unblock_first_rx) = std::sync::mpsc::channel::<()>();
+        let (started_second_tx, started_second_rx) = tokio::sync::oneshot::channel::<()>();
+        let captured: Arc<StdMutex<Vec<u8>>> = Arc::new(StdMutex::new(Vec::new()));
+
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            let (tx, _rx) = mpsc::channel(1);
+            let target: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx)));
+            let pane = MuxPane::new_test_with_writer(
+                pane_id,
+                80,
+                24,
+                target,
+                Box::new(BlockFirstWriter {
+                    first_call_done: false,
+                    started_first: Some(started_first_tx),
+                    unblock_first_rx: Some(unblock_first_rx),
+                    started_second: Some(started_second_tx),
+                    captured: captured.clone(),
+                }),
+            );
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+        }
+        let public_pane_id = mgr.lock().await.public_pane_id(pane_id);
+
+        let req1 = SendTextMsg {
+            public_pane_id: public_pane_id.clone(),
+            bytes: b"AAAA".to_vec(),
+        };
+        let msg1 = MuxMessage::control(MessageType::SendText, 0, &req1);
+        let mgr1 = mgr.clone();
+        let task1 = tokio::spawn(async move { handle_send_text(&msg1, &mgr1).await });
+        started_first_rx.await.expect("first write must start");
+
+        let req2 = SendTextMsg {
+            public_pane_id,
+            bytes: b"BBBB".to_vec(),
+        };
+        let msg2 = MuxMessage::control(MessageType::SendText, 0, &req2);
+        let mgr2 = mgr.clone();
+        let task2 = tokio::spawn(async move { handle_send_text(&msg2, &mgr2).await });
+
+        // The second send must NOT be able to enter its write while the
+        // first is still stalled inside its own write — it is blocked on
+        // the shared std::sync::Mutex, not merely racing for CPU time.
+        let raced_in_early =
+            tokio::time::timeout(std::time::Duration::from_millis(150), started_second_rx).await;
+        assert!(
+            raced_in_early.is_err(),
+            "second send must not start its write while the first is still in progress"
+        );
+
+        // Release the first write; both complete in order.
+        unblock_first_tx.send(()).expect("unblock first writer");
+        task1
+            .await
+            .expect("task1 join")
+            .expect("first send should succeed");
+        task2
+            .await
+            .expect("task2 join")
+            .expect("second send should succeed");
+
+        assert_eq!(
+            captured.lock().unwrap().as_slice(),
+            b"AAAABBBB",
+            "concurrent sends to the same pane must not interleave bytes"
+        );
     }
 
     // ---- WaitAgentState (AC-3, AC-4, AC-5) ----
