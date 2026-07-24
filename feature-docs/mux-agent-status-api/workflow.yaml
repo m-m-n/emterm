@@ -75,7 +75,7 @@ workflow:
       to the integration worktree before build, matching every implementer's
       environment-setup step.
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
