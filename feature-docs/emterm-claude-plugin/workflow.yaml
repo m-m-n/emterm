@@ -25,7 +25,8 @@ workflow:
     skipped_reason: "Plugin feature adds only JSON manifests, hook scripts, skill markdown, and a README — no visible UI or design tokens change."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: PENDING
   - id: implement
     status: pending
     base_commit: 7acf68ef88668cc0d0164b6d44cc57e44861f43a
@@ -38,7 +39,56 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Marketplace and plugin manifests"
+    plan: tasks/task0001.md
+    files:
+      - .claude-plugin/marketplace.json
+      - plugins/emterm/.claude-plugin/plugin.json
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR1, FR2, NFR3, NFR4]
+    status: pending
+  task0002:
+    title: "Hook wiring and notify-status.ts"
+    plan: tasks/task0002.md
+    files:
+      - plugins/emterm/hooks/hooks.json
+      - plugins/emterm/hooks/scripts/notify-status.ts
+      - plugins/emterm/hooks/scripts/notify-status.test.ts
+    skills: [backend-impl, infra-impl]
+    domains: [external-io, input-handling, config-infra]
+    complexity: medium
+    requirements: [FR3, FR4, NFR1, NFR2, NFR3]
+    status: pending
+  task0003:
+    title: "Display and mux skills"
+    plan: tasks/task0003.md
+    files:
+      - plugins/emterm/skills/display-markdown/SKILL.md
+      - plugins/emterm/skills/display-json/SKILL.md
+      - plugins/emterm/skills/display-yaml/SKILL.md
+      - plugins/emterm/skills/display-image/SKILL.md
+      - plugins/emterm/skills/mux-read/SKILL.md
+      - plugins/emterm/skills/mux-send/SKILL.md
+      - plugins/emterm/skills/mux-wait/SKILL.md
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR5, FR6, NFR3]
+    status: pending
+  task0004:
+    title: "Plugin README"
+    plan: tasks/task0004.md
+    files:
+      - plugins/emterm/README.md
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR7, NFR4]
+    status: pending
 
 review:
   status: pending
@@ -48,37 +98,37 @@ requirements:
   FR1:
     title: "marketplace.json at repository root"
     status: ok
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-6]
   FR2:
     title: "plugin.json for plugins/emterm/"
     status: ok
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-6]
   FR3:
     title: "hooks.json wires UserPromptSubmit/Stop/Notification to notify-status.ts"
     status: ok
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-6]
   FR4:
     title: "notify-status.ts (Bun+TS) writes emterm agent-status stdout to /dev/tty with silent failure"
     status: ok
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-5]
   FR5:
     title: "display-markdown/json/yaml/image SKILL.md wrappers"
     status: ok
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-7]
   FR6:
     title: "mux-read/send/wait SKILL.md wrappers"
     status: ok
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-7]
   FR7:
     title: "plugins/emterm/README.md documents install, prerequisites, and known limitations"
     status: ok
-    tasks: []
+    tasks: [task0004]
     tests: []
   FR8:
     title: "Local POC: verify /dev/tty hook path reaches an eMterm tab and record Bun startup timing"
@@ -88,20 +138,20 @@ requirements:
   NFR1:
     title: "Hook end-to-end under 3s timeout; Bun startup measured"
     status: ok
-    tasks: []
+    tasks: [task0002]
     tests: []
   NFR2:
     title: "State argument allow-list validation; argv-array spawn (no shell)"
     status: ok
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-1]
   NFR3:
     title: "All plugin paths relative to ${CLAUDE_PLUGIN_ROOT}"
     status: ok
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002, task0003, task0004]
+    tests: [TS-6]
   NFR4:
     title: "No binaries shipped; README points to GitHub Releases for emterm binary"
     status: ok
-    tasks: []
+    tasks: [task0004]
     tests: []
