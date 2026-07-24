@@ -50,7 +50,7 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR1, FR2, NFR3, NFR4]
-    status: in_progress
+    status: merged
     branch: em-workflow/emterm-claude-plugin/task0001
   task0002:
     title: "Hook wiring and notify-status.ts"
