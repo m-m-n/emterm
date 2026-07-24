@@ -50,7 +50,8 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR1, FR2, NFR3, NFR4]
-    status: pending
+    status: in_progress
+    branch: em-workflow/emterm-claude-plugin/task0001
   task0002:
     title: "Hook wiring and notify-status.ts"
     plan: tasks/task0002.md
@@ -62,7 +63,8 @@ tasks:
     domains: [external-io, input-handling, config-infra]
     complexity: medium
     requirements: [FR3, FR4, NFR1, NFR2, NFR3]
-    status: pending
+    status: in_progress
+    branch: em-workflow/emterm-claude-plugin/task0002
   task0003:
     title: "Display and mux skills"
     plan: tasks/task0003.md
@@ -78,7 +80,8 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR5, FR6, NFR3]
-    status: pending
+    status: in_progress
+    branch: em-workflow/emterm-claude-plugin/task0003
   task0004:
     title: "Plugin README"
     plan: tasks/task0004.md
@@ -88,7 +91,8 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR7, NFR4]
-    status: pending
+    status: in_progress
+    branch: em-workflow/emterm-claude-plugin/task0004
 
 review:
   status: pending
