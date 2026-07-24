@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
+use crate::agent_status::{AgentState, AgentStatusEvent};
 use crate::mux::scrollback_buffer::{DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer};
 use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
 use crate::pty::passthrough_scanner::PassthroughScanner;
@@ -48,6 +49,71 @@ pub type PaneExitSender = mpsc::Sender<PaneId>;
 /// what lets a detached pane still notify the daemon on EOF (M1).
 pub type SharedPaneExitSender = Arc<StdMutex<Option<PaneExitSender>>>;
 
+/// Channel carrying a raw agent-status OSC 777 payload string (the full
+/// `emterm;agent-status;…` body, `agent_status::parse`'s input contract)
+/// from a pane's reader thread to the daemon-level agent-status task
+/// (`pane_id`, `payload`).
+///
+/// Unlike `NotificationSender`, this must be forwarded regardless of attach
+/// state (SPEC FR3: the daemon owns per-pane agent-status state
+/// unconditionally, not only while detached) — mirroring the daemon-lifetime
+/// `TitleChangeSender` wiring rather than the Detached-only notification
+/// scanner.
+pub type AgentStatusReportSender = mpsc::Sender<(PaneId, String)>;
+
+/// Daemon-lifetime agent-status report sender shared with each pane reader
+/// thread. Follows the `SharedNotificationSender` / `SharedPaneExitSender`
+/// shape: populated once at pane creation and never swapped.
+pub type SharedAgentStatusReportSender = Arc<StdMutex<Option<AgentStatusReportSender>>>;
+
+/// A pane's agent-status state (SPEC FR3): the most recently accepted
+/// report (or none), plus a monotonically increasing revision. Every
+/// ACCEPTED report — set, clear, or a same-state re-report — increments
+/// `revision`; a rejected report is never applied (see
+/// `MuxPane::apply_agent_status_event`, which is only ever called with an
+/// `AgentStatusEvent` a caller already validated via `agent_status::parse`).
+/// State is in-memory only and is discarded when the owning `MuxPane` is
+/// dropped (pane destroy / PtyExited reap).
+#[derive(Debug, Clone, Default)]
+pub struct AgentStatus {
+    pub state: Option<AgentState>,
+    pub name: Option<String>,
+    pub revision: u64,
+}
+
+/// Thread-safe shared reference to a pane's agent-status state.
+pub type SharedAgentStatus = Arc<StdMutex<AgentStatus>>;
+
+/// A registered `WaitAgentState` request awaiting a qualifying state change
+/// (task0004, IMPLEMENTATION.md "Wait implementation"). Level-triggered:
+/// fires when `states` contains the pane's current
+/// [`AgentStatus::state`] AND (if set) the current revision exceeds
+/// `after_revision`. `states` is stored in the CORE `AgentState` type (this
+/// module's `AgentStatus::state` type) so matching needs no per-check wire
+/// conversion; the wire `mux_ipc::protocol::AgentState` only appears at the
+/// request/response boundary in `mux::ipc::handlers`.
+///
+/// `responder` is `Option` so a firing/cleanup pass can `.take()` the
+/// owned `Sender` out of a `&mut` iteration (`oneshot::Sender::send`
+/// consumes `self`).
+pub struct AgentWaiter {
+    pub states: Vec<AgentState>,
+    pub after_revision: Option<u64>,
+    pub responder: Option<tokio::sync::oneshot::Sender<AgentWaitOutcome>>,
+}
+
+/// Outcome delivered to a registered [`AgentWaiter`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentWaitOutcome {
+    /// The waiter's condition was satisfied.
+    Matched { state: AgentState, revision: u64 },
+    /// The pane was destroyed while the waiter was pending.
+    PaneGone,
+}
+
+/// Thread-safe shared reference to a pane's registered agent-state waiters.
+pub type SharedAgentWaiters = Arc<StdMutex<Vec<AgentWaiter>>>;
+
 /// Callback sink recording the most recent OSC 0/2 window title.
 ///
 /// vt100 0.16 removed `Screen::title()` in favor of the callback API;
@@ -80,6 +146,27 @@ pub type SharedShadowParser = Arc<StdMutex<ShadowParser>>;
 /// Construct a shadow parser at the given size (scrollback 0).
 pub fn new_shadow_parser(rows: u16, cols: u16) -> ShadowParser {
     vt100::Parser::new_with_callbacks(rows, cols, 0, TitleSink::default())
+}
+
+/// Write `data` to a PTY through a cloned writer handle (see
+/// [`MuxPane::writer_handle`]), without going through a `MuxPane`
+/// reference or any surrounding lock.
+///
+/// Locks `writer`'s `std::sync::Mutex` for the full `write_all` + `flush`
+/// (matching `MuxPane::write_input`'s atomicity contract exactly — this is
+/// the shared implementation both go through). Because handle clones share
+/// the same underlying mutex, two concurrent calls against handles cloned
+/// from the same pane still serialize here (task0011 AC-5: no interleaving
+/// between concurrent sends to the same pane).
+pub fn write_via_writer_handle(
+    writer: &Arc<StdMutex<Box<dyn Write + Send>>>,
+    data: &[u8],
+) -> std::io::Result<()> {
+    let mut w = writer
+        .lock()
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    w.write_all(data)?;
+    w.flush()
 }
 
 /// Lock the shadow parser, recovering from a poisoned mutex.
@@ -497,6 +584,15 @@ pub struct MuxPane {
     /// desktop notifications detected on Detached output through this channel
     /// so the daemon can relay them to the GUI client.
     pub notification_sender: SharedNotificationSender,
+    /// This pane's agent-status state (SPEC FR3): current report + revision.
+    pub agent_status: SharedAgentStatus,
+    /// Daemon-lifetime agent-status report sender. The reader thread forwards
+    /// raw agent-status OSC payload strings through this channel (regardless
+    /// of attach state) so the daemon can validate, apply, and broadcast them.
+    pub agent_status_report_sender: SharedAgentStatusReportSender,
+    /// Registered `WaitAgentState` waiters for this pane (task0004). See
+    /// [`AgentWaiter`].
+    pub agent_waiters: SharedAgentWaiters,
     /// Per-pane raw passthrough buffer for image / Markdown OSC sequences
     /// captured while the pane is detached (network detach OR client hidden).
     /// Drained into the reattach / resume snapshot.
@@ -535,6 +631,9 @@ impl MuxPane {
             title: Arc::new(StdMutex::new(None)),
             title_sender: Arc::new(StdMutex::new(None)),
             notification_sender: Arc::new(StdMutex::new(None)),
+            agent_status: Arc::new(StdMutex::new(AgentStatus::default())),
+            agent_status_report_sender: Arc::new(StdMutex::new(None)),
+            agent_waiters: Arc::new(StdMutex::new(Vec::new())),
             raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),
@@ -551,11 +650,23 @@ impl MuxPane {
             .writer
             .as_ref()
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "writer closed"))?;
-        let mut w = writer
-            .lock()
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        w.write_all(data)?;
-        w.flush()
+        write_via_writer_handle(writer, data)
+    }
+
+    /// Clone this pane's PTY-writer handle, if the pane still has one
+    /// (`None` once [`MuxPane::mark_exited`] has run).
+    ///
+    /// task0011 lock hygiene: callers that need to perform a synchronous
+    /// PTY write WITHOUT holding the `SessionManager` lock for the
+    /// duration (e.g. `handle_send_text`) resolve the pane under the
+    /// manager lock, clone this handle, release the manager lock, and
+    /// write through the cloned handle via [`write_via_writer_handle`].
+    /// Because the clone is an `Arc` over the SAME `std::sync::Mutex` as
+    /// `self.writer`, concurrent writes — whether via `write_input` or via
+    /// a cloned handle — still serialize on that mutex for the full
+    /// write+flush, preserving atomic-per-request write semantics.
+    pub fn writer_handle(&self) -> Option<Arc<StdMutex<Box<dyn Write + Send>>>> {
+        self.writer.clone()
     }
 
     /// Resize the PTY to the given dimensions.
@@ -590,6 +701,29 @@ impl MuxPane {
         Ok(())
     }
 
+    /// Apply an ACCEPTED agent-status report (SPEC FR3): update
+    /// state/name and increment revision. Returns the resulting revision.
+    ///
+    /// Callers must only invoke this with an `AgentStatusEvent` that
+    /// `agent_status::parse` already returned `Some` for — a rejected
+    /// (`None`) parse must never reach here, which is what leaves state and
+    /// revision untouched on rejection (AC-2).
+    pub fn apply_agent_status_event(&self, event: AgentStatusEvent) -> u64 {
+        let mut status = self.agent_status.lock().unwrap();
+        match event {
+            AgentStatusEvent::Set { state, name } => {
+                status.state = Some(state);
+                status.name = name;
+            }
+            AgentStatusEvent::Clear => {
+                status.state = None;
+                status.name = None;
+            }
+        }
+        status.revision += 1;
+        status.revision
+    }
+
     /// Mark PTY as exited.
     pub fn mark_exited(&mut self) {
         self.exited = true;
@@ -600,7 +734,20 @@ impl MuxPane {
     /// Create a pane without a PTY master, for testing only.
     #[cfg(test)]
     pub fn new_test(id: PaneId, cols: u16, rows: u16, output_target: SharedOutputTarget) -> Self {
-        let writer: Box<dyn Write + Send> = Box::new(std::io::sink());
+        Self::new_test_with_writer(id, cols, rows, output_target, Box::new(std::io::sink()))
+    }
+
+    /// Like [`Self::new_test`], but with a caller-supplied writer so tests
+    /// can capture exactly what `write_input` sends (e.g. `SendText`'s "no
+    /// trailing newline added" contract, task0004 AC-2).
+    #[cfg(test)]
+    pub fn new_test_with_writer(
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        output_target: SharedOutputTarget,
+        writer: Box<dyn Write + Send>,
+    ) -> Self {
         Self {
             id,
             cols,
@@ -614,6 +761,9 @@ impl MuxPane {
             title: Arc::new(StdMutex::new(None)),
             title_sender: Arc::new(StdMutex::new(None)),
             notification_sender: Arc::new(StdMutex::new(None)),
+            agent_status: Arc::new(StdMutex::new(AgentStatus::default())),
+            agent_status_report_sender: Arc::new(StdMutex::new(None)),
+            agent_waiters: Arc::new(StdMutex::new(Vec::new())),
             raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),
@@ -632,6 +782,132 @@ mod tests {
     fn make_output_target() -> SharedOutputTarget {
         let (tx, _rx) = mpsc::channel(1);
         Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx)))
+    }
+
+    // ── AgentStatus (SPEC FR3, task0003 AC-1/AC-2/AC-6) ──────────────────
+
+    #[test]
+    fn test_new_pane_has_no_agent_status_and_revision_zero() {
+        let target = make_output_target();
+        let pane = MuxPane::new_test(1, 80, 24, target);
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.state, None);
+        assert_eq!(status.name, None);
+        assert_eq!(status.revision, 0);
+    }
+
+    /// AC-1: a Set event updates state/name and increments revision.
+    #[test]
+    fn test_apply_agent_status_event_set_updates_state_and_increments_revision() {
+        let target = make_output_target();
+        let pane = MuxPane::new_test(1, 80, 24, target);
+
+        let revision = pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Working,
+            name: Some("claude".to_string()),
+        });
+        assert_eq!(revision, 1);
+
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.state, Some(AgentState::Working));
+        assert_eq!(status.name.as_deref(), Some("claude"));
+        assert_eq!(status.revision, 1);
+    }
+
+    /// AC-1: a Clear event empties state/name and increments revision.
+    #[test]
+    fn test_apply_agent_status_event_clear_empties_state_and_increments_revision() {
+        let target = make_output_target();
+        let pane = MuxPane::new_test(1, 80, 24, target);
+        pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Blocked,
+            name: Some("agent".to_string()),
+        });
+
+        let revision = pane.apply_agent_status_event(AgentStatusEvent::Clear);
+        assert_eq!(revision, 2);
+
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.state, None);
+        assert_eq!(status.name, None);
+        assert_eq!(status.revision, 2);
+    }
+
+    /// AC-2: a same-state re-report still increments revision (it is only
+    /// ever invoked for an ACCEPTED event; "same state" is not itself a
+    /// rejection reason).
+    #[test]
+    fn test_apply_agent_status_event_same_state_re_report_increments_revision() {
+        let target = make_output_target();
+        let pane = MuxPane::new_test(1, 80, 24, target);
+        let r1 = pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Working,
+            name: None,
+        });
+        let r2 = pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Working,
+            name: None,
+        });
+        assert_eq!(r1, 1);
+        assert_eq!(r2, 2);
+    }
+
+    /// AC-2: rejected sequences (parse returning `None`) never reach
+    /// `apply_agent_status_event`, so state/revision are naturally
+    /// untouched. This test pins that contract at the call-site level: a
+    /// caller that only calls `apply_agent_status_event` for `Some(event)`
+    /// leaves state/revision alone when `agent_status::parse` rejects.
+    #[test]
+    fn test_rejected_parse_never_reaches_apply_leaves_state_untouched() {
+        let target = make_output_target();
+        let pane = MuxPane::new_test(1, 80, 24, target);
+        pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Idle,
+            name: None,
+        });
+
+        // Simulate the caller's contract: a rejected report is never
+        // applied.
+        let rejected = crate::agent_status::parse("emterm;agent-status;v=1;state=bogus");
+        assert_eq!(rejected, None);
+        if let Some(event) = rejected {
+            pane.apply_agent_status_event(event);
+        }
+
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.state, Some(AgentState::Idle));
+        assert_eq!(status.revision, 1);
+    }
+
+    /// AC-6: pane destroy discards agent-status state — `MuxWindow::remove_pane`
+    /// drops the `MuxPane` (and its `Arc<Mutex<AgentStatus>>`) entirely, so a
+    /// removed pane's status is gone, not merely reset.
+    #[test]
+    fn test_pane_removal_discards_agent_status() {
+        use super::super::window::MuxWindow;
+
+        let target = make_output_target();
+        let pane = MuxPane::new_test(1, 80, 24, target);
+        pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Done,
+            name: Some("agent".to_string()),
+        });
+        let status_handle = pane.agent_status.clone();
+        assert_eq!(Arc::strong_count(&status_handle), 2, "pane + our clone");
+
+        let mut window = MuxWindow::new(1, "w".to_string());
+        window.add_pane(pane);
+        let removed = window.remove_pane(1);
+        assert!(removed.is_some());
+        drop(removed);
+
+        // The pane (and its only other Arc handle to `agent_status`) is
+        // gone; only our test-held clone remains.
+        assert_eq!(
+            Arc::strong_count(&status_handle),
+            1,
+            "agent_status must be discarded along with the destroyed pane"
+        );
     }
 
     #[test]

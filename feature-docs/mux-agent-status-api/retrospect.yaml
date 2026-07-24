@@ -1,0 +1,41 @@
+feature: mux-agent-status-api
+collected_at: "2026-07-24T09:30:00+09:00"
+session_ids:
+  - cf2b1c3d-6f3e-483d-8d30-f009289cdb58.jsonl
+signals:
+  review_critical_high:
+    # Round 1
+    - {stable_id: drain_wiring_spec, category: spec, file: src-tauri/src/app.rs, title: "FR9/US2 unimplemented: agent-status notifications never fire", resolution: deferred}
+    - {stable_id: drain_wiring_arch_claude, category: architecture, file: src-tauri/src/app.rs, title: "Agent-status transitions queue is never drained; notification pipeline is dead", resolution: deferred}
+    - {stable_id: drain_wiring_arch_codex, category: architecture, file: src-tauri/src/app.rs, title: "The notification producer and consumer are never connected", resolution: deferred}
+    - {stable_id: drain_wiring_comp_claude, category: comprehensive, file: src-tauri/src/app.rs, title: "Agent-status notification pipeline defined but never wired; queue leaks unbounded", resolution: deferred}
+    - {stable_id: drain_wiring_spec_codex, category: spec, file: src-tauri/src/app.rs, title: "Agent-status transitions never reach the OS notification sink", resolution: deferred}
+    - {stable_id: protocol_v1_v2_break, category: architecture, file: crates/mux_ipc/src/protocol.rs, title: "Protocol v2 strands already-running v1 daemons", resolution: deferred}
+    - {stable_id: mux_read_render_missing, category: spec, file: src-tauri/src/mux/ipc/handlers.rs, title: "mux read does not return rendered tail rows", resolution: deferred}
+    - {stable_id: osc_split_lost, category: spec, file: src-tauri/src/mux/scrollback_filter.rs, title: "Valid OSC reports are lost when split across PTY reads", resolution: deferred}
+    - {stable_id: replay_clear_lost, category: spec, file: src-tauri/src/mux/daemon.rs, title: "Replay synchronization cannot communicate a cleared state", resolution: deferred}
+    - {stable_id: send_text_lock_held, category: performance, file: src-tauri/src/mux/ipc/handlers.rs, title: "Blocking PTY write holds the global session-manager lock", resolution: deferred}
+    # Round 2 (post-rework)
+    - {stable_id: mux_double_notify, category: comprehensive, file: src-tauri/src/callbacks.rs, title: "Mux-attached tabs process each agent-status OSC twice → duplicate desktop notifications", resolution: deferred}
+    - {stable_id: send_watermark_race, category: spec, file: src-tauri/src/mux/ipc/handlers.rs, title: "Send watermark sampled before an unbounded scheduling gap (FR11 linearization break)", resolution: deferred}
+    - {stable_id: replay_sync_regress, category: spec, file: src-tauri/src/mux/daemon.rs, title: "Replay sync can overwrite a newer live state with an older revision (FR3 monotonicity break)", resolution: deferred}
+  conflict_reworks:
+    # Original task0003 had parent-side adoption (agent_status.rs, protocol.rs, connection.rs from task0001/task0002); conflict_retries reported as 0 in implementer report but the mechanism used was the parent-side-adoption protocol.
+    - {task: task0004, retries: 1, note: "user-initiated stop mid parent-adoption round 2; retry completed on kept worktree"}
+    - {task: task0006, retries: 1, note: "first attempt did no code work (background-poll wait); retry from scratch"}
+  file_prediction_misses:
+    - {task: task0003, files: [src-tauri/src/agent_status.rs, crates/mux_ipc/src/protocol.rs, src-tauri/src/mux/ipc/connection.rs, src-tauri/src/mux/ipc/pty_spawn.rs], note: "adopted from task0001/task0002 parent versions; connection.rs/pty_spawn.rs threaded new AgentStatusReportSender"}
+    - {task: task0005, files: [src-tauri/src/mux/bridge.rs], note: "bridge.rs (in expected_files) NOT touched — opaque byte-forwarder, not needed"}
+    - {task: task0006, files: [src-tauri/src/render/mod.rs, src-tauri/src/window_host.rs], note: "outside expected_files: render wires App query methods; window_host drains clipboard events"}
+    - {task: task0007, files: [src-tauri/web-shared/settings/sections/notification-section.ts], note: "outside expected_files: settings-sections.ts is a barrel re-export, actual toggle belongs in section file"}
+  verification_failures: []  # verify passed; the tabs.rs failures are documented pre-existing project issues (MEMORY.md), not feature-derived
+  discretionary_perspectives: []  # floor only; no Layer-2 additions were justified (no manifest touch → no license, no obvious extra risk beyond floor)
+  declined_findings: []  # batch mode: all residuals marked deferred (not declined). No false-positive candidates identified.
+lessons_candidates:
+  # Raw memos — analysis and rule-table promotion deferred to /em-workflow:retrospect
+  - "Integration-owner gap: task0005 (AgentStatusModel) built the transition queue + drain API; task0007 (notifications) built the notification helpers. Neither task's plan explicitly OWNED the wiring in pump_all — each assumed the other would connect them. This produced the exact 'Integration wiring must have an owner' failure the plan-writing skill warns about (evidence: braille-ar-overlay 2026-07-11). 5 reviewers independently flagged it. Consider making the planner audit for producer/consumer pairs explicitly."
+  - "Planner file-prediction accuracy was middling: 4 of 8 original tasks had at least one file outside expected_files. Reworks were cleaner (0 of 5). Possible cause: the original planner made file predictions per-task in isolation, without accounting for cross-cutting integration files (render/mod.rs, connection.rs, pty_spawn.rs) that any task involving mux IPC will inevitably touch."
+  - "Two batch-retry consumptions this run (task0004 user-stop, task0006 background-poll-wait). Both succeeded on retry. The background-poll-wait failure mode (implementer waits for an external dependency that never notifies) is worth flagging as a specific implementer failure pattern — subagents should not indefinitely poll; the parent branch already contains all dependencies."
+  - "Font-assets prerequisite: every fresh worktree (task and integration) had to manually copy src-tauri/assets/fonts/*.ttf/*.otf from the main tree before cargo check/test could pass, because build.rs hard-fails without them and the assets are gitignored. Every implementer independently discovered and worked around this. Consider either: (a) documenting this as a mandatory environment step in worktree-task-workflow skill, or (b) making build.rs auto-fetch them (via scripts/fetch-fonts.sh) on first miss."
+  - "Codex CLI cross-contamination between concurrent sessions: architecture (codex) round 2 failed 6/6 attempts (4 returned spec-perspective content from a parallel session, 2 timed out). The scratchpad directory is shared across concurrent subagents; naming reviewer output files by perspective (as some agents did) mitigated but did not eliminate the issue. Worth investigating whether codex CLI --session-id or a per-invocation working dir is needed."
+  - "Review found 3 new high issues in round 2 that were caused by the round 1 rework (mux_double_notify: the drain-wiring fix created a new double-processing path; send_watermark_race: the send_text lock-release fix introduced a race by decoupling revision-sample from write). Reworks can introduce fresh issues; a third-round review after rework would have caught them, but batch mode's cap-1 policy makes that a manual step. The batch cap-1 policy is defensible for cost but leaves a real quality gap when reworks change concurrency shape."

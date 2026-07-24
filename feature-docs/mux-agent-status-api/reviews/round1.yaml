@@ -1,0 +1,351 @@
+round: 1
+executed_at: "2026-07-24T00:59:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 06d795b6698952176a743a86d6f13fbfb6633105
+  head_commit: 505a022f10c4f0ba7ceeef781315d9c0afcc3837
+  changed_files:
+    - crates/app_settings/src/settings.rs
+    - crates/mux_ipc/src/lib.rs
+    - crates/mux_ipc/src/protocol.rs
+    - doc/AGENT-STATUS.md
+    - src-tauri/src/agent_status.rs
+    - src-tauri/src/agent_status_model.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/cli/agent_status.rs
+    - src-tauri/src/cli/messages.rs
+    - src-tauri/src/cli/mod.rs
+    - src-tauri/src/lib.rs
+    - src-tauri/src/main.rs
+    - src-tauri/src/mux/cli.rs
+    - src-tauri/src/mux/daemon.rs
+    - src-tauri/src/mux/ipc/connection.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/manager.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/session/session.rs
+    - src-tauri/src/notifications.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/src/tabs.rs
+    - src-tauri/src/ui/mux_sidebar.rs
+    - src-tauri/src/ui/status_bar.rs
+    - src-tauri/src/ui/tab_bar.rs
+    - src-tauri/src/window_host.rs
+    - src-tauri/tests/cli_subcommands.rs
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/settings/sections/notification-section.ts
+    - src-tauri/web-shared/settings/types.ts
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  # ========================================================================
+  # CRITICAL/HIGH — cross-model agreement cluster on the drain-wiring bug
+  # (task0005↔task0007 integration seam missing: AgentStatusModel.transitions
+  # is push-only in production; maybe_notify_agent_transition is never called)
+  # ========================================================================
+  - stable_id: drain_wiring_spec
+    severity: critical
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 3378
+    title: "FR9 / US2 unimplemented: agent-status notifications never fire"
+    description: "pump_all applies reports to AgentStatusModel and marks entries seen, but never calls drain_transitions or maybe_notify_agent_transition. The default-on agent_status_notifications setting is functionally dead. FR9/US2 acceptance is completely unmet."
+    suggestion: "Drain AgentStatusModel.transitions after applying updates in pump_all, resolve each Transition's pane visibility (foreground OS window AND displayed tab) and title, and call self.maybe_notify_agent_transition(pane_key, pane_visible, &AgentTransition{..}, tab_title). Also call self.discard_agent_notification_state at every discard site. Add an integration test."
+    sources: [claude:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "batch mode: cross-cutting integration wiring flagged by 5 reviewers (spec claude critical, spec codex high, comprehensive claude high, architecture claude high, architecture codex high). Substantive integration owner-work; better addressed via rework task on implement re-entry than mid-review auto-fix."
+  - stable_id: drain_wiring_arch_claude
+    severity: high
+    category: architecture
+    file: src-tauri/src/app.rs
+    line: 3116
+    title: "Agent-status transitions queue is never drained; notification pipeline is dead"
+    description: "grep -r drain_transitions|maybe_notify_agent_transition|discard_agent_notification_state finds only definitions + test callers. Consequences: (1) unbounded transitions queue growth on every real state change; (2) OS notifications never fire despite documented FR9 promise + default-on setting."
+    suggestion: "Wire drain-and-notify in pump_all after the mark_seen block: iterate transitions, compute PaneKey→(pane_visible, tab_title), call maybe_notify_agent_transition. Also call discard_agent_notification_state alongside every agent_status.discard site (close_tab, reap-exited-tabs, pump_all closed-panes loop)."
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: same underlying bug as drain_wiring_spec; consolidated for rework."
+  - stable_id: drain_wiring_arch_codex
+    severity: high
+    category: architecture
+    file: src-tauri/src/app.rs
+    line: 3345
+    title: "The notification producer and consumer are never connected"
+    description: "pump_all applies agent reports to AgentStatusModel then proceeds directly to close handling and mark_seen; no production code calls drain_transitions or maybe_notify_agent_transition. The two subsystems form disconnected APIs rather than an integrated pipeline."
+    suggestion: "Drain transitions in the application orchestration path immediately after applying reports; resolve each PaneKey to visibility/title/stable rate-limit identity; invoke the notification policy. Remove transitions for closed panes and clear their limiter state. Add end-to-end pump test."
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "batch mode: same underlying bug; consolidated."
+  - stable_id: drain_wiring_comp_claude
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 4405
+    title: "Agent-status notification pipeline defined but never wired; queue leaks unbounded"
+    description: "maybe_notify_agent_transition + discard_agent_notification_state + drain_transitions defined and unit-tested but never called from pump_all. Settings toggle + docs promise are dead. VecDeque grows without bound."
+    suggestion: "Wire the drain-and-notify loop into App::pump_all after the existing agent-status apply block. Alternatively, remove the notifications: ... claim from doc/AGENT-STATUS.md and the settings toggle if intentionally deferred."
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "batch mode: same underlying bug; consolidated."
+  - stable_id: drain_wiring_spec_codex
+    severity: high
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 3345
+    title: "Agent-status transitions never reach the OS notification sink"
+    description: "SPEC FR9 requires real transitions to blocked/done on non-visible panes to fire OS notifications. Production pump never calls drain_transitions or maybe_notify_agent_transition; blocked/done reports never produce a notification."
+    suggestion: "Drain AgentStatusModel transitions after applying updates, resolve visibility/title, invoke maybe_notify_agent_transition before mark_seen mutates unseen state."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "batch mode: same underlying bug; consolidated."
+  # ========================================================================
+  # HIGH — Codex-only novel findings
+  # ========================================================================
+  - stable_id: protocol_v1_v2_break
+    severity: high
+    category: architecture
+    file: crates/mux_ipc/src/protocol.rs
+    line: 22
+    title: "Protocol v2 strands already-running v1 daemons"
+    description: "ensure_daemon_running treats an existing socket/pipe as sufficient and never probes protocol compatibility. After upgrading eMterm, bridges and all mux CLI commands fail against long-lived v1 daemons. Even mux kill cannot recover it because the old server rejects v2 Hello before processing Shutdown."
+    suggestion: "Add an upgrade strategy: accept v1 and capability-gate v2 pushes, or make daemon discovery version-aware with a safe restart/handoff path. Ensure Shutdown remains usable across adjacent versions. Add an upgrade test."
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "batch mode: rework task synthesized (backward compat surface)."
+  - stable_id: mux_read_render_missing
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 898
+    title: "mux read does not return rendered tail rows"
+    description: "SPEC FR10 requires the tail N rendered rows from current screen plus scrollback. The scrollback path merely removes escape bytes and calls str::lines(); terminal wrapping, carriage returns, cursor movement, erasure, and overwritten cells are not rendered. Byte-cap truncate keeps the oldest prefix and removes the newest suffix, so the result is no longer the tail."
+    suggestion: "Maintain or reconstruct scrollback as rendered terminal rows, select the final N rows, and enforce the byte cap by retaining the UTF-8-safe suffix containing the newest output."
+    sources: [codex:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "batch mode: rework task synthesized."
+  - stable_id: osc_split_lost
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 235
+    title: "Valid OSC reports are lost when split across PTY reads"
+    description: "SPEC FR1 defines each valid OSC agent-status sequence as a report; SPEC FR3 requires accepted reports to update pane state and revision. The scanner is explicitly stateless — a report crossing an arbitrary PTY read boundary is not detected. Even a short sequence can be split at any byte boundary."
+    suggestion: "Use a per-pane stateful OSC scanner across reader chunks, or obtain agent-status events from the existing streaming terminal parser."
+    sources: [codex:spec, codex:architecture]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "batch mode: rework task synthesized. Two codex perspectives agree."
+  - stable_id: replay_clear_lost
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/daemon.rs
+    line: 700
+    title: "Replay synchronization cannot communicate a cleared state"
+    description: "SPEC FR4 says current states are synchronized after a snapshot through replay-derived FR5 messages; FR5 allows the message state to be none/cleared. The synchronization loop skips every pane whose current state is None. If the GUI previously knew a non-empty state but missed a clear while detached, reattach cannot clear the stale badge or summary."
+    suggestion: "Emit replay-derived updates for panes with an accepted clear (e.g. revision > 0) carrying state/name as None; ensure synchronization covers every pane whose GUI state may need replacement."
+    sources: [codex:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "batch mode: rework task synthesized."
+  - stable_id: send_text_lock_held
+    severity: high
+    category: performance
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 969
+    title: "Blocking PTY write holds the global session-manager lock"
+    description: "handle_send_text keeps the session_manager mutex guard alive while pane.write_input performs synchronous write_all + flush. A 1 MiB payload against a non-consuming child can block; during that time every task needing the manager stalls, while a Tokio worker is also blocked. handle_read_pane already drops the lock before scrollback work — SendText should too."
+    suggestion: "Clone per-pane writer/status handles under the manager lock, then release it. Serialize writes through a bounded per-pane writer task/channel, or use spawn_blocking after dropping the manager guard; obtain the revision watermark within the same per-pane serialized operation."
+    sources: [codex:performance, claude:performance]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "batch mode: rework task synthesized. Cross-model agreement (claude+codex performance)."
+  # ========================================================================
+  # MEDIUM — below auto-fix gate (severity floor) but recorded for follow-up
+  # ========================================================================
+  - stable_id: scrollback_double_copy
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 936
+    title: "handle_read_pane copies scrollback twice while holding the lock"
+    description: "read_all copies the full 2 MiB scrollback ring; then all[start..].to_vec() copies the 512 KiB tail again — total ~2.5 MiB allocation per emterm mux read, holding the std::sync::Mutex the PTY reader also needs. Repeated agent polling churns memory and stalls the pane's output append."
+    suggestion: "Add ScrollbackRingBuffer::read_tail(n) to copy only the required tail; release the lock immediately; use a bounded reverse scan for the line selection."
+    sources: [claude:performance, codex:performance]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate."
+  - stable_id: osc_scanner_quadratic
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 261
+    title: "Unterminated OSC input makes the PTY scanner quadratic"
+    description: "For every ESC ], scan_agent_status_reports calls find_osc_terminator; if the whole suffix has no terminator, it advances only one byte and repeats the suffix scan for every subsequent introducer. O(n²) work on the pane reader thread on a 64 KiB chunk with repeated ESC ] pairs."
+    suggestion: "Use a single-pass state machine. At minimum: break after find_osc_terminator returns None — a full-suffix scan proves no later introducer can have a terminator."
+    sources: [codex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate."
+  - stable_id: waiter_leak_timeout
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 1114
+    title: "Timed-out agent waiters remain registered indefinitely"
+    description: "Timeout branch returns without unregistering AgentWaiter. Cleanup only occurs on later report or pane destruction. Repeated short/zero-timeout waits accumulate stale entries. Also codex:spec flags disconnected clients' waiters staying registered."
+    suggestion: "Assign waiter IDs; unregister on every timeout/cancellation/disconnect exit path with an RAII/cleanup guard. Add per-pane or global outstanding-wait limits."
+    sources: [codex:performance, codex:spec, codex:security]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate; cross-perspective agreement."
+  - stable_id: cli_stdin_unbounded
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/cli.rs
+    line: 1002
+    title: "mux send --stdin buffers unbounded input before validation"
+    description: "read_to_end consumes the whole stream before applying the daemon's 1 MiB send cap. Piping a large file exhausts the CLI process."
+    suggestion: "Use Read::take(SEND_MAX_BYTES + 1); reject when the extra byte is present; avoid constructing an oversized request."
+    sources: [codex:performance, codex:security]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate."
+  - stable_id: try_send_drops_reports
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 622
+    title: "Agent-status ingestion silently drops reports under backpressure"
+    description: "US1 requires every state report to update badge and summary; FR3 requires accepted reports to advance revision. try_send error is discarded; a valid report can be silently lost when the bounded 64-entry channel fills."
+    suggestion: "Apply backpressure with a blocking/reserved send outside locks, or otherwise guarantee ordered lossless delivery of agent-status reports."
+    sources: [codex:spec, codex:architecture]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate."
+  - stable_id: broadcast_lag_state_stale
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 481
+    title: "Lag recovery drops status updates without resynchronizing them"
+    description: "When the broadcast receiver lags, the branch discards skipped messages and resynchronizes only window names. If the last AgentStatusUpdate is among the skipped, the GUI remains stale indefinitely."
+    suggestion: "On lag, resynchronize current agent status and revision for the connection's panes using replay-derived AgentStatusUpdate messages, in addition to window names."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate."
+  - stable_id: v1_grammar_loose
+    severity: medium
+    category: spec
+    file: src-tauri/src/agent_status.rs
+    line: 138
+    title: "OSC parser accepts forms outside the mandated v=1 grammar"
+    description: "SPEC FR1 mandates the set form with v=1 and says a duplicate key invalidates the whole sequence. Parser accepts missing v and arbitrary values (v=999) because it neither checks seen_version at completion nor validates the value. It also ignores duplicate unknown keys because only v/state/name have seen flags."
+    suggestion: "Require exactly one v=1 field for set reports; track all encountered key names so any duplicate rejects the sequence; first occurrences of unknown keys remain ignored."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate."
+  - stable_id: not_mux_pane_unreachable
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 820
+    title: "not_mux_pane error can never be returned"
+    description: "SPEC FR10 requires a plain-tab target to produce not_mux_pane (exit 5). resolve_pane maps every resolution failure to UnknownPane; no handler constructs AgentApiErrorKind::NotMuxPane."
+    suggestion: "Represent or resolve GUI/plain-pane identifiers distinctly; return NotMuxPane when the target exists but is not daemon-owned."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate."
+  - stable_id: wait_race_destruction
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 1073
+    title: "wait can miss pane destruction during waiter registration"
+    description: "SPEC FR12: pane destruction during pending wait must return pane-gone. The handler clones status/waiter Arcs, releases SessionManager, then registers the waiter. Destruction can drain the empty waiter list in that gap; the registered waiter returns Timeout instead of PaneGone."
+    suggestion: "Make pane lookup, destruction-state validation, and waiter registration atomic w.r.t. pane removal, or store a destruction flag/generation checked while registering."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate."
+  - stable_id: pane_id_discovery_gap
+    severity: medium
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 2271
+    title: "Pane IDs cannot be copied until a status report exists"
+    description: "SPEC FR13 requires the GUI to provide a copy affordance for a pane's public ID. The GUI only learns an ID via AgentStatusUpdate. Newly created or permanently stateless panes have no ID available to the copy UI."
+    suggestion: "Include each public pane ID in PaneCreated/reattach metadata or send a dedicated pane-identity message, independent of agent-status state."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate."
+  - stable_id: send_utf8_unvalidated
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 954
+    title: "mux send accepts non-UTF-8 stdin data"
+    description: "SPEC FR11: SendText writes a UTF-8 string verbatim. The daemon validates only NUL and size before writing the raw Vec<u8>; invalid UTF-8 succeeds instead of yielding invalid_input."
+    suggestion: "Validate SendText bytes with UTF-8 decoding at the daemon boundary before writing, preserving the validated bytes verbatim."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate."
+  - stable_id: session_broadcast_unfiltered
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/tabs.rs
+    line: 1442
+    title: "AgentStatusUpdate applied unfiltered by session (over-counting + leak)"
+    description: "Tab::apply_mux_message unconditionally pushes every AgentStatusUpdateMsg into pending updates; App::pump_all applies them keyed by wire pane_id. On multi-session daemons, foreign-session pane entries inflate status-bar counts and leak indefinitely (PtyExited only cleans up own-session panes)."
+    suggestion: "Either drop non-belonging updates at Tab level (check own mux_group), or scope the daemon broadcast to sessions the client is attached to. Add discard on session switch."
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate."
+  - stable_id: agent_state_type_duplication
+    severity: medium
+    category: architecture
+    file: src-tauri/src/agent_status_model.rs
+    line: 45
+    title: "Model Transition and notifications AgentTransition structurally incompatible"
+    description: "Two representations of one transition inside the same GUI process: model uses core AgentState (Option to allow Clear); notifications uses wire AgentState (non-optional, via re-export). Three AgentState sites, three conversion helpers. No compile-time coupling against variant drift."
+    suggestion: "Consolidate AgentState: have notifications.rs use core AgentState; delete daemon.rs from_wire/to_wire in favor of a single conversion. Realign AgentTransition with Transition on the Option semantics."
+    sources: [claude:architecture, codex:architecture]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate; cross-model agreement."
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: skipped-by-orchestrator
+  skip_reason: "batch mode with substantial architectural finding (drain-wiring bug: 5-reviewer consensus, missing integration owner on task0005↔task0007 seam). Auto-fix of complex integration wiring via prose-suggestion editor dispatch was judged high-risk vs the rework-task path. Per batch-mode.md, review_rework_count == 0 → synthesize rework tasks and route back to implement."
+residual_critical_high: 10
+rework_required: true
