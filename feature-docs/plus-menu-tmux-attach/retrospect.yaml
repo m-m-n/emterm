@@ -1,0 +1,18 @@
+feature: plus-menu-tmux-attach
+collected_at: "2026-07-24T22:35:00+09:00"
+session_ids:
+  - ec8521c7-2d36-4984-b3be-4ff6e6d8ed8b.jsonl
+signals:
+  review_critical_high: []  # no critical/high findings in round 1
+  conflict_reworks: []  # task0001 merged without conflicts (conflict_retries: 0)
+  file_prediction_misses: []  # implementer touched exactly the 4 files in expected_files (no deviations)
+  verification_failures: []  # verify passed; tabs.rs failures are pre-existing base-tree flakiness (documented in VERIFICATION.md and MEMORY.md), not feature-derived
+  discretionary_perspectives:
+    - {perspective: security, reason: "diff enumerates Unix domain sockets from a user-influenced env-var-derived directory (TMUX_TMPDIR) and spawns tmux -S {socket_path} attach with a filesystem-discovered path as an argv element; injection/path handling warrants a dedicated security lens"}
+  declined_findings: []  # no findings declined (4 medium findings all deferred, not declined)
+lessons_candidates:
+  # Raw memos — analysis and rule-table promotion deferred to /em-workflow:retrospect
+  - "Stale-launched recovery across sessions: task0001 had a stale `launched` journal event from a prior interrupted session (2026-07-23), with no corresponding `failed` event because the SubagentStop failure-net hook doesn't fire retroactively across process boundaries. The launch guard correctly blocked the retry. The recovery was manual (synthesized a `failed` entry in journal.jsonl to unstick the guard). Worth considering: a session-boot reconciler that emits synthetic `failed` for launched-with-no-later-event entries whose age exceeds a threshold, so this recovery doesn't need to be discovered mid-workflow."
+  - "Fonts-prerequisite persists: font assets under src-tauri/assets/fonts/ (gitignored) had to be copied from the main tree to both the integration worktree AND the task0001 worktree before builds could succeed. Same finding as the mux-agent-status-api retrospect. Options unchanged: (a) document as mandatory environment step in worktree-task-workflow skill, or (b) make build.rs auto-fetch via scripts/fetch-fonts.sh on first miss."
+  - "PostToolUse rustfmt hook truncated profile_selector.rs to empty mid-edit (implementer notes). Implementer recovered via git checkout with no data loss. Root cause looked like a one-off race, not a syntax problem. If reproducible, would be worth investigating the hook's atomicity (temp file + rename? locking?)."
+  - "Codex-vs-Claude finding overlap in this run: 0 (Claude found nothing at medium+; Codex found 4 medium — perf/security/spec×2). Codex's spec findings (EAGAIN handling, F_GETFL/F_SETFL error swallowing) were meaningful edge cases Claude's spec reviewer missed. This validates the codex_cross_validation firing on discretionary-security addition, though the practical impact of the specific findings is low here."
