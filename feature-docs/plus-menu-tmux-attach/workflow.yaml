@@ -47,9 +47,15 @@ workflow:
     status: completed
     completed_at_commit: 5278e96db05922decfd007f9ed291e58c1fa4ad5
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: |
+      Build: rust GUI check ✓ (57s), cli-only check ✓ (8s), windows xwin check ✓ (37s).
+      Tests --lib default parallelism: 2441 pass / 14 fail / 3 ignored. Retry with --test-threads=1: 2452 pass / 3 fail / 3 ignored. All failures confined to tabs::tests::* (off-thread replay timing / welcome_without_windows_leaves_group_none). tabs.rs is untouched by this feature's diff (verified via `git diff <base> HEAD --name-only`); matches VERIFICATION.md's pre-existing-flakiness allowance and project MEMORY (tabs.rs replay tests are order-sensitive).
+      TS-1..TS-6 automated coverage: all pass (tmux_sockets, profile_selector, app chooser tests green; windows/cli builds green for TS-6).
+      Manual M-1 (live tmux -L test attach round-trip) deferred to user; not automatable in this environment.
+      Review round 1: 4 medium findings (all deferred, non-blocking; see reviews/round1.yaml).
   - id: retrospect
     status: pending
 
