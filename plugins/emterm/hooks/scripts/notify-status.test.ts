@@ -1,10 +1,13 @@
 /**
- * Tests for the Claude Code hook script `notify-status.ts` (task0002).
+ * Tests for the Claude Code hook script `notify-status.ts` (task0002,
+ * hardened in task0005).
  *
  * Two groups:
  *  - Runtime behavior of `run()` (the injectable-dependency core), one test
  *    group per Acceptance Criterion (AC-3 .. AC-7) plus the `done` allow-list
- *    coverage from Test Notes.
+ *    coverage from Test Notes, plus the task0005 review round-1 fixes:
+ *    internal timeout (task0005 AC-1), non-zero-exit tty gate (task0005
+ *    AC-2), and argv cardinality (task0005 AC-3).
  *  - Static manifest invariants (AC-8) for marketplace.json / plugin.json /
  *    hooks.json — kept in this file per Test Notes ("share a helper... keep
  *    them in the same test file to avoid another new file").
@@ -17,7 +20,13 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { run, type Deps, type SpawnResult, type TtySink } from "./notify-status.ts";
+import {
+  INTERNAL_TIMEOUT_MS,
+  run,
+  type Deps,
+  type SpawnResult,
+  type TtySink,
+} from "./notify-status.ts";
 
 // ---------------------------------------------------------------------
 // Fakes
@@ -56,9 +65,11 @@ function fakeDeps(overrides: Partial<Deps> = {}) {
         ? overrides.which(command)
         : "/usr/local/bin/emterm";
     },
-    spawn: async (argv) => {
+    spawn: async (argv, signal) => {
       spawnCalls.push(argv);
-      return overrides.spawn ? await overrides.spawn(argv) : defaultSpawnResult;
+      return overrides.spawn
+        ? await overrides.spawn(argv, signal)
+        : defaultSpawnResult;
     },
     openTty: () => {
       openTtyCalls += 1;
@@ -88,6 +99,22 @@ describe("state validation (AC-3)", () => {
       expect(spawnCalls.length).toBe(0);
     },
   );
+});
+
+// ---------------------------------------------------------------------
+// task0005 AC-3 / F3: argv cardinality — exactly one positional argument.
+// Checked before the allow-list, so an otherwise-valid state with an extra
+// trailing argument is still rejected.
+// ---------------------------------------------------------------------
+
+describe("argv cardinality (task0005 AC-3)", () => {
+  test("two positional args: exits 0, never spawns emterm, never opens /dev/tty", async () => {
+    const { deps, spawnCalls, getOpenTtyCalls } = fakeDeps();
+    const exitCode = await run(["working", "extra"], deps);
+    expect(exitCode).toBe(0);
+    expect(spawnCalls.length).toBe(0);
+    expect(getOpenTtyCalls()).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------
@@ -124,16 +151,69 @@ describe("/dev/tty open failure (AC-5)", () => {
 
 // ---------------------------------------------------------------------
 // AC-6: emterm child exits non-zero
+// task0005 AC-2 / F2: SPEC.md Edge Cases makes non-zero exit a no-op, so
+// stdout must NOT reach the tty even when the child produced output.
 // ---------------------------------------------------------------------
 
 describe("emterm non-zero exit (AC-6)", () => {
-  test("spawn resolves with exitCode !== 0: script still exits 0", async () => {
-    const { deps } = fakeDeps({
-      spawn: async () => ({ stdout: new Uint8Array(), exitCode: 1 }),
+  test("spawn resolves with exitCode !== 0 and non-empty stdout: exits 0, never opens /dev/tty, writes nothing", async () => {
+    const { sink, writes, isClosed } = fakeTtySink();
+    const { deps, getOpenTtyCalls } = fakeDeps({
+      spawn: async () => ({
+        stdout: new TextEncoder().encode("should never be written"),
+        exitCode: 42,
+      }),
+      openTty: () => sink,
     });
     const exitCode = await run(["blocked"], deps);
     expect(exitCode).toBe(0);
+    expect(getOpenTtyCalls()).toBe(0);
+    expect(writes.length).toBe(0);
+    expect(isClosed()).toBe(false);
   });
+});
+
+// ---------------------------------------------------------------------
+// task0005 AC-1 / F1: internal timeout. SPEC.md FR4 requires timeouts to
+// resolve exit 0 before Claude Code's own 3 s hook timeout would kill the
+// process non-zero. `spawn` here hangs forever (never resolves `exited`)
+// to simulate a wedged `emterm`.
+// ---------------------------------------------------------------------
+
+describe("internal timeout (task0005 AC-1)", () => {
+  test(
+    "spawn never resolves: run() still returns 0 within the internal deadline and never opens /dev/tty",
+    async () => {
+      const { deps, getOpenTtyCalls } = fakeDeps({
+        spawn: () => new Promise<SpawnResult>(() => {}), // never settles
+      });
+
+      const start = Date.now();
+      const exitCode = await run(["working"], deps);
+      const elapsedMs = Date.now() - start;
+
+      expect(exitCode).toBe(0);
+      // AC-1: within <= 2500 ms (the 2000 ms internal deadline + slack).
+      expect(elapsedMs).toBeLessThanOrEqual(INTERNAL_TIMEOUT_MS + 500);
+      expect(getOpenTtyCalls()).toBe(0);
+    },
+    5000,
+  );
+
+  test("the internal deadline aborts the signal passed to spawn", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const { deps } = fakeDeps({
+      spawn: (_argv, signal) => {
+        observedSignal = signal;
+        return new Promise<SpawnResult>(() => {}); // never settles
+      },
+    });
+
+    const exitCode = await run(["working"], deps);
+
+    expect(exitCode).toBe(0);
+    expect(observedSignal?.aborted).toBe(true);
+  }, 5000);
 });
 
 // ---------------------------------------------------------------------
