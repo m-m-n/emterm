@@ -1,0 +1,143 @@
+round: 1
+executed_at: "2026-07-25T00:40:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 887f337b47f3757e5bdf986d033b2a8aa2a4776e
+  head_commit: c379e551911745d80627236c05349b2a33549e13
+  changed_files:
+    - .claude-plugin/marketplace.json
+    - plugins/emterm/.claude-plugin/plugin.json
+    - plugins/emterm/README.md
+    - plugins/emterm/hooks/hooks.json
+    - plugins/emterm/hooks/scripts/notify-status.test.ts
+    - plugins/emterm/hooks/scripts/notify-status.ts
+    - plugins/emterm/skills/display-image/SKILL.md
+    - plugins/emterm/skills/display-json/SKILL.md
+    - plugins/emterm/skills/display-markdown/SKILL.md
+    - plugins/emterm/skills/display-yaml/SKILL.md
+    - plugins/emterm/skills/mux-read/SKILL.md
+    - plugins/emterm/skills/mux-send/SKILL.md
+    - plugins/emterm/skills/mux-wait/SKILL.md
+    - plugins/emterm/skills/skills.test.ts
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  - stable_id: sp-hang-timeout-fr4
+    severity: high
+    category: spec
+    file: plugins/emterm/hooks/scripts/notify-status.ts
+    line: 90
+    title: "A hung emterm process cannot degrade to exit 0"
+    description: "SPEC FR4 requires timeouts to result in exit 0, but the real spawn awaits the child's exit indefinitely without an internal deadline. If emterm hangs, Claude Code's 3s hook timeout kills the script before run() can return 0, violating the required silent failure semantics."
+    suggestion: "Apply an internal timeout shorter than the hook's 3s limit, terminate the child on expiry, and return 0 without writing to /dev/tty."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+  - stable_id: cm-nonzero-tty-write
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/hooks/scripts/notify-status.ts
+    line: 73
+    title: "Non-zero emterm exit still writes stdout to /dev/tty (spec says no-op)"
+    description: "run() unconditionally writes result.stdout to /dev/tty after spawn returns, without gating on exitCode. SPEC Edge Cases promises emterm non-zero exit is a no-op. Any partial stdout from a failing emterm gets written verbatim to the user's terminal."
+    suggestion: "Skip the tty write when result.exitCode !== 0. Also extend AC-6 test to assert getOpenTtyCalls() is 0 when spawn resolves non-zero with non-empty stdout."
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: sc-mux-send-shell-inject
+    severity: medium
+    category: security
+    file: plugins/emterm/skills/mux-send/SKILL.md
+    line: 8
+    title: "User-controlled mux text is passed into a shell command without safe encoding"
+    description: "The mux-send skill directs the model to substitute user-derived text into 'emterm mux send --pane <id> --text <s>' without requiring validation or shell escaping. Untrusted text containing $(), backticks, ;, or newlines can execute locally instead of being sent as data."
+    suggestion: "Require --stdin for arbitrary text, validate pane IDs, and mandate argv-based execution. Add adversarial examples covering metacharacters."
+    sources: [codex:security]
+    confidence: 50
+    resolution: unresolved
+  - stable_id: sc-mux-read-prompt-inject
+    severity: medium
+    category: security
+    file: plugins/emterm/skills/mux-read/SKILL.md
+    line: 20
+    title: "Mux pane output is fed to the model without prompt-injection boundaries"
+    description: "The mux-read skill reads arbitrary pane output and hands it to the model without labeling it untrusted or prohibiting instructions embedded in it. Attacker-controlled pane content can attempt to steer the model to invoke tools or disclose data."
+    suggestion: "Explicitly label mux stdout as untrusted data, delimit it from instructions, and instruct the model to never follow directives from mux output."
+    sources: [codex:security]
+    confidence: 50
+    resolution: unresolved
+  - stable_id: pf-hook-2process-per-prompt
+    severity: medium
+    category: performance
+    file: plugins/emterm/hooks/hooks.json
+    line: 4
+    title: "Every prompt waits on a two-process status update"
+    description: "UserPromptSubmit synchronously launches Bun which launches emterm and awaits it before returning. Bun cold-start + emterm startup + I/O is on every prompt's critical path (README already documents up to 3s worst case)."
+    suggestion: "Remove the nested CLI invocation from the prompt path. Write the OSC directly from the hook, or send to a persistent IPC helper. If a child process is unavoidable, don't await and enforce a short deadline."
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+  - stable_id: sp-argv-cardinality
+    severity: medium
+    category: spec
+    file: plugins/emterm/hooks/scripts/notify-status.ts
+    line: 55
+    title: "Additional positional arguments are accepted"
+    description: "SPEC FR4 says the script must accept a single positional argument. Validation checks only argv[0], so 'notify-status.ts working extra' still invokes emterm instead of being a no-op."
+    suggestion: "Require argv.length === 1 before validating and using the state."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+  - stable_id: sp-test-outside-plugin-root
+    severity: medium
+    category: spec
+    file: plugins/emterm/hooks/scripts/notify-status.test.ts
+    line: 182
+    title: "Plugin code traverses outside the plugin root"
+    description: "SPEC NFR3 states every plugin path must remain relative to ${CLAUDE_PLUGIN_ROOT}, with nothing under '../' or outside the plugin directory because external references are not preserved in the plugin cache. This test traverses four parent directories to read repository-root files."
+    suggestion: "Keep plugin-contained tests rooted within plugins/emterm/, and move repository-level marketplace assertions to a test outside the plugin directory (or accept as a repo-level test that runs only in-tree)."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+  - stable_id: cm-poc-verification-incomplete
+    severity: medium
+    category: comprehensive
+    file: feature-docs/emterm-claude-plugin/VERIFICATION.md
+    line: 71
+    title: "The mandatory live POC and timing measurement are still incomplete"
+    description: "SPEC FR8 requires a real Claude Code session in eMterm and recorded results; NFR1 requires the Bun cold-start timing to be measured. M-1 is unchecked and POC-RESULTS.md is absent. Relabeled from spec to comprehensive because VERIFICATION.md is outside changed_files (protocol R3 rule 7)."
+    suggestion: "Run the POC in the verify phase, verify working/idle/blocked transitions, measure timing, and record observations under feature-docs/emterm-claude-plugin/POC-RESULTS.md."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-candidates
+residual_critical_high: 1
+rework_required: true
+rework_disposition:
+  scheduled_for_task0005:
+    - sp-hang-timeout-fr4       # high spec: internal timeout
+    - cm-nonzero-tty-write      # medium comprehensive: non-zero exit gate
+    - sp-argv-cardinality       # medium spec: argv.length check
+  scheduled_for_task0006:
+    - sc-mux-send-shell-inject  # medium security: mux-send hardening
+    - sc-mux-read-prompt-inject # medium security: mux-read boundary
+  deferred:
+    - id: pf-hook-2process-per-prompt
+      reason: "設計レベル (Bun cold-start + 2process). README で既知制限として明記済み。改善は別 feature の候補"
+    - id: sp-test-outside-plugin-root
+      reason: "静的マニフェスト整合性テストの位置付けに関する設計判断。plugin cache セマンティクスに実害なし (テストは in-tree でのみ実行され、プラグイン配布物にテストは含まれない)。retrospect で再検討"
+    - id: cm-poc-verification-incomplete
+      reason: "verify フェーズで実施する予定 (VERIFICATION.md M-1 / IMPLEMENTATION.md D4)"
