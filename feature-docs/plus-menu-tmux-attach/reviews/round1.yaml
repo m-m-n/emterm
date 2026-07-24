@@ -1,0 +1,121 @@
+round: 1
+executed_at: "2026-07-24T22:30:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 510dea39ef96a51a33eb7cab1e86f790962ad011
+  head_commit: 5278e96db05922decfd007f9ed291e58c1fa4ad5
+  changed_files:
+    - src-tauri/src/app.rs
+    - src-tauri/src/lib.rs
+    - src-tauri/src/tmux_sockets.rs
+    - src-tauri/src/ui/profile_selector.rs
+plan:
+  floor: [comprehensive, performance, spec]
+  discretionary:
+    - perspective: security
+      reason: "diff enumerates Unix domain sockets from a user-influenced env-var-derived directory (TMUX_TMPDIR) and spawns `tmux -S {socket_path} attach` with a filesystem-discovered path as an argv element; injection/path handling warrants a dedicated security lens"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+findings:
+  - stable_id: perf-ui-block-01
+    severity: medium
+    category: performance
+    file: src-tauri/src/tmux_sockets.rs
+    line: 76
+    title: "Serial socket probes can block the UI for 200 ms per candidate"
+    description: |
+      The new-tab event synchronously calls discovery from `App::open_new_tab_chooser`,
+      and the probe loop probes every socket sequentially. Each probe can block in
+      `libc::poll` for up to 200 ms, so N in-progress sockets delay the chooser by
+      N × 200 ms. Realistic tmux socket counts are 0-3 so the practical impact is
+      small, but the worst-case UI stall is unbounded by socket count.
+    suggestion: |
+      Run discovery on a background worker and update the chooser asynchronously.
+      Alternatively, initiate all non-blocking connections and poll them together
+      under one overall deadline rather than applying the full timeout serially to
+      every candidate.
+    sources: [codex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium severity below auto-fix gate; typical socket count (0-3) makes worst-case UI stall unlikely to be observable in practice; opt for a follow-up if telemetry shows N growing"
+  - stable_id: sec-ownership-01
+    severity: medium
+    category: security
+    file: src-tauri/src/tmux_sockets.rs
+    line: 48
+    title: "Untrusted tmux sockets are accepted without ownership validation"
+    description: |
+      `TMUX_TMPDIR` is treated as the socket directory itself, and the fallback
+      directory `/tmp/tmux-<uid>` is trusted without checking its owner or
+      permissions. A local attacker who can create `/tmp/tmux-<victim-uid>` with
+      permissive access and a plausible-looking socket could get the victim to
+      attach to an attacker-controlled tmux session (terminal spoofing / input
+      capture). Claude review notes this matches vanilla tmux's own trust model
+      (0700 socket dir + /tmp sticky bit), so no new attack surface is introduced
+      by this diff, but tmux itself does perform the ownership check that this
+      code skips.
+    suggestion: |
+      Resolve `${TMUX_TMPDIR:-/tmp}/tmux-<real-uid>` (matching tmux's own layout),
+      reject symlinked directories/entries, and require the directory and socket
+      to be owned by the real UID with no unsafe write permissions. Revalidate the
+      selected socket immediately before attaching to prevent replacement between
+      discovery and use.
+    sources: [codex:security]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium severity below auto-fix gate; same trust model as vanilla tmux (which relies on the 0700 socket dir); worth a follow-up hardening pass but not blocking merge"
+  - stable_id: spec-eagain-01
+    severity: medium
+    category: spec
+    file: src-tauri/src/tmux_sockets.rs
+    line: 133
+    title: "Pending Unix-socket connections are misclassified as stale"
+    description: |
+      The probe polls only when `connect` returns `EINPROGRESS`; on Linux, a
+      nonblocking Unix-domain connection that cannot complete immediately may
+      return `EAGAIN`. Such a connection can still succeed within the configured
+      timeout, but this code rejects it and omits a live-but-busy tmux socket.
+      SPEC FR1 requires keeping socket entries that accept a Unix-domain
+      connection.
+    suggestion: |
+      Treat `EAGAIN`/`EWOULDBLOCK` (and platform-specific pending-connect errors)
+      like `EINPROGRESS`, then poll and inspect `SO_ERROR` until the timeout.
+      Add a test exercising a temporarily pending Unix-socket connection.
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium severity below auto-fix gate; EAGAIN on connect(2) for Unix-domain sockets is extremely rare in practice (tmux server accept() is essentially immediate); worth a follow-up robustness fix"
+  - stable_id: spec-fcntl-err-01
+    severity: medium
+    category: spec
+    file: src-tauri/src/tmux_sockets.rs
+    line: 122
+    title: "Timeout does not bound connect when nonblocking setup fails"
+    description: |
+      Failures from both `F_GETFL` and `F_SETFL` are ignored, after which the code
+      still calls `connect`. If either operation fails (extremely unlikely on a
+      valid fd, but possible on kernel resource pressure), `connect` may remain
+      blocking and stall before the timeout-controlled `poll` is reached. SPEC
+      NFR1 mandates discovery must not perceptibly delay chooser opening.
+    suggestion: |
+      Create the socket with `SOCK_NONBLOCK` where supported, or verify/retry the
+      `fcntl` operations and abort the probe if nonblocking mode cannot be
+      established. Never call `connect` unless the descriptor is confirmed
+      nonblocking.
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium severity below auto-fix gate; failure of F_GETFL/F_SETFL on a freshly-created fd is extremely rare; worth a follow-up hardening"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-candidates
+residual_critical_high: 0
+rework_required: false

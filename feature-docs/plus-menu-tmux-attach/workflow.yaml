@@ -44,7 +44,8 @@ workflow:
     base_commit: 510dea39ef96a51a33eb7cab1e86f790962ad011
     completed_at_commit: d58a26e0cee387379c8432ff880755c798751e53
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 5278e96db05922decfd007f9ed291e58c1fa4ad5
   - id: verify
     status: pending
     result: null
@@ -71,8 +72,12 @@ tasks:
     notes: "AC-1..AC-5 covered by unit tests. AC-6 (CLI-only / Windows cross-check) not in task's project_commands; verify phase will run them."
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives_run: [comprehensive, performance, spec, security]
+  codex_cross_validation: true
+  residual_critical_high: 0
+  needs_rework: false
   plan:
     floor: [comprehensive, performance, spec]
     discretionary:
