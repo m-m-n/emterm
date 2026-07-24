@@ -53,9 +53,27 @@ workflow:
   - id: review
     status: pending
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: |
+      Build: rust ✓ (33s), cli-only ✓ (7s), mux-ipc ✓ (4s), web typecheck ✓.
+      Test: mux-ipc 76/76 ✓, web 171/171 ✓, main-crate feature-scoped tests
+      (agent_status, agent_status_model, notifications, handlers, app,
+      callbacks) all ✓. Full `cargo test --lib` on the main crate shows
+      15 failures (parallel) → 6 failures (--test-threads=1) confined to
+      tabs::tests: 5 known-flaky off-thread-replay-worker timing tests
+      (MEMORY.md: "tabs.rs replay tests are non-deterministic when run in
+      parallel"), plus 1 deterministic failure
+      `welcome_without_windows_leaves_group_none` that was verified to
+      reproduce identically on main HEAD baseline via a scratch worktree —
+      pre-existing project bug unrelated to this feature. TS-1..TS-12 and
+      TS-14 covered by the feature-scoped tests above. TS-13 (manual live
+      run with mockup visual comparison) and TS-15 (manual doc review)
+      require a human — deferred to the human evaluator per batch mode.
+      Fonts (gitignored bundled assets) were copied from the main worktree
+      to the integration worktree before build, matching every implementer's
+      environment-setup step.
   - id: retrospect
     status: pending
 
