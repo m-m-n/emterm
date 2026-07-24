@@ -20,6 +20,20 @@ export function isAllowedState(value: string): value is State {
   return (ALLOWED_STATES as readonly string[]).includes(value);
 }
 
+/**
+ * Internal deadline for the whole spawn+read step, enforced independently
+ * of Claude Code's own 3 s hook timeout (SPEC.md FR4). 1 s of slack is left
+ * so this script always wins the race and can return exit 0 on its own
+ * terms instead of being killed non-zero by Claude Code.
+ */
+export const INTERNAL_TIMEOUT_MS = 2000;
+
+/**
+ * Grace period between SIGTERM and SIGKILL when the internal deadline
+ * fires and the spawned child must be torn down.
+ */
+const KILL_GRACE_MS = 250;
+
 /** Result of spawning the `emterm agent-status` child process. */
 export interface SpawnResult {
   stdout: Uint8Array;
@@ -36,22 +50,57 @@ export interface TtySink {
  * Injectable dependencies so the core logic (`run`) never touches a real
  * terminal and never requires `emterm` to be installed on the machine
  * running the tests.
+ *
+ * `spawn` receives an `AbortSignal` that `run()` aborts once
+ * `INTERNAL_TIMEOUT_MS` elapses; real implementations use it to terminate
+ * the child process. Fakes may ignore it.
  */
 export interface Deps {
   which: (command: string) => string | null;
-  spawn: (argv: string[]) => Promise<SpawnResult>;
+  spawn: (argv: string[], signal: AbortSignal) => Promise<SpawnResult>;
   openTty: () => TtySink;
+}
+
+type SpawnOutcome =
+  | { timedOut: true }
+  | { timedOut: false; result: SpawnResult };
+
+/**
+ * Resolves `{ timedOut: true }` after `ms` and aborts `controller` so the
+ * in-flight `spawn` call can tear down its child. The timer is cancelled by
+ * the caller via the returned `cancel()` once the race has a winner, so a
+ * fast-resolving `spawn` never leaves a dangling 2 s timer behind.
+ */
+function armInternalTimeout(
+  ms: number,
+  controller: AbortController,
+): { promise: Promise<SpawnOutcome>; cancel: () => void } {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const promise = new Promise<SpawnOutcome>((resolve) => {
+    timeoutId = setTimeout(() => {
+      controller.abort();
+      resolve({ timedOut: true });
+    }, ms);
+  });
+  return { promise, cancel: () => clearTimeout(timeoutId) };
 }
 
 /**
  * Core hook behavior. Always resolves to 0 by design (SPEC.md FR4: every
- * failure path — bad state, missing `emterm`, /dev/tty open failure,
- * non-zero child exit, thrown exception — results in exit 0). The single
- * top-level try/catch is deliberate: it is the one place that guarantees
- * no exception from an injected dependency ever escapes this function.
+ * failure path — bad state, wrong argv cardinality, missing `emterm`,
+ * internal-timeout expiry, /dev/tty open failure, non-zero child exit,
+ * thrown exception — results in exit 0). The single top-level try/catch is
+ * deliberate: it is the one place that guarantees no exception from an
+ * injected dependency ever escapes this function.
  */
 export async function run(argv: string[], deps: Deps): Promise<number> {
   try {
+    // SPEC.md FR4: exactly one positional argument. Checked before the
+    // allow-list so extra/missing args are rejected uniformly.
+    if (argv.length !== 1) {
+      return 0;
+    }
+
     const state = argv[0];
     if (state === undefined || !isAllowedState(state)) {
       return 0;
@@ -62,19 +111,38 @@ export async function run(argv: string[], deps: Deps): Promise<number> {
       return 0;
     }
 
-    const result = await deps.spawn([
-      emtermPath,
-      "agent-status",
-      state,
-      "--name",
-      "claude-code",
-    ]);
+    const controller = new AbortController();
+    const { promise: timeoutPromise, cancel: cancelTimeout } =
+      armInternalTimeout(INTERNAL_TIMEOUT_MS, controller);
 
-    const sink = deps.openTty();
+    const spawnPromise: Promise<SpawnOutcome> = deps
+      .spawn(
+        [emtermPath, "agent-status", state, "--name", "claude-code"],
+        controller.signal,
+      )
+      .then((result) => ({ timedOut: false, result }) as const);
+
+    let outcome: SpawnOutcome;
     try {
-      sink.write(result.stdout);
+      outcome = await Promise.race([spawnPromise, timeoutPromise]);
     } finally {
-      sink.close();
+      cancelTimeout();
+    }
+
+    if (outcome.timedOut) {
+      // Deadline hit: the child was signaled via `controller.abort()`
+      // inside `armInternalTimeout`. No tty is opened, nothing is written.
+      return 0;
+    }
+
+    const { result } = outcome;
+    if (result.exitCode === 0) {
+      const sink = deps.openTty();
+      try {
+        sink.write(result.stdout);
+      } finally {
+        sink.close();
+      }
     }
 
     return 0;
@@ -87,13 +155,31 @@ export async function run(argv: string[], deps: Deps): Promise<number> {
 function realDeps(): Deps {
   return {
     which: (command) => Bun.which(command),
-    spawn: async (argv) => {
+    spawn: async (argv, signal) => {
       const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore" });
-      const stdout = new Uint8Array(
-        await new Response(proc.stdout).arrayBuffer(),
-      );
-      const exitCode = await proc.exited;
-      return { stdout, exitCode };
+
+      const onAbort = () => {
+        proc.kill(); // SIGTERM
+        const killTimer = setTimeout(() => {
+          if (!proc.killed) {
+            proc.kill("SIGKILL");
+          }
+        }, KILL_GRACE_MS);
+        // Don't let the grace-period timer keep the process/tests alive
+        // once the child has actually exited.
+        void proc.exited.finally(() => clearTimeout(killTimer));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+
+      try {
+        const stdout = new Uint8Array(
+          await new Response(proc.stdout).arrayBuffer(),
+        );
+        const exitCode = await proc.exited;
+        return { stdout, exitCode };
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
     },
     openTty: () => {
       const fd = openSync("/dev/tty", "w");
