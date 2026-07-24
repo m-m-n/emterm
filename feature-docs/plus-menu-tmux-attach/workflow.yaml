@@ -40,8 +40,9 @@ workflow:
     status: completed
     completed_at_commit: 06d795b6698952176a743a86d6f13fbfb6633105
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 510dea39ef96a51a33eb7cab1e86f790962ad011
+    completed_at_commit: d58a26e0cee387379c8432ff880755c798751e53
   - id: review
     status: pending
   - id: verify
@@ -64,9 +65,10 @@ tasks:
     domains: [ui, external-io]
     complexity: medium
     requirements: [FR1, FR2, FR3, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/plus-menu-tmux-attach/task0001
-    notes: null
+    merge_commit: d58a26e0cee387379c8432ff880755c798751e53
+    notes: "AC-1..AC-5 covered by unit tests. AC-6 (CLI-only / Windows cross-check) not in task's project_commands; verify phase will run them."
 
 review:
   status: pending
