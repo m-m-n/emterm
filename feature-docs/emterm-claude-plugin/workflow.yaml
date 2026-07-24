@@ -1,0 +1,107 @@
+schema_version: 1
+feature: emterm-claude-plugin
+created: 2026-07-25
+base_branch: main
+parent_branch: em-workflow/emterm-claude-plugin/integration
+
+project:
+  license: MIT
+  components:
+    plugin:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 7acf68ef88668cc0d0164b6d44cc57e44861f43a
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Plugin feature adds only JSON manifests, hook scripts, skill markdown, and a README — no visible UI or design tokens change."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: 7acf68ef88668cc0d0164b6d44cc57e44861f43a
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "marketplace.json at repository root"
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: "plugin.json for plugins/emterm/"
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: "hooks.json wires UserPromptSubmit/Stop/Notification to notify-status.ts"
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: "notify-status.ts (Bun+TS) writes emterm agent-status stdout to /dev/tty with silent failure"
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: "display-markdown/json/yaml/image SKILL.md wrappers"
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: "mux-read/send/wait SKILL.md wrappers"
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: "plugins/emterm/README.md documents install, prerequisites, and known limitations"
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: "Local POC: verify /dev/tty hook path reaches an eMterm tab and record Bun startup timing"
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Hook end-to-end under 3s timeout; Bun startup measured"
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: "State argument allow-list validation; argv-array spawn (no shell)"
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: "All plugin paths relative to ${CLAUDE_PLUGIN_ROOT}"
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: "No binaries shipped; README points to GitHub Releases for emterm binary"
+    status: ok
+    tasks: []
+    tests: []
