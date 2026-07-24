@@ -80,7 +80,7 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR5, FR6, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/emterm-claude-plugin/task0003
   task0004:
     title: "Plugin README"
