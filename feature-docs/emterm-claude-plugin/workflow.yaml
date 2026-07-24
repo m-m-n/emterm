@@ -91,7 +91,7 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR7, NFR4]
-    status: in_progress
+    status: merged
     branch: em-workflow/emterm-claude-plugin/task0004
 
 review:
