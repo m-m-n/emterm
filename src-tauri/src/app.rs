@@ -140,6 +140,92 @@ fn build_mux_latch(settings: &Settings) -> crate::mux::prefix::Latch {
     Latch::with_bindings(chord, crate::mux::prefix::DEFAULT_ARMED_TIMEOUT, bindings)
 }
 
+/// The `App::agent_status` keys `tab` occupies: its own plain-tab key
+/// (`PaneKey::Tab`, harmless to include even when unoccupied — `discard` /
+/// `mark_seen` on a missing key are no-ops) plus one `PaneKey::MuxPane` per
+/// pane in its window group, if attached (task0005). Shared by the
+/// tab-close (AC-6) and mark_seen-on-foreground-display (AC-5) call sites so
+/// "which panes belong to this tab" is defined in exactly one place.
+fn agent_status_keys_for_tab(tab: &crate::tabs::Tab) -> Vec<crate::agent_status_model::PaneKey> {
+    use crate::agent_status_model::PaneKey;
+    let mut keys = vec![PaneKey::Tab(tab.stable_id)];
+    if let Some(group) = tab.mux_group.as_ref() {
+        keys.extend(group.pane_ids().iter().map(|&id| PaneKey::MuxPane(id)));
+    }
+    keys
+}
+
+/// Whether a drained agent-status transition's `pane` is currently
+/// displayed (task0009 Design: "Resolve pane_visible"). `true` only when
+/// the OS window is focused AND `pane` is one of the active tab's
+/// agent-status keys — the SAME "displayed" definition `pump_all`'s
+/// mark_seen call already uses (`agent_status_keys_for_tab`), so a
+/// mux-attached tab's whole window group counts as displayed while that
+/// tab is active/focused, not just the group's currently-active window.
+/// Free function (not an `App` method) so the visibility rule is testable
+/// against arbitrary tab fixtures without constructing a full `App`.
+fn agent_status_pane_visible(
+    window_focused: bool,
+    active_tab: Option<&crate::tabs::Tab>,
+    pane: &crate::agent_status_model::PaneKey,
+) -> bool {
+    if !window_focused {
+        return false;
+    }
+    let Some(active_tab) = active_tab else {
+        return false;
+    };
+    agent_status_keys_for_tab(active_tab).contains(pane)
+}
+
+/// Resolve the tab title for a drained transition's `pane`, by locating
+/// its containing tab (task0009 Design: "Resolve tab_title from the
+/// transition's pane by locating its containing tab"). `None` when no
+/// tracked tab currently owns `pane` (it closed between the transition
+/// firing and this drain — the caller falls back to an empty title).
+fn agent_status_pane_tab_title<'a>(
+    tabs: &'a [crate::tabs::Tab],
+    pane: &crate::agent_status_model::PaneKey,
+) -> Option<&'a str> {
+    use crate::agent_status_model::PaneKey;
+    tabs.iter()
+        .find(|tab| match pane {
+            PaneKey::Tab(id) => tab.stable_id == *id,
+            PaneKey::MuxPane(pane_id) => tab
+                .mux_group
+                .as_ref()
+                .is_some_and(|g| g.pane_ids().contains(pane_id)),
+        })
+        .map(|tab| tab.title.as_str())
+}
+
+/// Resolve the per-pane notification rate-limit key for `pane` (task0009
+/// Design: "Resolve rate_limit_key"). Mux panes prefer the daemon-learned
+/// `public_pane_id` (stable across the pane's lifetime, unique across
+/// concurrent panes by the "Public pane ID format" shared component);
+/// plain tabs use a prefixed stable-id string. Both branches are prefixed
+/// (`"tab:"` / `"mux:"`) so the fallback path (a mux pane discarded before
+/// ever learning a public id — not expected in practice, since learning
+/// and applying a daemon update happen in the same `pump_all` batch) can
+/// never collide with a plain-tab key. Shared by every discard site
+/// (`close_tab`, the reaped-tab loop, `pump_all`'s closed-mux-pane loop)
+/// and the transition-drain loop so all four derive the same key. Takes
+/// `mux_public_pane_ids` explicitly (rather than `&App`) so it is testable
+/// without constructing a full `App`.
+fn agent_notification_rate_limit_key(
+    mux_public_pane_ids: &std::collections::HashMap<u32, String>,
+    pane: &crate::agent_status_model::PaneKey,
+) -> String {
+    use crate::agent_status_model::PaneKey;
+    match pane {
+        PaneKey::Tab(id) => format!("tab:{id}"),
+        PaneKey::MuxPane(pane_id) => mux_public_pane_ids
+            .get(pane_id)
+            .cloned()
+            .unwrap_or_else(|| format!("mux:{pane_id}")),
+    }
+}
+
 pub struct App {
     pub tabs: Vec<Tab>,
     pub active: usize,
@@ -238,6 +324,23 @@ pub struct App {
     /// "active tab is mux-attached" separately — see the Shared Components
     /// contract in IMPLEMENTATION.md).
     active_mux_attached_prev_pump: Option<usize>,
+    /// Merged agent-status store (mux-agent-status-api task0005, SPEC FR5 /
+    /// FR6 / NFR3): one [`crate::agent_status_model::AgentStatusModel`]
+    /// covering both plain tabs (this tab's own OSC 777 `agent-status`
+    /// events) and mux panes (daemon-pushed `AgentStatusUpdate`). Owned here
+    /// so the UI (task0006) and notification (task0007) layers can read it;
+    /// `pump_all` is the only writer.
+    pub agent_status: crate::agent_status_model::AgentStatusModel,
+    /// pane_id -> daemon-minted public pane ID (task0006 AC-5, `mux_ipc`'s
+    /// "Public pane ID format" shared component). The GUI only LEARNS a
+    /// pane's public ID when the daemon pushes an `AgentStatusUpdate` for
+    /// it (a real report or a replay-on-attach restatement) — there is no
+    /// separate wire message that hands it over. Populated alongside
+    /// `Self::agent_status` in `pump_all` from the same
+    /// `AgentStatusUpdateMsg` batch and cleared on the same closed-pane
+    /// list, so a pane with no entry here (never reported) simply hides
+    /// the sidebar's copy-to-clipboard row (`ui::mux_sidebar` AC-5).
+    mux_public_pane_ids: std::collections::HashMap<u32, String>,
     /// Display locale resolved once from `settings.language` at
     /// construction (`Auto` consults the OS locale). Consumed by the
     /// desktop-notification body formatting in `pump_all`.
@@ -430,6 +533,12 @@ pub struct App {
     /// Binary-mismatch restart toast (armed by a failed self-spawn, drawn by
     /// the render path, auto-dismissed by [`App::pump_sftp`]).
     pub restart_toast: RestartToast,
+    /// Per-pane rate limiter for agent-status (blocked/done) desktop
+    /// notifications (task0007 AC-4). Keyed by whatever stable pane
+    /// identity the caller of [`App::maybe_notify_agent_transition`]
+    /// supplies (a mux pane's `public_pane_id`, or a caller-chosen key for
+    /// plain tabs).
+    agent_notification_rate_limiter: crate::notifications::AgentNotificationRateLimiter<String>,
 }
 
 /// How long (in egui frame-time seconds) the binary-mismatch restart toast
@@ -668,6 +777,8 @@ impl App {
             mux_dialog: crate::mux::dialog::MuxDialogState::Closed,
             mux_sidebar_overlay_open: false,
             active_mux_attached_prev_pump: None,
+            agent_status: crate::agent_status_model::AgentStatusModel::new(),
+            mux_public_pane_ids: std::collections::HashMap::new(),
             settings_launcher: Box::new(crate::settings_launcher::ProcessSettingsLauncher::new()),
             cell_size: GridDims::default(),
             selection: None,
@@ -719,6 +830,8 @@ impl App {
             sftp_progress_rx,
             sftp_result_rx,
             restart_toast: RestartToast::default(),
+            agent_notification_rate_limiter:
+                crate::notifications::AgentNotificationRateLimiter::default(),
         }
     }
 
@@ -1589,6 +1702,15 @@ impl App {
         if idx >= self.tabs.len() {
             return self.tabs.is_empty();
         }
+        // task0005 AC-6 / task0009 AC-4: discard this tab's agent-status
+        // entries AND its notification rate-limit bookkeeping before
+        // removal (its own plain-tab key plus every mux pane in its window
+        // group, if attached).
+        for key in agent_status_keys_for_tab(&self.tabs[idx]) {
+            let rate_limit_key = agent_notification_rate_limit_key(&self.mux_public_pane_ids, &key);
+            self.discard_agent_notification_state(&rate_limit_key);
+            self.agent_status.discard(&key);
+        }
         // Drop the tab — its `PtySession::Drop` impl kills the child
         // and joins reader/writer threads.
         self.tabs.remove(idx);
@@ -2181,6 +2303,51 @@ impl App {
     }
     pub fn active_tab(&self) -> Option<&Tab> {
         self.tabs.get(self.active)
+    }
+
+    // ── task0006: agent-status query surface for the UI layer ──────────
+    // Read-only projections of `Self::agent_status` /
+    // `Self::mux_public_pane_ids` for `ui::tab_bar` / `ui::mux_sidebar` /
+    // `ui::status_bar`. The render pipeline calls these once per frame;
+    // none of them mutate state (mirrors `status_bar_view_model`'s
+    // read-only contract).
+
+    /// `tab`'s aggregated agent-status badge (task0006 AC-1/AC-2):
+    /// highest-priority state across the tab's own plain-tab status and
+    /// every pane in its mux window group (if attached), or `None` when
+    /// nothing has ever reported a state — the caller renders no badge and
+    /// reserves no layout space for it in that case.
+    pub fn agent_status_badge_for(
+        &self,
+        tab: &Tab,
+    ) -> Option<crate::agent_status_model::Aggregated> {
+        let keys = agent_status_keys_for_tab(tab);
+        self.agent_status.aggregate(keys.iter())
+    }
+
+    /// A single mux pane's aggregated badge, by wire `pane_id` (task0006:
+    /// `ui::mux_sidebar` window-entry badge — one pane per window entry).
+    pub fn agent_status_pane_badge(
+        &self,
+        pane_id: u32,
+    ) -> Option<crate::agent_status_model::Aggregated> {
+        self.agent_status
+            .aggregate([&crate::agent_status_model::PaneKey::MuxPane(pane_id)])
+    }
+
+    /// Per-state counts across every tracked pane/tab (task0006 AC-3: the
+    /// status-bar summary segment). Delegates to
+    /// [`crate::agent_status_model::AgentStatusModel::counts`].
+    pub fn agent_status_counts(&self) -> crate::agent_status_model::Counts {
+        self.agent_status.counts()
+    }
+
+    /// The daemon-minted public ID for mux pane `pane_id`, if the GUI has
+    /// learned it yet (task0006 AC-5). `None` until the daemon pushes at
+    /// least one `AgentStatusUpdate` for the pane — see
+    /// [`Self::mux_public_pane_ids`].
+    pub fn mux_public_pane_id(&self, pane_id: u32) -> Option<&str> {
+        self.mux_public_pane_ids.get(&pane_id).map(String::as_str)
     }
 
     /// Whether the active tab carries an attached mux window group with at
@@ -3023,6 +3190,15 @@ impl App {
         // router after it. Every tab is drained — like the WebView build,
         // any tab's `emterm image` opens a viewer window.
         let mut image_events: Vec<term_images::image_proc::ImageEvent> = Vec::new();
+        // Agent-status inputs collected across every tab this pass (task0005),
+        // applied to `self.agent_status` after the `&mut self.tabs` borrow
+        // ends: plain-tab OSC events (tagged with the originating tab's
+        // `stable_id`), daemon-pushed `AgentStatusUpdate` messages, and mux
+        // pane ids a `PtyExited` arm removed this pump.
+        let mut agent_status_plain_events: Vec<(u64, crate::agent_status::AgentStatusEvent)> =
+            Vec::new();
+        let mut agent_status_updates: Vec<mux_ipc::protocol::AgentStatusUpdateMsg> = Vec::new();
+        let mut agent_status_closed_panes: Vec<u32> = Vec::new();
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             // Phase 4-C (APC redesign): `Tab::pump` already routes
             // APC-encoded mux messages into the tab's own state via
@@ -3036,6 +3212,16 @@ impl App {
                     active_changed = true;
                 }
             }
+            // task0005: drain this tab's agent-status latches (plain-tab OSC
+            // events, daemon `AgentStatusUpdate` pushes, closed mux pane
+            // ids) every pump, not just the active tab — a background tab's
+            // agent can report status too.
+            let tab_stable_id = tab.stable_id;
+            for event in tab.take_pending_agent_status_events() {
+                agent_status_plain_events.push((tab_stable_id, event));
+            }
+            agent_status_updates.extend(tab.take_pending_agent_status_updates());
+            agent_status_closed_panes.extend(tab.take_closed_agent_status_panes());
             // FR6 (mux): drain every tab's one-shot "window appended this pump"
             // latch (set at the `PaneCreated` push site) to avoid stale
             // carry-over; act on it only for the active tab, where the freshly
@@ -3225,6 +3411,91 @@ impl App {
         if !image_events.is_empty() {
             self.image_viewer.handle_events(image_events);
         }
+        // Apply this pass' collected agent-status inputs now that the
+        // `&mut self.tabs` borrow has ended (task0005). Order does not
+        // matter across the three kinds since they key disjoint pane sets
+        // (`PaneKey::Tab` for plain-tab events, `PaneKey::MuxPane` for
+        // daemon updates and pane closes).
+        for (tab_stable_id, event) in agent_status_plain_events {
+            self.agent_status
+                .apply_plain_tab_event(tab_stable_id, event);
+        }
+        for update in agent_status_updates {
+            // task0006 AC-5: learn/refresh this pane's public ID from the
+            // same message before applying it to the model — the daemon is
+            // the only source for it (see `Self::mux_public_pane_ids`).
+            self.mux_public_pane_ids
+                .insert(update.pane_id, update.public_pane_id.clone());
+            self.agent_status.apply_daemon_update(
+                update.pane_id,
+                update.state.map(crate::agent_status_model::state_from_wire),
+                update.name,
+                update.revision,
+                update.replay_derived,
+            );
+        }
+        for pane_id in agent_status_closed_panes {
+            // task0009 AC-4: resolve the rate-limit key from the still-
+            // present public-id mapping BEFORE removing it below.
+            let key = crate::agent_status_model::PaneKey::MuxPane(pane_id);
+            let rate_limit_key = agent_notification_rate_limit_key(&self.mux_public_pane_ids, &key);
+            self.mux_public_pane_ids.remove(&pane_id);
+            self.discard_agent_notification_state(&rate_limit_key);
+            self.agent_status.discard(&key);
+        }
+        // task0009: drain queued real-transition events (task0005's
+        // `AgentStatusModel::drain_transitions`) and dispatch qualifying
+        // ones to the notification layer. Runs unconditionally — even
+        // while `settings.agent_status_notifications` is off — so the
+        // transition queue never grows unbounded while the setting is
+        // toggled off (NFR3); the settings gate lives inside
+        // `maybe_notify_agent_transition`. Must run BEFORE mark_seen below:
+        // mark_seen would otherwise flip a freshly-arrived transition's
+        // pane to "seen" before its own visibility is evaluated here (the
+        // two operate on independent flags today, but ordering keeps the
+        // gating and mark_seen concerns from becoming coupled).
+        for transition in self.agent_status.drain_transitions() {
+            let crate::agent_status_model::Transition {
+                pane,
+                old_state,
+                new_state,
+                name,
+            } = transition;
+            // AC-2: Clear transitions (new_state: None) are never
+            // notification-eligible — only Set into blocked/done qualifies.
+            let Some(new_state) = new_state else {
+                continue;
+            };
+            let pane_visible =
+                agent_status_pane_visible(self.window_focused, self.tabs.get(self.active), &pane);
+            let rate_limit_key =
+                agent_notification_rate_limit_key(&self.mux_public_pane_ids, &pane);
+            let tab_title = agent_status_pane_tab_title(&self.tabs, &pane)
+                .unwrap_or_default()
+                .to_string();
+            let agent_transition = crate::notifications::AgentTransition {
+                old_state: old_state.map(crate::agent_status_model::state_to_wire),
+                new_state: crate::agent_status_model::state_to_wire(new_state),
+                name,
+            };
+            self.maybe_notify_agent_transition(
+                rate_limit_key,
+                pane_visible,
+                &agent_transition,
+                &tab_title,
+            );
+        }
+        // mark_seen (task0005 AC-5): the active tab's panes are "displayed"
+        // whenever the OS window is focused, regardless of whether this
+        // pump produced any other change — the user could simply be looking
+        // at an already-idle screen. Re-running every pump is intentionally
+        // idempotent (`mark_seen` on an already-seen entry is a no-op).
+        if self.window_focused {
+            if let Some(active_tab) = self.tabs.get(self.active) {
+                let panes = agent_status_keys_for_tab(active_tab);
+                self.agent_status.mark_seen(panes.iter());
+            }
+        }
         // Apply the active tab's absolute-row selection bookkeeping now that
         // the `&mut self.tabs` borrow has ended. A frame reset drops the
         // selection outright (its rows belong to the discarded frame); an
@@ -3394,6 +3665,24 @@ impl App {
         }
         // Reap exited tabs (Phase 5 will refine the policy).
         let before = self.tabs.len();
+        // task0005 AC-6 / task0009 AC-4: discard every reaped tab's
+        // agent-status entries AND notification rate-limit bookkeeping
+        // before removal (a mux tab whose last pane exited reaches this
+        // path via `exited = true` rather than `close_tab`). Collected
+        // into an owned `Vec` first so the immutable `self.tabs` borrow
+        // (held by the iterator/filter) ends before the mutable
+        // `self.discard_agent_notification_state` calls below.
+        let reaped_agent_status_keys: Vec<crate::agent_status_model::PaneKey> = self
+            .tabs
+            .iter()
+            .filter(|t| t.exited)
+            .flat_map(agent_status_keys_for_tab)
+            .collect();
+        for key in reaped_agent_status_keys {
+            let rate_limit_key = agent_notification_rate_limit_key(&self.mux_public_pane_ids, &key);
+            self.discard_agent_notification_state(&rate_limit_key);
+            self.agent_status.discard(&key);
+        }
         self.tabs.retain(|t| !t.exited);
         if self.tabs.len() != before {
             if self.active >= self.tabs.len() && !self.tabs.is_empty() {
@@ -4227,6 +4516,57 @@ impl App {
     pub fn notify(&self, title: &str, body: &str) {
         self.notification_sink.send(title, body);
     }
+
+    /// Fire (or suppress) a desktop notification for one drained
+    /// agent-status transition (task0007 / FR9).
+    ///
+    /// `pane_key` identifies the pane for the per-pane rate limit
+    /// (task0005's mux `public_pane_id`, or a caller-chosen stable key for
+    /// plain tabs). `pane_visible` is `true` when the pane is the one
+    /// currently shown in the foreground OS window — the caller computes
+    /// this (it owns the tab/pane visibility model; this method only
+    /// applies the gating rule). `tab_title` feeds the notification body.
+    ///
+    /// This is the integration point IMPLEMENTATION.md assigns to
+    /// task0007 ("read the model from app state"): once `AgentStatusModel`
+    /// (task0005) is wired into `App`, its per-frame
+    /// `drain_transitions()` calls this method once per drained event.
+    /// Returns whether the notification fired, for tests.
+    pub fn maybe_notify_agent_transition(
+        &mut self,
+        pane_key: impl Into<String>,
+        pane_visible: bool,
+        transition: &crate::notifications::AgentTransition,
+        tab_title: &str,
+    ) -> bool {
+        let pane_key = pane_key.into();
+        let now = Instant::now();
+        let rate_limit_ok = self
+            .agent_notification_rate_limiter
+            .is_within_limit(&pane_key, now);
+        let fire = crate::notifications::should_fire_agent_notification(
+            transition.new_state,
+            pane_visible,
+            self.settings.agent_status_notifications,
+            self.settings.notification_enabled,
+            rate_limit_ok,
+        );
+        if fire {
+            self.agent_notification_rate_limiter.record(pane_key, now);
+            let body =
+                crate::notifications::agent_notification_body(transition, tab_title, self.locale);
+            self.notify(crate::notifications::NOTIFICATION_TITLE, &body);
+        }
+        fire
+    }
+
+    /// Discard agent-notification rate-limit bookkeeping for a pane that
+    /// closed (mirrors `AgentStatusModel`'s "discard on tab/pane close"
+    /// contract — see [`App::maybe_notify_agent_transition`]).
+    pub fn discard_agent_notification_state(&mut self, pane_key: &str) {
+        self.agent_notification_rate_limiter
+            .discard(&pane_key.to_string());
+    }
 }
 
 impl Default for App {
@@ -4273,6 +4613,503 @@ mod tests {
         // exercise the union logic rather than the bypass.
         app.record_render_state(core);
         app
+    }
+
+    // ── Agent-status notifications (task0007) ───────────────────────
+
+    /// Capturing `NotificationSink` for [`App::maybe_notify_agent_transition`]
+    /// tests — mirrors `callbacks::tests::TestSink`.
+    #[derive(Default)]
+    struct TestNotifySink {
+        calls: parking_lot::Mutex<Vec<(String, String)>>,
+    }
+
+    impl TestNotifySink {
+        fn calls(&self) -> Vec<(String, String)> {
+            self.calls.lock().clone()
+        }
+    }
+
+    impl NotificationSink for TestNotifySink {
+        fn send(&self, title: &str, body: &str) {
+            self.calls
+                .lock()
+                .push((title.to_string(), body.to_string()));
+        }
+    }
+
+    fn agent_transition(
+        new_state: crate::notifications::AgentState,
+    ) -> crate::notifications::AgentTransition {
+        crate::notifications::AgentTransition {
+            old_state: Some(crate::notifications::AgentState::Working),
+            new_state,
+            name: Some("claude".to_string()),
+        }
+    }
+
+    /// `App::new()` already defaults `agent_status_notifications` and
+    /// `notification_enabled` to `true` (see `settings.rs`), so this
+    /// starts every test from the "both switches on" baseline.
+    fn app_with_test_sink() -> (App, Arc<TestNotifySink>) {
+        let app = App::new();
+        assert!(app.settings.agent_status_notifications);
+        assert!(app.settings.notification_enabled);
+        let sink: Arc<TestNotifySink> = Arc::new(TestNotifySink::default());
+        let mut app = app;
+        app.notification_sink = sink.clone() as Arc<dyn NotificationSink>;
+        (app, sink)
+    }
+
+    /// Clone-and-flip one bool field on `app.settings` (an `Arc<Settings>`)
+    /// — mirrors the existing `sidebar_hidden_on_local_tab_regardless_of_mode`-
+    /// style pattern elsewhere in this test module.
+    fn with_setting(app: &mut App, set: impl FnOnce(&mut Settings)) {
+        app.settings = Arc::new({
+            let mut s = (*app.settings).clone();
+            set(&mut s);
+            s
+        });
+    }
+
+    // AC-1/AC-2: a qualifying transition on a non-visible pane fires
+    // exactly one notification.
+    #[test]
+    fn maybe_notify_agent_transition_ac1_fires_for_blocked_on_non_visible_pane() {
+        let (mut app, sink) = app_with_test_sink();
+        let fired = app.maybe_notify_agent_transition(
+            "pane-1",
+            false,
+            &agent_transition(crate::notifications::AgentState::Blocked),
+            "my-tab",
+        );
+        assert!(fired);
+        assert_eq!(sink.calls().len(), 1);
+    }
+
+    // AC-1: working/idle transitions never fire.
+    #[test]
+    fn maybe_notify_agent_transition_ac1_working_and_idle_never_fire() {
+        let (mut app, sink) = app_with_test_sink();
+        for state in [
+            crate::notifications::AgentState::Working,
+            crate::notifications::AgentState::Idle,
+        ] {
+            let fired = app.maybe_notify_agent_transition(
+                "pane-1",
+                false,
+                &agent_transition(state),
+                "my-tab",
+            );
+            assert!(!fired);
+        }
+        assert!(sink.calls().is_empty());
+    }
+
+    // AC-2: a transition on the visible pane does not fire.
+    #[test]
+    fn maybe_notify_agent_transition_ac2_visible_pane_does_not_fire() {
+        let (mut app, sink) = app_with_test_sink();
+        let fired = app.maybe_notify_agent_transition(
+            "pane-1",
+            true,
+            &agent_transition(crate::notifications::AgentState::Done),
+            "my-tab",
+        );
+        assert!(!fired);
+        assert!(sink.calls().is_empty());
+    }
+
+    // AC-3: either settings switch off suppresses the notification.
+    #[test]
+    fn maybe_notify_agent_transition_ac3_settings_off_suppress() {
+        let (mut app, sink) = app_with_test_sink();
+        with_setting(&mut app, |s| s.agent_status_notifications = false);
+        let fired = app.maybe_notify_agent_transition(
+            "pane-1",
+            false,
+            &agent_transition(crate::notifications::AgentState::Blocked),
+            "my-tab",
+        );
+        assert!(!fired);
+
+        with_setting(&mut app, |s| {
+            s.agent_status_notifications = true;
+            s.notification_enabled = false;
+        });
+        let fired = app.maybe_notify_agent_transition(
+            "pane-1",
+            false,
+            &agent_transition(crate::notifications::AgentState::Blocked),
+            "my-tab",
+        );
+        assert!(!fired);
+        assert!(sink.calls().is_empty());
+    }
+
+    // AC-4: a second qualifying transition on the same pane inside the
+    // rate-limit interval does not fire; a suppressed (visible-pane)
+    // attempt in between does not consume the window either.
+    #[test]
+    fn maybe_notify_agent_transition_ac4_rate_limits_per_pane() {
+        let (mut app, sink) = app_with_test_sink();
+        let t = agent_transition(crate::notifications::AgentState::Blocked);
+
+        assert!(app.maybe_notify_agent_transition("pane-1", false, &t, "my-tab"));
+        // Immediately after: still inside the rate-limit window.
+        assert!(!app.maybe_notify_agent_transition("pane-1", false, &t, "my-tab"));
+        // A different pane is unaffected by pane-1's window.
+        assert!(app.maybe_notify_agent_transition("pane-2", false, &t, "my-tab"));
+
+        assert_eq!(sink.calls().len(), 2);
+    }
+
+    #[test]
+    fn discard_agent_notification_state_reopens_the_rate_limit_window() {
+        let (mut app, sink) = app_with_test_sink();
+        let t = agent_transition(crate::notifications::AgentState::Done);
+        assert!(app.maybe_notify_agent_transition("pane-1", false, &t, "my-tab"));
+        assert!(!app.maybe_notify_agent_transition("pane-1", false, &t, "my-tab"));
+
+        app.discard_agent_notification_state("pane-1");
+        assert!(app.maybe_notify_agent_transition("pane-1", false, &t, "my-tab"));
+        assert_eq!(sink.calls().len(), 2);
+    }
+
+    // ── task0009: wire `AgentStatusModel::drain_transitions` into
+    // `pump_all` so blocked/done transitions reach the notification layer
+    // ("Rework context" — review round 1's `drain_wiring_spec` finding).
+
+    /// AC-1: a real Set-transition to Blocked on a NON-visible (background)
+    /// pane, drained by `pump_all`, fires exactly one notification; the
+    /// SAME kind of transition on the VISIBLE (active, focused) pane fires
+    /// none.
+    #[test]
+    fn pump_all_ac1_notifies_background_pane_not_visible_pane() {
+        let (mut app, sink) = app_with_test_sink();
+        app.spawn_initial_tab(); // tab 0: stays background (non-visible)
+        app.spawn_new_tab(); // tab 1: freshly active
+        app.window_focused = true;
+
+        // Background tab's agent reports straight to Blocked — a
+        // qualifying first-ever report (old_state None -> new Blocked).
+        app.tabs[0].cb_state.lock().pending_agent_status.push(
+            crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Blocked,
+                name: Some("claude".to_string()),
+            },
+        );
+        app.pump_all();
+        assert_eq!(sink.calls().len(), 1);
+
+        // The ACTIVE tab's own agent reports Done: window focused AND it
+        // IS the displayed tab, so this must not fire (count unchanged).
+        app.tabs[1].cb_state.lock().pending_agent_status.push(
+            crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Done,
+                name: Some("claude".to_string()),
+            },
+        );
+        app.pump_all();
+        assert_eq!(sink.calls().len(), 1);
+    }
+
+    /// AC-2: a same-state re-report and a Clear (`new_state: None`)
+    /// transition both drain WITHOUT firing a notification — only the
+    /// original real Set counts.
+    #[test]
+    fn pump_all_ac2_same_state_and_clear_transitions_do_not_notify() {
+        let (mut app, sink) = app_with_test_sink();
+        app.spawn_initial_tab(); // tab 0: stays background (non-visible)
+        app.spawn_new_tab(); // tab 1: active
+        app.window_focused = true;
+
+        app.tabs[0].cb_state.lock().pending_agent_status.push(
+            crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Blocked,
+                name: None,
+            },
+        );
+        app.pump_all();
+        assert_eq!(sink.calls().len(), 1);
+
+        // Same-state re-report: `AgentStatusModel` enqueues no transition
+        // at all for this, so nothing reaches the notification layer.
+        app.tabs[0].cb_state.lock().pending_agent_status.push(
+            crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Blocked,
+                name: None,
+            },
+        );
+        app.pump_all();
+        assert_eq!(sink.calls().len(), 1);
+
+        // Clear: a transition IS enqueued (old=Blocked, new=None), but
+        // `new_state: None` is never notification-eligible.
+        app.tabs[0]
+            .cb_state
+            .lock()
+            .pending_agent_status
+            .push(crate::agent_status::AgentStatusEvent::Clear);
+        app.pump_all();
+        assert_eq!(sink.calls().len(), 1);
+    }
+
+    /// AC-3: the transition queue drains every `pump_all`, even while
+    /// `agent_status_notifications` is off — the queue must not grow while
+    /// the setting is toggled off (NFR3); the settings gate lives inside
+    /// `maybe_notify_agent_transition`, not in whether draining happens.
+    #[test]
+    fn pump_all_ac3_drains_transitions_even_when_setting_is_off() {
+        let (mut app, sink) = app_with_test_sink();
+        with_setting(&mut app, |s| s.agent_status_notifications = false);
+        app.spawn_initial_tab();
+        app.window_focused = true;
+
+        app.tabs[0].cb_state.lock().pending_agent_status.push(
+            crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Blocked,
+                name: None,
+            },
+        );
+        app.pump_all();
+
+        // The setting being off suppressed the notification…
+        assert!(sink.calls().is_empty());
+        // …but `pump_all` still drained the queue; nothing is left for a
+        // caller to drain again.
+        assert!(app.agent_status.drain_transitions().is_empty());
+    }
+
+    /// AC-4: closing a tab discards its agent-status entry (task0005
+    /// AC-6, already covered by `close_tab_discards_agent_status_entry`)
+    /// AND its notification rate-limiter state (task0009). Re-arming the
+    /// SAME key immediately after close proves the window was discarded,
+    /// not merely orphaned.
+    #[test]
+    fn close_tab_discards_agent_notification_rate_limit_state() {
+        let (mut app, sink) = app_with_test_sink();
+        app.spawn_initial_tab();
+        let stable_id = app.tabs[0].stable_id;
+        let key = crate::agent_status_model::PaneKey::Tab(stable_id);
+        let rate_limit_key = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key);
+
+        let t = agent_transition(crate::notifications::AgentState::Blocked);
+        assert!(app.maybe_notify_agent_transition(rate_limit_key.clone(), false, &t, "shell"));
+        assert!(!app.maybe_notify_agent_transition(rate_limit_key.clone(), false, &t, "shell"));
+
+        app.close_tab(0);
+
+        assert!(app.maybe_notify_agent_transition(rate_limit_key, false, &t, "shell"));
+        assert_eq!(sink.calls().len(), 2);
+    }
+
+    /// AC-4 (reap-exited-tab variant): a tab that exits (`exited = true`,
+    /// reaped by `pump_all` rather than closed via `close_tab`) also
+    /// discards its agent-notification rate-limiter state.
+    #[test]
+    fn pump_all_reap_exited_tab_discards_agent_notification_rate_limit_state() {
+        let (mut app, sink) = app_with_test_sink();
+        app.spawn_initial_tab();
+        app.spawn_new_tab(); // two tabs; active is tab 1, tab 0 will be reaped
+        let stable_id = app.tabs[0].stable_id;
+        let key = crate::agent_status_model::PaneKey::Tab(stable_id);
+        let rate_limit_key = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key);
+
+        let t = agent_transition(crate::notifications::AgentState::Done);
+        assert!(app.maybe_notify_agent_transition(rate_limit_key.clone(), false, &t, "shell"));
+        assert!(!app.maybe_notify_agent_transition(rate_limit_key.clone(), false, &t, "shell"));
+
+        app.tabs[0].exited = true;
+        app.pump_all();
+        assert_eq!(app.tabs.len(), 1, "exited tab was reaped");
+
+        assert!(app.maybe_notify_agent_transition(rate_limit_key, false, &t, "shell"));
+        assert_eq!(sink.calls().len(), 2);
+    }
+
+    /// AC-4 (closed-mux-pane variant): a mux pane closing via `PtyExited`
+    /// (routed into `pump_all`'s closed-panes loop, not `close_tab`) also
+    /// discards its notification rate-limiter state, keyed by the
+    /// daemon-learned `public_pane_id`.
+    #[test]
+    fn pump_all_closed_mux_pane_discards_agent_notification_rate_limit_state() {
+        use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+        let (mut app, sink) = app_with_test_sink();
+        app.spawn_initial_tab(); // tab 0: will host the mux group
+        app.spawn_new_tab(); // tab 1: active — tab 0's mux pane is non-visible
+
+        let welcome = MuxMessage::control(
+            MessageType::Welcome,
+            0,
+            &WelcomeMsg::Accepted {
+                server_version: 1,
+                sessions: vec![SessionInfo {
+                    id: 1,
+                    name: "main".to_string(),
+                    window_count: 1,
+                    pane_count: 1,
+                    active_window_index: 0,
+                    windows: vec![WindowInfo {
+                        id: 0,
+                        name: "w0".to_string(),
+                        active_pane_id: 7,
+                    }],
+                }],
+            },
+        );
+        app.on_mux_message(0, welcome);
+        let update = AgentStatusUpdateMsg {
+            pane_id: 7,
+            public_pane_id: "xyz-7".to_string(),
+            state: Some(WireState::Blocked),
+            name: None,
+            revision: 1,
+            replay_derived: false,
+        };
+        app.on_mux_message(
+            0,
+            MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update),
+        );
+        app.pump_all();
+        assert_eq!(sink.calls().len(), 1);
+
+        // Rate limiter is armed for "xyz-7": a second attempt does not fire.
+        let t = agent_transition(crate::notifications::AgentState::Blocked);
+        assert!(!app.maybe_notify_agent_transition("xyz-7", false, &t, "shell"));
+
+        let pty_exited = MuxMessage {
+            msg_type: MessageType::PtyExited,
+            pane_id: 7,
+            payload: Vec::new(),
+        };
+        app.on_mux_message(0, pty_exited);
+        app.pump_all();
+
+        // The window reopened for "xyz-7" — proves the closed-panes loop
+        // discarded the rate-limiter bookkeeping, not just the model entry.
+        assert!(app.maybe_notify_agent_transition("xyz-7", false, &t, "shell"));
+        assert_eq!(sink.calls().len(), 2);
+    }
+
+    /// AC-5: a `replay_derived: true` daemon update never enqueues a
+    /// transition, so `pump_all`'s drain sees nothing for it — no
+    /// notification fires even for a qualifying (Blocked) state and even
+    /// with both notification switches on and the pane non-visible.
+    #[test]
+    fn pump_all_ac5_replay_derived_update_does_not_notify() {
+        use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+        let (mut app, sink) = app_with_test_sink();
+        app.spawn_initial_tab();
+        app.window_focused = false;
+
+        let update = AgentStatusUpdateMsg {
+            pane_id: 42,
+            public_pane_id: "abc-42".to_string(),
+            state: Some(WireState::Blocked),
+            name: None,
+            revision: 1,
+            replay_derived: true,
+        };
+        app.on_mux_message(
+            0,
+            MuxMessage::control(MessageType::AgentStatusUpdate, 42, &update),
+        );
+        app.pump_all();
+
+        assert!(sink.calls().is_empty());
+        assert!(app.agent_status.drain_transitions().is_empty());
+    }
+
+    // ── task0009: pure helper unit coverage (visibility / title / key) ──
+
+    #[test]
+    fn agent_status_pane_visible_false_when_window_unfocused() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let key = crate::agent_status_model::PaneKey::Tab(app.tabs[0].stable_id);
+        assert!(!agent_status_pane_visible(false, app.tabs.first(), &key));
+    }
+
+    #[test]
+    fn agent_status_pane_visible_true_only_for_the_active_tabs_keys() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        let background_key = crate::agent_status_model::PaneKey::Tab(app.tabs[0].stable_id);
+        let active_key = crate::agent_status_model::PaneKey::Tab(app.tabs[1].stable_id);
+        let active_tab = app.tabs.get(1);
+        assert!(!agent_status_pane_visible(
+            true,
+            active_tab,
+            &background_key
+        ));
+        assert!(agent_status_pane_visible(true, active_tab, &active_key));
+    }
+
+    #[test]
+    fn agent_status_pane_tab_title_resolves_plain_tab_and_mux_pane() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.tabs[0].title = "my-title".to_string();
+        let mut group = crate::mux::window_group::MuxWindowGroup::new();
+        group.seed(
+            vec![crate::mux::window_group::MuxWindow {
+                id: 0,
+                name: "w0".to_string(),
+            }],
+            vec![9],
+            0,
+        );
+        app.tabs[0].mux_group = Some(group);
+
+        assert_eq!(
+            agent_status_pane_tab_title(
+                &app.tabs,
+                &crate::agent_status_model::PaneKey::Tab(app.tabs[0].stable_id)
+            ),
+            Some("my-title")
+        );
+        assert_eq!(
+            agent_status_pane_tab_title(&app.tabs, &crate::agent_status_model::PaneKey::MuxPane(9)),
+            Some("my-title")
+        );
+        assert_eq!(
+            agent_status_pane_tab_title(
+                &app.tabs,
+                &crate::agent_status_model::PaneKey::MuxPane(999)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn agent_notification_rate_limit_key_prefers_public_pane_id_falls_back_to_prefixed_id() {
+        use std::collections::HashMap;
+        let mut ids: HashMap<u32, String> = HashMap::new();
+        ids.insert(7, "xyz-7".to_string());
+
+        assert_eq!(
+            agent_notification_rate_limit_key(
+                &ids,
+                &crate::agent_status_model::PaneKey::MuxPane(7)
+            ),
+            "xyz-7"
+        );
+        // No learned public id: falls back to a prefixed pane-id string.
+        assert_eq!(
+            agent_notification_rate_limit_key(
+                &ids,
+                &crate::agent_status_model::PaneKey::MuxPane(8)
+            ),
+            "mux:8"
+        );
+        assert_eq!(
+            agent_notification_rate_limit_key(&ids, &crate::agent_status_model::PaneKey::Tab(3)),
+            "tab:3"
+        );
     }
 
     // TS-5: arm(now) sets the dismissal instant to now + linger window.
@@ -6192,6 +7029,304 @@ mod tests {
             payload: b"hello".to_vec(),
         };
         assert!(!app.on_mux_message(0, msg));
+    }
+
+    // ── task0005: agent-status pump_all wiring ────────────────────────
+
+    /// AC-1: a plain-tab `agent-status` OSC event (buffered by
+    /// `NativeCallbacks::on_osc` into `cb_state.pending_agent_status`, as
+    /// the real OSC dispatch path would) reaches `App::agent_status` via
+    /// `pump_all`'s latch-drain, keyed by the tab's `stable_id`.
+    #[test]
+    fn pump_all_applies_plain_tab_agent_status_event_to_model() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let tab_stable_id = app.active_tab().unwrap().stable_id;
+        app.active_tab()
+            .unwrap()
+            .cb_state
+            .lock()
+            .pending_agent_status
+            .push(crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Working,
+                name: Some("claude".to_string()),
+            });
+
+        app.pump_all();
+
+        let status = app
+            .agent_status
+            .status(&crate::agent_status_model::PaneKey::Tab(tab_stable_id))
+            .expect("plain-tab event applied to the model");
+        assert_eq!(status.state, Some(crate::agent_status::AgentState::Working));
+        assert_eq!(status.name, Some("claude".to_string()));
+    }
+
+    /// AC-2: a daemon `AgentStatusUpdate` decoded by `Tab::apply_mux_message`
+    /// reaches `App::agent_status` via `pump_all`, with the wire-level
+    /// `mux_ipc::protocol::AgentState` converted to the core
+    /// `crate::agent_status::AgentState` the model stores.
+    #[test]
+    fn pump_all_applies_daemon_agent_status_update_to_model() {
+        use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let update = AgentStatusUpdateMsg {
+            pane_id: 42,
+            public_pane_id: "abc-42".to_string(),
+            state: Some(WireState::Blocked),
+            name: Some("agent".to_string()),
+            revision: 7,
+            replay_derived: false,
+        };
+        let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 42, &update);
+        app.on_mux_message(0, msg);
+
+        app.pump_all();
+
+        let status = app
+            .agent_status
+            .status(&crate::agent_status_model::PaneKey::MuxPane(42))
+            .expect("daemon update applied to the model");
+        assert_eq!(status.state, Some(crate::agent_status::AgentState::Blocked));
+        assert_eq!(status.revision, 7);
+    }
+
+    /// AC-6: closing a tab discards its plain-tab `App::agent_status` entry.
+    #[test]
+    fn close_tab_discards_agent_status_entry() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let tab_stable_id = app.active_tab().unwrap().stable_id;
+        app.agent_status.apply_plain_tab_event(
+            tab_stable_id,
+            crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Done,
+                name: None,
+            },
+        );
+
+        app.close_tab(0);
+
+        assert!(
+            app.agent_status
+                .status(&crate::agent_status_model::PaneKey::Tab(tab_stable_id))
+                .is_none()
+        );
+    }
+
+    /// AC-5: `pump_all` marks the active tab's panes seen when the OS
+    /// window is focused.
+    #[test]
+    fn pump_all_marks_active_tab_seen_when_window_focused() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let tab_stable_id = app.active_tab().unwrap().stable_id;
+        app.agent_status.apply_plain_tab_event(
+            tab_stable_id,
+            crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Blocked,
+                name: None,
+            },
+        );
+        assert!(
+            app.agent_status
+                .status(&crate::agent_status_model::PaneKey::Tab(tab_stable_id))
+                .unwrap()
+                .unseen
+        );
+        app.window_focused = true;
+
+        app.pump_all();
+
+        assert!(
+            !app.agent_status
+                .status(&crate::agent_status_model::PaneKey::Tab(tab_stable_id))
+                .unwrap()
+                .unseen
+        );
+    }
+
+    // ── task0006: agent-status query surface + public-pane-ID map ────
+
+    /// AC-5: `pump_all` learns a mux pane's public ID from the daemon's
+    /// `AgentStatusUpdate` payload, queryable via `App::mux_public_pane_id`.
+    #[test]
+    fn pump_all_learns_public_pane_id_from_daemon_agent_status_update() {
+        use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        assert_eq!(app.mux_public_pane_id(42), None);
+
+        let update = AgentStatusUpdateMsg {
+            pane_id: 42,
+            public_pane_id: "abc-42".to_string(),
+            state: Some(WireState::Working),
+            name: None,
+            revision: 1,
+            replay_derived: false,
+        };
+        let msg = MuxMessage::control(MessageType::AgentStatusUpdate, 42, &update);
+        app.on_mux_message(0, msg);
+        app.pump_all();
+
+        assert_eq!(app.mux_public_pane_id(42), Some("abc-42"));
+    }
+
+    /// A closed mux pane's public ID is forgotten alongside its
+    /// `agent_status` entry (mirrors `discard_removes_entry_and_updates_
+    /// aggregate_and_counts` in `agent_status_model`, at the `App` layer).
+    /// Drives the real `Welcome` -> `AgentStatusUpdate` -> `PtyExited`
+    /// sequence rather than reaching into `Tab` internals, matching the
+    /// existing `on_mux_message`-based tests in this module.
+    #[test]
+    fn closing_a_mux_pane_forgets_its_public_pane_id() {
+        use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let welcome = MuxMessage::control(
+            MessageType::Welcome,
+            0,
+            &WelcomeMsg::Accepted {
+                server_version: 1,
+                sessions: vec![SessionInfo {
+                    id: 1,
+                    name: "main".to_string(),
+                    window_count: 1,
+                    pane_count: 1,
+                    active_window_index: 0,
+                    windows: vec![WindowInfo {
+                        id: 0,
+                        name: "w0".to_string(),
+                        active_pane_id: 7,
+                    }],
+                }],
+            },
+        );
+        app.on_mux_message(0, welcome);
+
+        let update = AgentStatusUpdateMsg {
+            pane_id: 7,
+            public_pane_id: "xyz-7".to_string(),
+            state: Some(WireState::Idle),
+            name: None,
+            revision: 1,
+            replay_derived: false,
+        };
+        let update_msg = MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update);
+        app.on_mux_message(0, update_msg);
+        app.pump_all();
+        assert_eq!(app.mux_public_pane_id(7), Some("xyz-7"));
+
+        let pty_exited = MuxMessage {
+            msg_type: MessageType::PtyExited,
+            pane_id: 7,
+            payload: Vec::new(),
+        };
+        app.on_mux_message(0, pty_exited);
+        app.pump_all();
+
+        assert_eq!(app.mux_public_pane_id(7), None);
+    }
+
+    /// `agent_status_pane_badge` is a thin, single-pane wrapper over
+    /// `AgentStatusModel::aggregate` — returns `None` for an unreported
+    /// pane and the pane's own state once reported.
+    #[test]
+    fn agent_status_pane_badge_reflects_the_single_pane_queried() {
+        let mut app = App::new();
+        assert_eq!(app.agent_status_pane_badge(1), None);
+
+        app.agent_status.apply_daemon_update(
+            1,
+            Some(crate::agent_status::AgentState::Blocked),
+            None,
+            1,
+            false,
+        );
+        let badge = app.agent_status_pane_badge(1).expect("pane 1 has status");
+        assert_eq!(badge.state, crate::agent_status::AgentState::Blocked);
+        assert!(badge.unseen);
+    }
+
+    /// `agent_status_badge_for` aggregates across a mux-attached tab's own
+    /// plain-tab key AND every pane in its window group (task0006 AC-1),
+    /// delegating to the same `agent_status_keys_for_tab` set `pump_all`'s
+    /// mark_seen path already uses.
+    #[test]
+    fn agent_status_badge_for_aggregates_across_a_tabs_mux_panes() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        {
+            let tab = app.active_tab_mut().unwrap();
+            let mut group = crate::mux::window_group::MuxWindowGroup::new();
+            group.seed(
+                vec![
+                    crate::mux::window_group::MuxWindow {
+                        id: 0,
+                        name: "w0".to_string(),
+                    },
+                    crate::mux::window_group::MuxWindow {
+                        id: 1,
+                        name: "w1".to_string(),
+                    },
+                ],
+                vec![10, 11],
+                0,
+            );
+            tab.mux_group = Some(group);
+        }
+        app.agent_status.apply_daemon_update(
+            11,
+            Some(crate::agent_status::AgentState::Blocked),
+            None,
+            1,
+            false,
+        );
+
+        let tab = app.active_tab().unwrap();
+        let badge = app
+            .agent_status_badge_for(tab)
+            .expect("group's pane 11 has status");
+        assert_eq!(badge.state, crate::agent_status::AgentState::Blocked);
+    }
+
+    /// `agent_status_badge_for` returns `None` when neither the tab itself
+    /// nor any pane in its group has ever reported a state (task0006 AC-2).
+    #[test]
+    fn agent_status_badge_for_is_none_when_nothing_reported() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let tab = app.active_tab().unwrap();
+        assert_eq!(app.agent_status_badge_for(tab), None);
+    }
+
+    /// `agent_status_counts` is a thin passthrough to
+    /// `AgentStatusModel::counts` (task0006 AC-3).
+    #[test]
+    fn agent_status_counts_passthrough() {
+        let mut app = App::new();
+        assert_eq!(
+            app.agent_status_counts(),
+            crate::agent_status_model::Counts::default()
+        );
+        app.agent_status.apply_daemon_update(
+            1,
+            Some(crate::agent_status::AgentState::Working),
+            None,
+            1,
+            false,
+        );
+        assert_eq!(
+            app.agent_status_counts(),
+            crate::agent_status_model::Counts {
+                working: 1,
+                ..Default::default()
+            }
+        );
     }
 
     // ── Phase 3/4: mux action dispatch (TS-12, TS-13, TS-14) ──────────

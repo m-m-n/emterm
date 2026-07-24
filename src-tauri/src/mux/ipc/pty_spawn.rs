@@ -8,12 +8,13 @@ use std::sync::Mutex as StdMutex;
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
-use crate::mux::scrollback_filter::strip_replayable_rich_content;
+use crate::mux::scrollback_filter::{AgentStatusOscScanner, strip_replayable_rich_content};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget, PtyOutputChunk,
-    SharedNotificationSender, SharedOutputTarget, SharedPaneExitSender, SharedScrollback,
-    SharedShadowParser, SharedTitleSender, TitleChangeSender, lock_shadow_parser,
+    AgentStatusReportSender, DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget,
+    PtyOutputChunk, SharedAgentStatusReportSender, SharedNotificationSender, SharedOutputTarget,
+    SharedPaneExitSender, SharedScrollback, SharedShadowParser, SharedTitleSender,
+    TitleChangeSender, lock_shadow_parser,
 };
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::RawPassthroughBuffer;
@@ -46,8 +47,36 @@ pub(super) struct SpawnedPty {
     pub(super) reader: Box<dyn std::io::Read + Send>,
 }
 
+/// Build the fixed environment variables set on every newly spawned mux
+/// pane's shell process. Extracted as a pure function (separate from the
+/// real `portable_pty` spawn call) so `EMTERM_PANE_ID` injection is
+/// testable without spawning a real PTY (AC-6, IMPLEMENTATION.md FR13:
+/// mux pane spawn injects `EMTERM_PANE_ID` into the pane's environment,
+/// resolved by `emterm mux read|send|wait --pane current`).
+///
+/// `public_pane_id` is minted by the caller via
+/// `SessionManager::public_pane_id` (SPEC FR13) before `spawn_pty` runs —
+/// this module has no direct dependency on `SessionManager`'s incarnation
+/// state.
+fn pane_env_vars(public_pane_id: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("TERM", "xterm-256color".to_string()),
+        ("COLORTERM", "truecolor".to_string()),
+        ("TERM_PROGRAM", "emterm".to_string()),
+        ("EMTERM_MUX", "1".to_string()),
+        ("EMTERM_PANE_ID", public_pane_id.to_string()),
+    ]
+}
+
 /// Spawn a PTY with a shell process at the given size.
-pub(super) fn spawn_pty(cols: u16, rows: u16) -> Result<SpawnedPty, String> {
+///
+/// `public_pane_id` is the pane's public (opaque, daemon-incarnation-
+/// scoped) ID, minted by the caller (`SessionManager::public_pane_id`)
+/// BEFORE spawn — environment variables must be set before the shell
+/// process starts, so the ID cannot be injected after the fact. Resolved
+/// client-side by `emterm mux read|send|wait --pane current` via
+/// `EMTERM_PANE_ID` (IMPLEMENTATION.md FR13 / "Public pane ID format").
+pub(super) fn spawn_pty(cols: u16, rows: u16, public_pane_id: &str) -> Result<SpawnedPty, String> {
     let pty_system = portable_pty::native_pty_system();
     let pty_size = portable_pty::PtySize {
         rows,
@@ -62,10 +91,9 @@ pub(super) fn spawn_pty(cols: u16, rows: u16) -> Result<SpawnedPty, String> {
 
     let shell = detect_default_shell();
     let mut cmd = portable_pty::CommandBuilder::new(&shell);
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    cmd.env("TERM_PROGRAM", "emterm");
-    cmd.env("EMTERM_MUX", "1");
+    for (key, value) in pane_env_vars(public_pane_id) {
+        cmd.env(key, value);
+    }
     cmd.env_remove("TMUX");
     cmd.env_remove("TMUX_PANE");
 
@@ -100,27 +128,33 @@ pub(super) fn spawn_pty(cols: u16, rows: u16) -> Result<SpawnedPty, String> {
 
 /// Register a new pane in the session manager and start its reader thread.
 ///
-/// Returns the new pane_id and its output target (for the reader thread).
+/// `pane_id` is pre-allocated by the caller (`SessionManager::alloc_pane_id`)
+/// BEFORE `spawn_pty` runs, so `EMTERM_PANE_ID` can be injected into the
+/// shell's environment at spawn time. Returns the pane_id and its output
+/// target (for the reader thread) — `None` only when `session_id` /
+/// `window_id` no longer resolve (a race with concurrent teardown).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn register_pane_and_start_reader(
     mgr: &mut SessionManager,
     session_id: u32,
     window_id: u32,
+    pane_id: PaneId,
     cols: u16,
     rows: u16,
     spawned: SpawnedPty,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     title_tx: &TitleChangeSender,
     notification_tx: &NotificationSender,
+    agent_status_tx: &AgentStatusReportSender,
     pane_exit_sender: &SharedPaneExitSender,
 ) -> Option<PaneId> {
-    // Verify session/window exist before allocating pane ID
+    // Verify session/window still exist (pane_id was already allocated by
+    // the caller before spawn_pty, so there is nothing to allocate here).
     {
         let session = mgr.get_session(session_id)?;
         session.windows.get(&window_id)?;
     }
 
-    let pane_id = mgr.alloc_pane_id();
     let session = mgr.get_session_mut(session_id)?;
     let window = session.windows.get_mut(&window_id)?;
 
@@ -140,6 +174,7 @@ pub(super) fn register_pane_and_start_reader(
     let pane_title = pane.title.clone();
     let title_sender = pane.title_sender.clone();
     let notification_sender = pane.notification_sender.clone();
+    let agent_status_report_sender = pane.agent_status_report_sender.clone();
     let raw_passthrough = pane.raw_passthrough.clone();
     let passthrough_scanner = pane.passthrough_scanner.clone();
     let scrollback = pane.scrollback.clone();
@@ -147,6 +182,9 @@ pub(super) fn register_pane_and_start_reader(
     *title_sender.lock().unwrap() = Some(title_tx.clone());
     // The notification channel lives for the daemon lifetime; populate it once.
     *notification_sender.lock().unwrap() = Some(notification_tx.clone());
+    // The agent-status channel lives for the daemon lifetime; populate it
+    // once (SPEC FR3 — never swapped, mirrors notification_sender).
+    *agent_status_report_sender.lock().unwrap() = Some(agent_status_tx.clone());
     window.add_pane(pane);
 
     // The pane-exit sender is fixed at pane creation and never swapped on
@@ -164,6 +202,7 @@ pub(super) fn register_pane_and_start_reader(
             pane_title,
             title_sender,
             notification_sender,
+            agent_status_report_sender,
             raw_passthrough,
             passthrough_scanner,
             scrollback,
@@ -441,6 +480,7 @@ fn pty_reader_loop(
     last_title: Arc<std::sync::Mutex<Option<String>>>,
     title_sender: SharedTitleSender,
     notification_sender: SharedNotificationSender,
+    agent_status_report_sender: SharedAgentStatusReportSender,
     raw_passthrough: SharedRawPassthrough,
     passthrough_scanner: SharedPassthroughScanner,
     scrollback: SharedScrollback,
@@ -452,6 +492,11 @@ fn pty_reader_loop(
     // why a stateless per-chunk stripper is insufficient (128 KiB CLI chunks
     // straddle the 64 KiB PTY read buffer).
     let mut scrollback_filter = ScrollbackWriteFilter::new();
+    // Per-pane stateful agent-status OSC decoder: retains a partial
+    // `agent-status` OSC 777 sequence across PTY read boundaries so a
+    // report split across reads is still detected exactly once (SPEC
+    // FR1/FR3; review round-1 rework, stable_id `osc_split_lost`).
+    let mut agent_status_scanner = AgentStatusOscScanner::new();
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
@@ -571,6 +616,19 @@ fn pty_reader_loop(
                         let _ = tx.try_send((pane_id, new_title));
                     }
                 }
+
+                // Detect agent-status OSC 777 reports (SPEC FR3) and forward
+                // each to the daemon-level agent-status task. Unlike OSC 9
+                // notification scanning (Detached-only, to avoid double-
+                // firing with the GUI's own live parse), this runs
+                // regardless of attach state: the daemon owns per-pane
+                // agent-status state unconditionally, and the GUI never
+                // parses this OSC itself for mux panes. The scanner is
+                // per-pane stateful (see `agent_status_scanner` above) so a
+                // report split across this read and the next is still
+                // detected.
+                let reports = agent_status_scanner.feed(data);
+                forward_agent_status_reports(pane_id, reports, &agent_status_report_sender);
 
                 // Detect OSC 7 (cwd reporting) and cache the path
                 if let Some(cwd) = crate::mux::ipc::statusbar::detect_osc7_cwd(data) {
@@ -745,10 +803,96 @@ fn capture_passthrough(
     }
 }
 
+/// Forward each decoded agent-status report to the daemon-level agent-status
+/// task via `agent_status_report_sender`.
+///
+/// Unlike the best-effort PTY-output passthrough, an accepted report MUST
+/// reach the daemon — SPEC FR3 requires every accepted report to advance the
+/// pane's revision, so silently dropping one on a full channel would be a
+/// spec bug. A full channel therefore falls back to a blocking send instead
+/// of dropping (review round-1 stable_id `try_send_drops_reports`, addressed
+/// alongside the per-pane statefulness rework since the fix naturally
+/// extends here).
+///
+/// Runs OUTSIDE the `agent_status_report_sender` lock (the sender is cloned
+/// out and the lock released before any send), mirroring the "release lock
+/// before blocking_send" discipline the PTY-output backpressure path above
+/// already follows — a blocked send here cannot deadlock against the
+/// session-manager lock the consuming `run_agent_status_task` also needs.
+fn forward_agent_status_reports(
+    pane_id: PaneId,
+    reports: Vec<String>,
+    agent_status_report_sender: &SharedAgentStatusReportSender,
+) {
+    if reports.is_empty() {
+        return;
+    }
+    let sender = agent_status_report_sender.lock().unwrap().clone();
+    let Some(tx) = sender else {
+        return;
+    };
+    for report in reports {
+        match tx.try_send((pane_id, report)) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(msg)) => {
+                log::debug!(
+                    "pane {} agent-status channel full; falling back to blocking send",
+                    pane_id
+                );
+                if tx.blocking_send(msg).is_err() {
+                    log::warn!(
+                        "pane {} agent-status report not delivered: receiver dropped",
+                        pane_id
+                    );
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                log::debug!(
+                    "pane {} agent-status channel closed; report not delivered",
+                    pane_id
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pty::visibility::HIDDEN_PASSTHROUGH_CAPACITY_MUX;
+
+    // ── pane_env_vars (EMTERM_PANE_ID injection, AC-6) ─────────────────────
+
+    #[test]
+    fn pane_env_vars_includes_emterm_pane_id_matching_the_given_public_id() {
+        let vars = pane_env_vars("abc123-7");
+        let found = vars.iter().find(|(k, _)| *k == "EMTERM_PANE_ID");
+        assert_eq!(found.map(|(_, v)| v.as_str()), Some("abc123-7"));
+    }
+
+    #[test]
+    fn pane_env_vars_pane_id_differs_per_pane() {
+        let get = |vars: &[(&str, String)]| {
+            vars.iter()
+                .find(|(k, _)| *k == "EMTERM_PANE_ID")
+                .unwrap()
+                .1
+                .clone()
+        };
+        let a = get(&pane_env_vars("abc123-1"));
+        let b = get(&pane_env_vars("abc123-2"));
+        assert_ne!(a, b, "distinct public pane ids must round-trip distinctly");
+    }
+
+    #[test]
+    fn pane_env_vars_keeps_existing_fixed_vars() {
+        let vars = pane_env_vars("abc123-1");
+        let get = |key: &str| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
+        assert_eq!(get("TERM"), Some("xterm-256color".to_string()));
+        assert_eq!(get("COLORTERM"), Some("truecolor".to_string()));
+        assert_eq!(get("TERM_PROGRAM"), Some("emterm".to_string()));
+        assert_eq!(get("EMTERM_MUX"), Some("1".to_string()));
+    }
 
     // ── extract_main_buffer_bytes (alt-screen scrollback gating) ──────────
 
@@ -967,6 +1111,27 @@ mod tests {
         assert_eq!(scrollback.lock().unwrap().read_all(), &chunk[..]);
     }
 
+    /// task0012 AC-5: an `agent-status` OSC report split across chunk
+    /// boundaries must never land in scrollback. `ScrollbackWriteFilter`
+    /// already holds ANY unterminated OSC introducer (not just viewer
+    /// kinds) pending until a terminator arrives — this is a regression /
+    /// confirmation test that the same guarantee covers `agent-status`
+    /// reports now that the extraction side is stateful too.
+    #[test]
+    fn scrollback_filter_strips_agent_status_report_split_across_reads() {
+        let scrollback = new_scrollback(4096);
+        let full =
+            b"pre\x1b]777;emterm;agent-status;v=1;state=working;name=claude\x07post".as_slice();
+        let split = full
+            .windows(4)
+            .position(|w| w == b"stat")
+            .expect("marker present");
+        let (head, tail) = full.split_at(split);
+        let filter = feed_all(&scrollback, &[head, tail]);
+        assert_eq!(filter.pending_len(), 0);
+        assert_eq!(scrollback.lock().unwrap().read_all(), b"prepost");
+    }
+
     type TestRig = (
         SharedRawPassthrough,
         SharedPassthroughScanner,
@@ -1067,5 +1232,67 @@ mod tests {
         capture_passthrough(7, b"message\x1b\\", &buf, &scanner, &notif);
         let (_pane_id, message) = rx.try_recv().expect("notification after closing chunk");
         assert_eq!(message, "long message");
+    }
+
+    // ── forward_agent_status_reports (task0012 AC-6 / try_send_drops_reports) ─
+
+    /// Baseline: a healthy channel delivers via the `try_send` fast path,
+    /// no blocking.
+    #[test]
+    fn forward_agent_status_reports_delivers_via_try_send_when_channel_has_room() {
+        let (tx, mut rx) = mpsc::channel::<(PaneId, String)>(4);
+        let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(Some(tx)));
+        forward_agent_status_reports(3, vec!["emterm;agent-status;clear".to_string()], &sender);
+        let (pane_id, report) = rx.try_recv().expect("report must be delivered");
+        assert_eq!(pane_id, 3);
+        assert_eq!(report, "emterm;agent-status;clear");
+    }
+
+    /// Empty report list is a no-op — no send attempted, no panic on a
+    /// `None` sender either.
+    #[test]
+    fn forward_agent_status_reports_empty_list_is_noop() {
+        let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(None));
+        // Must not panic even though the sender is unset.
+        forward_agent_status_reports(1, Vec::new(), &sender);
+    }
+
+    /// AC-6: a full channel must NOT silently drop an accepted report
+    /// (review round-1 stable_id `try_send_drops_reports`). This proves the
+    /// blocking-send fallback actually delivers once capacity frees, rather
+    /// than the old best-effort `try_send` that discarded on `Full`.
+    #[test]
+    fn forward_agent_status_reports_blocks_instead_of_dropping_on_full_channel() {
+        let (tx, mut rx) = mpsc::channel::<(PaneId, String)>(1);
+        // Fill the one available slot directly so the channel is Full.
+        tx.try_send((1, "first".to_string())).unwrap();
+        let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(Some(tx)));
+
+        let sender_for_thread = sender.clone();
+        let handle = std::thread::spawn(move || {
+            forward_agent_status_reports(1, vec!["second".to_string()], &sender_for_thread);
+        });
+
+        // Drain the first item, freeing the slot the blocked send is
+        // waiting on.
+        let first = rx.blocking_recv().expect("first item must still arrive");
+        assert_eq!(first, (1, "first".to_string()));
+
+        // The blocking send only completes once the slot is free, so this
+        // recv is what proves "second" was not dropped.
+        let second = rx.blocking_recv().expect("second item must not be dropped");
+        assert_eq!(second, (1, "second".to_string()));
+
+        handle.join().expect("forwarding thread must not panic");
+    }
+
+    /// A closed channel (receiver dropped) is handled gracefully — the send
+    /// is a no-op, no panic, no hang.
+    #[test]
+    fn forward_agent_status_reports_closed_channel_does_not_panic() {
+        let (tx, rx) = mpsc::channel::<(PaneId, String)>(1);
+        drop(rx);
+        let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(Some(tx)));
+        forward_agent_status_reports(1, vec!["orphaned".to_string()], &sender);
     }
 }

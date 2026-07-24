@@ -1,0 +1,269 @@
+round: 2
+executed_at: "2026-07-24T08:20:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 06d795b6698952176a743a86d6f13fbfb6633105
+  head_commit: a73ca934389cc90946b571c5acff28c88b22ffe6
+  changed_files:
+    - crates/app_settings/src/settings.rs
+    - crates/mux_ipc/src/lib.rs
+    - crates/mux_ipc/src/protocol.rs
+    - doc/AGENT-STATUS.md
+    - src-tauri/src/agent_status.rs
+    - src-tauri/src/agent_status_model.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/cli/agent_status.rs
+    - src-tauri/src/cli/messages.rs
+    - src-tauri/src/cli/mod.rs
+    - src-tauri/src/lib.rs
+    - src-tauri/src/main.rs
+    - src-tauri/src/mux/cli.rs
+    - src-tauri/src/mux/daemon.rs
+    - src-tauri/src/mux/ipc/connection.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/manager.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/session/session.rs
+    - src-tauri/src/notifications.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/src/tabs.rs
+    - src-tauri/src/ui/mux_sidebar.rs
+    - src-tauri/src/ui/status_bar.rs
+    - src-tauri/src/ui/tab_bar.rs
+    - src-tauri/src/window_host.rs
+    - src-tauri/tests/cli_subcommands.rs
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/settings/sections/notification-section.ts
+    - src-tauri/web-shared/settings/types.ts
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex CLI cross-contamination between concurrent sessions; 4/6 attempts returned spec-perspective content, 2/6 timed out (600s)"}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  # ========================================================================
+  # HIGH (new — post-rework surface)
+  # ========================================================================
+  - stable_id: mux_double_notify
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/callbacks.rs
+    line: 508
+    title: "Mux-attached tabs process each agent-status OSC twice → duplicate desktop notifications"
+    description: "For mux-attached tabs, the same agent-status OSC 777 report is applied to App::agent_status under two different keys (PaneKey::MuxPane via daemon broadcast + PaneKey::Tab via client's local vt100 OSC parse). Each application drives an independent notification with a different rate-limit key, so the per-pane rate limiter cannot suppress the duplicate. Users get two OS notifications per blocked/done transition, and tab-bar / sidebar aggregate is inflated."
+    suggestion: "Gate NativeCallbacks::on_osc's agent-status arm on whether the tab is mux-attached (daemon-owned) and skip local-OSC application when so. Alternative: strip agent-status OSC from bytes forwarded to the client (pty_spawn.rs), or drop plain-tab events for mux tabs in pump_all."
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached (batch.review_rework_count already 1)"
+  - stable_id: send_watermark_race
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 984
+    title: "Send watermark sampled before an unbounded scheduling gap (FR11 linearization break)"
+    description: "SPEC FR11: returned watermark is 'the revision from just before the successful write'. The code reads the revision, then separately schedules the PTY write with spawn_blocking. If a report increments revision 5→6 during that gap, the write succeeds and returns watermark 5; wait --after 5 then immediately accepts revision 6 even though that report preceded the input write."
+    suggestion: "Serialize report acceptance with the watermark-and-write operation via a per-pane actor or coordination lock that drains prior reports, samples the revision, and performs the write without allowing another report to be accepted between those steps."
+    sources: [codex:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: replay_sync_regress
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/daemon.rs
+    line: 1020
+    title: "Replay sync can overwrite a newer live state with an older revision (FR3 monotonicity break)"
+    description: "SPEC FR3 requires monotonically increasing per-pane revisions. sync_agent_status_after_snapshot snapshots revisions under the manager lock, drops the lock, then broadcasts them. A live report can acquire the lock and broadcast revision r+1 in that gap; this loop then broadcasts captured revision r. The GUI model stores incoming revision/state unconditionally and regresses to stale state."
+    suggestion: "Publish replay updates in the same serialized order as live updates (retain the manager/per-pane sequencing guard), and defensively have the GUI ignore updates whose revision is lower than the pane's current revision."
+    sources: [codex:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  # ========================================================================
+  # MEDIUM (all deferred — below auto-fix gate)
+  # ========================================================================
+  - stable_id: scrollback_double_copy_r2
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 927
+    title: "ReadPane copies full scrollback ring, then copies tail again"
+    description: "read_all() clones the full ~2 MiB scrollback ring; all[start..].to_vec() copies the tail again. Every ReadPane request allocates ~2 MiB + up to 512 KiB. Cross-model agreement (claude+codex perf)."
+    sources: [claude:performance, codex:performance]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate; re-flagged from round 1"
+  - stable_id: waiter_leak_timeout_r2
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 1140
+    title: "WaitAgentState timeout leaks its AgentWaiter until next accepted report"
+    description: "Timeout branch does not evict the waiter registered at line 1119. Cleanup only occurs on later report or pane teardown. Also flagged by spec codex (wait_disconnect_not_discarded)."
+    sources: [claude:performance, codex:performance, codex:spec]
+    confidence: 80
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate; re-flagged"
+  - stable_id: cli_stdin_unbounded_r2
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/cli.rs
+    line: 1002
+    title: "mux send --stdin buffers unbounded input before validation"
+    sources: [codex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate; re-flagged"
+  - stable_id: sanitize_name_bidi
+    severity: medium
+    category: security
+    file: src-tauri/src/agent_status.rs
+    line: 158
+    title: "sanitize_name strips only category Cc; BiDi override / zero-width chars reach notification body"
+    description: "char::is_control() only strips category Cc (basic control chars). BiDi overrides (U+202A-202E, U+2066-2069), zero-width chars (U+200B-200D, U+FEFF), line/paragraph separators (U+2028, U+2029) pass through into notification body. doc/AGENT-STATUS.md's Trust Boundary section explicitly promises this sanitization is the defense against forged reports."
+    suggestion: "Extend sanitize_name to strip Cf/Zl/Zp categories in addition to Cc, or use an allowlist of display-safe chars."
+    sources: [claude:security]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium — below auto-fix gate (new finding)"
+  - stable_id: not_mux_pane_unreachable_r2
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 830
+    title: "not_mux_pane error kind is unreachable — collapsed into unknown_pane (FR10)"
+    sources: [claude:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — re-flagged"
+  - stable_id: pane_id_discovery_gap_r2
+    severity: medium
+    category: spec
+    file: src-tauri/src/ui/mux_sidebar.rs
+    line: 508
+    title: "GUI copy-pane-ID affordance only exists for panes that have reported agent status (FR13)"
+    sources: [claude:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — re-flagged"
+  - stable_id: agent_state_type_duplication_worse
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 874
+    title: "AgentState wire↔core conversion helpers now duplicated across TWO modules (deteriorated)"
+    description: "Task0010 added a second conversion pair (daemon::to_wire_state/from_wire_state) alongside the existing agent_status_model::state_from_wire/state_to_wire. Same 4-arm match repeated. Adding a fifth AgentState variant now requires updating four match arms."
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium — deteriorated from round 1"
+  - stable_id: notifications_wire_coupling
+    severity: medium
+    category: architecture
+    file: src-tauri/src/notifications.rs
+    line: 35
+    title: "Presentation layer notifications depends on wire enum mux_ipc::protocol::AgentState"
+    description: "notifications.rs re-exports mux_ipc's wire AgentState. AgentStatusModel::Transition carries core AgentState, so pump_all converts core→wire twice per transition purely to satisfy notification struct shape. DIP violation."
+    sources: [claude:architecture]
+    confidence: 55
+    resolution: deferred
+    resolution_reason: "medium — re-flagged"
+  - stable_id: send_text_error_misclassify
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 999
+    title: "handle_send_text misclassifies PTY write failures and JoinError as invalid_input (exit 2)"
+    description: "Both spawn_blocking JoinError and BrokenPipe (pane died mid-write) map to AgentApiErrorKind::InvalidInput → exit 2 (usage error), instead of PaneGone → exit 4 or a distinct Internal error."
+    suggestion: "Split arms: BrokenPipe → PaneGone; JoinError → new AgentApiErrorKind::Internal (exit 1)."
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium — new finding"
+  - stable_id: wait_race_destruction_r2
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 1099
+    title: "Wait registration not atomic with pane destruction (FR12)"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — re-flagged"
+  - stable_id: wait_disconnect_not_discarded
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 682
+    title: "Disconnected wait clients are not detected or promptly discarded (FR12)"
+    sources: [codex:spec]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium — re-flagged"
+  - stable_id: read_current_screen_dup
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 886
+    title: "ReadPane duplicates current screen in main-buffer output (FR10)"
+    description: "Scrollback replay through render_scrollback_rows already reconstructs the current screen at its tail. Appending the shadow parser's current screen duplicates it."
+    sources: [codex:spec]
+    confidence: 55
+    resolution: deferred
+    resolution_reason: "medium — new finding"
+  - stable_id: mux_hidden_window_visibility
+    severity: medium
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 153
+    title: "Hidden mux windows are treated as visible for notification suppression (FR9)"
+    description: "agent_status_pane_visible treats every pane in the mux window group as displayed when the outer tab is active. With multiple mux windows, only the active window is rendered; other windows' transitions are marked seen and suppressed."
+    sources: [codex:spec]
+    confidence: 55
+    resolution: deferred
+    resolution_reason: "medium — new finding"
+  - stable_id: osc_scanner_rejects_long_name
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 319
+    title: "OSC scanner rejects valid long names instead of truncating (FR1)"
+    description: "Scanner resets when OSC body exceeds 8 KiB. A valid report with a long percent-encoded name is discarded entirely, violating FR1's 'truncate to 80 chars' semantics."
+    sources: [codex:spec]
+    confidence: 55
+    resolution: deferred
+    resolution_reason: "medium — new finding"
+  - stable_id: osc_utf8_lossy_accept
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 397
+    title: "Lossy UTF-8 conversion turns invalid reports into accepted reports (FR1)"
+    description: "String::from_utf8_lossy replaces invalid PTY bytes with U+FFFD before the parser runs. Invalid UTF-8 in name= becomes a replacement char, allowing the report to be accepted and revision incremented."
+    suggestion: "Use strict UTF-8 conversion; discard on failure."
+    sources: [codex:spec]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium — new finding"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: skipped-by-orchestrator
+  skip_reason: "batch mode: review_rework_count already 1 (cap reached). All residual critical/high receive resolution: deferred per batch-mode.md decision table. Auto-fix loop skipped because rework had exhausted the batch budget."
+residual_critical_high: 3
+rework_required: false
