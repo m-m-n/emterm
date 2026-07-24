@@ -219,6 +219,13 @@ pub mod search;
 pub mod sftp;
 #[cfg(feature = "gui")]
 pub mod tabs;
+// Discovery of live tmux sockets for the new-tab chooser's tmux-attach
+// rows (SPEC A5). Unix-only: tmux's socket-directory layout and Unix-domain
+// socket probing have no Windows equivalent; `app.rs`'s chooser plumbing
+// stays platform-agnostic by dispatching to this module only on `cfg(unix)`
+// and falling back to an empty socket list elsewhere.
+#[cfg(all(feature = "gui", unix))]
+pub mod tmux_sockets;
 #[cfg(feature = "gui")]
 pub mod window_host;
 
