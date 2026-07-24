@@ -1,0 +1,8 @@
+{
+  "description": "Report Claude Code lifecycle to eMterm agent-status",
+  "hooks": {
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify-status.ts working", "timeout": 3 }] }],
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify-status.ts idle",    "timeout": 3 }] }],
+    "Notification":      [{ "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify-status.ts blocked", "timeout": 3 }] }]
+  }
+}
