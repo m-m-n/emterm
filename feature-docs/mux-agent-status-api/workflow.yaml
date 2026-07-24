@@ -260,20 +260,21 @@ tasks:
     branch: em-workflow/mux-agent-status-api/task0008
 
 review:
-  status: in_progress
-  rounds_completed: 1
+  status: completed
+  rounds_completed: 2
   needs_rework: false
-  residual_critical_high: 10
+  residual_critical_high: 3
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
     codex_cross_validation: true
   perspectives:
-    comprehensive: pending
-    security: pending
-    performance: pending
-    architecture: pending
-    spec: pending
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+  completion_note: "batch mode rework cap 1 exhausted (round 1 rework applied via task0009-task0013). Round 2 surfaced 3 new high findings (mux double-notify, send-watermark race, replay-sync regress) marked deferred per batch-mode.md decision table. Human evaluator reviews the round record."
 
 requirements:
   FR1:
