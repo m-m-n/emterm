@@ -1602,45 +1602,74 @@ impl App {
     }
 
     /// Tab-bar `+` button (`TabEvent::New`): spawn directly with the
-    /// global settings when no profiles exist, otherwise open the
-    /// new-tab chooser (a "Global Settings" row + each profile, with the
-    /// default profile preselected). Port of the WebView's
-    /// `tab-bar-ui.ts::handleNewTabClick` dialog.
+    /// global settings when no profiles exist and no live tmux sockets
+    /// were found, otherwise open the new-tab chooser (a "Global
+    /// Settings" row + each profile + each discovered tmux socket, with
+    /// the default profile preselected). Port of the WebView's
+    /// `tab-bar-ui.ts::handleNewTabClick` dialog, extended per task0001
+    /// AC-5: the fast path now requires BOTH profiles and tmux sockets
+    /// to be empty (previously profiles alone).
     pub fn open_new_tab_chooser(&mut self) {
-        if self.settings.profiles.is_empty() {
+        let sockets = discover_tmux_sockets();
+        self.open_new_tab_chooser_with_sockets(sockets);
+    }
+
+    /// Core decision logic behind [`Self::open_new_tab_chooser`], taking
+    /// the discovered tmux sockets as a parameter. Split out so AC-5
+    /// (profiles-empty × sockets-empty/non-empty) is unit-testable
+    /// without touching the real socket directory (`tdd-testing`: "test
+    /// the pure decision core").
+    fn open_new_tab_chooser_with_sockets(&mut self, sockets: Vec<(String, std::path::PathBuf)>) {
+        if self.settings.profiles.is_empty() && sockets.is_empty() {
             self.spawn_new_tab();
             return;
         }
         // Preselect the default profile's row (chooser mode prepends a
         // "Global Settings" row, so the row<->profile offset lives in
         // `ProfileSelectorState::profile_row`). No default → row 0
-        // (Global Settings).
+        // (Global Settings). Tmux sockets never carry a "default", so
+        // they never move the initial selection.
         self.profile_selector.open_with_global(0);
+        self.profile_selector.tmux_sockets = sockets;
         if let Some(i) = self.settings.profiles.iter().position(|p| p.is_default) {
             self.profile_selector.selected = self.profile_selector.profile_row(i);
         }
         self.needs_full_redraw = true;
     }
 
-    /// Number of rows the open selector shows (profiles, plus the
-    /// leading "Global Settings" row in new-tab chooser mode). Drives
-    /// the keyboard wrap-around in `window_host`.
+    /// Number of rows the open selector shows (profiles + discovered tmux
+    /// sockets, plus the leading "Global Settings" row in new-tab chooser
+    /// mode). Drives the keyboard wrap-around in `window_host`.
     pub fn profile_selector_row_count(&self) -> usize {
-        self.settings.profiles.len() + usize::from(self.profile_selector.include_global)
+        self.settings.profiles.len()
+            + self.profile_selector.tmux_sockets.len()
+            + usize::from(self.profile_selector.include_global)
     }
 
     /// Selector confirmed: resolve the chosen row and spawn a tab. The
-    /// row→choice decode (including the chooser-mode "Global Settings"
-    /// offset) lives in `ProfileSelectorState::row_to_choice`, the single
-    /// authority shared with the renderer. Resolution failures log an
-    /// error and spawn nothing (WebView parity with `launchSshProfile`'s
-    /// alert path).
+    /// row→choice decode (including the chooser-mode "Global Settings" /
+    /// tmux-socket offsets) lives in `ProfileSelectorState::row_to_choice`,
+    /// the single authority shared with the renderer. Resolution failures
+    /// log an error and spawn nothing (WebView parity with
+    /// `launchSshProfile`'s alert path).
     pub fn confirm_profile_selection(&mut self, index: usize) {
-        let choice = self.profile_selector.row_to_choice(index);
+        let choice = self
+            .profile_selector
+            .row_to_choice(index, self.settings.profiles.len());
         self.profile_selector.close();
         let profile_index = match choice {
             crate::ui::profile_selector::Choice::Global => {
                 self.spawn_new_tab();
+                return;
+            }
+            crate::ui::profile_selector::Choice::Tmux(i) => {
+                // AC-4: attach is a plain PTY spawn (`tmux -S <socket>
+                // attach`), not a mux-subsystem integration (IMPLEMENTATION.md).
+                let Some((_, path)) = self.profile_selector.tmux_sockets.get(i) else {
+                    return;
+                };
+                let overrides = tmux_attach_overrides(path);
+                self.spawn_new_tab_with_overrides(Some(overrides));
                 return;
             }
             crate::ui::profile_selector::Choice::Profile(i) => i,
@@ -4575,6 +4604,40 @@ impl Default for App {
     }
 }
 
+/// Discover live tmux sockets for the new-tab chooser (task0001, SPEC A5).
+/// Always empty on Windows (`crate::tmux_sockets` is Unix-only), so the
+/// chooser's fast-path / row-count logic in `App` needs no platform
+/// branching beyond this one function.
+#[cfg(unix)]
+fn discover_tmux_sockets() -> Vec<(String, std::path::PathBuf)> {
+    crate::tmux_sockets::discover()
+        .into_iter()
+        .map(|s| (s.name, s.path))
+        .collect()
+}
+
+#[cfg(not(unix))]
+fn discover_tmux_sockets() -> Vec<(String, std::path::PathBuf)> {
+    Vec::new()
+}
+
+/// Build the [`crate::profiles::SpawnOverrides`] for attaching to a
+/// discovered tmux socket (AC-4): executable `tmux`, argv exactly `-S
+/// {socket_path} attach` with the path as one argv element (not
+/// shell-quoted/split). A plain PTY spawn — no interaction with
+/// eMterm's built-in mux subsystem (IMPLEMENTATION.md).
+fn tmux_attach_overrides(socket_path: &std::path::Path) -> crate::profiles::SpawnOverrides {
+    crate::profiles::SpawnOverrides {
+        shell_path: Some("tmux".to_string()),
+        shell_args: Some(vec![
+            "-S".to_string(),
+            socket_path.display().to_string(),
+            "attach".to_string(),
+        ]),
+        ..Default::default()
+    }
+}
+
 /// Phase 4-G-E performance instrumentation gate. Returns `true` when
 /// the env `EMTERM_IME_PERF=1` is set. Cached on first call so the
 /// hot path (called once per preedit / commit event) is a single
@@ -5222,7 +5285,11 @@ mod tests {
     #[test]
     fn new_tab_chooser_prepends_global_and_preselects_default() {
         let mut app = app_with_profiles(vec![profile("a", false), profile("b", true)]);
-        app.open_new_tab_chooser();
+        // `_with_sockets` (not the public `open_new_tab_chooser`, which
+        // calls the real, environment-dependent socket discovery) keeps
+        // this test deterministic: it exercises the default-profile
+        // preselect decision, not tmux discovery.
+        app.open_new_tab_chooser_with_sockets(Vec::new());
         assert!(app.profile_selector.visible);
         assert!(app.profile_selector.include_global);
         // Global row + 2 profiles.
@@ -5234,9 +5301,82 @@ mod tests {
     #[test]
     fn new_tab_chooser_without_default_preselects_global() {
         let mut app = app_with_profiles(vec![profile("a", false)]);
-        app.open_new_tab_chooser();
+        app.open_new_tab_chooser_with_sockets(Vec::new());
         assert!(app.profile_selector.include_global);
         assert_eq!(app.profile_selector.selected, 0);
+    }
+
+    // AC-5: profiles empty + no live tmux sockets → today's immediate-spawn
+    // fast path is preserved (chooser never opens).
+    #[test]
+    fn new_tab_chooser_spawns_immediately_without_profiles_or_sockets() {
+        let mut app = App::new();
+        app.open_new_tab_chooser_with_sockets(Vec::new());
+        assert!(!app.profile_selector.visible);
+        assert_eq!(app.tabs.len(), 1);
+    }
+
+    // AC-5: profiles empty but a live tmux socket exists → the chooser
+    // opens instead of the fast path.
+    #[test]
+    fn new_tab_chooser_opens_with_sockets_even_without_profiles() {
+        let mut app = App::new();
+        app.open_new_tab_chooser_with_sockets(vec![(
+            "dev".to_string(),
+            std::path::PathBuf::from("/tmp/tmux-1000/dev"),
+        )]);
+        assert!(app.profile_selector.visible);
+        assert!(app.profile_selector.include_global);
+        // Global row + 0 profiles + 1 tmux socket.
+        assert_eq!(app.profile_selector_row_count(), 2);
+        assert!(app.tabs.is_empty());
+    }
+
+    // AC-4: confirming a tmux row builds the exact `tmux -S <socket>
+    // attach` spawn (the pure override-construction core, independent of
+    // the real PTY spawn).
+    #[test]
+    fn tmux_attach_overrides_builds_expected_executable_and_argv() {
+        let overrides = tmux_attach_overrides(std::path::Path::new("/tmp/tmux-1000/dev"));
+        assert_eq!(overrides.shell_path.as_deref(), Some("tmux"));
+        assert_eq!(
+            overrides.shell_args,
+            Some(vec![
+                "-S".to_string(),
+                "/tmp/tmux-1000/dev".to_string(),
+                "attach".to_string(),
+            ])
+        );
+    }
+
+    // AC-4: confirming a tmux row spawns a tab (routes through
+    // `spawn_new_tab_with_overrides`, same as a profile confirm).
+    #[test]
+    fn confirm_tmux_row_spawns_a_tab() {
+        let mut app = app_with_profiles(vec![profile("a", false)]);
+        app.open_new_tab_chooser_with_sockets(vec![(
+            "dev".to_string(),
+            std::path::PathBuf::from("/tmp/tmux-1000/dev"),
+        )]);
+        // Global(0) + profile "a"(1) + tmux "dev"(2).
+        app.confirm_profile_selection(2);
+        assert!(!app.profile_selector.visible);
+        assert_eq!(app.tabs.len(), 1);
+    }
+
+    // AC-3/AC-4: an out-of-range tmux index (stale sockets list) closes
+    // without spawning, same guard as an out-of-range profile index.
+    #[test]
+    fn confirm_tmux_row_out_of_range_closes_without_spawn() {
+        let mut app = App::new();
+        app.open_new_tab_chooser_with_sockets(vec![(
+            "dev".to_string(),
+            std::path::PathBuf::from("/tmp/tmux-1000/dev"),
+        )]);
+        // Global(0) + tmux "dev"(1); row 2 has no socket.
+        app.confirm_profile_selection(2);
+        assert!(!app.profile_selector.visible);
+        assert!(app.tabs.is_empty());
     }
 
     #[test]
