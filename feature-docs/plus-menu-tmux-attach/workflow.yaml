@@ -57,7 +57,7 @@ workflow:
       Manual M-1 (live tmux -L test attach round-trip) deferred to user; not automatable in this environment.
       Review round 1: 4 medium findings (all deferred, non-blocking; see reviews/round1.yaml).
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
