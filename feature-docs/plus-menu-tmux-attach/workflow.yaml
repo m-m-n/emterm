@@ -64,7 +64,8 @@ tasks:
     domains: [ui, external-io]
     complexity: medium
     requirements: [FR1, FR2, FR3, NFR1, NFR2, NFR3]
-    status: pending
+    status: in_progress
+    branch: em-workflow/plus-menu-tmux-attach/task0001
     notes: null
 
 review:
