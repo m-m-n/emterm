@@ -34,7 +34,8 @@ workflow:
     status: completed
     completed_at_commit: d494e646196ccba1c2f5359c26b88d8b5df46d1f
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: c04e6a4ab911eda4aeaec4aebec35771c5a99a08
     base_commit: 3e1689e88056b8f59dcaee31b49dee7e8f41bc13
   - id: review
     status: pending
@@ -57,8 +58,8 @@ tasks:
     domains: [input-handling]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "deviations: terminal_dispatch.rs (fast path last_write bookkeeping), snapshot.rs (last_write: None initializers); cell.rs untouched"
     branch: em-workflow/keycap-cluster-composition/task0001
   task0002:
     title: "Strip VS16 before emoji font shaping"
