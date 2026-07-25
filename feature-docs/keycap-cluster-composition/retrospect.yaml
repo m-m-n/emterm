@@ -1,0 +1,21 @@
+feature: keycap-cluster-composition
+collected_at: "2026-07-25T23:55:45+09:00"
+session_ids: [d98dece9-6bd2-4ded-b021-06168c91db10]
+signals:
+  review_critical_high:
+    - {stable_id: 50b592c09144a47d, category: performance, file: crates/term_core/src/print_handler.rs, title: "try_retroactive_merge にセル内容の上限が無く O(n²) コピー + 無制限メモリ増加", resolution: fixed}
+    - {stable_id: 3ff81ec15ccdcc90, category: comprehensive, file: crates/term_core/src/print_handler.rs, title: "retroactive merge has no size cap", resolution: fixed}
+    - {stable_id: "3337565944680335", category: security, file: crates/term_core/src/print_handler.rs, title: "無制限に伸びる結合文字マージで DoS", resolution: fixed}
+  conflict_reworks: []
+  file_prediction_misses:
+    - {task: task0001, files: [crates/term_core/src/terminal_dispatch.rs, crates/term_core/src/snapshot.rs]}
+  verification_failures: []
+  discretionary_perspectives:
+    - {perspective: performance, reason: "統合 diff が term_core の print ホットパス（terminal_dispatch fast path 含む）と描画のシェーピング経路に触れるため"}
+  declined_findings: []
+lessons_candidates:
+  - "3観点（comprehensive/security/performance）が同一サイトの同一根本原因（無上限成長）を独立検出した。信頼境界（PTY 入力）に触れるバッファ/蓄積系の変更は、planner 段階で『上限の有無』を Acceptance Criteria に含めると1ラウンド目の high を予防できそう"
+  - "task0002 の SPEC/plan が shape() の消費者を grid pass の2箇所と予測したが、実際は4箇所（resolve_overlay_glyph_meta / emoji_cache）あり medium 残留の主因になった。『同一パイプラインを名乗る呼び出しサイトの全数列挙』を planner の files 予測手順に入れる価値がある"
+  - "fresh worktree では gitignored な assets/fonts が無く build.rs が panic する。implementer と verify の双方で fetch-fonts.sh 実行かメインツリーからのコピーが必要だった。worktree ベースのワークフローでは gitignored ビルド資産の bootstrap 手順を暗黙前提にしない"
+  - "tabs.rs の off-thread replay worker timeout はベースラインでも7件落ち、失敗セットが実行ごとに変動する。verify フェーズの pass/fail 判定はベースライン比較（同一環境で base commit を回す）で切り分けるのが有効だった"
+  - "codex cross-validation が usage limit で全 skip になった（回復 2026-07-29）。cross-validation 前提の confidence スコアリングが claude-only に縮退したことは round 記録に明示済み"
