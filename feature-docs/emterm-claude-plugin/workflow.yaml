@@ -120,8 +120,8 @@ tasks:
     branch: em-workflow/emterm-claude-plugin/task0006
 
 review:
-  status: pending
-  rounds_completed: 1
+  status: completed
+  rounds_completed: 2
   plan:
     floor: [comprehensive, security, performance, spec]
     discretionary: []
@@ -131,8 +131,8 @@ review:
     security: completed
     performance: completed
     spec: completed
-  residual_critical_high: 1
-  needs_rework: true
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
