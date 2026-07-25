@@ -217,13 +217,13 @@ findings:
     description: >
       FR3's closing sentence reads "The JSON MUST escape the two control bytes as `<raw 0x1B>`",
       pinning nothing — it says to escape ESC as ESC, and a raw control byte cannot appear in a
-      JSON string at all. The implementation uses ``, which satisfies FR3's intent and the
+      JSON string at all. The implementation uses `\u001b`, which satisfies FR3's intent and the
       canonical byte sequence, but no clause actually backs that choice.
       Orchestrator verification: confirmed — SPEC.md line 66 holds a literal 0x1B
       (`grep -P '[\x00-\x08\x0b-\x1f]'` matches exactly one line; `cat -A` shows `^[`). It is the
       only raw control byte in the file.
     suggestion: >
-      Replace with a control-byte-free statement: escape each ESC (0x1B) as `` and the
+      Replace with a control-byte-free statement: escape each ESC (0x1B) as `\u001b` and the
       trailing backslash as `\\`.
     sources: [claude:spec]
     confidence: 65
