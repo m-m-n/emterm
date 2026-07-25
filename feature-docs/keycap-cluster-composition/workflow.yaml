@@ -44,7 +44,33 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "term_core retroactive merge of zero-width characters"
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/print_handler.rs
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/cell.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2]
+    status: pending
+    notes: null
+  task0002:
+    title: "Strip VS16 before emoji font shaping"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/render/terminal_grid_pass.rs
+      - src-tauri/src/render/font/fallback.rs
+      - src-tauri/src/render/font/presentation.rs
+    skills: []
+    domains: [ui]
+    complexity: medium
+    requirements: [FR5, NFR1]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -56,47 +82,47 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3]
   FR2:
     title: "VS16-driven retroactive width-2 expansion"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-6]
   FR3:
     title: "Wide-cell spacer traversal"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
   FR4:
     title: "Drop when no base exists"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4]
   FR5:
     title: "Strip VS16 before emoji font shaping"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-8, TS-9]
   NFR1:
     title: "Compatibility: grapheme-buffer path unchanged, existing tests pass"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002]
+    tests: [TS-7, TS-9]
   NFR2:
     title: "Performance: no print hot path regression"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-10]
