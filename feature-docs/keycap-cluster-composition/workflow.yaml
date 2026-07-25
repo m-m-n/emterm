@@ -31,7 +31,7 @@ workflow:
     skipped_reason: "グリッド・描画ロジックのみで新規 UI が無く、グリフの見た目は既存フォント解決に従うため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: 3e1689e88056b8f59dcaee31b49dee7e8f41bc13
