@@ -35,6 +35,9 @@ The sequence is the one cross-task fact. It is fully specified in SPEC.md FR3, s
 - **No shell evaluation of input**: no `eval`, no backticks, no `$(...)` applied to arguments. Only the validated literal state is interpolated.
 - **Skill hardening wording**: the four display skills adopt the same structure `mux-send/SKILL.md` already uses — a required-safety section naming argv-based invocation, plus adversarial examples. Read that file for the established shape rather than inventing a new one.
 - **Exec form**: `hooks.json` entries carry `command` (the script path only) and `args` (the state), never a single joined string.
+- **Never terminate processes** (`~/.claude/rules/process-termination.md`): `kill`, `pkill`, and `killall` are forbidden. Anything long-running is launched with `run_in_background: true` and stopped with `TaskStop`. Never kill an ancestor process, never match by pattern, and never pass a PID through command substitution. A process that seems hung is REPORTED, not killed — and the report is worth more than the cleanup.
+  (Origin: a task0006 implementer ran `pkill -f "/usr/bin/emterm"` to tidy up a helper. `pkill -f` matched the user's own eMterm, which was hosting the Claude Code session, so it killed its own ancestor — the session died and two in-flight subagents' work was lost. A `kill-guard.py` PreToolUse hook now enforces this, but the discipline comes first.)
+- **Temp files** (`~/.claude/rules/temp-file-placement.md`): write scratch output under `/tmp/` and leave it — it clears on reboot. Project-specific investigation output goes in the project's `tmp/`. Do not `rm`; use `gio trash` if something genuinely must go (and note `gio trash` does not work under `/tmp`).
 
 ## Cross-task Design Decisions
 
