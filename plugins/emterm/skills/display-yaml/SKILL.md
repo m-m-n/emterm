@@ -37,16 +37,20 @@ instead of part of the filename.
   file-not-found. Resolve the whole path to its absolute form first (for
   example, substitute the leading `~` with the value of `$HOME` yourself),
   then single-quote the entire resolved path as one token:
-  `emterm yaml -- '/absolute/path/data.yaml'`. This keeps one invariant
-  with no special case: no byte derived from an untrusted path ever
-  appears outside the single quotes.
+  `emterm yaml -- '/absolute/path/data.yaml'`. This is the invariant with
+  no exception: every byte of the path is either inside that
+  single-quoted span or is part of the fixed four-character `'\''` splice
+  described next; nothing else path-derived ever appears outside the
+  quotes.
+- If the path itself contains a single quote, close the quote, insert
+  `'\''` (end-quote, escaped literal quote, reopen-quote), then continue:
+  a path `it's.yaml` becomes `'it'\''s.yaml'`. Those four characters are
+  fixed literal syntax, not bytes derived from the path, so they satisfy
+  the invariant above rather than being an exception to it.
 - Double quotes are NOT a safe substitute for single quotes: `$(...)`
   command substitution, backtick command substitution, and `${...}`
   parameter expansion all still expand inside double quotes. Only single
   quotes suppress all shell expansion of the path.
-- If the path itself contains a single quote, close the quote, insert
-  `'\''` (end-quote, escaped literal quote, reopen-quote), then continue:
-  a path `it's.yaml` becomes `'it'\''s.yaml'`.
 - If a no-shell exec path is available (e.g. an argv-array invocation such
   as Bun's `Bun.spawn`-style array form), passing the path as a single argv
   element is an equally safe alternative to the quoted-and-delimited shell

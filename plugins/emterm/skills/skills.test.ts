@@ -47,6 +47,17 @@ const DISPLAY_SKILLS = [
   "display-image",
 ];
 
+/**
+ * Matches a shell heredoc operator regardless of delimiter quoting style
+ * (`<<EOF`, `<< EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`) — task0010, finding
+ * cm-heredoc-guard-too-narrow. The previous guard (`content.includes("<<'")`)
+ * matched only the two characters that open a QUOTED delimiter, so an
+ * unquoted heredoc passed silently despite being strictly more dangerous
+ * (its body also expands command substitution, backticks, and parameter
+ * expansion, on top of the same delimiter-collision termination risk).
+ */
+const HEREDOC_OPERATOR = /<<-?\s*['"]?[A-Za-z_]/;
+
 /** Directory slug -> exact `emterm` invocation its body must contain (task0003.md "Per-skill invocation mapping"). */
 const SKILLS: Record<string, string> = {
   "display-markdown": "emterm markdown",
@@ -186,14 +197,39 @@ for (const slug of DISPLAY_SKILLS) {
   describe(`plugins/emterm/skills/${slug}/SKILL.md quoting hardening (task0006)`, () => {
     const content = readFileSync(join(SKILLS_DIR, slug, "SKILL.md"), "utf-8");
 
-    test("AC-5 (task0007, finding sc-tilde-outside-quotes-invariant): documents the ~ rule as 'resolve to an absolute path first, then single-quote the whole path' and states the no-byte-outside-quotes invariant", () => {
+    test("AC-5 (task0007, finding sc-tilde-outside-quotes-invariant; restated task0010, finding sc-invariant-contradicts-escape): documents the ~ rule as 'resolve to an absolute path first, then single-quote the whole path', and states the invariant with the '\\'' splice as part of it rather than as an exception", () => {
       expect(content).toMatch(/single quotes suppress `~` expansion/);
       expect(content).toMatch(
         /resolve\s+it\s+to\s+an\s+absolute\s+path\s+yourself\s+before\s+quoting/,
       );
+      // task0010 F3: the old absolute framing ("no byte derived from an
+      // untrusted path ever appears outside the single quotes") directly
+      // contradicted the splice bullet two bullets later, which places the
+      // fixed `'\''` bytes outside the quotes. The invariant now folds the
+      // splice into itself instead of excepting it out.
       expect(content).toMatch(
-        /no\s+byte\s+derived\s+from\s+an\s+untrusted\s+path\s+ever\s+appears\s+outside\s+the\s+single\s+quotes/,
+        /every\s+byte\s+of\s+the\s+path\s+is\s+either\s+inside\s+(?:that|a)\s+single-quoted\s+span\s+or\s+is\s+part\s+of\s+the\s+fixed\s+four-character\s+(?:splice|`'\\''`\s+splice)/,
       );
+      expect(content).toMatch(
+        /nothing\s+else\s+path-derived\s+ever\s+appears\s+outside\s+the\s+(?:single\s+)?quotes/,
+      );
+    });
+
+    test("AC-5 (task0010, finding sc-invariant-contradicts-escape): the ~ bullet and the '\\'' splice bullet are adjacent, with the double-quote bullet outside that pair", () => {
+      const tildeIdx = content.search(
+        /resolve\s+it\s+to\s+an\s+absolute\s+path\s+yourself\s+before\s+quoting/,
+      );
+      const spliceIdx = content.search(
+        /insert\s+`'\\''`\s+\(end-quote, escaped literal quote, reopen-quote\)/,
+      );
+      const doubleQuoteIdx = content.search(
+        /Double quotes are NOT a safe substitute for single quotes/,
+      );
+      expect(tildeIdx).toBeGreaterThan(-1);
+      expect(spliceIdx).toBeGreaterThan(-1);
+      expect(doubleQuoteIdx).toBeGreaterThan(-1);
+      expect(spliceIdx).toBeGreaterThan(tildeIdx);
+      expect(doubleQuoteIdx).toBeGreaterThan(spliceIdx);
     });
 
     test("AC-6 (task0007, finding sc-tilde-outside-quotes-invariant): the old \"$HOME\"'/...' exception form is gone — nothing sits outside the single quotes", () => {
@@ -241,14 +277,19 @@ describe("plugins/emterm/skills/display-image/SKILL.md protocol example (task000
 describe("plugins/emterm/skills/mux-send/SKILL.md rework (task0007, findings sc-heredoc-delimiter-collision + cm-heredoc-trailing-newline-executes)", () => {
   const content = readFileSync(join(SKILLS_DIR, "mux-send", "SKILL.md"), "utf-8");
 
-  test("AC-1: the primary --stdin form for untrusted text is file redirection, and the quoted-delimiter heredoc is entirely gone", () => {
+  test("AC-1: the primary --stdin form for untrusted text is file redirection, and no heredoc form is present", () => {
     expect(content).toContain(
       "emterm mux send --pane <id> --stdin < '<file>'",
     );
-    // The regression guard that matters most (task0007.md 'Test Notes'):
-    // a quoted-delimiter heredoc (`<<'EOF'` or any other delimiter) must
-    // never reappear in this file.
-    expect(content).not.toContain("<<'");
+    // The regression guard that matters most (task0007.md 'Test Notes'),
+    // widened in task0010 (finding cm-heredoc-guard-too-narrow): the
+    // original guard rejected only the two characters that open a QUOTED
+    // delimiter (`<<'`), so a bare `<<EOF` heredoc — strictly more
+    // dangerous, since command substitution/backticks/parameter expansion
+    // also run inside its body — would have passed silently. This regex
+    // rejects the heredoc operator regardless of whether the delimiter is
+    // quoted or bare.
+    expect(content).not.toMatch(HEREDOC_OPERATOR);
   });
 
   test("AC-2: states nothing derived from the text enters the command line in that form, and that a trailing newline in the file is an Enter in the destination pane", () => {
@@ -272,7 +313,7 @@ describe("plugins/emterm/skills/mux-send/SKILL.md rework (task0007, findings sc-
   });
 
   test("AC-4: every 'Safe' label is true of the file-redirection form, the file states the destination pane executes what it receives, and that sending untrusted text to a shell pane needs user consent", () => {
-    expect(content).not.toContain("<<'");
+    expect(content).not.toMatch(HEREDOC_OPERATOR);
     expect(content).toMatch(
       /destination pane executes what it receives if it is running a shell/,
     );
@@ -281,6 +322,64 @@ describe("plugins/emterm/skills/mux-send/SKILL.md rework (task0007, findings sc-
     // primary form, not the retired heredoc.
     const safeMatches = [...content.matchAll(/Safe:/g)];
     expect(safeMatches.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("plugins/emterm/skills/mux-send/SKILL.md staging-file + redirect-path hardening (task0010, findings sc-stagefile-unspecified, sc-redirect-path-unruled, sc-consent-vs-invoke-as-is, sp-text-example-unbalanced)", () => {
+  const content = readFileSync(join(SKILLS_DIR, "mux-send", "SKILL.md"), "utf-8");
+
+  test("AC-1: the staging file MUST be created with the Write tool, and Bash-based creation (heredoc, printf, echo, interpolated-variable redirect) is forbidden for untrusted text", () => {
+    expect(content).toMatch(/MUST be created with the Write tool/);
+    expect(content).toMatch(/forbidden for untrusted text/);
+    expect(content).toContain("heredoc");
+    expect(content).toContain("printf");
+    expect(content).toContain("echo");
+    expect(content).toMatch(/interpolated shell variable/);
+  });
+
+  test("AC-2: the 'nothing enters the command line' claim is qualified to hold only when the file was written without a shell", () => {
+    expect(content).toMatch(
+      /holds only because the file was written without a shell/,
+    );
+  });
+
+  test("AC-3: the heredoc-rejecting adversarial example covers file creation as well as --stdin supply", () => {
+    expect(content).toMatch(
+      /heredoc\s+through\s+the\s+Bash\s+tool\s+instead\s+of\s+the\s+Write\s+tool/,
+    );
+    expect(content).toMatch(
+      /whether to supply `--stdin` directly or to create the file/,
+    );
+  });
+
+  test("AC-4: the redirect target is a stated requirement (model-chosen, absolute, temp directory, no ~, no untrusted-derived bytes), with the display skills' path rules given for a caller-supplied path", () => {
+    expect(content).toMatch(
+      /redirect target[^.]*is a requirement, not a free choice/,
+    );
+    expect(content).toMatch(/under a temp directory/);
+    expect(content).toMatch(/containing no `~`/);
+    expect(content).toMatch(
+      /resolve a leading `~`\s+to an absolute path yourself first/,
+    );
+    expect(content).toMatch(/splice it as `'\\''`/);
+  });
+
+  test("AC-6: the closing instruction is conditional on user consent for untrusted text to a shell pane, and states what happens on refusal", () => {
+    expect(content).toMatch(/show the user the exact bytes/);
+    expect(content).toMatch(
+      /explicit\s+approval\s+before\s+invoking\s+the\s+command/,
+    );
+    expect(content).toMatch(/If the user declines, do not invoke/);
+    expect(content).toMatch(
+      /Otherwise[^.]*invoke the command as-is and report the result back to the user/,
+    );
+  });
+
+  test("AC-9: the --text embedded-quote example shows the complete quoted value, including the outer quotes, not the splice substring alone", () => {
+    expect(content).toContain("'it'\\''s'");
+    expect(content).toContain(
+      "emterm mux send --pane <id> --text 'it'\\''s'",
+    );
   });
 });
 
