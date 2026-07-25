@@ -13,10 +13,10 @@ This plugin connects Claude Code to [eMterm](https://github.com/m-m-n/emterm), a
 
 ## Prerequisites
 
-- The `emterm` (or `emterm-cli`) binary, installed separately from [eMterm's GitHub Releases page](https://github.com/m-m-n/emterm/releases). The plugin does not ship the binary.
-- `bun` on `PATH`, required to run the hook script.
+- The `emterm` (or `emterm-cli`) binary, installed separately from [eMterm's GitHub Releases page](https://github.com/m-m-n/emterm/releases). The plugin does not ship the binary. `emterm` on `PATH` is required for the display and mux skills; the agent-status hook does not invoke it.
+- Claude Code v2.1.141 or later, required for the agent-status hook. The hook reports state via the `terminalSequence` JSON output field, which that version introduced. On older versions of Claude Code the field is ignored and no state is reported; this is harmless and everything else in the plugin still works.
 
-If `emterm` is not on `PATH`, the hook no-ops silently and Claude Code continues normally.
+If `emterm` is not on `PATH`, the display and mux skills fail when invoked; the agent-status hook is unaffected.
 
 ## What gets wired
 
@@ -31,8 +31,6 @@ Linux only for v0.1.0. Windows is not supported in this release; Windows support
 ## Known limitations
 
 - Some agent-status state changes may not display if the mux-agent-status-api drain wiring is incomplete on the installed eMterm build.
-- The hook has no `EMTERM_PANE_ID` fallback: if `/dev/tty` cannot reach the eMterm PTY (some non-standard shell/multiplexer stacks), state won't propagate.
-- The hook adds up to 3 s per Claude Code prompt in the worst case (Bun cold-start + `emterm` invocation).
 
 ## Uninstall
 
