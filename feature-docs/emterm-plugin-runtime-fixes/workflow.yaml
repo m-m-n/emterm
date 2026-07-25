@@ -28,7 +28,7 @@ workflow:
     status: completed
     completed_at_commit: 7381495a0ee8c5858aac7f8311ebe475863f268c
   - id: implement
-    status: completed
+    status: in_progress
     base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
     completed_at_commit: adbd70c2c0a9e4cb5bcb16c15752407f9d23102d
   - id: review
@@ -132,6 +132,36 @@ tasks:
     requirements: [FR7]
     status: merged
     branch: em-workflow/emterm-plugin-runtime-fixes/task0006
+  task0007:
+    title: "Remove the injection class instead of describing it (rework)"
+    plan: tasks/task0007.md
+    files:
+      - plugins/emterm/skills/mux-send/SKILL.md
+      - plugins/emterm/skills/display-markdown/SKILL.md
+      - plugins/emterm/skills/display-json/SKILL.md
+      - plugins/emterm/skills/display-yaml/SKILL.md
+      - plugins/emterm/skills/display-image/SKILL.md
+      - plugins/emterm/skills/skills.test.ts
+      - plugins/emterm/README.md
+    skills: [infra-impl]
+    domains: [input-handling, config-infra]
+    complexity: medium
+    requirements: [FR7]
+    status: in_progress
+    branch: em-workflow/emterm-plugin-runtime-fixes/task0007
+  task0008:
+    title: "SPEC reconciliation round 3 (rework)"
+    plan: tasks/task0008.md
+    files:
+      - feature-docs/emterm-plugin-runtime-fixes/SPEC.md
+      - feature-docs/emterm-plugin-runtime-fixes/VERIFICATION.md
+      - plugins/emterm/skills/skills.test.ts
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR3, FR7]
+    status: in_progress
+    branch: em-workflow/emterm-plugin-runtime-fixes/task0008
 
 review:
   status: pending
