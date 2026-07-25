@@ -676,6 +676,14 @@ impl GridInstanceBuilder {
         let font_id = self
             .fallback
             .resolve_for_cluster(&*self.rasterizer, &cell.glyph)?;
+        // FR5 (task0002): when the cluster resolved to the color emoji
+        // font, strip U+FE0F (VS16) from the string handed to the shaper
+        // — swash's ligature matcher does not skip default-ignorable
+        // variation selectors, so a keycap cluster (`5 FE0F 20E3`) shaped
+        // verbatim fails the `<digit> + 20E3` GSUB ligature match and
+        // decomposes. Font selection above already ran against the FULL
+        // cluster including VS16; only the shaping input changes here.
+        let shaping_input = self.fallback.shaping_cluster(&cell.glyph, font_id);
         // SGR bold: swap in the resolved font's real bold face when one
         // is registered (e.g. Inconsolata → Inconsolata Bold). Coverage
         // is resolved on the regular face; the bold face of the same
@@ -686,7 +694,7 @@ impl GridInstanceBuilder {
         } else {
             font_id
         };
-        let shaped = self.rasterizer.shape(&cell.glyph, font_id, size_px);
+        let shaped = self.rasterizer.shape(&shaping_input, font_id, size_px);
         let g = shaped.first()?;
         if g.glyph_id == 0 {
             return None;
@@ -1558,6 +1566,66 @@ mod tests {
         }
     }
 
+    /// Rasterizer that records every `shape()` call's exact input string
+    /// (task0002 AC-1/AC-4). Coverage mirrors the real-world quirk
+    /// documented on `is_pictographic`/`resolve_for_cluster` tests: the
+    /// mock's emoji font also covers ASCII digits (0-9) and U+26A0, so a
+    /// keycap cluster / ExtPict+VS16 cluster resolves to the emoji font
+    /// exactly as the bundled `Noto-COLRv1.ttf` does.
+    struct RecordingRasterizer {
+        ascii_font: FontId,
+        emoji_font: FontId,
+        shape_calls: Mutex<Vec<String>>,
+    }
+
+    impl GlyphRasterizer for RecordingRasterizer {
+        fn shape(&self, cluster: &str, font: FontId, size_px: f32) -> Vec<ShapedGlyph> {
+            self.shape_calls.lock().push(cluster.to_string());
+            let first = cluster.chars().next().unwrap_or('\0') as u32;
+            let glyph_id = match first {
+                0x30..=0x39 | 0x41..=0x7A | 0x26A0 => first,
+                _ => 0,
+            };
+            vec![ShapedGlyph {
+                font,
+                glyph_id,
+                size_px,
+            }]
+        }
+        fn raster(&self, font: FontId, glyph_id: u32, _size_px: f32) -> Option<GlyphBitmap> {
+            if glyph_id == 0 {
+                return None;
+            }
+            if font == self.emoji_font {
+                Some(GlyphBitmap {
+                    format: AtlasFormat::Rgba,
+                    width: 16,
+                    height: 16,
+                    bearing: (0, 0),
+                    advance: 16.0,
+                    pixels: vec![0xFF; 16 * 16 * 4],
+                })
+            } else {
+                Some(GlyphBitmap {
+                    format: AtlasFormat::Alpha,
+                    width: 8,
+                    height: 16,
+                    bearing: (0, 0),
+                    advance: 8.0,
+                    pixels: vec![0xFF; 8 * 16],
+                })
+            }
+        }
+        fn has_codepoint(&self, font: FontId, cp: u32) -> bool {
+            match (font, cp) {
+                (f, c) if f == self.ascii_font && (0x41..=0x7A).contains(&c) => true,
+                (f, c) if f == self.emoji_font && (0x30..=0x39).contains(&c) => true,
+                (f, 0x26A0) if f == self.emoji_font => true,
+                _ => false,
+            }
+        }
+    }
+
     /// Standalone wrapper that mirrors `TerminalGridPass::build_instances`
     /// without instantiating the wgpu-bearing fields. The logic is
     /// identical and lives in the same file so any changes stay in sync.
@@ -1599,7 +1667,11 @@ mod tests {
             }
             if !cell.glyph.is_empty() && cell.glyph != " " {
                 if let Some(font_id) = fallback.resolve_for_cluster(rasterizer, &cell.glyph) {
-                    let shaped = rasterizer.shape(&cell.glyph, font_id, metrics.font_size_px);
+                    // Same VS16-stripping decision as the production
+                    // `glyph_instance` path (task0002 FR5) — kept in sync
+                    // so this test-mirror site never diverges.
+                    let shaping_input = fallback.shaping_cluster(&cell.glyph, font_id);
+                    let shaped = rasterizer.shape(&shaping_input, font_id, metrics.font_size_px);
                     if let Some(g) = shaped.first() {
                         if g.glyph_id != 0 {
                             let key = GlyphKey::new(font_id, g.glyph_id, metrics.font_size_px, 0.0);
@@ -1912,6 +1984,199 @@ mod tests {
             inst[0].atlas_uv[2] > inst[0].atlas_uv[0],
             "non-empty UV width"
         );
+    }
+
+    // ── task0002 FR5: VS16 stripped before emoji shaping ────────────────
+
+    /// AC-1: a keycap cluster (`5 FE0F 20E3`) routed to the color emoji
+    /// font is shaped with U+FE0F stripped. Exercised through the
+    /// PRODUCTION path (`GridInstanceBuilder::build_instances`, which
+    /// calls `glyph_instance` per cell) rather than the `helper_*` mirror.
+    #[test]
+    fn glyph_instance_strips_vs16_for_keycap_cluster() {
+        let ascii = FontId(1);
+        let emoji = FontId(2);
+        let raster = Arc::new(RecordingRasterizer {
+            ascii_font: ascii,
+            emoji_font: emoji,
+            shape_calls: Mutex::new(Vec::new()),
+        });
+        let mut chain = FallbackChain::new(ascii, [emoji]);
+        chain.set_emoji(emoji);
+        let chain = Arc::new(chain);
+        let cache = Arc::new(Mutex::new(GlyphCache::new()));
+        let builder =
+            GridInstanceBuilder::new(cache, chain, raster.clone() as Arc<dyn GlyphRasterizer>);
+
+        let cluster: String = ['5', '\u{FE0F}', '\u{20E3}'].iter().collect();
+        let cells = vec![ascii_cell(0, 0, &cluster)];
+        let inst = builder.build_instances(&cells, metrics());
+        assert_eq!(inst.len(), 1, "keycap cluster must still emit a glyph");
+
+        let calls = raster.shape_calls.lock();
+        assert_eq!(calls.len(), 1, "exactly one shape() call for one cell");
+        assert!(
+            !calls[0].contains('\u{FE0F}'),
+            "shaping input must not contain VS16, got {:?}",
+            calls[0]
+        );
+        let expected: String = ['5', '\u{20E3}'].iter().collect();
+        assert_eq!(calls[0], expected);
+    }
+
+    /// AC-4: a non-emoji-routed cluster's shaping input is byte-identical
+    /// to the cell content — no stripping outside the emoji path.
+    #[test]
+    fn glyph_instance_leaves_non_emoji_cluster_byte_identical() {
+        let ascii = FontId(1);
+        let emoji = FontId(2);
+        let raster = Arc::new(RecordingRasterizer {
+            ascii_font: ascii,
+            emoji_font: emoji,
+            shape_calls: Mutex::new(Vec::new()),
+        });
+        let mut chain = FallbackChain::new(ascii, [emoji]);
+        chain.set_emoji(emoji);
+        let chain = Arc::new(chain);
+        let cache = Arc::new(Mutex::new(GlyphCache::new()));
+        let builder =
+            GridInstanceBuilder::new(cache, chain, raster.clone() as Arc<dyn GlyphRasterizer>);
+
+        let cells = vec![ascii_cell(0, 0, "A")];
+        let _inst = builder.build_instances(&cells, metrics());
+
+        let calls = raster.shape_calls.lock();
+        assert_eq!(calls.as_slice(), ["A".to_string()]);
+    }
+
+    /// AC-5: an ExtPict + VS16 cluster (U+26A0 U+FE0F) still renders its
+    /// emoji glyph after stripping — the pre-existing "accidental
+    /// correctness" case (`shaped.first()`) must survive the fix.
+    #[test]
+    fn glyph_instance_ext_pict_vs16_cluster_still_renders_after_stripping() {
+        let ascii = FontId(1);
+        let emoji = FontId(2);
+        let raster = Arc::new(RecordingRasterizer {
+            ascii_font: ascii,
+            emoji_font: emoji,
+            shape_calls: Mutex::new(Vec::new()),
+        });
+        let mut chain = FallbackChain::new(ascii, [emoji]);
+        chain.set_emoji(emoji);
+        let chain = Arc::new(chain);
+        let cache = Arc::new(Mutex::new(GlyphCache::new()));
+        let builder =
+            GridInstanceBuilder::new(cache, chain, raster.clone() as Arc<dyn GlyphRasterizer>);
+
+        let cluster: String = ['\u{26A0}', '\u{FE0F}'].iter().collect();
+        let cells = vec![ascii_cell(0, 0, &cluster)];
+        let inst = builder.build_instances(&cells, metrics());
+        assert_eq!(inst.len(), 1, "warning-sign + VS16 must still render");
+        assert_eq!(
+            inst[0].page, PAGE_RGBA,
+            "must render via the color emoji font"
+        );
+
+        let calls = raster.shape_calls.lock();
+        assert_eq!(calls.as_slice(), ["\u{26A0}".to_string()]);
+    }
+
+    /// Design decision 4 (IMPLEMENTATION.md): the test-mirror site
+    /// (`helper_build_instances`) applies the same stripping decision as
+    /// the production `glyph_instance` path — no divergence between the
+    /// main and secondary shaping call sites.
+    #[test]
+    fn helper_build_instances_strips_vs16_for_keycap_cluster() {
+        let ascii = FontId(1);
+        let emoji = FontId(2);
+        let raster = RecordingRasterizer {
+            ascii_font: ascii,
+            emoji_font: emoji,
+            shape_calls: Mutex::new(Vec::new()),
+        };
+        let mut chain = FallbackChain::new(ascii, [emoji]);
+        chain.set_emoji(emoji);
+        let cache = Arc::new(Mutex::new(GlyphCache::new()));
+
+        let cluster: String = ['5', '\u{FE0F}', '\u{20E3}'].iter().collect();
+        let cells = vec![ascii_cell(0, 0, &cluster)];
+        let raster_ref: &dyn GlyphRasterizer = &raster;
+        let inst = helper_build_instances(raster_ref, &chain, &cache, &cells, metrics());
+        assert_eq!(inst.len(), 1, "keycap cluster must still emit a glyph");
+
+        let calls = raster.shape_calls.lock();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            !calls[0].contains('\u{FE0F}'),
+            "secondary site must also strip VS16, got {:?}",
+            calls[0]
+        );
+    }
+
+    /// AC-2: shaping the VS16-stripped keycap cluster with the bundled
+    /// color-emoji font (via swash, the real adapter) yields a single
+    /// glyph — the GSUB `<digit> + U+20E3` ligature match. This is the
+    /// real-font regression the stripping fixes: swash's ligature
+    /// matcher does not skip VS16, so the unstripped cluster decomposes.
+    #[test]
+    fn integration_swash_keycap_cluster_shapes_to_single_glyph_after_stripping() {
+        let mut resolver = Resolver::new();
+        let (_cjk_id, emoji_id, _mono_id, base_id, _sym_id) = resolver.register_bundled();
+        let swash = SwashRasterizer::with_subpixel(false);
+        swash.ingest_resolver(&resolver);
+        let mut chain = FallbackChain::new(base_id, [emoji_id]);
+        chain.set_emoji(emoji_id);
+
+        let cluster: String = ['5', '\u{FE0F}', '\u{20E3}'].iter().collect();
+        let raster_ref: &dyn GlyphRasterizer = &swash;
+        let font_id = chain
+            .resolve_for_cluster(raster_ref, &cluster)
+            .expect("keycap cluster must resolve to a font");
+        assert_eq!(
+            font_id, emoji_id,
+            "keycap cluster must resolve via the color emoji font"
+        );
+
+        let shaping_input = chain.shaping_cluster(&cluster, font_id);
+        assert!(!shaping_input.contains('\u{FE0F}'));
+        let shaped = swash.shape(&shaping_input, font_id, 17.0);
+        assert_eq!(
+            shaped.len(),
+            1,
+            "stripped keycap cluster must shape to a single ligature glyph, got {:?}",
+            shaped
+        );
+        assert_ne!(shaped[0].glyph_id, 0, "ligature glyph must not be .notdef");
+    }
+
+    /// AC-5 (real-font companion): U+26A0 + VS16 still shapes to a
+    /// nonzero glyph via the color emoji font after VS16 is stripped.
+    #[test]
+    fn integration_swash_ext_pict_vs16_cluster_still_renders_after_stripping() {
+        let mut resolver = Resolver::new();
+        let (_cjk_id, emoji_id, _mono_id, base_id, _sym_id) = resolver.register_bundled();
+        let swash = SwashRasterizer::with_subpixel(false);
+        swash.ingest_resolver(&resolver);
+        let mut chain = FallbackChain::new(base_id, [emoji_id]);
+        chain.set_emoji(emoji_id);
+
+        let cluster: String = ['\u{26A0}', '\u{FE0F}'].iter().collect();
+        let raster_ref: &dyn GlyphRasterizer = &swash;
+        let font_id = chain
+            .resolve_for_cluster(raster_ref, &cluster)
+            .expect("warning sign + VS16 must resolve to a font");
+        assert_eq!(
+            font_id, emoji_id,
+            "warning sign + VS16 must resolve via the color emoji font"
+        );
+
+        let shaping_input = chain.shaping_cluster(&cluster, font_id);
+        assert_eq!(shaping_input.as_ref(), "\u{26A0}");
+        let shaped = swash.shape(&shaping_input, font_id, 17.0);
+        let glyph = shaped
+            .first()
+            .expect("shaping must yield at least one glyph");
+        assert_ne!(glyph.glyph_id, 0, "warning-sign glyph must not be .notdef");
     }
 
     #[test]

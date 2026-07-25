@@ -4,6 +4,7 @@
 //! Phase 3 of font-swash-migration (FR8). The chain is constructed once at
 //! startup from a `Resolver`; runtime mutation is not supported.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use parking_lot::Mutex;
@@ -198,6 +199,32 @@ impl FallbackChain {
                 self.resolve(rasterizer, first_cp_u32)
             }
             EmojiPresentation::NotEmoji => self.resolve(rasterizer, first_cp_u32),
+        }
+    }
+
+    /// Shaping input for `cluster` once [`Self::resolve_for_cluster`] has
+    /// resolved it to `font_id` (task0002 FR5).
+    ///
+    /// When `font_id` is the font marked via [`Self::set_emoji`], every
+    /// U+FE0F (VS16) is removed from `cluster` before it is handed to the
+    /// shaper: swash's GSUB ligature matcher does not skip default-
+    /// ignorable variation selectors, so a keycap cluster (`5 FE0F 20E3`)
+    /// shaped verbatim fails the `<digit> + 20E3` ligature match and
+    /// decomposes — the bundled color-emoji font (Noto-COLRv1) also lacks
+    /// a cmap entry for FE0F entirely, so the decomposed run pollutes the
+    /// output with a `.notdef` glyph. Stripping VS16 only from the
+    /// shaping input (never from font SELECTION, which stays on the full
+    /// cluster via `resolve_for_cluster`) preserves the presentation
+    /// dispatch while letting the ligature match.
+    ///
+    /// For any other resolved font (including the monochrome-emoji face
+    /// and the regular text chain), the cluster passes through unchanged
+    /// — VS15 / text-presentation shaping is untouched.
+    pub fn shaping_cluster<'a>(&self, cluster: &'a str, font_id: FontId) -> Cow<'a, str> {
+        if Some(font_id) == self.emoji && cluster.contains(VS16) {
+            Cow::Owned(cluster.chars().filter(|&c| c != VS16).collect())
+        } else {
+            Cow::Borrowed(cluster)
         }
     }
 
@@ -761,5 +788,64 @@ mod tests {
             Some(FontId(2)),
             "5 + VS16 + U+20E3 must resolve via ColorEmoji role"
         );
+    }
+
+    // shaping_cluster tests: VS16 stripping decision (task0002 FR5)
+
+    /// AC-1: a keycap cluster (`5 FE0F 20E3`) resolved to the marked
+    /// color-emoji font has every U+FE0F removed from the shaping input.
+    #[test]
+    fn shaping_cluster_strips_vs16_when_font_is_emoji() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2)]);
+        chain.set_emoji(FontId(2));
+
+        let cluster: String = ['5', '\u{FE0F}', '\u{20E3}'].iter().collect();
+        let shaped_input = chain.shaping_cluster(&cluster, FontId(2));
+
+        assert!(
+            !shaped_input.contains(VS16),
+            "shaping input must contain no U+FE0F"
+        );
+        let expected: String = ['5', '\u{20E3}'].iter().collect();
+        assert_eq!(shaped_input.as_ref(), expected);
+    }
+
+    /// AC-4: a cluster resolved to a non-emoji font is passed to the
+    /// shaper byte-identical to the cell content — no stripping outside
+    /// the emoji path, and a cluster containing VS16 that resolves to a
+    /// non-emoji font also stays untouched.
+    #[test]
+    fn shaping_cluster_leaves_non_emoji_font_byte_identical() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2)]);
+        chain.set_emoji(FontId(2));
+
+        // Plain ASCII, base font: untouched.
+        let shaped_input = chain.shaping_cluster("A", FontId(1));
+        assert_eq!(shaped_input.as_ref(), "A");
+        assert!(
+            matches!(shaped_input, Cow::Borrowed(_)),
+            "non-emoji path must not allocate"
+        );
+
+        // A VS16-bearing cluster resolved to a NON-emoji font (e.g. the
+        // opposite-side fallback landed on the base/text chain) is also
+        // untouched — stripping only ever applies on the emoji-font path.
+        let cluster: String = ['\u{23F5}', '\u{FE0F}'].iter().collect();
+        let shaped_input = chain.shaping_cluster(&cluster, FontId(1));
+        assert_eq!(shaped_input.as_ref(), cluster);
+    }
+
+    /// AC-5: an ExtPict + VS16 cluster (e.g. U+26A0 U+FE0F) resolved to
+    /// the emoji font has only the VS16 removed — the base character
+    /// survives intact.
+    #[test]
+    fn shaping_cluster_strips_vs16_from_ext_pict_cluster() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2)]);
+        chain.set_emoji(FontId(2));
+
+        let cluster: String = ['\u{26A0}', '\u{FE0F}'].iter().collect();
+        let shaped_input = chain.shaping_cluster(&cluster, FontId(2));
+
+        assert_eq!(shaped_input.as_ref(), "\u{26A0}");
     }
 }
