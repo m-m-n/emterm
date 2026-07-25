@@ -1,0 +1,44 @@
+feature: emterm-claude-plugin
+collected_at: "2026-07-25T10:22:00+09:00"
+session_ids:
+  - f5f62483-7897-405c-87f7-301dca06ff68
+signals:
+  review_critical_high:
+    - stable_id: sp-hang-timeout-fr4
+      category: spec
+      file: plugins/emterm/hooks/scripts/notify-status.ts
+      title: "A hung emterm process cannot degrade to exit 0"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0003
+      files: [plugins/emterm/skills/skills.test.ts]
+      notes: "Anticipated in task plan Test Notes ('If added, this file is a modification the implementer may make; note the deviation'). Not an unexpected miss — the planner named it as a possibility."
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings:
+    # Round 1
+    - stable_id: pf-hook-2process-per-prompt
+      category: performance
+      resolution_reason: "Design-level (Bun cold-start + 2process). Documented as known limitation in README. Follow-up candidate for a future feature."
+    - stable_id: sp-test-outside-plugin-root
+      category: spec
+      resolution_reason: "Static manifest-integration tests need repo root access; not shipped in plugin cache. Design choice — flagged for retrospect reconsideration."
+    - stable_id: cm-poc-verification-incomplete
+      category: comprehensive
+      resolution_reason: "Deferred to verify phase (VERIFICATION.md M-1 / IMPLEMENTATION.md D4)."
+    # Round 2
+    - stable_id: sc-display-shell-inject
+      category: security
+      resolution_reason: "Same class as mux-send hardening; declined for v0.1.0 to keep scope focused. Track as v0.1.1/v0.2.0 hardening pass across the 4 display SKILL.md files."
+    - stable_id: pf-sigkill-not-escalated
+      category: performance
+      resolution_reason: "Bounded impact (only triggers when emterm both hangs AND ignores SIGTERM). Follow-up hardening."
+    - stable_id: pf-writesync-blocks-tty
+      category: performance
+      resolution_reason: "Bounded by outer 3s hook timeout; ~30 byte payload rarely triggers backpressure. Follow-up hardening."
+lessons_candidates:
+  - "Round-2 spec (Codex) surfaced 4 findings in round 1 that Claude reviewers missed (hang-timeout, argv-cardinality, non-zero-tty-write, POC-incomplete). The Codex cross-validation is doing real work here — the hang-timeout finding especially would have shipped as a real bug without it."
+  - "Task-plan Test Notes explicitly anticipating a file addition (task0003 predicting skills.test.ts) worked well as a way to let the implementer add a helpful test without it counting as a deviation. Worth codifying: when the planner has good reason to suspect a test file may be added, name it in Test Notes so it's a sanctioned addition rather than a surprise."
+  - "The display-* shell-injection finding (round 2 codex-security) is the same class as mux-send but wasn't surfaced in round 1 — reviewers may not automatically generalize a fix pattern across sibling files. Consider: when hardening one skill, planner should proactively check whether siblings share the same shape."
+  - "Task0002's 'merge parent into task branch before implementing' pattern (to pull in task0001's manifests so static tests could run) is a legitimate coordination move but represents an implicit ordering that the parallel task model doesn't capture. Could formalize as: 'if a task's tests reference outputs of another task, the plan should either wait-for-integration or use fixtures'."

@@ -46,7 +46,7 @@ workflow:
       still safe (the plugin code passed all automated checks), but the FR8 POC
       MUST be executed by the user before publishing the plugin marketplace publicly.
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
