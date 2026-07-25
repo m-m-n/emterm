@@ -197,6 +197,44 @@ describe("plugins/emterm/README.md (task0002)", () => {
   });
 });
 
+describe("plugins/emterm/README.md hook wiring (task0005 AC-6)", () => {
+  const readmeContent = readFileSync(join(PLUGIN_DIR, "README.md"), "utf-8");
+  const hooksJson = JSON.parse(
+    readFileSync(join(PLUGIN_DIR, "hooks", "hooks.json"), "utf-8"),
+  ) as { hooks: Record<string, unknown> };
+
+  /**
+   * Extract a `## <heading>` section's body, up to the next `## ` heading or
+   * EOF. A trailing sentinel heading is appended so the non-greedy capture
+   * always has a `\n## ` to stop at — with the `m` flag, a bare `$`
+   * alternative would also match the blank line directly under the heading
+   * (end-of-line, not end-of-string), truncating the capture to "".
+   */
+  function extractSection(content: string, heading: string): string {
+    const terminated = `${content}\n## `;
+    const pattern = new RegExp(`^## ${heading}\\n([\\s\\S]*?)\\n## `, "m");
+    const match = terminated.match(pattern);
+    if (!match) {
+      throw new Error(`no "## ${heading}" section found in README.md`);
+    }
+    return match[1] ?? "";
+  }
+
+  const wiredSection = extractSection(readmeContent, "What gets wired");
+  // Event names in the wiring line are written as `` `EventName` → `state` ``.
+  const eventNamesInReadme = [
+    ...wiredSection.matchAll(/`([A-Za-z]+)`\s*→/g),
+  ].map((m) => m[1]);
+  const eventNamesInHooksJson = Object.keys(hooksJson.hooks);
+
+  test("README names exactly the hooks.json event keys, so an event added to or removed from hooks.json without a README edit fails this test", () => {
+    expect(eventNamesInHooksJson.length).toBeGreaterThan(0);
+    expect([...eventNamesInReadme].sort()).toEqual(
+      [...eventNamesInHooksJson].sort(),
+    );
+  });
+});
+
 describe("plugin/marketplace version regression guard (task0002 AC-9)", () => {
   test("plugin.json still reports version 0.1.0", () => {
     const pluginJson = JSON.parse(
