@@ -101,6 +101,9 @@ impl TerminalCore {
             cell.flags = self.cursor.flags;
             cell.hyperlink_id = self.active_hyperlink_id;
             self.mark_row_dirty(row);
+            // Track the base cell just written as the merge target for a
+            // subsequent standalone-arriving zero-width character (FR1).
+            self.last_write = Some((col, row));
         }
 
         // Placeholder for width-2 characters
@@ -160,6 +163,8 @@ impl TerminalCore {
                 }
             }
             self.mark_row_dirty(row);
+            // Track the base cell just written (FR1); see write_grapheme_to_grid.
+            self.last_write = Some((col, row));
         }
 
         let new_col = col + 1;
@@ -179,6 +184,203 @@ impl TerminalCore {
         let ch = char::from_u32(translated).unwrap_or(' ');
         let s = ch.encode_utf8(&mut buf);
         self.write_grapheme_to_grid(s, width);
+    }
+
+    /// Read a cell's full current content (inline or overflow) as an owned
+    /// `String`. Unlike `get_cell_char` (viewport-relative row), this takes
+    /// an already-resolved absolute row, matching the internal bookkeeping
+    /// used by the merge helpers below.
+    fn cell_content_at(&self, idx: usize, col: u16, abs: u32) -> String {
+        let cell = &self.ring_cells[idx];
+        if cell.is_overflow() {
+            self.overflow
+                .get(&(col as u32, abs))
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            cell.get_char_inline().unwrap_or(" ").to_string()
+        }
+    }
+
+    /// Attempt to merge a standalone-arriving zero-width character
+    /// (VARIATION_SEL or COMBINING, per `crate::unicode::classify_codepoint`)
+    /// into the most recently written grid cell (FR1). Returns `true` if the
+    /// character was merged, `false` if there was no valid merge target and
+    /// the character was dropped entirely — no grid write, no cursor
+    /// movement (FR4).
+    fn try_retroactive_merge(&mut self, cp: u32) -> bool {
+        let Some((mut col, row)) = self.last_write else {
+            return false; // FR4: nothing written yet on this screen.
+        };
+
+        // FR3: spacer traversal. If the tracked position holds a wide-cell
+        // spacer, the real merge target is its base cell one column left.
+        if let Some(idx) = self.cell_index(col, row) {
+            if self.ring_cells[idx].width == 0 {
+                if col == 0 {
+                    return false; // Orphaned spacer with no base: drop (FR4).
+                }
+                col -= 1;
+            }
+        }
+
+        let Some(idx) = self.cell_index(col, row) else {
+            return false; // FR4: tracked position no longer addressable.
+        };
+
+        let abs = self.viewport_abs(row) as u32;
+        let col32 = col as u32;
+        let mut content = self.cell_content_at(idx, col, abs);
+
+        let mut buf = [0u8; 4];
+        let ch = char::from_u32(cp).unwrap_or('\u{FFFD}');
+        content.push_str(ch.encode_utf8(&mut buf));
+
+        let old_width = self.ring_cells[idx].width;
+
+        // Write the grown content back (may push inline content to overflow;
+        // mirrors the bookkeeping in write_grapheme_to_grid / set_cell).
+        let cell = &mut self.ring_cells[idx];
+        cell.set_char(&content);
+        if cell.is_overflow() {
+            self.overflow.insert((col32, abs), content.clone());
+            overflow_ridx_insert(&mut self.overflow_ridx, abs, col32);
+        } else if !self.overflow.is_empty() && self.overflow.remove(&(col32, abs)).is_some() {
+            overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
+        }
+        self.mark_row_dirty(row);
+        self.last_write = Some((col, row));
+
+        // FR2: VS16 retroactively widens a width-1 base cell to width 2.
+        if cp == 0xFE0F && old_width == 1 {
+            self.widen_after_merge(col, row);
+        }
+
+        true
+    }
+
+    /// After a VS16 (U+FE0F) merge onto a width-1 base cell, retroactively
+    /// widen it to width 2: create a spacer cell at the next column and
+    /// advance the cursor by one (FR2). If the base cell sits in the last
+    /// column, apply the same end-of-line semantics the existing wide-char
+    /// write path uses (AC-6).
+    fn widen_after_merge(&mut self, col: u16, row: u16) {
+        let last_col = self.cols.saturating_sub(1);
+        if col == last_col {
+            if self.get_mode(MODE_AUTO_WRAP) {
+                self.relocate_widened_base_via_wrap(col, row);
+            } else {
+                // No room for a spacer and auto-wrap is off: widen in place
+                // with no placeholder, matching the existing no-autowrap
+                // wide-char end-of-line quirk. Cursor stays pinned.
+                if let Some(idx) = self.cell_index(col, row) {
+                    self.ring_cells[idx].width = 2;
+                }
+            }
+            return;
+        }
+
+        // Common case: room for a spacer at col + 1.
+        let Some(base_idx) = self.cell_index(col, row) else {
+            return;
+        };
+        self.ring_cells[base_idx].width = 2;
+        let (fg, bg, flags, hyperlink_id) = {
+            let base = &self.ring_cells[base_idx];
+            (base.fg, base.bg, base.flags, base.hyperlink_id)
+        };
+        let abs = self.viewport_abs(row) as u32;
+        if let Some(sp_idx) = self.cell_index(col + 1, row) {
+            let sp = &mut self.ring_cells[sp_idx];
+            sp.char_data = [0; 16];
+            sp.char_len = 0;
+            sp.width = 0;
+            sp.fg = fg;
+            sp.bg = bg;
+            sp.flags = flags;
+            sp.hyperlink_id = hyperlink_id;
+            let col1_32 = (col + 1) as u32;
+            if !self.overflow.is_empty() && self.overflow.remove(&(col1_32, abs)).is_some() {
+                overflow_ridx_remove(&mut self.overflow_ridx, abs, col1_32);
+            }
+        }
+        self.mark_row_dirty(row);
+
+        // Advance the cursor by 1: the VS16 widening consumes one more column.
+        let new_col = col as u32 + 2;
+        if new_col >= self.cols as u32 {
+            if self.get_mode(MODE_AUTO_WRAP) {
+                self.cursor.col = self.cols - 1;
+                self.wrap_pending = true;
+            }
+        } else {
+            self.cursor.col = new_col as u16;
+        }
+        self.last_write = Some((col, row));
+    }
+
+    /// Relocate a base cell that just widened to width 2 while sitting in
+    /// the last column: move its content to the start of the next row
+    /// (mirroring the pre-emptive wrap the normal wide-char write path
+    /// takes), mark the new row as a wrap continuation of the old one, and
+    /// leave the cursor past the new spacer (AC-6).
+    fn relocate_widened_base_via_wrap(&mut self, old_col: u16, old_row: u16) {
+        let Some(old_idx) = self.cell_index(old_col, old_row) else {
+            return;
+        };
+        let old_abs = self.viewport_abs(old_row) as u32;
+        let content = self.cell_content_at(old_idx, old_col, old_abs);
+        let old_cell = self.ring_cells[old_idx];
+        let (fg, bg, flags, hyperlink_id) = (
+            old_cell.fg,
+            old_cell.bg,
+            old_cell.flags,
+            old_cell.hyperlink_id,
+        );
+
+        // Vacate the old cell: its content is moving to the next row.
+        self.ring_cells[old_idx] = self.bce_cell();
+        if !self.overflow.is_empty() && self.overflow.remove(&(old_col as u32, old_abs)).is_some() {
+            overflow_ridx_remove(&mut self.overflow_ridx, old_abs, old_col as u32);
+        }
+        self.mark_row_dirty(old_row);
+
+        // Wrap to the start of the next row (same primitives
+        // write_grapheme_to_grid uses for its own pre-emptive wrap).
+        self.carriage_return();
+        self.line_feed();
+        let new_row = self.cursor.row;
+        let new_abs = self.viewport_abs(new_row) as u32;
+        self.ring_wrapped[new_abs as usize] = true;
+
+        if let Some(idx) = self.cell_index(0, new_row) {
+            let cell = &mut self.ring_cells[idx];
+            cell.set_char(&content);
+            if cell.is_overflow() {
+                self.overflow.insert((0, new_abs), content.clone());
+                overflow_ridx_insert(&mut self.overflow_ridx, new_abs, 0);
+            }
+            cell.width = 2;
+            cell.fg = fg;
+            cell.bg = bg;
+            cell.flags = flags;
+            cell.hyperlink_id = hyperlink_id;
+        }
+        if let Some(idx) = self.cell_index(1, new_row) {
+            let sp = &mut self.ring_cells[idx];
+            sp.char_data = [0; 16];
+            sp.char_len = 0;
+            sp.width = 0;
+            sp.fg = fg;
+            sp.bg = bg;
+            sp.flags = flags;
+            sp.hyperlink_id = hyperlink_id;
+        }
+        self.mark_row_dirty(new_row);
+
+        self.cursor.col = 2;
+        self.wrap_pending = false;
+        self.last_write = Some((0, new_row));
     }
 }
 
@@ -250,6 +452,15 @@ impl TerminalCore {
             // Buffer empty: check if cp starts buffering
             if props & (crate::unicode::EXT_PICTOGRAPHIC | crate::unicode::REGIONAL_IND) != 0 {
                 self.grapheme_buffer.push(cp);
+                return 0;
+            }
+            // Standalone-arriving zero-width character (VARIATION_SEL or
+            // COMBINING) that does not start a buffered cluster: retroactively
+            // merge it into the most recently written cell instead of falling
+            // through to the slow path, which would overwrite the cursor cell
+            // (FR1-FR4). Always consumed here, merged or dropped.
+            if props & (crate::unicode::VARIATION_SEL | crate::unicode::COMBINING) != 0 {
+                self.try_retroactive_merge(cp);
                 return 0;
             }
         }
@@ -833,5 +1044,253 @@ mod tests {
         core.handle_print(0x58); // 'X'
         assert_eq!(core.get_cursor_col(), 1);
         assert_eq!(core.get_cell_char(0, 0), "X");
+    }
+
+    // ── Retroactive zero-width merge (keycap-cluster-composition task0001) ──
+
+    // AC-1: digit + VS16 + COMBINING ENCLOSING KEYCAP widens the base cell
+    // to width 2 with a spacer, and following text starts after the spacer.
+    #[test]
+    fn test_retroactive_merge_keycap_widens_to_width2() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.handle_print(0x35); // '5'
+        core.handle_print(0xFE0F); // VS16
+        core.handle_print(0x20E3); // COMBINING ENCLOSING KEYCAP
+        core.handle_print(0x58); // 'X'
+        assert_eq!(core.get_cell_char(0, 0), "5\u{FE0F}\u{20E3}");
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        assert_eq!(core.get_cell_width(1, 0), 0); // spacer
+        assert_eq!(core.get_cell_char(2, 0), "X");
+        assert_eq!(core.get_cursor_col(), 3);
+    }
+
+    // AC-2: digit + COMBINING ENCLOSING KEYCAP (no VS16) stays width 1, and
+    // following text lands in the very next column.
+    #[test]
+    fn test_retroactive_merge_keycap_without_vs16_stays_width1() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.handle_print(0x35); // '5'
+        core.handle_print(0x20E3); // COMBINING ENCLOSING KEYCAP
+        core.handle_print(0x58); // 'X'
+        assert_eq!(core.get_cell_char(0, 0), "5\u{20E3}");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        assert_eq!(core.get_cell_char(1, 0), "X");
+        assert_eq!(core.get_cursor_col(), 2);
+    }
+
+    // AC-3: base char + general combining mark merges, and the accent
+    // survives subsequent writes elsewhere on the row.
+    #[test]
+    fn test_retroactive_merge_combining_accent_survives() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.handle_print(0x65); // 'e'
+        core.handle_print(0x0301); // COMBINING ACUTE ACCENT
+        core.handle_print(0x58); // 'X'
+        assert_eq!(core.get_cell_char(0, 0), "e\u{0301}");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        assert_eq!(core.get_cell_char(1, 0), "X");
+        // Further unrelated writes must not disturb the merged cell.
+        core.handle_print(0x59); // 'Y'
+        assert_eq!(core.get_cell_char(0, 0), "e\u{0301}");
+    }
+
+    // AC-3 (integration): the same base+combining sequence driven through
+    // process_pty_data, exercising the top-level ASCII fast path (which
+    // bypasses handle_print entirely for the base character) together with
+    // the parser slow path for the non-ASCII combining mark.
+    #[test]
+    fn test_retroactive_merge_combining_accent_via_process_pty_data() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        let mut bytes = vec![b'e'];
+        bytes.extend_from_slice("\u{0301}".as_bytes());
+        bytes.push(b'X');
+        core.process_pty_data(&bytes);
+        assert_eq!(core.get_cell_char(0, 0), "e\u{0301}");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        assert_eq!(core.get_cell_char(1, 0), "X");
+    }
+
+    // AC-4: a width-0 character arriving with nothing written yet on this
+    // screen is dropped entirely: no grid write, no cursor movement.
+    #[test]
+    fn test_retroactive_merge_dropped_at_start_of_screen() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.handle_print(0x0301); // combining accent, nothing written yet
+        assert_eq!(core.get_cell_char(0, 0), " ");
+        assert_eq!(core.get_cursor_col(), 0);
+        assert_eq!(core.get_cursor_row(), 0);
+    }
+
+    // AC-4: explicit cursor movement (CSI CUP) invalidates the merge target.
+    #[test]
+    fn test_retroactive_merge_dropped_after_cursor_movement_csi() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.handle_print(0x35); // '5' at (0,0)
+        core.process_pty_data(b"\x1b[3;3H"); // CUP row=3,col=3 (1-indexed)
+        assert_eq!(core.get_cursor_col(), 2);
+        assert_eq!(core.get_cursor_row(), 2);
+        core.handle_print(0x0301); // combining accent: no valid target, dropped
+        assert_eq!(core.get_cell_char(0, 0), "5"); // unchanged
+        assert_eq!(core.get_cursor_col(), 2); // unchanged by the dropped char
+        assert_eq!(core.get_cursor_row(), 2);
+    }
+
+    // AC-4: a screen/line erase (CSI EL) invalidates the merge target even
+    // though it does not move the cursor.
+    #[test]
+    fn test_retroactive_merge_dropped_after_line_erase_csi() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.handle_print(0x35); // '5' at (0,0), cursor col=1
+        core.process_pty_data(b"\x1b[2K"); // erase entire line
+        core.handle_print(0x20E3); // combining keycap: dropped
+        assert_eq!(core.get_cell_char(0, 0), " "); // erased, not re-merged
+        assert_eq!(core.get_cursor_col(), 1); // unchanged by the dropped char
+    }
+
+    // AC-4: a resize invalidates the merge target.
+    #[test]
+    fn test_retroactive_merge_dropped_after_resize() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.handle_print(0x35); // '5' at (0,0), cursor col=1
+        core.resize(12, 4);
+        core.handle_print(0x20E3); // combining keycap: dropped
+        assert_eq!(core.get_cell_char(0, 0), "5"); // unchanged by the dropped char
+        assert_eq!(core.get_cursor_col(), 1);
+    }
+
+    // AC-4: a scroll that displaces the tracked row invalidates the target
+    // even though the cursor's (col, row) pair does not itself change.
+    #[test]
+    fn test_retroactive_merge_dropped_after_scroll() {
+        let mut core = TerminalCore::new(5, 1, 0); // single row: any LF scrolls
+        core.handle_print(0x41); // 'A' at (0,0), cursor advances to col 1
+        core.handle_execute(0x0A); // LF -> scrolls, row content evicted/blanked
+        let col_before = core.get_cursor_col();
+        core.handle_print(0x0301); // combining accent: no valid target, dropped
+        assert_eq!(core.get_cell_char(0, 0), " ");
+        assert_eq!(core.get_cursor_col(), col_before); // unmoved by the dropped char
+    }
+
+    // AC-5: a width-0 character arriving after a wide (width-2) character
+    // merges into the wide base cell, not its spacer.
+    #[test]
+    fn test_retroactive_merge_after_wide_char_targets_base() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.handle_print(0x4E16); // '世' width 2 at (0,0), spacer at (1,0)
+        assert_eq!(core.get_cursor_col(), 2);
+        core.handle_print(0x0301); // combining accent: must target base, not spacer
+        assert_eq!(core.get_cell_char(0, 0), "\u{4E16}\u{0301}");
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        assert_eq!(core.get_cell_width(1, 0), 0); // spacer unaffected
+        assert_eq!(core.get_cursor_col(), 2); // non-VS16 merge never moves cursor
+    }
+
+    // AC-6 (auto-wrap on): VS16 widening a base cell sitting in the last
+    // column relocates it to the next row, mirroring the existing wide-char
+    // end-of-line wrap semantics. No spacer is orphaned across the line
+    // boundary and cursor state stays valid.
+    #[test]
+    fn test_retroactive_widen_at_last_column_wraps_with_autowrap() {
+        let mut core = TerminalCore::new(5, 3, 0); // last column index = 4
+        for c in b'A'..=b'D' {
+            core.handle_print(c as u32);
+        }
+        core.handle_print(0x35); // '5' at col 4 (last column)
+        assert_eq!(core.get_cursor_col(), 4);
+        assert!(core.get_wrap_pending());
+
+        core.handle_print(0xFE0F); // VS16 -> merge + retroactive widen + wrap
+
+        assert_eq!(core.get_cell_char(4, 0), " "); // vacated: content relocated
+        assert_eq!(core.get_cell_char(0, 1), "5\u{FE0F}");
+        assert_eq!(core.get_cell_width(0, 1), 2);
+        assert_eq!(core.get_cell_width(1, 1), 0); // spacer, not orphaned
+        assert_eq!(core.get_cursor_row(), 1);
+        assert_eq!(core.get_cursor_col(), 2);
+        assert!(!core.get_wrap_pending());
+        assert!(core.get_line_wrapped(1)); // row 1 is a continuation of row 0
+
+        // Subsequent text continues right after the spacer.
+        core.handle_print(0x58); // 'X'
+        assert_eq!(core.get_cell_char(2, 1), "X");
+    }
+
+    // AC-6 (auto-wrap off): the same scenario with DECAWM off widens the
+    // base cell in place with no spacer, matching the existing no-autowrap
+    // wide-char end-of-line quirk; the cursor stays pinned.
+    #[test]
+    fn test_retroactive_widen_at_last_column_no_autowrap_widens_in_place() {
+        let mut core = TerminalCore::new(5, 3, 0);
+        core.set_mode(0, false); // MODE_AUTO_WRAP off
+        for c in b'A'..=b'D' {
+            core.handle_print(c as u32);
+        }
+        core.handle_print(0x35); // '5' at col 4 (last column)
+        assert_eq!(core.get_cursor_col(), 4);
+        assert!(!core.get_wrap_pending());
+
+        core.handle_print(0xFE0F); // VS16 -> widen in place, no wrap
+
+        assert_eq!(core.get_cell_char(4, 0), "5\u{FE0F}");
+        assert_eq!(core.get_cell_width(4, 0), 2);
+        assert_eq!(core.get_cursor_col(), 4); // cursor stays pinned
+        assert_eq!(core.get_cursor_row(), 0);
+    }
+
+    // AC-8: a long run of combining marks on one base cell pushes the cell
+    // content past the inline 16-byte capacity into the overflow side table,
+    // and the full content remains readable back.
+    #[test]
+    fn test_retroactive_merge_long_combining_run_overflows_correctly() {
+        let mut core = TerminalCore::new(20, 3, 0);
+        core.handle_print(0x65); // 'e'
+        let marks: [u32; 8] = [
+            0x0301, 0x0302, 0x0303, 0x0304, 0x0305, 0x0306, 0x0307, 0x0308,
+        ];
+        for &m in &marks {
+            core.handle_print(m);
+        }
+        core.handle_print(0x58); // 'X'
+
+        let mut expected = String::from("e");
+        for &m in &marks {
+            expected.push(char::from_u32(m).unwrap());
+        }
+        assert_eq!(core.get_cell_char(0, 0), expected);
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        assert_eq!(core.get_cell_char(1, 0), "X");
+    }
+
+    // A second VS16 arriving after the base cell has already widened must
+    // not widen again (no double spacer / cursor double-advance).
+    #[test]
+    fn test_retroactive_merge_second_vs16_does_not_rewiden() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.handle_print(0x35); // '5'
+        core.handle_print(0xFE0F); // widens to width 2, cursor -> col 2
+        core.handle_print(0xFE0F); // second VS16: appends only, no re-widen
+        assert_eq!(core.get_cell_char(0, 0), "5\u{FE0F}\u{FE0F}");
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        assert_eq!(core.get_cursor_col(), 2); // unchanged by the second merge
+    }
+
+    // Boundary: widening one column short of the last column (col ==
+    // cols - 2) fits the spacer exactly and sets wrap_pending, matching the
+    // general wide-char cursor-advance formula (no special-cased relocation
+    // needed here).
+    #[test]
+    fn test_retroactive_widen_one_before_last_column_sets_wrap_pending() {
+        let mut core = TerminalCore::new(5, 3, 0); // cols-2 = 3
+        for c in b'A'..=b'C' {
+            core.handle_print(c as u32);
+        }
+        core.handle_print(0x35); // '5' at col 3 (cols - 2)
+        assert_eq!(core.get_cursor_col(), 4);
+        core.handle_print(0xFE0F); // widen: spacer fits at col 4 (last column)
+        assert_eq!(core.get_cell_char(3, 0), "5\u{FE0F}");
+        assert_eq!(core.get_cell_width(3, 0), 2);
+        assert_eq!(core.get_cell_width(4, 0), 0); // spacer at last column
+        assert!(core.get_wrap_pending());
+        assert_eq!(core.get_cursor_col(), 4);
     }
 }
