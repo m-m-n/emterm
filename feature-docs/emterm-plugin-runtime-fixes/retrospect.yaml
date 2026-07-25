@@ -1,0 +1,105 @@
+feature: emterm-plugin-runtime-fixes
+collected_at: "2026-07-25T16:20:00+09:00"
+session_ids:
+  - f5f62483-7897-405c-87f7-301dca06ff68
+  - 9bba19d9-44a9-492f-a7df-27e7417ccf44
+  - 7b923502-7ea6-4126-8e50-8000a1bd8aa1
+signals:
+  review_critical_high:
+    - {stable_id: sp-fr7-contradicts-impl, category: spec, file: plugins/emterm/skills/display-markdown/SKILL.md, round: 2, resolution: fixed}
+    - {stable_id: sc-heredoc-delimiter-collision, category: security, file: plugins/emterm/skills/mux-send/SKILL.md, round: 3, resolution: fixed}
+    - {stable_id: cm-heredoc-trailing-newline-executes, category: comprehensive, file: plugins/emterm/skills/mux-send/SKILL.md, round: 3, resolution: fixed}
+    - {stable_id: cm-no-blocked-recovery, category: comprehensive, file: plugins/emterm/hooks/hooks.json, round: 1, resolution: fixed}
+    - {stable_id: sc-stagefile-unspecified, category: security, file: plugins/emterm/skills/mux-send/SKILL.md, round: 4, resolution: fixed}
+    - {stable_id: cm-stopfailure-noop, category: comprehensive, file: plugins/emterm/hooks/hooks.json, round: 4, resolution: fixed}
+  conflict_reworks: []          # 10 tasks, zero merge conflicts across four rework rounds
+  file_prediction_misses:
+    - task: task0009
+      files: [feature-docs/emterm-plugin-runtime-fixes/SPEC.md, feature-docs/emterm-plugin-runtime-fixes/VERIFICATION.md]
+      note: >
+        Scope named "TS-6 and M-1" but M-1 is one logical scenario spanning both documents' Success
+        Criteria rows; the implementer extended to keep them consistent and reported it. Reasonable
+        — the plan under-specified the boundary, not the implementer overstepping.
+  verification_failures: []
+  discretionary_perspectives: []   # the mechanical floor covered every round; no Layer-2 additions
+  declined_findings:
+    - stable_id: sc-prose-escaping-fallible
+      category: security
+      round: 2
+      resolution_reason: >
+        Codex was right that prose escaping is not an enforced boundary, but its remedy (mandate an
+        argv-array execution path) does not exist for a Claude Code skill — the Bash tool is the only
+        execution surface. Declined and disclosed as a residual risk. The declination reasoning was
+        partly WRONG and that mattered: "argv is unavailable, therefore prose is the only option" is a
+        non-sequitur, and it took until round 4 to find the third option (keep the bytes off the
+        command line entirely). Two highs were spent getting there.
+    - stable_id: cm-posttooluse-overwrites-blocked
+      category: comprehensive
+      round: 3
+      resolution_reason: >
+        An unmatched PostToolUse can clear `blocked` while a permission dialog is still open. The
+        clean fix is a precedence rule in eMterm's agent-status state machine (src-tauri/), out of
+        scope for a plugin-only feature. Recorded as a known limitation in README and SPEC.
+        Also never measured: whether Claude Code actually schedules other tools during a permission
+        prompt was assumed, not observed.
+lessons_candidates:
+  - >
+    Four review rounds, 33 findings, and rounds 1-3 all had the same shape: each round's rewrite of
+    the skills' security prose produced the next round's findings. Round 1 mandated an argv-array
+    invocation the agent cannot perform; round 2 replaced it with Bash-first quoting that broke `~`
+    and left mux-send behind; round 3's mux-send heredoc introduced two highs, one exploitable by an
+    agent following the instructions correctly. The treadmill only stopped in round 4, when the fix
+    stopped describing the hazard and removed the construct that had one.
+  - >
+    The strongest single lesson: when a rule's safety depends on a model applying it correctly,
+    prefer a form with no rule to apply. `--stdin < '<file>'` beat three rounds of increasingly
+    careful quoting guidance because it keeps untrusted bytes off the command line entirely. But the
+    same round showed the corollary — a structural boundary only works if BOTH sides are specified.
+    The task0007 plan named where the bytes should end up and not how they get there, so the
+    injection point moved one step upstream (sc-stagefile-unspecified) instead of closing.
+  - >
+    Two highs came from wiring hook events on a reading of the documentation without a live check.
+    cm-stopfailure-noop is the sharp case: the task0003 plan explicitly flagged the risk, deferred it
+    to the M-1 live check, then shipped both the wiring AND a README sentence asserting it worked —
+    before M-1 ever ran. That is structurally the same mistake as the original `/dev/tty` decision
+    this entire feature exists to undo. Rule worth extracting: a claim the platform documents as
+    impossible must not ship pending verification; remove it, and reinstate on evidence.
+  - >
+    The pre-spec POC was the one thing that clearly worked. Verifying the terminalSequence transport
+    BEFORE freezing SPEC.md is why the core design never had to be revisited across four rounds,
+    while everything specified without a live check did. Worth making a create-spec rule: any
+    requirement resting on unverified platform behaviour is measured before the spec freezes, not
+    deferred to a manual scenario.
+  - >
+    Doc drift kept appearing at task boundaries. README was task0002's while hooks.json was
+    task0003's, so "Three hooks" survived a five-hook change with nothing spanning them
+    (cm-readme-hook-drift). task0005 wrote a truthful sentence about mux-send that task0006 then made
+    false (sp-mux-send-unspecified). The durable fix was structural: task0005's AC-6 derives the
+    expected event names from hooks.json at test time, so the two cannot drift again. Prefer
+    cross-artifact assertions over splitting related documents across parallel tasks.
+  - >
+    Several guards advertised more coverage than they implemented: the heredoc guard matched only the
+    quoted-delimiter form while its comment claimed any heredoc (the unquoted form is more dangerous);
+    the Notification matcher test claimed to cover the type namespace but listed seven of eight;
+    VERIFICATION.md credited TS-8 with a command-substitution check TS-8 did not contain. A guard
+    whose comment overstates it is worse than no guard, because it stops anyone looking again.
+  - >
+    Operational: an implementer ran `pkill -f "/usr/bin/emterm"` to tidy a helper, matched the user's
+    own eMterm hosting the session, killed its own ancestor, and destroyed two in-flight agents' work.
+    The user wrote ~/.claude/rules/process-termination.md in response and no later agent ran a kill
+    of any kind. Also learned: `emterm --version` launches the GUI rather than printing a version —
+    worth an eMterm-side issue, and worth remembering that "harmless-looking probe" is a category,
+    not a guarantee.
+  - >
+    Writing about control characters is itself a trap. The round-3 review record became unparseable
+    YAML because a raw 0x1B was written into the very finding describing a raw 0x1B in SPEC.md. Same
+    class of error, one layer up, within minutes of documenting it.
+outstanding:
+  - id: M-1
+    note: >
+      The live badge-transition check has never been executed, in this feature or its predecessor.
+      Three questions can only be settled there: badge recovery after approve-then-succeed and
+      approve-then-fail; whether a denied permission prompt really leaves `blocked` set; and whether
+      an API-error turn ending really leaves `working` set now that the StopFailure entry is removed.
+      A live result contradicting the documentation on the last point would justify reinstating the
+      StopFailure hook.

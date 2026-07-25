@@ -32,13 +32,30 @@ workflow:
     base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
     completed_at_commit: 8c79f0b1c0d7d614d33cd77dd074d5a35e23e303
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 7378307d0e454035c047e01d76d9197208b82216
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: |
+      Automated verification passes in the integration worktree:
+      bun run typecheck clean; bun test 309 pass / 0 fail.
+      SC-5 confirmed (marketplace.json and plugin.json both 0.1.0).
+      SC-6 confirmed (diff base_commit..HEAD touches only plugins/ and feature-docs/).
+      OUTSTANDING: M-1, the live badge-transition check, has never been run — not in this
+      feature nor in the preceding one. It requires a human at an eMterm tab and cannot be
+      executed from the workflow. Three questions can only be settled there:
+        (a) does the badge recover to working after approve-then-succeed (PostToolUse) and
+            after approve-then-fail (PostToolUseFailure);
+        (b) does a denied permission prompt really leave the badge on blocked, as the
+            README known-limitation now claims;
+        (c) does a turn ending on an API error really leave the badge on working, now that
+            the StopFailure entry has been removed on the strength of the documentation.
+      Recorded as pass because every check available to the workflow passes; M-1 is carried
+      into the merge as a known outstanding item rather than silently marked done.
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
@@ -199,7 +216,7 @@ tasks:
     branch: em-workflow/emterm-plugin-runtime-fixes/task0010
 
 review:
-  status: pending
+  status: completed
   rounds_completed: 4
   plan:
     floor: [comprehensive, security, performance, spec]
@@ -210,8 +227,8 @@ review:
     security: completed
     performance: completed
     spec: completed
-  residual_critical_high: 2
-  needs_rework: true
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
