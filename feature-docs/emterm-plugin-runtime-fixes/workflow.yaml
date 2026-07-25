@@ -28,7 +28,7 @@ workflow:
     status: completed
     completed_at_commit: 7381495a0ee8c5858aac7f8311ebe475863f268c
   - id: implement
-    status: completed
+    status: in_progress
     base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
     completed_at_commit: d29bab053078dd30deb3aaad35a8e9e1429956b6
   - id: review
@@ -102,10 +102,42 @@ tasks:
     requirements: [FR3, FR7]
     status: merged
     branch: em-workflow/emterm-plugin-runtime-fixes/task0004
+  task0005:
+    title: "SPEC reconciliation and README hook drift (rework)"
+    plan: tasks/task0005.md
+    files:
+      - feature-docs/emterm-plugin-runtime-fixes/SPEC.md
+      - feature-docs/emterm-plugin-runtime-fixes/VERIFICATION.md
+      - plugins/emterm/README.md
+      - plugins/emterm/skills/skills.test.ts
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR4, FR6, FR7, FR8]
+    status: in_progress
+    branch: em-workflow/emterm-plugin-runtime-fixes/task0005
+  task0006:
+    title: "Skill guidance completion (rework)"
+    plan: tasks/task0006.md
+    files:
+      - plugins/emterm/skills/display-markdown/SKILL.md
+      - plugins/emterm/skills/display-json/SKILL.md
+      - plugins/emterm/skills/display-yaml/SKILL.md
+      - plugins/emterm/skills/display-image/SKILL.md
+      - plugins/emterm/skills/mux-send/SKILL.md
+      - plugins/emterm/skills/skills.test.ts
+    skills: [infra-impl]
+    domains: [input-handling, config-infra]
+    complexity: medium
+    requirements: [FR7]
+    status: in_progress
+    branch: em-workflow/emterm-plugin-runtime-fixes/task0006
 
 review:
-  status: in_progress
-  rounds_completed: 1
+  status: pending
+  rounds_completed: 2
+  residual_critical_high: 1
+  needs_rework: true
   plan:
     floor: [comprehensive, security, performance, spec]
     discretionary: []
