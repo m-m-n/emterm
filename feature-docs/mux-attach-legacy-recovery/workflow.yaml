@@ -50,8 +50,9 @@ tasks:
     domains: [external-io, concurrency]
     complexity: medium
     requirements: [FR1, FR2, FR3, NFR1]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-attach-legacy-recovery/task0001
 
 review:
   status: pending
