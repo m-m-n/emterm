@@ -44,7 +44,7 @@ workflow:
       baseline 5f932ae（main ツリー）でも同一再現する既存 flaky で本 feature 無関係と確認済み。
       MT-1（実機での更新後 attach）はユーザー手動検証に委ねる。
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
