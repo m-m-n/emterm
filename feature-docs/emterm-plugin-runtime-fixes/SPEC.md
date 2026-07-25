@@ -146,7 +146,7 @@ plugins/emterm/
 
 ### Wire-format duplication
 
-The canonical sequence is now built in two places: `src-tauri/src/agent_status.rs` (Rust, for the `emterm agent-status` CLI and the GUI) and `notify-status.sh` (the plugin hook). This duplication is accepted: the format is a single stable line, and FR3 pins the exact bytes. The hook's tests assert the literal sequence, so a Rust-side format change that is not mirrored here shows up as a failing test rather than silent drift.
+The canonical sequence is now built in two places: `src-tauri/src/agent_status.rs` (Rust, for the `emterm agent-status` CLI and the GUI) and `notify-status.sh` (the plugin hook). This duplication is accepted: the format is a single stable line, and FR3 pins the exact bytes. `notify-status.test.ts` derives its expected sequence from the four wire-format constants (`OSC_INTRODUCER`, `PAYLOAD_PREFIX`, `WIRE_VERSION`, `ST`) read directly out of `src-tauri/src/agent_status.rs`, rather than from a hardcoded literal, so a Rust-side change to any of those constants shows up as a failing test rather than silent drift.
 
 ### Testing approach
 
