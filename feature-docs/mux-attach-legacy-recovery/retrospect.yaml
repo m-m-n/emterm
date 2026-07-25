@@ -1,0 +1,34 @@
+feature: mux-attach-legacy-recovery
+collected_at: "2026-07-25T21:04:21+09:00"
+session_ids: [0600c6eb-0697-4b19-9704-9e49542bf9b6]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    orchestrator の非対話シェルは PATH に ~/.cargo/bin を含まず cargo が
+    見つからない。承認済みコマンド文字列は変更せず、直前の別行で
+    export PATH="$HOME/.cargo/bin:$PATH" を置いて実行した（フックは行単位照合）。
+  - >-
+    emterm の worktree ビルドは gitignored の src-tauri/assets/fonts/ が無いと
+    build.rs が panic する。implementer と verify の両方で main ツリーからの
+    フォントコピーが必要だった（ネットワーク不要の再現手順として有効）。
+  - >-
+    tabs::tests に既存 flaky 5 件（off-thread replay worker timeout 系 +
+    welcome_without_windows_leaves_group_none）。baseline 5f932ae で同一再現、
+    --test-threads=1 でも消えない。verify の pass 判定はこれを除外して行った。
+  - >-
+    review round1 の medium 3 件は unresolved のまま記録: (1) attach 経路に
+    cleanup_stale_socket が無く残骸ソケット時に AC-3 メッセージが出ない、
+    (2) テストの FAKE_LEGACY_VERSION ハードコードが次の PROTOCOL_VERSION bump で
+    ハングに化ける、(3) FR3/TS-1 と実装のテスト構成乖離（fake ヘルパ複製 +
+    injected spawn）。フォローアップタスク候補。
+  - >-
+    implementer の deviation: run_bridge が long-running のため execute_attach を
+    e2e 駆動せず、spawn ステップをクロージャ注入する resolve_attach_socket_with
+    seam を導入（production 配線 resolve_attach_socket は実行されない点が
+    spec レビューの指摘 (3) と対応）。
