@@ -68,7 +68,7 @@ tasks:
     domains: [input-handling, config-infra]
     complexity: low
     requirements: [FR7, FR8, FR9]
-    status: in_progress
+    status: merged
     branch: em-workflow/emterm-plugin-runtime-fixes/task0002
 
 review:
