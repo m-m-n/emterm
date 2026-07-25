@@ -66,7 +66,9 @@ As a Claude Code user, I want the agent-status hook to work with no runtime prer
   The JSON MUST escape the two control bytes as ``, and the trailing backslash of `ESC \` as `\\`, so the emitted line parses as valid JSON.
 - **FR4:** `plugins/emterm/hooks/hooks.json` MUST configure exactly these hooks, all in **exec form** (a `command` naming the script plus an `args` array), each with `timeout: 3`:
   - `UserPromptSubmit` (no matcher) → args `["working"]`
+  - `PostToolUse` (no matcher) → args `["working"]`
   - `Stop` (no matcher) → args `["idle"]`
+  - `StopFailure` (no matcher) → args `["idle"]`
   - `Notification`, with a matcher restricted to human-input-awaited notification types → args `["blocked"]`
 
   The `command` MUST be `${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify-status.sh`. No hook is configured for `SubagentStop`.
@@ -179,7 +181,7 @@ The following was **verified empirically before this spec was finalized**, not a
 - [ ] TS-5: An argument containing shell metacharacters (e.g. `"working; touch PWNED"`, `"$(id)"`) produces empty stdout, exit 0, and no side effect on the filesystem.
 
 ### Integration Tests
-- [ ] TS-6: `hooks.json` parses as JSON; all three hooks are in exec form (`command` present, `args` present, no state embedded in `command`); every `command` is `${CLAUDE_PLUGIN_ROOT}`-prefixed with no absolute path and no `..`; `timeout` is 3 on each; there is no `SubagentStop` entry.
+- [ ] TS-6: `hooks.json` parses as JSON; all five hooks are in exec form (`command` present, `args` present, no state embedded in `command`); every `command` is `${CLAUDE_PLUGIN_ROOT}`-prefixed with no absolute path and no `..`; `timeout` is 3 on each; there is no `SubagentStop` entry.
 - [ ] TS-7: The `Notification` hook's matcher matches `permission_prompt`, `elicitation_dialog`, and `agent_needs_input`, and does not match `idle_prompt`, `auth_success`, `elicitation_complete`, or `elicitation_response`.
 - [ ] TS-8: `notify-status.sh` source contains no reference to `/dev/tty`, `emterm`, `bun`, `eval`, or backticks, and `notify-status.ts` no longer exists.
 - [ ] TS-9: The sequence emitted for each state is byte-identical to what the Rust canonical builder produces for the same state with name `claude-code` (asserted as a literal, cross-checked against `src-tauri/src/agent_status.rs`).
@@ -187,7 +189,7 @@ The following was **verified empirically before this spec was finalized**, not a
 - [ ] TS-11: `marketplace.json` and `plugin.json` both report `version` `0.1.0`.
 
 ### Manual Testing (E2E Not Possible)
-- [ ] M-1: With the plugin installed locally in an eMterm tab, send a prompt and observe the tab badge become `working`, then `idle` when the response completes. Trigger a permission prompt and observe `blocked`. Confirm the badge does NOT flip to `blocked` on an ordinary idle notification after a completed response.
+- [ ] M-1: With the plugin installed locally in an eMterm tab, send a prompt and observe the tab badge become `working`, then `idle` when the response completes. Trigger a permission prompt and observe `blocked`; approve it and observe the badge return to `working` (via `PostToolUse`) before settling on `idle`. Confirm the badge does NOT flip to `blocked` on an ordinary idle notification after a completed response. Force an API error (e.g. a rate limit) to end the turn via `StopFailure` and observe whether the badge settles on `idle`; `StopFailure` output/exit codes are documented as ignored by Claude Code, so record the result even if inconclusive rather than treating it as a pass.
 - [ ] M-2: Read `plugins/emterm/README.md` end to end and confirm every FR8 change is present.
 
 ### Edge Cases
@@ -210,7 +212,7 @@ Every rejection path exits 0 with no output on either stream (NFR4). There are n
 
 - [ ] All functional requirements (FR1-FR9) are implemented.
 - [ ] All automated test scenarios (TS-1 through TS-11) pass under `bun test`, and `bun run typecheck` passes.
-- [ ] Manual scenario M-1 demonstrates the three state transitions on a real eMterm tab.
+- [ ] Manual scenario M-1 demonstrates the state transitions, including the `blocked`-to-`working` recovery and the `StopFailure` path, on a real eMterm tab.
 - [ ] `notify-status.ts` is gone and nothing in the plugin references `bun` or `/dev/tty`.
 - [ ] Plugin version remains `0.1.0`.
 - [ ] No changes to `src-tauri/`, `crates/`, or any other pre-existing project source outside `plugins/` and `feature-docs/`.
