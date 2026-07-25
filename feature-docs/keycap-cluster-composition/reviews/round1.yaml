@@ -1,0 +1,160 @@
+round: 1
+executed_at: "2026-07-25T23:55:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 3e1689e88056b8f59dcaee31b49dee7e8f41bc13
+  head_commit: d6c072a2ce57ca8f67ba9e5c955e771c29e4d83c
+  changed_files:
+    - crates/term_core/src/print_handler.rs
+    - crates/term_core/src/snapshot.rs
+    - crates/term_core/src/terminal_core.rs
+    - crates/term_core/src/terminal_dispatch.rs
+    - src-tauri/src/render/font/fallback.rs
+    - src-tauri/src/render/terminal_grid_pass.rs
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+    - perspective: performance
+      reason: "統合 diff が term_core の print ホットパス（terminal_dispatch fast path 含む）と描画のシェーピング経路に触れるため"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "codex usage limit (retry 2026-07-29)"}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex usage limit (retry 2026-07-29)"}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex usage limit (retry 2026-07-29)"}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "codex usage limit (retry 2026-07-29)"}
+findings:
+  - stable_id: 50b592c09144a47d
+    severity: high
+    category: performance
+    file: crates/term_core/src/print_handler.rs
+    line: 233
+    title: "try_retroactive_merge にセル内容の上限が無く、連続する結合文字で O(n²) コピー + 無制限メモリ増加"
+    description: "到来 zero-width 文字ごとにセル内容全体を複製して追記するため、途切れない結合文字ラン N 個で合計 O(N²) バイトのコピーとなり、1 セルの内容長に上限が無い。既存 grapheme_buffer の 64 コードポイント上限を迂回する経路になっていた。PTY は非信頼入力（DoS ベクタ）。"
+    suggestion: "MAX_MERGED_CLUSTER_BYTES=256 の上限を追加し、到達後は消費して破棄（グリッド書き込み・カーソル移動なし）。overflow insert は clone でなくムーブ。"
+    sources: [claude:performance]
+    confidence: 75
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (commit d6c072a)。再レビュー3観点で解消確認"
+  - stable_id: 3ff81ec15ccdcc90
+    severity: high
+    category: comprehensive
+    file: crates/term_core/src/print_handler.rs
+    line: 231
+    title: "retroactive merge has no size cap — defeats the existing 64-codepoint cluster cap and grows one cell O(n²)"
+    description: "50b592c09144a47d と同一根本原因（同一サイトを comprehensive 観点が検出）。"
+    suggestion: "同上"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: "同一サイトの performance 版 fix (50b592c09144a47d) を pick-one 適用で解消。再レビューで解消確認"
+  - stable_id: "3337565944680335"
+    severity: high
+    category: security
+    file: crates/term_core/src/print_handler.rs
+    line: 233
+    title: "無制限に伸びる結合文字マージでメモリ枯渇・二次オーダーCPU (untrusted PTY 入力による DoS)"
+    description: "50b592c09144a47d と同一根本原因（同一サイトを security 観点が検出）。"
+    suggestion: "同上"
+    sources: [claude:security]
+    confidence: 75
+    resolution: fixed
+    resolution_reason: "同一サイトの performance 版 fix (50b592c09144a47d) を pick-one 適用で解消。再レビューで解消確認（security 再走で指摘ゼロ）"
+  - stable_id: cbcbe11ffe5eeb50
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/render/font/mod.rs
+    line: 132
+    title: "VS16 ストリップ判断が shape() 呼び出しサイトのうち grid pass にしか配線されていない（resolve_overlay_glyph_meta / emoji_cache が素通し）"
+    description: "FR5 の VS16 除去が terminal_grid_pass の2箇所のみに配線され、resolve_overlay_glyph_meta（ブロックカーソルオーバーレイ、doc で grid pass との parity を明言）と ui/emoji_cache.rs:175 が未適用。カーソルがキーキャップセルに乗った瞬間だけ表示が崩れる。初回 high（architecture）→再評価で medium。changed_files 外のため category=comprehensive に強制・confidence 50 cap。"
+    suggestion: "(a) 最小: 両サイトに fallback.shaping_cluster を配線（bold 差し替え前の font_id で判定）。(b) 推奨: resolve→strip→shape→glyph_id==0 判定を render/font の単一ヘルパに集約し3消費者を寄せる。"
+    sources: [claude:architecture, claude:spec]
+    confidence: 50
+    resolution: unresolved
+  - stable_id: 858ffcb23036e505
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/print_handler.rs
+    line: 372
+    title: "relocate_widened_base_via_wrap が移送先セル/スペーサの古い overflow エントリを消していない"
+    description: "移送先 (0,new_row) がインラインに収まった場合の overflow.remove 分岐が無く、スペーサ (1,new_row) は purge 自体が無い。他の全書き込みサイト（write_grapheme_to_grid / set_cell / widen_after_merge）と非対称。孤児エントリが overflow / overflow_ridx に滞留し snapshot にも載る。comprehensive + architecture の2観点一致（初回 eda0ea32d1f856e2 / ee5d57302c765558、fix によるシフト後の再報告）。"
+    suggestion: "両サイトに write_grapheme_to_grid と同じ else-remove 分岐を追加。構造修正なら put_cell_content / write_spacer_cell プリミティブへ集約。"
+    sources: [claude:comprehensive, claude:architecture]
+    confidence: 80
+    resolution: unresolved
+  - stable_id: 42848f5b2acc252d
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_dispatch.rs
+    line: 161
+    title: "BEL（および SO/SI 等の no-op C0）で fast path と parser 経路の last_write 扱いが食い違う"
+    description: "fast path の BEL は last_write を保持、parser 経由の Execute アームは無条件クリア。同じバイト列が経路（charset 状態等）で挙動差を生む。BEL はカーソルもグリッドも動かさないため過剰無効化側が誤り。"
+    suggestion: "Execute アームで 0x07/0x0E/0x0F を無効化対象から除外し、fast path 有効/無効の両方を通す回帰テストを追加。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: 7ff33251eea3fd2b
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/terminal_core.rs
+    line: 316
+    title: "last_write インバリアントに choke point が無く、無効化が4ファイルに分散（resize_reflow 等の公開プリミティブに穴）"
+    description: "set 6箇所 / clear 12箇所が手配線で、無効化が legacy wrapper（resize()）側に付き実体 resize_reflow には無い等の非対称。新経路追加時に静かに壊れる。"
+    suggestion: "note_write / invalidate_last_write の2メソッドに集約し、グリッドを再配置するプリミティブ側で無効化する規約に統一。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+  - stable_id: 5c81a4a2fbdd17af
+    severity: medium
+    category: spec
+    file: crates/term_core/src/print_handler.rs
+    line: 475
+    title: "FR1 ゲートが char_width==0 でなく分類ビットのみ — ZWJ/ZWNJ/ZWSP が漏れて幅0ファントムセルが last_write を汚染し FR3 遡上を誤発火、逆に U+3099 等の wide combining は対象に入る"
+    description: "SPEC FR1 は char_width=0 を条件とするが実装は VARIATION_SEL|COMBINING ビットのみ。U+200B/200C/200D は幅0なのに merge 対象外でカーソルセルを width=0 で上書き→last_write 経由で FR3 の spacer 遡上が無関係セルに発火。U+302A-302F / U+3099-309A は char_width=2 なのに COMBINING ビットで merge 経路に入る。初回 fc1235997fd49e39 の拡張再報告。"
+    suggestion: "ゲートを char_width==0 に揃える（か FR3 遡上条件を『col-1 が width==2』に厳格化 + width==0 書き込み時は last_write を更新しない）。U+200B/200C/200D と U+3099 の回帰テスト追加。SPEC 側の意図確認も要る。"
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+  - stable_id: 09eeb68a125f5123
+    severity: medium
+    category: spec
+    file: crates/term_core/src/print_handler.rs
+    line: 244
+    title: "新設バイト上限が FR2 の VS16 幅2拡張より前に return し、飽和セルでは VS16 が来ても幅2化されない"
+    description: "上限到達時の早期 return が widen 処理ごとスキップするため、飽和セルへの VS16 到着で width1 のまま・spacer 無し・カーソル前進無しとなり FR2 から外れる（発生は稀）。loop 1 fix の副作用として新規検出。"
+    suggestion: "早期 return 前に cp==0xFE0F && width==1 なら widen_after_merge を呼ぶ。飽和セル + VS16 のユニットテスト追加。"
+    sources: [claude:spec]
+    confidence: 85
+    resolution: unresolved
+  - stable_id: b2fbe0461a559b23
+    severity: medium
+    category: performance
+    file: crates/term_core/src/print_handler.rs
+    line: 239
+    title: "飽和判定がセル内容の複製後に行われ、上限到達後もマークごとに 256 バイトの確保・破棄が続く"
+    description: "content.len() 判定が cell_content_at の clone 後にあるため、飽和後の結合文字ごとに HashMap lookup + 256B の malloc/memcpy/free が空回りする（O(N) には収まる）。loop 1 fix の残課題として新規検出。"
+    suggestion: "非確保の cell_content_len_at ヘルパを足し、判定を複製前に移動。"
+    sources: [claude:performance]
+    confidence: 85
+    resolution: unresolved
+  - stable_id: c93e6ca46b0b855f
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/print_handler.rs
+    line: 394
+    title: "relocate_widened_base_via_wrap のカーソル前進が cols 境界でクランプされていない"
+    description: "cursor.col = 2 を無条件代入するため cols <= 2 で範囲外になり、次の印字文字が黙って消える。他サイトは全て >= cols クランプ済み。新規検出。"
+    suggestion: "cols <= 2 のとき cols-1 + wrap_pending にクランプする分岐を追加し、極小幅のテストを足す。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+auto_fix:
+  loops_run: 1
+  applied_total: 1
+  termination: clean
+residual_critical_high: 0
+rework_required: false
