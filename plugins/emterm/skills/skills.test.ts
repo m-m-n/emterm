@@ -338,6 +338,27 @@ describe("plugins/emterm/README.md hook wiring (task0005 AC-6)", () => {
   });
 });
 
+describe("feature-docs/emterm-plugin-runtime-fixes/{SPEC,VERIFICATION}.md byte hygiene (task0008 AC-8, finding sp-fr3-raw-esc-byte)", () => {
+  const FEATURE_DOCS_DIR = join(
+    MARKETPLACE_ROOT,
+    "feature-docs",
+    "emterm-plugin-runtime-fixes",
+  );
+  // Mirrors `grep -P '[\x00-\x08\x0b-\x1f]'`: only tab (0x09) and newline
+  // (0x0a) are excluded from the matched range; every other C0 control
+  // byte (including CR, 0x0d) is flagged. A raw ESC (0x1B) byte written
+  // into FR3's escaping clause previously made a round-3 review record
+  // unparseable YAML for exactly this reason.
+  const RAW_CONTROL_BYTE = /[\x00-\x08\x0b-\x1f]/;
+
+  for (const filename of ["SPEC.md", "VERIFICATION.md"]) {
+    test(`${filename} contains no raw control bytes`, () => {
+      const content = readFileSync(join(FEATURE_DOCS_DIR, filename), "utf-8");
+      expect(RAW_CONTROL_BYTE.test(content)).toBe(false);
+    });
+  }
+});
+
 describe("plugin/marketplace version regression guard (task0002 AC-9)", () => {
   test("plugin.json still reports version 0.1.0", () => {
     const pluginJson = JSON.parse(

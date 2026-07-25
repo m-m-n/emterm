@@ -27,9 +27,9 @@
 | TS-5 | Argument with shell metacharacters (`"working; touch PWNED"`, `"$(id)"`) | Empty stdout, exit 0, no file created | Unit |
 | TS-6 | `hooks.json` structural check | Valid JSON; all five hooks exec form; `${CLAUDE_PLUGIN_ROOT}`-prefixed commands; no absolute path, no `..`; `timeout` 3; no `SubagentStop` | Integration |
 | TS-7 | `Notification` matcher behaviour | Matches `permission_prompt` / `elicitation_dialog` / `agent_needs_input`; does not match `idle_prompt` / `auth_success` / `elicitation_complete` / `elicitation_response` | Integration |
-| TS-8 | Legacy artifacts removed | `notify-status.ts` absent; `notify-status.sh` contains no `/dev/tty`, `emterm`, `bun`, `eval`, or backticks | Integration |
+| TS-8 | Legacy artifacts removed | `notify-status.ts` absent; `notify-status.sh` contains no `/dev/tty`, `bun`, `eval`, or backticks, and no invocation of the `emterm` binary — the sole occurrence of the string `emterm` is the FR3 payload literal `emterm;agent-status;` | Integration |
 | TS-9 | Wire-format fidelity | Emitted sequence per state is byte-identical to the canonical form documented in SPEC.md FR3 and produced by `src-tauri/src/agent_status.rs` with name `claude-code` | Integration |
-| TS-10 | Skill static scan | All seven SKILL.md pass the existing checks; the four display skills additionally document the Bash-first quoted-and-`--`-delimited invocation form (with the `'\''` escaping rule) and carry an adversarial example | Integration |
+| TS-10 | Skill static scan | All seven SKILL.md pass the existing checks; the four display skills additionally document the Bash-first quoted-and-`--`-delimited invocation form (with the `'\''` escaping rule), the resolve-`~`-before-quoting rule, and the double-quote-is-not-a-substitute warning with a quote-type-discriminating adversarial example; `mux-send/SKILL.md` additionally documents the file-redirection primary form (no heredoc present), the `--text` single-quote rule, pane-ID validation, and adversarial examples describing the destination pane's actual execution behaviour | Integration |
 | TS-11 | Version pinned | `marketplace.json` and `plugin.json` both report `0.1.0` | Integration |
 
 ## Code Quality Verification
@@ -43,7 +43,7 @@
 
 | ID | Criterion | How to Verify |
 |----|-----------|---------------|
-| SC-1 | FR1-FR9 implemented | Requirements coverage table below plus task acceptance criteria |
+| SC-1 | FR1-FR10 implemented | Requirements coverage table below plus task acceptance criteria |
 | SC-2 | `bun test` and `bun run typecheck` pass | Build + Test Verification above |
 | SC-3 | State transitions, including `blocked`-to-`working` recovery and the `StopFailure` path, observed on a real eMterm tab | Manual scenario M-1 |
 | SC-4 | `notify-status.ts` gone; nothing references `bun` or `/dev/tty` | TS-8, plus `git grep -n 'dev/tty\|bun' plugins/emterm/` returning only test-harness references |
@@ -63,6 +63,7 @@
 | FR7 | task0002 | TS-10 |
 | FR8 | task0002 | M-2 |
 | FR9 | task0002 | TS-11 |
+| FR10 | task0007 | TS-10 |
 | NFR1 | task0001 | TS-8 (no subprocess/timer references in the script) |
 | NFR2 | task0001 | TS-2, TS-5 |
 | NFR3 | task0001 | TS-1 through TS-5, executed via `sh` |
@@ -95,6 +96,7 @@ No project E2E framework. E2E coverage is the manual scenarios below.
 
 - **NFR1 (performance)**: verified structurally rather than by measurement — TS-8 confirms the script contains no process spawn, no device open, and no timer. With one `printf` as the only work, no timing threshold is meaningful.
 - **NFR2 (security)**: TS-5 confirms metacharacter arguments are rejected with no output and no side effect. A static grep of `notify-status.sh` for `eval`, backticks, and `$(` over argument values must return zero hits (TS-8).
+- **Known gap — no ordering coverage:** no automated test covers the ordering between `PostToolUse` and an open permission-prompt `Notification` (see SPEC.md Edge Cases, finding `cm-posttooluse-overwrites-blocked`). The correct fix is a precedence rule inside eMterm's own agent-status state machine (`src-tauri/`), which is out of scope for this feature; this feature only records the gap.
 
 ## Verification Summary
 
