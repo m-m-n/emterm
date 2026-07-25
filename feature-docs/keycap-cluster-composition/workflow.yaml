@@ -41,9 +41,11 @@ workflow:
     status: completed
     completed_at_commit: e7f8dd893a50bb5659da20159f66b8c9ece42d90
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: null
+    result: pass
     failed_items: []
+    notes: "TS-1..TS-9 自動テスト全パス（term_core 723 / main --lib 2656+）。tabs.rs の off-thread replay worker timeout 7件は base commit 3e1689e の未変更ベースラインでも再現する pre-existing flake（失敗セットは実行ごとに変動）で今回の diff 非起因と確認。M-1..M-3（実機目視）は人間による確認待ちとして残る"
   - id: retrospect
     status: pending
 
