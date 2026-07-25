@@ -73,8 +73,8 @@ As a Claude Code user, I want the agent-status hook to work with no runtime prer
 
   The `command` MUST be `${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify-status.sh`. No hook is configured for `SubagentStop`.
 - **FR5:** The `Notification` hook's matcher MUST fire for `permission_prompt`, `elicitation_dialog`, and `agent_needs_input`, and MUST NOT fire for `idle_prompt`, `auth_success`, `elicitation_complete`, or `elicitation_response`. The matcher is a regular expression over the notification type; it MUST be anchored so that it cannot match a longer type name as a substring.
-- **FR6:** `plugins/emterm/hooks/scripts/notify-status.ts` and `plugins/emterm/hooks/scripts/notify-status.test.ts` MUST be deleted. Their test coverage MUST be replaced by tests over the new shell script (see Test Scenarios).
-- **FR7:** The four display skills (`plugins/emterm/skills/display-{markdown,json,yaml,image}/SKILL.md`) MUST document that the file path is passed as a single argv element through a no-shell invocation, and MUST NOT instruct the model to interpolate the path into a shell command string. Each MUST carry at least one adversarial example (a path containing shell metacharacters). This mirrors the hardening already present in `mux-send/SKILL.md`.
+- **FR6:** `plugins/emterm/hooks/scripts/notify-status.ts` MUST be deleted. `plugins/emterm/hooks/scripts/notify-status.test.ts` MUST be replaced in place with tests over the new shell script (see Test Scenarios), not deleted — its filename and location stay the same while its contents change.
+- **FR7:** The four display skills (`plugins/emterm/skills/display-{markdown,json,yaml,image}/SKILL.md`) MUST require, as the primary invocation form, the file path single-quoted and placed after the `--` end-of-options delimiter (`emterm <sub> [opts] -- '<path>'`). A Claude Code skill's only execution surface is the Bash tool, so a no-shell argv invocation MUST NOT be the primary requirement; it MAY be documented as an equally safe alternative where a caller has a no-shell exec path. Each SKILL.md MUST document the `'\''` escaping rule for a path containing an embedded single quote, and MUST NOT show a bare unquoted path as the canonical example. Each MUST carry at least one adversarial example (a path containing shell metacharacters) contrasting the safe quoted form with the unsafe bare form.
 - **FR8:** `plugins/emterm/README.md` MUST be updated to: remove `bun` from the prerequisites; state that the agent-status hook requires Claude Code v2.1.141 or later (the `terminalSequence` minimum); state that `emterm` on `PATH` is required only for the display and mux skills, not for the hook; and drop the two now-obsolete known limitations (the `/dev/tty` reachability caveat and the up-to-3-seconds-per-prompt caveat) while keeping the mux-agent-status-api drain-wiring caveat.
 - **FR9:** `marketplace.json` and `plugin.json` MUST keep `"version": "0.1.0"`. No version field changes in this feature.
 
@@ -185,7 +185,7 @@ The following was **verified empirically before this spec was finalized**, not a
 - [ ] TS-7: The `Notification` hook's matcher matches `permission_prompt`, `elicitation_dialog`, and `agent_needs_input`, and does not match `idle_prompt`, `auth_success`, `elicitation_complete`, or `elicitation_response`.
 - [ ] TS-8: `notify-status.sh` source contains no reference to `/dev/tty`, `emterm`, `bun`, `eval`, or backticks, and `notify-status.ts` no longer exists.
 - [ ] TS-9: The sequence emitted for each state is byte-identical to what the Rust canonical builder produces for the same state with name `claude-code` (asserted as a literal, cross-checked against `src-tauri/src/agent_status.rs`).
-- [ ] TS-10: All seven SKILL.md files still satisfy the existing static checks (frontmatter, name/directory match, non-empty English description), and the four display skills additionally document argv-based invocation and contain an adversarial example.
+- [ ] TS-10: All seven SKILL.md files still satisfy the existing static checks (frontmatter, name/directory match, non-empty English description), and the four display skills additionally document the Bash-first quoted-and-`--`-delimited invocation form (including the `'\''` escaping rule) and contain an adversarial example.
 - [ ] TS-11: `marketplace.json` and `plugin.json` both report `version` `0.1.0`.
 
 ### Manual Testing (E2E Not Possible)
@@ -194,7 +194,7 @@ The following was **verified empirically before this spec was finalized**, not a
 
 ### Edge Cases
 - [ ] Running under a terminal that is not eMterm: the OSC 777 sequence is emitted but not interpreted; nothing is displayed and nothing breaks.
-- [ ] Running under Claude Code older than v2.1.141: the `terminalSequence` field is ignored; no state is reported and nothing breaks.
+- [ ] Running under Claude Code older than v2.1.141: the `terminalSequence` field is ignored; no state is reported and nothing breaks. This floor is derived from `terminalSequence` alone; the exec-form hook configuration and `StopFailure` are assumed — not separately confirmed — to be available at that version, since neither carries its own minimum-version marker in the hooks documentation.
 - [ ] Running inside tmux: no DCS wrapping is involved because the hook never invokes the `emterm` CLI; Claude Code's own write path handles the multiplexer.
 
 ## Security Considerations
@@ -202,7 +202,8 @@ The following was **verified empirically before this spec was finalized**, not a
 - **Input validation:** The state argument is checked against the hard-coded list `idle|working|blocked|done`, and the positional-argument count is required to be exactly 1, before any output is produced.
 - **Shell injection:** Only the validated literal is interpolated into the output. The script uses no `eval`, no backticks, and no command substitution over its input. Rejected input produces no output at all, so a metacharacter-laden argument cannot reach the emitted sequence.
 - **Escape-sequence injection:** Because only allow-listed literals are emitted, the script cannot be induced to emit an arbitrary escape sequence. Claude Code's own allowlist is a second, independent layer.
-- **Skill guidance:** FR7 extends the argv-based invocation requirement from `mux-send` to the four display skills, closing the last documented shell-string-interpolation path in the plugin's skill set.
+- **Skill guidance:** FR7 requires the four display skills to place the path after `--`, single-quoted and `'\''`-escaped. This is a Bash-first requirement rather than an argv-based one — a Claude Code skill has no no-shell execution surface, so it does not mirror `mux-send`'s current argv-based wording. `mux-send/SKILL.md` still carries the argv-based primary MUST as of this task; that file is out of scope here (task0006).
+- **Residual risk — prose-escaping is not an enforced boundary:** the display skills' injection protection depends on the model correctly applying the documented single-quote-and-`'\''`-escaping rule at generation time; the plugin has no serialization layer that enforces it mechanically. A single omitted or malformed escape on an untrusted path can still produce a shell-interpreted command. An argv-array execution path would close this gap but is not available: the Bash tool is the only execution surface a Claude Code skill has. This risk is disclosed here rather than mitigated further.
 
 ## Error Handling
 
