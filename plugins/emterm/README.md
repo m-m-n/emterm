@@ -32,6 +32,7 @@ Linux only for v0.1.0. Windows is not supported in this release; Windows support
 
 - Some agent-status state changes may not display if the mux-agent-status-api drain wiring is incomplete on the installed eMterm build.
 - The display skills' argument-injection protection relies on the model correctly applying the documented single-quote-and-`'\''`-escaping rule when it constructs the Bash invocation; there is no enforced serialization boundary because a Claude Code skill's only execution surface is the Bash tool. A single incorrect or omitted escape on an untrusted path can still result in shell-interpreted content.
+- `PostToolUse` has no matcher and fires on every tool completion. If a different tool call's permission dialog is still open when another tool finishes, the resulting `working` report can clear a `blocked` badge before the user has answered the dialog. No matcher is added to narrow this, since doing so would reintroduce the missed-recovery gap an earlier round fixed; this is a known precedence gap in the current hook wiring.
 
 ## Uninstall
 

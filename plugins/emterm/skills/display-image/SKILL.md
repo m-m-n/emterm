@@ -41,12 +41,16 @@ instead of part of the filename.
 - eMterm's CLI is clap-based and accepts `--` as the end-of-options marker
   on this subcommand — everything after it is a positional argument, never
   parsed as a flag, regardless of what characters the path contains.
-- If the path starts with `~` (home-directory shorthand), resolve it before
-  quoting: single quotes suppress `~` expansion, and eMterm's CLI does not
-  expand `~` itself, so a single-quoted `~` path always fails as file-not-
-  found. Expand only the `~`/`$HOME` segment and keep the untrusted
-  remainder single-quoted, e.g. `emterm image -- "$HOME"'/photo.png'` —
-  `"$HOME"` expands outside the quotes, `'/photo.png'` stays single-quoted.
+- If the path starts with `~` (home-directory shorthand), resolve it to an
+  absolute path yourself before quoting — do not rely on the shell to
+  expand it: single quotes suppress `~` expansion, and eMterm's CLI does
+  not expand `~` itself, so a single-quoted `~` path always fails as
+  file-not-found. Resolve the whole path to its absolute form first (for
+  example, substitute the leading `~` with the value of `$HOME` yourself),
+  then single-quote the entire resolved path as one token:
+  `emterm image -- '/absolute/path/photo.png'`. This keeps one invariant
+  with no special case: no byte derived from an untrusted path ever
+  appears outside the single quotes.
 - Double quotes are NOT a safe substitute for single quotes: `$(...)`
   command substitution, backtick command substitution, and `${...}`
   parameter expansion all still expand inside double quotes. Only single
