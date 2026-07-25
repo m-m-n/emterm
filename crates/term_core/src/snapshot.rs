@@ -303,6 +303,10 @@ impl TerminalCore {
             overflow_ridx: snapshot.overflow_ridx,
             grapheme_buffer: Vec::new(),
             wrap_pending: snapshot.wrap_pending,
+            // Snapshot restore is a discontinuity like a viewport switch: the
+            // restored grid was not built by this core's own print path, so
+            // there is no valid retroactive zero-width-merge target yet.
+            last_write: None,
             g0_charset: snapshot.g0_charset,
             g1_charset: snapshot.g1_charset,
             active_charset: snapshot.active_charset,
@@ -429,6 +433,10 @@ impl TerminalCore {
             overflow_ridx: new_overflow_ridx,
             grapheme_buffer: Vec::new(),
             wrap_pending: snapshot.wrap_pending,
+            // Snapshot restore is a discontinuity like a viewport switch: the
+            // restored grid was not built by this core's own print path, so
+            // there is no valid retroactive zero-width-merge target yet.
+            last_write: None,
             g0_charset: snapshot.g0_charset,
             g1_charset: snapshot.g1_charset,
             active_charset: snapshot.active_charset,

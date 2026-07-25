@@ -303,6 +303,17 @@ pub struct TerminalCore {
     // Sprint 2: Print handler state
     pub(crate) grapheme_buffer: Vec<u32>,
     pub(crate) wrap_pending: bool,
+    /// Viewport position `(col, row)` of the most recently written grid
+    /// cell in the print path — always the BASE cell of the last-written
+    /// grapheme (never a wide-char spacer). This is the merge target for a
+    /// standalone-arriving zero-width character (VARIATION_SEL / COMBINING,
+    /// see `crate::print_handler::try_retroactive_merge`). `None` means
+    /// there is no valid target: nothing has been written yet on this
+    /// screen, or the tracked position was invalidated by cursor movement,
+    /// scrolling, an erase, a resize, or a reset. Conservative invalidation
+    /// is intentional: dropping a combining character is preferable to
+    /// merging it into an unrelated cell.
+    pub(crate) last_write: Option<(u16, u16)>,
     pub(crate) g0_charset: u8,     // 0=Ascii, 1=DecLineDrawing
     pub(crate) g1_charset: u8,     // 0=Ascii, 1=DecLineDrawing
     pub(crate) active_charset: u8, // 0=G0, 1=G1
@@ -434,6 +445,7 @@ impl TerminalCore {
             // Sprint 2
             grapheme_buffer: Vec::with_capacity(8),
             wrap_pending: false,
+            last_write: None,
             g0_charset: 0,
             g1_charset: 0,
             active_charset: 0,
@@ -520,6 +532,10 @@ impl TerminalCore {
     /// Legacy resize (delegates to resize_reflow with scrollback_lines=0).
     /// Kept for backward compatibility with existing tests.
     pub fn resize(&mut self, new_cols: u16, new_rows: u16) {
+        // A resize/reflow can relocate or drop any cell; the most-recently-
+        // written-cell tracking used by retroactive zero-width merge can no
+        // longer be trusted afterwards.
+        self.last_write = None;
         // Use reflow with current scrollback capacity
         let scrollback_lines = self.ring_capacity.saturating_sub(self.rows as usize) as u32;
         self.resize_reflow(new_cols, new_rows, scrollback_lines);
@@ -944,6 +960,7 @@ impl TerminalCore {
         // Sprint 2
         self.grapheme_buffer.clear();
         self.wrap_pending = false;
+        self.last_write = None;
         self.g0_charset = 0;
         self.g1_charset = 0;
         self.active_charset = 0;
@@ -1220,6 +1237,13 @@ impl TerminalCore {
 
     /// Advance cursor row. Scrolls internally if at scroll_region_bottom.
     pub(crate) fn line_feed(&mut self) {
+        // A line feed always moves the cursor down (or scrolls the
+        // viewport), either of which can displace the most-recently-
+        // written-cell tracking used by retroactive zero-width merge.
+        // Conservative: invalidate unconditionally rather than only when a
+        // scroll actually occurs. Callers that immediately write a new cell
+        // after wrapping (print_handler.rs) re-set this right after.
+        self.last_write = None;
         if self.cursor.row >= self.scroll_region_bottom {
             self.scroll_up_internal(1);
         } else {
