@@ -34,9 +34,15 @@ workflow:
   - id: review
     status: completed
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: >-
+      build check pass. TS-1/TS-2/TS-3 = mux::cli::tests の resolve_attach_socket_*
+      3 テストすべて pass。TS-4: mux:: 450 件全 pass。フルスイートの tabs::tests
+      5 件失敗（off-thread replay timeout 系 + welcome_without_windows_leaves_group_none）は
+      baseline 5f932ae（main ツリー）でも同一再現する既存 flaky で本 feature 無関係と確認済み。
+      MT-1（実機での更新後 attach）はユーザー手動検証に委ねる。
   - id: retrospect
     status: pending
 
