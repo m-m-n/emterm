@@ -3,6 +3,12 @@
 use crate::cell::{overflow_ridx_insert, overflow_ridx_remove};
 use crate::terminal_core::{MODE_AUTO_WRAP, TerminalCore};
 
+/// `try_retroactive_merge` が 1 セルに蓄積できる内容の UTF-8 バイト上限。
+/// `handle_print` が `grapheme_buffer` に既に課している 64 コードポイント
+/// 上限(64 * 4 バイト)に合わせ、途切れない結合文字ランで 1 セルが無制限に
+/// 肥大することを防ぐ。
+const MAX_MERGED_CLUSTER_BYTES: usize = 256;
+
 impl TerminalCore {
     /// Apply active charset translation to a codepoint.
     fn translate_charset(&self, cp: u32) -> u32 {
@@ -232,6 +238,13 @@ impl TerminalCore {
         let col32 = col as u32;
         let mut content = self.cell_content_at(idx, col, abs);
 
+        // 上限に達したら以降のマークは「消費して破棄」する。これが無いと
+        // マーク 1 個ごとにセル内容全体を複製するため合計 O(N^2) になり、
+        // セル内容長にも上限が無くなる。
+        if content.len() >= MAX_MERGED_CLUSTER_BYTES {
+            return true;
+        }
+
         let mut buf = [0u8; 4];
         let ch = char::from_u32(cp).unwrap_or('\u{FFFD}');
         content.push_str(ch.encode_utf8(&mut buf));
@@ -243,7 +256,7 @@ impl TerminalCore {
         let cell = &mut self.ring_cells[idx];
         cell.set_char(&content);
         if cell.is_overflow() {
-            self.overflow.insert((col32, abs), content.clone());
+            self.overflow.insert((col32, abs), content);
             overflow_ridx_insert(&mut self.overflow_ridx, abs, col32);
         } else if !self.overflow.is_empty() && self.overflow.remove(&(col32, abs)).is_some() {
             overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
