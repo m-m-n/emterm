@@ -18,6 +18,12 @@ import { join } from "node:path";
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
 const SCRIPT_PATH = join(import.meta.dir, "notify-status.sh");
 const HOOKS_JSON_PATH = join(REPO_ROOT, "plugins/emterm/hooks/hooks.json");
+const AGENT_STATUS_RS_PATH = join(
+  REPO_ROOT,
+  "src-tauri",
+  "src",
+  "agent_status.rs",
+);
 
 /** Runs `sh <script> <args>`, returning stdout, stderr, and exit code. */
 function runScript(
@@ -37,14 +43,131 @@ function runScript(
 }
 
 /**
+ * Decode a Rust `&str` literal body (the text captured between the quotes
+ * by `extractRustStrConst` below, escapes intact) into the runtime string
+ * it represents. `src-tauri/src/agent_status.rs`'s wire constants use only
+ * `\xHH` byte escapes and a literal `\\`; both are handled here, plus the
+ * common `\n`/`\t`/`\r`/`\"` escapes for robustness. Any other escape is a
+ * source-format surprise this derivation does not understand, so it throws
+ * rather than silently guessing (task0004.md AC-7 — fail loudly).
+ */
+function decodeRustStringLiteral(body: string): string {
+  let out = "";
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch !== "\\") {
+      out += ch;
+      continue;
+    }
+    const next = body[++i];
+    switch (next) {
+      case "x": {
+        const hex = body.slice(i + 1, i + 3);
+        i += 2;
+        out += String.fromCharCode(Number.parseInt(hex, 16));
+        break;
+      }
+      case "\\":
+        out += "\\";
+        break;
+      case '"':
+        out += '"';
+        break;
+      case "n":
+        out += "\n";
+        break;
+      case "t":
+        out += "\t";
+        break;
+      case "r":
+        out += "\r";
+        break;
+      default:
+        throw new Error(
+          `decodeRustStringLiteral: unsupported escape '\\${next}' while decoding agent_status.rs constant literal ${JSON.stringify(body)}`,
+        );
+    }
+  }
+  return out;
+}
+
+/**
+ * Extract a `const <name>: &str = "...";` value out of Rust source,
+ * tolerating ordinary formatting variation (whitespace around `=`, a
+ * trailing `//` comment after the semicolon) but throwing loudly — never
+ * falling back to an assumed value — if the constant cannot be found. This
+ * is the mechanism that turns a Rust-side wire-format change into a
+ * failing test here instead of silent drift (task0004.md F4 /
+ * SPEC.md "Wire-format duplication").
+ */
+function extractRustStrConst(source: string, name: string): string {
+  const pattern = new RegExp(
+    `const\\s+${name}\\b\\s*:\\s*&str\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"\\s*;`,
+  );
+  const match = pattern.exec(source);
+  if (!match) {
+    throw new Error(
+      `extractRustStrConst: could not find 'const ${name}: &str = "...";' in ${AGENT_STATUS_RS_PATH} — the wire-format drift detection this backs (task0004 AC-7) cannot verify the hook's expected sequence`,
+    );
+  }
+  return decodeRustStringLiteral(match[1] as string);
+}
+
+/**
+ * The four wire-format constants (task0004.md F4), derived from
+ * `src-tauri/src/agent_status.rs` at module-load time rather than
+ * hardcoded — a missing constant throws immediately and fails every test
+ * in this file loudly, rather than silently falling back to a stale
+ * literal. This is read-only access to `src-tauri/`; nothing there is
+ * written (task0004.md "Out of Scope").
+ */
+const AGENT_STATUS_RS_SOURCE = readFileSync(AGENT_STATUS_RS_PATH, "utf-8");
+const OSC_INTRODUCER = extractRustStrConst(
+  AGENT_STATUS_RS_SOURCE,
+  "OSC_INTRODUCER",
+);
+const PAYLOAD_PREFIX = extractRustStrConst(
+  AGENT_STATUS_RS_SOURCE,
+  "PAYLOAD_PREFIX",
+);
+const WIRE_VERSION = extractRustStrConst(
+  AGENT_STATUS_RS_SOURCE,
+  "WIRE_VERSION",
+);
+const ST = extractRustStrConst(AGENT_STATUS_RS_SOURCE, "ST");
+
+describe("wire-format constant extraction from agent_status.rs (AC-7)", () => {
+  test("extracts OSC_INTRODUCER, PAYLOAD_PREFIX, WIRE_VERSION, ST matching the documented wire grammar", () => {
+    expect(OSC_INTRODUCER).toBe("\x1b]777;");
+    expect(PAYLOAD_PREFIX).toBe("emterm;agent-status;");
+    expect(WIRE_VERSION).toBe("1");
+    expect(ST).toBe("\x1b\\");
+  });
+
+  test("fails loudly (throws) rather than falling back, when a constant name is not present in the source", () => {
+    expect(() =>
+      extractRustStrConst(AGENT_STATUS_RS_SOURCE, "DOES_NOT_EXIST"),
+    ).toThrow();
+  });
+});
+
+/**
  * The canonical wire-format sequence (SPEC.md FR3), byte-identical to what
  * `crate::agent_status::build` in `src-tauri/src/agent_status.rs` emits for
- * name "claude-code" (TS-9's cross-check against the Rust canonical
- * builder; the literal below is pinned by SPEC.md, not re-derived from
- * source at test time, since this task never touches `src-tauri/`).
+ * name "claude-code" — now derived from the four extracted constants above
+ * rather than a hardcoded literal (task0004.md F4), so a Rust-side change
+ * to `WIRE_VERSION`, `PAYLOAD_PREFIX`, `OSC_INTRODUCER`, or `ST` shows up
+ * as a failing test here instead of silent drift.
+ *
+ * `name=claude-code` is appended as a literal rather than run through the
+ * Rust builder's percent-encoder: `claude-code` is composed entirely of
+ * URI-unreserved characters (letters, digits, `-`), so percent-encoding it
+ * is the identity transform. This is a deliberate simplification, not an
+ * oversight — a name containing reserved characters would need the encoder
+ * mirrored here too, but nothing this suite tests sends one.
  */
 function canonicalSequence(state: string): string {
-  return `\x1b]777;emterm;agent-status;v=1;state=${state};name=claude-code\x1b\\`;
+  return `${OSC_INTRODUCER}${PAYLOAD_PREFIX}v=${WIRE_VERSION};state=${state};name=claude-code${ST}`;
 }
 
 const ALLOWED_STATES = ["idle", "working", "blocked", "done"] as const;

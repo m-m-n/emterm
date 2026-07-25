@@ -1,15 +1,20 @@
 /**
  * Static scan of the plugin's SKILL.md files (task0003 — display / mux
- * skills; task0002 — display-skill argument-injection hardening).
+ * skills; task0002 — display-skill argument-injection hardening; task0004
+ * — rework of the hardening to a Bash-first, shell-safe form).
  *
  * Skill content is prose; there is no runtime to exercise inside a task
  * worktree, so these tests assert the static invariants the task plans'
  * Acceptance Criteria describe: frontmatter shape, the exact `emterm`
  * invocation each body must contain, path hygiene, and (for the four
- * display skills) the argument-injection-safety guardrails required by
- * task0002.md. Whether Claude actually auto-invokes the right skill for a
- * given prompt is human judgment and lives in the verify phase
- * (task0003.md "Test Notes").
+ * display skills) the argument-injection-safety guardrails. task0004
+ * replaced task0002's "no-shell invocation" primary MUST — a path Claude
+ * Code cannot reach, since a skill only ever calls `emterm` through the
+ * Bash tool — with the quoted-plus-`--` shell form as the primary MUST, so
+ * these tests assert the copy-pastable safe form directly rather than
+ * loose word-presence checks (task0004.md "Test Notes"). Whether Claude
+ * actually auto-invokes the right skill for a given prompt is human
+ * judgment and lives in the verify phase (task0003.md "Test Notes").
  */
 
 import { describe, expect, test } from "bun:test";
@@ -107,26 +112,57 @@ describe("plugins/emterm/skills/display-image/SKILL.md", () => {
     expect(content).toContain("kitty");
     expect(content).toContain("sixel");
   });
+
+  test("AC-5 (task0004): --protocol is placed before the -- end-of-options delimiter", () => {
+    expect(content).toMatch(/--protocol[^\n]*--\s+'<path>'/);
+  });
 });
 
+/**
+ * Directory slug -> the exact canonical-example text before the trailing
+ * `-- '<path>'` (task0004.md F3, item 1: options first, then `--`, then
+ * the single-quoted path). `display-image` is the only one with an option.
+ */
+const CANONICAL_EXAMPLE_PREFIX: Record<string, string> = {
+  "display-markdown": "emterm markdown",
+  "display-json": "emterm json",
+  "display-yaml": "emterm yaml",
+  "display-image": "emterm image --protocol kitty",
+};
+
+/** Extract the first fenced code block in a SKILL.md body — the canonical usage example. */
+function extractFirstCodeBlock(body: string): string {
+  const match = body.match(/```\n([\s\S]*?)```/);
+  if (!match) {
+    throw new Error("no fenced code block found in SKILL.md body");
+  }
+  return (match[1] ?? "").trim();
+}
+
 for (const slug of DISPLAY_SKILLS) {
-  describe(`plugins/emterm/skills/${slug}/SKILL.md argument-injection hardening (task0002)`, () => {
+  describe(`plugins/emterm/skills/${slug}/SKILL.md safe invocation form (task0004)`, () => {
     const content = readFileSync(join(SKILLS_DIR, slug, "SKILL.md"), "utf-8");
+    const { body } = parseSkillMd(content);
+    const canonicalExample = extractFirstCodeBlock(body);
 
-    test("AC-6: contains a required-safety section requiring a single argv element, never a shell-interpolated string", () => {
-      expect(content).toContain("single argv element");
-      expect(content).toContain("never");
-      expect(content).toContain("interpolated");
+    test("AC-1: the canonical example is options-first, then --, then a single-quoted path", () => {
+      expect(canonicalExample).toBe(
+        `${CANONICAL_EXAMPLE_PREFIX[slug]} -- '<path>'`,
+      );
     });
 
-    test("AC-6: states the shell-quoting fallback for when a shell is unavoidable", () => {
-      expect(content.toLowerCase()).toContain("shell-quoted");
+    test("AC-2: the quoted-plus-- form is stated as the primary requirement, and the '\\'' escaping rule is documented", () => {
+      expect(content).toContain("Always single-quote the path");
+      expect(content).toContain("'\\''");
     });
 
-    test("AC-7: contains at least one adversarial example using a path with shell metacharacters", () => {
-      // Distinctive token rather than a whole sentence, per task0002.md
-      // "Test Notes" — robust to wording changes around it.
+    test("AC-3: the 'where the command supports it' hedge on -- is gone", () => {
+      expect(content).not.toContain("where the command supports it");
+    });
+
+    test("AC-4: contains an adversarial example whose safe side is a directly copyable command (-- plus a single-quoted path containing the injection payload)", () => {
       expect(content).toContain("touch PWNED");
+      expect(content).toMatch(/--\s+'[^']*touch PWNED[^']*'/);
     });
   });
 }
