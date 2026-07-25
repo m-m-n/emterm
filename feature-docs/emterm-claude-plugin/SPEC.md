@@ -52,7 +52,7 @@ As a Claude Code user, I want skills for `emterm mux read|send|wait`, so that Cl
 
 ### Functional Requirements
 
-- **FR1:** A `.claude-plugin/marketplace.json` at the repository root MUST declare a marketplace named `emterm-plugins`, owner `{ "name": "m-m-n" }`, with `metadata.pluginRoot: "./plugins"` and a single plugin entry `{ "name": "emterm", "source": "emterm", "description": "...", "version": "0.1.0" }`.
+- **FR1:** A `.claude-plugin/marketplace.json` at the repository root MUST declare a marketplace named `emterm-plugins`, owner `{ "name": "m-m-n" }`, and a single plugin entry `{ "name": "emterm", "source": "./plugins/emterm", "description": "...", "version": "0.1.0" }`. The `source` MUST be an explicit `./`-prefixed relative path: Claude Code's plugin-source resolver requires relative paths to start with `./`, and the `metadata.pluginRoot` shorthand (`"source": "emterm"`) is rejected as an unsupported source type (verified against Claude Code 2.1.219 during the FR8 POC).
 - **FR2:** `plugins/emterm/.claude-plugin/plugin.json` MUST declare the plugin's metadata (name, version, description) consistent with the marketplace entry.
 - **FR3:** `plugins/emterm/hooks/hooks.json` MUST configure exactly these hooks, each with `type: command`, `timeout: 3`, invoking `${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify-status.ts <state>`:
   - `UserPromptSubmit` → state `working`
@@ -135,11 +135,10 @@ Failure semantics are uniform: any failure path exits 0 so Claude Code is never 
   "name": "emterm-plugins",
   "owner": { "name": "m-m-n" },
   "description": "eMterm integration plugins for Claude Code",
-  "metadata": { "pluginRoot": "./plugins" },
   "plugins": [
     {
       "name": "emterm",
-      "source": "emterm",
+      "source": "./plugins/emterm",
       "description": "eMterm agent-status hook + rich-display skills + mux API skills",
       "version": "0.1.0"
     }
