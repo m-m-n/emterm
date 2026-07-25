@@ -1,0 +1,75 @@
+schema_version: 1
+feature: mux-attach-legacy-recovery
+created: 2026-07-25
+base_branch: main
+parent_branch: em-workflow/mux-attach-legacy-recovery/integration
+
+project:
+  license: MIT
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: dfc5004263b0ab8152b585bd0d335e25c37bfa3b
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "CLI/daemon バグ修正で可視 UI が無いため"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: 5f932ae34cd5a1890fb0e1c3f9e0344fe79cf5f1
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "Extract spawn_daemon from ensure_daemon_running (no behavior change)"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "execute_attach runs legacy recovery + conditional spawn before run_bridge"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "Attach-path recovery covered by FAKE_LEGACY_VERSION-based tests"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Linux/Windows parity; existing daemon/mux behavior unchanged"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
