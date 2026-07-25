@@ -28,9 +28,9 @@ workflow:
     status: completed
     completed_at_commit: 7381495a0ee8c5858aac7f8311ebe475863f268c
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
-    completed_at_commit: adbd70c2c0a9e4cb5bcb16c15752407f9d23102d
+    completed_at_commit: 1071915cdc0e835be25f54d2904813cde6a67c82
   - id: review
     status: pending
   - id: verify
@@ -147,7 +147,7 @@ tasks:
     domains: [input-handling, config-infra]
     complexity: medium
     requirements: [FR7]
-    status: in_progress
+    status: merged
     branch: em-workflow/emterm-plugin-runtime-fixes/task0007
   task0008:
     title: "SPEC reconciliation round 3 (rework)"
@@ -160,11 +160,11 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR3, FR7]
-    status: in_progress
+    status: merged
     branch: em-workflow/emterm-plugin-runtime-fixes/task0008
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 3
   plan:
     floor: [comprehensive, security, performance, spec]
