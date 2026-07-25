@@ -113,6 +113,10 @@ impl TerminalCore {
                                 cell.flags = self.cursor.flags;
                                 cell.hyperlink_id = self.active_hyperlink_id;
                                 self.mark_row_dirty(self.cursor.row);
+                                // Track the base cell just written (FR1); this
+                                // fast path bypasses handle_print_ascii, which
+                                // does the same bookkeeping on the slow path.
+                                self.last_write = Some((col, self.cursor.row));
                             }
                             let new_col = col + 1;
                             if new_col < self.cols {
@@ -127,6 +131,10 @@ impl TerminalCore {
                         0x0D => {
                             self.cursor.col = 0;
                             self.wrap_pending = false;
+                            // Explicit cursor movement invalidates the merge
+                            // target (FR4); this fast path bypasses dispatch_action's
+                            // blanket invalidation for Execute actions.
+                            self.last_write = None;
                             pos += 1;
                         }
                         // LF/VT/FF: line feed
@@ -139,12 +147,14 @@ impl TerminalCore {
                         0x08 => {
                             self.cursor.col = self.cursor.col.saturating_sub(1);
                             self.wrap_pending = false;
+                            self.last_write = None;
                             pos += 1;
                         }
                         // HT: horizontal tab
                         0x09 => {
                             self.cursor.col = self.next_tab_stop(self.cursor.col);
                             self.wrap_pending = false;
+                            self.last_write = None;
                             pos += 1;
                         }
                         // BEL
@@ -222,10 +232,18 @@ impl TerminalCore {
             // This ensures any accumulated emoji/pictographic codepoints are
             // written to the grid at the correct cursor position BEFORE
             // cursor movements, erases, or other operations change the state.
+            //
+            // Every non-Print action also invalidates the retroactive zero-
+            // width-merge target (`last_write`): conservatively, ANY of these
+            // (cursor movement, erase, resize, mode/buffer switch, ...) may
+            // displace or repurpose the most recently written cell (FR4).
+            // The flush above may re-set `last_write` to the just-flushed
+            // cluster's position, so invalidation runs after it.
             ParsedAction::Execute(byte) => {
                 if !self.grapheme_buffer.is_empty() {
                     self.flush_grapheme_buffer();
                 }
+                self.last_write = None;
                 self.handle_execute_internal(byte);
             }
             ParsedAction::CsiDispatch {
@@ -238,6 +256,7 @@ impl TerminalCore {
                 if !self.grapheme_buffer.is_empty() {
                     self.flush_grapheme_buffer();
                 }
+                self.last_write = None;
                 self.handle_csi_internal(
                     &params[..param_count as usize],
                     &intermediates[..intermediate_count as usize],
@@ -251,18 +270,21 @@ impl TerminalCore {
                 if !self.grapheme_buffer.is_empty() {
                     self.flush_grapheme_buffer();
                 }
+                self.last_write = None;
                 self.handle_esc_internal(intermediate, final_byte);
             }
             ParsedAction::OscDispatch { param, data } => {
                 if !self.grapheme_buffer.is_empty() {
                     self.flush_grapheme_buffer();
                 }
+                self.last_write = None;
                 self.handle_osc_internal(param, &data);
             }
             ParsedAction::ApcDispatch(payload) => {
                 if !self.grapheme_buffer.is_empty() {
                     self.flush_grapheme_buffer();
                 }
+                self.last_write = None;
                 use crate::apc_handler::KittyApcResult;
                 let result = self.handle_kitty_apc(&payload);
                 // Forward to backend for all except query (which needs no image processing)
@@ -274,6 +296,7 @@ impl TerminalCore {
                 if !self.grapheme_buffer.is_empty() {
                     self.flush_grapheme_buffer();
                 }
+                self.last_write = None;
                 self.fire_dcs_callback(&payload);
             }
         }
