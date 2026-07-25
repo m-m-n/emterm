@@ -77,7 +77,10 @@ findings:
       just `--stdin` supply.
     sources: [claude:security, claude:comprehensive, codex:security]
     confidence: 95
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0010. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
   - stable_id: cm-stopfailure-noop
     severity: high
     category: comprehensive
@@ -107,7 +110,10 @@ findings:
       README-to-hooks.json consistency assertion fails.
     sources: [claude:comprehensive]
     confidence: 80
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0009. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
   - stable_id: cm-posttooluse-failure-unwired
     severity: medium
     category: comprehensive
@@ -128,7 +134,10 @@ findings:
       hook, so record that one as a known limitation.
     sources: [claude:comprehensive]
     confidence: 65
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0009. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
   - stable_id: sc-redirect-path-unruled
     severity: medium
     category: security
@@ -150,7 +159,10 @@ findings:
       single-quote the whole path, splice embedded quotes as `'\''`). Add a regression assertion.
     sources: [claude:security, codex:security]
     confidence: 80
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0010. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
   - stable_id: sc-invariant-contradicts-escape
     severity: medium
     category: security
@@ -174,7 +186,10 @@ findings:
       update the skills.test.ts assertion that pins the old wording.
     sources: [claude:security]
     confidence: 60
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0010. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
   - stable_id: sc-consent-vs-invoke-as-is
     severity: medium
     category: security
@@ -195,7 +210,10 @@ findings:
       that the closing instruction is not the unconditional form.
     sources: [claude:security, claude:comprehensive]
     confidence: 80
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0010. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
   - stable_id: cm-heredoc-guard-too-narrow
     severity: medium
     category: comprehensive
@@ -216,7 +234,10 @@ findings:
       operator.
     sources: [claude:comprehensive]
     confidence: 65
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0010. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
   - stable_id: cm-matcher-test-missing-type
     severity: medium
     category: comprehensive
@@ -236,7 +257,10 @@ findings:
       the list tracks the documented notification types so a future addition is noticed.
     sources: [claude:comprehensive]
     confidence: 65
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0010. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
   - stable_id: sp-text-example-unbalanced
     severity: medium
     category: spec
@@ -254,7 +278,10 @@ findings:
       substring.
     sources: [codex:spec]
     confidence: 50
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0010. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
   - stable_id: sp-sc4-bun-absolute
     severity: medium
     category: spec
@@ -273,7 +300,10 @@ findings:
       that the test files use Bun as a development-time tool, matching VERIFICATION.md.
     sources: [claude:spec]
     confidence: 65
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0010. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
   - stable_id: sp-nfr3-path-absolute
     severity: medium
     category: spec
@@ -294,7 +324,10 @@ findings:
       repository paths relative to their own location as other SPEC sections require.
     sources: [claude:spec]
     confidence: 65
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0010. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
   - stable_id: sp-verification-dollarparen-grep
     severity: medium
     category: spec
@@ -314,7 +347,10 @@ findings:
       is a review-time structural confirmation rather than a TS-8 assertion.
     sources: [claude:spec]
     confidence: 65
-    resolution: unresolved
+    resolution: fixed
+    resolution_reason: >-
+      Addressed by task0010. NOT re-reviewed: no round 5 was run — the decision after round 4
+      was to fix and then execute the M-1 live check rather than open another static round.
 auto_fix:
   loops_run: 0
   applied_total: 0
@@ -323,8 +359,9 @@ auto_fix:
     No auto-fix candidates: both highs require design decisions (a write-mechanism requirement and
     whether to keep an event whose output the platform discards), and every remaining finding is
     below the severity gate.
-residual_critical_high: 2
-rework_required: true
+residual_critical_high: 0
+rework_required: false
+resolved_by: [task0009, task0010]
 meta:
   pattern_shift: >
     Rounds 1-3 all had the same shape — each round's security-prose rewrite produced the next
