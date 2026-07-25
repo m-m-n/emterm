@@ -13,7 +13,31 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify-status.sh",
+            "args": ["working"],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
     "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify-status.sh",
+            "args": ["idle"],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
       {
         "hooks": [
           {

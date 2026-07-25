@@ -25,7 +25,7 @@
 | TS-3 | Zero positional arguments | Empty stdout, empty stderr, exit 0 | Unit |
 | TS-4 | Two or more positional arguments (`working extra`) | Empty stdout, empty stderr, exit 0 | Unit |
 | TS-5 | Argument with shell metacharacters (`"working; touch PWNED"`, `"$(id)"`) | Empty stdout, exit 0, no file created | Unit |
-| TS-6 | `hooks.json` structural check | Valid JSON; all three hooks exec form; `${CLAUDE_PLUGIN_ROOT}`-prefixed commands; no absolute path, no `..`; `timeout` 3; no `SubagentStop` | Integration |
+| TS-6 | `hooks.json` structural check | Valid JSON; all five hooks exec form; `${CLAUDE_PLUGIN_ROOT}`-prefixed commands; no absolute path, no `..`; `timeout` 3; no `SubagentStop` | Integration |
 | TS-7 | `Notification` matcher behaviour | Matches `permission_prompt` / `elicitation_dialog` / `agent_needs_input`; does not match `idle_prompt` / `auth_success` / `elicitation_complete` / `elicitation_response` | Integration |
 | TS-8 | Legacy artifacts removed | `notify-status.ts` absent; `notify-status.sh` contains no `/dev/tty`, `emterm`, `bun`, `eval`, or backticks | Integration |
 | TS-9 | Wire-format fidelity | Emitted sequence per state is byte-identical to the canonical form documented in SPEC.md FR3 and produced by `src-tauri/src/agent_status.rs` with name `claude-code` | Integration |
@@ -45,7 +45,7 @@
 |----|-----------|---------------|
 | SC-1 | FR1-FR9 implemented | Requirements coverage table below plus task acceptance criteria |
 | SC-2 | `bun test` and `bun run typecheck` pass | Build + Test Verification above |
-| SC-3 | Three state transitions observed on a real eMterm tab | Manual scenario M-1 |
+| SC-3 | State transitions, including `blocked`-to-`working` recovery and the `StopFailure` path, observed on a real eMterm tab | Manual scenario M-1 |
 | SC-4 | `notify-status.ts` gone; nothing references `bun` or `/dev/tty` | TS-8, plus `git grep -n 'dev/tty\|bun' plugins/emterm/` returning only test-harness references |
 | SC-5 | Version remains `0.1.0` | TS-11 |
 | SC-6 | No changes outside `plugins/` and `feature-docs/` | `git diff --name-only <base_commit>..<parent_branch>` shows no path under `src-tauri/`, `crates/`, or `.claude-plugin/` |
@@ -82,9 +82,10 @@ No project E2E framework. E2E coverage is the manual scenarios below.
   1. Send a prompt. Observe the eMterm tab badge become `working` (filled, primary colour).
   2. Wait for the response to complete. Observe the badge become `idle` (filled, `on_surface_variant`).
   3. Trigger a permission prompt (any tool call requiring approval). Observe the badge become `blocked` (`on_error_container`).
-  4. Approve it, let the response finish, and confirm the badge settles on `idle` and does NOT flip back to `blocked` from the ordinary idle notification.
+  4. Approve it. Observe the badge return to `working` (filled, primary colour) as soon as the approved tool call completes — this is the `PostToolUse` hook firing — then let the response finish and confirm the badge settles on `idle` and does NOT flip back to `blocked` from the ordinary idle notification.
+  5. Force an API error (e.g. a rate limit or an auth failure) so the turn ends via `StopFailure` instead of `Stop`. Observe whether the badge settles on `idle`. `StopFailure` output and exit codes are documented as ignored by Claude Code, so treat this step as informational: record what was observed (including "no change" or "inconclusive") rather than treating any outcome as a hard pass/fail.
 
-  Expected: all three transitions visible; step 4 shows no spurious `blocked`.
+  Expected: all transitions in steps 1-4 visible, with step 4 showing the `blocked` -> `working` recovery and no spurious `blocked` afterward; step 5's result recorded either way.
 
   Note: badge shape distinguishes states — `Working`/`Idle` always render filled, `Blocked`/`Done` render as a ring once seen (`src-tauri/src/ui/tab_bar.rs`, `agent_badge_filled`). This is the same discriminator used in the pre-spec POC.
 
