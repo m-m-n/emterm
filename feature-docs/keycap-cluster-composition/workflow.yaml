@@ -71,7 +71,7 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR5, NFR1]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/keycap-cluster-composition/task0002
 
