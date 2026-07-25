@@ -57,8 +57,9 @@ tasks:
     domains: [input-handling]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/keycap-cluster-composition/task0001
   task0002:
     title: "Strip VS16 before emoji font shaping"
     plan: tasks/task0002.md
@@ -70,8 +71,9 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR5, NFR1]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/keycap-cluster-composition/task0002
 
 review:
   status: pending
