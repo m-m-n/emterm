@@ -1,0 +1,111 @@
+schema_version: 1
+feature: emterm-plugin-runtime-fixes
+created: 2026-07-25
+base_branch: main
+parent_branch: em-workflow/emterm-plugin-runtime-fixes/integration
+
+project:
+  license: MIT
+  components:
+    plugin:
+      language: shell
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 78966a60f485dbd6ffe2adc53826b693a792da55
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Transport-layer and documentation changes only — no visible UI, no design tokens. The eMterm tab badge rendering is pre-existing and untouched."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "notify-status.sh replaces notify-status.ts (POSIX sh, mode 0755, no runtime deps)"
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: "Exactly one positional arg; allow-list validation; reject silently with exit 0"
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: "Emit {\"terminalSequence\": \"<canonical OSC 777 sequence>\"} on stdout"
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: "hooks.json in exec form (command + args), timeout 3, no SubagentStop"
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: "Notification matcher restricted to permission_prompt/elicitation_dialog/agent_needs_input"
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: "Delete notify-status.ts; replace its test coverage against the shell script"
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: "display-* skills document argv-based invocation with adversarial examples"
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: "README: drop bun prereq, state Claude Code >= 2.1.141, prune obsolete limitations"
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: "marketplace.json and plugin.json keep version 0.1.0"
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: "No subprocess, no file I/O beyond stdout, no timeout mechanism"
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Allow-list before use; no eval/backticks/command substitution over input"
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: "POSIX-shell portable (no bashisms); all paths under ${CLAUDE_PLUGIN_ROOT}"
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Every rejection path exits 0 with no stdout and no stderr"
+    status: ok
+    tasks: []
+    tests: []
