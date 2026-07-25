@@ -1,0 +1,60 @@
+round: 1
+executed_at: "2026-07-25T20:55:23+09:00"
+scope:
+  review_mode: diff
+  base_commit: 5f932ae34cd5a1890fb0e1c3f9e0344fe79cf5f1
+  head_commit: b149b24e83141db16b941b00780fb37a8ffd63fe
+  changed_files:
+    - src-tauri/src/mux/cli.rs
+    - src-tauri/src/mux/daemon.rs
+plan:
+  floor: [comprehensive, performance, spec]
+  discretionary: []
+  codex_cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+findings:
+  - stable_id: 42d33f98995b5197
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/cli.rs
+    line: 381
+    title: "attach 経路が cleanup_stale_socket を踏まないため、クラッシュ残骸ソケットで AC-3 のメッセージが出ない"
+    description: "resolve_attach_socket_with は ensure_daemon_running のゲート（cleanup_stale_socket → 存在チェック → recovery probe → spawn）から cleanup_stale_socket だけを落としている。daemon が SIGKILL / クラッシュで落ちた場合、Unix では AF_UNIX ソケットファイル、Windows では marker ファイルが残るため sock_path.exists() は true になり、そのまま recover_from_legacy_daemon に入って connect_daemon が ECONNREFUSED で落ちる。結果ユーザーが見るのは生の接続エラーで、AC-3 の「No mux sessions to attach to…」は socket ファイルが物理的に無いときしか出ない。attach 側は残骸ファイルを消さないので次に emterm mux を叩くまでその状態が残る。cleanup_stale_socket は pub かつまさにこの用途で存在しており、ロジックが 2 箇所に分かれてドリフトしている状態。"
+    suggestion: "resolve_attach_socket_with の冒頭（存在チェックの前）で daemon::cleanup_stale_socket(sock_path) を呼び、ensure_daemon_running と同じ前処理を通す（unified diff は auto-fix 候補外のため round 記録では省略、レビュアー出力参照）。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium は auto-fix ゲート対象外（batch run・人間評価向けに記録）"
+  - stable_id: b7e2f9b4870c9957
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/cli.rs
+    line: 1568
+    title: "fake legacy daemon のバージョンがハードコードで、次の PROTOCOL_VERSION bump 時にテストが失敗ではなくハングする"
+    description: "cli.rs テストの FAKE_LEGACY_VERSION = 1 はリテラル固定なのに、テスト対象の recover_from_legacy_daemon はリトライ時に PREVIOUS_PROTOCOL_VERSION（= PROTOCOL_VERSION - 1、現在 1）を送る。PROTOCOL_VERSION の bump（2→3）が起きると PREVIOUS は 2 になり、fake daemon は 2 番目の Hello も reject して listener.accept() で永久ブロック。テストは結果検証の前に legacy.join() するため、cargo test が assert 失敗ではなく無期限ハングになる。AC-2 テストの server.join() も同じ形。"
+    suggestion: "(a) FAKE_LEGACY_VERSION を PREVIOUS_PROTOCOL_VERSION 参照にして版数 bump に自動追従させる。(b) 両テストで result の検証を join() より前に移し、壊れたときは panic で落ちるようにする。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium は auto-fix ゲート対象外（batch run・人間評価向けに記録）"
+  - stable_id: ab9903c0e7b72726
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/cli.rs
+    line: 1561
+    title: "FR3/TS-1 の「既存 fake-legacy-daemon インフラを使い、実 daemon を spawn する」から乖離"
+    description: "SPEC FR3 は既存の FAKE_LEGACY_VERSION fake-legacy-daemon テスト基盤（daemon.rs test module）の再利用を明記し、TS-1 は「spawning a real daemon」を規定するが、実装は (1) daemon.rs のヘルパを再利用せず cli.rs テストにほぼ逐語コピーを新設、(2) AC-1 テストは実 daemon ではなく注入 fake（spawn_fake_current_daemon）で respawn 経路を検証している。Assumptions A2 は run_bridge を e2e で駆動しない免除までで、spawn 差し替えは免除対象外。production 配線 resolve_attach_socket は一度も実行されないため、spawn 前後の将来的な欠落はテストで検知できない。"
+    suggestion: "(a) daemon.rs の fake ヘルパ群を #[cfg(test)] pub(in crate::mux) mod test_support に切り出して再利用し、実 spawn 不可の点を SPEC Assumptions に A5 として追記 + TS-1 文言を injected spawn step に更新。または (b) src-tauri/tests/ 側の integration test に実 daemon spawn の TS-1 相当を置く。"
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "medium は auto-fix ゲート対象外（batch run・人間評価向けに記録）"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
