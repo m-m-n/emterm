@@ -25,7 +25,7 @@ workflow:
     skipped_reason: "CLI/daemon バグ修正で可視 UI が無いため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: 5f932ae34cd5a1890fb0e1c3f9e0344fe79cf5f1
