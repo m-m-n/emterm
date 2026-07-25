@@ -77,8 +77,14 @@ tasks:
     branch: em-workflow/keycap-cluster-composition/task0002
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, security, architecture, spec]
+    discretionary:
+      - perspective: performance
+        reason: "統合 diff が term_core の print ホットパス（terminal_dispatch fast path 含む）と描画のシェーピング経路に触れるため"
+    codex_cross_validation: true
 
 requirements:
   FR1:
