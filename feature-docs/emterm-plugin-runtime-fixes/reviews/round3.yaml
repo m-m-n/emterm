@@ -1,0 +1,251 @@
+round: 3
+executed_at: "2026-07-25T14:20:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
+  head_commit: 00cd622b0d3498975158220098315ad3890a3a4a
+  changed_files:
+    - plugins/emterm/README.md
+    - plugins/emterm/hooks/hooks.json
+    - plugins/emterm/hooks/scripts/notify-status.sh
+    - plugins/emterm/hooks/scripts/notify-status.test.ts
+    - plugins/emterm/hooks/scripts/notify-status.ts   # deleted
+    - plugins/emterm/skills/display-image/SKILL.md
+    - plugins/emterm/skills/display-json/SKILL.md
+    - plugins/emterm/skills/display-markdown/SKILL.md
+    - plugins/emterm/skills/display-yaml/SKILL.md
+    - plugins/emterm/skills/mux-send/SKILL.md
+    - plugins/emterm/skills/skills.test.ts
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "hooks.json unchanged since round 2; rounds 1-2 both clean on this perspective"}
+verified_fixed:
+  - cm-no-blocked-recovery
+  - cm-stopfailure-unwired
+  - cm-wire-drift-undetected
+  - sc-display-hardening-wrong-path
+  - sp-fr7-contradicts-impl
+  - cm-tilde-expansion-broken
+  - cm-readme-hook-drift
+  - sc-doublequote-not-taught
+  - cm-display-image-self-contradiction
+  - sp-fr6-delete-vs-replace
+  - cm-minversion-args-stopfailure
+findings:
+  - stable_id: sc-heredoc-delimiter-collision
+    severity: high
+    category: security
+    file: plugins/emterm/skills/mux-send/SKILL.md
+    line: 29
+    title: "Heredoc delimiter collision gives arbitrary command execution"
+    description: >
+      The quoted-delimiter heredoc that became mux-send's primary --stdin form ends as soon as a
+      body line equals the delimiter. The delimiter `EOF` is published in the skill itself, and
+      the skill explicitly accepts file contents, pane output, and logs as untrusted sources, so
+      an attacker only has to place a bare `EOF` line followed by commands in the text. The
+      mitigation as written offers "pick a delimiter unlikely to collide" as an ALTERNATIVE to
+      checking the text, so an agent that follows the instruction correctly is still exploitable.
+      Codex supplied a refinement that leaves no error trace: `safe\nEOF\ntouch PWNED\n: <<'EOF'`
+      opens a second heredoc to swallow the generated closing delimiter.
+      Orchestrator verification: reproduced directly — a bash heredoc with an `EOF` line in the
+      body executed the following line and created /tmp/HEREDOC-PWNED.
+      This is a regression introduced by the round-2 fix for sc-mux-send-unreachable; the form it
+      replaced (`printf '%s' "$TEXT" | ...`) did not have this failure mode.
+    suggestion: >
+      Do not patch the wording. Remove the class: write the bytes to a file the model itself
+      created and redirect, `emterm mux send --pane <id> --stdin < '<file>'`. Untrusted bytes then
+      never enter the command line, so no delimiter, quoting, or escaping rule applies to them.
+    sources: [claude:security, codex:security, codex:spec]
+    confidence: 95
+    resolution: unresolved
+  - stable_id: cm-heredoc-trailing-newline-executes
+    severity: high
+    category: comprehensive
+    file: plugins/emterm/skills/mux-send/SKILL.md
+    line: 29
+    title: "Heredoc appends a trailing newline, so sent text is executed in the destination pane"
+    description: >
+      A heredoc always terminates its body with a newline. `emterm mux send --stdin` reads stdin
+      with `read_to_end` and forwards the bytes verbatim as typed input (verified in
+      src-tauri/src/mux/cli.rs `execute_mux_send`; there is no trailing-newline stripping). In a
+      pane running a shell that trailing newline is an Enter, so the text is committed and run.
+      The form it replaced, `printf '%s' "$TEXT"`, appended nothing — this is a behavioural change
+      smuggled in with a security rework. The skill's own adversarial examples now assert the
+      opposite of the truth: example 1 says the pane "receives the literal characters `; rm -rf ~`
+      as typed input", and example 3 calls `first line\nrm -rf /` "Safe … passes the text verbatim,
+      including the newline". Under the recommended form both are executed.
+      skills.test.ts AC-6 pins the heredoc shape, so fixing this requires updating the test too.
+    suggestion: >
+      The file-redirection form proposed for sc-heredoc-delimiter-collision also fixes this: the
+      model writes the file with exactly the bytes it intends, so whether a trailing newline is
+      sent becomes an explicit choice rather than an artifact. Whichever form is chosen, rewrite
+      adversarial examples 1 and 3 to state that the destination pane executes what it receives,
+      and say plainly that sending untrusted text to a pane running a shell is an action needing
+      user consent.
+    sources: [claude:comprehensive, claude:security]
+    confidence: 80
+    resolution: unresolved
+  - stable_id: sc-tilde-outside-quotes-invariant
+    severity: medium
+    category: security
+    file: plugins/emterm/skills/display-markdown/SKILL.md
+    line: 33
+    title: "`~` rule states no invariant for what may leave the quotes; `~user` generalises into command substitution"
+    description: >
+      The documented form `emterm markdown -- "$HOME"'/notes.md'` is itself safe: `"$HOME"` is a
+      literal the model writes and the untrusted remainder stays single-quoted. But it is the only
+      place where anything sits outside the single quotes, and no invariant constrains that
+      exception. The text says "expand only the `~`/`$HOME` segment" and is silent on the
+      `~user/...` tilde-prefix form. Applying the natural generalisation to an untrusted path
+      `~$(touch PWNED)/notes.md` yields `emterm markdown -- ~$(touch PWNED)'/notes.md'`, where the
+      command substitution sits outside the quotes and executes. Identical wording is in all four
+      display skills; skills.test.ts AC-1 only matches `"$HOME"'/...'` so the generalisation is
+      not caught.
+    suggestion: >
+      Simplest fix is to delete the exception rather than qualify it: require the model to resolve
+      `~` to an absolute path itself before quoting, and state that no byte derived from an
+      untrusted path may appear outside the single quotes — one invariant, no special case. If the
+      `"$HOME"` form is kept, add that invariant explicitly and say `~user` forms are not expanded.
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+  - stable_id: cm-posttooluse-overwrites-blocked
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/hooks/hooks.json
+    line: 16
+    title: "Unmatched PostToolUse->working can clear `blocked` while a permission dialog is still open"
+    description: >
+      `PostToolUse` has no matcher, so it fires on every tool completion. Claude Code runs
+      independent tool calls in parallel, so a tool finishing while another call's permission
+      dialog is still on screen reports `working` and clears the `blocked` badge before the user
+      has answered — defeating the feature's main purpose. This is an interaction introduced by
+      round 1's cm-no-blocked-recovery fix.
+      Confidence caveat from the reviewer: whether Claude Code actually schedules other tools
+      during a permission prompt was NOT measured; only the absence of any suppression in
+      hooks.json was confirmed. Current tests check hooks.json's static shape only and cover no
+      ordering at all.
+    suggestion: >
+      Options: add a matcher narrowing PostToolUse; give eMterm's agent-status a priority rule so
+      `blocked` survives until the next UserPromptSubmit / Stop / StopFailure (cleanest, but
+      touches src-tauri which is out of scope for this feature); or accept it, record the
+      behaviour in SPEC as an intentional precedence rule, and note it in the README known
+      limitations. Whichever is chosen, add a test that states the expected precedence rather than
+      just the event set.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: sp-mux-send-unspecified
+    severity: medium
+    category: spec
+    file: plugins/emterm/skills/mux-send/SKILL.md
+    line: 24
+    title: "mux-send's rework has no requirement behind it, and SPEC still asserts the opposite state"
+    description: >
+      No FR mentions mux-send, the File structure section does not list it, and TS-10 covers only
+      the four display skills — so nothing in the SSOT authorises or verifies the rework. Worse,
+      SPEC's Security Considerations still reads "mux-send/SKILL.md still carries the argv-based
+      primary MUST as of this task; that file is out of scope here (task0006)", which task0006
+      then made false by rewriting it.
+      Root cause is the task split, not an implementer error: task0005 wrote a statement about a
+      file task0006 owned, correct when written and stale once task0006 merged.
+    suggestion: >
+      Add an FR covering mux-send (whatever primary form round 4 settles on, the `--text`
+      single-quote plus `'\''` rule, and the retained pane-ID validation), extend TS-10 to all
+      seven skills, list the file in the File structure section, and rewrite the stale Security
+      Considerations sentence. Alternatively drop mux-send from this feature and revert it — but
+      that reinstates sc-mux-send-unreachable.
+    sources: [claude:spec]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: sp-fr7-missing-tilde-and-doublequote
+    severity: medium
+    category: spec
+    file: feature-docs/emterm-plugin-runtime-fixes/SPEC.md
+    line: 77
+    title: "FR7 and TS-10 do not cover the `~` rule or the double-quote warning added to the display skills"
+    description: >
+      The rewritten FR7 lists five MUSTs, none of which mention the `~`/`$HOME` handling or the
+      "double quotes are NOT a safe substitute" warning plus its command-substitution adversarial
+      example — both added to all four display skills this round. The `~` form is in fact a
+      DEVIATION from FR7's pinned shape, since part of the argument sits outside the single
+      quotes, and FR7 grants no exception. skills.test.ts enforces both additions strictly, so
+      restoring the skills to FR7's literal text would now fail the tests: spec and tests are
+      inverted.
+    suggestion: >
+      Add both to FR7 and TS-10 — or, if the `~` exception is removed per
+      sc-tilde-outside-quotes-invariant, add only the double-quote requirement and keep FR7's
+      single-invariant shape intact.
+    sources: [claude:spec]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: sp-ts8-contradicts-fr3
+    severity: medium
+    category: spec
+    file: feature-docs/emterm-plugin-runtime-fixes/SPEC.md
+    line: 186
+    title: "TS-8 forbids any reference to `emterm` in a script FR3 requires to contain that literal"
+    description: >
+      TS-8 requires notify-status.sh to contain "no reference to /dev/tty, emterm, bun, eval, or
+      backticks", while FR3 requires the same script to emit the literal payload
+      `emterm;agent-status;`. The two cannot both hold. The test resolves it by stripping the
+      payload before asserting, i.e. it verifies "does not invoke the emterm binary" — a different
+      claim from the one TS-8 makes. The task0001 implementer flagged this contradiction in its
+      completion report and it was not acted on.
+    suggestion: >
+      Reword TS-8 to what is actually verified: no `/dev/tty`, `bun`, `eval`, or backticks, and no
+      invocation of the emterm binary, with the FR3 payload literal as the sole permitted
+      occurrence of the string. The test needs no change.
+    sources: [claude:spec]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: sp-fr3-raw-esc-byte
+    severity: medium
+    category: spec
+    file: feature-docs/emterm-plugin-runtime-fixes/SPEC.md
+    line: 66
+    title: "FR3's JSON-escaping clause contains a raw ESC byte and is self-referential"
+    description: >
+      FR3's closing sentence reads "The JSON MUST escape the two control bytes as `<raw 0x1B>`",
+      pinning nothing — it says to escape ESC as ESC, and a raw control byte cannot appear in a
+      JSON string at all. The implementation uses ``, which satisfies FR3's intent and the
+      canonical byte sequence, but no clause actually backs that choice.
+      Orchestrator verification: confirmed — SPEC.md line 66 holds a literal 0x1B
+      (`grep -P '[\x00-\x08\x0b-\x1f]'` matches exactly one line; `cat -A` shows `^[`). It is the
+      only raw control byte in the file.
+    suggestion: >
+      Replace with a control-byte-free statement: escape each ESC (0x1B) as `` and the
+      trailing backslash as `\\`.
+    sources: [claude:spec]
+    confidence: 65
+    resolution: unresolved
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-candidates
+  note: >
+    No auto-fix candidates: both highs are prose/design changes in a SKILL.md rather than
+    structurally-applicable diffs, and every remaining finding is below the severity gate.
+residual_critical_high: 2
+rework_required: true
+meta:
+  pattern: >
+    Rounds 1-3 show a consistent shape: every round's security-guidance rewrite introduces the
+    next round's findings. Round 1 mandated an argv-array invocation the agent cannot perform;
+    round 2 replaced it with Bash-first quoting that broke `~` and left mux-send behind; round 3's
+    mux-send heredoc introduced two highs, one of them exploitable by an agent that follows the
+    instructions correctly. Prose-level hardening is not converging.
+    This is the substance of round 2's sc-prose-escaping-fallible, which was declined as not
+    implementable and disclosed as a residual risk. The declination was right about the argv
+    remedy being unavailable, but wrong to conclude that prose was therefore the only option:
+    `--stdin < '<file>'` keeps untrusted bytes out of the command line entirely and is available
+    today. Round 4 should prefer removing the injection class over describing it more carefully.
