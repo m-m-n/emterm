@@ -42,7 +42,7 @@ findings:
     suggestion: "Apply an internal timeout shorter than the hook's 3s limit, terminate the child on expiry, and return 0 without writing to /dev/tty."
     sources: [codex:spec]
     confidence: 50
-    resolution: unresolved
+    resolution: unresolved  # superseded by rework_disposition; see round 2 for outcome
   - stable_id: cm-nonzero-tty-write
     severity: medium
     category: comprehensive
@@ -53,7 +53,7 @@ findings:
     suggestion: "Skip the tty write when result.exitCode !== 0. Also extend AC-6 test to assert getOpenTtyCalls() is 0 when spawn resolves non-zero with non-empty stdout."
     sources: [claude:comprehensive]
     confidence: 65
-    resolution: unresolved
+    resolution: unresolved  # superseded by rework_disposition; see round 2 for outcome
   - stable_id: sc-mux-send-shell-inject
     severity: medium
     category: security
@@ -64,7 +64,7 @@ findings:
     suggestion: "Require --stdin for arbitrary text, validate pane IDs, and mandate argv-based execution. Add adversarial examples covering metacharacters."
     sources: [codex:security]
     confidence: 50
-    resolution: unresolved
+    resolution: unresolved  # superseded by rework_disposition; see round 2 for outcome
   - stable_id: sc-mux-read-prompt-inject
     severity: medium
     category: security
@@ -75,7 +75,7 @@ findings:
     suggestion: "Explicitly label mux stdout as untrusted data, delimit it from instructions, and instruct the model to never follow directives from mux output."
     sources: [codex:security]
     confidence: 50
-    resolution: unresolved
+    resolution: unresolved  # superseded by rework_disposition; see round 2 for outcome
   - stable_id: pf-hook-2process-per-prompt
     severity: medium
     category: performance
@@ -86,7 +86,7 @@ findings:
     suggestion: "Remove the nested CLI invocation from the prompt path. Write the OSC directly from the hook, or send to a persistent IPC helper. If a child process is unavoidable, don't await and enforce a short deadline."
     sources: [codex:performance]
     confidence: 50
-    resolution: unresolved
+    resolution: unresolved  # superseded by rework_disposition; see round 2 for outcome
   - stable_id: sp-argv-cardinality
     severity: medium
     category: spec
@@ -97,7 +97,7 @@ findings:
     suggestion: "Require argv.length === 1 before validating and using the state."
     sources: [codex:spec]
     confidence: 50
-    resolution: unresolved
+    resolution: unresolved  # superseded by rework_disposition; see round 2 for outcome
   - stable_id: sp-test-outside-plugin-root
     severity: medium
     category: spec
@@ -108,7 +108,7 @@ findings:
     suggestion: "Keep plugin-contained tests rooted within plugins/emterm/, and move repository-level marketplace assertions to a test outside the plugin directory (or accept as a repo-level test that runs only in-tree)."
     sources: [codex:spec]
     confidence: 50
-    resolution: unresolved
+    resolution: unresolved  # superseded by rework_disposition; see round 2 for outcome
   - stable_id: cm-poc-verification-incomplete
     severity: medium
     category: comprehensive
@@ -119,7 +119,7 @@ findings:
     suggestion: "Run the POC in the verify phase, verify working/idle/blocked transitions, measure timing, and record observations under feature-docs/emterm-claude-plugin/POC-RESULTS.md."
     sources: [codex:spec]
     confidence: 50
-    resolution: unresolved
+    resolution: unresolved  # superseded by rework_disposition; see round 2 for outcome
 auto_fix:
   loops_run: 0
   applied_total: 0
