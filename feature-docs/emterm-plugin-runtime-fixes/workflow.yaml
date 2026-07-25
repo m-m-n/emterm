@@ -104,7 +104,7 @@ tasks:
     branch: em-workflow/emterm-plugin-runtime-fixes/task0004
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, spec]
