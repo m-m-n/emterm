@@ -1,0 +1,137 @@
+round: 1
+executed_at: "2026-07-25T11:45:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
+  head_commit: 258acd646715c049ce7acb27702f930f14f78094
+  changed_files:
+    - plugins/emterm/README.md
+    - plugins/emterm/hooks/hooks.json
+    - plugins/emterm/hooks/scripts/notify-status.sh
+    - plugins/emterm/hooks/scripts/notify-status.test.ts
+    - plugins/emterm/hooks/scripts/notify-status.ts   # deleted by this change
+    - plugins/emterm/skills/display-image/SKILL.md
+    - plugins/emterm/skills/display-json/SKILL.md
+    - plugins/emterm/skills/display-markdown/SKILL.md
+    - plugins/emterm/skills/display-yaml/SKILL.md
+    - plugins/emterm/skills/skills.test.ts
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  - stable_id: cm-no-blocked-recovery
+    severity: high
+    category: comprehensive
+    file: plugins/emterm/hooks/hooks.json
+    line: 28
+    title: "No blocked -> working recovery transition; badge stays blocked after a permission prompt is answered"
+    description: >
+      The state machine is one-way into blocked. Real sequence: UserPromptSubmit -> working;
+      Notification(permission_prompt) -> blocked; the user approves and Claude resumes working;
+      Stop -> idle at end of turn. Nothing clears blocked during the resumed work, so the tab
+      badge reads "waiting on you" for the rest of the turn while Claude is actually running.
+      Permission prompts are frequent in the default permission mode, so in practice the badge
+      is wrong for much of a session. This defeats SPEC US1 (tell thinking / done / waiting
+      apart at a glance) and US2 (blocked means a human is actually needed). VERIFICATION.md
+      M-1 only checks that blocked appears, never that it clears, so manual testing misses it too.
+    suggestion: >
+      Add a PostToolUse hook (no matcher) with args ["working"]: right after an approved tool
+      runs, the badge returns to working, so blocked covers only the actual wait. Per-tool-call
+      cost is one sh fork with no subprocess or I/O (NFR1), which is negligible. PreToolUse is
+      the weaker alternative because it can be overwritten by the permission prompt that follows.
+      Requires updating SPEC FR4 / TS-6 and the notify-status.test.ts event-set assertion.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: cm-stopfailure-unwired
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/hooks/hooks.json
+    line: 16
+    title: "StopFailure unwired; badge sticks on working when an API error ends the turn"
+    description: >
+      Claude Code fires StopFailure instead of Stop when the turn ends due to an API error
+      (verified in the hooks documentation: "Runs instead of Stop when the turn ends due to an
+      API error ... rate limits, authentication problems, or other API errors"). hooks.json
+      wires idle only to Stop, so on that path the badge stays working until the next prompt.
+      Rate limiting is a routine occurrence, so this is not a rare path.
+    suggestion: >
+      Add a StopFailure hook (no matcher) with args ["idle"]. StopFailure output and exit codes
+      are ignored by Claude Code, so whether terminalSequence is honoured on that event needs a
+      live check — add it to M-1. Requires updating SPEC FR4 / TS-6 and the test's event-set
+      assertion. If not wired, document it in the README known limitations instead.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: cm-wire-drift-undetected
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/hooks/scripts/notify-status.test.ts
+    line: 38
+    title: "Wire-format drift detection does not actually exist; SPEC claims otherwise"
+    description: >
+      canonicalSequence() hardcodes the expected sequence in TypeScript, and its own comment
+      admits the literal is "pinned by SPEC.md, not re-derived from source at test time".
+      SPEC.md's "Wire-format duplication" section claims that "a Rust-side format change that is
+      not mirrored here shows up as a failing test rather than silent drift" — that claim is
+      false. Bumping WIRE_VERSION or changing PAYLOAD_PREFIX in src-tauri/src/agent_status.rs
+      would leave the plugin test green while the hook silently emits an obsolete sequence.
+      The current literal itself is correct (verified against the Rust constants).
+    suggestion: >
+      Either (a) have the test read src-tauri/src/agent_status.rs and extract the
+      OSC_INTRODUCER / PAYLOAD_PREFIX / WIRE_VERSION / ST constants by regex to build the
+      expected sequence — read-only, so it does not violate the no-src-tauri-changes constraint;
+      or (b) correct SPEC.md's "Wire-format duplication" wording to state that drift is NOT
+      automatically detected and must be synced manually.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: sc-display-hardening-wrong-path
+    severity: medium
+    category: security
+    file: plugins/emterm/skills/display-markdown/SKILL.md
+    line: 26
+    title: "display-* hardening does not match the execution path the agent actually has"
+    description: >
+      The new "Argument-injection safety (required)" section makes "pass the path as a single
+      argv element through a no-shell invocation (e.g. Bun.spawn array form)" the primary MUST.
+      But a Claude Code skill can only invoke emterm through the Bash tool, which always goes
+      through a shell — the MUST names a path that does not exist in this environment, leaving
+      only the hedged "If a shell is unavoidable" fallback actually in force (and its `--` advice
+      is further hedged with "where the command supports it"). Worse, the canonical usage example
+      at the top of each file still shows a bare `emterm markdown <file>` with "Replace <file>
+      with the path", i.e. exactly the unsafe form. An agent following the top-of-file example
+      with an attacker-controlled name like `report.md; touch PWNED` gets command execution.
+      mux-send/SKILL.md, the stated model for this hardening, does provide a copy-pastable
+      shell-safe form; the display skills do not. All four display SKILL.md files share the text.
+    suggestion: >
+      Promote a concrete Bash-first safe form to the primary MUST: quote the path and place it
+      after an end-of-options `--`, e.g. `emterm markdown -- '<path>'`, with `'\''` escaping for
+      paths containing a single quote. Replace the top-of-file canonical example with that form.
+      Drop the "where the command supports it" hedge — emterm's clap-based CLI accepts `--`
+      (verified: `emterm markdown -- '/tmp/poc; touch PWNED.md'` exits 0 and creates no PWNED
+      file). Demote the argv-array wording to a note for non-shell callers. Strengthen the
+      skills.test.ts AC-6 assertion from loose word checks to asserting the `--` + quoted form
+      is present, so the gap cannot silently reopen.
+    sources: [claude:security, claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-candidates
+  note: >
+    No auto-fix candidates. The one critical/high finding is category comprehensive but its
+    suggestion is prose (a design change adding a hook event), not a structurally applicable
+    diff, so it falls outside the auto-fix gate.
+residual_critical_high: 1
+rework_required: true
