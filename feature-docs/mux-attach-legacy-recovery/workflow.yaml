@@ -34,7 +34,7 @@ workflow:
   - id: review
     status: completed
   - id: verify
-    status: pending
+    status: in_progress
     result: null
     failed_items: []
   - id: retrospect
