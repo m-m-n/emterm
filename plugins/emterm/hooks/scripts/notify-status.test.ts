@@ -328,6 +328,10 @@ describe("notify-status.sh source hygiene (AC-9)", () => {
     expect(source.includes("`")).toBe(false);
   });
 
+  test("no command substitution (task0010, finding sp-verification-dollarparen-grep: NFR2's third prohibition, alongside eval and backticks, must be mechanically checked here too)", () => {
+    expect(source.includes("$(")).toBe(false);
+  });
+
   test("no invocation of the emterm binary (only the required OSC payload literal 'emterm;agent-status' survives)", () => {
     // FR3 requires the printf format string to literally contain the OSC
     // payload "emterm;agent-status;...", which is not a subprocess
@@ -416,8 +420,13 @@ describe("hooks.json shape (AC-7)", () => {
 
 // ---------------------------------------------------------------------
 // AC-8: Notification matcher — pure-function test over the matcher
-// string extracted from hooks.json, evaluated against the seven
-// notification-type names. No hook execution needed (Test Notes).
+// string extracted from hooks.json, evaluated against the eight
+// documented notification-type names (task0010, finding
+// cm-matcher-test-missing-type: the previous negative set counted seven
+// and omitted `agent_completed`; a matcher loosened to a prefix match
+// would set `blocked` when a background agent COMPLETES — the opposite
+// of a wait — with nothing here failing to catch it). No hook execution
+// needed (Test Notes).
 // ---------------------------------------------------------------------
 
 describe("Notification matcher (AC-8)", () => {
@@ -441,6 +450,7 @@ describe("Notification matcher (AC-8)", () => {
     "auth_success",
     "elicitation_complete",
     "elicitation_response",
+    "agent_completed",
   ])("does not match %s", (name) => {
     const matcher = new RegExp(matcherSource as string);
     expect(matcher.test(name)).toBe(false);
