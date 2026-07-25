@@ -247,17 +247,19 @@ describe("hooks.json shape (AC-7)", () => {
     expect(() => readHooksJson()).not.toThrow();
   });
 
-  test("declares exactly UserPromptSubmit, Stop, Notification; no SubagentStop", () => {
+  test("declares exactly UserPromptSubmit, PostToolUse, Stop, StopFailure, Notification; no SubagentStop", () => {
     const hooksJson = readHooksJson();
     expect(Object.keys(hooksJson.hooks).sort()).toEqual(
-      ["Notification", "Stop", "UserPromptSubmit"].sort(),
+      ["Notification", "PostToolUse", "Stop", "StopFailure", "UserPromptSubmit"].sort(),
     );
     expect(hooksJson.hooks.SubagentStop).toBeUndefined();
   });
 
   test.each([
     ["UserPromptSubmit", "working"],
+    ["PostToolUse", "working"],
     ["Stop", "idle"],
+    ["StopFailure", "idle"],
     ["Notification", "blocked"],
   ])(
     "%s hook: exec form, command has no state appended, args=[%s], timeout 3",
