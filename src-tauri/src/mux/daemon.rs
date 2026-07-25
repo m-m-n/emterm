@@ -165,93 +165,113 @@ pub fn ensure_daemon_running() -> Result<PathBuf, String> {
     }
 
     if !daemon_running {
-        // Ensure parent directory exists with restricted permissions
-        if let Some(parent) = sock_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create socket directory: {}", e))?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
-            }
-        }
-
-        let exe = crate::self_exec::self_exe_path()
-            .map_err(|e| format!("Failed to get executable path: {}", e))?;
-
-        let log_path = sock_path.with_file_name("mux-daemon.log");
-        let log_file = open_mux_log_append(&log_path).or_else(|_| {
-            let fallback = if cfg!(windows) {
-                std::env::temp_dir().join("emterm-mux-daemon.log")
-            } else {
-                std::path::PathBuf::from("/tmp/emterm-mux-daemon.log")
-            };
-            open_mux_log_append(&fallback)
-        });
-
-        let mut cmd = std::process::Command::new(&exe);
-        cmd.args(["mux", "--daemon"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null());
-        // Fall back to discarding daemon stderr if no log file could be opened
-        // (symlink refusal, permission denied, disk full). Prior code panicked
-        // via `.unwrap()` on the fallback, which aborted daemon startup.
-        match log_file {
-            Ok(f) => {
-                cmd.stderr(std::process::Stdio::from(f));
-            }
-            Err(e) => {
-                eprintln!(
-                    "Daemon log unavailable ({}): {} (daemon stderr discarded)",
-                    log_path.display(),
-                    e
-                );
-                cmd.stderr(std::process::Stdio::null());
-            }
-        }
-
-        // Detach daemon into its own session so it survives parent terminal exit
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            // SAFETY: setsid() is async-signal-safe per POSIX
-            unsafe {
-                cmd.pre_exec(|| {
-                    libc::setsid();
-                    Ok(())
-                });
-            }
-        }
-
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-            const DETACHED_PROCESS: u32 = 0x00000008;
-            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
-        }
-
-        cmd.spawn().map_err(|e| {
-            crate::self_exec::note_spawn_failure();
-            format!("Failed to spawn daemon: {}", e)
-        })?;
-
-        // Wait for daemon to start with exponential backoff
-        let mut started = false;
-        for i in 0..50 {
-            if is_daemon_running(&sock_path) {
-                started = true;
-                break;
-            }
-            let delay = std::cmp::min(10 * (1 << i.min(4)), 100);
-            std::thread::sleep(std::time::Duration::from_millis(delay));
-        }
-        if !started {
-            return Err("Failed to start mux daemon".to_string());
-        }
+        spawn_daemon(&sock_path)?;
     }
 
     Ok(sock_path)
+}
+
+/// Create the socket's parent directory with restricted permissions, spawn
+/// the daemon as a detached background process, and wait for it to become
+/// ready with exponential backoff.
+///
+/// Extracted out of [`ensure_daemon_running`] (task0001) so the `emterm mux
+/// attach` path can respawn a daemon after a legacy-daemon recovery
+/// shutdown, without duplicating the spawn/readiness logic.
+///
+/// Precondition: no compatible daemon currently owns `sock_path` (the
+/// caller is responsible for stale-socket cleanup, the presence check, and
+/// the recovery probe, as [`ensure_daemon_running`] does). Postcondition: a
+/// daemon answers on `sock_path`, or this returns an error string identical
+/// to the pre-extraction failure messages ("Failed to spawn daemon: …",
+/// "Failed to start mux daemon").
+pub(in crate::mux) fn spawn_daemon(sock_path: &Path) -> Result<(), String> {
+    // Ensure parent directory exists with restricted permissions
+    if let Some(parent) = sock_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create socket directory: {}", e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+
+    let exe = crate::self_exec::self_exe_path()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?;
+
+    let log_path = sock_path.with_file_name("mux-daemon.log");
+    let log_file = open_mux_log_append(&log_path).or_else(|_| {
+        let fallback = if cfg!(windows) {
+            std::env::temp_dir().join("emterm-mux-daemon.log")
+        } else {
+            std::path::PathBuf::from("/tmp/emterm-mux-daemon.log")
+        };
+        open_mux_log_append(&fallback)
+    });
+
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(["mux", "--daemon"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null());
+    // Fall back to discarding daemon stderr if no log file could be opened
+    // (symlink refusal, permission denied, disk full). Prior code panicked
+    // via `.unwrap()` on the fallback, which aborted daemon startup.
+    match log_file {
+        Ok(f) => {
+            cmd.stderr(std::process::Stdio::from(f));
+        }
+        Err(e) => {
+            eprintln!(
+                "Daemon log unavailable ({}): {} (daemon stderr discarded)",
+                log_path.display(),
+                e
+            );
+            cmd.stderr(std::process::Stdio::null());
+        }
+    }
+
+    // Detach daemon into its own session so it survives parent terminal exit
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid() is async-signal-safe per POSIX
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    }
+
+    cmd.spawn().map_err(|e| {
+        crate::self_exec::note_spawn_failure();
+        format!("Failed to spawn daemon: {}", e)
+    })?;
+
+    // Wait for daemon to start with exponential backoff
+    let mut started = false;
+    for i in 0..50 {
+        if is_daemon_running(sock_path) {
+            started = true;
+            break;
+        }
+        let delay = std::cmp::min(10 * (1 << i.min(4)), 100);
+        std::thread::sleep(std::time::Duration::from_millis(delay));
+    }
+    if !started {
+        return Err("Failed to start mux daemon".to_string());
+    }
+
+    Ok(())
 }
 
 // ============================================================================
@@ -267,8 +287,13 @@ pub fn ensure_daemon_running() -> Result<PathBuf, String> {
 // ============================================================================
 
 /// Outcome of [`recover_from_legacy_daemon`]'s handshake probe.
+///
+/// `pub(in crate::mux)` (task0001): the `emterm mux attach` path
+/// (`mux::cli::execute_attach`) needs to branch on this outcome the same
+/// way [`ensure_daemon_running`] does, without exposing it outside the mux
+/// module.
 #[derive(Debug)]
-enum LegacyRecovery {
+pub(in crate::mux) enum LegacyRecovery {
     /// The running daemon already accepted a [`PROTOCOL_VERSION`] Hello —
     /// nothing to recover.
     Compatible,
@@ -388,7 +413,12 @@ fn wait_for_daemon_exit(sock_path: &Path) -> Result<(), String> {
 /// once a legacy daemon has been asked to exit and has released the socket,
 /// or `Err` with a short, human-readable message (never a bincode/decode
 /// error, per AC-3) when recovery could not complete.
-fn recover_from_legacy_daemon(sock_path: &Path) -> Result<LegacyRecovery, String> {
+///
+/// `pub(in crate::mux)` (task0001): widened so `mux::cli::execute_attach`
+/// can run the same probe before deciding whether to respawn.
+pub(in crate::mux) fn recover_from_legacy_daemon(
+    sock_path: &Path,
+) -> Result<LegacyRecovery, String> {
     let mut probe = connect_daemon(sock_path)
         .map_err(|e| format!("Could not connect to the existing mux daemon: {e}"))?;
     match handshake_with_version(&mut probe, PROTOCOL_VERSION) {
