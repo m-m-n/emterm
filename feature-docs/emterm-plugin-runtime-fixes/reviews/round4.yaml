@@ -1,0 +1,352 @@
+round: 4
+executed_at: "2026-07-25T15:50:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
+  head_commit: 45cb6832fe0d16643143eff760a68b0013be7b54
+  changed_files:
+    - plugins/emterm/README.md
+    - plugins/emterm/hooks/hooks.json
+    - plugins/emterm/hooks/scripts/notify-status.sh
+    - plugins/emterm/hooks/scripts/notify-status.test.ts
+    - plugins/emterm/hooks/scripts/notify-status.ts   # deleted
+    - plugins/emterm/skills/display-image/SKILL.md
+    - plugins/emterm/skills/display-json/SKILL.md
+    - plugins/emterm/skills/display-markdown/SKILL.md
+    - plugins/emterm/skills/display-yaml/SKILL.md
+    - plugins/emterm/skills/mux-send/SKILL.md
+    - plugins/emterm/skills/skills.test.ts
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: skipped, skip_reason: "clean in rounds 1-3; hooks.json and notify-status.sh unchanged since round 2"}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "same"}
+verified_fixed:
+  - sc-heredoc-delimiter-collision      # heredoc removed from mux-send entirely
+  - sc-tilde-outside-quotes-invariant   # `~` exception deleted; resolve-to-absolute-path required
+  - sp-mux-send-unspecified             # FR10 added and matches the skill
+  - sp-fr7-missing-tilde-and-doublequote
+  - sp-ts8-contradicts-fr3
+  - sp-fr3-raw-esc-byte                 # no raw control byte remains in SPEC.md or VERIFICATION.md
+  - cm-display-image-self-contradiction
+  - cm-readme-hook-drift
+  - cm-wire-drift-undetected
+  - cm-minversion-args-stopfailure
+partially_fixed:
+  - stable_id: cm-heredoc-trailing-newline-executes
+    note: >
+      The heredoc is gone so its mandatory trailing newline no longer applies, and the skill now
+      states that the destination pane executes what it receives. But the consent requirement that
+      mitigation depends on is cancelled by the file's closing line — see sc-consent-vs-invoke-as-is.
+findings:
+  - stable_id: sc-stagefile-unspecified
+    severity: high
+    category: security
+    file: plugins/emterm/skills/mux-send/SKILL.md
+    line: 33
+    title: "The staging file's creation step is unspecified, so the injection point moved upstream rather than closing"
+    description: >
+      Round 4 made `emterm mux send --pane <id> --stdin < '<file>'` the required form for untrusted
+      text, on the stated grounds that nothing derived from the text enters the command line. That
+      is true of the send command only. The skill never says HOW to create the file. The model's
+      realistic options are the Write tool (argv-based, no shell) or the Bash tool — and via Bash,
+      `cat > f <<'EOF' ... EOF`, `printf '%s' '<text>' > f`, or an interpolated variable redirect
+      all put the whole untrusted blob back on a shell command line. The heredoc route reproduces
+      sc-heredoc-delimiter-collision exactly, one step upstream. File bodies are arbitrary-length
+      and arbitrary-byte, so this is a worse surface than the path was.
+      The skill's own text pushes toward that outcome: it forbids assigning untrusted text into a
+      shell variable, and calls heredocs "never used for untrusted text in this skill" in a context
+      readable as being about `--stdin` supply only — while never mentioning the Write tool at all.
+      Root cause is the task0007 plan, which said "write the file with exactly the bytes it intends"
+      without specifying the write mechanism.
+      Three reviewers reached this independently (security/claude high, comprehensive/claude high,
+      security/codex medium), which is why it is recorded at the higher severity.
+    suggestion: >
+      Require a non-shell write: the file MUST be created with the Write tool, whose content is a
+      parameter rather than shell text. State that Bash-based creation (heredoc, printf, echo,
+      variable redirect) is forbidden for untrusted text, and narrow the "nothing derived from the
+      text enters the command line" claim to say it holds provided the file was written without a
+      shell. Extend the adversarial example that rejects heredocs so it covers file creation, not
+      just `--stdin` supply.
+    sources: [claude:security, claude:comprehensive, codex:security]
+    confidence: 95
+    resolution: unresolved
+  - stable_id: cm-stopfailure-noop
+    severity: high
+    category: comprehensive
+    file: plugins/emterm/hooks/hooks.json
+    line: 40
+    title: "StopFailure output is ignored by Claude Code, so the StopFailure hook cannot report idle"
+    description: >
+      The hooks documentation states in two places that StopFailure's "Output and exit code are
+      ignored" (the event table and the exit-code table). notify-status.sh's only transport is the
+      `terminalSequence` field of its stdout JSON, so the StopFailure entry added in round 2 is a
+      complete no-op. When a turn ends on an API error the badge stays `working` until the next
+      UserPromptSubmit — `Stop` does not fire, since StopFailure runs instead of it. That is the
+      exact condition cm-stopfailure-unwired was supposed to fix.
+      Worse, README now asserts "Five hooks … StopFailure → idle" as fact, and both skills.test.ts
+      (README-to-hooks.json consistency) and notify-status.test.ts (exact event set) pin that claim,
+      so documentation and tests jointly guarantee behaviour the platform says cannot happen.
+      Orchestrator verification: confirmed against the hooks documentation.
+      Provenance: the task0003 plan explicitly flagged this risk and deferred it to a live M-1
+      check, then shipped the wiring and the README claim before that check was ever run — the same
+      pattern as the original `/dev/tty` decision this whole feature exists to undo.
+    suggestion: >
+      Preferred: remove the StopFailure entry, revert README and both test files to a four-hook
+      set, and record "a turn ending on an API error leaves the badge on `working` until the next
+      prompt" as a known limitation. Alternative: keep it only if a live run proves terminalSequence
+      is honoured on StopFailure despite the documentation — that is an M-1 step, not a static one.
+      Either way hooks.json, README, and both test files must move together or the
+      README-to-hooks.json consistency assertion fails.
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+  - stable_id: cm-posttooluse-failure-unwired
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/hooks/hooks.json
+    line: 16
+    title: "PostToolUse fires only on success, so `blocked` does not clear when a tool fails or permission is denied"
+    description: >
+      The documentation says PostToolUse "Runs immediately after a tool completes successfully";
+      failures fire the separate PostToolUseFailure event, and permission denials fire neither
+      (PreToolUse only). So of the three outcomes after a permission prompt sets `blocked`, only one
+      recovers: approve-and-succeed. Approve-then-fail (a non-zero Bash exit, routine in practice)
+      and deny both leave the badge on `blocked` until the next successful tool call or Stop.
+      Round 2's cm-no-blocked-recovery fix therefore covers only the happy path.
+      Orchestrator verification: confirmed against the hooks documentation.
+    suggestion: >
+      Wire PostToolUseFailure to `working` alongside PostToolUse, and update README's hook list plus
+      both test files' event sets in the same change. The permission-denied case has no event to
+      hook, so record that one as a known limitation.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: sc-redirect-path-unruled
+    severity: medium
+    category: security
+    file: plugins/emterm/skills/mux-send/SKILL.md
+    line: 43
+    title: "The redirect target path is described as model-chosen rather than required to be, and has no quoting rule"
+    description: >
+      The path in `--stdin < '<file>'` is the one shell-interpreted token in the form, and the skill
+      only observes that it is "the file path, which you chose" — a statement of assumption, not a
+      requirement. A request like "send the contents of ~/notes/draft.txt to pane 2" makes that path
+      caller-derived, and mux-send carries neither of the rules the display skills adopted for
+      exactly this: no `'\''` rule for the redirect path (it exists only for `--text`), and no
+      resolve-`~`-first rule (so a `~` path is passed literally inside single quotes and always
+      fails). Codex's concrete case: a path `/tmp/in'; touch PWNED; #` closes the quote and executes.
+    suggestion: >
+      Make it a requirement: the redirect target MUST be a path the model chose itself — absolute,
+      under a temp directory, no `~`, no bytes derived from untrusted input. If a caller-supplied
+      path must be redirected instead, apply the display skills' rules verbatim (resolve `~`,
+      single-quote the whole path, splice embedded quotes as `'\''`). Add a regression assertion.
+    sources: [claude:security, codex:security]
+    confidence: 80
+    resolution: unresolved
+  - stable_id: sc-invariant-contradicts-escape
+    severity: medium
+    category: security
+    file: plugins/emterm/skills/display-markdown/SKILL.md
+    line: 41
+    title: "The `no byte outside the quotes, no exception` invariant contradicts the `'\\''` rule two bullets later"
+    description: >
+      The display skills state the invariant as absolute: "one invariant with no special case: no
+      byte derived from an untrusted path ever appears outside the single quotes". But the `'\''`
+      splice documented shortly after places a path-derived byte — the quote itself, as a
+      backslash-escaped character — outside the quotes. A model given a path containing `'` cannot
+      satisfy both statements, and one way to resolve the conflict is to reach for double quotes,
+      which the same file explicitly forbids because command substitution expands inside them.
+      This is an internal contradiction in the rule, not imprecision in its wording, and the same
+      text is duplicated across all four display skills.
+    suggestion: >
+      Restate the invariant so the splice is part of it rather than an exception to it: every byte
+      of the path is either inside a single-quoted span or is part of the fixed four-character
+      `'\''` splice, and nothing else path-derived appears outside the quotes. Place the `~` bullet
+      and the splice bullet adjacent so neither reads as contradicting the other in isolation, and
+      update the skills.test.ts assertion that pins the old wording.
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+  - stable_id: sc-consent-vs-invoke-as-is
+    severity: medium
+    category: security
+    file: plugins/emterm/skills/mux-send/SKILL.md
+    line: 100
+    title: "The closing `Invoke the command as-is` cancels the consent requirement added this round"
+    description: >
+      Round 4 added that the destination pane executes what it receives and that sending untrusted
+      text to a shell pane "needs the user's consent, the same as running a shell command directly".
+      The file's last line is still the unconditional "Invoke the command as-is and report the
+      result back to the user." A model reads the closing line as the operative instruction, so the
+      consent requirement is decorative. The skill also never says how consent is obtained, what is
+      shown, or what to do when it is refused. skills.test.ts only asserts the consent phrase
+      exists, so the contradiction is invisible to tests.
+    suggestion: >
+      Make the closing line conditional — show the user the exact bytes and get explicit approval
+      before sending when the text is untrusted and the pane runs a shell — and add an assertion
+      that the closing instruction is not the unconditional form.
+    sources: [claude:security, claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+  - stable_id: cm-heredoc-guard-too-narrow
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/skills/skills.test.ts
+    line: 251
+    title: "The heredoc regression guard matches `<<'` only, letting the more dangerous unquoted heredoc through"
+    description: >
+      The guard added to prevent the heredoc from returning asserts the file does not contain the
+      two characters that open a QUOTED delimiter, while its comment claims it blocks a
+      quoted-delimiter heredoc "or any other delimiter". An unquoted `cat <<EOF` passes the
+      assertion, and it is strictly more dangerous than the form that was removed: besides the same
+      delimiter-collision termination, an unquoted heredoc also expands command substitution,
+      backticks, and parameter expansion inside the body. The guard is narrower than the invariant
+      it advertises. mux-send currently contains no heredoc of either kind, so widening it is safe.
+    suggestion: >
+      Widen both assertions to reject the bare heredoc operator regardless of delimiter quoting, and
+      align the comment. Prose that needs to mention heredocs should use the word rather than the
+      operator.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: cm-matcher-test-missing-type
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/hooks/scripts/notify-status.test.ts
+    line: 439
+    title: "The Notification matcher test claims to cover the notification-type namespace but omits one of the eight types"
+    description: >
+      The test's comment says the matcher is evaluated against "the seven notification-type names",
+      but the documentation lists eight (permission_prompt, idle_prompt, auth_success,
+      elicitation_dialog, elicitation_complete, elicitation_response, agent_needs_input,
+      agent_completed). `agent_completed` is absent from the negative set. The current anchored
+      matcher is unaffected, but a future loosening to something like `agent_.*` would set `blocked`
+      on a background agent COMPLETING — the opposite of a wait — and no test would fail. A guard
+      that advertises exhaustiveness should be exhaustive.
+    suggestion: >
+      Add `agent_completed` to the negative cases and correct the count in the comment; note that
+      the list tracks the documented notification types so a future addition is noticed.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: sp-text-example-unbalanced
+    severity: medium
+    category: spec
+    file: plugins/emterm/skills/mux-send/SKILL.md
+    line: 48
+    title: "The embedded-quote `--text` example omits the surrounding quotes, giving an unbalanced token"
+    description: >
+      FR10 requires `--text` to follow FR7's single-quote-plus-`'\''` rule. The example renders
+      `it's` as the splice alone, without the opening and closing single quotes that make it a valid
+      single-quoted value. Followed literally it produces an unbalanced shell token, so the
+      documented rule fails precisely on the case the example exists to explain.
+    suggestion: >
+      Show the complete value including its outer quotes, ideally inside the full command, and
+      strengthen the TS-10 assertion to require the complete quoted form rather than the splice
+      substring.
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+  - stable_id: sp-sc4-bun-absolute
+    severity: medium
+    category: spec
+    file: feature-docs/emterm-plugin-runtime-fixes/SPEC.md
+    line: 222
+    title: "SC-4's `nothing in the plugin references bun` is contradicted by the SPEC's own testing approach"
+    description: >
+      SC-4 states absolutely that nothing in the plugin references `bun`, while the same SPEC's
+      Testing approach section requires the shell script to be exercised from a Bun test file to
+      keep the existing harness. Both test files import `bun:test`, and notify-status.test.ts calls
+      Bun.spawnSync. VERIFICATION.md already carries the carve-out ("returning only test-harness
+      references"), so the two SSOT documents disagree and a literal SC-4 check would fail verify.
+      This is original create-spec wording rather than drift introduced by a later round.
+    suggestion: >
+      Scope SC-4 to shipped artifacts (the script, hooks.json, the SKILL.md files, README) and state
+      that the test files use Bun as a development-time tool, matching VERIFICATION.md.
+    sources: [claude:spec]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: sp-nfr3-path-absolute
+    severity: medium
+    category: spec
+    file: feature-docs/emterm-plugin-runtime-fixes/SPEC.md
+    line: 88
+    title: "NFR3's `every path relative to CLAUDE_PLUGIN_ROOT` is contradicted by paths the SPEC itself requires"
+    description: >
+      NFR3 requires every path referenced from plugin files to be `${CLAUDE_PLUGIN_ROOT}`-relative,
+      but notify-status.test.ts resolves the repository root from its own location to read
+      src-tauri/src/agent_status.rs, and skills.test.ts reads the marketplace manifest and the
+      feature docs — both mandated elsewhere in the same SPEC (Wire-format duplication, File
+      structure). skills.test.ts additionally asserts that SKILL.md files contain NO
+      `${CLAUDE_PLUGIN_ROOT}`, so the requirement as phrased fits no file type in the plugin.
+      Original create-spec wording, surfaced now rather than introduced.
+    suggestion: >
+      Scope NFR3 to shipped config (hooks.json must be `${CLAUDE_PLUGIN_ROOT}`-relative with no
+      absolute path and no `..`), and exempt development-time test files, noting that they resolve
+      repository paths relative to their own location as other SPEC sections require.
+    sources: [claude:spec]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: sp-verification-dollarparen-grep
+    severity: medium
+    category: spec
+    file: feature-docs/emterm-plugin-runtime-fixes/VERIFICATION.md
+    line: 98
+    title: "VERIFICATION.md credits TS-8 with a command-substitution check that TS-8 does not contain"
+    description: >
+      VERIFICATION.md's NFR2 note says a static grep of notify-status.sh for `eval`, backticks, and
+      command substitution "must return zero hits (TS-8)". TS-8 lists only /dev/tty, bun, eval,
+      backticks, and emterm-binary invocation, and the test's source-hygiene block has five
+      assertions matching that list. So of NFR2's three prohibitions, command substitution is the
+      one with no mechanical guard, while the record claims it is covered. No present impact — the
+      script contains none — but an edit introducing one would pass CI.
+    suggestion: >
+      Add the command-substitution check to TS-8 and to the source-hygiene block so all three NFR2
+      prohibitions are guarded mechanically. Failing that, correct VERIFICATION.md to say the check
+      is a review-time structural confirmation rather than a TS-8 assertion.
+    sources: [claude:spec]
+    confidence: 65
+    resolution: unresolved
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-candidates
+  note: >
+    No auto-fix candidates: both highs require design decisions (a write-mechanism requirement and
+    whether to keep an event whose output the platform discards), and every remaining finding is
+    below the severity gate.
+residual_critical_high: 2
+rework_required: true
+meta:
+  pattern_shift: >
+    Rounds 1-3 all had the same shape — each round's security-prose rewrite produced the next
+    round's findings. Round 4's results are different in kind, and split three ways:
+      1. UNVERIFIED PLATFORM ASSUMPTIONS (cm-stopfailure-noop, cm-posttooluse-failure-unwired).
+         Both are real behavioural bugs, and both trace to hook events being wired on a reading of
+         the documentation without a live check. cm-stopfailure-noop is the sharper case: the
+         task0003 plan flagged the exact risk, deferred it to M-1, and then shipped the wiring plus
+         a README claim before M-1 was ever run — structurally the same mistake as the original
+         `/dev/tty` decision this feature exists to undo.
+      2. THE STRUCTURAL FIX APPLIED INCOMPLETELY (sc-stagefile-unspecified, sc-redirect-path-unruled).
+         Removing the heredoc was right, but the task0007 plan specified the destination of the
+         untrusted bytes without specifying how they get there, so the injection point moved one
+         step upstream instead of closing. The direction held — the `~` exception and the heredoc
+         are genuinely gone and stayed gone — but the boundary was drawn on one side only.
+      3. PRECISION IN PROSE, TESTS, AND SPEC (the remaining eight). Several are original
+         create-spec wording (absolute phrasing in SC-4 and NFR3) rather than anything a later round
+         introduced, and several are guards that advertise more coverage than they implement.
+  recommendation: >
+    Category 1 cannot be settled by more static review: whether terminalSequence is honoured on
+    StopFailure, and whether the badge actually recovers after each of the three post-permission
+    outcomes, are live-behaviour questions. M-1 has existed since the first VERIFICATION.md and has
+    never been run; the feature's central claim rests on it. Fix categories 2 and 3, resolve
+    cm-stopfailure-noop by removing the entry (the documentation is explicit) or by proving it with
+    a live run, then execute M-1 before opening another review round.
