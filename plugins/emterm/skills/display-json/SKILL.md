@@ -8,38 +8,45 @@ description: Renders a JSON file in eMterm's child data viewer window. Use when 
 Run the eMterm CLI on the JSON file the user gave you:
 
 ```
-emterm json <file>
+emterm json -- '<path>'
 ```
 
-Replace `<file>` with the path to the JSON file. `emterm` writes a display
-escape sequence to stdout; eMterm's terminal intercepts it and opens the
+Replace `<path>` with the path to the JSON file, single-quoted and placed
+after the end-of-options delimiter `--`. `emterm` writes a display escape
+sequence to stdout; eMterm's terminal intercepts it and opens the
 formatted JSON in a child data viewer window.
 
 ## Argument-injection safety (required)
 
 The file path may originate from an untrusted source (a path pasted by the
 user, extracted from another file, or produced by earlier tool output). A
-contributor-controlled path such as `report.json; touch PWNED` would, if
-interpolated into a shell command string, execute the appended command
-instead of being treated as a filename.
+path such as `report.json; touch PWNED`, if placed bare and unquoted on the
+command line, would let the shell treat `; touch PWNED` as a second command
+instead of part of the filename.
 
-- The path MUST be passed as a single argv element through a no-shell
-  invocation (e.g. Bun's `Bun.spawn`-style array form, or any
-  exec-without-shell call) — never interpolated into a joined shell command
-  string.
-- **If a shell is unavoidable**, the path must be shell-quoted, and an
-  end-of-options delimiter (`--`) must be used where the command supports
-  it, so the path can never be parsed as a flag or as shell syntax.
+- Always single-quote the path and place it after the end-of-options
+  delimiter `--`, never as a bare unquoted argument:
+  `emterm json -- '<path>'`.
+- eMterm's CLI is clap-based and accepts `--` as the end-of-options marker
+  on this subcommand — everything after it is a positional argument, never
+  parsed as a flag, regardless of what characters the path contains.
+- If the path itself contains a single quote, close the quote, insert
+  `'\''` (end-quote, escaped literal quote, reopen-quote), then continue:
+  a path `it's.json` becomes `'it'\''s.json'`.
+- If a no-shell exec path is available (e.g. an argv-array invocation such
+  as Bun's `Bun.spawn`-style array form), passing the path as a single argv
+  element is an equally safe alternative to the quoted-and-delimited shell
+  form above.
 
 ### Adversarial example
 
 Path is `report.json; touch PWNED`:
 
-- **Safe** (single argv element / no-shell invocation, or `--` +
-  shell-quoted): `emterm` receives the literal path `report.json; touch
-  PWNED` as its `<file>` argument, and reports the file not found (there is
-  no such file). The `; touch PWNED` fragment is inert — it is data, not
-  shell syntax.
-- **Unsafe** (path spliced into a shell command string): the shell parses
-  `;` as a command separator and runs `touch PWNED` as a second command,
-  creating a file the user never asked for.
+- **Safe**: `emterm json -- 'report.json; touch PWNED'` — `emterm`
+  receives the literal path `report.json; touch PWNED` as its file argument
+  and reports the file as not found (no such file exists). The `; touch
+  PWNED` fragment is inert: it is data inside the quotes, not shell syntax.
+- **Unsafe** (bare, unquoted path): `emterm json report.json; touch PWNED`
+  — the shell parses the unquoted `;` as a command separator and runs
+  `touch PWNED` as a second command, creating a file the user never asked
+  for.
