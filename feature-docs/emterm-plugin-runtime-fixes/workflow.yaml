@@ -28,9 +28,9 @@ workflow:
     status: completed
     completed_at_commit: 7381495a0ee8c5858aac7f8311ebe475863f268c
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
-    completed_at_commit: 1071915cdc0e835be25f54d2904813cde6a67c82
+    completed_at_commit: 8c79f0b1c0d7d614d33cd77dd074d5a35e23e303
   - id: review
     status: pending
   - id: verify
@@ -176,7 +176,7 @@ tasks:
     domains: [config-infra, external-io]
     complexity: medium
     requirements: [FR4, FR5, FR8]
-    status: in_progress
+    status: merged
     branch: em-workflow/emterm-plugin-runtime-fixes/task0009
   task0010:
     title: "Close the staging-file boundary and tighten guards (rework)"
@@ -195,7 +195,7 @@ tasks:
     domains: [input-handling, config-infra]
     complexity: medium
     requirements: [FR7, FR10, NFR2, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/emterm-plugin-runtime-fixes/task0010
 
 review:
