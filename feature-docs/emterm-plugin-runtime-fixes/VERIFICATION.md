@@ -25,7 +25,7 @@
 | TS-3 | Zero positional arguments | Empty stdout, empty stderr, exit 0 | Unit |
 | TS-4 | Two or more positional arguments (`working extra`) | Empty stdout, empty stderr, exit 0 | Unit |
 | TS-5 | Argument with shell metacharacters (`"working; touch PWNED"`, `"$(id)"`) | Empty stdout, exit 0, no file created | Unit |
-| TS-6 | `hooks.json` structural check | Valid JSON; all five hooks exec form; `${CLAUDE_PLUGIN_ROOT}`-prefixed commands; no absolute path, no `..`; `timeout` 3; no `SubagentStop` | Integration |
+| TS-6 | `hooks.json` structural check | Valid JSON; declares exactly `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `Notification` in exec form; `${CLAUDE_PLUGIN_ROOT}`-prefixed commands; no absolute path, no `..`; `timeout` 3; no `StopFailure` or `SubagentStop` | Integration |
 | TS-7 | `Notification` matcher behaviour | Matches `permission_prompt` / `elicitation_dialog` / `agent_needs_input`; does not match `idle_prompt` / `auth_success` / `elicitation_complete` / `elicitation_response` | Integration |
 | TS-8 | Legacy artifacts removed | `notify-status.ts` absent; `notify-status.sh` contains no `/dev/tty`, `bun`, `eval`, backticks, or command substitution (`$(`), and no invocation of the `emterm` binary — the sole occurrence of the string `emterm` is the FR3 payload literal `emterm;agent-status;` | Integration |
 | TS-9 | Wire-format fidelity | Emitted sequence per state is byte-identical to the canonical form documented in SPEC.md FR3 and produced by `src-tauri/src/agent_status.rs` with name `claude-code` | Integration |
@@ -45,7 +45,7 @@
 |----|-----------|---------------|
 | SC-1 | FR1-FR10 implemented | Requirements coverage table below plus task acceptance criteria |
 | SC-2 | `bun test` and `bun run typecheck` pass | Build + Test Verification above |
-| SC-3 | State transitions, including `blocked`-to-`working` recovery and the `StopFailure` path, observed on a real eMterm tab | Manual scenario M-1 |
+| SC-3 | State transitions, including `blocked`-to-`working` recovery on the approve-and-succeed and approve-then-fail paths, the deny path, and the removed-`StopFailure` observation, observed on a real eMterm tab | Manual scenario M-1 |
 | SC-4 | `notify-status.ts` gone; nothing references `bun` or `/dev/tty` | TS-8, plus `git grep -n 'dev/tty\|bun' plugins/emterm/` returning only test-harness references |
 | SC-5 | Version remains `0.1.0` | TS-11 |
 | SC-6 | No changes outside `plugins/` and `feature-docs/` | `git diff --name-only <base_commit>..<parent_branch>` shows no path under `src-tauri/`, `crates/`, or `.claude-plugin/` |
@@ -83,10 +83,12 @@ No project E2E framework. E2E coverage is the manual scenarios below.
   1. Send a prompt. Observe the eMterm tab badge become `working` (filled, primary colour).
   2. Wait for the response to complete. Observe the badge become `idle` (filled, `on_surface_variant`).
   3. Trigger a permission prompt (any tool call requiring approval). Observe the badge become `blocked` (`on_error_container`).
-  4. Approve it. Observe the badge return to `working` (filled, primary colour) as soon as the approved tool call completes — this is the `PostToolUse` hook firing — then let the response finish and confirm the badge settles on `idle` and does NOT flip back to `blocked` from the ordinary idle notification.
-  5. Force an API error (e.g. a rate limit or an auth failure) so the turn ends via `StopFailure` instead of `Stop`. Observe whether the badge settles on `idle`. `StopFailure` output and exit codes are documented as ignored by Claude Code, so treat this step as informational: record what was observed (including "no change" or "inconclusive") rather than treating any outcome as a hard pass/fail.
+  4. Approve it and let the approved tool call succeed. Observe the badge return to `working` (filled, primary colour) as soon as the call completes — this is the `PostToolUse` hook firing — then let the response finish and confirm the badge settles on `idle` and does NOT flip back to `blocked` from the ordinary idle notification.
+  5. Trigger a second permission prompt, approve it, but arrange for the approved call to fail (e.g. a Bash command with a non-zero exit). Observe the badge return to `working` — this is the new `PostToolUseFailure` hook firing — rather than staying on `blocked`.
+  6. Trigger a third permission prompt and deny it. Observe the badge stays on `blocked`: a denied call fires neither `PostToolUse` nor `PostToolUseFailure`, so nothing clears it. Confirm it clears only once a subsequent tool call completes (success or failure) or the turn ends (`Stop`).
+  7. Force an API error (e.g. a rate limit or an auth failure) so the turn ends via `StopFailure` instead of `Stop`. `hooks.json` no longer wires `StopFailure` (its output and exit code are documented as ignored by Claude Code), so observe whether the badge changes at all — the expectation is that it stays on whatever it last was until the next `UserPromptSubmit`. Treat this step as informational: record what was observed (including "no change" or "inconclusive") rather than treating any outcome as a hard pass/fail. If the sequence turns out to be honoured after all, that is evidence for reinstating the `StopFailure` entry as a follow-up (SPEC.md Edge Cases), not for changing this feature's wiring.
 
-  Expected: all transitions in steps 1-4 visible, with step 4 showing the `blocked` -> `working` recovery and no spurious `blocked` afterward; step 5's result recorded either way.
+  Expected: all transitions in steps 1-6 visible, with step 4 showing the `blocked` -> `working` recovery on approve-and-succeed, step 5 showing the same recovery on approve-then-fail, step 6 showing the badge holding `blocked` through the deny with no premature clear, and no spurious `blocked` afterward; step 7's result recorded either way.
 
   Note: badge shape distinguishes states — `Working`/`Idle` always render filled, `Blocked`/`Done` render as a ring once seen (`src-tauri/src/ui/tab_bar.rs`, `agent_badge_filled`). This is the same discriminator used in the pre-spec POC.
 
