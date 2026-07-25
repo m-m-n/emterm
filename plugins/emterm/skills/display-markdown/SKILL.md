@@ -30,6 +30,16 @@ instead of part of the filename.
 - eMterm's CLI is clap-based and accepts `--` as the end-of-options marker
   on this subcommand — everything after it is a positional argument, never
   parsed as a flag, regardless of what characters the path contains.
+- If the path starts with `~` (home-directory shorthand), resolve it before
+  quoting: single quotes suppress `~` expansion, and eMterm's CLI does not
+  expand `~` itself, so a single-quoted `~` path always fails as file-not-
+  found. Expand only the `~`/`$HOME` segment and keep the untrusted
+  remainder single-quoted, e.g. `emterm markdown -- "$HOME"'/notes.md'` —
+  `"$HOME"` expands outside the quotes, `'/notes.md'` stays single-quoted.
+- Double quotes are NOT a safe substitute for single quotes: `$(...)`
+  command substitution, backtick command substitution, and `${...}`
+  parameter expansion all still expand inside double quotes. Only single
+  quotes suppress all shell expansion of the path.
 - If the path itself contains a single quote, close the quote, insert
   `'\''` (end-quote, escaped literal quote, reopen-quote), then continue:
   a path `it's.md` becomes `'it'\''s.md'`.
@@ -38,15 +48,25 @@ instead of part of the filename.
   element is an equally safe alternative to the quoted-and-delimited shell
   form above.
 
-### Adversarial example
+### Adversarial examples
 
-Path is `report.md; touch PWNED`:
-
-- **Safe**: `emterm markdown -- 'report.md; touch PWNED'` — `emterm`
-  receives the literal path `report.md; touch PWNED` as its file argument
-  and reports the file as not found (no such file exists). The `; touch
-  PWNED` fragment is inert: it is data inside the quotes, not shell syntax.
-- **Unsafe** (bare, unquoted path): `emterm markdown report.md; touch
-  PWNED` — the shell parses the unquoted `;` as a command separator and
-  runs `touch PWNED` as a second command, creating a file the user never
-  asked for.
+1. Path is `report.md; touch PWNED`:
+   - **Safe**: `emterm markdown -- 'report.md; touch PWNED'` — `emterm`
+     receives the literal path `report.md; touch PWNED` as its file
+     argument and reports the file as not found (no such file exists). The
+     `; touch PWNED` fragment is inert: it is data inside the quotes, not
+     shell syntax.
+   - **Unsafe** (bare, unquoted path): `emterm markdown report.md; touch
+     PWNED` — the shell parses the unquoted `;` as a command separator and
+     runs `touch PWNED` as a second command, creating a file the user
+     never asked for.
+2. Path is `report$(touch PWNED).md`:
+   - **Safe** (single-quoted):
+     `emterm markdown -- 'report$(touch PWNED).md'` — `emterm` receives
+     the literal path `report$(touch PWNED).md` and reports it as not
+     found. The `$(...)` fragment is inert data inside the single quotes;
+     no command runs.
+   - **Unsafe** (double-quoted):
+     `emterm markdown -- "report$(touch PWNED).md"` — the shell evaluates
+     `$(touch PWNED)` before `emterm` ever runs, creating `PWNED` as a
+     side effect and passing `emterm` the substituted path `report.md`.
