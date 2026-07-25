@@ -78,6 +78,7 @@ command that failed before, `hostnamectl status`.
 | --- | --- | --- |
 | 3. Permission dialog → `blocked` | **Badge became a ring.** Same command, same dialog, and before the fix it stayed a filled dot. | **PASS** |
 | 4a. Approve → succeed → `working` | The call was approved and exited 0; the badge left the ring state | **PASS** |
+| 4c. Deny → stays `blocked` | Same command, denied at the dialog. **The badge stayed a ring** — nothing cleared it. | **PASS** (the limitation is real) |
 
 The shape change is what makes this decisive: `agent_badge_filled` renders Working and Idle as
 filled in every case, so a ring can only be Blocked or Done. Nothing else in the wiring emits
@@ -85,6 +86,12 @@ filled in every case, so a ring can only be Blocked or Done. Nothing else in the
 
 `PermissionRequest` was therefore the correct event, and the original `Notification(permission_prompt)`
 choice was the whole of the defect.
+
+Step 4c confirmed the denied-dialog limitation is real rather than inferred. Denying the dialog left
+the badge on the ring: `PermissionDenied` did not fire (it is auto-mode only, as documented), and a
+denied call never executes, so no `PostToolUse` or `PostToolUseFailure` followed either. The badge
+stays `blocked` until the next successful tool call or the turn's `Stop`. That is exactly what the
+README and SPEC already claimed, now observed rather than reasoned about.
 
 ## Still outstanding
 - **Step 5** (API-error turn ending) has never been exercised. If the badge does reach `idle`
