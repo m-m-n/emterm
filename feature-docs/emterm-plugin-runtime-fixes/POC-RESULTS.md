@@ -69,10 +69,24 @@ wait and would otherwise double-report.
 in auto mode: it doesn't run when you manually deny a permission dialog". The denied-dialog gap
 therefore stands as a known limitation.
 
-## Still outstanding
+## Re-run against the fixed wiring
 
-- **Re-run steps 3, 4a, and 4c** against the fixed wiring. Step 3 is the one that matters: the
-  badge should become a near-white ring while the dialog is open.
+The plugin was reinstalled (see the propagation note below) and step 3 was repeated with the same
+command that failed before, `hostnamectl status`.
+
+| Step | Observed | Verdict |
+| --- | --- | --- |
+| 3. Permission dialog → `blocked` | **Badge became a ring.** Same command, same dialog, and before the fix it stayed a filled dot. | **PASS** |
+| 4a. Approve → succeed → `working` | The call was approved and exited 0; the badge left the ring state | **PASS** |
+
+The shape change is what makes this decisive: `agent_badge_filled` renders Working and Idle as
+filled in every case, so a ring can only be Blocked or Done. Nothing else in the wiring emits
+`done`.
+
+`PermissionRequest` was therefore the correct event, and the original `Notification(permission_prompt)`
+choice was the whole of the defect.
+
+## Still outstanding
 - **Step 5** (API-error turn ending) has never been exercised. If the badge does reach `idle`
   there, the documentation's claim that `StopFailure` output is ignored would be wrong for
   `terminalSequence`, and the removed `StopFailure` entry should be reinstated on that evidence.
@@ -80,6 +94,23 @@ therefore stands as a known limitation.
   the pink dark theme, in closely related hues (`#FFB1C8` vs `#D4BFC5`). Choosing a discriminator
   that differs only in colour was a poor test design on the verification side; the `blocked` ring
   is the only shape-distinguished state and is what made step 3 conclusive.
+
+## Propagation note — a pinned version does not update in place
+
+Reinstalling to pick up the fix was not straightforward, and the reason is worth recording.
+`/plugin marketplace update` refreshed the catalogue, but `/plugin install` answered "already
+installed" and copied nothing: the plugin cache is keyed by version, and `version` was still
+`0.1.0`. The documentation is explicit — "If set, the plugin is pinned to this string and users
+only receive updates when it changes." The cached `hooks.json` kept its original mtime and the old
+matcher, so a reload appeared to succeed while running the unfixed wiring.
+
+`/plugin uninstall` followed by `/plugin install` forced the re-copy, after which the cached file
+matched the branch.
+
+Pinning `0.1.0` across the whole feature was right while the plugin was unpublished, but it stops
+being right the moment anyone has it installed — including us. Any behavioural change from here
+needs either a version bump or an explicit uninstall/reinstall, and only the first is something a
+user would discover on their own.
 
 ## Environment note
 
