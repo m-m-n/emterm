@@ -28,7 +28,7 @@ workflow:
     status: completed
     completed_at_commit: 7381495a0ee8c5858aac7f8311ebe475863f268c
   - id: implement
-    status: completed
+    status: in_progress
     base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
     completed_at_commit: 1071915cdc0e835be25f54d2904813cde6a67c82
   - id: review
@@ -162,6 +162,41 @@ tasks:
     requirements: [FR3, FR7]
     status: merged
     branch: em-workflow/emterm-plugin-runtime-fixes/task0008
+  task0009:
+    title: "Hook wiring corrected to actual platform behaviour (rework)"
+    plan: tasks/task0009.md
+    files:
+      - plugins/emterm/hooks/hooks.json
+      - plugins/emterm/hooks/scripts/notify-status.test.ts
+      - plugins/emterm/skills/skills.test.ts
+      - plugins/emterm/README.md
+      - feature-docs/emterm-plugin-runtime-fixes/SPEC.md
+      - feature-docs/emterm-plugin-runtime-fixes/VERIFICATION.md
+    skills: [infra-impl]
+    domains: [config-infra, external-io]
+    complexity: medium
+    requirements: [FR4, FR5, FR8]
+    status: in_progress
+    branch: em-workflow/emterm-plugin-runtime-fixes/task0009
+  task0010:
+    title: "Close the staging-file boundary and tighten guards (rework)"
+    plan: tasks/task0010.md
+    files:
+      - plugins/emterm/skills/mux-send/SKILL.md
+      - plugins/emterm/skills/display-markdown/SKILL.md
+      - plugins/emterm/skills/display-json/SKILL.md
+      - plugins/emterm/skills/display-yaml/SKILL.md
+      - plugins/emterm/skills/display-image/SKILL.md
+      - plugins/emterm/skills/skills.test.ts
+      - plugins/emterm/hooks/scripts/notify-status.test.ts
+      - feature-docs/emterm-plugin-runtime-fixes/SPEC.md
+      - feature-docs/emterm-plugin-runtime-fixes/VERIFICATION.md
+    skills: [infra-impl]
+    domains: [input-handling, config-infra]
+    complexity: medium
+    requirements: [FR7, FR10, NFR2, NFR3]
+    status: in_progress
+    branch: em-workflow/emterm-plugin-runtime-fixes/task0010
 
 review:
   status: pending
