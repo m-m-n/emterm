@@ -4,7 +4,12 @@
  * — rework of the hardening to a Bash-first, shell-safe form; task0006 —
  * round-2 rework closing the `~`-expansion regression, the double-quote
  * near-miss, the display-image self-contradiction, and the mux-send
- * argv-array unreachable instruction).
+ * argv-array unreachable instruction; task0007 — round-4 rework replacing
+ * the two constructs whose safety depended on the model applying a rule
+ * correctly (mux-send's quoted-delimiter heredoc, the display skills' `~`
+ * exception) with forms that have no hole to describe: file redirection
+ * for untrusted `--stdin` text, and a single "resolve to absolute, then
+ * single-quote the whole path" invariant for `~`).
  *
  * Skill content is prose; there is no runtime to exercise inside a task
  * worktree, so these tests assert the static invariants the task plans'
@@ -18,9 +23,11 @@
  * loose word-presence checks (task0004.md "Test Notes"). task0006 adds
  * regression guards specific enough to fail on a wording regression
  * (task0006.md "Test coverage") rather than the loose word-presence checks
- * round 1 used. Whether Claude actually auto-invokes the right skill for a
- * given prompt is human judgment and lives in the verify phase (task0003.md
- * "Test Notes").
+ * round 1 used. task0007 keeps that bar: the heredoc-absence and
+ * `"$HOME"'`-absence guards assert on the literal syntax that must never
+ * reappear, not on loose word presence (task0007.md "Test Notes"). Whether
+ * Claude actually auto-invokes the right skill for a given prompt is human
+ * judgment and lives in the verify phase (task0003.md "Test Notes").
  */
 
 import { describe, expect, test } from "bun:test";
@@ -179,9 +186,18 @@ for (const slug of DISPLAY_SKILLS) {
   describe(`plugins/emterm/skills/${slug}/SKILL.md quoting hardening (task0006)`, () => {
     const content = readFileSync(join(SKILLS_DIR, slug, "SKILL.md"), "utf-8");
 
-    test("AC-1 (finding cm-tilde-expansion-broken): documents the ~ rule with a concrete safe form that expands only the leading $HOME/~ segment and keeps the untrusted remainder single-quoted", () => {
+    test("AC-5 (task0007, finding sc-tilde-outside-quotes-invariant): documents the ~ rule as 'resolve to an absolute path first, then single-quote the whole path' and states the no-byte-outside-quotes invariant", () => {
       expect(content).toMatch(/single quotes suppress `~` expansion/);
-      expect(content).toMatch(/"\$HOME"'\/[^']*'/);
+      expect(content).toMatch(
+        /resolve\s+it\s+to\s+an\s+absolute\s+path\s+yourself\s+before\s+quoting/,
+      );
+      expect(content).toMatch(
+        /no\s+byte\s+derived\s+from\s+an\s+untrusted\s+path\s+ever\s+appears\s+outside\s+the\s+single\s+quotes/,
+      );
+    });
+
+    test("AC-6 (task0007, finding sc-tilde-outside-quotes-invariant): the old \"$HOME\"'/...' exception form is gone — nothing sits outside the single quotes", () => {
+      expect(content).not.toMatch(/"\$HOME"'/);
     });
 
     test("AC-2 (finding sc-doublequote-not-taught): states double quotes are insufficient and names $(...), backticks, and ${...}", () => {
@@ -222,32 +238,49 @@ describe("plugins/emterm/skills/display-image/SKILL.md protocol example (task000
   });
 });
 
-describe("plugins/emterm/skills/mux-send/SKILL.md rework (task0006 F4, finding sc-mux-send-unreachable)", () => {
+describe("plugins/emterm/skills/mux-send/SKILL.md rework (task0007, findings sc-heredoc-delimiter-collision + cm-heredoc-trailing-newline-executes)", () => {
   const content = readFileSync(join(SKILLS_DIR, "mux-send", "SKILL.md"), "utf-8");
 
-  test("AC-6: the primary --stdin form is a quoted-delimiter heredoc, and it appears before the argv-array alternative", () => {
-    expect(content).toMatch(/--stdin <<'[A-Z]+'/);
-    expect(content).toMatch(/no-shell exec path is available/i);
-    const heredocIdx = content.indexOf("quoted-delimiter heredoc");
-    const argvIdx = content.indexOf("no-shell exec path is available");
-    expect(heredocIdx).toBeGreaterThan(-1);
-    expect(argvIdx).toBeGreaterThan(heredocIdx);
+  test("AC-1: the primary --stdin form for untrusted text is file redirection, and the quoted-delimiter heredoc is entirely gone", () => {
+    expect(content).toContain(
+      "emterm mux send --pane <id> --stdin < '<file>'",
+    );
+    // The regression guard that matters most (task0007.md 'Test Notes'):
+    // a quoted-delimiter heredoc (`<<'EOF'` or any other delimiter) must
+    // never reappear in this file.
+    expect(content).not.toContain("<<'");
   });
 
-  test("AC-6: the argv-array form is no longer presented as the primary requirement", () => {
-    expect(content).not.toMatch(
-      /assemble the invocation as an argv array.*so the text is never/s,
+  test("AC-2: states nothing derived from the text enters the command line in that form, and that a trailing newline in the file is an Enter in the destination pane", () => {
+    expect(content).toMatch(
+      /nothing\s+derived from the text ever enters the command line/,
+    );
+    expect(content).toMatch(
+      /trailing newline\s+in the file is an Enter in the destination pane/,
     );
   });
 
-  test("AC-6: notes the delimiter-collision condition", () => {
-    expect(content).toMatch(/must not contain a line consisting solely/);
-  });
-
-  test("AC-7: --text guidance matches the display skills' single-quote plus '\\'' rule, and pane-ID validation is retained", () => {
-    expect(content).toContain("single-quote the value");
+  test("AC-3: --text guidance matches the display skills' single-quote plus '\\'' rule, --text is restricted to trusted strings, pane-ID validation is retained, and the argv-array note is a conditional alternative (not the primary form)", () => {
+    expect(content).toMatch(/single-quote the value/i);
     expect(content).toContain("'\\''");
     expect(content).toContain("^[a-z0-9-]+$");
+    expect(content).toMatch(/trusted strings only/);
+    const stdinIdx = content.indexOf("Required for untrusted text");
+    const argvIdx = content.indexOf("no-shell exec path is available");
+    expect(stdinIdx).toBeGreaterThan(-1);
+    expect(argvIdx).toBeGreaterThan(stdinIdx);
+  });
+
+  test("AC-4: every 'Safe' label is true of the file-redirection form, the file states the destination pane executes what it receives, and that sending untrusted text to a shell pane needs user consent", () => {
+    expect(content).not.toContain("<<'");
+    expect(content).toMatch(
+      /destination pane executes what it receives if it is running a shell/,
+    );
+    expect(content).toMatch(/needs\s+the user's consent/);
+    // Every adversarial-example "Safe" claim must be paired with the new
+    // primary form, not the retired heredoc.
+    const safeMatches = [...content.matchAll(/Safe:/g)];
+    expect(safeMatches.length).toBeGreaterThanOrEqual(3);
   });
 });
 
