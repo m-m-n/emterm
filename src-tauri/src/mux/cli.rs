@@ -349,9 +349,62 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Pre-bridge sequence for `emterm mux attach` (task0001): resolve the
+/// socket path, recover from a stale legacy-protocol daemon if one is
+/// found, and return the socket path once a daemon speaking the current
+/// protocol is confirmed reachable there. Does not start the bridge, so
+/// tests can drive the sequence without a real long-running process.
+///
+/// Numbered flow (mirrors the task plan's Design section):
+/// 1. `sock_path` is resolved by the caller (kept as a parameter here so
+///    tests can point it at an isolated fake-daemon socket instead of the
+///    real per-user `daemon::socket_path()`).
+/// 2. If the socket does not exist, fail with the unchanged "No mux
+///    sessions to attach to" message (AC-3).
+/// 3. Run the recovery probe ([`daemon::recover_from_legacy_daemon`])
+///    against the socket.
+/// 4. `Compatible` -> done, nothing to spawn (AC-2).
+/// 5. `Recovered` -> call `spawn` to bring up a replacement daemon (AC-1).
+/// 6. Any probe/spawn error propagates to the caller.
+///
+/// Generic over the respawn step (`spawn`) so tests can substitute a
+/// lightweight stand-in for [`daemon::spawn_daemon`], which spawns the real
+/// `emterm` binary — a `cargo test --lib` unit test binary is not that
+/// binary, so a substitute is required to exercise the "recovered ->
+/// respawn -> handshake accepted" path deterministically (task0001 Test
+/// Notes). [`resolve_attach_socket`] is the production entry point, wired
+/// to the real `daemon::spawn_daemon`.
+fn resolve_attach_socket_with(
+    sock_path: &std::path::Path,
+    spawn: impl FnOnce(&std::path::Path) -> Result<(), String>,
+) -> Result<std::path::PathBuf, String> {
+    if !sock_path.exists() {
+        return Err(
+            "No mux sessions to attach to (daemon not running)\nUse 'emterm mux' to start a new session."
+                .to_string(),
+        );
+    }
+
+    match daemon::recover_from_legacy_daemon(sock_path)? {
+        daemon::LegacyRecovery::Compatible => {}
+        daemon::LegacyRecovery::Recovered => spawn(sock_path)?,
+    }
+
+    Ok(sock_path.to_path_buf())
+}
+
+/// Production entry point for [`resolve_attach_socket_with`]: respawns via
+/// the real [`daemon::spawn_daemon`].
+fn resolve_attach_socket(sock_path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    resolve_attach_socket_with(sock_path, daemon::spawn_daemon)
+}
+
 /// Execute the `emterm mux attach` command (long-running bridge).
 ///
-/// Attaches to an existing session. If no daemon is running, prints an error.
+/// Attaches to an existing session. If no daemon is running, prints an
+/// error. If a stale legacy-protocol daemon is found, it is shut down and a
+/// compatible one is spawned in its place before the bridge starts
+/// (task0001).
 pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     init_bridge_logger();
@@ -361,11 +414,8 @@ pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::
         std::process::id()
     );
 
-    let sock_path = daemon::socket_path();
-
-    if !sock_path.exists() {
-        return Err("No mux sessions to attach to (daemon not running)\nUse 'emterm mux' to start a new session.".into());
-    }
+    let sock_path = resolve_attach_socket(&daemon::socket_path())
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     // Run the long-running bridge process
     run_bridge(&sock_path)?;
@@ -1506,5 +1556,238 @@ mod tests {
     fn parse_agent_states_rejects_empty() {
         assert!(parse_agent_states("").is_err());
         assert!(parse_agent_states(",").is_err());
+    }
+
+    // ---- `emterm mux attach` legacy-daemon recovery (task0001) ----
+    //
+    // A fake daemon is a bare `UnixListener` thread rather than a real
+    // spawned process, mirroring `mux::daemon::tests`' construction style
+    // and socket-path isolation (task0001 Test Notes).
+
+    #[cfg(unix)]
+    const FAKE_LEGACY_VERSION: u32 = 1;
+
+    #[cfg(unix)]
+    fn read_frame<S: std::io::Read>(stream: &mut S) -> MuxMessage {
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).expect("read frame length");
+        let frame_len = u32::from_be_bytes(len_buf) as usize;
+        let mut frame_buf = vec![0u8; frame_len];
+        stream.read_exact(&mut frame_buf).expect("read frame body");
+        MuxMessage::from_frame_body(&frame_buf).expect("valid frame")
+    }
+
+    #[cfg(unix)]
+    fn write_welcome<S: std::io::Write>(stream: &mut S, welcome: &WelcomeMsg) {
+        let msg = MuxMessage::control(MessageType::Welcome, 0, welcome);
+        let body = msg.to_frame_body();
+        stream
+            .write_all(&(body.len() as u32).to_be_bytes())
+            .expect("write frame length");
+        stream.write_all(&body).expect("write frame body");
+        stream.flush().expect("flush");
+    }
+
+    /// Spawn a thread that behaves like a single-instance legacy (v1) mux
+    /// daemon on `sock_path`: rejects a mismatched Hello, accepts a
+    /// [`FAKE_LEGACY_VERSION`] Hello, waits for `Shutdown`, then removes the
+    /// socket file and exits.
+    #[cfg(unix)]
+    fn spawn_fake_legacy_daemon(sock_path: std::path::PathBuf) -> std::thread::JoinHandle<()> {
+        use std::os::unix::net::UnixListener;
+
+        let listener = UnixListener::bind(&sock_path).expect("bind fake legacy daemon socket");
+        std::thread::spawn(move || {
+            loop {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let hello_frame = read_frame(&mut stream);
+                assert_eq!(hello_frame.msg_type, MessageType::Hello);
+                let hello: HelloMsg = hello_frame.decode_payload().expect("Hello payload");
+
+                if hello.protocol_version != FAKE_LEGACY_VERSION {
+                    let reject = WelcomeMsg::Rejected {
+                        reason: format!(
+                            "Protocol version mismatch: client={}, server={}",
+                            hello.protocol_version, FAKE_LEGACY_VERSION
+                        ),
+                    };
+                    write_welcome(&mut stream, &reject);
+                    continue;
+                }
+
+                let accept = WelcomeMsg::Accepted {
+                    server_version: FAKE_LEGACY_VERSION,
+                    sessions: Vec::<SessionInfo>::new(),
+                };
+                write_welcome(&mut stream, &accept);
+
+                let shutdown_frame = read_frame(&mut stream);
+                assert_eq!(shutdown_frame.msg_type, MessageType::Shutdown);
+
+                // Simulate process exit: release the socket like the real
+                // daemon's shutdown path does.
+                let _ = std::fs::remove_file(&sock_path);
+                break;
+            }
+        })
+    }
+
+    /// Stand-in for a freshly-respawned current-protocol daemon: binds
+    /// `sock_path` synchronously (so it is ready the moment this returns),
+    /// then accepts exactly one Hello and replies `Accepted` on a
+    /// background thread. Used as the injected `spawn` step in
+    /// [`resolve_attach_socket_with`] tests, since a `cargo test --lib`
+    /// unit test binary is not the real `emterm` binary
+    /// [`daemon::spawn_daemon`] would spawn (task0001 Test Notes / AC-1
+    /// deviation).
+    #[cfg(unix)]
+    fn spawn_fake_current_daemon(sock_path: std::path::PathBuf) -> std::thread::JoinHandle<()> {
+        use std::os::unix::net::UnixListener;
+
+        let listener = UnixListener::bind(&sock_path).expect("bind fake respawned daemon socket");
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let hello_frame = read_frame(&mut stream);
+            assert_eq!(hello_frame.msg_type, MessageType::Hello);
+            let hello: HelloMsg = hello_frame.decode_payload().expect("Hello payload");
+            assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
+
+            let accept = WelcomeMsg::Accepted {
+                server_version: PROTOCOL_VERSION,
+                sessions: Vec::<SessionInfo>::new(),
+            };
+            write_welcome(&mut stream, &accept);
+            let _ = std::fs::remove_file(&sock_path);
+        })
+    }
+
+    /// AC-1: with a fake legacy daemon listening, `resolve_attach_socket_with`
+    /// shuts it down (via the shared recovery probe), invokes the spawn step,
+    /// and a subsequent handshake against the socket is accepted.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_attach_socket_recovers_from_legacy_daemon_and_respawns() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("legacy-attach.sock");
+        let legacy = spawn_fake_legacy_daemon(sock_path.clone());
+
+        let respawned: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> =
+            Arc::new(Mutex::new(None));
+        let respawned_for_closure = respawned.clone();
+
+        let result = resolve_attach_socket_with(&sock_path, move |p| {
+            let handle = spawn_fake_current_daemon(p.to_path_buf());
+            *respawned_for_closure.lock().unwrap() = Some(handle);
+            Ok(())
+        });
+
+        legacy.join().expect("fake legacy daemon thread panicked");
+
+        match &result {
+            Ok(path) => assert_eq!(path, &sock_path),
+            Err(e) => panic!("expected Ok(sock_path), got Err({e:?})"),
+        }
+
+        // A subsequent handshake on the socket is accepted (AC-1).
+        let mut stream = std::os::unix::net::UnixStream::connect(&sock_path)
+            .expect("connect to respawned daemon");
+        let hello = HelloMsg {
+            client_type: ClientType::Cli,
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let msg = MuxMessage::control(MessageType::Hello, 0, &hello);
+        let body = msg.to_frame_body();
+        stream
+            .write_all(&(body.len() as u32).to_be_bytes())
+            .expect("write frame length");
+        stream.write_all(&body).expect("write frame body");
+        stream.flush().expect("flush");
+
+        let welcome_frame = read_frame(&mut stream);
+        assert_eq!(welcome_frame.msg_type, MessageType::Welcome);
+        let welcome: WelcomeMsg = welcome_frame.decode_payload().expect("Welcome payload");
+        assert!(
+            matches!(welcome, WelcomeMsg::Accepted { .. }),
+            "expected the respawned daemon to accept the handshake, got {welcome:?}"
+        );
+
+        if let Some(handle) = respawned.lock().unwrap().take() {
+            handle.join().expect("fake respawned daemon thread panicked");
+        }
+    }
+
+    /// AC-2: with a fake current-protocol daemon listening,
+    /// `resolve_attach_socket_with` succeeds without spawning anything; the
+    /// fake daemon still owns the socket afterwards.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_attach_socket_is_noop_against_a_compatible_daemon() {
+        use std::os::unix::net::UnixListener;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("compatible-attach.sock");
+        let listener = UnixListener::bind(&sock_path).expect("bind fake v2 daemon socket");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let hello_frame = read_frame(&mut stream);
+            let hello: HelloMsg = hello_frame.decode_payload().expect("Hello payload");
+            assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
+            let accept = WelcomeMsg::Accepted {
+                server_version: PROTOCOL_VERSION,
+                sessions: Vec::<SessionInfo>::new(),
+            };
+            write_welcome(&mut stream, &accept);
+        });
+
+        let spawn_called = Arc::new(AtomicBool::new(false));
+        let spawn_called_for_closure = spawn_called.clone();
+
+        let result = resolve_attach_socket_with(&sock_path, move |_p| {
+            spawn_called_for_closure.store(true, Ordering::SeqCst);
+            Ok(())
+        });
+
+        server.join().expect("fake daemon thread panicked");
+
+        match &result {
+            Ok(path) => assert_eq!(path, &sock_path),
+            Err(e) => panic!("expected Ok(sock_path), got Err({e:?})"),
+        }
+        assert!(
+            !spawn_called.load(Ordering::SeqCst),
+            "a compatible daemon must not trigger a respawn"
+        );
+        assert!(sock_path.exists(), "a compatible daemon is left untouched");
+    }
+
+    /// AC-3: with no socket present, `resolve_attach_socket_with` fails with
+    /// the existing "No mux sessions to attach to" message, byte-identical
+    /// to today's error, and never calls the spawn step.
+    #[test]
+    fn resolve_attach_socket_fails_when_no_socket_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("nonexistent.sock");
+
+        let result = resolve_attach_socket_with(&sock_path, |_p| {
+            panic!("spawn must not be called when no socket is present");
+        });
+
+        match result {
+            Err(msg) => assert_eq!(
+                msg,
+                "No mux sessions to attach to (daemon not running)\n\
+                 Use 'emterm mux' to start a new session."
+            ),
+            Ok(_) => panic!("expected Err for a nonexistent socket"),
+        }
     }
 }
