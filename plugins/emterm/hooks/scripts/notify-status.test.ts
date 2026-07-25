@@ -1,13 +1,15 @@
 /**
  * Tests for the Claude Code hook script `notify-status.sh` and the
- * `hooks.json` manifest that wires it up (task0001).
+ * `hooks.json` manifest that wires it up (task0001; event set reworked by
+ * task0009 — `StopFailure` removed as a documented no-op, `PostToolUseFailure`
+ * added so approve-then-fail also clears `blocked`).
  *
  * `notify-status.sh` is exercised as a real subprocess, invoked explicitly
  * via `sh <script> <args…>`, so the assertions cover POSIX-shell semantics
  * rather than the developer's login shell (IMPLEMENTATION.md D3, Test
  * Notes). No fakes: this is the shipped artifact itself.
  *
- * See feature-docs/emterm-plugin-runtime-fixes/{SPEC,tasks/task0001}.md.
+ * See feature-docs/emterm-plugin-runtime-fixes/{SPEC,tasks/task0001,tasks/task0009}.md.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -370,19 +372,25 @@ describe("hooks.json shape (AC-7)", () => {
     expect(() => readHooksJson()).not.toThrow();
   });
 
-  test("declares exactly UserPromptSubmit, PostToolUse, Stop, StopFailure, Notification; no SubagentStop", () => {
+  test("declares exactly UserPromptSubmit, PostToolUse, PostToolUseFailure, Stop, Notification; no SubagentStop, no StopFailure", () => {
+    // StopFailure is deliberately absent (task0009, finding cm-stopfailure-noop):
+    // the hooks documentation states its output and exit code are ignored by
+    // Claude Code, and this hook transports state exclusively through the
+    // `terminalSequence` field of its stdout JSON, so a StopFailure entry
+    // could never report anything.
     const hooksJson = readHooksJson();
     expect(Object.keys(hooksJson.hooks).sort()).toEqual(
-      ["Notification", "PostToolUse", "Stop", "StopFailure", "UserPromptSubmit"].sort(),
+      ["Notification", "PostToolUse", "PostToolUseFailure", "Stop", "UserPromptSubmit"].sort(),
     );
     expect(hooksJson.hooks.SubagentStop).toBeUndefined();
+    expect(hooksJson.hooks.StopFailure).toBeUndefined();
   });
 
   test.each([
     ["UserPromptSubmit", "working"],
     ["PostToolUse", "working"],
+    ["PostToolUseFailure", "working"],
     ["Stop", "idle"],
-    ["StopFailure", "idle"],
     ["Notification", "blocked"],
   ])(
     "%s hook: exec form, command has no state appended, args=[%s], timeout 3",
