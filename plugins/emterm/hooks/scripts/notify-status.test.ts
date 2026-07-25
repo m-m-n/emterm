@@ -376,18 +376,41 @@ describe("hooks.json shape (AC-7)", () => {
     expect(() => readHooksJson()).not.toThrow();
   });
 
-  test("declares exactly UserPromptSubmit, PostToolUse, PostToolUseFailure, Stop, Notification; no SubagentStop, no StopFailure", () => {
+  test("declares exactly UserPromptSubmit, PostToolUse, PostToolUseFailure, Stop, PermissionRequest, Notification; no SubagentStop, no StopFailure", () => {
     // StopFailure is deliberately absent (task0009, finding cm-stopfailure-noop):
     // the hooks documentation states its output and exit code are ignored by
     // Claude Code, and this hook transports state exclusively through the
     // `terminalSequence` field of its stdout JSON, so a StopFailure entry
     // could never report anything.
+    //
+    // PermissionRequest carries `blocked`, not Notification. Found by the M-1
+    // live check: with a permission dialog on screen the badge stayed
+    // `working`, because Notification is a standalone async event for OS-level
+    // notifications (it fires when you are NOT watching the terminal), while
+    // "Runs when the user is shown a permission dialog" is PermissionRequest.
+    // Four static review rounds scrutinised the Notification matcher and none
+    // caught that the event itself was the wrong one.
     const hooksJson = readHooksJson();
     expect(Object.keys(hooksJson.hooks).sort()).toEqual(
-      ["Notification", "PostToolUse", "PostToolUseFailure", "Stop", "UserPromptSubmit"].sort(),
+      [
+        "Notification",
+        "PermissionRequest",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "Stop",
+        "UserPromptSubmit",
+      ].sort(),
     );
     expect(hooksJson.hooks.SubagentStop).toBeUndefined();
     expect(hooksJson.hooks.StopFailure).toBeUndefined();
+  });
+
+  test("PermissionRequest carries blocked and has no matcher, so every permission dialog sets it", () => {
+    const hooksJson = readHooksJson();
+    const group = hooksJson.hooks.PermissionRequest?.[0];
+    expect(group).toBeDefined();
+    expect(group?.matcher).toBeUndefined();
+    expect(group?.hooks?.[0]?.args).toEqual(["blocked"]);
   });
 
   test.each([
@@ -395,6 +418,7 @@ describe("hooks.json shape (AC-7)", () => {
     ["PostToolUse", "working"],
     ["PostToolUseFailure", "working"],
     ["Stop", "idle"],
+    ["PermissionRequest", "blocked"],
     ["Notification", "blocked"],
   ])(
     "%s hook: exec form, command has no state appended, args=[%s], timeout 3",
@@ -445,7 +469,7 @@ describe("Notification matcher (AC-8)", () => {
     expect(matcherSource).toBeDefined();
   });
 
-  test.each(["permission_prompt", "elicitation_dialog", "agent_needs_input"])(
+  test.each(["elicitation_dialog", "agent_needs_input"])(
     "matches %s",
     (name) => {
       const matcher = new RegExp(matcherSource as string);
@@ -454,6 +478,11 @@ describe("Notification matcher (AC-8)", () => {
   );
 
   test.each([
+    // `permission_prompt` moved out of this matcher: PermissionRequest is the
+    // event that fires when the dialog is shown. Leaving it here too would
+    // double-report `blocked` for the same wait, from an event that only fires
+    // when the user is away from the terminal.
+    "permission_prompt",
     "idle_prompt",
     "auth_success",
     "elicitation_complete",

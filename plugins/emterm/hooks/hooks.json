@@ -49,9 +49,21 @@
         ]
       }
     ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify-status.sh",
+            "args": ["blocked"],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
     "Notification": [
       {
-        "matcher": "^(permission_prompt|elicitation_dialog|agent_needs_input)$",
+        "matcher": "^(elicitation_dialog|agent_needs_input)$",
         "hooks": [
           {
             "type": "command",
