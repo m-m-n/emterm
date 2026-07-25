@@ -28,7 +28,7 @@ workflow:
     status: completed
     completed_at_commit: 7381495a0ee8c5858aac7f8311ebe475863f268c
   - id: implement
-    status: pending
+    status: in_progress
     base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
     completed_at_commit: 9cb1409e949687aa842a34709de7ad3ce582aed1
   - id: review
@@ -83,7 +83,8 @@ tasks:
     domains: [config-infra, external-io]
     complexity: medium
     requirements: [FR4, FR5]
-    status: pending
+    status: in_progress
+    branch: em-workflow/emterm-plugin-runtime-fixes/task0003
   task0004:
     title: "Display-skill safe form and wire-format drift detection (rework)"
     plan: tasks/task0004.md
@@ -99,7 +100,8 @@ tasks:
     domains: [input-handling, config-infra]
     complexity: medium
     requirements: [FR3, FR7]
-    status: pending
+    status: in_progress
+    branch: em-workflow/emterm-plugin-runtime-fixes/task0004
 
 review:
   status: pending
