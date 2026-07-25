@@ -28,7 +28,8 @@ workflow:
     status: completed
     completed_at_commit: 7381495a0ee8c5858aac7f8311ebe475863f268c
   - id: implement
-    status: pending
+    status: in_progress
+    base_commit: a0db9ea641ae236fc68e87bb4487c5ec219a114a
   - id: review
     status: pending
   - id: verify
@@ -51,7 +52,8 @@ tasks:
     domains: [input-handling, external-io, config-infra]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
-    status: pending
+    status: in_progress
+    branch: em-workflow/emterm-plugin-runtime-fixes/task0001
   task0002:
     title: "Documentation and display-skill hardening"
     plan: tasks/task0002.md
@@ -66,7 +68,8 @@ tasks:
     domains: [input-handling, config-infra]
     complexity: low
     requirements: [FR7, FR8, FR9]
-    status: pending
+    status: in_progress
+    branch: em-workflow/emterm-plugin-runtime-fixes/task0002
 
 review:
   status: pending
