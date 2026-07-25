@@ -1,7 +1,10 @@
 /**
  * Static scan of the plugin's SKILL.md files (task0003 — display / mux
  * skills; task0002 — display-skill argument-injection hardening; task0004
- * — rework of the hardening to a Bash-first, shell-safe form).
+ * — rework of the hardening to a Bash-first, shell-safe form; task0006 —
+ * round-2 rework closing the `~`-expansion regression, the double-quote
+ * near-miss, the display-image self-contradiction, and the mux-send
+ * argv-array unreachable instruction).
  *
  * Skill content is prose; there is no runtime to exercise inside a task
  * worktree, so these tests assert the static invariants the task plans'
@@ -12,9 +15,12 @@
  * Code cannot reach, since a skill only ever calls `emterm` through the
  * Bash tool — with the quoted-plus-`--` shell form as the primary MUST, so
  * these tests assert the copy-pastable safe form directly rather than
- * loose word-presence checks (task0004.md "Test Notes"). Whether Claude
- * actually auto-invokes the right skill for a given prompt is human
- * judgment and lives in the verify phase (task0003.md "Test Notes").
+ * loose word-presence checks (task0004.md "Test Notes"). task0006 adds
+ * regression guards specific enough to fail on a wording regression
+ * (task0006.md "Test coverage") rather than the loose word-presence checks
+ * round 1 used. Whether Claude actually auto-invokes the right skill for a
+ * given prompt is human judgment and lives in the verify phase (task0003.md
+ * "Test Notes").
  */
 
 import { describe, expect, test } from "bun:test";
@@ -121,13 +127,15 @@ describe("plugins/emterm/skills/display-image/SKILL.md", () => {
 /**
  * Directory slug -> the exact canonical-example text before the trailing
  * `-- '<path>'` (task0004.md F3, item 1: options first, then `--`, then
- * the single-quoted path). `display-image` is the only one with an option.
+ * the single-quoted path). `display-image`'s canonical example carries no
+ * `--protocol` as of task0006 F3 — the protocol-specific form is a
+ * separate second example (see the task0006 F3 describe block below).
  */
 const CANONICAL_EXAMPLE_PREFIX: Record<string, string> = {
   "display-markdown": "emterm markdown",
   "display-json": "emterm json",
   "display-yaml": "emterm yaml",
-  "display-image": "emterm image --protocol kitty",
+  "display-image": "emterm image",
 };
 
 /** Extract the first fenced code block in a SKILL.md body — the canonical usage example. */
@@ -166,6 +174,101 @@ for (const slug of DISPLAY_SKILLS) {
     });
   });
 }
+
+for (const slug of DISPLAY_SKILLS) {
+  describe(`plugins/emterm/skills/${slug}/SKILL.md quoting hardening (task0006)`, () => {
+    const content = readFileSync(join(SKILLS_DIR, slug, "SKILL.md"), "utf-8");
+
+    test("AC-1 (finding cm-tilde-expansion-broken): documents the ~ rule with a concrete safe form that expands only the leading $HOME/~ segment and keeps the untrusted remainder single-quoted", () => {
+      expect(content).toMatch(/single quotes suppress `~` expansion/);
+      expect(content).toMatch(/"\$HOME"'\/[^']*'/);
+    });
+
+    test("AC-2 (finding sc-doublequote-not-taught): states double quotes are insufficient and names $(...), backticks, and ${...}", () => {
+      expect(content).toMatch(
+        /Double quotes are NOT a safe substitute for single quotes/,
+      );
+      expect(content).toContain("$(...)");
+      expect(content).toContain("backtick");
+      expect(content).toContain("${...}");
+    });
+
+    test("AC-3 (finding sc-doublequote-not-taught): carries a command-substitution adversarial example contrasting the single-quoted safe form against the double-quoted unsafe form", () => {
+      expect(content).toMatch(/--\s+'[^']*\$\(touch PWNED\)[^']*'/);
+      expect(content).toMatch(/--\s+"[^"]*\$\(touch PWNED\)[^"]*"/);
+    });
+  });
+}
+
+describe("plugins/emterm/skills/display-image/SKILL.md protocol example (task0006 F3, finding cm-display-image-self-contradiction)", () => {
+  const content = readFileSync(
+    join(SKILLS_DIR, "display-image", "SKILL.md"),
+    "utf-8",
+  );
+  const { body } = parseSkillMd(content);
+  const canonicalExample = extractFirstCodeBlock(body);
+
+  test("AC-4: the canonical example carries no --protocol", () => {
+    expect(canonicalExample).toBe("emterm image -- '<path>'");
+    expect(canonicalExample).not.toContain("--protocol");
+  });
+
+  test("AC-4: a second example shows --protocol sixel placed before the -- delimiter", () => {
+    expect(content).toMatch(/emterm image --protocol sixel -- '<path>'/);
+  });
+
+  test("AC-5: the prose states the default protocol so it no longer contradicts a --protocol-free canonical example", () => {
+    expect(content).toMatch(/default[^.]*Kitty Graphics Protocol/i);
+  });
+});
+
+describe("plugins/emterm/skills/mux-send/SKILL.md rework (task0006 F4, finding sc-mux-send-unreachable)", () => {
+  const content = readFileSync(join(SKILLS_DIR, "mux-send", "SKILL.md"), "utf-8");
+
+  test("AC-6: the primary --stdin form is a quoted-delimiter heredoc, and it appears before the argv-array alternative", () => {
+    expect(content).toMatch(/--stdin <<'[A-Z]+'/);
+    expect(content).toMatch(/no-shell exec path is available/i);
+    const heredocIdx = content.indexOf("quoted-delimiter heredoc");
+    const argvIdx = content.indexOf("no-shell exec path is available");
+    expect(heredocIdx).toBeGreaterThan(-1);
+    expect(argvIdx).toBeGreaterThan(heredocIdx);
+  });
+
+  test("AC-6: the argv-array form is no longer presented as the primary requirement", () => {
+    expect(content).not.toMatch(
+      /assemble the invocation as an argv array.*so the text is never/s,
+    );
+  });
+
+  test("AC-6: notes the delimiter-collision condition", () => {
+    expect(content).toMatch(/must not contain a line consisting solely/);
+  });
+
+  test("AC-7: --text guidance matches the display skills' single-quote plus '\\'' rule, and pane-ID validation is retained", () => {
+    expect(content).toContain("single-quote the value");
+    expect(content).toContain("'\\''");
+    expect(content).toContain("^[a-z0-9-]+$");
+  });
+});
+
+describe("plugins/emterm/skills/mux-read/SKILL.md and mux-wait/SKILL.md (task0006 AC-8: unchanged)", () => {
+  test("mux-read still carries the prompt-injection boundary section untouched by task0006", () => {
+    const content = readFileSync(
+      join(SKILLS_DIR, "mux-read", "SKILL.md"),
+      "utf-8",
+    );
+    expect(content).toContain("Prompt-injection boundary (required)");
+    expect(content).toContain("UNTRUSTED DATA");
+  });
+
+  test("mux-wait carries no free-form text or path argument", () => {
+    const content = readFileSync(
+      join(SKILLS_DIR, "mux-wait", "SKILL.md"),
+      "utf-8",
+    );
+    expect(content).not.toContain("Argument-injection safety");
+  });
+});
 
 describe("plugins/emterm/README.md (task0002)", () => {
   const content = readFileSync(join(PLUGIN_DIR, "README.md"), "utf-8");
