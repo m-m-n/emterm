@@ -114,7 +114,7 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR4, FR6, FR7, FR8]
-    status: in_progress
+    status: merged
     branch: em-workflow/emterm-plugin-runtime-fixes/task0005
   task0006:
     title: "Skill guidance completion (rework)"
