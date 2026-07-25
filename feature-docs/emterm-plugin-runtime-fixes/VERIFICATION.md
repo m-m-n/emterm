@@ -29,7 +29,7 @@
 | TS-7 | `Notification` matcher behaviour | Matches `permission_prompt` / `elicitation_dialog` / `agent_needs_input`; does not match `idle_prompt` / `auth_success` / `elicitation_complete` / `elicitation_response` | Integration |
 | TS-8 | Legacy artifacts removed | `notify-status.ts` absent; `notify-status.sh` contains no `/dev/tty`, `emterm`, `bun`, `eval`, or backticks | Integration |
 | TS-9 | Wire-format fidelity | Emitted sequence per state is byte-identical to the canonical form documented in SPEC.md FR3 and produced by `src-tauri/src/agent_status.rs` with name `claude-code` | Integration |
-| TS-10 | Skill static scan | All seven SKILL.md pass the existing checks; the four display skills additionally document argv-based invocation and carry an adversarial example | Integration |
+| TS-10 | Skill static scan | All seven SKILL.md pass the existing checks; the four display skills additionally document the Bash-first quoted-and-`--`-delimited invocation form (with the `'\''` escaping rule) and carry an adversarial example | Integration |
 | TS-11 | Version pinned | `marketplace.json` and `plugin.json` both report `0.1.0` | Integration |
 
 ## Code Quality Verification
