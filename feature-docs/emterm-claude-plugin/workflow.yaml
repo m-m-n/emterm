@@ -34,9 +34,17 @@ workflow:
   - id: review
     status: pending
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: |
+      Automated portion (bun run typecheck + bun test = 226 pass / 0 fail) all green.
+      Manual scenario M-2 (README review against task0004 AC-1..AC-7) verified by orchestrator read.
+      Manual scenario M-1 (FR8 POC + NFR1 Bun startup timing) requires the user's live
+      eMterm + Claude Code session and cannot run in the workflow's automated context.
+      Recorded as OUTSTANDING USER ACTION for release-time — merge into base_branch is
+      still safe (the plugin code passed all automated checks), but the FR8 POC
+      MUST be executed by the user before publishing the plugin marketplace publicly.
   - id: retrospect
     status: pending
 
