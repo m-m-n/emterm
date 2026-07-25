@@ -32,7 +32,7 @@ workflow:
     completed_at_commit: dc2a390b3220950866096e33e4980b00469a6dc3
     base_commit: 5f932ae34cd5a1890fb0e1c3f9e0344fe79cf5f1
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -56,8 +56,12 @@ tasks:
     branch: em-workflow/mux-attach-legacy-recovery/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, performance, spec]
+    discretionary: []
+    codex_cross_validation: false
 
 requirements:
   FR1:
