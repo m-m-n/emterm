@@ -1,0 +1,295 @@
+round: 1
+executed_at: "2026-07-26T18:10:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
+  head_commit: 961e2f5cf7a1bec9a65ee4a94d43a192fc3d07a4
+  changed_files:
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+plan:
+  floor: [comprehensive, spec, security, performance, architecture]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: codex, status: completed, note: "codex drifted off-perspective; its finding duplicated the security critical and was folded into 0c18ff55032328ab rather than recorded as a spec finding"}
+
+findings:
+  - stable_id: 0c18ff55032328ab
+    severity: critical
+    category: security
+    file: crates/term_core/src/terminal_core.rs
+    line: 695
+    title: "子プロセスが偽装できる in-band resize マーカーを replay が無検証で信頼し、無制限な次元でプロセスを abort させられる"
+    description: >-
+      resize マーカー `ESC]777;emterm;resize;<cols>;<rows>BEL` は daemon が書くものと
+      子プロセスが printf で出すものが完全に同一。ScrollbackWriteFilter が剥がすのは
+      viewer 系 kind のみで resize は意図的に KEEP されるため、子プロセス由来のマーカーが
+      scrollback に残り snapshot 経由で replay に届く。replay 側は上限を持たず u16 全域を
+      TerminalCore::resize に渡すので、65535x65535 を出力してからウィンドウ切替すると
+      数十 GB の確保要求で allocator abort によりターミナルプロセスが即死する。
+      hostile なファイルの cat / リモートログの tail から一行で到達可能。
+    suggestion: >-
+      (a) 出所の分離: ScrollbackWriteFilter::feed が呼ぶ strip 関数を snapshot 時の
+      strip_replayable_rich_content と分け、書き込みフィルタ側だけ resize kind も除去する。
+      daemon 自身のマーカーは MuxPane::new / MuxPane::resize からフィルタを通さず
+      リングへ直接書かれるので、この分離だけで「replay が信じるマーカー = daemon が書いたもの」
+      という不変条件が成立する。(b) デコーダ側の防御的上限（loop 1 で適用済み）。
+    sources: [claude:security, codex:security, claude:comprehensive, codex:spec]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "多層防御の (b) のみ loop 1 で適用。本丸の (a) 書き込み経路 strip 分離は複数ファイルにまたがるため rework へ回送"
+
+  - stable_id: ee2769bbb044e9f4
+    severity: high
+    category: security
+    file: crates/term_core/src/terminal_core.rs
+    line: 1363
+    title: "find_resize_marker の BEL 探索が非有界で、細工された PTY 出力により replay が二次時間でフリーズする"
+    description: >-
+      候補プレフィックスごとにストリーム終端まで BEL を探し、malformed なら
+      search_from = marker_start + 1 で再走査するため O(候補数 x n) になる。
+      2 MiB の scrollback をプレフィックスで埋め末尾に BEL を 1 個置くと
+      window 切替 / reattach ごとに数十秒〜数分の停止が起きる。
+      process_pty_data_fully_cancellable の外側で走るため cancel でも中断できない。
+    suggestion: "BEL 探索を妥当な body 最大長（65535;65535 = 11 バイト）の窓に限定し、候補あたり O(1) にする"
+    sources: [claude:security, claude:performance, codex:performance]
+    confidence: 100
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (RESIZE_MARKER_MAX_BODY_LEN による窓制限)"
+
+  - stable_id: 90eb865d6524c8ec
+    severity: high
+    category: performance
+    file: crates/term_core/src/terminal_core.rs
+    line: 1371
+    title: "find_resize_marker の BEL 探索が無制限で、候補多数の入力に対しリプレイが O(n^2) 化する"
+    description: "ee2769bbb044e9f4 と同一の物理バグを performance 観点から検出したもの（line bucket 差により別 site 判定）"
+    suggestion: "同上（探索窓の固定長化）"
+    sources: [claude:performance, codex:performance]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 と同一の修正でカバー"
+
+  - stable_id: 417a9976ffcace4f
+    severity: high
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 1387
+    title: "resize マーカーは PTY 出力から偽装可能で、寸法に上限が無い"
+    description: >-
+      parse_resize_marker_dims は 0 以外の任意の u16 を受け入れ、上限クランプが無い。
+      巨大値では repopulate_ring_from_lines が数十 GB のセル確保を試みて落ち、
+      小さい値（1;1 等）では replay 全体が 1 桁幅で reflow され scrollback が静かに壊れる。
+    suggestion: "parse_resize_marker_dims に寸法上限を課し、範囲外は「マーカーでない」として扱う"
+    sources: [claude:comprehensive]
+    confidence: 75
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (RESIZE_MARKER_MAX_COLS / MAX_ROWS = 2000)"
+
+  - stable_id: 6ff208bbc674189c
+    severity: high
+    category: performance
+    file: crates/term_core/src/terminal_core.rs
+    line: 695
+    title: "resize marker ごとのフルリフローでスナップショットリプレイが O(marker 数 x 保持行数) になる"
+    description: >-
+      replay_with_resize_markers はマーカーごとに content-preserving な resize を呼び、
+      resize_reflow が scrollback 全行を drain して再構築する。TabManager::resize が
+      セル数変化ごとにグループ内全ペインへ Resize を送るため、ウィンドウを一度ドラッグ
+      しただけで数十個のマーカーが（多くは間に出力バイトを挟まず）積まれ、以後の切替の
+      たびにほぼ空セグメントに対するフルリフローを繰り返す。mux 切替が既に 2-3 秒という
+      既知課題に上乗せされる。
+    suggestion: >-
+      空セグメントを挟む連続マーカーを合流させる。replay 側で pending 寸法を持ち、
+      実際に非空スライスを供給する直前にだけ resize する（記録済み scrollback にも効く）。
+      あるいは記録側で MuxPane::resize が末尾の連続マーカーを上書きする。
+    sources: [claude:performance, codex:performance, claude:comprehensive]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "rework へ回送（bypass 不変条件 1698d9b52a89e241 と同じ関数を触るため一括で扱う）"
+
+  - stable_id: 83bed291fb779f52
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 687
+    title: "Resize markers are not ordered with PTY output"
+    description: >-
+      MuxPane::resize は master.resize()（= 子プロセスへ SIGWINCH）を先に発行し、
+      その後で別ロックの scrollback にマーカーを書く。PTY リーダースレッドは並行に動くため、
+      この隙間で SIGWINCH 反応バイトを読んでリングへ書き込むと、新寸法で生成されたバイトが
+      マーカーより前に並ぶ。replay ではそれが旧寸法で解釈され、本修正が潰そうとしている
+      DECSTBM / CUP の座標 drift がそのまま再発する。
+    suggestion: >-
+      マーカー書き込みと master.resize() の順序を PTY リーダーに対して確定させる。
+      scrollback ロックを resize 全体にかぶせ、マーカー書き込み → master.resize() の順にする。
+      より厳密にはマーカー投入をリーダースレッドの制御チャネル経由にしてストリーム順序を
+      単一スレッドで確定させる。
+    sources: [codex:architecture, claude:comprehensive]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "rework へ回送"
+
+  - stable_id: 81947e02402b5ace
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 54
+    title: "The byte ring cannot preserve the resize protocol's required state"
+    description: >-
+      ScrollbackRingBuffer は 2 MiB 固定の生バイトリングで、満杯後はシーケンス境界を
+      無視して最古バイトを上書きする。MuxPane::new の初期マーカーは pane が 2 MiB 出力した
+      時点で evict され、「最も古い retained セグメントの前には必ずマーカーがある」という
+      不変条件が崩れる。長寿命 pane（= 報告された症状が出る母集団）では常にこの状態で、
+      retained 範囲内に resize が無ければ先頭セグメントは修正前と同じ座標 drift を起こす。
+      副次的に、切断点がマーカー途中に落ちると残骸が可視テキストとして replay されうる。
+    suggestion: >-
+      scrollback を record-aware にし、最古 retained バイト時点で有効な寸法を保持する。
+      あるいは snapshot 組み立て（build_snapshot_bytes / build_resume_snapshot_bytes）の
+      先頭へその寸法のマーカーを必ず prepend する。リングを一周させたうえで resize を跨ぐ
+      recording の回帰テストも追加する。
+    sources: [codex:architecture, claude:comprehensive, claude:spec]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "rework へ回送"
+
+  - stable_id: 20b2bed0aaf48f94
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 712
+    title: "マーカーを解釈する消費者が 3 経路中 1 経路のみ（契約の適用漏れ）"
+    description: >-
+      マーカーは 3 経路へ流れる。(1) ウィンドウ切替の Snapshot/SnapshotRestore →
+      reset_and_replay（対応済み）、(2) reattach: send_reattach_data が
+      MessageType::PtyOutput として送出 → GUI のライブ経路、(3) 可視化再開:
+      resume_pane_with_permit → 同じくライブ経路。(2)(3) は find_resize_marker を
+      通らないため、マーカーは不活性な未知 OSC として捨てられ、PROBE D の座標ズレが残る。
+      detach → ウィンドウサイズ変更 → 再アタッチは現実的な操作列で、報告された症状と
+      同じ機構で再現しうる。
+    suggestion: >-
+      reattach / visibility-resume のスナップショットを SnapshotRestore として送り
+      reset_and_replay で受けるよう経路を統一する。あるいはライブ経路側でも
+      マーカーを解釈できるようにする。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "severity は medium だが、報告された症状の一部が未修正で残るため rework に含める"
+
+  - stable_id: ee93d8be8823e5d7
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 623
+    title: "MuxPane::new の初期マーカーはリング wrap で失われ、先頭セグメントの drift が残る"
+    description: "81947e02402b5ace と同一機構を comprehensive 観点から検出"
+    suggestion: "同上（リング先頭時点の寸法を snapshot 先頭へ prepend）"
+    sources: [claude:comprehensive, claude:spec]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "rework へ回送（81947e02402b5ace と同一修正でカバー）"
+
+  - stable_id: 1698d9b52a89e241
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 809
+    title: "bypass 中の mid-drain resize は evicted_total の過少報告に留まらず、2nd-pass merge の行重複を招く"
+    description: >-
+      resize → resize_reflow → repopulate_ring_from_lines は bypass 非対応なので、
+      行数が縮む向きのマーカーでは scrollback_slim に行が積まれ、disable_snapshot_bypass は
+      それを消さない。2nd-pass の merge_scrollback_from はこの残留行を「swap 後のライブ
+      drain 分」とみなすため、行の重複・順序崩れ・再構築行のドロップを招きうる。
+      evicted_total は drain_marks 経由で apply_replay_reconcile の evicted_baseline に
+      なり、プロンプト/フォールドマークと選択の絶対行マッピングの基準になるため、
+      「会計値が少しずれるだけ」より影響範囲は広い。
+    suggestion: >-
+      resize_reflow を bypass 対応にする、または bypass 中の mid-drain resize 後に
+      scrollback_slim を drain して不変条件を復元する。少なくとも resize_reflow 入口に
+      debug_assert! を置き、bypass 中の内容変更経路が増えたときテストで落ちるようにする。
+      64 KiB 超 + 行数が縮むマーカー + merge_scrollback_from を通した結合テストも追加する。
+    sources: [claude:comprehensive, claude:architecture, codex:architecture]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "rework へ回送"
+
+  - stable_id: 4005fe364386682d
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/terminal_core.rs
+    line: 1346
+    title: "resize マーカーのバイト契約が 2 クレートに二重定義（SSOT なし）"
+    description: >-
+      エンコーダ（mux/scrollback_buffer.rs の resize_marker_bytes）とデコーダ側の
+      プレフィックス（term_core の RESIZE_MARKER_PREFIX）が独立したリテラルで、
+      片方だけ変更してもコンパイルが通る。ドリフト時の失敗モードは静かで、
+      マーカーが認識されなくなり座標ズレが復活するだけ。
+    suggestion: >-
+      定数とエンコーダを term_core 側に一本化して mux 側は再エクスポートにする。
+      移動させない場合は、エンコーダ出力をデコーダで往復させるドリフトガードテストを追加する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "rework へ回送"
+
+  - stable_id: 7aef70ff81703b90
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 1383
+    title: "FR3 が明示する「異なる terminal width で produce された行」のテストシナリオが無い"
+    description: >-
+      SPEC FR3 は「a scenario where the scrollback contains lines produced at different
+      terminal widths」を明示するが、新規テストは cols 固定で rows だけを変える組み合わせ
+      しか回していない。幅変更時は replay 途中の resize で既 replay 行が re-wrap され、
+      末尾の target 幅復元でもう一度 reflow されるが、この二重 reflow が FR2 を保つかは未検証。
+    suggestion: "cols を変える recording（幅を超えて折り返す長い行を含む）で cross-line mixing ゼロを assert するケースを追加する"
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "rework へ回送"
+
+  - stable_id: abeda9cc206cf018
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 1507
+    title: "SPEC の Unit Test「switch 前のグリッド == replay 後のグリッド」ラウンドトリップテストが未実装"
+    description: >-
+      新規テストの汚染検出は「2 種類の断片が同じ行に同居しない」ヒューリスティックのみで、
+      switch 前グリッドとの一致は見ていない。マーカー解釈によって行が欠落・重複・空行化する
+      退行（混ざりはしないが内容が失われる）を素通しする。
+    suggestion: >-
+      recording を daemon 側サイズの core にライブに食わせた grid fingerprint と、
+      同じ recording の snapshot を replay した fingerprint の一致を assert するテストを追加する。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "rework へ回送"
+
+auto_fix:
+  loops_run: 1
+  applied_total: 2
+  termination: routed-to-rework
+  note: >-
+    loop 1 で単一ファイル・自己完結な 2 件（BEL 探索の窓制限、寸法上限クランプ）を適用。
+    残る critical/high は書き込み経路の strip 分離・scrollback リングの record 化・
+    resize/マーカーの順序所有権・replay 経路の統一といった複数ファイルにまたがる構造的修正で、
+    単一ファイル限定の review-editor では実装できないため、loop 2 の再レビューを回さず
+    implement フェーズへ差し戻す判断をユーザーが選択した。
+
+residual_critical_high: 4
+rework_required: true

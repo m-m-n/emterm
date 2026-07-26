@@ -34,11 +34,11 @@ workflow:
     status: completed
     completed_at_commit: 097c6745466c5dbeed5861ec2c7c8d2d95ddc7d0
   - id: implement
-    status: completed
+    status: pending
     completed_at_commit: 6f966a307f57adcfe5f8056a2510e5abf23266a9
     base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
   - id: review
-    status: in_progress
+    status: pending
   - id: verify
     status: pending
     result: null
@@ -70,10 +70,37 @@ tasks:
     status: merged
     notes: "Investigation verdict: same root cause as PROBE D (resize-interleaved scrollback replay coordinate drift). Fix centralized in TerminalCore::replay_with_resize_markers; daemon.rs/handlers.rs/tabs.rs/app.rs/ring_buffer.rs left unmodified (predicted but unnecessary). Known limitation: marker inside >=64KiB off-thread snapshot payload can under-report evicted_total/scrollback_length (grid/cursor correctness unaffected)."
     branch: em-workflow/mux-render-corruption/task0001
+  task0002:
+    title: "Harden the resize-marker protocol (review round 1 rework)"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/mux/scrollback_filter.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/mux/scrollback_buffer.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/snapshot_bytes.rs
+      - src-tauri/src/mux/ipc/reattach.rs
+      - src-tauri/src/mux/daemon.rs
+      - src-tauri/src/tabs.rs
+      - crates/term_core/src/terminal_core.rs
+    skills: [backend-impl]
+    domains: [input-handling, ui, concurrency, api-contract]
+    complexity: high
+    requirements: [FR2, FR3, NFR1, NFR2, NFR3]
+    status: pending
+    notes: "review round 1 の residual critical/high からの rework（findings 0c18ff55032328ab / 81947e02402b5ace / 83bed291fb779f52 / 6ff208bbc674189c / 20b2bed0aaf48f94 / 1698d9b52a89e241 / 4005fe364386682d / 7aef70ff81703b90 / abeda9cc206cf018）"
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
+  residual_critical_high: 4
+  needs_rework: true
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    security: completed
+    performance: completed
+    architecture: completed
   plan:
     floor: [comprehensive, spec, security, performance, architecture]
     discretionary: []
