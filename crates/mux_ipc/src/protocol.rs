@@ -15,6 +15,21 @@ use serde::{Deserialize, Serialize};
 /// `SendText`/`SendTextResult`, `WaitAgentState`/`WaitAgentStateResult`,
 /// `AgentApiError`). No existing message's encoded bytes changed.
 ///
+/// Bumped from 2 to 3 (mux-render-corruption round-4/5 rework, review
+/// round-4 finding `fdfd391ba97167de`): the `Snapshot` / `SnapshotRestore`
+/// payload format changed INCOMPATIBLY — it is now the `EMSNAP2`-prefixed
+/// structural-segment envelope (see [`encode_snapshot_payload`] /
+/// [`decode_snapshot_payload_typed`]), not the plain ANSI bytes a v2 client
+/// expects. A v2 GUI reading a v3 daemon's snapshot would render the magic
+/// bytes and segment table as literal terminal content. The decode side's
+/// magic-prefix sniff is a DELIBERATE compatibility shim for the OTHER
+/// direction only (an old, v2-speaking daemon that a current GUI reattaches
+/// to — see [`decode_snapshot_payload_typed`]'s `Legacy` variant) and does
+/// not contradict the handshake guarantee below: a v3 daemon meeting a v2
+/// `HelloMsg` still rejects it via `WelcomeMsg::Rejected`, exactly as the
+/// previous bump did, precisely so this incompatible payload change cannot
+/// reach a client that would misinterpret it.
+///
 /// The handshake path (`HelloMsg::protocol_version` vs this constant,
 /// checked in `mux/ipc/connection.rs`) rejects a mismatched client
 /// cleanly via `WelcomeMsg::Rejected` — there is no silent compatibility
@@ -29,7 +44,7 @@ use serde::{Deserialize, Serialize};
 /// accepts) and sends a version-tolerant `Shutdown`, then relaunches a
 /// current-version daemon. See IMPLEMENTATION.md "Old GUI × new daemon
 /// pairing".
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// The protocol version immediately preceding [`PROTOCOL_VERSION`].
 ///
@@ -82,6 +97,19 @@ pub const FRAME_HEADER_LEN: usize = 5;
 /// threshold that under- or over-shoots the actual wire constraint.
 pub const MAX_SNAPSHOT_FRAME_PAYLOAD: usize = MAX_FRAME_LENGTH - FRAME_HEADER_LEN;
 
+/// Whether an encoded snapshot payload (segment header + content bytes,
+/// [`encode_snapshot_payload`]'s output) fits in a single codec frame — the
+/// ONE size-policy check every snapshot producer must go through (task0005
+/// rework D6'', review round-4 finding `1d4a0c96821da0ef`: producers had
+/// been checking this independently — `mux::ipc::reattach`'s
+/// `send_reattach_data` did, `mux::ipc::handlers`'
+/// `handle_request_pane_snapshot` and the visibility-resume path did not —
+/// so whether an oversized snapshot degraded gracefully or tore down the
+/// connection depended on which code path produced it).
+pub fn fits_single_snapshot_frame(encoded_len: usize) -> bool {
+    encoded_len <= MAX_SNAPSHOT_FRAME_PAYLOAD
+}
+
 /// A structural dimension segment (task0004 round-4 rework, D1'): content
 /// starting at byte `offset` into a snapshot payload's bytes was produced
 /// under `(cols, rows)`, until the next segment (if any, in the same list)
@@ -109,6 +137,55 @@ pub struct DimSegment {
 /// for the compatibility contract this enables (task0004 AC-11).
 const SNAPSHOT_PAYLOAD_MAGIC: [u8; 8] = *b"EMSNAP2\0";
 
+/// Maximum number of [`DimSegment`] entries a decoded structured payload may
+/// declare (task0005 rework D2'', review round-4 finding
+/// `1cd7b5e593f3b901`).
+///
+/// The old decoder's `count.min(4096)` only bounded the initial `Vec`
+/// allocation — the per-entry parse loop still ran the FULL declared
+/// `count`, so a frame well under the 64 KiB off-thread-replay threshold
+/// could still declare a segment table approaching `MAX_FRAME_LENGTH / 8`
+/// (~2,000,000 entries) and force that many synchronous reflows on the
+/// caller's UI thread. A genuine daemon-recorded payload never approaches
+/// this bound — `mux::scrollback_buffer::MAX_DIM_MARKERS` caps the daemon's
+/// OWN recording an order of magnitude below it — so rejecting anything
+/// above it as [`DecodedSnapshotPayload::Malformed`] costs no legitimate
+/// payload while making the size of `count` itself part of the checked
+/// upfront validation ([`decode_snapshot_payload_typed`]) rather than
+/// something only a full per-entry scan would discover.
+pub const MAX_SEGMENTS: usize = 4096;
+
+/// Result of decoding a snapshot payload (task0005 rework D2'', replacing
+/// the ambiguous `(Vec<DimSegment>, &[u8])` tuple [`decode_snapshot_payload`]
+/// still returns for existing callers). The tuple form could not
+/// distinguish "no magic prefix — legacy raw content" from "magic prefix
+/// present but the segment table is corrupt", so a corrupted structured
+/// frame silently fell back to "the whole payload (magic bytes and all) is
+/// terminal content" — review round-4 finding `5299d50f586b8cb8`: that
+/// literally renders the protocol envelope on screen instead of being
+/// recognized as damaged transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodedSnapshotPayload<'a> {
+    /// `payload` does not start with [`SNAPSHOT_PAYLOAD_MAGIC`]: the WHOLE
+    /// input is legacy raw content, no structural dimension segments — the
+    /// pre-task0001 single-dimension replay degrade path (task0004 AC-11).
+    Legacy(&'a [u8]),
+    /// Magic prefix present and the segment table parsed successfully
+    /// (`count` bounded by [`MAX_SEGMENTS`], table length verified with
+    /// checked arithmetic before any entry is parsed).
+    Structured {
+        segments: Vec<DimSegment>,
+        content: &'a [u8],
+    },
+    /// Magic prefix present but the segment table is truncated, declares a
+    /// count above [`MAX_SEGMENTS`], or its length overflows the
+    /// checked-arithmetic bounds check. This is a CORRUPTED structured
+    /// frame — never legacy content — and a caller MUST NOT replay
+    /// `payload` as terminal bytes for it (see [`decode_snapshot_payload`]'s
+    /// doc for how the tuple-form compatibility wrapper handles this).
+    Malformed,
+}
+
 /// Encode a snapshot payload in the D1' structural format: `segments` (the
 /// sole authority for "which dimensions applied to which bytes") followed by
 /// `bytes` (the plain ANSI payload, carrying no dimension information of its
@@ -130,13 +207,16 @@ pub fn encode_snapshot_payload(segments: &[DimSegment], bytes: &[u8]) -> Vec<u8>
     out
 }
 
-/// Decode a snapshot payload produced by [`encode_snapshot_payload`].
+/// Decode a snapshot payload produced by [`encode_snapshot_payload`],
+/// distinguishing legacy content, a successfully parsed structured payload,
+/// and a corrupted structured payload (task0005 rework D2'', review
+/// round-4 finding `5299d50f586b8cb8`).
 ///
 /// **Older-daemon compatibility (task0004 AC-11):** when `payload` does not
-/// start with the magic prefix — or the segment table is truncated /
-/// malformed in any way — this returns `(Vec::new(), payload)`: the WHOLE
-/// input is treated as legacy raw bytes with no structural dimension info.
-/// A caller feeding that through the segment-aware replay path
+/// start with [`SNAPSHOT_PAYLOAD_MAGIC`], this returns
+/// [`DecodedSnapshotPayload::Legacy`]: the WHOLE input is legacy raw bytes
+/// with no structural dimension info. A caller feeding that through the
+/// segment-aware replay path
 /// (`term_core::terminal_core::TerminalCore::reset_and_replay_segments`
 /// with an empty segment list) gets exactly the pre-task0001
 /// single-dimension replay behavior — the documented degradation for an
@@ -145,31 +225,80 @@ pub fn encode_snapshot_payload(segments: &[DimSegment], bytes: &[u8]) -> Vec<u8>
 /// the 8-byte magic by coincidence would be misparsed, but real ANSI
 /// snapshot payloads always begin with the clear-prefix `ESC` byte (see
 /// [`SNAPSHOT_PAYLOAD_MAGIC`]'s doc comment).
-pub fn decode_snapshot_payload(payload: &[u8]) -> (Vec<DimSegment>, &[u8]) {
+///
+/// When the magic prefix IS present, the segment table's declared `count`
+/// is validated with checked arithmetic (against both [`MAX_SEGMENTS`] and
+/// the actual remaining byte length) BEFORE any entry is parsed — a
+/// truncated table, an overflow-inducing `count`, or a `count` above
+/// `MAX_SEGMENTS` all yield [`DecodedSnapshotPayload::Malformed`]. This is
+/// DELIBERATELY not the same as `Legacy`: the magic prefix proves the
+/// producer meant this to be a structured payload, so a corrupted table
+/// must never be handed to a caller as if it were plain terminal content
+/// (that would render the magic bytes and partial table literally on
+/// screen).
+pub fn decode_snapshot_payload_typed(payload: &[u8]) -> DecodedSnapshotPayload<'_> {
     if !payload.starts_with(&SNAPSHOT_PAYLOAD_MAGIC) {
-        return (Vec::new(), payload);
+        return DecodedSnapshotPayload::Legacy(payload);
     }
     let rest = &payload[SNAPSHOT_PAYLOAD_MAGIC.len()..];
     let Some(count_bytes) = rest.get(0..4) else {
-        return (Vec::new(), payload);
+        return DecodedSnapshotPayload::Malformed;
     };
     let count = u32::from_le_bytes(count_bytes.try_into().expect("4-byte slice")) as usize;
+    if count > MAX_SEGMENTS {
+        return DecodedSnapshotPayload::Malformed;
+    }
+    // Checked arithmetic (D2''): verify the WHOLE table fits within `rest`
+    // before parsing a single entry, rather than discovering truncation
+    // only after iterating partway through a possibly-huge declared count.
+    let Some(table_bytes) = count.checked_mul(8) else {
+        return DecodedSnapshotPayload::Malformed;
+    };
+    let Some(table_end) = 4usize.checked_add(table_bytes) else {
+        return DecodedSnapshotPayload::Malformed;
+    };
+    if rest.len() < table_end {
+        return DecodedSnapshotPayload::Malformed;
+    }
+    let mut segments = Vec::with_capacity(count);
     let mut cursor = 4usize;
-    let mut segments = Vec::with_capacity(count.min(4096));
     for _ in 0..count {
-        let Some(seg_bytes) = rest.get(cursor..cursor + 8) else {
-            // Truncated segment table: an incomplete/corrupted transfer.
-            // Fall back to the safest interpretation (no segments, whole
-            // payload as content) rather than guessing.
-            return (Vec::new(), payload);
-        };
+        // Bounds already verified above (`table_end <= rest.len()`); this
+        // slice cannot panic.
+        let seg_bytes = &rest[cursor..cursor + 8];
         let offset = u32::from_le_bytes(seg_bytes[0..4].try_into().expect("4-byte slice"));
         let cols = u16::from_le_bytes(seg_bytes[4..6].try_into().expect("2-byte slice"));
         let rows = u16::from_le_bytes(seg_bytes[6..8].try_into().expect("2-byte slice"));
         segments.push(DimSegment { offset, cols, rows });
         cursor += 8;
     }
-    (segments, &rest[cursor..])
+    DecodedSnapshotPayload::Structured {
+        segments,
+        content: &rest[cursor..],
+    }
+}
+
+/// Backward-compatible tuple-shaped wrapper over
+/// [`decode_snapshot_payload_typed`], for callers that only ever cared
+/// about "segments + content" and treated any decode failure as "fall back
+/// to legacy interpretation" (most existing call sites and tests).
+///
+/// [`DecodedSnapshotPayload::Malformed`] maps to `(Vec::new(), &[])` — empty
+/// segments AND empty content — NOT `(Vec::new(), payload)` as the
+/// pre-task0005 implementation did. Handing a caller the raw magic + corrupt
+/// table bytes as "content" would have them replayed as literal terminal
+/// text (review round-4 finding `5299d50f586b8cb8`); an empty replay is the
+/// safe degradation instead. A caller that needs to distinguish "nothing to
+/// show" (`Malformed`) from "legitimately empty snapshot" should use
+/// [`decode_snapshot_payload_typed`] directly (`tabs.rs`'s
+/// `apply_mux_message` does, so it can log and skip applying the frame
+/// entirely rather than resetting the display to blank).
+pub fn decode_snapshot_payload(payload: &[u8]) -> (Vec<DimSegment>, &[u8]) {
+    match decode_snapshot_payload_typed(payload) {
+        DecodedSnapshotPayload::Legacy(content) => (Vec::new(), content),
+        DecodedSnapshotPayload::Structured { segments, content } => (segments, content),
+        DecodedSnapshotPayload::Malformed => (Vec::new(), &[]),
+    }
 }
 
 /// Message type identifiers.
@@ -1908,10 +2037,23 @@ mod tests {
 
     // ---- PROTOCOL_VERSION bump (task0002) ----
 
-    /// AC-5: `PROTOCOL_VERSION` is bumped exactly once for this task, to 2.
+    /// AC-5: `PROTOCOL_VERSION` was bumped to 2 for the agent-API additions.
     #[test]
     fn test_protocol_version_bumped_for_agent_api_additions() {
-        assert_eq!(PROTOCOL_VERSION, 2);
+        assert!(PROTOCOL_VERSION >= 2);
+    }
+
+    // ---- task0005 rework D4'': PROTOCOL_VERSION bump for the D1'
+    // structural Snapshot/SnapshotRestore payload change (review round-4
+    // finding `fdfd391ba97167de`) ------------------------------------------
+
+    /// AC-6: `PROTOCOL_VERSION` reflects the incompatible `Snapshot` /
+    /// `SnapshotRestore` payload change — bumped to 3 so a new daemon and an
+    /// old (v2) GUI no longer handshake successfully and misinterpret the
+    /// `EMSNAP2` envelope as terminal content.
+    #[test]
+    fn test_protocol_version_bumped_for_structural_snapshot_payload_change() {
+        assert_eq!(PROTOCOL_VERSION, 3);
     }
 
     // ---- task0010 rework: safe PROTOCOL_VERSION upgrade path (strategy B) ----
@@ -1921,7 +2063,7 @@ mod tests {
     #[test]
     fn test_previous_protocol_version_is_adjacent() {
         assert_eq!(PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION - 1);
-        assert_eq!(PREVIOUS_PROTOCOL_VERSION, 1);
+        assert_eq!(PREVIOUS_PROTOCOL_VERSION, 2);
     }
 
     /// AC-1: parses the exact reason text the daemon's version-mismatch
@@ -2014,17 +2156,113 @@ mod tests {
     }
 
     /// A truncated segment table (transfer cut mid-header) must not panic
-    /// or read out of bounds — falls back to "no segments, whole payload as
-    /// content" like any other malformed input.
+    /// or read out of bounds. task0005 rework D2'' (review round-4 finding
+    /// `5299d50f586b8cb8`): the magic prefix proves this was MEANT to be a
+    /// structured payload, so it is reported as `Malformed` — the tuple
+    /// compat wrapper maps that to EMPTY content, not the raw
+    /// magic-plus-garbage bytes. Confirmed to fail pre-fix: the old
+    /// implementation returned `(Vec::new(), malformed.as_slice())` here,
+    /// i.e. the WHOLE magic + truncated-table bytes handed back as if they
+    /// were plain terminal content — exactly the bug this test now guards
+    /// against.
     #[test]
     fn decode_snapshot_payload_falls_back_for_truncated_segment_table() {
         let mut malformed = Vec::new();
         malformed.extend_from_slice(&SNAPSHOT_PAYLOAD_MAGIC);
         malformed.extend_from_slice(&2u32.to_le_bytes()); // claims 2 segments
         malformed.extend_from_slice(&[1, 2, 3]); // but far too few bytes follow
+        assert_eq!(
+            decode_snapshot_payload_typed(&malformed),
+            DecodedSnapshotPayload::Malformed
+        );
         let (segments, bytes) = decode_snapshot_payload(&malformed);
         assert!(segments.is_empty());
-        assert_eq!(bytes, malformed.as_slice());
+        assert!(
+            bytes.is_empty(),
+            "a malformed structured frame must never surface its magic/table \
+             bytes as replayable content, got {bytes:?}"
+        );
+    }
+
+    /// D2'' (review round-4 finding `1cd7b5e593f3b901`): a segment count
+    /// above `MAX_SEGMENTS` is rejected as `Malformed` BEFORE any per-entry
+    /// parsing — even though the actual table bytes following it happen to
+    /// be well-formed for the (smaller) number of entries genuinely
+    /// present. Confirmed to fail pre-fix: the old decoder had no count
+    /// ceiling at all (only `count.min(4096)` for the initial `Vec`
+    /// capacity), so an oversized `count` here would have looped far past
+    /// `MAX_SEGMENTS`, parsing whatever real entries followed instead of
+    /// rejecting the frame outright.
+    #[test]
+    fn decode_snapshot_payload_rejects_a_count_above_max_segments() {
+        let mut malformed = Vec::new();
+        malformed.extend_from_slice(&SNAPSHOT_PAYLOAD_MAGIC);
+        malformed.extend_from_slice(&((MAX_SEGMENTS as u32) + 1).to_le_bytes());
+        // No table bytes at all — irrelevant, the count ceiling must reject
+        // this before the table length is even checked.
+        assert_eq!(
+            decode_snapshot_payload_typed(&malformed),
+            DecodedSnapshotPayload::Malformed
+        );
+    }
+
+    /// A `count` exactly at `MAX_SEGMENTS` with a genuinely complete table
+    /// still decodes successfully — the bound rejects EXCESS, not the
+    /// legitimate ceiling itself.
+    #[test]
+    fn decode_snapshot_payload_accepts_a_count_exactly_at_max_segments() {
+        let segments: Vec<DimSegment> = (0..MAX_SEGMENTS)
+            .map(|i| DimSegment {
+                offset: i as u32,
+                cols: 80,
+                rows: 24,
+            })
+            .collect();
+        let encoded = encode_snapshot_payload(&segments, b"content");
+        match decode_snapshot_payload_typed(&encoded) {
+            DecodedSnapshotPayload::Structured {
+                segments: decoded, ..
+            } => assert_eq!(decoded.len(), MAX_SEGMENTS),
+            other => panic!("expected Structured, got {other:?}"),
+        }
+    }
+
+    /// D2'' checked-arithmetic path: a `count` near `u32::MAX` must be
+    /// rejected via the `MAX_SEGMENTS` ceiling (and, defensively, the
+    /// `checked_mul` overflow guard) rather than attempting
+    /// `count * 8`, which would overflow `usize` on a 32-bit target and — if
+    /// wrapping were used instead of checked arithmetic — could wrap back
+    /// into a small, spuriously "valid" table length.
+    #[test]
+    fn decode_snapshot_payload_rejects_count_near_u32_max_without_overflow_panic() {
+        let mut malformed = Vec::new();
+        malformed.extend_from_slice(&SNAPSHOT_PAYLOAD_MAGIC);
+        malformed.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            decode_snapshot_payload_typed(&malformed),
+            DecodedSnapshotPayload::Malformed
+        );
+    }
+
+    /// D2'': `Legacy` (no magic prefix) and `Malformed` (magic prefix but
+    /// corrupt table) are OBSERVABLY different outcomes, not merely two
+    /// names for the same tuple shape — the whole point of the typed API.
+    #[test]
+    fn decode_snapshot_payload_typed_distinguishes_legacy_from_malformed() {
+        let legacy = b"\x1b[3J\x1b[H\x1b[2Jplain ansi, no magic".to_vec();
+        assert_eq!(
+            decode_snapshot_payload_typed(&legacy),
+            DecodedSnapshotPayload::Legacy(&legacy)
+        );
+
+        let mut malformed = Vec::new();
+        malformed.extend_from_slice(&SNAPSHOT_PAYLOAD_MAGIC);
+        malformed.extend_from_slice(&1u32.to_le_bytes());
+        // Declares 1 segment (needs 8 bytes) but supplies none.
+        assert_eq!(
+            decode_snapshot_payload_typed(&malformed),
+            DecodedSnapshotPayload::Malformed
+        );
     }
 
     #[test]
@@ -2034,5 +2272,15 @@ mod tests {
             MAX_FRAME_LENGTH - FRAME_HEADER_LEN
         );
         assert_eq!(FRAME_HEADER_LEN, 5);
+    }
+
+    /// D6'' (task0005 rework, review round-4 finding `1d4a0c96821da0ef`):
+    /// the shared size-policy check accepts exactly up to the limit and
+    /// rejects one byte past it.
+    #[test]
+    fn fits_single_snapshot_frame_boundary() {
+        assert!(fits_single_snapshot_frame(0));
+        assert!(fits_single_snapshot_frame(MAX_SNAPSHOT_FRAME_PAYLOAD));
+        assert!(!fits_single_snapshot_frame(MAX_SNAPSHOT_FRAME_PAYLOAD + 1));
     }
 }

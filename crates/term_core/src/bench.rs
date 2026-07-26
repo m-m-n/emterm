@@ -413,7 +413,12 @@ mod benches {
             let bypass = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &[], &cancel)
                 .expect("warm-up 1st-pass");
             let rebuilt = TerminalCore::build_scrollback_only_from_snapshot(
-                200, 50, 10_000, &payload, &[], &cancel,
+                200,
+                50,
+                10_000,
+                &payload,
+                &[],
+                &cancel,
             )
             .expect("warm-up 2nd-pass");
             let mut live = bypass.core;
@@ -428,7 +433,12 @@ mod benches {
             let bypass = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &[], &cancel)
                 .expect("1st-pass");
             let rebuilt = TerminalCore::build_scrollback_only_from_snapshot(
-                200, 50, 10_000, &payload, &[], &cancel,
+                200,
+                50,
+                10_000,
+                &payload,
+                &[],
+                &cancel,
             )
             .expect("2nd-pass");
             let mut live = bypass.core;
@@ -449,6 +459,157 @@ mod benches {
             "scrollback_restore per-call {:?} ≥ MUST threshold {:?} (NFR2)",
             per,
             threshold,
+        );
+    }
+
+    /// Perf bench (NFR1, task0005 rework D3'', review round-4 finding
+    /// `6c650908ea8e95e9`): reproduces the round-4 measurement methodology —
+    /// a ~0.95 MiB snapshot replayed through `TerminalCore::build_from_snapshot`
+    /// at the shipping scrollback default, varying segment count — and
+    /// asserts replay stays fast at the segment-count bound this task's fix
+    /// enforces daemon-side
+    /// (`src-tauri/src/mux/scrollback_buffer.rs::MAX_DIM_MARKERS`, currently
+    /// 16). `term_core` has no dependency on the daemon crate, so that
+    /// value is duplicated here as a literal, cross-referenced by name —
+    /// keep the two in sync if either changes.
+    ///
+    /// Round-4's raw (unbounded) measurement: segments=0 → 134 ms / 5 →
+    /// 176 ms / 20 → 272 ms / 30 → 2078 ms / 50 → 3322 ms / 80 → 5350 ms —
+    /// replay cost jumps sharply once segment count crosses roughly 20-30.
+    /// This task's fix does not change `replay_segments`' per-call reflow
+    /// cost; instead it keeps every REAL snapshot's segment count on the
+    /// cheap side of that cliff by bounding what the daemon ever records
+    /// (see `scrollback_buffer.rs`'s `MAX_DIM_MARKERS` tests for the
+    /// recording-side guarantee). This bench validates that choice
+    /// empirically: replay at the FULL bound (16 segments) stays under 1
+    /// second — comfortably under the several-second blowup the unbounded
+    /// case measured — and going from a quarter of the bound to the full
+    /// bound (4x the segment count) does not multiply cost anywhere near
+    /// the ~8x jump round-4 measured for only a 1.5x count increase (20 →
+    /// 30), ruling out the same superlinear blowup within the bounded
+    /// range.
+    ///
+    /// Gated `#[ignore]` (release-mode timing bench, not part of the
+    /// default `--lib` run). Invoke with:
+    ///
+    /// ```sh
+    /// CARGO_TARGET_DIR=src-tauri/target cargo test --release \
+    ///   --manifest-path crates/term_core/Cargo.toml --lib \
+    ///   segment_bounded_replay_bench_950kib \
+    ///   -- --nocapture --include-ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap() {
+        use crate::terminal_core::{ReplaySegment, TerminalCore};
+        use std::sync::atomic::AtomicBool;
+        use std::time::Instant;
+
+        // Mirrors `src-tauri/src/mux/scrollback_buffer.rs::MAX_DIM_MARKERS`.
+        const DAEMON_SEGMENT_CAP: usize = 16;
+        // Mirrors `src-tauri/src/settings.rs::DEFAULT_SCROLLBACK_LINES`.
+        const SHIPPING_SCROLLBACK_LINES: u32 = 10_000;
+        const TARGET_PAYLOAD_LEN: usize = 950 * 1024;
+        let cols: u16 = 100;
+        let rows_a: u16 = 30;
+        let rows_b: u16 = 24;
+
+        let build_payload = |segment_count: usize| -> (Vec<u8>, Vec<ReplaySegment>) {
+            let filler = b"line of scrollback content padded out a bit\r\n";
+            if segment_count == 0 {
+                let mut payload = Vec::with_capacity(TARGET_PAYLOAD_LEN + filler.len());
+                while payload.len() < TARGET_PAYLOAD_LEN {
+                    payload.extend_from_slice(filler);
+                }
+                return (payload, Vec::new());
+            }
+            let per_segment = TARGET_PAYLOAD_LEN / segment_count;
+            let mut payload = Vec::with_capacity(TARGET_PAYLOAD_LEN + filler.len() * segment_count);
+            let mut segments = Vec::with_capacity(segment_count);
+            for i in 0..segment_count {
+                segments.push(ReplaySegment {
+                    offset: payload.len() as u32,
+                    cols,
+                    rows: if i % 2 == 0 { rows_a } else { rows_b },
+                });
+                let start_len = payload.len();
+                while payload.len() < start_len + per_segment {
+                    payload.extend_from_slice(filler);
+                }
+            }
+            (payload, segments)
+        };
+
+        let measure = |segment_count: usize| -> std::time::Duration {
+            let (payload, segments) = build_payload(segment_count);
+            // Warm-up.
+            {
+                let cancel = AtomicBool::new(false);
+                let _ = TerminalCore::build_from_snapshot(
+                    cols,
+                    rows_a,
+                    SHIPPING_SCROLLBACK_LINES,
+                    &payload,
+                    &segments,
+                    &cancel,
+                );
+            }
+            let cancel = AtomicBool::new(false);
+            let start = Instant::now();
+            let replay = TerminalCore::build_from_snapshot(
+                cols,
+                rows_a,
+                SHIPPING_SCROLLBACK_LINES,
+                &payload,
+                &segments,
+                &cancel,
+            );
+            let elapsed = start.elapsed();
+            std::hint::black_box(replay);
+            elapsed
+        };
+
+        let t_baseline = measure(0);
+        let t_quarter = measure(DAEMON_SEGMENT_CAP / 4);
+        let t_cap = measure(DAEMON_SEGMENT_CAP);
+
+        eprintln!(
+            "[bench] segment-bounded replay (0.95 MiB, {cols}x{rows_a}, sb={SHIPPING_SCROLLBACK_LINES}): \
+             0 segs → {:?} | {} segs → {:?} | {} segs (daemon cap) → {:?}",
+            t_baseline,
+            DAEMON_SEGMENT_CAP / 4,
+            t_quarter,
+            DAEMON_SEGMENT_CAP,
+            t_cap,
+        );
+
+        let bound = std::time::Duration::from_millis(1000);
+        assert!(
+            t_cap < bound,
+            "replay at the daemon's segment cap ({DAEMON_SEGMENT_CAP}) took \
+             {:?}, at or above the {:?} NFR1 bound — round-4 measured 2+ \
+             seconds once segment count crossed ~30 unbounded; this bound \
+             exists precisely so a real snapshot (capped at \
+             {DAEMON_SEGMENT_CAP}) never gets there",
+            t_cap,
+            bound,
+        );
+        // Ratio check: going from a quarter of the cap to the full cap (4x
+        // the segment count) must not multiply cost anywhere near the ~8x
+        // jump round-4 measured going from 20 to 30 segments (only a 1.5x
+        // count increase). A generous 6x ceiling still catches a
+        // reintroduced superlinear blowup while tolerating ordinary
+        // linear-ish scaling plus measurement noise.
+        let ratio = t_cap.as_secs_f64() / t_quarter.as_secs_f64().max(0.0001);
+        assert!(
+            ratio < 6.0,
+            "cost at the full daemon cap ({:?}) is {:.1}x the cost at a \
+             quarter of it ({:?}) — a ratio this high for only a 4x \
+             segment-count increase would reproduce the superlinear blowup \
+             this bound exists to prevent",
+            t_cap,
+            ratio,
+            t_quarter,
         );
     }
 }

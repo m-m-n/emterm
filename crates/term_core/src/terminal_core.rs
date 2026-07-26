@@ -859,8 +859,25 @@ impl TerminalCore {
             // pays a reflow, for its OWN dimensions — never one reflow per
             // segment regardless of content.
             if end > start {
-                if (self.cols, self.rows) != (seg.cols, seg.rows) {
-                    self.resize(seg.cols, seg.rows);
+                // D1'' (task0005 rework, review round-4 finding
+                // `da834d05f3f18af4`, high): a decoded segment travels
+                // straight from the wire (`mux_ipc::protocol::DimSegment`,
+                // an untrusted `u16` pair) to here. Without this clamp,
+                // `self.resize` allocates `(scrollback_capacity + rows) *
+                // cols` cells unconditionally — a segment carrying
+                // `cols == rows == 65535` requests roughly 4.3 billion
+                // cells, and a zero dimension trips `resize_reflow`'s
+                // `debug_assert!(cols > 0 && rows > 0)` (an underflow in
+                // release builds). `clamp_resize_dims` is the SAME domain
+                // the daemon-side producer already enforces
+                // (`MuxPane::resize` / `MuxPane::new`) — applying it again
+                // here means a segment can never resize this core outside
+                // that domain regardless of what produced it (a forged
+                // frame, a future encoder bug, or a daemon that predates
+                // the producer-side clamp).
+                let (seg_cols, seg_rows) = clamp_resize_dims(seg.cols, seg.rows);
+                if (self.cols, self.rows) != (seg_cols, seg_rows) {
+                    self.resize(seg_cols, seg_rows);
                 }
                 actions
                     .extend(self.process_pty_data_fully_cancellable(&bytes[start..end], cancel)?);
@@ -990,15 +1007,24 @@ impl TerminalCore {
         // would violate this function's "scrollback_slim stays empty
         // throughout" contract for its caller, `build_from_snapshot`),
         // downgrade to the non-bypass recipe for the WHOLE replay whenever
-        // `segments` contains any row-growing transition, so growth always
-        // pulls real content exactly as the synchronous path does.
+        // `segments` contains any transition that will actually cause a
+        // resize during the drain, so that content is always re-wrapped
+        // against real history exactly as the synchronous path does.
         //
         // task0004 round-4 rework (D1'): this is now a plain iteration over
-        // the (small, structural) `segments` slice — `segments_has_row_growth`
-        // — rather than a byte scan of `payload` (`payload_has_row_growing_marker`,
-        // removed). Trivially cheap and, unlike a byte scan, cannot be
-        // confused by anything a child process wrote into `payload`.
-        let bypass = bypass && !segments_has_row_growth(rows, segments);
+        // the (small, structural) `segments` slice rather than a byte scan
+        // of `payload` (`payload_has_row_growing_marker`, removed). Trivially
+        // cheap and, unlike a byte scan, cannot be confused by anything a
+        // child process wrote into `payload`.
+        //
+        // task0005 rework D5'' (review round-4 finding `697d8dc2b88dcddc`):
+        // widened from ROW GROWTH ONLY (`segments_has_row_growth`) to ANY
+        // dimension change (`segments_trigger_resize`) — a columns-only
+        // resize also drives `resize_reflow`, which needs the full logical
+        // history to re-split lines at the new width, not just rows growing
+        // back into view. See `segments_trigger_resize`'s doc for the full
+        // rationale.
+        let bypass = bypass && !segments_trigger_resize(cols, rows, segments);
         let mut core = TerminalCore::new(cols, rows, scrollback_lines);
         core.reset();
         // Snapshot-replay bypass: skip per-row SlimCell compression during the
@@ -1579,32 +1605,60 @@ impl TerminalCore {
 // No function in this module scans a byte buffer for a marker pattern any
 // more, so there is nothing left for PTY output to forge.
 
-/// Scan `segments` for any transition whose `rows` exceeds the row count in
-/// effect immediately before it (starting from `initial_rows`, the
-/// dimensions the replay core is constructed at) — task0003 D6, used by
+/// Scan `segments` for any transition that will actually cause
+/// [`TerminalCore::resize`] to run during [`TerminalCore::replay_segments`]
+/// — either dimension changing from the pair in effect immediately before
+/// it (starting from `(initial_cols, initial_rows)`, the dimensions the
+/// replay core is constructed at) — task0003 D6 / task0005 D5'', used by
 /// [`TerminalCore::build_from_snapshot_inner`] to decide whether the
-/// snapshot-replay bypass is safe for a given replay (see that function's
-/// doc comment for why a row-count GROWTH during the bypass diverges from
-/// the synchronous path).
+/// snapshot-replay bypass is safe for a given replay.
+///
+/// task0005 rework D5'' (review round-4 finding `697d8dc2b88dcddc`): this
+/// used to check ONLY row growth (the original task0003 D6 scope, named
+/// `segments_has_row_growth`). But `resize_reflow` (the content-preserving
+/// reflow [`TerminalCore::resize`] performs) re-wraps `scrollback_slim` +
+/// the viewport together whenever EITHER dimension changes — a COLUMNS-only
+/// resize also needs the full logical-line history to re-split correctly at
+/// the new width, not just rows growing back into view. Under the bypass,
+/// `scrollback_slim` is deliberately empty, so ANY resize during the drain
+/// — not only a row-growing one — reflows against missing history and can
+/// diverge from the synchronous path: the reflow's input becomes the
+/// viewport alone, producing an up-shifted grid with blank trailing rows
+/// instead of the history-filled result the synchronous path (real
+/// `scrollback_slim`) produces for the same payload. Basing the predicate
+/// on "does a resize happen at all" closes that gap uniformly for both
+/// dimensions.
+///
+/// `clamp_resize_dims` is applied to each segment here so this predicate
+/// agrees with what [`TerminalCore::replay_segments`] will actually decide
+/// (it clamps at the same point, D1''): an out-of-domain wire dimension
+/// cannot make this predicate see a "change" that replay itself would
+/// clamp away to a no-op, or vice versa.
 ///
 /// A plain iteration over the (small, structural) `segments` slice —
 /// task0004 round-4 rework's replacement for the byte-scanning
 /// `payload_has_row_growing_marker` this superseded.
-fn segments_has_row_growth(initial_rows: u16, segments: &[ReplaySegment]) -> bool {
-    let mut prev_rows = initial_rows;
+fn segments_trigger_resize(
+    initial_cols: u16,
+    initial_rows: u16,
+    segments: &[ReplaySegment],
+) -> bool {
+    let initial = (initial_cols, initial_rows);
+    let mut prev = initial;
     for seg in segments {
-        if seg.rows > prev_rows {
+        let clamped = clamp_resize_dims(seg.cols, seg.rows);
+        if clamped != prev {
             return true;
         }
-        prev_rows = seg.rows;
+        prev = clamped;
     }
-    // `replay_segments` always restores to `initial_rows` (the construction
-    // / target size) at the end of the drain, even when no segment
-    // explicitly asks for it. If the last segment (or the initial size,
-    // when there are none) left FEWER rows than that, this implicit final
-    // restore is itself a row-count growth and needs the same treatment as
-    // an explicit one.
-    initial_rows > prev_rows
+    // `replay_segments` always restores to `(initial_cols, initial_rows)`
+    // (the construction / target size) at the end of the drain, even when
+    // no segment explicitly asks for it. If the last segment (or the
+    // initial size, when there are none) left a DIFFERENT pair, this
+    // implicit final restore is itself a resize and needs the same
+    // treatment as an explicit one.
+    prev != initial
 }
 
 /// Defensive upper bound on a resize's `cols` field. Replay dimensions are
@@ -2876,26 +2930,53 @@ mod tests {
         );
     }
 
-    /// A transition that changes only COLS — rows stay constant throughout,
-    /// including at the implicit final restore-to-target — does not trigger
-    /// the D6 downgrade: `build_from_snapshot` still returns an EMPTY
-    /// scrollback, matching the existing (pre-D6) bypass invariant other
-    /// tests already rely on. (A genuine ROW shrink cannot serve as this
-    /// counter-example: `replay_segments` always restores to the
-    /// construction/target row count at the end of the drain, so a replay
-    /// that ever shrinks rows always ends up growing back — explicitly or
-    /// implicitly — by the time the drain finishes.)
+    /// D5'' (task0005 rework, review round-4 finding `697d8dc2b88dcddc`): a
+    /// transition that changes ONLY cols (rows constant throughout,
+    /// including at the implicit final restore-to-target) must ALSO
+    /// downgrade out of the bypass, just like a row-growing transition —
+    /// `resize_reflow` re-wraps `scrollback_slim` + the viewport together
+    /// whenever EITHER dimension changes, so a cols-only resize under
+    /// bypass reflows against an artificially empty scrollback and can
+    /// diverge from the synchronous path exactly like the row-growth case
+    /// D6 (task0003) already closed.
+    ///
+    /// Replaces `build_from_snapshot_stays_bypassed_for_a_cols_only_marker`
+    /// (round-4 finding: that test asserted only `scrollback_count() == 0`,
+    /// which is true of EVERY bypassed replay regardless of correctness and
+    /// therefore could never detect this divergence — unlike the other D6
+    /// tests, which compare `grid_fingerprint` against the synchronous
+    /// path). This version does that comparison.
+    ///
+    /// One long autowrapping logical line with NO CR/LF at all, so it wraps
+    /// continuously across far more physical rows than the small viewport
+    /// holds — most of it must live in scrollback by the time the cols-only
+    /// transition runs, which is exactly the history a cols-only reflow
+    /// needs to re-split correctly at the new width.
+    ///
+    /// Confirmed to fail pre-fix: reverting `segments_trigger_resize` to
+    /// only check row growth (the old `segments_has_row_growth` behavior)
+    /// keeps this payload's replay bypassed, and the resulting
+    /// `grid_fingerprint` diverges from the synchronous reference — the
+    /// reflow only has the last `rows` viewport lines to re-wrap (bypass
+    /// keeps `scrollback_slim` empty), not the full autowrapped history that
+    /// actually produced them.
     #[test]
-    fn build_from_snapshot_stays_bypassed_for_a_cols_only_marker() {
+    fn build_from_snapshot_bypass_path_matches_sync_path_across_cols_only_marker() {
         let cols_a: u16 = 80;
         let cols_b: u16 = 40;
-        let rows: u16 = 24;
-        let mut payload: Vec<u8> = Vec::new();
-        for i in 0..5u32 {
-            payload.extend_from_slice(format!("early line {i}\r\n").as_bytes());
-        }
-        // Only cols changes; rows stay the same throughout — D6 must not
-        // fire (it is scoped to row growth, not cols).
+        let rows: u16 = 10;
+        let long_line: String = (0..cols_a as usize * 1000)
+            .map(|i| char::from(b'a' + (i % 26) as u8))
+            .collect();
+        let mut payload: Vec<u8> = long_line.into_bytes();
+        assert!(
+            payload.len() >= 64 * 1024,
+            "must clear the off-thread bypass-path threshold (AC-7), got {}",
+            payload.len()
+        );
+
+        // Only cols changes; rows stay the same throughout, including the
+        // implicit final restore (both segments name the same `rows`).
         let segments = [
             ReplaySegment {
                 offset: 0,
@@ -2908,21 +2989,27 @@ mod tests {
                 rows,
             },
         ];
-        for i in 0..3000u32 {
-            payload.extend_from_slice(
-                format!("padding line {i} padded for size padded padded\r\n").as_bytes(),
-            );
-        }
-        assert!(payload.len() >= 64 * 1024);
+        // A little more content after the transition so the resize is
+        // actually applied (`replay_segments` only resizes a segment that
+        // has content to feed).
+        payload.extend_from_slice(b"tail content after the cols-only resize");
 
         let never = std::sync::atomic::AtomicBool::new(false);
+        let reference = TerminalCore::build_scrollback_only_from_snapshot(
+            cols_a, rows, 5000, &payload, &segments, &never,
+        )
+        .expect("reference build not cancelled");
         let bypass_replay =
             TerminalCore::build_from_snapshot(cols_a, rows, 5000, &payload, &segments, &never)
                 .expect("bypass-path build not cancelled");
+
         assert_eq!(
-            bypass_replay.core.scrollback_count(),
-            0,
-            "a transition that only changes cols (rows constant) must still take the bypass fast path"
+            grid_fingerprint(&bypass_replay.core),
+            grid_fingerprint(&reference.core),
+            "a cols-only transition must downgrade out of the bypass just \
+             like a row-growing one — the reflow needs real scrollback \
+             history to re-wrap correctly regardless of which dimension \
+             changed"
         );
     }
 
