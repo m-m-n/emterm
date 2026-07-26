@@ -1345,6 +1345,13 @@ impl TerminalCore {
 /// a marker-unaware consumer).
 const RESIZE_MARKER_PREFIX: &[u8] = b"\x1b]777;emterm;resize;";
 
+/// Maximum length in bytes of a well-formed marker body (`<cols>;<rows>`),
+/// e.g. `"65535;65535"`. A BEL found beyond this many bytes past a
+/// candidate's prefix cannot terminate a valid marker body by definition,
+/// so the BEL scan is bounded to this window rather than running to the
+/// end of `bytes` (see `find_resize_marker`).
+const RESIZE_MARKER_MAX_BODY_LEN: usize = 11;
+
 /// Scan `bytes[from..]` for the next complete, well-formed resize marker.
 /// Returns `(marker_start, marker_end, cols, rows)`: `marker_start..marker_end`
 /// is the marker's full byte span (introducer through the terminating BEL,
@@ -1359,7 +1366,9 @@ const RESIZE_MARKER_PREFIX: &[u8] = b"\x1b]777;emterm;resize;";
 /// the scan entirely (mirrors the daemon-side scrollback filters' "leave a
 /// partial sequence alone" discipline), while a terminated-but-malformed one
 /// only skips past its own prefix so a later, well-formed marker is still
-/// found.
+/// found. A BEL found only outside the `RESIZE_MARKER_MAX_BODY_LEN` window
+/// is likewise treated as "not our marker" (not a valid body length) and
+/// only skips past the candidate's own prefix.
 fn find_resize_marker(bytes: &[u8], from: usize) -> Option<(usize, usize, u16, u16)> {
     let mut search_from = from;
     while search_from + RESIZE_MARKER_PREFIX.len() <= bytes.len() {
@@ -1368,7 +1377,22 @@ fn find_resize_marker(bytes: &[u8], from: usize) -> Option<(usize, usize, u16, u
             .position(|w| w == RESIZE_MARKER_PREFIX)?;
         let marker_start = search_from + rel;
         let body_start = marker_start + RESIZE_MARKER_PREFIX.len();
-        let bel_rel = bytes[body_start..].iter().position(|&b| b == 0x07)?;
+        let window_end = (body_start + RESIZE_MARKER_MAX_BODY_LEN + 1).min(bytes.len());
+        let bel_rel = match bytes[body_start..window_end]
+            .iter()
+            .position(|&b| b == 0x07)
+        {
+            Some(rel) => rel,
+            None if window_end == bytes.len() => return None,
+            None => {
+                // No BEL within the valid-body-length window, but the
+                // stream continues past it: this candidate is not our
+                // marker. Resume scanning just past this candidate's
+                // introducer so an overlapping later match is still found.
+                search_from = marker_start + 1;
+                continue;
+            }
+        };
         let bel_at = body_start + bel_rel;
         if let Some((cols, rows)) = parse_resize_marker_dims(&bytes[body_start..bel_at]) {
             return Some((marker_start, bel_at + 1, cols, rows));
@@ -1382,14 +1406,32 @@ fn find_resize_marker(bytes: &[u8], from: usize) -> Option<(usize, usize, u16, u
     None
 }
 
+/// Defensive upper bound on a resize marker's `cols` field. Marker
+/// dimensions are replayed directly into `TerminalCore::resize`, which
+/// allocates `(scrollback_capacity + rows) * cols` cells — an unbounded
+/// value here would let a forged or corrupted marker trigger a huge
+/// allocation. Comfortably above any real terminal width.
+const RESIZE_MARKER_MAX_COLS: u16 = 2000;
+
+/// Defensive upper bound on a resize marker's `rows` field. See
+/// [`RESIZE_MARKER_MAX_COLS`] for the rationale. Comfortably above any real
+/// terminal height.
+const RESIZE_MARKER_MAX_ROWS: u16 = 2000;
+
 /// Parse a resize marker body (`<cols>;<rows>`, no leading/trailing bytes).
-/// Rejects a non-numeric, extra-field, or zero-valued dimension.
+/// Rejects a non-numeric, extra-field, zero-valued, or over-large dimension
+/// (see [`RESIZE_MARKER_MAX_COLS`] / [`RESIZE_MARKER_MAX_ROWS`]).
 fn parse_resize_marker_dims(body: &[u8]) -> Option<(u16, u16)> {
     let s = std::str::from_utf8(body).ok()?;
     let mut parts = s.split(';');
     let cols: u16 = parts.next()?.parse().ok()?;
     let rows: u16 = parts.next()?.parse().ok()?;
-    if parts.next().is_some() || cols == 0 || rows == 0 {
+    if parts.next().is_some()
+        || cols == 0
+        || rows == 0
+        || cols > RESIZE_MARKER_MAX_COLS
+        || rows > RESIZE_MARKER_MAX_ROWS
+    {
         return None;
     }
     Some((cols, rows))
