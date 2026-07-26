@@ -66,8 +66,9 @@ tasks:
     domains: [input-handling, ui, concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, NFR1, NFR2, NFR3]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-render-corruption/task0001
 
 review:
   status: pending
