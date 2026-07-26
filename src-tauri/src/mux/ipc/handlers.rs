@@ -640,8 +640,8 @@ where
 
     // `send_reattach_data` always emits one `PaneCreated` per entry. When
     // `attach_visible == false`, every entry has empty buffer bytes so no
-    // `PtyOutput` is sent (the frontend learns the pane exists but receives
-    // no screen contents until the next SetVisibility(true) resume).
+    // snapshot frame is sent (the frontend learns the pane exists but
+    // receives no screen contents until the next SetVisibility(true) resume).
     if send_reattach_data(framed, &reattach_data).await.is_err() {
         return Err(true);
     }

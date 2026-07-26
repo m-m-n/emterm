@@ -7,9 +7,7 @@ use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
 use crate::agent_status::{AgentState, AgentStatusEvent};
-use crate::mux::scrollback_buffer::{
-    DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer, resize_marker_bytes,
-};
+use crate::mux::scrollback_buffer::{DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer};
 use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
@@ -554,7 +552,17 @@ pub fn resume_pane_with_permit(
                 buf.clear();
             }
             let snapshot = build_resume_snapshot_bytes(&buffered, &screen, alt_screen);
-            permit.send(PtyOutputChunk::pty_output(pane.id, snapshot));
+            // review round-1 rework, finding `20b2bed0aaf48f94`: tag this as
+            // a Snapshot-kind chunk (not the default PtyOutput) so the mux
+            // connection drain (`mux::ipc::connection`) sends it as
+            // `MessageType::Snapshot` on the wire. The client's
+            // `apply_mux_message::Snapshot|SnapshotRestore` arm routes
+            // through `reset_and_replay`, which interprets in-band resize
+            // markers (`find_resize_marker`) — the plain `PtyOutput` live
+            // path used before this fix does not, so a resize-spanning
+            // visibility-resume snapshot replayed coordinate-drifted
+            // content just like the reattach path did.
+            permit.send(PtyOutputChunk::snapshot(pane.id, snapshot));
             *target = PaneOutputTarget::Connected(owned_tx.clone());
             ResumeOutcome::Resumed
         }
@@ -628,7 +636,12 @@ impl MuxPane {
         // segment (produced under THESE dims), reproducing the
         // resize-interleaved coordinate drift for that leading segment even
         // when every later resize is correctly marked.
-        scrollback.write(&resize_marker_bytes(cols, rows));
+        //
+        // `write_resize_marker` (not a plain `write`) also records this
+        // marker's offset so `ScrollbackRingBuffer::read_all` can
+        // reconstruct it after ring wraparound evicts it — review round-1
+        // rework, findings `81947e02402b5ace` / `ee93d8be8823e5d7`.
+        scrollback.write_resize_marker(cols, rows);
         Self {
             id,
             cols,
@@ -684,14 +697,6 @@ impl MuxPane {
             .master
             .as_ref()
             .ok_or_else(|| "PTY master closed".to_string())?;
-        master
-            .resize(portable_pty::PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| format!("PTY resize failed: {}", e))?;
         // IMPLEMENTATION.md D1/D2 (task0001): record an in-band resize
         // marker into the scrollback stream so a later replay resizes its
         // core to match the dimensions the FOLLOWING bytes were produced
@@ -707,9 +712,40 @@ impl MuxPane {
         // `scrollback_buffer::resize_marker_bytes`). Only recorded when the
         // dimensions actually change, so a redundant Resize message does
         // not pollute the stream.
+        //
+        // Ordering (review round-1 rework, finding `83bed291fb779f52`,
+        // high): `master.resize()` triggers SIGWINCH, and the PTY reader
+        // thread can observe the child's response and try to append it to
+        // `self.scrollback` concurrently. Pre-fix, `master.resize()` ran
+        // OUTSIDE any lock, leaving a real window for the reader thread to
+        // win the scrollback lock and record post-resize bytes BEFORE the
+        // marker — replay would then interpret them under the OLD
+        // dimensions, reproducing the exact coordinate drift this marker
+        // exists to prevent. Holding `self.scrollback`'s lock across BOTH
+        // the PTY-visible resize and the marker write establishes a single
+        // ordering owner: the reader thread needs this SAME lock to append
+        // anything, so it cannot record a single byte until AFTER the
+        // marker is in place.
         if self.cols != cols || self.rows != rows {
-            let marker = resize_marker_bytes(cols, rows);
-            self.scrollback.lock().unwrap().write(&marker);
+            let mut scrollback = self.scrollback.lock().unwrap();
+            master
+                .resize(portable_pty::PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|e| format!("PTY resize failed: {}", e))?;
+            scrollback.write_resize_marker(cols, rows);
+        } else {
+            master
+                .resize(portable_pty::PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|e| format!("PTY resize failed: {}", e))?;
         }
         self.cols = cols;
         self.rows = rows;
@@ -1126,6 +1162,62 @@ mod tests {
         );
     }
 
+    /// review round-1 rework, finding 83bed291fb779f52 (high) / task0002
+    /// AC-4: `resize()` must hold the scrollback lock across BOTH the
+    /// PTY-visible resize and the marker write, establishing a single
+    /// ordering owner against a concurrent scrollback writer (the PTY
+    /// reader thread). Proven deterministically: while a competing thread
+    /// holds `pane.scrollback`'s lock (standing in for a reader thread's
+    /// in-flight append), `resize()` must be unable to complete — if it
+    /// could, that would mean it never needed the lock across its whole
+    /// body, reopening the exact race the fix closes.
+    #[cfg(unix)]
+    #[test]
+    fn test_resize_holds_scrollback_lock_establishing_ordering_with_reader_thread() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let mut pane = MuxPane::new(1, 80, 24, target, writer, pair.master);
+        let scrollback = pane.scrollback.clone();
+
+        // Hold the scrollback lock from the TEST thread first, standing in
+        // for the PTY reader thread's write() call already in flight.
+        let guard = scrollback.lock().unwrap();
+
+        let resize_done = Arc::new(AtomicBool::new(false));
+        let rd = resize_done.clone();
+        let resizer = std::thread::spawn(move || {
+            let result = pane.resize(120, 40);
+            rd.store(true, Ordering::SeqCst);
+            (pane, result)
+        });
+
+        // resize() must NOT be able to complete while the lock is held —
+        // pre-fix, master.resize() ran outside any lock and the whole call
+        // could finish freely here.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !resize_done.load(Ordering::SeqCst),
+            "resize() must block on the scrollback lock, establishing that \
+             no concurrent write can land ahead of its marker"
+        );
+
+        drop(guard);
+        let (pane, result) = resizer.join().unwrap();
+        assert!(result.is_ok());
+        assert_eq!(pane.cols, 120);
+        assert_eq!(pane.rows, 40);
+    }
+
     /// Build a `Detached` target with a `NetworkDetach`-only reason and
     /// `owner = None` (system origin), matching the daemon's pre-attach state.
     fn detached_system_target() -> SharedOutputTarget {
@@ -1415,6 +1507,12 @@ mod tests {
 
         // raw_passthrough drained.
         assert!(pane.raw_passthrough.lock().unwrap().is_empty());
+
+        // review round-1 rework, finding 20b2bed0aaf48f94: the resume
+        // snapshot must be tagged Snapshot (not the default PtyOutput) so
+        // the client routes it through the marker-interpreting
+        // `reset_and_replay` path instead of the marker-blind live path.
+        assert_eq!(chunk.kind, ChunkKind::Snapshot);
     }
 
     /// Companion to `test_resume_pane_with_permit_sends_then_swaps`: when
