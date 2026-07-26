@@ -1295,4 +1295,284 @@ mod tests {
         let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(Some(tx)));
         forward_agent_status_reports(1, vec!["orphaned".to_string()], &sender);
     }
+
+    // ── task0001: resize-interleaved scrollback replay coordinate drift ──
+    //
+    // Investigation verdict (IMPLEMENTATION.md D1, `tmp/apt-progress-bar-
+    // regression-2026-07-09.md` PROBE D): the reported intermittent
+    // post-window-switch line-content mixing shares the proven root cause —
+    // bytes recorded for two different terminal row counts coexist serially
+    // in a pane's scrollback, and replaying them into a core fixed at one
+    // row count misinterprets DECSTBM / CUP coordinates recorded for the
+    // OTHER row count. The fix (candidate A, resize markers) records an
+    // in-band marker at each daemon-side pane resize
+    // (`mux::scrollback_buffer::resize_marker_bytes`, written by
+    // `MuxPane::resize`) and interprets it during replay
+    // (`term_core::terminal_core::TerminalCore::reset_and_replay`), resizing
+    // the replay core before the bytes recorded under the new size are fed.
+
+    /// apt-style scroll-region + bottom-bar recording (mirrors PROBE D's
+    /// synthesis, `install-progress.cc`'s SIGWINCH re-setup behavior), now
+    /// with resize markers a fixed `MuxPane` would have written: an INITIAL
+    /// marker for rows_a (`MuxPane::new` records the pane's creation
+    /// dimensions as the first scrollback bytes) and a mid-run marker for
+    /// rows_b at the SIGWINCH point (`MuxPane::resize`).
+    fn synth_apt_bytes_with_midrun_resize(cols: u16, rows_a: u16, rows_b: u16) -> Vec<u8> {
+        let mut b = crate::mux::scrollback_buffer::resize_marker_bytes(cols, rows_a);
+        // Fill history so the cursor starts at the bottom, matching a real
+        // terminal's state when a long-running command begins.
+        for i in 0..rows_a.max(rows_b) + 20 {
+            b.extend_from_slice(format!("history line {i} filling the screen\r\n").as_bytes());
+        }
+        b.extend_from_slice(b"$ sudo apt reinstall ./build/emterm.deb\r\n");
+        // Start (rows_a-shaped scroll region + bottom bar).
+        b.extend_from_slice(b"\n\x1b7");
+        b.extend_from_slice(format!("\x1b[0;{}r", rows_a - 1).as_bytes());
+        b.extend_from_slice(b"\x1b8\x1b[1A");
+        for pct in [0u32, 15, 30] {
+            b.extend_from_slice(
+                format!("emterm log line at {pct} percent unpacking something\r\n").as_bytes(),
+            );
+            let filled = (pct as usize * 60) / 100;
+            b.extend_from_slice(
+                format!(
+                    "\x1b7\x1b[{rows_a};0f\x1b[42m\x1b[30m進捗: [{pct:3}%] [{}{}]\x1b[49m\x1b[39m\x1b[0m\x1b8",
+                    "\u{2588}".repeat(filled),
+                    " ".repeat(60 - filled),
+                )
+                .as_bytes(),
+            );
+        }
+        // SIGWINCH: the daemon records a resize marker (this is what
+        // `MuxPane::resize` writes into the pane's scrollback), then apt
+        // re-sets up the scroll region + bar for rows_b.
+        b.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
+            cols, rows_b,
+        ));
+        b.extend_from_slice(b"\n\x1b7");
+        b.extend_from_slice(format!("\x1b[0;{}r", rows_b - 1).as_bytes());
+        b.extend_from_slice(b"\x1b8\x1b[1A");
+        for pct in [45u32, 60, 75, 90, 100] {
+            b.extend_from_slice(
+                format!("emterm log line at {pct} percent installing package\r\n").as_bytes(),
+            );
+            let filled = (pct as usize * 60) / 100;
+            b.extend_from_slice(
+                format!(
+                    "\x1b7\x1b[{rows_b};0f\x1b[42m\x1b[30m進捗: [{pct:3}%] [{}{}]\x1b[49m\x1b[39m\x1b[0m\x1b8",
+                    "\u{2588}".repeat(filled),
+                    " ".repeat(60 - filled),
+                )
+                .as_bytes(),
+            );
+        }
+        // Stop (rows_b-shaped).
+        b.extend_from_slice(b"\x1b7");
+        b.extend_from_slice(format!("\x1b[0;{rows_b}r").as_bytes());
+        b.extend_from_slice(b"\x1b8\x1b[J");
+        b.extend_from_slice(b"$ done\r\n");
+        b
+    }
+
+    /// AC-1: the apt-style recording, replayed through the full snapshot
+    /// pipeline into a fixed-size core, produces ZERO rows mixing bar
+    /// fragments with log-line content — fails on pre-fix code (PROBE D
+    /// observed 1-3 tainted rows per case for the same synthesis, absent
+    /// the marker).
+    #[test]
+    fn resize_marker_fix_apt_style_recording_replays_without_cross_line_mixing() {
+        use term_core::terminal_core::TerminalCore;
+        let cols: u16 = 120;
+        for (rec_a, rec_b, replay_rows) in [
+            (47u16, 48u16, 47u16),
+            (47, 48, 48),
+            (48, 47, 47),
+            (48, 47, 48),
+        ] {
+            let recording = synth_apt_bytes_with_midrun_resize(cols, rec_a, rec_b);
+            let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, b"", false);
+            let mut core = TerminalCore::new(cols, replay_rows, 10_000);
+            core.reset_and_replay(&snap);
+            let mut tainted = Vec::new();
+            for r in 0..replay_rows {
+                let line = core.get_line_text(r);
+                let has_bar = line.contains('\u{2588}') || line.trim_end().ends_with(']');
+                let has_log = line.contains("percent");
+                if has_bar && has_log {
+                    tainted.push(format!("row {r}: {line}"));
+                }
+            }
+            assert!(
+                tainted.is_empty(),
+                "rec {rec_a}->{rec_b} replay@{replay_rows}: expected zero cross-line-mixed rows \
+                 after the resize-marker fix, got {tainted:?}"
+            );
+        }
+    }
+
+    /// Cursor-addressed TUI-style recording: a status/input row pinned to
+    /// the bottom of the screen via a scroll region excluding it (mirrors
+    /// an app like Claude Code keeping its status/input line in place while
+    /// chat content scrolls above — `project_status_bar_design`), re-painted
+    /// in place via `ESC7 CUP <text> ESC8` on every tick while chat content
+    /// scrolls via plain `\r\n` above it. Row count changes mid-run, with
+    /// resize markers a fixed `MuxPane` would have written: an INITIAL
+    /// marker for rows_a (`MuxPane::new`) and a mid-run marker for rows_b at
+    /// the SIGWINCH point (`MuxPane::resize`).
+    ///
+    /// Distinguishes from AC-1's apt-style bar (bottom-row-only redraw, no
+    /// scrolling *inside* the reserved region) via genuinely scrolling chat
+    /// content interleaved with the fixed-row status — the mechanism PROBE D
+    /// identified (a scroll-region boundary computed for the WRONG row
+    /// count lets scrolled content invade a row that should have been
+    /// exempt) reproducing for "an app with a pinned status line" shape, not
+    /// only "an app with a growing progress bar" shape.
+    fn synth_tui_cursor_addressed_bytes_with_midrun_resize(rows_a: u16, rows_b: u16) -> Vec<u8> {
+        let mut b = crate::mux::scrollback_buffer::resize_marker_bytes(100, rows_a);
+        for i in 0..rows_a.max(rows_b) + 20 {
+            b.extend_from_slice(format!("chat history line {i}\r\n").as_bytes());
+        }
+        // Phase A: reserve the bottom row for a status/input line (scroll
+        // region excludes it) while chat content scrolls above and the
+        // status row is periodically re-painted in place.
+        b.extend_from_slice(b"\n\x1b7");
+        b.extend_from_slice(format!("\x1b[0;{}r", rows_a - 1).as_bytes());
+        b.extend_from_slice(b"\x1b8\x1b[1A");
+        for tick in 0..3u32 {
+            b.extend_from_slice(format!("chat reply A line {tick}\r\n").as_bytes());
+            b.extend_from_slice(format!("\x1b7\x1b[{rows_a};0fSTATUS-A[{tick}]\x1b8").as_bytes());
+        }
+        // SIGWINCH: resize marker, then the same pattern re-established for
+        // rows_b.
+        b.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
+            100, rows_b,
+        ));
+        b.extend_from_slice(b"\n\x1b7");
+        b.extend_from_slice(format!("\x1b[0;{}r", rows_b - 1).as_bytes());
+        b.extend_from_slice(b"\x1b8\x1b[1A");
+        for tick in 0..3u32 {
+            b.extend_from_slice(format!("chat reply B line {tick}\r\n").as_bytes());
+            b.extend_from_slice(format!("\x1b7\x1b[{rows_b};0fSTATUS-B[{tick}]\x1b8").as_bytes());
+        }
+        b
+    }
+
+    /// AC-2: the TUI-style cursor-addressed recording, replayed after the
+    /// fix, shows no row mixing content from phase A (pre-resize) and phase
+    /// B (post-resize) — the reported symptom's shape (Claude Code's
+    /// status/input area), covering a pinned-status-row app rather than
+    /// only apt's growing-bar pattern. Fails on pre-fix code for every
+    /// combination (each pairs a row-count change with a replay target that
+    /// differs from at least one recorded size).
+    #[test]
+    fn resize_marker_fix_tui_cursor_addressed_recording_replays_without_cross_line_mixing() {
+        use term_core::terminal_core::TerminalCore;
+        let cols: u16 = 100;
+        for (rec_a, rec_b, replay_rows) in [
+            (30u16, 32u16, 30u16),
+            (30, 32, 32),
+            (32, 30, 30),
+            (32, 30, 32),
+        ] {
+            let recording = synth_tui_cursor_addressed_bytes_with_midrun_resize(rec_a, rec_b);
+            let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, b"", false);
+            let mut core = TerminalCore::new(cols, replay_rows, 10_000);
+            core.reset_and_replay(&snap);
+            let mut tainted = Vec::new();
+            for r in 0..replay_rows {
+                let line = core.get_line_text(r);
+                // A row is tainted if it shows a STATUS redraw fragment
+                // glued to a scrolled chat-line fragment — the "bar
+                // fragment landed on a log-content row" shape (mirrors
+                // AC-1's `has_bar && has_log` detector; not phase-specific,
+                // since the coordinate-drift bug glues ANY two logically
+                // distinct writes onto one physical row).
+                if line.contains("STATUS-") && line.contains(" line ") {
+                    tainted.push(format!("row {r}: {line}"));
+                }
+            }
+            assert!(
+                tainted.is_empty(),
+                "rec {rec_a}->{rec_b} replay@{replay_rows}: expected zero cross-phase-mixed rows, \
+                 got {tainted:?}"
+            );
+        }
+    }
+
+    /// AC-3: a resize-free recording replays to the SAME grid as the
+    /// pre-marker-support path (a straight `reset()` + full-drain
+    /// `process_pty_data_fully`, no marker scanning) — the byte path for a
+    /// marker-free recording is unchanged by the fix.
+    #[test]
+    fn resize_marker_fix_marker_free_recording_replays_unchanged() {
+        use term_core::terminal_core::TerminalCore;
+        let cols: u16 = 80;
+        let rows: u16 = 24;
+        let mut recording = Vec::new();
+        for i in 0..40 {
+            recording.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        recording.extend_from_slice(b"\x1b[31mred\x1b[0m plain\r\n");
+
+        let mut reference = TerminalCore::new(cols, rows, 1000);
+        reference.reset();
+        reference.process_pty_data_fully(&recording);
+
+        let mut under_test = TerminalCore::new(cols, rows, 1000);
+        under_test.reset_and_replay(&recording);
+
+        for r in 0..rows {
+            assert_eq!(
+                under_test.get_line_text(r),
+                reference.get_line_text(r),
+                "row {r} differs: marker-free replay must be byte-path unchanged"
+            );
+        }
+        assert_eq!(under_test.cols(), reference.cols());
+        assert_eq!(under_test.rows(), reference.rows());
+    }
+
+    /// AC-4: a recording containing a resize marker, replayed through the
+    /// full pipeline (write filter -> snapshot assembly -> replay), never
+    /// renders the marker's body as visible cell content, and the surviving
+    /// plain text on either side of it is preserved.
+    #[test]
+    fn resize_marker_never_rendered_as_visible_cell_through_full_pipeline() {
+        use term_core::terminal_core::TerminalCore;
+        let cols: u16 = 80;
+        let rows: u16 = 24;
+        let mut recording = Vec::new();
+        recording.extend_from_slice(b"before-marker\r\n");
+        recording.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(100, 30));
+        recording.extend_from_slice(b"after-marker\r\n");
+
+        let mut filter = ScrollbackWriteFilter::new();
+        let filtered = filter.feed(&recording);
+        let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&filtered, b"", false);
+
+        let mut core = TerminalCore::new(cols, rows, 1000);
+        core.reset_and_replay(&snap);
+
+        let mut all_text = String::new();
+        for r in 0..rows {
+            all_text.push_str(&core.get_line_text(r));
+            all_text.push('\n');
+        }
+        assert!(
+            !all_text.contains("emterm") && !all_text.contains("resize"),
+            "marker body must never render as visible cell content: {all_text:?}"
+        );
+        assert!(all_text.contains("before-marker"));
+        assert!(all_text.contains("after-marker"));
+        // Confirms the marker was actually consumed as a resize instruction
+        // (not merely swallowed as an inert unrecognized OSC): replay ends
+        // back at the caller's target size regardless of the marker's
+        // intermediate dimensions.
+        assert_eq!(
+            core.cols(),
+            cols,
+            "core must end back at the caller's target size"
+        );
+        assert_eq!(core.rows(), rows);
+    }
 }

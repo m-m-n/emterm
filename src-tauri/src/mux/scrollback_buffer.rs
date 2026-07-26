@@ -19,6 +19,42 @@
 /// — previously 64 MiB caused a 320 MiB spike across five detached panes.
 pub const DEFAULT_SCROLLBACK_CAPACITY: usize = 2 * 1024 * 1024;
 
+/// Build the in-band resize marker recorded into a pane's scrollback stream
+/// at each PTY resize (IMPLEMENTATION.md D1/D2, task0001): a private OSC 777
+/// `resize` extension carrying the pane's new dimensions —
+/// `ESC ] 777 ; emterm ; resize ; <cols> ; <rows> BEL`.
+///
+/// This is the fix for the resize-interleaved scrollback replay coordinate
+/// drift (`tmp/apt-progress-bar-regression-2026-07-09.md` PROBE D): bytes
+/// recorded for different terminal row counts coexist serially in a pane's
+/// scrollback, and a replay that feeds them all into a core fixed at one row
+/// count misinterprets DECSTBM / CUP coordinates recorded for the OTHER row
+/// count, mixing content from two logical output lines onto one row. The
+/// marker lets a replay consumer resize its core to match the dimensions the
+/// FOLLOWING bytes were produced for (see `term_core::terminal_core`'s
+/// `find_resize_marker` / `TerminalCore::reset_and_replay`).
+///
+/// Rides the same envelope as the other `emterm` OSC 777 extensions (fold /
+/// status-bar / agent-status / viewer launches — see
+/// `crate::mux::scrollback_filter`), so it is:
+/// - preserved byte-for-byte by `strip_replayable_rich_content`: that
+///   function only strips viewer-launch kinds and `agent-status`; a `resize`
+///   kind falls through to "kept" with no code change needed (see the
+///   drift-guard test `scrollback_filter::strip_keeps_osc777_resize_marker`).
+/// - inert to a marker-UNAWARE replay consumer: an unrecognized,
+///   BEL-terminated OSC is parsed structurally and dropped without producing
+///   a visible cell, both by an older `term_core` and by the daemon-side
+///   shadow `vt100::Parser` (which never even sees this marker — it is
+///   written directly into the pane's `scrollback` ring by `MuxPane::resize`,
+///   not fed through the live PTY reader path).
+///
+/// `term_core` has no dependency on this (`emterm` mux) crate, so the byte
+/// format itself — not a shared Rust type — is the contract between this
+/// encoder and `term_core`'s decoder.
+pub fn resize_marker_bytes(cols: u16, rows: u16) -> Vec<u8> {
+    format!("\x1b]777;emterm;resize;{cols};{rows}\x07").into_bytes()
+}
+
 /// Circular byte buffer with fixed capacity.
 pub struct ScrollbackRingBuffer {
     buf: Vec<u8>,
@@ -243,6 +279,22 @@ mod tests {
             per,
             threshold,
         );
+    }
+
+    // ── resize_marker_bytes (task0001 AC-1..AC-4, IMPLEMENTATION.md D2) ──
+
+    #[test]
+    fn test_resize_marker_bytes_format() {
+        assert_eq!(
+            resize_marker_bytes(120, 48),
+            b"\x1b]777;emterm;resize;120;48\x07".to_vec()
+        );
+    }
+
+    #[test]
+    fn test_resize_marker_bytes_distinguishes_cols_and_rows() {
+        // Guards against a copy-paste swap of the two fields.
+        assert_ne!(resize_marker_bytes(80, 24), resize_marker_bytes(24, 80));
     }
 
     #[test]

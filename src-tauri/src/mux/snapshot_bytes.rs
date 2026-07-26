@@ -238,6 +238,25 @@ mod tests {
         assert_eq!(out, expected);
     }
 
+    /// task0001 AC-4: the resize marker (`crate::mux::scrollback_buffer::
+    /// resize_marker_bytes`) must survive full snapshot assembly untouched —
+    /// it rides through the shared `strip_replayable_rich_content` pass
+    /// (asserted directly in `scrollback_filter::strip_keeps_osc777_resize_marker`)
+    /// and must not be dropped or mangled by the surrounding clear-prefix /
+    /// screen / alt-mode assembly either.
+    #[test]
+    fn build_snapshot_bytes_preserves_resize_marker() {
+        let marker = crate::mux::scrollback_buffer::resize_marker_bytes(100, 40);
+        let mut scrollback = b"before".to_vec();
+        scrollback.extend_from_slice(&marker);
+        scrollback.extend_from_slice(b"after");
+        let out = build_snapshot_bytes(&scrollback, b"", false);
+        assert!(
+            contains(&out, &marker),
+            "resize marker must survive snapshot assembly: {out:?}"
+        );
+    }
+
     /// `build_resume_snapshot_bytes` (visibility-resume path) shares the
     /// strip + main/alt split with `build_snapshot_bytes` but uses the
     /// shorter clear prefix `ESC[H ESC[2J` (no `ESC[3J` — the client is
