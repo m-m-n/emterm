@@ -538,7 +538,12 @@ pub fn evaluate_output_target(
                     // always passes `visible == false`. Kept on the SSOT so a
                     // future `visible == true` call site picks up the
                     // strip / main-alt-split contract for free.
-                    let (screen_bytes, alt_screen) = {
+                    // D7'' (task0005 rework, review round-4 finding
+                    // `5ba2063e993baf6c`): the shadow parser's own size
+                    // tracks every `MuxPane::resize` call, so it is the
+                    // pane's dims AT THE MOMENT this snapshot is assembled
+                    // — what `screen_bytes` was actually produced at.
+                    let (screen_bytes, alt_screen, current_dims) = {
                         let parser = lock_shadow_parser(&pane.shadow_parser);
                         let alt = parser.screen().alternate_screen();
                         let screen_bytes = if alt {
@@ -546,7 +551,8 @@ pub fn evaluate_output_target(
                         } else {
                             Vec::new()
                         };
-                        (screen_bytes, alt)
+                        let (rows, cols) = parser.screen().size();
+                        (screen_bytes, alt, (cols, rows))
                     };
                     let (buffered, buffered_segments) =
                         pane.scrollback.lock().unwrap().read_segments();
@@ -564,8 +570,28 @@ pub fn evaluate_output_target(
                         &buffered_segments,
                         &screen_bytes,
                         alt_screen,
+                        current_dims,
                     );
                     let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
+                    // D6'' (task0005 rework, review round-4 finding
+                    // `1d4a0c96821da0ef`): this producer previously enqueued
+                    // unconditionally, with no size check at all — flag it
+                    // via the SAME shared policy `mux::ipc::reattach` /
+                    // `mux::ipc::handlers` now use, so a snapshot large
+                    // enough to blow the codec's single-frame limit is at
+                    // least visible in the log rather than silently tearing
+                    // the connection down. Practically unreachable (see
+                    // `REATTACH_CHUNK_SIZE`'s doc in `mux::ipc::reattach`
+                    // for why a real pane's snapshot never approaches this).
+                    if !mux_ipc::protocol::fits_single_snapshot_frame(encoded_snapshot.len()) {
+                        log::warn!(
+                            "visibility-resume: pane {} snapshot {}B exceeds the \
+                             single-frame limit ({}B)",
+                            pane.id,
+                            encoded_snapshot.len(),
+                            mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD
+                        );
+                    }
                     *target = PaneOutputTarget::Connected(owned_tx.clone());
                     EvalResult::ResumeWithSnapshot {
                         snapshot: encoded_snapshot,
@@ -625,7 +651,12 @@ pub fn resume_pane_with_permit(
             // Skip `contents_formatted()` entirely for main-buffer panes:
             // the helper would drop the slice anyway, so we avoid both the
             // computation and the longer shadow-parser lock hold.
-            let (screen, alt_screen) = {
+            // D7'' (task0005 rework, review round-4 finding
+            // `5ba2063e993baf6c`): the shadow parser's own size tracks
+            // every `MuxPane::resize` call, so it is the pane's dims AT THE
+            // MOMENT this snapshot is assembled — what `screen` was
+            // actually produced at.
+            let (screen, alt_screen, current_dims) = {
                 let parser = lock_shadow_parser(&pane.shadow_parser);
                 let alt = parser.screen().alternate_screen();
                 let screen_bytes = if alt {
@@ -633,7 +664,8 @@ pub fn resume_pane_with_permit(
                 } else {
                     Vec::new()
                 };
-                (screen_bytes, alt)
+                let (rows, cols) = parser.screen().size();
+                (screen_bytes, alt, (cols, rows))
             };
             let (buffered, buffered_segments) = pane.scrollback.lock().unwrap().read_segments();
             {
@@ -645,9 +677,28 @@ pub fn resume_pane_with_permit(
                 let _ = buf.read_all();
                 buf.clear();
             }
-            let (snapshot, snapshot_segments) =
-                build_resume_snapshot_bytes(&buffered, &buffered_segments, &screen, alt_screen);
+            let (snapshot, snapshot_segments) = build_resume_snapshot_bytes(
+                &buffered,
+                &buffered_segments,
+                &screen,
+                alt_screen,
+                current_dims,
+            );
             let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
+            // D6'' (task0005 rework, review round-4 finding
+            // `1d4a0c96821da0ef`): see the parallel check in
+            // `evaluate_output_target`'s `ResumeWithSnapshot` branch above —
+            // same shared policy, same "practically unreachable but now
+            // visible instead of silent" rationale.
+            if !mux_ipc::protocol::fits_single_snapshot_frame(encoded_snapshot.len()) {
+                log::warn!(
+                    "visibility-resume: pane {} snapshot {}B exceeds the \
+                     single-frame limit ({}B)",
+                    pane.id,
+                    encoded_snapshot.len(),
+                    mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD
+                );
+            }
             // review round-1 rework, finding `20b2bed0aaf48f94`: tag this as
             // a Snapshot-kind chunk (not the default PtyOutput) so the mux
             // connection drain (`mux::ipc::connection`) sends it as
@@ -863,15 +914,36 @@ impl MuxPane {
             // first closes that window: by the time the child could
             // possibly react to SIGWINCH, `PaneDims` already reports the
             // size the reaction was produced under.
+            let (old_cols, old_rows) = (self.cols, self.rows);
             self.dims.set(cols, rows);
-            master
-                .resize(portable_pty::PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })
-                .map_err(|e| format!("PTY resize failed: {}", e))?;
+            if let Err(e) = master.resize(portable_pty::PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            }) {
+                // D7'' (task0005 rework, review round-4 finding
+                // `ef9ab1689853785c`, medium): `master.resize()` failing
+                // means the PTY never actually changed size — but `self.dims`
+                // was already published above (needed to close the OTHER
+                // race this ordering fixes). Left as-is, `PaneDims` would
+                // keep reporting a size the PTY was never at; the reader
+                // thread reads it on every chunk and hands it to
+                // `ScrollbackRingBuffer::attribute_write`, which — seeing a
+                // mismatch against the ring's last-recorded dims — would
+                // record a CORRECTIVE marker for those bogus dims, and every
+                // later chunk in this pane's scrollback would be attributed
+                // to a size that never existed. Roll `self.dims` back to the
+                // size the PTY still actually has (still inside this same
+                // scrollback-locked section, so no reader-thread read can
+                // observe the bogus dims and misattribute against them
+                // between the `set` above and this rollback) before
+                // returning the error. `self.cols`/`self.rows` were never
+                // updated on this path (still assigned after this whole
+                // `if`/`else`), so they already agree with the rollback.
+                self.dims.set(old_cols, old_rows);
+                return Err(format!("PTY resize failed: {}", e));
+            }
             scrollback.write_resize_marker(cols, rows);
         } else {
             master
@@ -1223,6 +1295,93 @@ mod tests {
         // Dimensions should not change on error
         assert_eq!(pane.cols, 80);
         assert_eq!(pane.rows, 24);
+    }
+
+    // ── D7'' (task0005 rework, review round-4 finding `ef9ab1689853785c`):
+    // a failed `master.resize()` must not leave `PaneDims` advanced ───────
+
+    /// Test double whose `resize` always fails, so `MuxPane::resize` can be
+    /// exercised past the point where a REAL master is already open (unlike
+    /// `test_resize_fails_without_master`, which only covers the "no master
+    /// at all" branch).
+    #[cfg(unix)]
+    struct FailingResizeMaster;
+
+    #[cfg(unix)]
+    impl portable_pty::MasterPty for FailingResizeMaster {
+        fn resize(&self, _size: portable_pty::PtySize) -> Result<(), anyhow::Error> {
+            Err(anyhow::anyhow!("simulated resize failure"))
+        }
+        fn get_size(&self) -> Result<portable_pty::PtySize, anyhow::Error> {
+            Ok(portable_pty::PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+        }
+        fn try_clone_reader(&self) -> Result<Box<dyn std::io::Read + Send>, anyhow::Error> {
+            Err(anyhow::anyhow!("not supported in test double"))
+        }
+        fn take_writer(&self) -> Result<Box<dyn std::io::Write + Send>, anyhow::Error> {
+            Err(anyhow::anyhow!("not supported in test double"))
+        }
+        fn process_group_leader(&self) -> Option<libc::pid_t> {
+            None
+        }
+        fn as_raw_fd(&self) -> Option<std::os::unix::io::RawFd> {
+            None
+        }
+    }
+
+    /// D7'': a PTY resize failure must leave `PaneDims` (and
+    /// `self.cols`/`self.rows`) unchanged — not advanced to the size the
+    /// PTY never actually reached. Left advanced, the reader thread would
+    /// read the bogus new size on its very next chunk and hand it to
+    /// `ScrollbackRingBuffer::attribute_write`, which — seeing a mismatch
+    /// against the ring's last-recorded dims — would record a CORRECTIVE
+    /// marker for dimensions the PTY was never actually at, misattributing
+    /// every later chunk in this pane's scrollback.
+    ///
+    /// Confirmed to fail pre-fix: before the rollback, `self.dims.set(cols,
+    /// rows)` ran unconditionally before `master.resize()`'s early return,
+    /// so a resize failure left `pane.dims.get()` reporting the NEW
+    /// (never-applied) size while `pane.cols`/`pane.rows` stayed at the OLD
+    /// size — this test's `dims.get()` assertion would then observe
+    /// `(120, 40)` instead of the expected `(80, 24)`.
+    #[cfg(unix)]
+    #[test]
+    fn resize_failure_rolls_back_published_dims() {
+        let target = make_output_target();
+        let mut pane = MuxPane::new(
+            1,
+            80,
+            24,
+            target,
+            Box::new(std::io::sink()),
+            Box::new(FailingResizeMaster),
+        );
+        let before = pane.dims.get();
+        assert_eq!(before, (80, 24));
+
+        let result = pane.resize(120, 40);
+        assert!(result.is_err(), "resize must surface the PTY failure");
+
+        assert_eq!(
+            pane.dims.get(),
+            before,
+            "PaneDims must roll back to the size the PTY actually still has \
+             after a failed resize — a stale published size would \
+             misattribute every later chunk"
+        );
+        assert_eq!(pane.cols, 80);
+        assert_eq!(pane.rows, 24);
+
+        // No corrective marker should have been recorded either — the
+        // ring's only segment is still the pane's initial construction
+        // dims.
+        let (_bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
+        assert_eq!(segments, vec![(0usize, 80u16, 24u16)]);
     }
 
     #[test]
