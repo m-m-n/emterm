@@ -1,0 +1,356 @@
+round: 4
+executed_at: "2026-07-26T23:05:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
+  head_commit: b706c59168a30d5faa9285d8c4e9f5f4cca3dcc4
+  changed_files:
+    - crates/mux_ipc/src/protocol.rs
+    - crates/term_core/src/bench.rs
+    - crates/term_core/src/ring_buffer.rs
+    - crates/term_core/src/snapshot.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/tabs.rs
+plan:
+  floor: [comprehensive, spec, security, performance, architecture]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: skipped, skip_reason: "codex performance が同一範囲をカバー"}
+
+headline: >-
+  rounds 1-3 で 3 回にわたり再発した marker 偽装クラスは、round 4 の構造化転送
+  （DimSegment を wire の別フィールドで運び replay のバイト走査を廃止）で
+  **claude:security と codex:security の双方が「再現せず・残存経路なし」と確認**した。
+  critical はゼロ。残る指摘はいずれも新設デコード経路の入力検証・プロトコル版数・
+  述語の適用漏れといった個別に閉じられる性質のもので、設計そのものへの反証ではない。
+
+findings:
+  - stable_id: da834d05f3f18af4
+    severity: high
+    category: security
+    file: crates/mux_ipc/src/protocol.rs
+    line: 166
+    title: "Unvalidated dimensions allow a tiny snapshot frame to crash or exhaust the client"
+    description: >-
+      デコーダは 0 や任意の u16 寸法を受け入れ、tabs はそれを検証せず
+      TerminalCore::resize に渡す。cols=rows=65535 の 1 バイト segment で
+      約 42.9 億セルの確保を要求でき、0 寸法は resize_reflow の
+      debug_assert 違反（release では reflow_split_at_width の usize 減算
+      アンダーフロー）を招く。daemon 側の 1..=4096 clamp はこの受信経路を守らない。
+      RESIZE_MARKER_MAX_COLS/ROWS の doc 自身がこの防御境界の必要性を明記しているのに、
+      round 4 で強制点が producer 側だけになった。
+    suggestion: >-
+      replay_segments 内で clamp_resize_dims を通す（producer 側 clamp は
+      defense-in-depth として残す）。あわせて decode 側で範囲外 segment を
+      「壊れたテーブル」として legacy フォールバックに落とす。
+      segments_has_row_growth 相当の判定も clamp 後の値で行う。
+    sources: [codex:security, claude:security, codex:architecture]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+  - stable_id: 1cd7b5e593f3b901
+    severity: medium
+    category: security
+    file: crates/mux_ipc/src/protocol.rs
+    line: 156
+    title: "Unbounded segment count enables memory and reflow denial of service"
+    description: >-
+      wire の count に上限が無い。count.min(4096) は初期 Vec 容量を制限するだけで、
+      ループはフレーム内の全 segment を push する（codec 上限内で約 200 万エントリ）。
+      64 KiB 未満の content に 1 バイトずつ寸法の異なる segment を並べると、
+      同期 replay 経路が選ばれたまま UI スレッドで数万回のフルリフローが走る。
+    suggestion: >-
+      allocation 前に厳格な最大 segment 数を定義・強制し、テーブル長を
+      checked arithmetic で検証する。同期 replay の選択にも segment 数を織り込む。
+    sources: [codex:security, codex:performance, codex:architecture]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+  - stable_id: fdfd391ba97167de
+    severity: high
+    category: architecture
+    file: crates/mux_ipc/src/protocol.rs
+    line: 32
+    title: "Snapshot/SnapshotRestore のペイロード形式を変えたのに PROTOCOL_VERSION を据え置いている"
+    description: >-
+      既存メッセージ Snapshot / SnapshotRestore の payload が EMSNAP2 エンベロープに
+      非互換変更されたのに PROTOCOL_VERSION は 2 のまま。PROTOCOL_VERSION の doc は
+      前回の bump について「No existing message's encoded bytes changed」（追加だけでも
+      bump した）と明記し、「there is no silent compatibility shim between protocol
+      versions」とも書いている。今回は既存メッセージのバイト列が変わり、かつ
+      decode 側のマジック sniff という silent shim をバージョン交渉を経ずに入れている。
+      縮退が定義されているのは「旧 daemon → 新 GUI」の一方向のみで、逆向き
+      （新 daemon → 旧 GUI）は version=2 同士でハンドシェイクが通り、旧 GUI は
+      EMSNAP2 ヘッダと segment テーブルをそのまま端末内容として描画する。
+      mux は SSH 越しで版ズレを前提とした設計で、PREVIOUS_PROTOCOL_VERSION +
+      recover_from_legacy_daemon という復旧機構があるのに、それを起動する唯一の
+      スイッチを回していない。
+    suggestion: >-
+      PROTOCOL_VERSION を 3 に bump し、doc に変更内容を追記。固定値テストも更新する。
+      bump しない判断なら、その根拠を doc に明示し、マジック sniff が意図的な shim である
+      ことを「no silent compatibility shim」記述と矛盾しない形に直す。
+    sources: [claude:architecture, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+  - stable_id: 697d8dc2b88dcddc
+    severity: high
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 1001
+    title: "D6 バイパス降格が row 成長のみを見ており、cols 変化セグメントは空 scrollback で reflow されて同期パスと乖離する"
+    description: >-
+      build_from_snapshot_inner は segments_has_row_growth が真のときだけ bypass を降格
+      するが、resize_reflow は reflow_drain() で scrollback_slim + viewport の両方を入力に
+      する。bypass 中は scrollback_slim が空なので、cols が変わる mid-drain resize では
+      reflow の入力が viewport だけになり、論理行の join/再分割が履歴を欠いたまま行われる。
+      結果、同期パスなら履歴で埋まるビューポートが上詰め＋下部空行になり、カーソル行もずれる。
+      round 2 finding 893241823258fce3 が row 成長について閉じたのと同一の乖離が cols に残った。
+      ウィンドウを横方向のみリサイズ → 64 KiB 以上の scrollback → 次の切替、で到達する。
+      テスト build_from_snapshot_stays_bypassed_for_a_cols_only_marker は
+      scrollback_count() == 0 しか見ておらず、このグリッド乖離を検出できない
+      （他の D6 テストは grid_fingerprint を同期パスと比較しているのにこの 1 本だけ比較していない）。
+    suggestion: >-
+      segments_has_row_growth を「replay 中に resize が 1 回でも走るか」の判定に置き換える
+      （reflow_drain は cols/rows どちらの変化でも scrollback を入力にするため、
+      行成長だけを特別扱いする根拠が無い）。既存テストは「cols のみ変化でも降格する」を
+      確認する形に置き換え、cols-only 版の grid_fingerprint 比較テストを追加する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+  - stable_id: 6c650908ea8e95e9
+    severity: high
+    category: spec
+    file: crates/term_core/src/terminal_core.rs
+    line: 861
+    title: "NFR1 違反: セグメント数に比例した replay 遅延増（実測 134ms → 3.3s）"
+    description: >-
+      replay_segments は各セグメント境界で content-preserving な resize（フルリフロー）を
+      呼ぶ。出荷デフォルト（scrollback 10000 行）と 0.95 MiB snapshot で term_core を
+      直接計測した結果: segments=0 → 134ms / 5 → 176ms / 20 → 272ms / 30 → 2078ms /
+      50 → 3322ms / 80 → 5350ms（cols も変える版はさらに +20%）。30 本前後を境に
+      replay が数秒に跳ね上がる。tabs.rs はグリッドサイズが変わるたびデバウンス無しで
+      全 pane へ Resize を送り、round 4 で coalescing が「介在バイト 0」のみに戻された
+      （ab54fae335086db3 の是正）ため、SIGWINCH で再描画する TUI 相手ではウィンドウ端を
+      一度ドラッグするだけで数十エントリ溜まる。apply_offthread_swap は同じ payload で
+      2nd-pass も走らせるので同じコストが 2 回発生する。
+      round 3 で deferred とした 981230284d7d3273 / 5d1a4e9509365517 と同根だが、
+      この実測は NFR1 の文言を直接破る水準であり受容可能な残件ではない。
+    suggestion: >-
+      (a) 中間セグメントの resize を scrollback 再ラップ無し（ビューポートのみ）にする
+      — 途中段階の再ラップは最終 restore-to-target で上書きされるため。
+      (b) 記録側で dim_markers のエントリ数に上限 K を設け、超過時は最古の境界を
+      次の生存セグメントへ併合する（バイト数しきい値方式と違い直近の帰属は保たれるので
+      ab54fae335086db3 の再発にならない）。(c) tabs.rs 側で Resize 送出をデバウンスする。
+      あわせて VERIFICATION.md の MT-2 に「ウィンドウ端をドラッグした直後に切替」を
+      明示シナリオとして追加する。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送。round 3 で deferred にした residual が実測で NFR1 違反と判明"
+
+  - stable_id: 1d4a0c96821da0ef
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 524
+    title: "Snapshot frame-size enforcement is fragmented across producers"
+    description: >-
+      handle_request_pane_snapshot と visibility-resume 経路は
+      MAX_SNAPSHOT_FRAME_PAYLOAD を確認せずエンコード済み snapshot を enqueue する。
+      connection.rs は Snapshot チャンクを 1 フレームで送るため、過大な snapshot は
+      codec に拒否されて接続が切れる。reattach 経路は同じ上限を別扱いにしていて、
+      raw PtyOutput チャンクへフォールバックして segment を全部捨てる
+      （＝寸法非対応 replay に戻る）。どの producer を通ったかで転送の安全性と
+      構造化 replay の可否が変わる。
+    suggestion: >-
+      構造化 snapshot の分割を mux_ipc 自身に置き、全 producer をそこへ通す。
+      チャンクは転送の同一性と segment メタデータを保持し、どの経路も
+      raw PtyOutput へ降格しないようにする。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+  - stable_id: ef9ab1689853785c
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 866
+    title: "master.resize() 失敗時に PaneDims だけが新 dims のまま残り、以後の全チャンクが実在しないサイズに帰属される"
+    description: >-
+      MuxPane::resize は SIGWINCH 前に dims を公開する目的で dims.set() を
+      master.resize() より前に置いたが、master.resize() が Err なら ? で早期 return し、
+      dims だけ新値・self.cols/rows と shadow parser と marker は旧値のまま残る。
+      PTY が一度もなったことのないサイズを PaneDims が報告し続け、reader は次の read で
+      それを拾って実在しない dims の補正マーカーを記録する。以降そのペインの scrollback は
+      丸ごと誤った dims に帰属され、次の切替で座標ずれが起きる。
+      本変更以前は失敗時に何も書き換わらなかったので、今回の diff で入った退行。
+    suggestion: "master.resize() が Err のとき dims を旧値へ巻き戻してから return する"
+    sources: [claude:comprehensive, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+  - stable_id: 0e3f8378913e1f4a
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 637
+    title: "ScrollbackWriteFilter の pending は read をまたぐため、read 時点の dims で帰属するという D5 の保証が持ち越しバイトに対して成立しない"
+    description: >-
+      帰属対象の filtered は scrollback_filter.feed() の戻り値だが、フィルタは read を
+      またいで pending を保持する。よって feed が返すバイト列には前回以前の read 由来の
+      バイトが先頭に含まれ得るのに、attribute_write は今回の read の dims でまとめて
+      帰属させる。通常は数バイト〜数百バイトだが、512 KiB の overflow 脱出路では
+      最大 512 KiB 分が 1 回の read の dims に帰属される。
+    suggestion: >-
+      フィルタに「今の pending run が始まった read の dims」を持たせ、feed が
+      (dims, bytes) を返す形にする。あるいは resize がロックを取る前にフィルタの
+      pending を旧 dims でフラッシュする。少なくとも呼び出し側コメントの主張と
+      実装を一致させること。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+  - stable_id: 5ba2063e993baf6c
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/snapshot_bytes.rs
+    line: 207
+    title: "末尾の screen dump が最後のセグメント（＝古い dims の可能性あり）に帰属する"
+    description: >-
+      build_snapshot_bytes_with_layout は scrollback_segments をそのまま写すだけで、
+      後ろに連結する screen（shadow parser の contents_formatted()）と alt-mode バイトに
+      専用セグメントを付けない。doc 自身が steady state 限定と認めているが、
+      attribute_write の是正パスが非 steady state を設計上作り出す:
+      resize が (100,40) を記録 → reader が旧 dims (80,24) で補正して合体により
+      (100,40) が消える → その時点の snapshot は最後のセグメントが (80,24) のまま →
+      100x40 で生成された screen dump が 80x24 のコアに流し込まれ行が潰れる。
+      alt-screen ペイン限定で、新 dims の内容が 1 チャンク届けば自己修復する。
+    suggestion: >-
+      build_snapshot_bytes_with_layout にペインの現在 dims を渡し、screen が始まる位置に
+      セグメントを 1 本追加する（最後の scrollback セグメントと同一 dims なら
+      replay 側が resize しないので無条件追加でもリフローは増えない）。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+  - stable_id: 03c11d98f82dfa1c
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/snapshot_bytes.rs
+    line: 212
+    title: "build_snapshot_bytes_with_layout の `i == 0 → offset 0` が暗黙かつ非強制の前提に依存している"
+    description: >-
+      「入力 scrollback_segments の先頭要素は必ず offset 0 にある」ことを無条件に
+      前提にしている。破れると先頭要素より前のバイトが黙って先頭セグメントの寸法に
+      付け替えられる（＝本機能が防ぐドリフトの再発）。前提はどこにも書かれておらず
+      assert も無く、3 モジュールにまたがる創発的な不変条件で成立しているだけ。
+      read_segments の doc 自身は head 不在をあり得る場合として書いており、
+      SSOT 側の契約と消費側の前提が食い違っている。
+    suggestion: >-
+      debug_assert! で前提を強制し doc に事前条件として書く、または
+      index 依存をやめて `if remapped == 0` で判定する。
+      read_segments 側の doc にも保証の出所を明記する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+  - stable_id: cefa30b5ebd33f5c
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/snapshot_bytes.rs
+    line: 103
+    title: "寸法 segment が 3 表現に分裂し、中間層が無名タプル (usize, u16, u16) になっている"
+    description: >-
+      DimSegment（wire）/ ReplaySegment（replay API）の重複はクレート境界上妥当だが、
+      mux 層を貫く素のタプルが 8 シグネチャ・5 モジュールを位置引数で流れ、
+      境界で 3 回手書き変換される。このコードベースは cols/rows の並び順が既に
+      統一されていない（TerminalCore::new(cols, rows) vs new_shadow_parser(rows, cols)
+      vs PtySize { rows, cols }）ため、取り違えてもコンパイルは通り、
+      80x24 同士のテストでは落ちない。
+    suggestion: >-
+      mux 層に名前付き型 SnapshotSegment を置いてタプルを置き換え、
+      DimSegment / ReplaySegment との変換を From 実装 1 組に集約する。
+      encode_snapshot_segments も session/pane.rs から transport 寄りへ移す。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+  - stable_id: 5299d50f586b8cb8
+    severity: medium
+    category: architecture
+    file: crates/mux_ipc/src/protocol.rs
+    line: 160
+    title: "Malformed structured payloads are misclassified as legacy terminal bytes"
+    description: >-
+      SNAPSHOT_PAYLOAD_MAGIC があれば新形式と確定しているのに、テーブルが切り詰められて
+      いるとエンベロープ全体を legacy raw content として返す。プロトコル層のバイトが
+      TerminalCore に漏れて可視の壊れた出力になり、呼び出し側は互換フォールバックと
+      転送破損を区別できない。
+    suggestion: >-
+      Legacy / Structured / Malformed を区別する型付き結果を返す。
+      マジック不在のときだけ Legacy を選び、Malformed は拒否または再取得を促す。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+  - stable_id: b1de83542bfe60bc
+    severity: medium
+    category: performance
+    file: src-tauri/src/tabs.rs
+    line: 1334
+    title: "Synchronous replay threshold ignores segment-driven reflow cost"
+    description: >-
+      同期 / off-thread の判定が content_bytes.len() だけを見ているが、
+      replay_segments は寸法の異なる非空セグメントごとにフルリフローを行う。
+      リングは介在バイトが 1 つでもあればセグメントを保つので、TUI 相手の
+      リサイズドラッグは 64 KiB 未満のまま数百セグメントを生みうる。
+      構造テーブルは content_bytes.len() に含まれないため、以前の
+      wire ペイロードサイズ判定より代表性が落ちている。
+    suggestion: >-
+      segment 数に保守的な per-segment 重みを与えて replay コストのゲートに織り込み、
+      バイト量か推定リフロー量のどちらかがしきい値を超えたら off-thread に回す。
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 5 rework へ回送"
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: routed-to-rework
+  note: >-
+    residual high はいずれも複数ファイル（decode + replay + producer 各所）または
+    設計判断（NFR1 のリフロー総量を有界にする方法、PROTOCOL_VERSION の扱い）を含み、
+    単一ファイル限定の review-editor では対応できない。ただし rounds 1-3 と異なり、
+    どれも「設計が間違っている」ではなく「新設経路の検証・述語・版数が足りない」種類。
+
+residual_critical_high: 5
+rework_required: true
