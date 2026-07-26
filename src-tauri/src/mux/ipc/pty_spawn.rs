@@ -178,6 +178,7 @@ pub(super) fn register_pane_and_start_reader(
     let raw_passthrough = pane.raw_passthrough.clone();
     let passthrough_scanner = pane.passthrough_scanner.clone();
     let scrollback = pane.scrollback.clone();
+    let pane_dims = pane.dims.clone();
     // Store initial title_tx in the swappable sender (reattach will swap in a new one)
     *title_sender.lock().unwrap() = Some(title_tx.clone());
     // The notification channel lives for the daemon lifetime; populate it once.
@@ -206,6 +207,7 @@ pub(super) fn register_pane_and_start_reader(
             raw_passthrough,
             passthrough_scanner,
             scrollback,
+            pane_dims,
             pane_exit_sender,
         );
     });
@@ -295,10 +297,22 @@ impl ScrollbackWriteFilter {
     /// next feed.
     ///
     /// Overflow escape hatch: if `pending` (after appending `chunk`) exceeds
-    /// [`SCROLLBACK_FILTER_PENDING_CAP`], the entire pending run is forwarded
-    /// raw and `pending` is reset. This trades the strip guarantee for a
-    /// bounded per-pane memory footprint — a wedged / adversarial stream
-    /// cannot pin arbitrary bytes in the buffer.
+    /// [`SCROLLBACK_FILTER_PENDING_CAP`], the entire pending run is flushed
+    /// early WITHOUT waiting for a safe boundary. This trades "flush at a
+    /// structurally clean boundary" for a bounded per-pane memory footprint
+    /// — a wedged / adversarial stream cannot pin arbitrary bytes in the
+    /// buffer.
+    ///
+    /// task0003 D1 (review round-2 finding `a6ab9b340119beed`, critical):
+    /// the flushed bytes still go through
+    /// [`strip_pty_output_for_scrollback_write`] — they are NOT forwarded
+    /// raw. Before this fix, the overflow path returned `pending` verbatim,
+    /// so a child process could force this branch (an unterminated OSC/DCS/
+    /// APC introducer padded past the cap) and have a forged resize marker
+    /// anywhere in that padding reach the scrollback ring completely
+    /// unfiltered — the cap bounds MEMORY, not the strip guarantee; a
+    /// complete marker is removed in a single linear pass regardless of how
+    /// this batch was flushed.
     pub(in crate::mux) fn feed(&mut self, chunk: &[u8]) -> Vec<u8> {
         if chunk.is_empty() {
             return Vec::new();
@@ -307,10 +321,11 @@ impl ScrollbackWriteFilter {
 
         if self.pending.len() > SCROLLBACK_FILTER_PENDING_CAP {
             log::warn!(
-                "scrollback write filter: pending exceeded {} bytes, flushing raw",
+                "scrollback write filter: pending exceeded {} bytes, flushing early",
                 SCROLLBACK_FILTER_PENDING_CAP
             );
-            return std::mem::take(&mut self.pending);
+            let pending = std::mem::take(&mut self.pending);
+            return strip_pty_output_for_scrollback_write(&pending);
         }
 
         let boundary = find_safe_boundary(&self.pending);
@@ -487,6 +502,7 @@ fn pty_reader_loop(
     raw_passthrough: SharedRawPassthrough,
     passthrough_scanner: SharedPassthroughScanner,
     scrollback: SharedScrollback,
+    pane_dims: crate::mux::session::pane::SharedPaneDims,
     pane_exit_sender: SharedPaneExitSender,
 ) {
     let mut buf = [0u8; 65536];
@@ -542,6 +558,15 @@ fn pty_reader_loop(
             }
             Ok(n) => {
                 let data = &buf[..n];
+                // task0003 D5 (finding `0bebe3e6f7b416dd`): snapshot the
+                // pane's dims as early as possible after `read()` returns —
+                // before any of this chunk's own processing — so the
+                // scrollback write below attributes it to what was actually
+                // in effect when the data was produced, not to whatever
+                // `MuxPane::resize` happens to have already published by the
+                // time we get around to writing (see
+                // `ScrollbackRingBuffer::attribute_write`).
+                let (read_cols, read_rows) = pane_dims.get();
 
                 // Feed the shadow parser (OSC title + alt-screen state) FIRST,
                 // in a single lock scope, so the scrollback write below can be
@@ -611,7 +636,10 @@ fn pty_reader_loop(
                 if !to_write.is_empty() {
                     let filtered = scrollback_filter.feed(to_write);
                     if !filtered.is_empty() {
-                        scrollback.lock().unwrap().write(&filtered);
+                        scrollback
+                            .lock()
+                            .unwrap()
+                            .attribute_write(read_cols, read_rows, &filtered);
                     }
                 }
                 if let Some(new_title) = title_changed {
@@ -1621,6 +1649,21 @@ mod tests {
     /// changes the replay core's dimensions — proving the write-path strip
     /// is what establishes the "replay only trusts daemon-written markers"
     /// invariant, not merely the decoder's defensive dimension clamp.
+    ///
+    /// Asserts on [`term_core::terminal_core::TerminalCore::reflow_call_count`],
+    /// NOT on `core.cols()` / `core.rows()` after the replay completes:
+    /// `replay_with_resize_markers` unconditionally restores the core to its
+    /// construction/target dimensions at the END of every replay regardless
+    /// of what happened mid-stream, so a genuinely honored forged marker and
+    /// a correctly-ignored one both leave the core at the SAME final size —
+    /// checking the final size does not actually distinguish them (verified
+    /// empirically while developing this test: the pre-task0003 version of
+    /// this exact test, which asserted on final `cols()`/`rows()`, still
+    /// passed even with the write-path's `resize`-kind strip completely
+    /// disabled). `reflow_call_count` has no such blind spot: a replay that
+    /// never recognizes any marker calls [`term_core::terminal_core::TerminalCore::resize`]
+    /// zero times (nothing to apply, nothing to restore FROM), while
+    /// honoring even one marker calls it at least once.
     #[test]
     fn forged_resize_marker_from_pty_output_never_resizes_replay_core() {
         use term_core::terminal_core::TerminalCore;
@@ -1637,14 +1680,145 @@ mod tests {
         let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&filtered, b"", false);
 
         let mut core = TerminalCore::new(cols, rows, 1000);
+        let before = core.reflow_call_count();
         core.reset_and_replay(&snap);
 
         assert_eq!(
-            core.cols(),
-            cols,
-            "a forged marker fed as PTY output must never resize the replay core"
+            core.reflow_call_count(),
+            before,
+            "a forged marker fed as PTY output must never trigger a resize \
+             (reflow_call_count must not move)"
         );
-        assert_eq!(core.rows(), rows);
+    }
+
+    // ── task0003 D1 (review round-2 finding `a6ab9b340119beed`, critical):
+    // AC-1 — a forged marker arriving through the pending-overflow escape
+    // hatch (unterminated introducer + padding past the cap + marker) must
+    // never resize the replay core ─────────────────────────────────────
+
+    /// A child process that opens an unterminated DCS introducer (`ESC P`,
+    /// never closed by an `ESC \` anywhere) and keeps writing until
+    /// `ScrollbackWriteFilter`'s pending buffer exceeds
+    /// [`SCROLLBACK_FILTER_PENDING_CAP`], with a well-formed forged resize
+    /// marker sitting in that padding, must not have the marker survive —
+    /// end-to-end through write-filter -> snapshot-assembly -> replay.
+    /// Before the fix, the overflow escape hatch forwarded `pending`
+    /// completely raw (no strip at all), so this exact shape reached replay
+    /// unfiltered.
+    ///
+    /// Deliberately NOT an OSC-777-viewer-kind introducer (e.g.
+    /// `markdown`): the marker's own BEL would then terminate the OUTER
+    /// viewer OSC's body scan (which stops at the FIRST BEL/ST it finds,
+    /// regardless of nesting), making the whole run — marker included — get
+    /// swallowed as an oversized "viewer chunk" by the SNAPSHOT-time
+    /// stripper's UNRELATED viewer-kind stripping, masking whether the
+    /// escape-hatch fix itself did anything. A DCS introducer has no such
+    /// accidental interaction: the marker has no `ESC \` in it, so an
+    /// unterminated DCS never accidentally "consumes" it as part of the
+    /// same sequence either way.
+    ///
+    /// See [`forged_resize_marker_from_pty_output_never_resizes_replay_core`]'s
+    /// doc comment for why this asserts on `reflow_call_count`, not on the
+    /// core's final `cols()`/`rows()`.
+    #[test]
+    fn forged_resize_marker_via_pending_overflow_escape_hatch_never_resizes_replay_core() {
+        use term_core::terminal_core::TerminalCore;
+        let cols: u16 = 80;
+        let rows: u16 = 24;
+
+        // Unterminated DCS introducer: never closes (no `ESC \` anywhere in
+        // this test's bytes), so the filter holds everything in `pending`
+        // rather than flushing at a safe boundary.
+        let intro = b"\x1bPtmux;".to_vec();
+        // Padding plus a well-formed forged marker, sized so the running
+        // `pending` total (introducer + padding) exceeds
+        // `SCROLLBACK_FILTER_PENDING_CAP` (512 KiB) in a single `feed` call
+        // — forcing the overflow escape hatch.
+        let mut padding_and_marker: Vec<u8> = std::iter::repeat_n(b'A', 520 * 1024).collect();
+        padding_and_marker.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
+            999, 999,
+        ));
+
+        let mut filter = ScrollbackWriteFilter::new();
+        let first = filter.feed(&intro);
+        assert!(
+            first.is_empty(),
+            "introducer alone must still be held pending"
+        );
+        let flushed = filter.feed(&padding_and_marker);
+        assert!(
+            !flushed.is_empty(),
+            "the overflow escape hatch must have fired for this test to be meaningful"
+        );
+        assert_eq!(filter.pending_len(), 0);
+
+        let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&flushed, b"", false);
+        let mut core = TerminalCore::new(cols, rows, 1000);
+        let before = core.reflow_call_count();
+        core.reset_and_replay(&snap);
+
+        assert_eq!(
+            core.reflow_call_count(),
+            before,
+            "a forged marker reaching replay via the pending-overflow escape \
+             hatch must never trigger a resize (reflow_call_count must not move)"
+        );
+    }
+
+    // ── task0003 D1 (review round-2 finding `15c54fb74bb91ec7`): AC-1 — a
+    // forged marker nested inside a non-SIXEL DCS body must never resize
+    // the replay core, end-to-end ─────────────────────────────────────
+
+    /// Mirrors `printf '\ePtmux;\e\e]777;emterm;resize;999;999\a\e\\'` — a
+    /// doubled ESC is the tmux DCS passthrough convention for escaping a
+    /// literal ESC inside the passthrough body, so the marker's own `ESC ]`
+    /// is nested inside a non-SIXEL DCS the ANSI-structural strip does not
+    /// consume as a single unit. End-to-end through write-filter ->
+    /// snapshot-assembly -> replay, the marker must still never resize the
+    /// core.
+    ///
+    /// This shape is caught by TWO independent layers today, verified while
+    /// developing this test: the pre-task0003 per-byte fallback (an
+    /// un-consumed DCS falls back to single-byte scanning, which
+    /// re-discovers the nested `ESC ]` as its own OSC candidate and strips
+    /// it via the ordinary `resize`-kind check) ALREADY covers this exact
+    /// input on its own, and the new `strip_literal_resize_marker_occurrences`
+    /// (task0003 D1) covers it independently too. Disabling either one alone
+    /// still leaves this test green; disabling BOTH makes it fail (confirmed
+    /// during development) — so this is deliberate defense-in-depth
+    /// coverage, not a redundant/vacuous test.
+    ///
+    /// See [`forged_resize_marker_from_pty_output_never_resizes_replay_core`]'s
+    /// doc comment for why this asserts on `reflow_call_count`, not on the
+    /// core's final `cols()`/`rows()`.
+    #[test]
+    fn forged_resize_marker_nested_in_non_sixel_dcs_never_resizes_replay_core() {
+        use term_core::terminal_core::TerminalCore;
+        let cols: u16 = 80;
+        let rows: u16 = 24;
+
+        let mut chunk = b"before".to_vec();
+        chunk.extend_from_slice(b"\x1bPtmux;\x1b");
+        chunk.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
+            999, 999,
+        ));
+        chunk.extend_from_slice(b"\x1b\\");
+        chunk.extend_from_slice(b"after");
+
+        let mut filter = ScrollbackWriteFilter::new();
+        let filtered = filter.feed(&chunk);
+        let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&filtered, b"", false);
+
+        let mut core = TerminalCore::new(cols, rows, 1000);
+        let before = core.reflow_call_count();
+        core.reset_and_replay(&snap);
+
+        assert_eq!(
+            core.reflow_call_count(),
+            before,
+            "a forged marker nested inside a non-SIXEL DCS body must never \
+             trigger a resize (reflow_call_count must not move)"
+        );
     }
 
     // ── review round-1 rework, findings 7aef70ff81703b90 / abeda9cc206cf018
@@ -1724,73 +1898,103 @@ mod tests {
         }
     }
 
-    /// SPEC FR3 differing-terminal-WIDTH scenario (finding
-    /// `7aef70ff81703b90`): mirrors `synth_tui_cursor_addressed_bytes_with_midrun_resize`
-    /// above but varies COLS (not rows) across the marker, and includes
-    /// lines LONGER than the narrower width so they actually wrap under
-    /// it — the scenario the pre-round-1 test suite never covered.
-    fn synth_cols_varying_recording_with_wrapping_long_lines(
-        rows: u16,
-        cols_a: u16,
-        cols_b: u16,
-    ) -> Vec<u8> {
-        let mut b = crate::mux::scrollback_buffer::resize_marker_bytes(cols_a, rows);
+    /// task0003 D8 (review round-2 finding `c9773adeab150890`): builds ONE
+    /// phase's raw content (no marker bytes) for the differing-DIMENSIONS
+    /// scenario below — reused both to assemble the marker-bearing
+    /// recording AND to drive the marker-free LIVE reference (which resizes
+    /// directly instead of via an in-band marker).
+    ///
+    /// `narrower_cols` is fixed across both phases (the narrower of the
+    /// recording's two cols values) so the long line wraps whenever the
+    /// narrower width is in effect, regardless of which phase is active.
+    fn synth_dims_phase_bytes(rows: u16, narrower_cols: u16, label: &str) -> Vec<u8> {
+        let mut b = Vec::new();
         for i in 0..rows + 20 {
             b.extend_from_slice(format!("chat history line {i}\r\n").as_bytes());
         }
         b.extend_from_slice(b"\n\x1b7");
-        b.extend_from_slice(format!("\x1b[0;{}r", rows - 1).as_bytes());
+        b.extend_from_slice(format!("\x1b[0;{}r", rows.saturating_sub(1)).as_bytes());
         b.extend_from_slice(b"\x1b8\x1b[1A");
-        let narrower = cols_a.min(cols_b);
-        // Longer than the narrower width, so it wraps whenever that width
-        // is in effect.
-        let long_line = "L".repeat(narrower as usize + 20);
+        // Longer than the narrower width in play across the whole
+        // recording, so it wraps whenever that width is in effect.
+        let long_line = "L".repeat(narrower_cols as usize + 20);
         for tick in 0..3u32 {
-            b.extend_from_slice(format!("chat reply A {tick} {long_line}\r\n").as_bytes());
-            b.extend_from_slice(format!("\x1b7\x1b[{rows};0fSTATUS-A[{tick}]\x1b8").as_bytes());
-        }
-        b.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
-            cols_b, rows,
-        ));
-        b.extend_from_slice(b"\n\x1b7");
-        b.extend_from_slice(format!("\x1b[0;{}r", rows - 1).as_bytes());
-        b.extend_from_slice(b"\x1b8\x1b[1A");
-        for tick in 0..3u32 {
-            b.extend_from_slice(format!("chat reply B {tick} {long_line}\r\n").as_bytes());
-            b.extend_from_slice(format!("\x1b7\x1b[{rows};0fSTATUS-B[{tick}]\x1b8").as_bytes());
+            b.extend_from_slice(format!("chat reply {label} {tick} {long_line}\r\n").as_bytes());
+            b.extend_from_slice(
+                format!("\x1b7\x1b[{rows};0f{label}-STATUS[{tick}]\x1b8").as_bytes(),
+            );
         }
         b
     }
 
-    /// task0002 AC-9: a recording whose lines were produced at DIFFERING
-    /// terminal WIDTHS — including lines longer than the narrower width —
-    /// replays with zero cross-line mixing.
+    /// task0003 D8 / AC-10 (review round-2 finding `c9773adeab150890`): the
+    /// PREVIOUS version of this test (`
+    /// resize_marker_fix_differing_terminal_widths_recording_replays_without_cross_line_mixing`)
+    /// could never fail regardless of correctness — its rows were identical
+    /// across both phases (so PROBE D's row-count coordinate-drift
+    /// mechanism, which needs a ROW COUNT change to misinterpret DECSTBM /
+    /// CUP coordinates, never fired at all), and its taint detector searched
+    /// for a substring (`" line "`) the cols-varying synthesized content
+    /// never actually contained. This version:
+    /// - varies BOTH rows and cols across the marker (actually exercises the
+    ///   drift mechanism),
+    /// - still includes a line longer than the narrower width so it wraps,
+    /// - compares against a LIVE-FED reference grid FINGERPRINT (the same
+    ///   technique
+    ///   `round_trip_grid_fingerprint_matches_live_feed_for_resize_free_and_resize_spanning`
+    ///   uses) instead of a substring taint detector — confirmed, while
+    ///   developing this test, to FAIL when marker interpretation is
+    ///   disabled (`find_resize_marker` stubbed to always return `None`),
+    ///   unlike its predecessor.
     #[test]
-    fn resize_marker_fix_differing_terminal_widths_recording_replays_without_cross_line_mixing() {
+    fn resize_marker_fix_differing_dimensions_recording_matches_live_feed_fingerprint() {
         use term_core::terminal_core::TerminalCore;
-        let rows: u16 = 30;
-        for (cols_a, cols_b, replay_cols) in [
-            (100u16, 40u16, 100u16),
-            (100, 40, 40),
-            (40, 100, 100),
-            (40, 100, 40),
-        ] {
-            let recording =
-                synth_cols_varying_recording_with_wrapping_long_lines(rows, cols_a, cols_b);
-            let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, b"", false);
-            let mut core = TerminalCore::new(replay_cols, rows, 10_000);
-            core.reset_and_replay(&snap);
-            let mut tainted = Vec::new();
-            for r in 0..rows {
-                let line = core.get_line_text(r);
-                if line.contains("STATUS-") && line.contains(" line ") {
-                    tainted.push(format!("row {r}: {line}"));
-                }
+
+        fn fingerprint(core: &TerminalCore) -> (Vec<String>, u16, u16) {
+            let mut lines = Vec::with_capacity(core.rows() as usize);
+            for r in 0..core.rows() {
+                lines.push(core.get_line_text(r));
             }
-            assert!(
-                tainted.is_empty(),
-                "cols {cols_a}->{cols_b} replay@{replay_cols}: expected zero cross-line-mixed \
-                 rows with wrapping long lines in play, got {tainted:?}"
+            (lines, core.get_cursor_col(), core.get_cursor_row())
+        }
+
+        for ((cols_a, rows_a), (cols_b, rows_b), (replay_cols, replay_rows)) in [
+            ((100u16, 32u16), (40u16, 24u16), (100u16, 32u16)),
+            ((100, 32), (40, 24), (40, 24)),
+            ((40, 24), (100, 32), (100, 32)),
+            ((40, 24), (100, 32), (40, 24)),
+        ] {
+            let narrower_cols = cols_a.min(cols_b);
+            let phase_a = synth_dims_phase_bytes(rows_a, narrower_cols, "A");
+            let phase_b = synth_dims_phase_bytes(rows_b, narrower_cols, "B");
+
+            let mut recording = crate::mux::scrollback_buffer::resize_marker_bytes(cols_a, rows_a);
+            recording.extend_from_slice(&phase_a);
+            recording.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
+                cols_b, rows_b,
+            ));
+            recording.extend_from_slice(&phase_b);
+
+            // Live reference: a live parser never sees markers — it resizes
+            // directly at the exact points in the stream the markers
+            // represent, mirroring exactly what `reset_and_replay` does for
+            // the marker-bearing recording.
+            let mut live = TerminalCore::new(replay_cols, replay_rows, 10_000);
+            live.resize(cols_a, rows_a);
+            live.process_pty_data_fully(&phase_a);
+            live.resize(cols_b, rows_b);
+            live.process_pty_data_fully(&phase_b);
+            live.resize(replay_cols, replay_rows);
+
+            let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, b"", false);
+            let mut replayed = TerminalCore::new(replay_cols, replay_rows, 10_000);
+            replayed.reset_and_replay(&snap);
+
+            assert_eq!(
+                fingerprint(&live),
+                fingerprint(&replayed),
+                "dims ({cols_a},{rows_a})->({cols_b},{rows_b}) replay@({replay_cols},{replay_rows}): \
+                 replayed grid must match the live-fed reference"
             );
         }
     }

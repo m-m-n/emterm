@@ -1230,6 +1230,35 @@ impl Tab {
     pub fn apply_mux_message(&mut self, msg: MuxMessage) -> bool {
         match msg.msg_type {
             MessageType::Snapshot | MessageType::SnapshotRestore => {
+                // task0003 D3 (review round-2 findings `200b2c8beeb68fe4` /
+                // `87ba3cc2911d104e`): a frame that RESETS the tab's single
+                // core must only be applied when it belongs to the pane this
+                // tab is currently displaying — mirrors the `PtyOutput` arm's
+                // filter below. Both the reattach path (per-pane
+                // `SnapshotRestore`) and the visibility-resume path
+                // (per-pane `Snapshot`) send one such frame per pane in the
+                // session, relying on the CLIENT to pick the right one; this
+                // arm used to apply whatever arrived last unconditionally,
+                // so a background window's reattach / resume snapshot
+                // silently overwrote the visible pane's content with a
+                // different window's screen — re-introducing, via this
+                // newer per-pane framing, the exact "switch shows the wrong
+                // pane's content" symptom this feature exists to fix. When
+                // the tab has no window group (older daemon / single pane),
+                // `active_pane_id()` is `None` and every frame is accepted,
+                // matching the `PtyOutput` arm's fallback.
+                if let Some(active) = self.mux_group.as_ref().and_then(|g| g.active_pane_id()) {
+                    if msg.pane_id != active {
+                        log::debug!(
+                            "mux apc: dropping {:?} for non-active pane {} (active {}) for tab {:?}",
+                            msg.msg_type,
+                            msg.pane_id,
+                            active,
+                            self.title
+                        );
+                        return false;
+                    }
+                }
                 // FR4: branch on payload size. Small snapshots replay
                 // synchronously (no perceptible block, no swap gap); large
                 // ones go off-thread so the switch stays responsive.
@@ -4985,6 +5014,81 @@ mod tests {
         // not advance the cursor) so row 0 stays exactly `marker`.
         p.resize(OFFTHREAD_REPLAY_THRESHOLD_BYTES + 16, 0);
         p
+    }
+
+    // ── task0003 D3 (review round-2 findings `200b2c8beeb68fe4` /
+    // `87ba3cc2911d104e`): Snapshot|SnapshotRestore pane filter ───────────
+
+    /// AC-3: with two or more mux windows, a reattach-shaped
+    /// `SnapshotRestore` for a NON-active pane must not overwrite the tab's
+    /// displayed core.
+    #[test]
+    fn snapshot_restore_for_non_active_pane_does_not_overwrite_displayed_core() {
+        let mut tab = test_tab();
+        // Two windows: pane 10 (index 0, active) and pane 20 (index 1).
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        assert_eq!(tab.mux_group.as_ref().unwrap().active_pane_id(), Some(10));
+
+        // Paint identifiable content into the displayed core first.
+        {
+            let mut c = tab.core.lock();
+            c.process_pty_data_fully(b"ACTIVE-A");
+        }
+
+        // A reattach-shaped SnapshotRestore arrives for the NON-active pane
+        // (20) — this is exactly what `send_reattach_data` emits per pane in
+        // the session, relying on the client to pick the right one.
+        let msg = MuxMessage {
+            msg_type: MessageType::SnapshotRestore,
+            pane_id: 20,
+            payload: b"NON-ACTIVE-B\r\n".to_vec(),
+        };
+        let changed = tab.apply_mux_message(msg);
+        assert!(
+            !changed,
+            "a non-active pane's snapshot must be dropped (no redraw signalled)"
+        );
+
+        let c = tab.core.lock();
+        let row0: String = (0..8).map(|col| c.get_cell_char(col, 0)).collect();
+        assert_eq!(
+            row0, "ACTIVE-A",
+            "the displayed core must still show the active pane's content, \
+             not the non-active pane's snapshot"
+        );
+    }
+
+    /// AC-4: same fix, exercised via `MessageType::Snapshot` (the
+    /// visibility-resume shape — `resume_pane_with_permit` sends this kind)
+    /// and the OFF-THREAD (>= 64 KiB) path — a resume snapshot for a
+    /// NON-active pane must not engage the off-thread swap or otherwise
+    /// touch the displayed core; the SAME shape for the active pane still
+    /// does.
+    #[test]
+    fn resume_snapshot_for_non_active_pane_does_not_trigger_offthread_swap() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        assert_eq!(tab.mux_group.as_ref().unwrap().active_pane_id(), Some(10));
+
+        {
+            let mut c = tab.core.lock();
+            c.process_pty_data_fully(b"ACTIVE-A");
+        }
+
+        let changed = tab.apply_mux_message(snapshot_msg(20, large_payload("NON-ACTIVE-B")));
+        assert!(
+            !changed,
+            "a non-active pane's resume snapshot must be dropped"
+        );
+        assert!(
+            !tab.test_has_pending_switch(),
+            "a non-active pane's resume snapshot must never engage the off-thread swap"
+        );
+
+        // Sanity: the SAME shape for the ACTIVE pane DOES engage the swap.
+        let changed = tab.apply_mux_message(snapshot_msg(10, large_payload("ACTIVE-A-RESUMED")));
+        assert!(changed);
+        assert!(tab.test_has_pending_switch());
     }
 
     /// TS-4: exactly at the threshold goes off-thread; one byte below stays
