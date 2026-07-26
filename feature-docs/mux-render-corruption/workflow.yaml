@@ -31,7 +31,8 @@ workflow:
     skipped_reason: "レンダリングパイプラインのバグ修正で、視覚デザイン判断を要する UI 変更が無いため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 097c6745466c5dbeed5861ec2c7c8d2d95ddc7d0
   - id: implement
     status: pending
     base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
