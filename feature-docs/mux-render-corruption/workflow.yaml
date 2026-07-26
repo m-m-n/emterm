@@ -34,8 +34,8 @@ workflow:
     status: completed
     completed_at_commit: 097c6745466c5dbeed5861ec2c7c8d2d95ddc7d0
   - id: implement
-    status: in_progress
-    completed_at_commit: 6d42f73c0095357645e3d4a8a84caccce958e0c9
+    status: completed
+    completed_at_commit: b80a0c6417697ff9c7c7c6531e048dd62b3def28
     base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
   - id: review
     status: pending
@@ -153,9 +153,9 @@ tasks:
     domains: [input-handling, ui, concurrency, api-contract]
     complexity: high
     requirements: [FR2, FR3, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-render-corruption/task0005
-    notes: "review round 4 の residual high からの rework。round 4 で偽装クラスは構造的に解消済みで、残るのは新設デコード経路の検証・replay コストの有界化・プロトコル版数・述語の適用漏れ"
+    notes: "review round 4 の residual high からの rework。D3''(NFR1) は MAX_DIM_MARKERS=16 の daemon 側上限 + segment 数を考慮した off-thread dispatch で対応（term_core 側の per-segment reflow コスト削減ではない）。意図的にスコープダウンした 2 件: (a) D6''/AC-8 は共有関数 fits_single_snapshot_frame で全 producer が検査する形にしたが、reattach の oversize フォールバックは segment-blind な PtyOutput chunking のまま（真の多フレーム配送はクライアント側再組み立てプロトコルが必要）、(b) SnapshotSegment 名前付き型リファクタ(cefa30b5ebd33f5c)は見送り。途中で implementer が未コミットのまま停止し、SendMessage で再開して完了。Deviations: src-tauri/src/mux/{cli.rs,daemon.rs} の legacy-daemon テスト fixture が FAKE_LEGACY_VERSION=1 をハードコードしており PROTOCOL_VERSION bump で hang したため PREVIOUS_PROTOCOL_VERSION 由来に修正"
 
 review:
   status: pending
