@@ -1,0 +1,292 @@
+round: 5
+executed_at: "2026-07-27T00:45:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
+  head_commit: 1871145e5012ba57a0e8801ee61d155ad202a260
+  changed_files:
+    - crates/mux_ipc/src/protocol.rs
+    - crates/term_core/src/bench.rs
+    - crates/term_core/src/ring_buffer.rs
+    - crates/term_core/src/snapshot.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/mux/cli.rs
+    - src-tauri/src/mux/daemon.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/tabs.rs
+plan:
+  floor: [comprehensive, spec, security, performance, architecture]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: claude, status: failed, note: "API error (connection closed mid-response) の途中終了。claude 側 security の網羅は本ラウンドで得られていない。codex:security は完走"}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: performance, source: codex, status: completed, note: "findings ゼロ。segment 数の上限と off-thread dispatch は実効的と判定"}
+  - {perspective: architecture, source: claude, status: skipped, skip_reason: "codex architecture が同一範囲をカバー"}
+  - {perspective: performance, source: claude, status: skipped, skip_reason: "claude:spec が NFR1 を実測込みで扱ったため"}
+
+headline: >-
+  rounds 1-3 の marker 偽装クラスは round 4 以降も再現していない（本ラウンドでも
+  codex:security が構造面での再発なしを確認）。codex:performance は findings ゼロ。
+  一方で **round 5 自身の 2 つの修正が FR2 / NFR1 の退行を新たに作った**:
+  MAX_DIM_MARKERS の併合が offset を連鎖的に 0 まで引き戻して保持ウィンドウ全体を
+  単一の中間寸法で replay させ（PROBE D ドリフトの再導入）、bypass 降格が
+  通常のウィンドウ切替を 7ms → 170-220ms に悪化させている。
+  どちらも「replay が寸法変更ごとに全 scrollback を content-preserving reflow する」
+  という 1 点の帰結で、round 4 finding 6c650908ea8e95e9 の suggestion (a)
+  （中間セグメントの resize で scrollback を再ラップしない）を採れば同時に解ける。
+
+findings:
+  - stable_id: 1227fc04fb9368d0
+    severity: high
+    category: security
+    file: crates/term_core/src/terminal_core.rs
+    line: 1673
+    title: "Dimension clamp still permits memory-exhaustion snapshots"
+    description: >-
+      wire 由来の segment 寸法は 4096x4096 に clamp されたうえで
+      TerminalCore::resize に渡る。reflow は rows * cols の 32 バイトセルを
+      フラットに確保するため、1 セグメントで新グリッドだけで 512 MiB を要求でき、
+      旧グリッドと中間 reflow データも生きたまま残る。悪意ある IPC ピアからの
+      1 つの妥当な snapshot で GUI をメモリ枯渇させられる。
+    suggestion: >-
+      replay 前に checked な総セル数 / バイト予算を検証し、超過する snapshot 全体を
+      拒否する。現実的な寸法上限をもっと低くし、fallible allocation を使う。
+      敵対的な値を「別の危険なサイズ」に clamp するだけにしない。
+    sources: [codex:security]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 6 rework へ回送"
+
+  - stable_id: 89b58cd82d7aa713
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 693
+    title: "The shared frame-size policy is advisory on visibility resume"
+    description: >-
+      resume_pane_with_permit は過大な encoded snapshot を検出するが、log を出すだけで
+      無条件に単一 Snapshot として enqueue する。connection codec は
+      MAX_FRAME_LENGTH 超の body を拒否し、その後 connection loop が終了する。
+      つまり round 5 の中心的な述語 fits_single_snapshot_frame は
+      共通の producer 契約を実際には強制しておらず、hidden→visible 遷移が
+      まさにその過大ケースでクライアントを切断しうる。AC-8 が実質未達。
+    suggestion: >-
+      中央 API が強制可能な転送判断 / エラーを返すようにする。過大時は
+      segment 保存型の多フレームプロトコルを使うか、pane を detached のまま
+      回復可能な失敗を返す。拒否される単一フレームを enqueue しない。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 6 rework へ回送"
+
+  - stable_id: 986a3881b2b97a16
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 106
+    title: "FR2: MAX_DIM_MARKERS=16 の併合が offset を連鎖的に 0 まで引き戻し、保持ウィンドウ全体に座標ドリフトを再導入する"
+    description: >-
+      enforce_dim_marker_cap は overflow するたびに最古エントリを pop し、その後継の
+      offset を捨てたエントリの offset まで引き戻す。これが繰り返されるため offset が
+      連鎖し、N > 16 回の resize 後には最古の生存エントリの offset が最初のエントリ
+      （offset 0 = MuxPane::new の初期マーカー）まで引きずられる一方、その dims は
+      resize ステップ N-15 のものになる。結果、offset 0 からそのステップまでの全バイトが
+      単一の中間ドラッグサイズで replay される — ドラッグの場合それはドラッグ前の
+      scrollback 全体（最大 2 MiB の保持ウィンドウ）＋最初の N-16 回分の再描画。
+      これは SPEC が閉じる対象として名指ししている PROBE D の座標ドリフト機構そのもの。
+      MAX_DIM_MARKERS の doc は「精度が失われるのは最古の 1 span だけ」と正当化するが、
+      span の *数* としては正しくても *バイト量* としては正しくない。
+      閾値 16 は現実的な操作で超える: VERIFICATION.md の MT-3 自身が
+      「dozens of grid-size changes」と書いており、テストも 40 / 50 ステップを模している。
+      cap 併合 *後* の replay 忠実性を検証するテストは存在しない。
+      なお replay コストは 16 → 239ms、24 → 295ms だが 30 → 2.08s なので、
+      単純に cap を上げて 40 ステップのドラッグを覆う選択肢は無い。
+    suggestion: >-
+      (a) 併合を count-aware でなく content-aware にする（バイト長が最小の隣接 span 対、
+      または寸法が最も近い対を併合する）。(b) head を落とすとき、その span が後継より
+      大きければ *落とすエントリの* 寸法を併合 span に残す。(c) cap を最大 ~24 に上げる
+      （295ms、2.08s の崖の手前）— 部分的緩和。いずれの場合も、>MAX_DIM_MARKERS 回の
+      resize を実際の再描画バイト込みで流し、read_segments → build_snapshot_bytes →
+      reset_and_replay_segments を通して cross-line mixing ゼロを assert する
+      回帰テストを追加すること。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 6 rework へ回送。round 5 の NFR1 対策が FR2 を壊した"
+
+  - stable_id: abb36fa1ad4c89ea
+    severity: high
+    category: spec
+    file: crates/term_core/src/terminal_core.rs
+    line: 1027
+    title: "NFR1: bypass 降格が通常のウィンドウ切替を約 25 倍遅くし、追加された bench はそれを測れない"
+    description: >-
+      integration worktree での実測（release、term_core、0.95 MiB payload、100x30、
+      scrollback 10000、build_from_snapshot）:
+      0 segments = 7.1ms / 1 segment（dims が target と一致）= 7.1ms /
+      1 segment（dims が異なる）= 219.7ms / 2 segments 80x24→100x30 = 166.5ms /
+      16 segments（daemon cap）= 239.2ms / bypass off = 137.1ms。
+      コストを支配しているのは segment 数ではなく D5'' の bypass 降格
+      （4 → 16 segments は 215 → 239ms しか動かないが、1-equal → 1-differing で
+      7 → 220ms）。しかもこれは resize storm ではなく **通常の切替**で発火する:
+      MuxPane::new が daemon のハードコード 80x24 spawn サイズを head マーカーとして
+      記録し、GUI の最初の Resize が 2 本目を記録する。prune_dim_markers が head を
+      落とすのはリングが 2 本目を超えて evict した後（約 2 MiB の出力後）なので、
+      それまで全 snapshot が GUI グリッドと異なる head セグメントを積む。
+      変更前は 1st pass が約 7ms で swap し、約 137ms の非 bypass 再構築は
+      背景の 2nd pass で走っていた。今はそのコストが swap の *前* に来て
+      2nd pass はスキップされるため、ユーザーは切替画面が出るまで約 170-220ms 待つ。
+      唯一の NFR1 自動証跡である bench.rs の
+      segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap は
+      #[ignore] 付きで通常スイートに乗らず、比較する 2 アーム（4 と 16 segments）が
+      どちらも既に降格コストを払っているため ratio 1.09 を測っているだけで、
+      1 秒の上限に近づくことすらない。
+    suggestion: >-
+      実際に動いた軸を測る bench アームを足す（0-segment / head-dims-equal-target と
+      1 つの differing segment の比較）。そのうえで NFR1 を明示的に判定する:
+      (a) 約 200ms を受容して MT-2/MT-3 で実測値込みのサインオフを得る（VERIFICATION.md に
+      数値を記録して bench でなく計測で判定する）、または (b) 降格の影響範囲を狭める
+      — 例えば「唯一の寸法差が head セグメントで、それが reset 直後の空コアに適用され、
+      暗黙の最終 restore-to-target が no-op になる」という極めて一般的な形
+      （[(0, 80x24)] → target 80x24）では降格しない。
+      bench を検証フローで実行可能にする（#[ignore] を外すか VERIFICATION.md に
+      --include-ignored を書く）。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 6 rework へ回送。round 5 の D5'' 対応が NFR1 を悪化させた"
+
+  - stable_id: b45fb09344067621
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/tabs.rs
+    line: 1338
+    title: "Malformed snapshot frame が画面を空にする — typed decode が消費側に配線されていない"
+    description: >-
+      round 5 で decode_snapshot_payload_typed / DecodedSnapshotPayload::Malformed を
+      新設し、tuple 版の Malformed マッピングを (vec![], payload) から (vec![], &[]) に
+      変更した。protocol.rs の doc は「tabs.rs の apply_mux_message は typed 版を使うので
+      フレーム適用自体をスキップでき表示を空にしない」と明記しているが、実際の
+      tabs.rs は tuple 版を呼んでおり typed 版はどこからも呼ばれていない。
+      結果、破損した structured frame は content=[] / segments=[] になり
+      reset_frame_for_replay(b"", &[]) が走って表示中の pane が丸ごと空になる。
+      round 5 の変更は「envelope をそのまま描画する」を「画面を空にする」に
+      置き換えただけで、doc が約束した安全な劣化は存在しない。
+    suggestion: >-
+      apply_mux_message を typed 版に切り替え、Malformed のとき log::warn! して
+      return false（フレーム適用スキップ、現在の表示を維持）にする。
+      あるいは doc から事実誤認を削り、実際の挙動を明記する。前者が本来の意図。
+    sources: [claude:comprehensive, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "round 6 rework へ回送"
+
+  - stable_id: 58db33c799bedf87
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 846
+    title: "replay_segments が wire 由来 segment の offset を検証せず、payload を無言で捨てる"
+    description: >-
+      round 5 の D1'' は「decoded segment は untrusted」という理由で cols/rows に
+      clamp_resize_dims を適用したが、同じ経路の offset には一切の検証がない。
+      segments[0].offset > 0 の frame では bytes[0..offset] が一度も replay に渡らず
+      無言で消える（clear prefix + scrollback 先頭が丸ごと欠落）。offset が非昇順だと
+      end < start で区間が丸ごと捨てられる。MAX_SEGMENTS は個数だけを縛る。
+      .min(bytes.len()) があるので panic はせず、必ず「静かに内容が消える」形で現れる。
+      producer 側は先頭を 0 に強制し debug_assert も置いているが release では効かず、
+      消費側は dims をクランプしたばかりなのに offset だけ非対称に無防備。
+    suggestion: >-
+      decode_snapshot_payload_typed の upfront validation に offset 条件を追加し、
+      先頭が 0 でない / 非単調 / content 長超過の table を Malformed として弾く
+      （round 5 の「壊れた envelope は content として扱わない」方針と一貫する）。
+      あるいは replay_segments 側で先頭バイトを捨てないよう補正する。
+    sources: [claude:comprehensive, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "round 6 rework へ回送"
+
+  - stable_id: fd379025e1900e9f
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 380
+    title: "pending_started_dims が新しい pending run に更新されず、2 回目以降の持ち越しで古い dims に誤帰属する"
+    description: >-
+      D7'' の修正は pending が空になったときだけ pending_started_dims を None に戻す。
+      partial drain（boundary > 0 かつ drain 後も pending が残る）の場合、残ったバイトは
+      必ず今回の chunk 由来なのに pending_started_dims は古い run の dims のまま。
+      read1@A → read2@B（partial drain、B 由来の tail が残る）→ read3@C の flush が
+      B と C の内容を A に帰属させる。round 4 finding が塞ごうとした誤帰属そのもので、
+      修正前（常に current_dims）より遠い dims を選ぶ分だけ悪化しうる。
+      連続する read が続けて未終端シーケンスで終わり、その間に resize が入ると発生する。
+    suggestion: "partial drain で持ち越しがあった場合は pending_started_dims を current_dims に更新する"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 6 rework へ回送"
+
+  - stable_id: bfebad60b3862d3e
+    severity: medium
+    category: security
+    file: crates/mux_ipc/src/protocol.rs
+    line: 156
+    title: "The segment-count limit remains large enough for replay DoS"
+    description: >-
+      デコーダは 4096 セグメントを受け入れるが、daemon の producer は 16 で上限を
+      かけている。非空セグメントごとにフルリフローが走るため、0.95 MiB snapshot で
+      80 セグメントが約 5.35 秒という自前の実測に照らすと、数千の交互寸法セグメントを
+      持つコンパクトな有効フレームで replay ワーカーを長時間占有できる。
+      off-thread に回しても攻撃者制御の CPU 仕事量は bound されない。
+    suggestion: >-
+      producer の正当な上限（MAX_DIM_MARKERS）と揃えた共有定数で、それを超える
+      structured payload を拒否する。各リフロー前に cancellation もチェックする
+      （ただし cancellation を主たる仕事量 bound にしない）。
+    sources: [codex:security]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 6 rework へ回送"
+
+  - stable_id: c1605e6978ee5e48
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/reattach.rs
+    line: 332
+    title: "Oversized reattach changes a snapshot into segment-blind live output"
+    description: >-
+      過大時のフォールバックが encoded segment テーブルを捨てて SnapshotRestore を
+      raw PtyOutput チャンクに変える。フレーム上限を超える resize-spanning snapshot では
+      クライアントが snapshot デコード / reset にも segment-aware replay にも入らず、
+      全バイトを現在の寸法で解釈する = 本プロトコル変更が排除しようとしている
+      レンダリング破壊クラスを再現する。ペイロードサイズだけに基づく意味論の不連続。
+    suggestion: >-
+      snapshot の同一性・順序・完了・segment メタデータを持つバージョン付き
+      chunked snapshot framing を追加する。それができるまでは、拒否するか
+      pane を detached のまま保つ。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 6 rework へ回送。task0005 で意図的にスコープダウンした項目で、レビュアーは安全な完了境界ではないと判定"
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: routed-to-rework
+  note: >-
+    residual high 4 件のうち 2 件（986a3881b2b97a16 / abb36fa1ad4c89ea）は
+    round 5 自身の修正が作った FR2 / NFR1 の退行で、どちらも
+    「replay が寸法変更ごとに全 scrollback を reflow する」という同一原因に帰着する。
+    単一ファイルの機械適用では対応できない。
+
+residual_critical_high: 4
+rework_required: true
