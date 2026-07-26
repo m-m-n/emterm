@@ -38,7 +38,7 @@ workflow:
     completed_at_commit: 6f966a307f57adcfe5f8056a2510e5abf23266a9
     base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -72,8 +72,12 @@ tasks:
     branch: em-workflow/mux-render-corruption/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, spec, security, performance, architecture]
+    discretionary: []
+    codex_cross_validation: true
 
 requirements:
   FR1:
