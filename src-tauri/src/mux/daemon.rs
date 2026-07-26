@@ -1182,10 +1182,22 @@ mod tests {
     // spawned process, per the task's Test Notes ("Simulate a v1 server ...
     // by manually crafting the handshake bytes"). It speaks the exact wire
     // shapes (`HelloMsg`/`WelcomeMsg`/`Shutdown`) the real daemon does, with
-    // a hardcoded `server_version = 1` and no session/PTY machinery.
+    // a hardcoded `server_version` and no session/PTY machinery.
 
+    // task0005 rework: derived from `PREVIOUS_PROTOCOL_VERSION` rather than
+    // hardcoded to `1`. `recover_from_legacy_daemon`'s retry handshake uses
+    // `PREVIOUS_PROTOCOL_VERSION` (exactly one version behind whatever
+    // `PROTOCOL_VERSION` currently is) — a fixed literal here silently
+    // stopped matching that retry the moment `PROTOCOL_VERSION` moved past
+    // 2, at which point the fake daemon's `else` branch below rejects the
+    // retry, `recover_from_legacy_daemon` gives up (returns `Err`), and the
+    // fake daemon's `accept()` loop is left waiting forever for a THIRD
+    // connection that will never arrive — a `server.join()` in a test below
+    // then hangs indefinitely. Tying this constant to
+    // `PREVIOUS_PROTOCOL_VERSION` keeps the fixture "one version behind
+    // current" through any future bump.
     #[cfg(unix)]
-    const FAKE_LEGACY_VERSION: u32 = 1;
+    const FAKE_LEGACY_VERSION: u32 = PREVIOUS_PROTOCOL_VERSION;
 
     #[cfg(unix)]
     fn read_frame<S: std::io::Read>(stream: &mut S) -> MuxMessage {
