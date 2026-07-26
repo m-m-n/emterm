@@ -22,8 +22,8 @@ use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatus, AgentStatusReportSender, AgentWaitOutcome, AgentWaiter, MuxPane,
     NotificationSender, PaneId, PtyOutputChunk, SharedPaneExitSender, SharedScrollback,
-    SharedShadowParser, TitleChangeSender, evaluate_output_target, lock_shadow_parser,
-    resume_pane_with_permit,
+    SharedShadowParser, TitleChangeSender, encode_snapshot_segments, evaluate_output_target,
+    lock_shadow_parser, resume_pane_with_permit,
 };
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.
@@ -504,20 +504,24 @@ pub(super) async fn handle_request_pane_snapshot(
 
     // Read the pane's scrollback WITHOUT clearing (the buffer lives for the
     // lifetime of the pane; an empty buffer yields a valid clear + shadow
-    // snapshot). The client's reset_and_replay rebuilds history from it.
+    // snapshot). The client's segment-driven replay rebuilds history from it
+    // (task0004 round-4 rework D1').
     //
     // INVARIANT (FR3 guard-rail): the scrollback lock is held ONLY for the
-    // `read_all` copy. The owned `Vec` is returned out of this scope so the
-    // guard is provably dropped at the closing brace — before snapshot
-    // assembly, logging, and the channel send below. This is a copy-only
-    // critical section: the O(n) copy is unavoidable, but the lock must never
-    // span assembly/log/send. Keep the copy inside this block when refactoring.
-    let scrollback_data: Vec<u8> = {
+    // `read_segments` copy. The owned `Vec`s are returned out of this scope
+    // so the guard is provably dropped at the closing brace — before
+    // snapshot assembly, logging, and the channel send below. This is a
+    // copy-only critical section: the O(n) copy is unavoidable, but the
+    // lock must never span assembly/log/send. Keep the copy inside this
+    // block when refactoring.
+    let (scrollback_data, scrollback_segments): (Vec<u8>, Vec<(usize, u16, u16)>) = {
         let guard = scrollback.lock().unwrap();
-        guard.read_all()
+        guard.read_segments()
         // guard dropped here, at scope end, before any assembly/log/send.
     };
-    let snapshot = build_shadow_parser_snapshot(&shadow_parser, &scrollback_data);
+    let (snapshot, snapshot_segments) =
+        build_shadow_parser_snapshot(&shadow_parser, &scrollback_data, &scrollback_segments);
+    let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
     // Promoted from debug -> warn so release builds (which drop debug/info)
     // capture the snapshot-reply path during recovery investigations. The
     // call is rare (only on WASM recovery / window-switch reattach), so the
@@ -525,10 +529,11 @@ pub(super) async fn handle_request_pane_snapshot(
     // payload scales like the reattach path), so this line doubles as the
     // transfer-size diagnostic for the larger payload.
     log::warn!(
-        "RequestPaneSnapshot: pane {} -> {}B (scrollback {}B)",
+        "RequestPaneSnapshot: pane {} -> {}B (scrollback {}B, {} segments)",
         pane_id,
-        snapshot.len(),
-        scrollback_data.len()
+        encoded_snapshot.len(),
+        scrollback_data.len(),
+        snapshot_segments.len()
     );
 
     // Send as a snapshot-tagged chunk so the drain encodes it as
@@ -538,7 +543,7 @@ pub(super) async fn handle_request_pane_snapshot(
     // FR5). If the client is gone the channel is closed — that's not a
     // fatal error for this handler, just drop the reply.
     if let Err(e) = pane_output_tx
-        .send(PtyOutputChunk::snapshot(pane_id, snapshot))
+        .send(PtyOutputChunk::snapshot(pane_id, encoded_snapshot))
         .await
     {
         log::warn!(
@@ -1150,6 +1155,16 @@ mod tests {
     use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
     use std::sync::Mutex as StdMutex;
 
+    /// Decode a `Snapshot`-kind chunk's wire-encoded `data` (task0004
+    /// round-4 rework D1', `mux_ipc::protocol::decode_snapshot_payload`)
+    /// back into its plain content bytes, discarding the structural
+    /// segment header — used by tests that only care about the ANSI
+    /// content layout (clear prefix / scrollback / screen ordering), not
+    /// the segments themselves.
+    fn decode_snapshot_chunk_content(data: &[u8]) -> Vec<u8> {
+        mux_ipc::protocol::decode_snapshot_payload(data).1.to_vec()
+    }
+
     fn add_pane(
         mgr: &mut SessionManager,
         session_id: u32,
@@ -1203,11 +1218,12 @@ mod tests {
             .write(b"HISTORY-LINE-ONE\r\nHISTORY-LINE-TWO\r\n");
 
         // Mirror the handler's scoped-copy step, then assemble.
-        let scrollback_data: Vec<u8> = {
+        let (scrollback_data, scrollback_segments): (Vec<u8>, Vec<(usize, u16, u16)>) = {
             let guard = scrollback.lock().unwrap();
-            guard.read_all()
+            guard.read_segments()
         };
-        let assembled = build_shadow_parser_snapshot(&shadow_parser, &scrollback_data);
+        let (assembled, _segments) =
+            build_shadow_parser_snapshot(&shadow_parser, &scrollback_data, &scrollback_segments);
 
         // Established layout: ESC[3J ESC[H ESC[2J + scrollback + shadow screen.
         assert!(
@@ -1232,19 +1248,20 @@ mod tests {
         );
         // The owned-copy path produces the exact same bytes as feeding the
         // scrollback slice straight through (no behavioral divergence).
-        let direct =
-            build_shadow_parser_snapshot(&shadow_parser, &scrollback.lock().unwrap().read_all());
+        let (sb_direct, seg_direct) = scrollback.lock().unwrap().read_segments();
+        let (direct, _) = build_shadow_parser_snapshot(&shadow_parser, &sb_direct, &seg_direct);
         assert_eq!(assembled, direct, "scoped copy must be byte-identical");
 
         // Empty-scrollback case: still a valid clear + shadow snapshot.
         let empty_sb: SharedScrollback =
             Arc::new(StdMutex::new(ScrollbackRingBuffer::new(64 * 1024)));
-        let empty_data: Vec<u8> = {
+        let (empty_data, empty_segments): (Vec<u8>, Vec<(usize, u16, u16)>) = {
             let guard = empty_sb.lock().unwrap();
-            guard.read_all()
+            guard.read_segments()
         };
         assert!(empty_data.is_empty(), "fresh buffer reads back empty");
-        let empty_assembled = build_shadow_parser_snapshot(&shadow_parser, &empty_data);
+        let (empty_assembled, _) =
+            build_shadow_parser_snapshot(&shadow_parser, &empty_data, &empty_segments);
         assert!(empty_assembled.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
         assert!(
             empty_assembled
@@ -1336,11 +1353,13 @@ mod tests {
         // Exactly one snapshot chunk must have landed on the channel.
         let chunk = rx.try_recv().expect("snapshot chunk expected");
         assert_eq!(chunk.pane_id, 1);
-        assert!(chunk.data.starts_with(b"\x1b[H\x1b[2J"));
+        assert!(decode_snapshot_chunk_content(&chunk.data).starts_with(b"\x1b[H\x1b[2J"));
         // Captured passthrough must NOT be replayed (would re-render the image).
         let needle = b"\x1b_Gi=9;XX\x1b\\";
         assert!(
-            !chunk.data.windows(needle.len()).any(|w| w == needle),
+            !decode_snapshot_chunk_content(&chunk.data)
+                .windows(needle.len())
+                .any(|w| w == needle),
             "snapshot must NOT include the captured passthrough sequence"
         );
         assert!(
@@ -1397,7 +1416,7 @@ mod tests {
         ));
         let chunk = rx.try_recv().expect("snapshot chunk must be queued");
         assert_eq!(chunk.pane_id, 1);
-        assert!(chunk.data.starts_with(b"\x1b[H\x1b[2J"));
+        assert!(decode_snapshot_chunk_content(&chunk.data).starts_with(b"\x1b[H\x1b[2J"));
     }
 
     /// F2 regression: with two panes, each gets exactly one snapshot
@@ -1433,7 +1452,7 @@ mod tests {
         for _ in 0..2 {
             let chunk = rx.try_recv().expect("snapshot chunk expected");
             assert!(seen.insert(chunk.pane_id), "duplicate snapshot for pane");
-            assert!(chunk.data.starts_with(b"\x1b[H\x1b[2J"));
+            assert!(decode_snapshot_chunk_content(&chunk.data).starts_with(b"\x1b[H\x1b[2J"));
         }
         assert!(rx.try_recv().is_err(), "exactly two snapshots expected");
         assert!(matches!(
@@ -1547,14 +1566,15 @@ mod tests {
             "snapshot reply must carry kind = Snapshot (FR1, FR3)"
         );
         // Byte-identity guardrail: clear+home prefix, then scrollback,
-        // then shadow screen.
+        // then shadow screen. `chunk.data` is the D1' wire-encoded payload
+        // (structural segment header + content bytes) — decode it first.
+        let content = decode_snapshot_chunk_content(&chunk.data);
         assert!(
-            chunk.data.starts_with(b"\x1b[3J\x1b[H\x1b[2J"),
+            content.starts_with(b"\x1b[3J\x1b[H\x1b[2J"),
             "snapshot must start with the clear+home prefix"
         );
         let find = |needle: &[u8]| {
-            chunk
-                .data
+            content
                 .windows(needle.len())
                 .position(|w| w == needle)
                 .unwrap_or_else(|| panic!("needle {:?} not found in snapshot", needle))
@@ -1627,7 +1647,7 @@ mod tests {
 
         assert_eq!(snap.pane_id, 1);
         assert_eq!(snap.kind, crate::mux::session::pane::ChunkKind::Snapshot);
-        assert!(snap.data.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
+        assert!(decode_snapshot_chunk_content(&snap.data).starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
 
         assert_eq!(post.data, b"POST");
         assert_eq!(post.kind, crate::mux::session::pane::ChunkKind::PtyOutput);
