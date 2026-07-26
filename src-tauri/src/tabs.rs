@@ -21,7 +21,9 @@ use crate::render::theme::Theme;
 use crate::settings::Settings;
 use mux_ipc::protocol::{
     MessageType, MuxMessage, RenameWindowMsg, ResizeMsg, StatusUpdateMsg, WelcomeMsg,
+    decode_snapshot_payload,
 };
+use term_core::terminal_core::ReplaySegment;
 
 use crate::mux::window_group::{MuxWindow, MuxWindowGroup};
 
@@ -85,6 +87,11 @@ pub(crate) struct PendingSwitch {
     /// re-dispatch the same bytes at the new grid without another daemon
     /// round-trip.
     pub(crate) payload: Vec<u8>,
+    /// Structural dimension segments decoded from the wire payload
+    /// (task0004 round-4 rework D1', `mux_ipc::protocol::decode_snapshot_payload`),
+    /// retained alongside `payload` so a supersession-by-resize re-dispatch
+    /// carries the same segment authority forward.
+    pub(crate) segments: Vec<ReplaySegment>,
     /// Cooperative cancellation flag shared with the worker thread. Set when
     /// this switch is superseded (a newer switch, a grid resize, or the
     /// live-queue cap fallback) so the worker abandons its parse at the next
@@ -707,11 +714,19 @@ impl Tab {
     ///
     /// Returns the mode actions accumulated during the replay so a caller
     /// (e.g. Snapshot's debug log) can use them.
-    fn reset_frame_for_replay(&mut self, payload: &[u8]) -> Vec<u8> {
+    ///
+    /// `segments` (task0004 round-4 rework D1'): structural dimension
+    /// segments decoded from the wire payload
+    /// (`mux_ipc::protocol::decode_snapshot_payload`) — the sole authority
+    /// for which dimensions applied to which bytes of `payload`. An empty
+    /// slice (a `PaneCreated` blank-reset call, or an older daemon's
+    /// snapshot with no segment field) degrades to single-dimension replay
+    /// (AC-11).
+    fn reset_frame_for_replay(&mut self, payload: &[u8], segments: &[ReplaySegment]) -> Vec<u8> {
         self.reset_frame_prompts_folds();
         let (actions, evicted_total, pending_marks, pending_fold_marks) = {
             let mut c = self.core.lock();
-            let actions = c.reset_and_replay(payload);
+            let actions = c.reset_and_replay_segments(payload, segments);
             // Discard any device responses (DA1 / DSR / XTWINOPS / …) that
             // historic queries baked into the snapshot bytes generated during
             // replay. The originating program is long gone; leaving the bytes
@@ -752,7 +767,12 @@ impl Tab {
     /// Replaces (supersedes) any prior in-flight switch on this tab; the
     /// prior worker's result is dropped when its `done` sender is dropped
     /// with the old `PendingSwitch`.
-    fn dispatch_offthread_replay(&mut self, target_pane: u32, payload: Vec<u8>) {
+    fn dispatch_offthread_replay(
+        &mut self,
+        target_pane: u32,
+        payload: Vec<u8>,
+        segments: Vec<ReplaySegment>,
+    ) {
         // Supersede any in-flight worker: signal it to bail at the next chunk
         // boundary so workers do not pile up under a rapid switch / resize
         // storm. The old `PendingSwitch` (and its receiver) is dropped when
@@ -781,6 +801,7 @@ impl Tab {
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
         let worker_payload = payload.clone();
+        let worker_segments = segments.clone();
         // One-shot worker: pure build off the UI thread. `build_from_snapshot`
         // returns `None` if cancelled mid-parse — then there is nothing to
         // send. A successful build's `send` failure (receiver dropped because
@@ -795,6 +816,7 @@ impl Tab {
                     rows,
                     scrollback_lines,
                     &worker_payload,
+                    &worker_segments,
                     &worker_cancel,
                 ) {
                     let _ = tx.send(replay);
@@ -817,6 +839,7 @@ impl Tab {
                     live_queue: Vec::new(),
                     queued_bytes: 0,
                     payload,
+                    segments,
                     cancel,
                 });
             }
@@ -832,7 +855,7 @@ impl Tab {
                      synchronous reparse fallback for tab {:?}",
                     self.title
                 );
-                self.reset_frame_for_replay(&payload);
+                self.reset_frame_for_replay(&payload, &segments);
                 self.pending_switch = None;
             }
         }
@@ -865,7 +888,12 @@ impl Tab {
                 // Take ownership of the queued live output + payload before
                 // dropping the pending state.
                 let pending = self.pending_switch.take().expect("just matched Some");
-                self.apply_offthread_swap(replay, pending.live_queue, pending.payload);
+                self.apply_offthread_swap(
+                    replay,
+                    pending.live_queue,
+                    pending.payload,
+                    pending.segments,
+                );
                 SwapOutcome::Swapped
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -879,7 +907,7 @@ impl Tab {
                     self.title
                 );
                 let pending = self.pending_switch.take().expect("just matched Some");
-                self.reset_frame_for_replay(&pending.payload);
+                self.reset_frame_for_replay(&pending.payload, &pending.segments);
                 self.apply_queued_live_output(pending.live_queue);
                 SwapOutcome::Swapped
             }
@@ -904,10 +932,18 @@ impl Tab {
         replay: term_core::terminal_core::SnapshotReplay,
         live_queue: Vec<Vec<u8>>,
         payload: Vec<u8>,
+        segments: Vec<ReplaySegment>,
     ) {
         // Move out the pre-captured B-mark texts BEFORE partial-moving
         // `replay.core` (field ordering matters for partial moves).
         let bypass_b_mark_texts = replay.bypass_b_mark_texts;
+        // D3' (task0004 round-4 rework, review round-3 finding
+        // `b235e4dbc61cc4ba`): whether THIS 1st-pass replay already
+        // populated `scrollback_slim` — either because the bypass was off
+        // to begin with, or because `build_from_snapshot_inner`'s D6 guard
+        // downgraded out of the bypass for this payload (a row-count-growing
+        // segment transition). Captured before the partial move below.
+        let scrollback_populated = replay.scrollback_populated;
         // 1. Swap the built core in (renderer's Arc stays valid), transplanting
         //    the pre-swap wiring onto it FIRST so the live core is never
         //    observable (even momentarily, under this same lock) without its
@@ -954,13 +990,28 @@ impl Tab {
         //    so live B marks go through the normal scrollback lookup path.
         self.apply_queued_live_output(live_queue);
         // 6. Spawn the 2nd-pass scrollback restore worker (bypass-off
-        //    rebuild). This runs the same parse off-thread without the
-        //    SlimCell compression bypass so `scrollback_slim` ends up
-        //    populated; `apply_scrollback_restore` later merges that into
-        //    the live core. We supersede any prior in-flight restore on
-        //    this tab (NFR4 — one in-flight 2nd-pass per tab); the prior
-        //    worker observes cancel at the next chunk boundary.
-        self.spawn_scrollback_restore(payload);
+        //    rebuild) — but ONLY if the 1st-pass replay did NOT already
+        //    populate scrollback (D3', review round-3 finding
+        //    `b235e4dbc61cc4ba`). Spawning it unconditionally after a replay
+        //    that already populated `scrollback_slim` (the D6 bypass
+        //    downgrade, or a bypass-off build to begin with) would prepend
+        //    the SAME history a second time via `apply_scrollback_restore`'s
+        //    merge, duplicating it up to the ring's full capacity. This runs
+        //    the same parse off-thread without the SlimCell compression
+        //    bypass so `scrollback_slim` ends up populated;
+        //    `apply_scrollback_restore` later merges that into the live
+        //    core. We supersede any prior in-flight restore on this tab
+        //    (NFR4 — one in-flight 2nd-pass per tab); the prior worker
+        //    observes cancel at the next chunk boundary.
+        if scrollback_populated {
+            log::debug!(
+                "1st-pass replay already populated scrollback for tab {:?}; \
+                 skipping the 2nd-pass restore worker (D3')",
+                self.title
+            );
+        } else {
+            self.spawn_scrollback_restore(payload, segments);
+        }
     }
 
     /// Best-effort cancellation of any in-flight 2nd-pass scrollback restore
@@ -1068,7 +1119,7 @@ impl Tab {
     /// `PendingScrollbackRestore`. On spawn failure: `log::warn` + no state
     /// installed (FR7 — the 1st-pass swap is already correct, the user just
     /// gets no history).
-    fn spawn_scrollback_restore(&mut self, payload: Vec<u8>) {
+    fn spawn_scrollback_restore(&mut self, payload: Vec<u8>, segments: Vec<ReplaySegment>) {
         // Supersede any prior in-flight restore (NFR4) — the freshly-swapped
         // core is the new authoritative state, the prior restore's rebuilt
         // scrollback would be against a now-stale baseline.
@@ -1099,6 +1150,7 @@ impl Tab {
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
         let worker_payload = payload;
+        let worker_segments = segments;
         let payload_len = worker_payload.len();
         let spawn_result = std::thread::Builder::new()
             .name("mux-scrollback-restore".into())
@@ -1109,6 +1161,7 @@ impl Tab {
                         rows,
                         scrollback_lines,
                         &worker_payload,
+                        &worker_segments,
                         &worker_cancel,
                     )
                 {
@@ -1259,10 +1312,26 @@ impl Tab {
                         return false;
                     }
                 }
+                // task0004 round-4 rework (D1'): decode the wire payload
+                // into its structural dimension segments + plain content
+                // bytes (`mux_ipc::protocol::decode_snapshot_payload`). An
+                // older daemon's payload (no magic prefix) decodes with an
+                // empty segment list, degrading to single-dimension replay
+                // (AC-11) — see `reset_and_replay_segments`'s doc comment.
+                let (dim_segments, content_bytes) = decode_snapshot_payload(&msg.payload);
+                let segments: Vec<ReplaySegment> = dim_segments
+                    .iter()
+                    .map(|d| ReplaySegment {
+                        offset: d.offset,
+                        cols: d.cols,
+                        rows: d.rows,
+                    })
+                    .collect();
+                let content_bytes = content_bytes.to_vec();
                 // FR4: branch on payload size. Small snapshots replay
                 // synchronously (no perceptible block, no swap gap); large
                 // ones go off-thread so the switch stays responsive.
-                if msg.payload.len() < OFFTHREAD_REPLAY_THRESHOLD_BYTES {
+                if content_bytes.len() < OFFTHREAD_REPLAY_THRESHOLD_BYTES {
                     // Synchronous path (legacy). `reset_frame_for_replay`
                     // owns the recipe (prompt clear, fold rebuild, drain +
                     // backfill marks so `pending_frame_reset` latches) so the
@@ -1280,11 +1349,12 @@ impl Tab {
                             self.title
                         );
                     }
-                    let _actions = self.reset_frame_for_replay(&msg.payload);
+                    let _actions = self.reset_frame_for_replay(&content_bytes, &segments);
                     log::debug!(
-                        "mux apc: applied {:?} ({} bytes, sync) for tab {:?}",
+                        "mux apc: applied {:?} ({} bytes, {} segments, sync) for tab {:?}",
                         msg.msg_type,
-                        msg.payload.len(),
+                        content_bytes.len(),
+                        segments.len(),
                         self.title
                     );
                 } else {
@@ -1306,14 +1376,16 @@ impl Tab {
                         .as_ref()
                         .and_then(|g| g.active_pane_id())
                         .unwrap_or(msg.pane_id);
-                    self.dispatch_offthread_replay(target_pane, msg.payload);
+                    let segments_len = segments.len();
+                    self.dispatch_offthread_replay(target_pane, content_bytes, segments);
                     log::debug!(
-                        "mux apc: dispatched {:?} ({} bytes, off-thread) for tab {:?} pane {}",
+                        "mux apc: dispatched {:?} ({} bytes, {} segments, off-thread) for tab {:?} pane {}",
                         msg.msg_type,
                         self.pending_switch
                             .as_ref()
                             .map(|p| p.payload.len())
                             .unwrap_or(0),
+                        segments_len,
                         self.title,
                         target_pane
                     );
@@ -1413,7 +1485,7 @@ impl Tab {
                                 OFFTHREAD_LIVE_QUEUE_CAP_BYTES,
                                 self.title
                             );
-                            self.reset_frame_for_replay(&pending.payload);
+                            self.reset_frame_for_replay(&pending.payload, &pending.segments);
                             self.apply_queued_live_output(pending.live_queue);
                             // The swap-equivalent happened synchronously now;
                             // repaint the newly-visible pane.
@@ -1719,7 +1791,7 @@ impl Tab {
                 // `backfill_marks` so `pending_frame_reset` latches and
                 // any active selection / press anchor on this tab is
                 // dropped by `App::pump_all`.
-                let _ = self.reset_frame_for_replay(b"");
+                let _ = self.reset_frame_for_replay(b"", &[]);
                 // The daemon spawns every new PTY at a hardcoded 80x24
                 // (`handle_create_window`); without this, the pane stays at
                 // 80 columns even though the GUI grid is wider, so output
@@ -1936,7 +2008,7 @@ impl Tab {
                 // pending_frame_reset so App::pump_all drops any selection and
                 // forces a full redraw). Without this the detached session's
                 // screen lingers until the shell happens to overwrite it.
-                let _ = self.reset_frame_for_replay(b"");
+                let _ = self.reset_frame_for_replay(b"", &[]);
                 true
             }
             other => {
@@ -3151,12 +3223,13 @@ impl Tab {
             if pending.cols != cols || pending.rows != rows {
                 let target = pending.target_pane;
                 let payload = pending.payload.clone();
+                let segments = pending.segments.clone();
                 let queued = pending.live_queue.clone();
                 let queued_bytes = pending.queued_bytes;
                 // `dispatch_offthread_replay` reads the *current* core size
                 // (just resized above), cancels the old worker, and starts a
                 // fresh one, overwriting `self.pending_switch`.
-                self.dispatch_offthread_replay(target, payload);
+                self.dispatch_offthread_replay(target, payload, segments);
                 if let Some(p) = self.pending_switch.as_mut() {
                     p.live_queue = queued;
                     p.queued_bytes = queued_bytes;
@@ -5317,7 +5390,7 @@ mod tests {
         snapshot.extend_from_slice(b"row two\r\n");
         snapshot.extend_from_slice(b"\x1b[6n"); // CPR query
 
-        let _ = tab.reset_frame_for_replay(&snapshot);
+        let _ = tab.reset_frame_for_replay(&snapshot, &[]);
 
         let core = tab.core.lock();
         assert_eq!(
@@ -5347,7 +5420,7 @@ mod tests {
         // ordinary output — exactly the legacy behavior with no off-thread gap.
         let mut reference = test_tab();
         reference.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
-        reference.reset_frame_for_replay(&snapshot);
+        reference.reset_frame_for_replay(&snapshot, &[]);
         reference.apply_queued_live_output(vec![live1.clone(), live2.clone()]);
 
         // Off-thread path: dispatch, queue the live chunks, then swap.
@@ -5504,7 +5577,7 @@ mod tests {
         // Synchronous reference (sub-threshold, legacy path).
         let mut reference = test_tab();
         reference.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
-        reference.reset_frame_for_replay(&snapshot);
+        reference.reset_frame_for_replay(&snapshot, &[]);
 
         // Off-thread path (padded past the threshold; NUL padding does not
         // change the grid/marks).
@@ -6185,7 +6258,12 @@ mod tests {
         let never = std::sync::atomic::AtomicBool::new(false);
         let reference =
             term_core::terminal_core::TerminalCore::build_scrollback_only_from_snapshot(
-                80, 24, 100, &payload, &never,
+                80,
+                24,
+                100,
+                &payload,
+                &[],
+                &never,
             )
             .expect("reference build not cancelled");
         let reference_scrollback_count = reference.core.get_scrollback_length();
@@ -6308,7 +6386,12 @@ mod tests {
         let never = std::sync::atomic::AtomicBool::new(false);
         let reference =
             term_core::terminal_core::TerminalCore::build_scrollback_only_from_snapshot(
-                80, 24, 100, &payload, &never,
+                80,
+                24,
+                100,
+                &payload,
+                &[],
+                &never,
             )
             .expect("reference");
         let reference_count = reference.core.get_scrollback_length() as usize;

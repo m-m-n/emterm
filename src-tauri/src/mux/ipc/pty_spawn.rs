@@ -891,6 +891,31 @@ fn forward_agent_status_reports(
 mod tests {
     use super::*;
     use crate::pty::visibility::HIDDEN_PASSTHROUGH_CAPACITY_MUX;
+    use term_core::terminal_core::ReplaySegment;
+
+    /// Convert term_core's `ReplaySegment` (used by test-side recording
+    /// construction) into the mux-layer's plain `(usize, u16, u16)` tuples
+    /// `build_snapshot_bytes` accepts.
+    fn to_tuples(segments: &[ReplaySegment]) -> Vec<(usize, u16, u16)> {
+        segments
+            .iter()
+            .map(|s| (s.offset as usize, s.cols, s.rows))
+            .collect()
+    }
+
+    /// Convert the mux-layer's plain `(usize, u16, u16)` tuples (as
+    /// returned by `build_snapshot_bytes`) into `ReplaySegment`s for
+    /// `reset_and_replay_segments`.
+    fn to_replay_segments(tuples: &[(usize, u16, u16)]) -> Vec<ReplaySegment> {
+        tuples
+            .iter()
+            .map(|&(offset, cols, rows)| ReplaySegment {
+                offset: offset as u32,
+                cols,
+                rows,
+            })
+            .collect()
+    }
 
     // ── pane_env_vars (EMTERM_PANE_ID injection, AC-6) ─────────────────────
 
@@ -1327,29 +1352,36 @@ mod tests {
         forward_agent_status_reports(1, vec!["orphaned".to_string()], &sender);
     }
 
-    // ── task0001: resize-interleaved scrollback replay coordinate drift ──
-    //
-    // Investigation verdict (IMPLEMENTATION.md D1, `tmp/apt-progress-bar-
-    // regression-2026-07-09.md` PROBE D): the reported intermittent
-    // post-window-switch line-content mixing shares the proven root cause —
-    // bytes recorded for two different terminal row counts coexist serially
-    // in a pane's scrollback, and replaying them into a core fixed at one
-    // row count misinterprets DECSTBM / CUP coordinates recorded for the
-    // OTHER row count. The fix (candidate A, resize markers) records an
-    // in-band marker at each daemon-side pane resize
-    // (`mux::scrollback_buffer::resize_marker_bytes`, written by
-    // `MuxPane::resize`) and interprets it during replay
-    // (`term_core::terminal_core::TerminalCore::reset_and_replay`), resizing
-    // the replay core before the bytes recorded under the new size are fed.
+    // ── task0004 round-4 rework (D1'): dimensions travel as structural
+    // segments (`term_core::terminal_core::ReplaySegment`) alongside the
+    // payload — never as an in-band `OSC 777;emterm;resize;…` marker byte
+    // sequence. Rounds 1-3's marker-scanning fix (IMPLEMENTATION.md D1,
+    // `tmp/apt-progress-bar-regression-2026-07-09.md` PROBE D) is superseded:
+    // the coordinate-drift regression tests below now construct explicit
+    // segment lists instead of embedding marker bytes, and the forgery tests
+    // (AC-1) prove marker-SHAPED byte sequences carry no authority at all —
+    // whatever survives the write-path strip (now identical for every kind,
+    // see `strip_pty_output_for_scrollback_write`'s doc comment) becomes
+    // ordinary content with no bearing on replay dimensions, because nothing
+    // scans for one any more.
 
     /// apt-style scroll-region + bottom-bar recording (mirrors PROBE D's
-    /// synthesis, `install-progress.cc`'s SIGWINCH re-setup behavior), now
-    /// with resize markers a fixed `MuxPane` would have written: an INITIAL
-    /// marker for rows_a (`MuxPane::new` records the pane's creation
-    /// dimensions as the first scrollback bytes) and a mid-run marker for
-    /// rows_b at the SIGWINCH point (`MuxPane::resize`).
-    fn synth_apt_bytes_with_midrun_resize(cols: u16, rows_a: u16, rows_b: u16) -> Vec<u8> {
-        let mut b = crate::mux::scrollback_buffer::resize_marker_bytes(cols, rows_a);
+    /// synthesis, `install-progress.cc`'s SIGWINCH re-setup behavior). No
+    /// marker bytes are embedded; the caller supplies the segment
+    /// boundaries explicitly, mirroring what `ScrollbackRingBuffer::
+    /// read_segments` would report for a real `MuxPane::new` (initial dims)
+    /// + `MuxPane::resize` (mid-run SIGWINCH) sequence.
+    fn synth_apt_bytes_with_midrun_resize(
+        cols: u16,
+        rows_a: u16,
+        rows_b: u16,
+    ) -> (Vec<u8>, Vec<ReplaySegment>) {
+        let mut b = Vec::new();
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: rows_a,
+        }];
         // Fill history so the cursor starts at the bottom, matching a real
         // terminal's state when a long-running command begins.
         for i in 0..rows_a.max(rows_b) + 20 {
@@ -1374,12 +1406,15 @@ mod tests {
                 .as_bytes(),
             );
         }
-        // SIGWINCH: the daemon records a resize marker (this is what
-        // `MuxPane::resize` writes into the pane's scrollback), then apt
-        // re-sets up the scroll region + bar for rows_b.
-        b.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
-            cols, rows_b,
-        ));
+        // SIGWINCH: the daemon records a segment for rows_b at THIS offset
+        // (this is what `ScrollbackRingBuffer::write_resize_marker` records
+        // via `MuxPane::resize`), then apt re-sets up the scroll region +
+        // bar for rows_b.
+        segments.push(ReplaySegment {
+            offset: b.len() as u32,
+            cols,
+            rows: rows_b,
+        });
         b.extend_from_slice(b"\n\x1b7");
         b.extend_from_slice(format!("\x1b[0;{}r", rows_b - 1).as_bytes());
         b.extend_from_slice(b"\x1b8\x1b[1A");
@@ -1402,16 +1437,16 @@ mod tests {
         b.extend_from_slice(format!("\x1b[0;{rows_b}r").as_bytes());
         b.extend_from_slice(b"\x1b8\x1b[J");
         b.extend_from_slice(b"$ done\r\n");
-        b
+        (b, segments)
     }
 
-    /// AC-1: the apt-style recording, replayed through the full snapshot
+    /// AC-2: the apt-style recording, replayed through the full snapshot
     /// pipeline into a fixed-size core, produces ZERO rows mixing bar
-    /// fragments with log-line content — fails on pre-fix code (PROBE D
-    /// observed 1-3 tainted rows per case for the same synthesis, absent
-    /// the marker).
+    /// fragments with log-line content — fails when the segment authority
+    /// is dropped (PROBE D observed 1-3 tainted rows per case for the same
+    /// synthesis without dimension attribution).
     #[test]
-    fn resize_marker_fix_apt_style_recording_replays_without_cross_line_mixing() {
+    fn apt_style_recording_replays_without_cross_line_mixing() {
         use term_core::terminal_core::TerminalCore;
         let cols: u16 = 120;
         for (rec_a, rec_b, replay_rows) in [
@@ -1420,10 +1455,15 @@ mod tests {
             (48, 47, 47),
             (48, 47, 48),
         ] {
-            let recording = synth_apt_bytes_with_midrun_resize(cols, rec_a, rec_b);
-            let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, b"", false);
+            let (recording, segments) = synth_apt_bytes_with_midrun_resize(cols, rec_a, rec_b);
+            let (snap, snap_segments) = crate::mux::snapshot_bytes::build_snapshot_bytes(
+                &recording,
+                &to_tuples(&segments),
+                b"",
+                false,
+            );
             let mut core = TerminalCore::new(cols, replay_rows, 10_000);
-            core.reset_and_replay(&snap);
+            core.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
             let mut tainted = Vec::new();
             for r in 0..replay_rows {
                 let line = core.get_line_text(r);
@@ -1436,7 +1476,7 @@ mod tests {
             assert!(
                 tainted.is_empty(),
                 "rec {rec_a}->{rec_b} replay@{replay_rows}: expected zero cross-line-mixed rows \
-                 after the resize-marker fix, got {tainted:?}"
+                 with segment attribution, got {tainted:?}"
             );
         }
     }
@@ -1446,20 +1486,26 @@ mod tests {
     /// an app like Claude Code keeping its status/input line in place while
     /// chat content scrolls above — `project_status_bar_design`), re-painted
     /// in place via `ESC7 CUP <text> ESC8` on every tick while chat content
-    /// scrolls via plain `\r\n` above it. Row count changes mid-run, with
-    /// resize markers a fixed `MuxPane` would have written: an INITIAL
-    /// marker for rows_a (`MuxPane::new`) and a mid-run marker for rows_b at
-    /// the SIGWINCH point (`MuxPane::resize`).
+    /// scrolls via plain `\r\n` above it. Row count changes mid-run; the
+    /// caller supplies the segment boundaries explicitly (no marker bytes).
     ///
-    /// Distinguishes from AC-1's apt-style bar (bottom-row-only redraw, no
+    /// Distinguishes from AC-2's apt-style bar (bottom-row-only redraw, no
     /// scrolling *inside* the reserved region) via genuinely scrolling chat
     /// content interleaved with the fixed-row status — the mechanism PROBE D
     /// identified (a scroll-region boundary computed for the WRONG row
     /// count lets scrolled content invade a row that should have been
     /// exempt) reproducing for "an app with a pinned status line" shape, not
     /// only "an app with a growing progress bar" shape.
-    fn synth_tui_cursor_addressed_bytes_with_midrun_resize(rows_a: u16, rows_b: u16) -> Vec<u8> {
-        let mut b = crate::mux::scrollback_buffer::resize_marker_bytes(100, rows_a);
+    fn synth_tui_cursor_addressed_bytes_with_midrun_resize(
+        rows_a: u16,
+        rows_b: u16,
+    ) -> (Vec<u8>, Vec<ReplaySegment>) {
+        let mut b = Vec::new();
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols: 100,
+            rows: rows_a,
+        }];
         for i in 0..rows_a.max(rows_b) + 20 {
             b.extend_from_slice(format!("chat history line {i}\r\n").as_bytes());
         }
@@ -1473,11 +1519,13 @@ mod tests {
             b.extend_from_slice(format!("chat reply A line {tick}\r\n").as_bytes());
             b.extend_from_slice(format!("\x1b7\x1b[{rows_a};0fSTATUS-A[{tick}]\x1b8").as_bytes());
         }
-        // SIGWINCH: resize marker, then the same pattern re-established for
-        // rows_b.
-        b.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
-            100, rows_b,
-        ));
+        // SIGWINCH: a new segment at this offset, then the same pattern
+        // re-established for rows_b.
+        segments.push(ReplaySegment {
+            offset: b.len() as u32,
+            cols: 100,
+            rows: rows_b,
+        });
         b.extend_from_slice(b"\n\x1b7");
         b.extend_from_slice(format!("\x1b[0;{}r", rows_b - 1).as_bytes());
         b.extend_from_slice(b"\x1b8\x1b[1A");
@@ -1485,18 +1533,18 @@ mod tests {
             b.extend_from_slice(format!("chat reply B line {tick}\r\n").as_bytes());
             b.extend_from_slice(format!("\x1b7\x1b[{rows_b};0fSTATUS-B[{tick}]\x1b8").as_bytes());
         }
-        b
+        (b, segments)
     }
 
     /// AC-2: the TUI-style cursor-addressed recording, replayed after the
     /// fix, shows no row mixing content from phase A (pre-resize) and phase
     /// B (post-resize) — the reported symptom's shape (Claude Code's
     /// status/input area), covering a pinned-status-row app rather than
-    /// only apt's growing-bar pattern. Fails on pre-fix code for every
-    /// combination (each pairs a row-count change with a replay target that
-    /// differs from at least one recorded size).
+    /// only apt's growing-bar pattern. Fails when segment attribution is
+    /// dropped, for every combination (each pairs a row-count change with a
+    /// replay target that differs from at least one recorded size).
     #[test]
-    fn resize_marker_fix_tui_cursor_addressed_recording_replays_without_cross_line_mixing() {
+    fn tui_cursor_addressed_recording_replays_without_cross_line_mixing() {
         use term_core::terminal_core::TerminalCore;
         let cols: u16 = 100;
         for (rec_a, rec_b, replay_rows) in [
@@ -1505,17 +1553,23 @@ mod tests {
             (32, 30, 30),
             (32, 30, 32),
         ] {
-            let recording = synth_tui_cursor_addressed_bytes_with_midrun_resize(rec_a, rec_b);
-            let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, b"", false);
+            let (recording, segments) =
+                synth_tui_cursor_addressed_bytes_with_midrun_resize(rec_a, rec_b);
+            let (snap, snap_segments) = crate::mux::snapshot_bytes::build_snapshot_bytes(
+                &recording,
+                &to_tuples(&segments),
+                b"",
+                false,
+            );
             let mut core = TerminalCore::new(cols, replay_rows, 10_000);
-            core.reset_and_replay(&snap);
+            core.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
             let mut tainted = Vec::new();
             for r in 0..replay_rows {
                 let line = core.get_line_text(r);
                 // A row is tainted if it shows a STATUS redraw fragment
                 // glued to a scrolled chat-line fragment — the "bar
                 // fragment landed on a log-content row" shape (mirrors
-                // AC-1's `has_bar && has_log` detector; not phase-specific,
+                // AC-2's `has_bar && has_log` detector; not phase-specific,
                 // since the coordinate-drift bug glues ANY two logically
                 // distinct writes onto one physical row).
                 if line.contains("STATUS-") && line.contains(" line ") {
@@ -1530,12 +1584,11 @@ mod tests {
         }
     }
 
-    /// AC-3: a resize-free recording replays to the SAME grid as the
-    /// pre-marker-support path (a straight `reset()` + full-drain
-    /// `process_pty_data_fully`, no marker scanning) — the byte path for a
-    /// marker-free recording is unchanged by the fix.
+    /// AC-11: a segment-free recording replays to the SAME grid as a
+    /// straight `reset()` + full-drain `process_pty_data_fully` — the
+    /// documented older-daemon degradation (single-dimension replay).
     #[test]
-    fn resize_marker_fix_marker_free_recording_replays_unchanged() {
+    fn segment_free_recording_replays_unchanged() {
         use term_core::terminal_core::TerminalCore;
         let cols: u16 = 80;
         let rows: u16 = 24;
@@ -1550,194 +1603,118 @@ mod tests {
         reference.process_pty_data_fully(&recording);
 
         let mut under_test = TerminalCore::new(cols, rows, 1000);
-        under_test.reset_and_replay(&recording);
+        under_test.reset_and_replay_segments(&recording, &[]);
 
         for r in 0..rows {
             assert_eq!(
                 under_test.get_line_text(r),
                 reference.get_line_text(r),
-                "row {r} differs: marker-free replay must be byte-path unchanged"
+                "row {r} differs: segment-free replay must be byte-path unchanged"
             );
         }
         assert_eq!(under_test.cols(), reference.cols());
         assert_eq!(under_test.rows(), reference.rows());
     }
 
-    /// AC-4: a recording containing a resize marker, replayed through the
-    /// full pipeline (snapshot assembly -> replay), never renders the
-    /// marker's body as visible cell content, and the surviving plain text
-    /// on either side of it is preserved.
-    ///
-    /// Feeds `recording` straight to `build_snapshot_bytes` — NOT through
-    /// `ScrollbackWriteFilter` — mirroring production: a real daemon marker
-    /// is written directly into the ring by `MuxPane::new` / `MuxPane::resize`
-    /// (`scrollback_buffer::resize_marker_bytes`), bypassing the PTY
-    /// write-path filter entirely. Routing it through
-    /// `ScrollbackWriteFilter` here would exercise the WRONG path (that
-    /// filter now strips `resize`, review round-1 rework finding
-    /// `0c18ff55032328ab`) — see
-    /// `scrollback_filter_strips_forged_resize_marker_from_pty_output`
-    /// below for the write-path coverage.
-    #[test]
-    fn resize_marker_never_rendered_as_visible_cell_through_full_pipeline() {
-        use term_core::terminal_core::TerminalCore;
-        let cols: u16 = 80;
-        let rows: u16 = 24;
-        let mut recording = Vec::new();
-        recording.extend_from_slice(b"before-marker\r\n");
-        recording.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(100, 30));
-        recording.extend_from_slice(b"after-marker\r\n");
+    // ── AC-1: marker-SHAPED byte sequences carry no segment authority,
+    // however they are shaped, split, nested, or reconstructed ───────────
 
-        let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, b"", false);
-
-        let mut core = TerminalCore::new(cols, rows, 1000);
-        core.reset_and_replay(&snap);
-
-        let mut all_text = String::new();
-        for r in 0..rows {
-            all_text.push_str(&core.get_line_text(r));
-            all_text.push('\n');
-        }
-        assert!(
-            !all_text.contains("emterm") && !all_text.contains("resize"),
-            "marker body must never render as visible cell content: {all_text:?}"
-        );
-        assert!(all_text.contains("before-marker"));
-        assert!(all_text.contains("after-marker"));
-        // Confirms the marker was actually consumed as a resize instruction
-        // (not merely swallowed as an inert unrecognized OSC): replay ends
-        // back at the caller's target size regardless of the marker's
-        // intermediate dimensions.
-        assert_eq!(
-            core.cols(),
-            cols,
-            "core must end back at the caller's target size"
-        );
-        assert_eq!(core.rows(), rows);
+    /// Byte-for-byte the OLD (pre-round-4) marker wire format. Kept ONLY as
+    /// adversarial test fixture data — no production decoder recognizes
+    /// this shape any more.
+    fn legacy_marker_shaped_bytes(cols: u16, rows: u16) -> Vec<u8> {
+        format!("\x1b]777;emterm;resize;{cols};{rows}\x07").into_bytes()
     }
 
-    // ── review round-1 rework, finding 0c18ff55032328ab (critical) —
-    // task0002 AC-1: a PTY-originated (forged) resize marker never reaches
-    // the scrollback ring, so it can never reach replay either ───────────
+    /// Replay `bytes` with NO segments and return the reflow delta —
+    /// the shared witness every AC-1 scenario below checks: per the task's
+    /// test notes, `core.cols()`/`rows()` after a replay always equal the
+    /// caller's target regardless of what happened mid-drain, so only the
+    /// reflow counter (or a grid fingerprint) actually distinguishes
+    /// "the adversarial bytes were honored" from "they were inert".
+    fn reflow_delta_replaying_with_no_segments(bytes: &[u8]) -> u64 {
+        use term_core::terminal_core::TerminalCore;
+        let mut core = TerminalCore::new(80, 24, 1000);
+        let before = core.reflow_call_count();
+        core.reset_and_replay_segments(bytes, &[]);
+        core.reflow_call_count() - before
+    }
 
-    /// A resize-marker-shaped byte sequence arriving as ordinary child PTY
-    /// output — fed through the SAME `ScrollbackWriteFilter` the reader
-    /// thread uses, not written directly into the ring the way
-    /// `MuxPane::resize` does — must be stripped before it ever lands in
-    /// the scrollback ring.
+    /// AC-1 scenario 1 (bare sequence): a marker-shaped OSC 777 body
+    /// arriving as ordinary child PTY output in ONE read now reaches the
+    /// scrollback ring UNSTRIPPED (task0004 round-4 rework: there is no
+    /// more `resize`-kind special-casing at the write path — see
+    /// `strip_pty_output_for_scrollback_write`'s doc comment) — and that is
+    /// fine: the ring's `write_resize_marker` was never called for it, so
+    /// `read_segments()` reports zero segments regardless of what the byte
+    /// content looks like, and replay never resizes on it.
     #[test]
-    fn scrollback_filter_strips_forged_resize_marker_from_pty_output() {
+    fn ac1_bare_marker_shaped_bytes_reach_ring_but_carry_no_segment_authority() {
         let scrollback = new_scrollback(4096);
-        // Maximal dimensions: if this ever reached replay unfiltered, it
-        // would be exactly the shape that could make an unbounded replay
-        // resize allocate a huge grid.
-        let marker = crate::mux::scrollback_buffer::resize_marker_bytes(65535, 65535);
+        let marker = legacy_marker_shaped_bytes(65535, 65535);
         let mut chunk = b"before".to_vec();
         chunk.extend_from_slice(&marker);
         chunk.extend_from_slice(b"after");
         let filter = feed_all(&scrollback, &[&chunk]);
         assert_eq!(filter.pending_len(), 0);
+        let (bytes, segments) = scrollback.lock().unwrap().read_segments();
+        assert!(
+            segments.is_empty(),
+            "a ring that never called write_resize_marker must report zero \
+             segments, regardless of marker-shaped byte content"
+        );
+        assert!(
+            bytes.windows(marker.len()).any(|w| w == marker.as_slice()),
+            "marker-shaped bytes now survive as ordinary (authority-less) \
+             content — there is no more resize-kind stripping"
+        );
         assert_eq!(
-            scrollback.lock().unwrap().read_all(),
-            b"beforeafter",
-            "a PTY-originated resize marker must never reach the scrollback ring"
+            reflow_delta_replaying_with_no_segments(&bytes),
+            0,
+            "surviving marker-shaped bytes must never trigger a resize"
         );
     }
 
-    /// AC-1 end-to-end: a forged marker fed as ordinary child output through
-    /// the full write-filter -> snapshot-assembly -> replay pipeline never
-    /// changes the replay core's dimensions — proving the write-path strip
-    /// is what establishes the "replay only trusts daemon-written markers"
-    /// invariant, not merely the decoder's defensive dimension clamp.
+    /// AC-1 scenario 2 (split across two filter batches): the SAME
+    /// marker-shaped sequence, but delivered across TWO separate
+    /// `ScrollbackWriteFilter::feed` calls (mirroring two PTY `read()`
+    /// calls) — still zero segment authority, zero reflow.
     ///
-    /// Asserts on [`term_core::terminal_core::TerminalCore::reflow_call_count`],
-    /// NOT on `core.cols()` / `core.rows()` after the replay completes:
-    /// `replay_with_resize_markers` unconditionally restores the core to its
-    /// construction/target dimensions at the END of every replay regardless
-    /// of what happened mid-stream, so a genuinely honored forged marker and
-    /// a correctly-ignored one both leave the core at the SAME final size —
-    /// checking the final size does not actually distinguish them (verified
-    /// empirically while developing this test: the pre-task0003 version of
-    /// this exact test, which asserted on final `cols()`/`rows()`, still
-    /// passed even with the write-path's `resize`-kind strip completely
-    /// disabled). `reflow_call_count` has no such blind spot: a replay that
-    /// never recognizes any marker calls [`term_core::terminal_core::TerminalCore::resize`]
-    /// zero times (nothing to apply, nothing to restore FROM), while
-    /// honoring even one marker calls it at least once.
+    /// Confirmed to fail pre-fix: against the removed round-1/round-2
+    /// write-path strip (`strip_pty_output_for_scrollback_write`'s old
+    /// `resize`-kind special-casing), a marker split exactly at this point
+    /// was the round-3 finding `4a22bd439fcdaf56` scenario — the flush
+    /// boundary let a complete marker re-form on the ring side across the
+    /// two batches, undetected by either single-batch strip pass.
     #[test]
-    fn forged_resize_marker_from_pty_output_never_resizes_replay_core() {
-        use term_core::terminal_core::TerminalCore;
-        let cols: u16 = 80;
-        let rows: u16 = 24;
-        let mut chunk = b"before".to_vec();
-        chunk.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
-            999, 999,
-        ));
-        chunk.extend_from_slice(b"after");
-
-        let mut filter = ScrollbackWriteFilter::new();
-        let filtered = filter.feed(&chunk);
-        let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&filtered, b"", false);
-
-        let mut core = TerminalCore::new(cols, rows, 1000);
-        let before = core.reflow_call_count();
-        core.reset_and_replay(&snap);
-
-        assert_eq!(
-            core.reflow_call_count(),
-            before,
-            "a forged marker fed as PTY output must never trigger a resize \
-             (reflow_call_count must not move)"
-        );
+    fn ac1_marker_shaped_bytes_split_across_two_filter_batches_carry_no_segment_authority() {
+        let scrollback = new_scrollback(4096);
+        let marker = legacy_marker_shaped_bytes(4096, 4096);
+        let mut full = b"before".to_vec();
+        full.extend_from_slice(&marker);
+        full.extend_from_slice(b"after");
+        let split_at = b"before".len() + marker.len() / 2;
+        let (first, second) = full.split_at(split_at);
+        let filter = feed_all(&scrollback, &[first, second]);
+        assert_eq!(filter.pending_len(), 0);
+        let (bytes, segments) = scrollback.lock().unwrap().read_segments();
+        assert!(segments.is_empty());
+        assert_eq!(reflow_delta_replaying_with_no_segments(&bytes), 0);
     }
 
-    // ── task0003 D1 (review round-2 finding `a6ab9b340119beed`, critical):
-    // AC-1 — a forged marker arriving through the pending-overflow escape
-    // hatch (unterminated introducer + padding past the cap + marker) must
-    // never resize the replay core ─────────────────────────────────────
-
-    /// A child process that opens an unterminated DCS introducer (`ESC P`,
-    /// never closed by an `ESC \` anywhere) and keeps writing until
+    /// AC-1 scenario 3 (split at a lone-trailing-ESC boundary / pending
+    /// overflow escape hatch): a child process opens an unterminated DCS
+    /// introducer (`ESC P`, never closed) and keeps writing until
     /// `ScrollbackWriteFilter`'s pending buffer exceeds
-    /// [`SCROLLBACK_FILTER_PENDING_CAP`], with a well-formed forged resize
-    /// marker sitting in that padding, must not have the marker survive —
-    /// end-to-end through write-filter -> snapshot-assembly -> replay.
-    /// Before the fix, the overflow escape hatch forwarded `pending`
-    /// completely raw (no strip at all), so this exact shape reached replay
-    /// unfiltered.
-    ///
-    /// Deliberately NOT an OSC-777-viewer-kind introducer (e.g.
-    /// `markdown`): the marker's own BEL would then terminate the OUTER
-    /// viewer OSC's body scan (which stops at the FIRST BEL/ST it finds,
-    /// regardless of nesting), making the whole run — marker included — get
-    /// swallowed as an oversized "viewer chunk" by the SNAPSHOT-time
-    /// stripper's UNRELATED viewer-kind stripping, masking whether the
-    /// escape-hatch fix itself did anything. A DCS introducer has no such
-    /// accidental interaction: the marker has no `ESC \` in it, so an
-    /// unterminated DCS never accidentally "consumes" it as part of the
-    /// same sequence either way.
-    ///
-    /// See [`forged_resize_marker_from_pty_output_never_resizes_replay_core`]'s
-    /// doc comment for why this asserts on `reflow_call_count`, not on the
-    /// core's final `cols()`/`rows()`.
+    /// [`SCROLLBACK_FILTER_PENDING_CAP`], with a well-formed marker-shaped
+    /// sequence sitting in the padding that gets flushed raw by the
+    /// overflow escape hatch. Zero segment authority, zero reflow.
     #[test]
-    fn forged_resize_marker_via_pending_overflow_escape_hatch_never_resizes_replay_core() {
-        use term_core::terminal_core::TerminalCore;
-        let cols: u16 = 80;
-        let rows: u16 = 24;
-
-        // Unterminated DCS introducer: never closes (no `ESC \` anywhere in
-        // this test's bytes), so the filter holds everything in `pending`
-        // rather than flushing at a safe boundary.
+    fn ac1_marker_shaped_bytes_via_pending_overflow_escape_hatch_carry_no_segment_authority() {
+        let scrollback = new_scrollback(4096);
         let intro = b"\x1bPtmux;".to_vec();
-        // Padding plus a well-formed forged marker, sized so the running
-        // `pending` total (introducer + padding) exceeds
-        // `SCROLLBACK_FILTER_PENDING_CAP` (512 KiB) in a single `feed` call
-        // — forcing the overflow escape hatch.
         let mut padding_and_marker: Vec<u8> = std::iter::repeat_n(b'A', 520 * 1024).collect();
-        padding_and_marker.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
-            999, 999,
-        ));
+        padding_and_marker.extend_from_slice(&legacy_marker_shaped_bytes(999, 999));
 
         let mut filter = ScrollbackWriteFilter::new();
         let first = filter.feed(&intro);
@@ -1751,86 +1728,75 @@ mod tests {
             "the overflow escape hatch must have fired for this test to be meaningful"
         );
         assert_eq!(filter.pending_len(), 0);
-
-        let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&flushed, b"", false);
-        let mut core = TerminalCore::new(cols, rows, 1000);
-        let before = core.reflow_call_count();
-        core.reset_and_replay(&snap);
-
-        assert_eq!(
-            core.reflow_call_count(),
-            before,
-            "a forged marker reaching replay via the pending-overflow escape \
-             hatch must never trigger a resize (reflow_call_count must not move)"
-        );
+        scrollback.lock().unwrap().write(&flushed);
+        let (bytes, segments) = scrollback.lock().unwrap().read_segments();
+        assert!(segments.is_empty());
+        assert_eq!(reflow_delta_replaying_with_no_segments(&bytes), 0);
     }
 
-    // ── task0003 D1 (review round-2 finding `15c54fb74bb91ec7`): AC-1 — a
-    // forged marker nested inside a non-SIXEL DCS body must never resize
-    // the replay core, end-to-end ─────────────────────────────────────
-
-    /// Mirrors `printf '\ePtmux;\e\e]777;emterm;resize;999;999\a\e\\'` — a
-    /// doubled ESC is the tmux DCS passthrough convention for escaping a
-    /// literal ESC inside the passthrough body, so the marker's own `ESC ]`
-    /// is nested inside a non-SIXEL DCS the ANSI-structural strip does not
-    /// consume as a single unit. End-to-end through write-filter ->
-    /// snapshot-assembly -> replay, the marker must still never resize the
-    /// core.
-    ///
-    /// This shape is caught by TWO independent layers today, verified while
-    /// developing this test: the pre-task0003 per-byte fallback (an
-    /// un-consumed DCS falls back to single-byte scanning, which
-    /// re-discovers the nested `ESC ]` as its own OSC candidate and strips
-    /// it via the ordinary `resize`-kind check) ALREADY covers this exact
-    /// input on its own, and the new `strip_literal_resize_marker_occurrences`
-    /// (task0003 D1) covers it independently too. Disabling either one alone
-    /// still leaves this test green; disabling BOTH makes it fail (confirmed
-    /// during development) — so this is deliberate defense-in-depth
-    /// coverage, not a redundant/vacuous test.
-    ///
-    /// See [`forged_resize_marker_from_pty_output_never_resizes_replay_core`]'s
-    /// doc comment for why this asserts on `reflow_call_count`, not on the
-    /// core's final `cols()`/`rows()`.
+    /// AC-1 scenario 4 (nested in a non-SIXEL DCS): mirrors
+    /// `printf '\ePtmux;\e\e]777;emterm;resize;999;999\a\e\\'` — a doubled
+    /// ESC is the tmux DCS passthrough convention for escaping a literal
+    /// ESC inside the passthrough body, so the marker-shaped `ESC ]` is
+    /// nested inside a non-SIXEL DCS. Zero segment authority, zero reflow.
     #[test]
-    fn forged_resize_marker_nested_in_non_sixel_dcs_never_resizes_replay_core() {
-        use term_core::terminal_core::TerminalCore;
-        let cols: u16 = 80;
-        let rows: u16 = 24;
-
+    fn ac1_marker_shaped_bytes_nested_in_non_sixel_dcs_carry_no_segment_authority() {
+        let scrollback = new_scrollback(4096);
         let mut chunk = b"before".to_vec();
         chunk.extend_from_slice(b"\x1bPtmux;\x1b");
-        chunk.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
-            999, 999,
-        ));
+        chunk.extend_from_slice(&legacy_marker_shaped_bytes(999, 999));
         chunk.extend_from_slice(b"\x1b\\");
         chunk.extend_from_slice(b"after");
 
-        let mut filter = ScrollbackWriteFilter::new();
-        let filtered = filter.feed(&chunk);
-        let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&filtered, b"", false);
-
-        let mut core = TerminalCore::new(cols, rows, 1000);
-        let before = core.reflow_call_count();
-        core.reset_and_replay(&snap);
-
-        assert_eq!(
-            core.reflow_call_count(),
-            before,
-            "a forged marker nested inside a non-SIXEL DCS body must never \
-             trigger a resize (reflow_call_count must not move)"
-        );
+        let filter = feed_all(&scrollback, &[&chunk]);
+        assert_eq!(filter.pending_len(), 0);
+        let (bytes, segments) = scrollback.lock().unwrap().read_segments();
+        assert!(segments.is_empty());
+        assert_eq!(reflow_delta_replaying_with_no_segments(&bytes), 0);
     }
 
-    // ── review round-1 rework, findings 7aef70ff81703b90 / abeda9cc206cf018
-    // (medium, spec test gaps) — task0002 AC-8 / AC-9 ─────────────────────
+    /// AC-1 scenario 5 (formed by concatenation after a strip pass): round-3
+    /// finding `95fb7c115b0b64da`'s exact adversarial construction —
+    /// `P + P + SIXEL_DCS + "1;1\a" + "999;999\a"` (`P` = the marker prefix,
+    /// unterminated) — which, under the OLD single-pass literal strip
+    /// (`strip_literal_resize_marker_occurrences`, removed by D1'),
+    /// concatenated a surviving prefix with a surviving body into a
+    /// complete forged marker. Feeds `strip_pty_output_for_scrollback_write`
+    /// directly (the exact function the finding targeted) — since D1'
+    /// carries dimensions structurally (never as bytes), there is no
+    /// literal-marker strip pass left to defeat, and whatever this input
+    /// reduces to can never carry segment authority regardless.
+    #[test]
+    fn ac1_marker_shaped_bytes_formed_by_concatenation_after_strip_carry_no_segment_authority() {
+        let scrollback = new_scrollback(4096);
+        let prefix = b"\x1b]777;emterm;resize;"; // unterminated marker prefix ("P")
+        let sixel = b"\x1bP1;0;0q\"1;1;5;5#0;2;0;0;0\x1b\\"; // complete SIXEL DCS (stripped)
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(prefix);
+        chunk.extend_from_slice(prefix);
+        chunk.extend_from_slice(sixel);
+        chunk.extend_from_slice(b"1;1\x07");
+        chunk.extend_from_slice(b"999;999\x07");
 
-    /// task0002 AC-8: round-trip fingerprint equality. The grid (line text
-    /// + cursor) of a core fed a recording LIVE (`process_pty_data_fully`,
-    /// no marker interpretation — mirrors what the daemon's own shadow
-    /// parser sees, resizing in lockstep with each real PTY resize) must
-    /// equal that of a core replayed from the SNAPSHOT-ASSEMBLED bytes
-    /// (`build_snapshot_bytes` -> `reset_and_replay`, marker-aware), for
-    /// both a marker-free recording and a resize-spanning one. This is the
+        let stripped = strip_pty_output_for_scrollback_write(&chunk);
+        scrollback.lock().unwrap().write(&stripped);
+        let (bytes, segments) = scrollback.lock().unwrap().read_segments();
+        assert!(
+            segments.is_empty(),
+            "no write_resize_marker call was ever made for this ring"
+        );
+        assert_eq!(reflow_delta_replaying_with_no_segments(&bytes), 0);
+    }
+
+    // ── round-trip fidelity: replayed grid matches a live-fed reference ───
+
+    /// Round-trip fingerprint equality. The grid (line text + cursor) of a
+    /// core fed a recording LIVE (`process_pty_data_fully`, resizing
+    /// directly at each real PTY resize — mirrors what the daemon's own
+    /// shadow parser sees) must equal that of a core replayed from the
+    /// SNAPSHOT-ASSEMBLED bytes (`build_snapshot_bytes` ->
+    /// `reset_and_replay_segments`, segment-aware), for both a
+    /// segment-free recording and a resize-spanning one. This is the
     /// SPEC.md unit test list's "switch-time grid == replay grid"
     /// round-trip check: unlike the cross-line-mixing detectors above, it
     /// also catches a regression that drops, duplicates, or blanks content
@@ -1849,7 +1815,7 @@ mod tests {
             (lines, core.get_cursor_col(), core.get_cursor_row())
         }
 
-        // Case 1: resize-free recording.
+        // Case 1: segment-free recording.
         {
             let mut recording = Vec::new();
             for i in 0..30 {
@@ -1858,27 +1824,39 @@ mod tests {
             let mut live = TerminalCore::new(cols, rows, 1000);
             live.process_pty_data_fully(&recording);
 
-            let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, b"", false);
+            let (snap, snap_segments) =
+                crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, &[], b"", false);
             let mut replayed = TerminalCore::new(cols, rows, 1000);
-            replayed.reset_and_replay(&snap);
+            replayed.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
 
             assert_eq!(
                 fingerprint(&live),
                 fingerprint(&replayed),
-                "resize-free round-trip must match the live-fed reference"
+                "segment-free round-trip must match the live-fed reference"
             );
         }
 
         // Case 2: resize-spanning recording. The live reference resizes
-        // directly (no marker bytes — a live parser never sees them) at
-        // the exact point in the stream the marker represents, then
-        // restores to the target size at the end — mirroring exactly what
-        // `reset_and_replay` does for the marker-bearing snapshot.
+        // directly at the exact point in the stream the segment boundary
+        // represents, then restores to the target size at the end —
+        // mirroring exactly what `reset_and_replay_segments` does.
         {
-            let mut recording = b"before\r\n".to_vec();
-            recording
-                .extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(100, 30));
-            recording.extend_from_slice(b"after\r\n");
+            let before = b"before\r\n".to_vec();
+            let after = b"after\r\n".to_vec();
+            let mut recording = before.clone();
+            recording.extend_from_slice(&after);
+            let segments = [
+                ReplaySegment {
+                    offset: 0,
+                    cols,
+                    rows,
+                },
+                ReplaySegment {
+                    offset: before.len() as u32,
+                    cols: 100,
+                    rows: 30,
+                },
+            ];
 
             let mut live = TerminalCore::new(cols, rows, 1000);
             live.process_pty_data_fully(b"before\r\n");
@@ -1886,9 +1864,14 @@ mod tests {
             live.process_pty_data_fully(b"after\r\n");
             live.resize(cols, rows);
 
-            let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, b"", false);
+            let (snap, snap_segments) = crate::mux::snapshot_bytes::build_snapshot_bytes(
+                &recording,
+                &to_tuples(&segments),
+                b"",
+                false,
+            );
             let mut replayed = TerminalCore::new(cols, rows, 1000);
-            replayed.reset_and_replay(&snap);
+            replayed.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
 
             assert_eq!(
                 fingerprint(&live),
@@ -1898,11 +1881,10 @@ mod tests {
         }
     }
 
-    /// task0003 D8 (review round-2 finding `c9773adeab150890`): builds ONE
-    /// phase's raw content (no marker bytes) for the differing-DIMENSIONS
-    /// scenario below — reused both to assemble the marker-bearing
-    /// recording AND to drive the marker-free LIVE reference (which resizes
-    /// directly instead of via an in-band marker).
+    /// Builds ONE phase's raw content (no marker bytes) for the
+    /// differing-DIMENSIONS scenario below — reused both to assemble the
+    /// segment-bearing recording AND to drive the segment-free LIVE
+    /// reference (which resizes directly instead of via a segment).
     ///
     /// `narrower_cols` is fixed across both phases (the narrower of the
     /// recording's two cols values) so the long line wraps whenever the
@@ -1927,27 +1909,20 @@ mod tests {
         b
     }
 
-    /// task0003 D8 / AC-10 (review round-2 finding `c9773adeab150890`): the
-    /// PREVIOUS version of this test (`
-    /// resize_marker_fix_differing_terminal_widths_recording_replays_without_cross_line_mixing`)
-    /// could never fail regardless of correctness — its rows were identical
-    /// across both phases (so PROBE D's row-count coordinate-drift
-    /// mechanism, which needs a ROW COUNT change to misinterpret DECSTBM /
-    /// CUP coordinates, never fired at all), and its taint detector searched
-    /// for a substring (`" line "`) the cols-varying synthesized content
-    /// never actually contained. This version:
-    /// - varies BOTH rows and cols across the marker (actually exercises the
-    ///   drift mechanism),
-    /// - still includes a line longer than the narrower width so it wraps,
-    /// - compares against a LIVE-FED reference grid FINGERPRINT (the same
-    ///   technique
-    ///   `round_trip_grid_fingerprint_matches_live_feed_for_resize_free_and_resize_spanning`
-    ///   uses) instead of a substring taint detector — confirmed, while
-    ///   developing this test, to FAIL when marker interpretation is
-    ///   disabled (`find_resize_marker` stubbed to always return `None`),
-    ///   unlike its predecessor.
+    /// The PREVIOUS version of this test (task0002 era) could never fail
+    /// regardless of correctness — its rows were identical across both
+    /// phases (so PROBE D's row-count coordinate-drift mechanism, which
+    /// needs a ROW COUNT change to misinterpret DECSTBM / CUP coordinates,
+    /// never fired at all), and its taint detector searched for a substring
+    /// the cols-varying synthesized content never actually contained. This
+    /// version varies BOTH rows and cols across the segment boundary
+    /// (actually exercises the drift mechanism), still includes a line
+    /// longer than the narrower width so it wraps, and compares against a
+    /// LIVE-FED reference grid FINGERPRINT — confirmed, while developing
+    /// this test, to FAIL when segment attribution is dropped (empty
+    /// segments passed to `reset_and_replay_segments`).
     #[test]
-    fn resize_marker_fix_differing_dimensions_recording_matches_live_feed_fingerprint() {
+    fn differing_dimensions_recording_matches_live_feed_fingerprint() {
         use term_core::terminal_core::TerminalCore;
 
         fn fingerprint(core: &TerminalCore) -> (Vec<String>, u16, u16) {
@@ -1968,17 +1943,24 @@ mod tests {
             let phase_a = synth_dims_phase_bytes(rows_a, narrower_cols, "A");
             let phase_b = synth_dims_phase_bytes(rows_b, narrower_cols, "B");
 
-            let mut recording = crate::mux::scrollback_buffer::resize_marker_bytes(cols_a, rows_a);
-            recording.extend_from_slice(&phase_a);
-            recording.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
-                cols_b, rows_b,
-            ));
+            let mut recording = phase_a.clone();
             recording.extend_from_slice(&phase_b);
+            let segments = [
+                ReplaySegment {
+                    offset: 0,
+                    cols: cols_a,
+                    rows: rows_a,
+                },
+                ReplaySegment {
+                    offset: phase_a.len() as u32,
+                    cols: cols_b,
+                    rows: rows_b,
+                },
+            ];
 
-            // Live reference: a live parser never sees markers — it resizes
-            // directly at the exact points in the stream the markers
-            // represent, mirroring exactly what `reset_and_replay` does for
-            // the marker-bearing recording.
+            // Live reference: a live parser resizes directly at the exact
+            // points in the stream the segments represent, mirroring
+            // exactly what `reset_and_replay_segments` does.
             let mut live = TerminalCore::new(replay_cols, replay_rows, 10_000);
             live.resize(cols_a, rows_a);
             live.process_pty_data_fully(&phase_a);
@@ -1986,9 +1968,14 @@ mod tests {
             live.process_pty_data_fully(&phase_b);
             live.resize(replay_cols, replay_rows);
 
-            let snap = crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, b"", false);
+            let (snap, snap_segments) = crate::mux::snapshot_bytes::build_snapshot_bytes(
+                &recording,
+                &to_tuples(&segments),
+                b"",
+                false,
+            );
             let mut replayed = TerminalCore::new(replay_cols, replay_rows, 10_000);
-            replayed.reset_and_replay(&snap);
+            replayed.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
 
             assert_eq!(
                 fingerprint(&live),

@@ -21,76 +21,25 @@ use std::collections::VecDeque;
 /// — previously 64 MiB caused a 320 MiB spike across five detached panes.
 pub const DEFAULT_SCROLLBACK_CAPACITY: usize = 2 * 1024 * 1024;
 
-/// Build the in-band resize marker recorded into a pane's scrollback stream
-/// at each PTY resize (IMPLEMENTATION.md D1/D2, task0001): a private OSC 777
-/// `resize` extension carrying the pane's new dimensions —
-/// `ESC ] 777 ; emterm ; resize ; <cols> ; <rows> BEL`.
-///
-/// This is the fix for the resize-interleaved scrollback replay coordinate
-/// drift (`tmp/apt-progress-bar-regression-2026-07-09.md` PROBE D): bytes
-/// recorded for different terminal row counts coexist serially in a pane's
-/// scrollback, and a replay that feeds them all into a core fixed at one row
-/// count misinterprets DECSTBM / CUP coordinates recorded for the OTHER row
-/// count, mixing content from two logical output lines onto one row. The
-/// marker lets a replay consumer resize its core to match the dimensions the
-/// FOLLOWING bytes were produced for (see `term_core::terminal_core`'s
-/// `find_resize_marker` / `TerminalCore::reset_and_replay`).
-///
-/// task0003 D2 (review round-2 finding `602e685494248cbb`): this used to be
-/// an independent literal, hand-mirrored by a SEPARATE literal in
-/// `term_core::terminal_core`'s decoder, with each side enforcing its own
-/// dimension bounds — the encoder accepted any `u16` while the decoder
-/// rejected anything past a private cap, so a legitimate large resize could
-/// silently lose its marker at replay. `term_core` has no dependency on
-/// this (`emterm` mux) crate, but this crate already depends on `term_core`,
-/// so the byte format and its accepted range are now owned there
-/// (`term_core::terminal_core::resize_marker_bytes` /
-/// `RESIZE_MARKER_MAX_COLS` / `RESIZE_MARKER_MAX_ROWS`) and this function is
-/// a thin re-export — the two sides can no longer drift.
-pub fn resize_marker_bytes(cols: u16, rows: u16) -> Vec<u8> {
-    term_core::terminal_core::resize_marker_bytes(cols, rows)
-}
-
-/// Maximum bytes of REAL (non-marker) content that may separate two
-/// `write_resize_marker` calls for them to still be coalesced into a single
-/// `dim_markers` entry (task0003 D4, review round-2 finding
-/// `5d1a4e9509365517`).
-///
-/// The existing "coalesce adjacent markers" behavior only collapsed markers
-/// with LITERALLY ZERO bytes between them, but a real drag-resize has the
-/// TUI redraw its frame at each intermediate size, so consecutive markers
-/// almost always have SOME output between them and the zero-byte rule never
-/// fires. Left unbounded, a single drag produces one `dim_markers` entry per
-/// intermediate size, and every later snapshot rebuild / replay pays one
-/// full-scrollback reflow per surviving entry (until they age out of the
-/// retained window). Treating "a single TUI frame's worth of redraw" as
-/// negligible bounds this: a dimension change superseding a previous one
-/// with at most this many bytes of output since is folded into the SAME
-/// entry (the position is kept, only the dimensions are updated) rather
-/// than appended as a new one. Chosen generously above a full-screen redraw
-/// for a large terminal (heavily SGR-styled output can run several bytes
-/// per cell) while still being far below "a real, distinguishable command's
-/// output" — a `cat` of a multi-KB file right after a resize is NOT
-/// coalesced away.
-const RESIZE_MARKER_COALESCE_MAX_BYTES: u64 = 8 * 1024;
-
-/// Circular byte buffer with fixed capacity.
-///
 /// `dim_markers` is the SOLE authority for "which dimensions were in effect
 /// at a given byte offset" (task0003 D1, review round-2 findings
-/// `a6ab9b340119beed` / `15c54fb74bb91ec7`): resize-marker bytes are NEVER
+/// `a6ab9b340119beed` / `15c54fb74bb91ec7`) — resize dimensions are NEVER
 /// written into `buf` at all — [`Self::write_resize_marker`] only records
-/// `(offset, cols, rows)` here, and [`Self::read_all`] synthesizes fresh
-/// marker bytes from these entries at read time. PTY-sourced content can
-/// therefore never contribute a marker (nothing forged, nested, or smuggled
-/// through any write path can ever be mistaken for one), because there is
-/// no marker-shaped content for it to collide with in the first place —
-/// `buf` holds ONLY the plain byte stream `write` was called with. This
-/// replaces the previous design (round-1 rework) where a marker's bytes
-/// were written into `buf` like ordinary content and `read_all` had to
-/// special-case reconstructing just the one at the retained window's head
-/// after ring-wraparound eviction; that reconstruction is now the general
-/// case for every surviving entry, at any offset, not only the head.
+/// `(offset, cols, rows)` here.
+///
+/// task0004 round-4 rework (D1'): this structural side channel is now ALSO
+/// how dimensions leave the ring — [`Self::read_segments`] exposes the
+/// entries directly (offset-adjusted for the retained window), and
+/// [`Self::read_all`] returns plain content bytes with no marker synthesis
+/// at all. Rounds 1-3 additionally synthesized fresh `OSC 777;emterm;resize;
+/// …` marker BYTES into `read_all`'s output so the wire payload carried
+/// dimensions in-band; every one of that design's residual forgery findings
+/// (`95fb7c115b0b64da`, `4a22bd439fcdaf56`, `d4a83d5403bf1d7c`) traced back
+/// to that byte-shaped representation being — definitionally — also
+/// forgeable by PTY output. Carrying `dim_markers` entries structurally all
+/// the way to the wire (via [`Self::read_segments`] and
+/// `mux_ipc::protocol::DimSegment`) closes the class outright: there is no
+/// longer any marker-shaped byte sequence for PTY output to collide with.
 pub struct ScrollbackRingBuffer {
     buf: Vec<u8>,
     capacity: usize,
@@ -165,20 +114,42 @@ impl ScrollbackRingBuffer {
     /// written to `buf`. `MuxPane::new` / `MuxPane::resize` call this
     /// instead of a plain `write` for every marker they record.
     ///
-    /// D4 coalescing (review round-2 finding `5d1a4e9509365517`): if the
-    /// most recent entry is still within
-    /// [`RESIZE_MARKER_COALESCE_MAX_BYTES`] of the current offset — i.e.
-    /// only a negligible amount of real content (a redraw frame, not a
-    /// distinguishable command's output) has been written since — its
-    /// dimensions are UPDATED in place rather than appending a new entry.
-    /// This is what keeps a drag-resize (many intermediate sizes, each
-    /// followed by a TUI redraw) from leaving one `dim_markers` entry per
-    /// intermediate size, each costing a full-scrollback reflow on every
-    /// later replay.
+    /// Coalescing: if the most recent entry is at the EXACT SAME offset (no
+    /// real content bytes were written since it was recorded), its
+    /// dimensions are UPDATED in place rather than appending a new entry —
+    /// this is always safe because nothing was ever attributed to the
+    /// superseded dimensions in the first place (zero bytes exist at that
+    /// offset for them to describe). Any other case appends a NEW entry.
+    ///
+    /// task0004 round-4 rework (D2', review round-3 finding
+    /// `ab54fae335086db3`, critical): a round-2 fix widened this to coalesce
+    /// across up to 8 KiB of INTERVENING real content (treating a small
+    /// TUI redraw frame as "negligible"), reusing the earlier entry's
+    /// OFFSET while overwriting its DIMENSIONS. That silently reattributed
+    /// already-recorded content: bytes written between the two
+    /// `write_resize_marker` calls were produced under the FIRST (old)
+    /// dimensions, but ended up replayed under the SECOND (new) ones once
+    /// the entry describing the first dimensions was overwritten — the
+    /// exact resize-interleaved coordinate drift this whole marker
+    /// mechanism exists to prevent, reintroduced by the very fix meant to
+    /// bound `dim_markers` growth (round-3 findings `ab54fae335086db3` and
+    /// `9d4f7176af1b264e`, the latter specifically about
+    /// [`Self::attribute_write`]'s correction entries being swallowed the
+    /// same way). Reverted to the only sound rule: coalesce ONLY when
+    /// literally nothing was recorded in between (offset unchanged).
+    ///
+    /// A resize storm whose every step emits real (non-zero) redraw bytes
+    /// therefore does grow `dim_markers` by one entry per step — bounded
+    /// only by [`Self::prune_dim_markers`]'s retained-window eviction, not
+    /// by this coalescing rule. Bounding that growth independently of
+    /// redraw byte volume (review round-3 finding `981230284d7d3273`) is a
+    /// known, separately-tracked residual: no worse than the design's
+    /// pre-round-2 baseline, and a byte-count threshold cannot fix it
+    /// without reintroducing the misattribution above.
     pub fn write_resize_marker(&mut self, cols: u16, rows: u16) {
         let offset = self.total_written;
         if let Some(last) = self.dim_markers.back_mut() {
-            if offset.saturating_sub(last.0) <= RESIZE_MARKER_COALESCE_MAX_BYTES {
+            if offset == last.0 {
                 last.1 = cols;
                 last.2 = rows;
                 return;
@@ -206,68 +177,22 @@ impl ScrollbackRingBuffer {
         }
     }
 
-    /// Read all accumulated data in chronological order.
-    /// Returns a Vec containing the buffer contents from oldest to newest.
+    /// Read all accumulated data in chronological order, oldest to newest.
     ///
-    /// When [`Self::write_resize_marker`] has ever been called on this ring,
-    /// the returned bytes have fresh marker bytes synthesized from
-    /// `dim_markers` (task0003 D1) at every offset still relevant to the
-    /// retained window:
-    ///
-    /// - The entry describing the dimensions in effect at the retained
-    ///   window's first byte (the latest entry at or before that offset, if
-    ///   any) is prepended, so the invariant "the retained window is
-    ///   preceded by a marker describing the dimensions in effect at its
-    ///   first byte" holds regardless of ring wraparound.
-    /// - Every entry whose offset falls WITHIN the retained window is
-    ///   spliced in at its correct relative position, in order.
-    ///
-    /// A ring that never received a [`Self::write_resize_marker`] call (e.g.
-    /// a bare `ScrollbackRingBuffer` used directly, outside `MuxPane`)
-    /// behaves exactly as before — no synthetic bytes are ever introduced.
+    /// task0004 round-4 rework (D1', review round-3 findings
+    /// `ef69658e6e4d0b05` / `c84c751810cbd8cb`): this is now ALWAYS the
+    /// plain content bytes `write` was called with — no marker bytes are
+    /// ever synthesized into it. Rounds 1-3 had this method inject fresh
+    /// `OSC 777;emterm;resize;…` marker bytes at every `dim_markers` offset
+    /// so the wire payload carried dimensions in-band; that meant EVERY
+    /// consumer of `read_all()` received those synthetic bytes, including
+    /// `mux-read` (`handle_read_pane`), which has no business seeing them
+    /// and could have a tail-cut land mid-marker and leak the literal
+    /// protocol text into an agent's read result. Consumers that need
+    /// structural dimension info now call [`Self::read_segments`] instead;
+    /// `read_all` goes back to being a plain byte accessor, with no second
+    /// full-buffer copy to insert markers into.
     pub fn read_all(&self) -> Vec<u8> {
-        let raw = self.read_all_raw();
-        if self.dim_markers.is_empty() {
-            return raw;
-        }
-        let oldest_offset = self.total_written.saturating_sub(self.capacity as u64);
-
-        let mut head_marker: Option<(u16, u16)> = None;
-        let mut mid_markers: Vec<(usize, u16, u16)> = Vec::new();
-        for &(offset, cols, rows) in &self.dim_markers {
-            if offset <= oldest_offset {
-                // Ascending order means a LATER entry that still qualifies
-                // as "at or before the retained window's head" overwrites
-                // an earlier one — the most recent surviving marker wins.
-                head_marker = Some((cols, rows));
-            } else {
-                let pos = ((offset - oldest_offset) as usize).min(raw.len());
-                mid_markers.push((pos, cols, rows));
-            }
-        }
-
-        if head_marker.is_none() && mid_markers.is_empty() {
-            return raw;
-        }
-
-        let mut out = Vec::with_capacity(raw.len() + (mid_markers.len() + 1) * 32);
-        if let Some((cols, rows)) = head_marker {
-            out.extend_from_slice(&resize_marker_bytes(cols, rows));
-        }
-        let mut cursor = 0usize;
-        for (pos, cols, rows) in mid_markers {
-            out.extend_from_slice(&raw[cursor..pos]);
-            out.extend_from_slice(&resize_marker_bytes(cols, rows));
-            cursor = pos;
-        }
-        out.extend_from_slice(&raw[cursor..]);
-        out
-    }
-
-    /// The raw ring contents (no marker synthesis) — plain content bytes
-    /// only, since [`Self::write_resize_marker`] never contributes to `buf`
-    /// (task0003 D1).
-    fn read_all_raw(&self) -> Vec<u8> {
         if self.len == 0 {
             return Vec::new();
         }
@@ -289,6 +214,63 @@ impl ScrollbackRingBuffer {
         }
 
         result
+    }
+
+    /// Structural counterpart to [`Self::read_all`] (task0004 round-4
+    /// rework, D1'): returns the SAME raw content bytes [`Self::read_all`]
+    /// would, paired with the `dim_markers` entries still relevant to the
+    /// retained window, each expressed as `(position, cols, rows)` where
+    /// `position` is a byte offset INTO the returned `Vec<u8>` (not the
+    /// ring's absolute stream offset).
+    ///
+    /// - The entry describing the dimensions in effect at the retained
+    ///   window's first byte (the latest entry at or before that offset, if
+    ///   any) is reported at `position == 0`, so the invariant "the
+    ///   returned segments cover the WHOLE retained window, with no
+    ///   dimension-less prefix" holds regardless of ring wraparound.
+    /// - Every entry whose offset falls WITHIN the retained window is
+    ///   reported at its correct relative position, in ascending order.
+    ///
+    /// This is the sole surviving descendant of the old `read_all`'s marker
+    /// synthesis: instead of encoding `dim_markers` as bytes inside the
+    /// payload, callers that need to route a snapshot over the wire carry
+    /// this Vec alongside it (`mux_ipc::protocol::DimSegment` /
+    /// `encode_snapshot_payload`) and the replay side consumes it as a
+    /// structural parameter
+    /// (`term_core::terminal_core::TerminalCore::reset_and_replay_segments`),
+    /// never by scanning the bytes.
+    ///
+    /// Returns an empty `Vec` when this ring never called
+    /// [`Self::write_resize_marker`] / [`Self::attribute_write`] (e.g. a
+    /// bare `ScrollbackRingBuffer` used directly, outside `MuxPane`) — the
+    /// caller's replay then degrades to single-dimension (task0004 AC-11).
+    pub fn read_segments(&self) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
+        let raw = self.read_all();
+        if self.dim_markers.is_empty() {
+            return (raw, Vec::new());
+        }
+        let oldest_offset = self.total_written.saturating_sub(self.capacity as u64);
+
+        let mut head: Option<(u16, u16)> = None;
+        let mut mid: Vec<(usize, u16, u16)> = Vec::new();
+        for &(offset, cols, rows) in &self.dim_markers {
+            if offset <= oldest_offset {
+                // Ascending order means a LATER entry that still qualifies
+                // as "at or before the retained window's head" overwrites
+                // an earlier one — the most recent surviving marker wins.
+                head = Some((cols, rows));
+            } else {
+                let pos = ((offset - oldest_offset) as usize).min(raw.len());
+                mid.push((pos, cols, rows));
+            }
+        }
+
+        let mut segments = Vec::with_capacity(mid.len() + 1);
+        if let Some((cols, rows)) = head {
+            segments.push((0usize, cols, rows));
+        }
+        segments.extend(mid);
+        (raw, segments)
     }
 
     /// The dimensions the MOST RECENTLY recorded [`Self::write_resize_marker`]
@@ -482,108 +464,6 @@ mod tests {
         );
     }
 
-    // ── resize_marker_bytes (task0001 AC-1..AC-4, IMPLEMENTATION.md D2) ──
-
-    #[test]
-    fn test_resize_marker_bytes_format() {
-        assert_eq!(
-            resize_marker_bytes(120, 48),
-            b"\x1b]777;emterm;resize;120;48\x07".to_vec()
-        );
-    }
-
-    #[test]
-    fn test_resize_marker_bytes_distinguishes_cols_and_rows() {
-        // Guards against a copy-paste swap of the two fields.
-        assert_ne!(resize_marker_bytes(80, 24), resize_marker_bytes(24, 80));
-    }
-
-    /// review round-1 rework, finding `4005fe364386682d` (medium) / task0002
-    /// AC-10: drift-guard round-trip. The encoder here
-    /// (`resize_marker_bytes`) and `term_core`'s decoder
-    /// (`RESIZE_MARKER_PREFIX` / `parse_resize_marker_dims`, a SEPARATE
-    /// crate this one depends on but which cannot depend back) hold
-    /// independent literals for the marker byte format — nothing at
-    /// compile time catches one changing without the other. This test
-    /// feeds the encoder's actual output through a real
-    /// `term_core::TerminalCore` via `reset_and_replay` (the same entry
-    /// point every replay consumer uses) and proves it is still
-    /// RECOGNIZED as a resize instruction — not merely byte-format-pinned
-    /// (`test_resize_marker_bytes_format` above already does that) — using
-    /// the same scroll-region + cursor-addressed-redraw technique
-    /// task0001's coordinate-drift regression tests use: the redraw's
-    /// correct placement depends on the row count the marker encodes
-    /// actually taking effect. A future drift between the two crates'
-    /// literals would make the marker an inert, unrecognized OSC, and this
-    /// test would fail with the exact coordinate-mixing symptom the
-    /// marker protocol exists to prevent — loud and immediate, not a
-    /// silent regression discovered later in an unrelated test.
-    ///
-    /// task0003 D2 update: the encoder is now a thin re-export of
-    /// `term_core::terminal_core::resize_marker_bytes` (the two are the
-    /// SAME function), so this test is now more of a permanent pin than a
-    /// drift guard — kept as-is since it still proves the marker survives
-    /// a full round-trip through a real `TerminalCore`.
-    #[test]
-    fn resize_marker_bytes_round_trips_through_term_core_decoder_drift_guard() {
-        // Mirrors the EXACT shape and magnitudes of the proven task0001
-        // regression test `mux::ipc::pty_spawn::
-        // resize_marker_fix_tui_cursor_addressed_recording_replays_without_cross_line_mixing`
-        // (rows 30 vs 32, replay at 32) — empirically confirmed (during
-        // this test's own development) to fail loudly when the decoder is
-        // drifted from the encoder, unlike a naively-scaled-down variant: a
-        // too-small recording (few fill lines) or a too-large row delta
-        // lets the replay core's out-of-viewport CUP clamping coincidentally
-        // land BOTH phases' status redraws on the same row even when the
-        // marker is never recognized at all, masking the drift instead of
-        // revealing it as content mixing.
-        let cols: u16 = 100;
-        let rows_a: u16 = 32;
-        let rows_b: u16 = 30;
-        let replay_rows: u16 = 32;
-
-        let mut recording = resize_marker_bytes(cols, rows_a);
-        for i in 0..rows_a.max(rows_b) + 20 {
-            recording.extend_from_slice(format!("chat history line {i}\r\n").as_bytes());
-        }
-        recording.extend_from_slice(b"\n\x1b7");
-        recording.extend_from_slice(format!("\x1b[0;{}r", rows_a - 1).as_bytes());
-        recording.extend_from_slice(b"\x1b8\x1b[1A");
-        for tick in 0..3u32 {
-            recording.extend_from_slice(format!("chat reply A line {tick}\r\n").as_bytes());
-            recording.extend_from_slice(
-                format!("\x1b7\x1b[{rows_a};0fSTATUS-A[{tick}]\x1b8").as_bytes(),
-            );
-        }
-        recording.extend_from_slice(&resize_marker_bytes(cols, rows_b));
-        recording.extend_from_slice(b"\n\x1b7");
-        recording.extend_from_slice(format!("\x1b[0;{}r", rows_b - 1).as_bytes());
-        recording.extend_from_slice(b"\x1b8\x1b[1A");
-        for tick in 0..3u32 {
-            recording.extend_from_slice(format!("chat reply B line {tick}\r\n").as_bytes());
-            recording.extend_from_slice(
-                format!("\x1b7\x1b[{rows_b};0fSTATUS-B[{tick}]\x1b8").as_bytes(),
-            );
-        }
-
-        let mut core = term_core::terminal_core::TerminalCore::new(cols, replay_rows, 10_000);
-        core.reset_and_replay(&recording);
-        let mut tainted = Vec::new();
-        for r in 0..replay_rows {
-            let line = core.get_line_text(r);
-            if line.contains("STATUS-") && line.contains(" line ") {
-                tainted.push(format!("row {r}: {line}"));
-            }
-        }
-        assert!(
-            tainted.is_empty(),
-            "resize_marker_bytes -> term_core decoder round-trip must show zero \
-             cross-phase content mixing (a drift between the two crates' literals \
-             would reintroduce the coordinate-mixing bug this marker protocol \
-             exists to prevent): {tainted:?}"
-        );
-    }
-
     #[test]
     fn test_repeated_small_writes_overflow() {
         let mut rb = ScrollbackRingBuffer::new(8);
@@ -595,27 +475,33 @@ mod tests {
         assert_eq!(rb.read_all(), vec![12, 13, 14, 15, 16, 17, 18, 19]);
     }
 
-    // ── task0003 D1 (review round-2 findings `a6ab9b340119beed` /
-    // `15c54fb74bb91ec7`): dim_markers is the SOLE authority — marker bytes
-    // never occupy ring space, so read_all() synthesizes them at read time ──
+    // ── task0004 round-4 rework (D1'): dim_markers is the SOLE authority,
+    // exposed structurally via read_segments() — read_all() never contains
+    // any marker-shaped bytes, at all, regardless of write_resize_marker /
+    // attribute_write calls ──────────────────────────────────────────────
 
-    /// `write_resize_marker` behaves like `write(&resize_marker_bytes(..))`
-    /// content-wise when the ring never wraps: `read_all` returns the exact
-    /// same bytes a plain `write` would have produced.
+    /// AC-9 (review round-3 finding `ef69658e6e4d0b05`): `read_all()` is
+    /// completely unaffected by any number of `write_resize_marker` /
+    /// `attribute_write` calls — it returns EXACTLY the bytes passed to
+    /// `write` / `attribute_write`'s `data` parameter, in order, with zero
+    /// synthesized bytes of any kind. This is what makes `mux-read`
+    /// (`handle_read_pane`, which calls `read_all()` directly) immune to
+    /// ever seeing a protocol remnant: there is nothing to leak because
+    /// nothing is ever inserted.
     #[test]
-    fn write_resize_marker_matches_plain_write_before_any_wraparound() {
-        let mut rb = ScrollbackRingBuffer::new(1024);
+    fn read_all_never_contains_any_synthesized_bytes_regardless_of_resize_calls() {
+        let mut rb = ScrollbackRingBuffer::new(4096);
         rb.write_resize_marker(80, 24);
-        rb.write(b"hello");
-        assert_eq!(
-            rb.read_all(),
-            [resize_marker_bytes(80, 24), b"hello".to_vec()].concat()
-        );
+        rb.write(b"before");
+        rb.write_resize_marker(65535, 65535); // extreme dims — would be highly visible if leaked
+        rb.attribute_write(120, 40, b"middle");
+        rb.write_resize_marker(1, 1);
+        rb.write(b"after");
+        assert_eq!(rb.read_all(), b"beforemiddleafter");
     }
 
-    /// A ring that never calls `write_resize_marker` is completely
-    /// unaffected by the new reconstruction logic — `read_all` returns raw
-    /// bytes exactly as before, even after wraparound.
+    /// A ring that never calls `write_resize_marker` behaves exactly as a
+    /// plain byte ring, even after wraparound.
     #[test]
     fn read_all_without_any_resize_marker_is_unaffected_by_wraparound() {
         let mut rb = ScrollbackRingBuffer::new(8);
@@ -624,38 +510,60 @@ mod tests {
         assert_eq!(rb.read_all(), b"BCDEFGHI");
     }
 
-    /// Driving the ring past wraparound so the INITIAL marker's offset falls
-    /// before the retained window still yields a `read_all()` that starts
-    /// with a marker describing the dimensions in effect for whatever
-    /// content survived — the last marker recorded before the retained
-    /// window began. Since marker bytes never occupied ring space to begin
-    /// with (task0003 D1), there is no "evicted marker bytes" case to
-    /// reconstruct from partial remnants any more — this is just the
-    /// ordinary "marker offset precedes the retained window" branch of
-    /// `read_all`.
+    /// `read_segments()` reports the raw bytes (identical to `read_all()`)
+    /// paired with the segment for the ring's only recorded resize, at
+    /// position 0 (the whole retained window is under those dims).
     #[test]
-    fn read_all_reconstructs_head_marker_after_window_advances_past_it() {
+    fn read_segments_matches_read_all_bytes_and_reports_head_segment() {
+        let mut rb = ScrollbackRingBuffer::new(1024);
+        rb.write_resize_marker(80, 24);
+        rb.write(b"hello");
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes, rb.read_all());
+        assert_eq!(bytes, b"hello");
+        assert_eq!(segments, vec![(0usize, 80u16, 24u16)]);
+    }
+
+    /// A ring that never calls `write_resize_marker` reports NO segments —
+    /// the caller's replay degrades to single-dimension (task0004 AC-11).
+    #[test]
+    fn read_segments_reports_no_segments_when_ring_never_recorded_a_resize() {
+        let mut rb = ScrollbackRingBuffer::new(1024);
+        rb.write(b"plain content, no resize ever recorded");
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes, rb.read_all());
+        assert!(segments.is_empty());
+    }
+
+    /// Driving the ring past wraparound so the INITIAL marker's offset falls
+    /// before the retained window still yields a `read_segments()` head
+    /// segment (position 0) describing the dimensions in effect for
+    /// whatever content survived — the last marker recorded before the
+    /// retained window began.
+    #[test]
+    fn read_segments_reconstructs_head_segment_after_window_advances_past_it() {
         let capacity = 32;
         let mut rb = ScrollbackRingBuffer::new(capacity);
         rb.write_resize_marker(80, 24);
         // Push enough plain bytes to advance the retained window well past
         // this marker's offset (0).
         rb.write(&vec![b'x'; capacity * 3]);
-        let out = rb.read_all();
-        let expected = [resize_marker_bytes(80, 24), vec![b'x'; capacity]].concat();
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes, vec![b'x'; capacity]);
         assert_eq!(
-            out, expected,
-            "retained window must be preceded by a marker for the dims that \
+            segments,
+            vec![(0usize, 80u16, 24u16)],
+            "retained window must be preceded by a segment for the dims that \
              produced it, even though its offset now precedes the window"
         );
     }
 
     /// Multi-resize variant: after TWO resizes and enough content to advance
-    /// the retained window past both offsets, the reconstructed head marker
-    /// reflects the SECOND (most recent surviving) resize's dimensions, not
-    /// the first.
+    /// the retained window past both offsets, the reconstructed head
+    /// segment reflects the SECOND (most recent surviving) resize's
+    /// dimensions, not the first.
     #[test]
-    fn read_all_reconstructs_head_marker_using_latest_surviving_resize() {
+    fn read_segments_reconstructs_head_segment_using_latest_surviving_resize() {
         let capacity = 64;
         let mut rb = ScrollbackRingBuffer::new(capacity);
         rb.write_resize_marker(80, 24);
@@ -663,81 +571,33 @@ mod tests {
         rb.write_resize_marker(120, 40);
         // Push enough plain bytes to advance the window past both offsets.
         rb.write(&vec![b'y'; capacity * 3]);
-        let out = rb.read_all();
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(segments, vec![(0usize, 120u16, 40u16)]);
         assert!(
-            out.starts_with(&resize_marker_bytes(120, 40)),
-            "head marker must reflect the most recent resize whose offset \
-             still precedes the retained window: {out:?}"
-        );
-        let first_marker = resize_marker_bytes(80, 24);
-        assert!(
-            !out.windows(first_marker.len()).any(|w| w == first_marker),
-            "no trace of the superseded first marker should remain: {out:?}"
-        );
-        assert!(
-            !out.windows(b"first size".len()).any(|w| w == b"first size"),
-            "no trace of the evicted first-resize content should remain: {out:?}"
+            !bytes
+                .windows(b"first size".len())
+                .any(|w| w == b"first size"),
+            "no trace of the evicted first-resize content should remain: {bytes:?}"
         );
     }
 
-    /// A marker whose offset falls WITHIN the retained window (not just at
-    /// its head) is spliced into `read_all`'s output at the correct
-    /// position, with the surrounding plain content preserved on both
-    /// sides — the general case task0003 D1 extends the reconstruction to
-    /// (previously, only the head position was ever reconstructed).
+    /// A resize whose offset falls WITHIN the retained window (not just at
+    /// its head) is reported at the correct relative position, with the
+    /// surrounding plain content bytes unaffected.
     #[test]
-    fn read_all_splices_a_mid_window_marker_at_the_correct_position() {
+    fn read_segments_reports_a_mid_window_segment_at_the_correct_position() {
         let mut rb = ScrollbackRingBuffer::new(4096);
         rb.write(b"before");
         rb.write_resize_marker(100, 40);
         rb.write(b"after");
-        assert_eq!(
-            rb.read_all(),
-            [
-                b"before".to_vec(),
-                resize_marker_bytes(100, 40),
-                b"after".to_vec()
-            ]
-            .concat()
-        );
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes, b"beforeafter");
+        assert_eq!(segments, vec![("before".len(), 100u16, 40u16)]);
     }
 
-    /// Since marker bytes never physically occupy ring space (task0003 D1),
-    /// ring eviction can never cut a marker's byte sequence in half — the
-    /// entire "truncated marker remnant surfaces as garbage" failure mode
-    /// the previous design needed a special reconstruction branch for is now
-    /// structurally impossible. This test drives the SAME kind of tight,
-    /// exact-eviction-boundary scenario the old truncation test did (a
-    /// resize followed by content sized so the retained window's boundary
-    /// would, under the OLD byte-embedded design, have landed mid-marker)
-    /// and confirms `read_all()` still produces exactly
-    /// `marker_bytes + surviving_content` — clean, with no remnant of any
-    /// kind, by construction rather than by a remnant-dropping branch.
-    #[test]
-    fn read_all_never_produces_a_marker_byte_remnant_even_at_a_tight_eviction_boundary() {
-        let marker = resize_marker_bytes(65500, 65500); // fixed-width digits, easy to reason about
-        let marker_len = marker.len();
-        let capacity = marker_len + 4;
-        let mut rb = ScrollbackRingBuffer::new(capacity);
-        rb.write_resize_marker(65500, 65500);
-        // Content sized so the OLD design's ring-wraparound eviction would
-        // have landed exactly mid-marker; content bytes alone now occupy
-        // the ring (the marker itself was never IN it).
-        let content_len = marker_len + 4 - 2;
-        rb.write(&vec![b'z'; content_len]);
-
-        let out = rb.read_all();
-        let expected = [marker, vec![b'z'; content_len]].concat();
-        assert_eq!(
-            out, expected,
-            "a clean marker must precede the full surviving content, with no \
-             partial-marker-byte remnant possible"
-        );
-    }
-
-    /// `clear()` resets the resize-marker bookkeeping too — a subsequent
+    /// `clear()` resets the resize bookkeeping too — a subsequent
     /// `write_resize_marker` after `clear()` behaves like a fresh ring (no
-    /// stale marker offsets from before the clear).
+    /// stale offsets from before the clear).
     #[test]
     fn clear_resets_resize_marker_bookkeeping() {
         let mut rb = ScrollbackRingBuffer::new(1024);
@@ -746,10 +606,9 @@ mod tests {
         rb.clear();
         rb.write_resize_marker(100, 30);
         rb.write(b"new content");
-        assert_eq!(
-            rb.read_all(),
-            [resize_marker_bytes(100, 30), b"new content".to_vec()].concat()
-        );
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes, b"new content");
+        assert_eq!(segments, vec![(0usize, 100u16, 30u16)]);
     }
 
     // ── task0003 AC-8 (D5, review round-2 finding `0bebe3e6f7b416dd`):
@@ -761,7 +620,7 @@ mod tests {
     /// the reader thread's chunk — which was actually read (and started
     /// processing) BEFORE the resize, so was produced under the OLD dims —
     /// only reaches the ring afterward. `attribute_write` must insert a
-    /// corrective marker for the dims it is TOLD the content was produced
+    /// corrective entry for the dims it is TOLD the content was produced
     /// under, so that content is not misattributed to the resize's (newer,
     /// wrong) dims at replay.
     #[test]
@@ -769,12 +628,54 @@ mod tests {
         let mut rb = ScrollbackRingBuffer::new(4096);
         rb.write_resize_marker(100, 40);
         rb.attribute_write(80, 24, b"stale-dims content");
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes, b"stale-dims content");
         assert_eq!(
-            rb.read_all(),
-            [resize_marker_bytes(80, 24), b"stale-dims content".to_vec()].concat(),
+            segments,
+            vec![(0usize, 80u16, 24u16)],
             "content attributed via attribute_write must be preceded by a \
-             marker for the dims it was actually produced under, correcting \
+             segment for the dims it was actually produced under, correcting \
              a marker that won the lock race for different dims"
+        );
+    }
+
+    /// AC-3 (task0004 round-4 rework, review round-3 finding
+    /// `9d4f7176af1b264e`): a correction entry for bytes read BEFORE a
+    /// resize survives SUBSEQUENT recording at the resize's own dims — the
+    /// three-step sequence the finding names: resize, stale chunk (via
+    /// `attribute_write` at the OLD dims), then a fresh chunk recorded at
+    /// the NEW dims. The stale chunk must keep its OLD-dims attribution
+    /// even after the fresh chunk is recorded.
+    ///
+    /// Confirmed to fail pre-fix: against the removed
+    /// `RESIZE_MARKER_COALESCE_MAX_BYTES`-based coalescing (which merged
+    /// any two `write_resize_marker` calls within 8 KiB of each other by
+    /// overwriting the EARLIER entry's dimensions in place), the fresh
+    /// chunk's `write_resize_marker(100, 40)` call — happening right after
+    /// the short `stale-dims content` write — landed within that window and
+    /// overwrote the entry this test expects to survive at `(80, 24)`,
+    /// collapsing both entries into one at `(100, 40)` and misattributing
+    /// the stale chunk to the new dims.
+    #[test]
+    fn attribute_write_correction_survives_a_subsequent_recording_at_new_dims() {
+        let mut rb = ScrollbackRingBuffer::new(4096);
+        // Step 1: resize records the NEW dims marker.
+        rb.write_resize_marker(100, 40);
+        // Step 2: a stale chunk (produced before the resize) is attributed
+        // to the OLD dims, correcting the marker that won the lock race.
+        rb.attribute_write(80, 24, b"stale chunk");
+        // Step 3: a fresh chunk, genuinely produced at the NEW dims,
+        // arrives next.
+        rb.attribute_write(100, 40, b"fresh chunk");
+
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes, b"stale chunkfresh chunk");
+        assert_eq!(
+            segments,
+            vec![(0usize, 80u16, 24u16), ("stale chunk".len(), 100u16, 40u16),],
+            "the stale chunk's correction must survive the subsequent \
+             fresh-chunk recording, not get swallowed back into the resize's \
+             dims"
         );
     }
 
@@ -786,10 +687,9 @@ mod tests {
         let mut rb = ScrollbackRingBuffer::new(4096);
         rb.write_resize_marker(80, 24);
         rb.attribute_write(80, 24, b"normal content");
-        assert_eq!(
-            rb.read_all(),
-            [resize_marker_bytes(80, 24), b"normal content".to_vec()].concat()
-        );
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes, b"normal content");
+        assert_eq!(segments, vec![(0usize, 80u16, 24u16)]);
         assert_eq!(
             rb.dim_markers_len(),
             1,
@@ -805,141 +705,138 @@ mod tests {
     fn attribute_write_seeds_a_marker_on_a_ring_with_no_prior_marker() {
         let mut rb = ScrollbackRingBuffer::new(4096);
         rb.attribute_write(80, 24, b"first content");
-        assert_eq!(
-            rb.read_all(),
-            [resize_marker_bytes(80, 24), b"first content".to_vec()].concat()
-        );
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes, b"first content");
+        assert_eq!(segments, vec![(0usize, 80u16, 24u16)]);
     }
 
-    // ── task0003 D4 (review round-2 finding `5d1a4e9509365517`): recording-
-    // side coalescing bounds dim_markers growth across a drag-resize-shaped
-    // sequence (many dimension changes, each followed by redraw bytes) ────
+    // ── task0004 round-4 rework (D2', review round-3 finding
+    // `ab54fae335086db3`): coalescing reverted to the only sound rule ─────
 
-    /// A dimension change following the previous one with only a SMALL
-    /// (below-threshold) amount of content in between replaces the existing
-    /// entry rather than appending — simulating a drag-resize's "redraw a
-    /// frame, then immediately resize again" pattern.
+    /// Two `write_resize_marker` calls with literally ZERO bytes recorded
+    /// between them (the safe case: nothing exists yet to misattribute)
+    /// coalesce into a single entry, taking the LATEST dimensions.
     #[test]
-    fn write_resize_marker_coalesces_when_negligible_content_intervenes() {
+    fn write_resize_marker_coalesces_only_at_the_exact_same_offset() {
         let mut rb = ScrollbackRingBuffer::new(4096);
         rb.write_resize_marker(80, 24);
-        rb.write(b"tiny redraw"); // well under the coalesce threshold
-        rb.write_resize_marker(81, 25);
-        rb.write(b"tiny redraw 2");
-        rb.write_resize_marker(82, 26);
+        rb.write_resize_marker(81, 25); // zero bytes since the previous call
+        rb.write_resize_marker(82, 26); // zero bytes since the previous call
         assert_eq!(
             rb.dim_markers_len(),
             1,
-            "consecutive markers separated only by negligible content must \
-             coalesce into a single dim_markers entry"
+            "consecutive resize calls with zero intervening bytes must \
+             coalesce (nothing was ever recorded under the superseded dims)"
         );
-        // The coalesced entry's position is retained from the FIRST of the
-        // coalesced markers, but its dimensions are the LATEST — read_all
-        // must reflect the final dimensions.
-        assert_eq!(
-            rb.read_all(),
-            [
-                resize_marker_bytes(82, 26),
-                b"tiny redraw".to_vec(),
-                b"tiny redraw 2".to_vec(),
-            ]
-            .concat()
-        );
+        rb.write(b"content");
+        let (_, segments) = rb.read_segments();
+        assert_eq!(segments, vec![(0usize, 82u16, 26u16)]);
     }
 
-    /// A dimension change following the previous one with MORE than
-    /// [`RESIZE_MARKER_COALESCE_MAX_BYTES`] of real content in between is
-    /// NOT coalesced — a genuinely distinguishable command's output between
-    /// two resizes must not have its resize markers silently merged.
+    /// ANY real content between two resize calls — even a single byte —
+    /// must NOT be coalesced away: doing so would misattribute that content
+    /// to the wrong dimensions (review round-3 finding `ab54fae335086db3`,
+    /// critical — the round-2 8 KiB-threshold coalescing did exactly this
+    /// for "negligible" redraws).
+    ///
+    /// Confirmed to fail pre-fix: against the removed
+    /// `RESIZE_MARKER_COALESCE_MAX_BYTES` (8 KiB) rule, this single byte of
+    /// intervening content was well under the threshold, so the second
+    /// `write_resize_marker` call coalesced into the first — overwriting
+    /// its dims and misattributing the 1-byte write to (81, 25) instead of
+    /// the (80, 24) it was actually recorded under.
     #[test]
-    fn write_resize_marker_does_not_coalesce_across_substantial_content() {
-        let mut rb = ScrollbackRingBuffer::new(1024 * 1024);
+    fn write_resize_marker_never_coalesces_across_any_real_content() {
+        let mut rb = ScrollbackRingBuffer::new(4096);
         rb.write_resize_marker(80, 24);
-        rb.write(&vec![b'a'; (RESIZE_MARKER_COALESCE_MAX_BYTES + 1) as usize]);
+        rb.write(b"X"); // a single byte of real content
         rb.write_resize_marker(81, 25);
         assert_eq!(
             rb.dim_markers_len(),
             2,
-            "markers separated by substantial content must NOT coalesce"
+            "even one byte of real content between two resize calls must \
+             prevent coalescing"
+        );
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes, b"X");
+        assert_eq!(
+            segments,
+            vec![(0usize, 80u16, 24u16), (1usize, 81u16, 25u16)],
+            "the single byte must stay attributed to the FIRST dims, not the \
+             second"
         );
     }
 
-    /// AC-6 shape (drag-resize): many dimension changes, each followed by a
-    /// small redraw-sized chunk (well under the coalesce threshold) — the
-    /// SAME pattern a real SIGWINCH storm produces (a TUI redraws its frame
-    /// at every intermediate size) — must still collapse to very few
-    /// `dim_markers` entries, not one per change.
+    /// AC-2 end-to-end: a resize immediately followed by under-threshold
+    /// (well under the OLD 8 KiB coalescing window) real output, then
+    /// another resize, must keep the intervening output under its ORIGINAL
+    /// dimensions — never retroactively reattributed by a later resize.
     #[test]
-    fn write_resize_marker_bounds_dim_markers_across_a_drag_resize_shaped_sequence() {
-        let mut rb = ScrollbackRingBuffer::new(1024 * 1024);
-        for step in 0..200u16 {
-            rb.write_resize_marker(80 + step, 24 + (step % 5));
-            rb.write(b"\x1b[2J\x1b[Hredraw frame");
-        }
-        assert!(
-            rb.dim_markers_len() <= 2,
-            "a drag-resize-shaped sequence (many changes, small redraws \
-             between them) must collapse to a handful of dim_markers \
-             entries, got {}",
-            rb.dim_markers_len()
+    fn resize_then_small_output_then_resize_keeps_original_attribution() {
+        let mut rb = ScrollbackRingBuffer::new(4096);
+        rb.write_resize_marker(80, 24);
+        rb.write(b"small output under 8KiB");
+        rb.write_resize_marker(120, 40);
+        rb.write(b"more output");
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes, b"small output under 8KiBmore output");
+        assert_eq!(
+            segments,
+            vec![
+                (0usize, 80u16, 24u16),
+                ("small output under 8KiB".len(), 120u16, 40u16),
+            ]
         );
     }
 
-    /// AC-6 end-to-end: a drag-resize-shaped RECORDING (coalesced via
-    /// `write_resize_marker`'s D4 logic), replayed through `TerminalCore`,
-    /// costs at most a couple of reflows total — not one per intermediate
-    /// resize — because the ring already collapsed the redundant markers
-    /// before they ever reached the replay stream. (`TerminalCore`'s OWN
-    /// replay-side coalescing, exercised by
-    /// `term_core::terminal_core::tests::replay_coalesces_consecutive_markers_into_a_single_reflow`,
-    /// only collapses markers with ZERO bytes between them — a real
-    /// drag-resize always has redraw bytes between steps, so replay-side
-    /// coalescing alone does not bound this; the recording-side coalescing
-    /// this test exercises is what actually closes finding
-    /// `5d1a4e9509365517`.)
-    #[test]
-    fn drag_resize_shaped_recording_replays_with_bounded_reflow_count() {
-        let mut rb = ScrollbackRingBuffer::new(1024 * 1024);
-        rb.write(b"before drag\r\n");
-        for step in 0..200u16 {
-            rb.write_resize_marker(80 + step, 24 + (step % 5));
-            rb.write(b"\x1b[2J\x1b[Hredraw frame\r\n");
-        }
-        rb.write(b"after drag\r\n");
-        let recording = rb.read_all();
+    // ── review round-3 finding `981230284d7d3273` (performance, residual):
+    // a resize storm whose EVERY step emits real (non-empty) redraw bytes
+    // grows dim_markers by one entry per step — bounded only by
+    // prune_dim_markers' retained-window eviction, not by coalescing. This
+    // is the accepted trade-off of reverting the unsound byte-threshold
+    // coalescing above: correctness (never misattribute recorded content)
+    // takes priority over bounding entry count independent of redraw
+    // volume. Documented here rather than silently left unverified — see
+    // `write_resize_marker`'s doc comment for the full rationale.  ────────
 
-        let mut core = term_core::terminal_core::TerminalCore::new(80, 24, 10_000);
-        let before = core.reflow_call_count();
-        core.reset_and_replay(&recording);
-        let reflows = core.reflow_call_count() - before;
-        assert!(
-            reflows <= 2,
-            "a drag-resize-shaped recording must replay with a bounded \
-             reflow count (coalesced at the recording side), got {reflows} \
-             reflows for 200 intermediate resizes"
+    /// A resize storm where each step's redraw exceeds the OLD 8 KiB
+    /// coalescing threshold produces one `dim_markers` entry per step (not
+    /// silently dropped or merged) — proving the reverted coalescing rule
+    /// does not pretend to bound this, rather than leaving the growth
+    /// unverified.
+    #[test]
+    fn resize_storm_with_large_per_step_redraw_grows_one_entry_per_step() {
+        let mut rb = ScrollbackRingBuffer::new(4 * 1024 * 1024);
+        let step_count = 50u16;
+        let redraw = vec![b'r'; 10 * 1024]; // > the old 8 KiB coalescing threshold
+        for step in 0..step_count {
+            rb.write_resize_marker(80 + step, 24);
+            rb.write(&redraw);
+        }
+        assert_eq!(
+            rb.dim_markers_len(),
+            step_count as usize,
+            "each step's redraw exceeds the old coalescing threshold, so \
+             none of the {step_count} resize calls may coalesce"
         );
     }
 
     // ── task0003 AC-7 (D4, review round-2 finding `0b0c18ff4ab911f4`):
     // pruning is linear (VecDeque::pop_front), not quadratic ────────────
 
-    /// A large number of markers, each separated by MORE than the coalesce
-    /// threshold (so none collapse and `dim_markers` genuinely grows large)
-    /// and all still within the CURRENT retained window (so none are
-    /// prunable yet), followed by enough additional content to advance the
-    /// retained window past ALL of them at once — forcing a single
-    /// `prune_dim_markers` call to drop nearly the entire backlog in one
-    /// pass. Asserts the STRUCTURAL outcome (bounded final length), which a
-    /// correct prune must reach regardless of whether the underlying pop is
-    /// O(1) (`VecDeque`, this fix) or O(n) (the previous `Vec::remove(0)`,
-    /// quadratic overall for a pass dropping this many entries) — the
-    /// complexity class itself is what `VecDeque::pop_front` fixes, not
-    /// observable via a plain assertion, but this proves the fix doesn't
-    /// change the OBSERVABLE result: it must still collapse to a bounded
-    /// tail, not leak entries or leave the ring in an inconsistent state.
+    /// A large number of markers, each separated by real content (so none
+    /// collapse and `dim_markers` genuinely grows large) and all still
+    /// within the CURRENT retained window (so none are prunable yet),
+    /// followed by enough additional content to advance the retained window
+    /// past ALL of them at once — forcing a single `prune_dim_markers` call
+    /// to drop nearly the entire backlog in one pass. Asserts the
+    /// STRUCTURAL outcome (bounded final length), which a correct prune
+    /// must reach regardless of whether the underlying pop is O(1)
+    /// (`VecDeque`, this fix) or O(n) (the previous `Vec::remove(0)`,
+    /// quadratic overall for a pass dropping this many entries).
     #[test]
     fn prune_dim_markers_collapses_a_large_backlog_to_a_bounded_tail_in_one_pass() {
-        let chunk_len = (RESIZE_MARKER_COALESCE_MAX_BYTES + 1) as usize;
+        let chunk_len = 8 * 1024 + 1;
         let marker_count = 2_000u32;
         // Capacity comfortably larger than the whole backlog so every
         // marker's offset is still within the retained window before the

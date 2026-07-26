@@ -186,7 +186,7 @@ mod benches {
         // Warm-up.
         for _ in 0..1 {
             let cancel = AtomicBool::new(false);
-            let _ = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &cancel);
+            let _ = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &[], &cancel);
         }
 
         // Measure: build_from_snapshot end-to-end (this is what the worker
@@ -195,7 +195,7 @@ mod benches {
         let start = Instant::now();
         for _ in 0..iters {
             let cancel = AtomicBool::new(false);
-            let replay = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &cancel);
+            let replay = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &[], &cancel);
             std::hint::black_box(replay);
         }
         let elapsed = start.elapsed();
@@ -410,10 +410,10 @@ mod benches {
         // converge before the measurement loop.
         {
             let cancel = AtomicBool::new(false);
-            let bypass = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &cancel)
+            let bypass = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &[], &cancel)
                 .expect("warm-up 1st-pass");
             let rebuilt = TerminalCore::build_scrollback_only_from_snapshot(
-                200, 50, 10_000, &payload, &cancel,
+                200, 50, 10_000, &payload, &[], &cancel,
             )
             .expect("warm-up 2nd-pass");
             let mut live = bypass.core;
@@ -425,10 +425,10 @@ mod benches {
         let start = Instant::now();
         for _ in 0..iters {
             let cancel = AtomicBool::new(false);
-            let bypass = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &cancel)
+            let bypass = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &[], &cancel)
                 .expect("1st-pass");
             let rebuilt = TerminalCore::build_scrollback_only_from_snapshot(
-                200, 50, 10_000, &payload, &cancel,
+                200, 50, 10_000, &payload, &[], &cancel,
             )
             .expect("2nd-pass");
             let mut live = bypass.core;

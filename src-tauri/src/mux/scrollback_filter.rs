@@ -28,20 +28,13 @@ const AGENT_STATUS_OSC_KIND: &str = "agent-status";
 /// Removed:
 /// - OSC 777 viewer launch: `ESC ] 777 ; emterm ; <kind> ; …` (BEL or ST
 ///   terminated) where `<kind>` is one of [`REPLAYABLE_VIEWER_KINDS`]
-///   (`markdown` / `image` / `json` / `yaml`). `<kind> == fold` (fold marks),
-///   `<kind> == resize` (the in-band resize marker, task0001,
-///   `crate::mux::scrollback_buffer::resize_marker_bytes`), and any other
-///   `<kind>` (status-bar, …) are KEPT.
-///
-///   **`resize` is a snapshot-time-only exemption.** This function is the
-///   SNAPSHOT assembly strip (`crate::mux::snapshot_bytes`) — by the time it
-///   runs, every `resize` marker still in the ring was written directly by
-///   `MuxPane::new` / `MuxPane::resize` (bypassing this module entirely), so
-///   keeping the kind here is what lets a genuine daemon-authored marker
-///   survive to replay. The PTY WRITE path uses the separate
-///   [`strip_pty_output_for_scrollback_write`] instead, which strips
-///   `resize` too — see that function's doc comment (review round-1 rework,
-///   finding `0c18ff55032328ab`).
+///   (`markdown` / `image` / `json` / `yaml`). `<kind> == fold` (fold marks)
+///   and any other `<kind>` (status-bar, …) are KEPT. There is no `resize`
+///   kind any more (task0004 round-4 rework D1'): dimensions travel
+///   structurally alongside the payload
+///   (`mux::scrollback_buffer::ScrollbackRingBuffer::read_segments` /
+///   `mux_ipc::protocol::DimSegment`), never as an OSC 777 body in the byte
+///   stream — see [`strip_pty_output_for_scrollback_write`]'s doc comment.
 /// - Kitty graphics APC: `ESC _ G … ESC \`
 /// - SIXEL DCS: `ESC P <params> q …  ESC \` (only DCS whose final byte is
 ///   `q`; a DCS whose *data* merely contains `q`, e.g. DECRQSS, is KEPT).
@@ -67,87 +60,64 @@ const AGENT_STATUS_OSC_KIND: &str = "agent-status";
 /// OSC terminator search is likewise bounded — it stops at the first bare ESC,
 /// so it never scans past the introducer's own (short) run.
 pub(in crate::mux) fn strip_replayable_rich_content(bytes: &[u8]) -> Vec<u8> {
-    strip_rich_content(bytes, false)
+    strip_rich_content(bytes)
 }
 
-/// Write-path variant of [`strip_replayable_rich_content`]: strips
-/// everything that function strips, PLUS a `resize` kind OSC 777 body.
+/// Write-path alias for [`strip_replayable_rich_content`]
+/// (`crate::mux::ipc::pty_spawn::ScrollbackWriteFilter` calls this name).
 ///
-/// **Why a separate function (review round-1 rework, finding
-/// `0c18ff55032328ab`, critical):** a child process can emit the exact
-/// resize-marker byte sequence itself (e.g. `cat`ing a hostile file, or
-/// tailing a remote log). Before this split, the SAME strip function served
-/// both the PTY write path and snapshot assembly, and it kept `resize` on
-/// both — so a PTY-originated forged marker survived into the ring and
-/// reached replay indistinguishably from a real daemon-authored one, with
-/// no upper bound on the dimensions it could carry (the decoder's dimension
-/// clamp is defense in depth, not the fix).
-///
-/// This function is called ONLY from [`crate::mux::ipc::pty_spawn::ScrollbackWriteFilter`],
-/// which sits directly in the PTY reader's write path — the ONLY place raw
-/// child-process bytes reach the scrollback ring. A genuine daemon-authored
-/// marker (`crate::mux::scrollback_buffer::resize_marker_bytes`, written by
-/// `MuxPane::new` / `MuxPane::resize`) is recorded into the ring's
-/// `dim_markers` side channel DIRECTLY (task0003 D1) — it never contributes
-/// a byte to the plain content stream this function filters, so stripping
-/// `resize` here can never remove a real marker. Combined, this establishes
-/// the invariant "every `resize` marker the replay stage ever sees was
-/// written by the daemon, never by PTY output" — the write path can't let a
-/// forged one in, and the daemon never routes its own markers through the
-/// function that would strip them.
-///
-/// task0003 D1 (review round-2 finding `15c54fb74bb91ec7`): the ANSI-
-/// structural strip above only removes a `resize`-kind body when it
-/// recognizes the ENCLOSING sequence as a standalone OSC — a forged marker
-/// nested inside a sequence this pass does not fully consume as a unit
-/// (e.g. one embedded in a non-SIXEL DCS body via a doubled-ESC passthrough
-/// framing) could otherwise survive verbatim. After the structural pass,
-/// [`strip_literal_resize_marker_occurrences`] runs a SECOND, ANSI-context-
-/// FREE pass using the exact same byte-pattern scan the replay decoder
-/// itself uses (`term_core::terminal_core::find_resize_marker`) to remove
-/// ANY literal occurrence of a well-formed marker sequence, however it is
-/// wrapped — closing the whole class of "nested inside something the
-/// structural pass keeps" forgeries at once, rather than chasing each
-/// nesting shape individually.
+/// task0004 round-4 rework (D1'): rounds 1-3 had a separate write-path
+/// variant here that ALSO stripped a `resize`-kind OSC 777 body (plus a
+/// second, ANSI-context-free literal-byte-pattern pass closing forgeries
+/// nested inside sequences the structural pass didn't fully consume) —
+/// because a child process could emit the exact resize-marker byte
+/// sequence, and dimensions were carried IN the byte stream. Every one of
+/// those forgery findings across rounds 1-3 (`0c18ff55032328ab`,
+/// `15c54fb74bb91ec7`, `95fb7c115b0b64da`, `4a22bd439fcdaf56`,
+/// `d4a83d5403bf1d7c`) existed only because there was marker-shaped content
+/// for PTY output to collide with. D1' moves dimensions OUT of the byte
+/// stream entirely (see
+/// `mux::scrollback_buffer::ScrollbackRingBuffer::read_segments` /
+/// `mux_ipc::protocol::DimSegment`) — there is no more `resize` OSC kind,
+/// no marker-shaped byte pattern, and nothing left to strip beyond what
+/// [`strip_replayable_rich_content`] already strips. The write path and the
+/// snapshot path are now IDENTICAL, so this is a plain alias rather than a
+/// second implementation that could drift from it.
 pub(in crate::mux) fn strip_pty_output_for_scrollback_write(bytes: &[u8]) -> Vec<u8> {
-    let structurally_stripped = strip_rich_content(bytes, true);
-    strip_literal_resize_marker_occurrences(&structurally_stripped)
+    strip_rich_content(bytes)
 }
 
-/// Remove EVERY literal occurrence of a well-formed resize marker from
-/// `bytes`, regardless of surrounding ANSI structure (task0003 D1, review
-/// round-2 finding `15c54fb74bb91ec7`). Uses
-/// `term_core::terminal_core::find_resize_marker` directly — the SAME scan
-/// the replay decoder itself runs — so this can never disagree with the
-/// decoder about what counts as a marker: anything this misses, the decoder
-/// wouldn't have recognized either, and anything this removes could never
-/// have been misinterpreted as a marker at replay even if left in place.
+/// Shared implementation for [`strip_replayable_rich_content`] /
+/// [`strip_pty_output_for_scrollback_write`] (the write path and the
+/// snapshot path are identical since task0004 round-4 rework D1' — see
+/// [`strip_pty_output_for_scrollback_write`]'s doc comment for why).
+fn strip_rich_content(bytes: &[u8]) -> Vec<u8> {
+    strip_rich_content_and_remap(bytes, &[]).0
+}
+
+/// [`strip_rich_content`], plus remapping of `watch_offsets` (byte positions
+/// into the ORIGINAL `bytes`, in ascending order) to their corresponding
+/// position in the returned, stripped output — a single O(n + m) pass
+/// (`m = watch_offsets.len()`), not a second scan per offset.
 ///
-/// Runs as an UNCONDITIONAL second pass after the ANSI-structural strip in
-/// [`strip_pty_output_for_scrollback_write`] — not case-by-case per
-/// enclosing sequence type — so it also closes the "sneaks past inside a
-/// DCS/APC/kept-OSC body the structural pass doesn't fully unwrap" class of
-/// forgery outright, rather than requiring a new special case each time a
-/// new nesting shape is found.
-pub(in crate::mux) fn strip_literal_resize_marker_occurrences(bytes: &[u8]) -> Vec<u8> {
+/// Used by `mux::snapshot_bytes` (task0004 round-4 rework, D1') to keep
+/// structural dimension segments (offsets recorded against a pane's RAW
+/// scrollback bytes) valid after this strip removes bytes ahead of them —
+/// without it, a segment's `offset` would point past whatever content the
+/// strip removed before it, misaligning every later segment.
+///
+/// An offset falling strictly inside a sequence this pass REMOVES maps to
+/// the output position immediately after whatever content preceded it (the
+/// removed span contributes nothing, so nothing exists there any more — the
+/// closest faithful stand-in). An offset at or past `bytes.len()` maps to
+/// `out.len()` (the end of the stripped output).
+pub(in crate::mux) fn strip_rich_content_and_remap(
+    bytes: &[u8],
+    watch_offsets: &[usize],
+) -> (Vec<u8>, Vec<usize>) {
     let mut out = Vec::with_capacity(bytes.len());
-    let mut offset = 0usize;
-    while let Some((start, end, _cols, _rows)) =
-        term_core::terminal_core::find_resize_marker(bytes, offset)
-    {
-        out.extend_from_slice(&bytes[offset..start]);
-        offset = end;
-    }
-    out.extend_from_slice(&bytes[offset..]);
-    out
-}
-
-/// Shared implementation for [`strip_replayable_rich_content`] (snapshot
-/// path, `strip_resize_marker == false`) and
-/// [`strip_pty_output_for_scrollback_write`] (PTY write path,
-/// `strip_resize_marker == true`).
-fn strip_rich_content(bytes: &[u8], strip_resize_marker: bool) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
+    let mut remapped = vec![0usize; watch_offsets.len()];
+    let mut next_watch = 0usize;
     let mut i = 0;
     let n = bytes.len();
     // Smallest index at or after which an `ESC \` (ST) terminator may still
@@ -156,6 +126,16 @@ fn strip_rich_content(bytes: &[u8], strip_resize_marker: bool) -> Vec<u8> {
     // tail — that is what keeps the whole pass O(n).
     let mut st_search_from = 0usize;
     while i < n {
+        // Any watch offset at or before the CURRENT input position maps to
+        // the CURRENT output length. Checked at every iteration (including
+        // right after a strip jumps `i` past several input bytes at once),
+        // so an offset inside a stripped span is caught on the very next
+        // iteration with the correct (unchanged, since nothing was pushed
+        // for that span) output length.
+        while next_watch < watch_offsets.len() && watch_offsets[next_watch] <= i {
+            remapped[next_watch] = out.len();
+            next_watch += 1;
+        }
         // Only sequences introduced by ESC are candidates for removal.
         if bytes[i] != 0x1b || i + 1 >= n {
             out.push(bytes[i]);
@@ -189,7 +169,7 @@ fn strip_rich_content(bytes: &[u8], strip_resize_marker: bool) -> Vec<u8> {
                 // OSC: ESC ] ... (BEL | ESC \).
                 if let Some(end) = find_osc_terminator(bytes, i + 2) {
                     let body = &bytes[i + 2..osc_body_end(bytes, end)];
-                    if is_replayable_osc_body(body, strip_resize_marker) {
+                    if is_replayable_osc_body(body) {
                         i = end;
                         continue;
                     }
@@ -215,7 +195,14 @@ fn strip_rich_content(bytes: &[u8], strip_resize_marker: bool) -> Vec<u8> {
             }
         }
     }
-    out
+    // Any remaining watch offsets (including one exactly at `bytes.len()`,
+    // which the loop above never revisits since it exits at `i == n`) map
+    // to the final output length.
+    while next_watch < watch_offsets.len() {
+        remapped[next_watch] = out.len();
+        next_watch += 1;
+    }
+    (out, remapped)
 }
 
 /// Find the index just past an ST terminator (`ESC \`) for a sequence whose
@@ -305,23 +292,17 @@ fn dcs_is_sixel(body: &[u8]) -> bool {
 /// Decide whether an OSC body (the bytes between `ESC ]` and the terminator)
 /// is a replayable rich-content launch sequence that must be stripped.
 ///
-/// `strip_resize_marker` additionally strips a `resize` kind body — set only
-/// by [`strip_pty_output_for_scrollback_write`] (the PTY write path); the
-/// snapshot-time [`strip_replayable_rich_content`] always passes `false` so a
-/// genuine daemon-authored marker survives to replay. See both functions'
-/// doc comments (review round-1 rework, finding `0c18ff55032328ab`).
-fn is_replayable_osc_body(body: &[u8], strip_resize_marker: bool) -> bool {
+/// Identical for the write path and the snapshot path (task0004 round-4
+/// rework D1' — see [`strip_pty_output_for_scrollback_write`]'s doc
+/// comment): there is no more `resize` kind to conditionally strip.
+fn is_replayable_osc_body(body: &[u8]) -> bool {
     // OSC 777 viewer launch: `777;emterm;<kind>;…`. Strip only the viewer
     // kinds and `agent-status` (SPEC FR4: the OSC report itself is never
     // replayed — the daemon resyncs current state out-of-band after a
-    // snapshot); keep `fold` (fold marks) and any other kind (status-bar, …)
-    // except `resize` when `strip_resize_marker` is set.
+    // snapshot); keep `fold` (fold marks) and any other kind (status-bar, …).
     if let Some(rest) = body.strip_prefix(b"777;emterm;") {
         let kind = rest.split(|&c| c == b';').next().unwrap_or(rest);
         if kind == AGENT_STATUS_OSC_KIND.as_bytes() {
-            return true;
-        }
-        if strip_resize_marker && kind == b"resize" {
             return true;
         }
         return REPLAYABLE_VIEWER_KINDS.iter().any(|k| kind == k.as_bytes());
@@ -953,84 +934,44 @@ mod tests {
         assert_eq!(out, input);
     }
 
-    /// task0001 AC-4: the resize marker (`mux::scrollback_buffer::resize_marker_bytes`,
-    /// IMPLEMENTATION.md D1/D2) is an OSC 777 kind that is neither a viewer
-    /// launch nor `agent-status`, so it must survive the snapshot-time
-    /// stripper byte-for-byte — a later replay needs to see it intact to
-    /// resize its core.
+    /// task0004 round-4 rework (D1'): there is no `resize` OSC 777 kind any
+    /// more — a marker-SHAPED byte sequence is just an ordinary, unrecognized
+    /// OSC 777 kind (like `status-bar`) and is KEPT, byte-for-byte, by both
+    /// the snapshot-time strip and the write-path strip (which are now the
+    /// SAME function — see [`strip_pty_output_for_scrollback_write`]'s doc
+    /// comment). This is intentional: since dimensions never travel in the
+    /// byte stream at all any more, there is nothing security-sensitive
+    /// about this sequence surviving — it carries no authority, unlike the
+    /// pre-D1' design where a surviving marker WAS the dimension change.
     #[test]
-    fn strip_keeps_osc777_resize_marker() {
-        let marker = crate::mux::scrollback_buffer::resize_marker_bytes(120, 48);
+    fn marker_shaped_osc777_bytes_are_kept_identically_by_both_strip_paths() {
+        let marker_shaped = b"\x1b]777;emterm;resize;120;48\x07";
         let mut input = b"before".to_vec();
-        input.extend_from_slice(&marker);
+        input.extend_from_slice(marker_shaped);
         input.extend_from_slice(b"after");
-        let out = strip_replayable_rich_content(&input);
+
+        let snapshot_out = strip_replayable_rich_content(&input);
+        let write_out = strip_pty_output_for_scrollback_write(&input);
         assert_eq!(
-            out, input,
-            "resize marker must be preserved byte-for-byte by the strip pass"
+            snapshot_out, input,
+            "marker-shaped bytes are an ordinary, unrecognized OSC 777 kind \
+             and must be preserved byte-for-byte"
         );
-    }
-
-    /// review round-1 rework, finding `0c18ff55032328ab` (critical) / task0002
-    /// AC-1: the WRITE-path variant strips a `resize` marker too — a
-    /// PTY-originated (forged) marker must never reach the ring, unlike the
-    /// snapshot-time `strip_replayable_rich_content` which keeps it.
-    #[test]
-    fn strip_pty_output_for_scrollback_write_removes_resize_marker() {
-        let marker = crate::mux::scrollback_buffer::resize_marker_bytes(65535, 65535);
-        let mut input = b"before".to_vec();
-        input.extend_from_slice(&marker);
-        input.extend_from_slice(b"after");
-        let out = strip_pty_output_for_scrollback_write(&input);
         assert_eq!(
-            out, b"beforeafter",
-            "a resize marker arriving as ordinary PTY output must be stripped at write time"
+            write_out, input,
+            "the write-path strip must behave identically — there is no \
+             more resize-specific stripping"
         );
     }
 
-    /// task0003 D1 (review round-2 finding `15c54fb74bb91ec7`): a forged
-    /// marker NESTED inside a non-SIXEL DCS body (mirroring
-    /// `printf '\ePtmux;\e\e]777;emterm;resize;100;40\a\e\\'` — a doubled
-    /// ESC is the tmux DCS passthrough convention for escaping a literal ESC
-    /// inside the passthrough body) must still be fully removed.
-    ///
-    /// This is ALREADY true of the pre-task0003 structural strip alone: an
-    /// un-consumed (non-SIXEL) DCS falls back to single-byte scanning, which
-    /// re-discovers the nested `ESC ]` as its own OSC candidate and strips
-    /// it via the ordinary `resize`-kind check — verified empirically
-    /// during this task by temporarily disabling
-    /// [`strip_literal_resize_marker_occurrences`] and confirming this
-    /// specific case still passed. The end-to-end AC-1 coverage for THIS
-    /// scenario (proving no code path lets it through, including via the
-    /// full write-filter -> ring -> snapshot -> replay pipeline) lives in
-    /// `mux::ipc::pty_spawn`'s AC-1 tests instead; this test is kept as a
-    /// direct, minimal pin on `strip_pty_output_for_scrollback_write`'s
-    /// observable behavior for this shape (regardless of which internal
-    /// mechanism currently provides it).
+    /// The write-path function and the snapshot-time function behave
+    /// IDENTICALLY for every input (task0004 round-4 rework D1': they are
+    /// now literally the same implementation) — viewer launches, fold
+    /// marks, device queries, and plain text all strip the same way.
     #[test]
-    fn strip_pty_output_for_scrollback_write_removes_resize_marker_nested_in_non_sixel_dcs() {
-        let mut input = b"before".to_vec();
-        input.extend_from_slice(b"\x1bPtmux;\x1b");
-        input.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(100, 40));
-        input.extend_from_slice(b"\x1b\\");
-        input.extend_from_slice(b"after");
-        let out = strip_pty_output_for_scrollback_write(&input);
-        assert!(
-            !out.windows(b"777;emterm;resize".len())
-                .any(|w| w == b"777;emterm;resize"),
-            "a resize marker nested inside a non-SIXEL DCS body must never \
-             survive the write-path strip: {out:?}"
-        );
-    }
-
-    /// The write-path variant must still behave identically to the
-    /// snapshot-time stripper for everything else (viewer launches, fold
-    /// marks, device queries, plain text) — `strip_resize_marker` only adds
-    /// the `resize` kind to the strip set.
-    #[test]
-    fn strip_pty_output_for_scrollback_write_matches_snapshot_strip_for_non_resize_content() {
+    fn strip_pty_output_for_scrollback_write_matches_snapshot_strip_for_everything() {
         let input =
-            b"$ ls\r\n\x1b]777;emterm;markdown;begin\x07\x1b]777;emterm;fold;start;1\x07done";
+            b"$ ls\r\n\x1b]777;emterm;markdown;begin\x07\x1b]777;emterm;fold;start;1\x07done\x1b[c";
         assert_eq!(
             strip_pty_output_for_scrollback_write(input),
             strip_replayable_rich_content(input)
@@ -1363,7 +1304,7 @@ mod tests {
     fn build_snapshot_bytes_funnel_strips_da1_device_query() {
         use crate::mux::snapshot_bytes::build_snapshot_bytes;
         let scrollback = b"prompt$ \x1b[cdone"; // DA1 query in scrollback
-        let out = build_snapshot_bytes(scrollback, b"", false);
+        let (out, _segments) = build_snapshot_bytes(scrollback, &[], b"", false);
         assert!(
             !out.windows(3).any(|w| w == b"\x1b[c"),
             "snapshot must not contain a removable DA1 device query: {out:?}"
@@ -1491,5 +1432,104 @@ mod tests {
         assert_eq!(strip_replayable_rich_content(dsr), dsr);
         let da1 = b"a\x1b[0?cb";
         assert_eq!(strip_replayable_rich_content(da1), da1);
+    }
+
+    // ── task0004 round-4 rework (D1'): strip_rich_content_and_remap keeps
+    // structural dimension segment offsets valid after the strip removes
+    // bytes ahead of them ──────────────────────────────────────────────
+
+    /// No stripping occurs: every watch offset maps to itself.
+    #[test]
+    fn remap_identity_when_nothing_is_stripped() {
+        let input = b"plain text, nothing removable here";
+        let watch = [0usize, 5, input.len()];
+        let (out, remapped) = strip_rich_content_and_remap(input, &watch);
+        assert_eq!(out, input);
+        assert_eq!(remapped, vec![0, 5, input.len()]);
+    }
+
+    /// A watch offset AFTER a stripped sequence shifts back by exactly the
+    /// stripped sequence's length.
+    #[test]
+    fn remap_shifts_offset_after_a_stripped_sequence() {
+        let mut input = b"before".to_vec();
+        let viewer_launch = b"\x1b]777;emterm;markdown;begin\x07";
+        input.extend_from_slice(viewer_launch);
+        input.extend_from_slice(b"after");
+        let after_offset = input.len() - b"after".len();
+        let (out, remapped) = strip_rich_content_and_remap(&input, &[after_offset]);
+        assert_eq!(out, b"beforeafter");
+        assert_eq!(
+            remapped,
+            vec![b"before".len()],
+            "offset must land right where 'after' starts in the stripped output"
+        );
+    }
+
+    /// A watch offset falling STRICTLY INSIDE a stripped sequence maps to
+    /// the output position immediately after the content that preceded it
+    /// (the removed span contributes nothing at any position within it).
+    #[test]
+    fn remap_offset_inside_a_stripped_sequence_maps_past_it() {
+        let mut input = b"before".to_vec();
+        let viewer_launch = b"\x1b]777;emterm;markdown;begin\x07";
+        input.extend_from_slice(viewer_launch);
+        input.extend_from_slice(b"after");
+        // An offset landing mid-way through the viewer launch sequence.
+        let mid_launch_offset = b"before".len() + 5;
+        let (out, remapped) = strip_rich_content_and_remap(&input, &[mid_launch_offset]);
+        assert_eq!(out, b"beforeafter");
+        assert_eq!(remapped, vec![b"before".len()]);
+    }
+
+    /// A watch offset exactly at `bytes.len()` (the end) maps to the final
+    /// output length — the loop's exit condition must not skip this case.
+    #[test]
+    fn remap_offset_at_end_of_input_maps_to_end_of_output() {
+        let mut input = b"before".to_vec();
+        input.extend_from_slice(b"\x1b]777;emterm;markdown;begin\x07");
+        let (out, remapped) = strip_rich_content_and_remap(&input, &[input.len()]);
+        assert_eq!(out, b"before");
+        assert_eq!(remapped, vec![out.len()]);
+    }
+
+    /// Multiple watch offsets in one call, spanning before / inside / after
+    /// TWO stripped sequences, each remapped correctly in a single pass.
+    #[test]
+    fn remap_multiple_offsets_across_multiple_stripped_sequences() {
+        let mut input = Vec::new();
+        input.extend_from_slice(b"AAA"); // [0, 3)
+        let launch1 = b"\x1b]777;emterm;markdown;begin\x07";
+        input.extend_from_slice(launch1); // [3, 3+launch1.len())
+        input.extend_from_slice(b"BBB"); // after launch1
+        let launch2 = b"\x1b_Gi=1,a=T;PAYLOAD\x1b\\"; // Kitty APC
+        input.extend_from_slice(launch2);
+        input.extend_from_slice(b"CCC");
+
+        let offset_in_aaa = 1usize;
+        let offset_in_launch1 = 3 + 2;
+        let offset_in_bbb = 3 + launch1.len() + 1;
+        let offset_in_launch2 = 3 + launch1.len() + 3 + 2;
+        let offset_in_ccc = 3 + launch1.len() + 3 + launch2.len() + 1;
+
+        let watch = [
+            offset_in_aaa,
+            offset_in_launch1,
+            offset_in_bbb,
+            offset_in_launch2,
+            offset_in_ccc,
+        ];
+        let (out, remapped) = strip_rich_content_and_remap(&input, &watch);
+        assert_eq!(out, b"AAABBBCCC");
+        assert_eq!(
+            remapped,
+            vec![
+                1,         // inside AAA: unaffected
+                3,         // inside launch1: maps past "AAA"
+                3 + 1,     // inside BBB: "AAA" + 1 byte into BBB
+                3 + 3,     // inside launch2: maps past "AAABBB"
+                3 + 3 + 1, // inside CCC: "AAABBB" + 1 byte into CCC
+            ]
+        );
     }
 }

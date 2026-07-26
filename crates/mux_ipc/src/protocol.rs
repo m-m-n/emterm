@@ -69,6 +69,109 @@ const OSC_START: &str = "\x1b]";
 /// Maximum IPC frame size (16MB) to prevent OOM.
 pub const MAX_FRAME_LENGTH: usize = 16 * 1024 * 1024;
 
+/// Bytes consumed by a frame body's fixed header (`[type: u8][pane_id: u32]`,
+/// see [`MuxMessage::to_frame_body`]) — the only overhead a payload pays
+/// before it must fit inside [`MAX_FRAME_LENGTH`].
+pub const FRAME_HEADER_LEN: usize = 5;
+
+/// The largest a single message's `payload` may be while still fitting in
+/// one codec frame (task0004 round-4 rework, D4' / review round-3 finding
+/// `ea222e74bb0a046c`): derived directly from the protocol's own hard limit
+/// rather than an ad-hoc "comfortably below today's realistic max" margin,
+/// so a caller deciding "does this snapshot need chunking" cannot pick a
+/// threshold that under- or over-shoots the actual wire constraint.
+pub const MAX_SNAPSHOT_FRAME_PAYLOAD: usize = MAX_FRAME_LENGTH - FRAME_HEADER_LEN;
+
+/// A structural dimension segment (task0004 round-4 rework, D1'): content
+/// starting at byte `offset` into a snapshot payload's bytes was produced
+/// under `(cols, rows)`, until the next segment (if any, in the same list)
+/// takes over. Carried ALONGSIDE the payload bytes (see
+/// [`encode_snapshot_payload`] / [`decode_snapshot_payload`]) — never
+/// encoded as a recognizable byte sequence inside them. This is the
+/// structural replacement for the in-band `OSC 777;emterm;resize;…` marker
+/// bytes rounds 1-3 tried (and repeatedly failed) to filter out of the byte
+/// stream: with dimensions carried here, no byte sequence a child process
+/// can produce is ever interpreted as a dimension change, because nothing
+/// scans the payload for one any more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DimSegment {
+    pub offset: u32,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Magic prefix identifying the structural-segments snapshot payload format.
+/// Chosen to be vanishingly unlikely to appear at the start of a LEGACY
+/// snapshot payload (produced by a daemon that predates this format): such a
+/// payload is either empty or begins with the snapshot clear-prefix
+/// (`ESC[3J…` / `ESC[H…`, always starting with the single byte `0x1b`), never
+/// with these 8 specific bytes. See [`decode_snapshot_payload`]'s doc comment
+/// for the compatibility contract this enables (task0004 AC-11).
+const SNAPSHOT_PAYLOAD_MAGIC: [u8; 8] = *b"EMSNAP2\0";
+
+/// Encode a snapshot payload in the D1' structural format: `segments` (the
+/// sole authority for "which dimensions applied to which bytes") followed by
+/// `bytes` (the plain ANSI payload, carrying no dimension information of its
+/// own). `segments` may be empty.
+///
+/// Wire layout: `MAGIC(8) | segment_count(u32 LE) | segment_count *
+/// (offset(u32 LE) cols(u16 LE) rows(u16 LE)) | bytes`.
+pub fn encode_snapshot_payload(segments: &[DimSegment], bytes: &[u8]) -> Vec<u8> {
+    let mut out =
+        Vec::with_capacity(SNAPSHOT_PAYLOAD_MAGIC.len() + 4 + segments.len() * 8 + bytes.len());
+    out.extend_from_slice(&SNAPSHOT_PAYLOAD_MAGIC);
+    out.extend_from_slice(&(segments.len() as u32).to_le_bytes());
+    for seg in segments {
+        out.extend_from_slice(&seg.offset.to_le_bytes());
+        out.extend_from_slice(&seg.cols.to_le_bytes());
+        out.extend_from_slice(&seg.rows.to_le_bytes());
+    }
+    out.extend_from_slice(bytes);
+    out
+}
+
+/// Decode a snapshot payload produced by [`encode_snapshot_payload`].
+///
+/// **Older-daemon compatibility (task0004 AC-11):** when `payload` does not
+/// start with the magic prefix — or the segment table is truncated /
+/// malformed in any way — this returns `(Vec::new(), payload)`: the WHOLE
+/// input is treated as legacy raw bytes with no structural dimension info.
+/// A caller feeding that through the segment-aware replay path
+/// (`term_core::terminal_core::TerminalCore::reset_and_replay_segments`
+/// with an empty segment list) gets exactly the pre-task0001
+/// single-dimension replay behavior — the documented degradation for an
+/// older daemon that never adopted this wire format. This is a graceful
+/// fallback, not a security boundary: a payload that happens to start with
+/// the 8-byte magic by coincidence would be misparsed, but real ANSI
+/// snapshot payloads always begin with the clear-prefix `ESC` byte (see
+/// [`SNAPSHOT_PAYLOAD_MAGIC`]'s doc comment).
+pub fn decode_snapshot_payload(payload: &[u8]) -> (Vec<DimSegment>, &[u8]) {
+    if !payload.starts_with(&SNAPSHOT_PAYLOAD_MAGIC) {
+        return (Vec::new(), payload);
+    }
+    let rest = &payload[SNAPSHOT_PAYLOAD_MAGIC.len()..];
+    let Some(count_bytes) = rest.get(0..4) else {
+        return (Vec::new(), payload);
+    };
+    let count = u32::from_le_bytes(count_bytes.try_into().expect("4-byte slice")) as usize;
+    let mut cursor = 4usize;
+    let mut segments = Vec::with_capacity(count.min(4096));
+    for _ in 0..count {
+        let Some(seg_bytes) = rest.get(cursor..cursor + 8) else {
+            // Truncated segment table: an incomplete/corrupted transfer.
+            // Fall back to the safest interpretation (no segments, whole
+            // payload as content) rather than guessing.
+            return (Vec::new(), payload);
+        };
+        let offset = u32::from_le_bytes(seg_bytes[0..4].try_into().expect("4-byte slice"));
+        let cols = u16::from_le_bytes(seg_bytes[4..6].try_into().expect("2-byte slice"));
+        let rows = u16::from_le_bytes(seg_bytes[6..8].try_into().expect("2-byte slice"));
+        segments.push(DimSegment { offset, cols, rows });
+        cursor += 8;
+    }
+    (segments, &rest[cursor..])
+}
+
 /// Message type identifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -1853,5 +1956,83 @@ mod tests {
             parse_rejected_server_version("client=2, server=1 (extra info)"),
             Some(1)
         );
+    }
+
+    // ── task0004 round-4 rework (D1'): structural snapshot segments ──────
+
+    #[test]
+    fn encode_decode_snapshot_payload_round_trips_multiple_segments() {
+        let segments = vec![
+            DimSegment {
+                offset: 0,
+                cols: 80,
+                rows: 24,
+            },
+            DimSegment {
+                offset: 42,
+                cols: 120,
+                rows: 40,
+            },
+            DimSegment {
+                offset: 4096,
+                cols: 200,
+                rows: 50,
+            },
+        ];
+        let bytes = b"hello resize world, this is plain content".to_vec();
+        let encoded = encode_snapshot_payload(&segments, &bytes);
+        let (decoded_segments, decoded_bytes) = decode_snapshot_payload(&encoded);
+        assert_eq!(decoded_segments, segments);
+        assert_eq!(decoded_bytes, bytes.as_slice());
+    }
+
+    #[test]
+    fn encode_decode_snapshot_payload_round_trips_empty_segments() {
+        let bytes = b"no dimension changes recorded".to_vec();
+        let encoded = encode_snapshot_payload(&[], &bytes);
+        let (decoded_segments, decoded_bytes) = decode_snapshot_payload(&encoded);
+        assert!(decoded_segments.is_empty());
+        assert_eq!(decoded_bytes, bytes.as_slice());
+    }
+
+    /// AC-11: a legacy payload (no magic prefix — an older daemon that never
+    /// adopted the D1' wire format) decodes with NO segments and the WHOLE
+    /// input preserved as content bytes, never misinterpreted or truncated.
+    #[test]
+    fn decode_snapshot_payload_falls_back_for_legacy_payload_without_magic() {
+        let legacy = b"\x1b[3J\x1b[H\x1b[2Jsome legacy ansi snapshot bytes".to_vec();
+        let (segments, bytes) = decode_snapshot_payload(&legacy);
+        assert!(segments.is_empty());
+        assert_eq!(bytes, legacy.as_slice());
+    }
+
+    #[test]
+    fn decode_snapshot_payload_falls_back_for_empty_payload() {
+        let (segments, bytes) = decode_snapshot_payload(&[]);
+        assert!(segments.is_empty());
+        assert!(bytes.is_empty());
+    }
+
+    /// A truncated segment table (transfer cut mid-header) must not panic
+    /// or read out of bounds — falls back to "no segments, whole payload as
+    /// content" like any other malformed input.
+    #[test]
+    fn decode_snapshot_payload_falls_back_for_truncated_segment_table() {
+        let mut malformed = Vec::new();
+        malformed.extend_from_slice(&SNAPSHOT_PAYLOAD_MAGIC);
+        malformed.extend_from_slice(&2u32.to_le_bytes()); // claims 2 segments
+        malformed.extend_from_slice(&[1, 2, 3]); // but far too few bytes follow
+        let (segments, bytes) = decode_snapshot_payload(&malformed);
+        assert!(segments.is_empty());
+        assert_eq!(bytes, malformed.as_slice());
+    }
+
+    #[test]
+    fn max_snapshot_frame_payload_matches_frame_length_minus_header() {
+        assert_eq!(
+            MAX_SNAPSHOT_FRAME_PAYLOAD,
+            MAX_FRAME_LENGTH - FRAME_HEADER_LEN
+        );
+        assert_eq!(FRAME_HEADER_LEN, 5);
     }
 }
