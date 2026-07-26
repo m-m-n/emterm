@@ -28,8 +28,10 @@ const AGENT_STATUS_OSC_KIND: &str = "agent-status";
 /// Removed:
 /// - OSC 777 viewer launch: `ESC ] 777 ; emterm ; <kind> ; …` (BEL or ST
 ///   terminated) where `<kind>` is one of [`REPLAYABLE_VIEWER_KINDS`]
-///   (`markdown` / `image` / `json` / `yaml`). `<kind> == fold` (fold marks)
-///   and any other `<kind>` (status-bar, …) are KEPT.
+///   (`markdown` / `image` / `json` / `yaml`). `<kind> == fold` (fold marks),
+///   `<kind> == resize` (the in-band resize marker, task0001,
+///   `crate::mux::scrollback_buffer::resize_marker_bytes`), and any other
+///   `<kind>` (status-bar, …) are KEPT.
 /// - Kitty graphics APC: `ESC _ G … ESC \`
 /// - SIXEL DCS: `ESC P <params> q …  ESC \` (only DCS whose final byte is
 ///   `q`; a DCS whose *data* merely contains `q`, e.g. DECRQSS, is KEPT).
@@ -849,6 +851,24 @@ mod tests {
         let input = b"\x1b]777;emterm;status-bar;line\x07tail";
         let out = strip_replayable_rich_content(input);
         assert_eq!(out, input);
+    }
+
+    /// task0001 AC-4: the resize marker (`mux::scrollback_buffer::resize_marker_bytes`,
+    /// IMPLEMENTATION.md D1/D2) is an OSC 777 kind that is neither a viewer
+    /// launch nor `agent-status`, so it must survive the snapshot-time
+    /// stripper byte-for-byte — a later replay needs to see it intact to
+    /// resize its core.
+    #[test]
+    fn strip_keeps_osc777_resize_marker() {
+        let marker = crate::mux::scrollback_buffer::resize_marker_bytes(120, 48);
+        let mut input = b"before".to_vec();
+        input.extend_from_slice(&marker);
+        input.extend_from_slice(b"after");
+        let out = strip_replayable_rich_content(&input);
+        assert_eq!(
+            out, input,
+            "resize marker must be preserved byte-for-byte by the strip pass"
+        );
     }
 
     #[test]
