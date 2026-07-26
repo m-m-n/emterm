@@ -1,0 +1,317 @@
+round: 3
+executed_at: "2026-07-26T21:20:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
+  head_commit: 79989855c89a2e5785aada3d9ee00e4780b6a868
+  changed_files:
+    - crates/term_core/src/snapshot.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/tabs.rs
+plan:
+  floor: [comprehensive, spec, security, performance, architecture]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: skipped, skip_reason: "codex performance が同一範囲をカバー"}
+
+findings:
+  - stable_id: 95fb7c115b0b64da
+    severity: critical
+    category: security
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 132
+    title: "書き込みパスの marker 除去が、除去そのものによって偽装 marker を合成してしまう"
+    description: >-
+      strip_literal_resize_marker_occurrences は前方 1 パスで完全な marker を切り出し、
+      out に bytes[offset..start] を追記して offset = end へ飛ぶ。切り出しによって
+      「生き残った prefix」と「生き残った body」が連結され新たな完全 marker が生まれても
+      out は二度と走査されないため、その合成結果がそのまま ring に書かれる。
+      入力例（すべて子プロセスの通常出力で生成可能）:
+      P + P + SIXEL_DCS + "1;1\a" + "999;999\a"（P は未終端の marker prefix）。
+      構造 strip が SIXEL を除去 → literal strip が 2 個目の P + "1;1\a" を marker と
+      判定して除去 → 残った P + "999;999\a" が完全な偽装 marker になる。
+      タイミング依存もレースも無い決定的な経路。
+    suggestion: >-
+      除去が新たな marker を作りうる以上 1 パスでは閉じない。不動点まで反復するか、
+      完全な marker ではなく RESIZE_MARKER_PREFIX の出現そのものを（これも不動点まで）
+      除去する。ただし根治は下記 D1' 参照。
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送。単発修正ではなく設計変更（marker をバイト列に載せない）で対応"
+
+  - stable_id: 4a22bd439fcdaf56
+    severity: high
+    category: security
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 322
+    title: "pending 溢れ escape hatch がシーケンス途中で切るため、marker を 2 バッチに跨がせると ring 上で再結合する"
+    description: >-
+      round 2 の a6ab9b340119beed は「flush されるバイトに strip を掛ける」ことで塞いだが、
+      escape hatch が pending の途中で切る性質自体は残っている。strip はバッチ単位でしか
+      走らないため、marker を切断点で分割すればどちらのバッチにも完全な marker が存在せず
+      両方とも素通りし、ring の連続領域への追記で完全な marker として再結合する。
+      未終端 DCS → cap ちょうどまでパディング → prefix → 次に body、という確定的な手順。
+    suggestion: >-
+      flush 時に marker 1 個分（32 バイト）を pending に残して次バッチへ持ち越す。
+      根治は下記 D1' 参照。
+    sources: [claude:security, codex:security, codex:architecture]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送"
+
+  - stable_id: d4a83d5403bf1d7c
+    severity: high
+    category: security
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 364
+    title: "PTY read boundaries can reconstruct a forged authoritative marker"
+    description: >-
+      find_safe_boundary は末尾の裸 ESC を安全とみなして出力する。攻撃者が ESC を単独で
+      書き、次に "]777;emterm;resize;4096;4096\a" を書けば、どちらの filter 呼び出しにも
+      完全な marker は含まれないが、ring 上で連続して再結合する。escape hatch とは独立の
+      3 本目の再結合経路。
+    suggestion: >-
+      marker prefix になりうる末尾はすべて filter state に保持する。根治は下記 D1' 参照。
+    sources: [codex:security]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送"
+
+  - stable_id: ab54fae335086db3
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 181
+    title: "8 KiB coalescing が既存コンテンツを「未来の寸法」に付け替え、座標ドリフトを再導入する"
+    description: >-
+      write_resize_marker の D4 coalescing は直前エントリの offset を保持したまま dims だけ
+      上書きする。その結果、旧寸法で既に記録済みの最大 8 KiB 分のコンテンツが read_all() の
+      合成時に新寸法マーカーの後ろに並び、新寸法で replay される。
+      例: 80x24 で pane 作成 → 4 KiB 出力（24 行前提の DECSTBM/CUP を含む）→ 80x48 に
+      リサイズ → coalesce されて dim_markers = [(0, 80, 48)] になり、先頭 4 KiB が
+      48 行のコアへ流し込まれる。これは PROBE D の座標ドリフトそのもの。
+      drag ではない通常操作（pane 作成直後の最初のリサイズ）で常に発火する。
+      既存テストはこの挙動を期待値として固定してしまっている。
+    suggestion: >-
+      介在バイト 0 のときだけ merge する規則に戻す、または coalesce 時に offset を
+      現在の total_written へ前進させて介在コンテンツを直前の dims 配下に残す。
+      「リサイズ前に記録済みのバイトが新寸法マーカーより後ろに来ない」ことを assert する
+      回帰テストを追加する。
+    sources: [claude:comprehensive, claude:spec, codex:architecture]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送。本 feature が潰したはずのバグを通常操作で再導入している"
+
+  - stable_id: 9d4f7176af1b264e
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 313
+    title: "attribute_write の補正マーカーが coalescing に飲まれ、resize マーカー自体を消去する"
+    description: >-
+      attribute_write は補正時に write_resize_marker を呼ぶが、D5 が想定するまさにその状況
+      （resize が直前にマーカーを書き、まだ content が 1 バイトも書かれていない）では
+      offset 差分 0 で coalescing 経路に入り、resize が書いた新寸法エントリを旧寸法で
+      上書きして消す。次の reader チャンクが 8 KiB 以内なら再び coalesce されて新寸法に戻り、
+      stale チャンクは D5 導入前とまったく同じく新寸法に誤帰属される。つまり D5 で追加した
+      PaneDims / attribute_write 一式が通常のチャンクサイズでは何の効果も生んでいない。
+      SIGWINCH を無視する子プロセスでは、リング最終記録寸法が旧寸法のまま固定され、
+      新寸法で取得した shadow parser の画面ダンプが旧寸法マーカー配下で replay される
+      （D5 導入前には存在しなかった新しいドリフト）。
+    suggestion: >-
+      補正マーカーを coalescing 対象外にする（エントリに coalescable フラグを持たせ、
+      両者が coalescable のときだけ畳む）。resize → attribute_write(旧) →
+      attribute_write(新) の 3 ステップ列を検証するテストを追加する。
+    sources: [claude:comprehensive, claude:spec, codex:architecture]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送"
+
+  - stable_id: b235e4dbc61cc4ba
+    severity: high
+    category: architecture
+    file: crates/term_core/src/terminal_core.rs
+    line: 926
+    title: "D6 の bypass ダウングレードが build_from_snapshot の契約を破り、2nd-pass merge が履歴を二重化する"
+    description: >-
+      build_from_snapshot_inner の bypass 無効化は payload の内容によって契約を変えるが、
+      公開ドキュメントは「scrollback は populate されない」を無条件に宣言したままで、
+      SnapshotReplay にモードを示すフィールドも無い。唯一の本番コンシューマ tabs.rs は
+      swap 直後に無条件で spawn_scrollback_restore を呼び、2nd-pass が同じ履歴を prepend
+      するため scrollback が容量いっぱいまで二重化する。発火条件は「保持ウィンドウ内で
+      rows が一度でも増えた」だけで、ウィンドウ最大化やフォントサイズ変更を経た pane の
+      reattach / window 切替という日常操作で踏む。diff 内のテストはこのズレを
+      「テスト側から 2nd-pass merge の手順を外す」ことで回避している。
+    suggestion: >-
+      SnapshotReplay に scrollback_populated / bypass_engaged を追加してドキュメントを
+      改め、tabs.rs がそのフラグを見て spawn_scrollback_restore をスキップする。
+      または bypass を維持したまま row 成長に対応して契約を保つ。
+      回帰テストは tabs 側で「二重化しない」ことを直接検証する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送"
+
+  - stable_id: 981230284d7d3273
+    severity: high
+    category: performance
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 76
+    title: "8 KiB coalescing does not bound realistic resize storms"
+    description: >-
+      206x50 端末のフル再描画はエスケープシーケンス抜きで既に 10 KiB を超えるため、
+      各 drag ステップで再描画する TUI ではマーカーが 1 ステップ 1 本残る。残った各マーカーは
+      replay で TerminalCore::resize を呼ぶので、以後の pane 切替 / attach のたびに
+      最大数百回のフル scrollback リフローが走る。NFR1 対策として入れた coalescing が
+      現実の再描画量を bound できていない。
+    suggestion: >-
+      再描画バイト量とは独立に resize burst を bound する（時刻 / generation ベース）、
+      または replay 側がマーカーごとのフルリフローを避ける。
+      1 resize ステップあたり 8 KiB 超の再描画を使う回帰テストを追加する。
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送"
+
+  - stable_id: 5ac1a5171a1e6a58
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 805
+    title: "dims の公開が master.resize() の後ろにあり、SIGWINCH 直後の出力が旧寸法へ誤補正される"
+    description: >-
+      MuxPane::resize は master.resize()（SIGWINCH 送出）の後に dims.set() している。
+      子プロセスが SIGWINCH に反応して新寸法で再描画した出力に対し、reader の read() が
+      その隙間で戻ると pane_dims.get() はまだ旧寸法を返し、新寸法で生成されたバイトに
+      旧寸法の補正マーカーが付く。D5 導入前は scrollback ロックの順序保証で正しく並んで
+      いたので方向としては退行。加えて ScrollbackWriteFilter の pending バッファリングにより、
+      今回の read で取得した dims が前回以前の read 由来バイトにも一括適用される。
+    suggestion: >-
+      dims.set() を master.resize() の前（scrollback ロック保持区間内）へ移す。
+      pending については feed が「その batch を構成する最古の read の dims」を返すよう拡張する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送"
+
+  - stable_id: ae43417cee647afa
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 185
+    title: "PaneDims は cols/rows が独立 atomic のため、存在しない寸法ペアを読み取り得る"
+    description: >-
+      PaneDims::get() は cols と rows を別々の AtomicU16 から 2 回に分けて load し、
+      set() も別々に store する。リサイズと並行して読むと (旧 cols, 新 rows) のような
+      実際には一度も存在しなかった組み合わせを観測でき、それがそのまま resize マーカーとして
+      記録される。D5 が閉じようとしている並行 resize × read のレースそのもの。
+    suggestion: "cols/rows を単一の AtomicU32 にパックし、get/set を 1 回の load/store にする"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送"
+
+  - stable_id: ef69658e6e4d0b05
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 228
+    title: "read_all() が全コンシューマに転送プロトコルバイトを注入し、非 replay 経路が巻き込まれている"
+    description: >-
+      dim_markers は構造化 SSOT として導入されたが、外部に出す手段が read_all() による
+      バイト列への平坦化のみ。replay を必要としないコンシューマ handle_read_pane
+      （エージェント向け mux-read API）も read_all() の結果をバイト単位に切り出して
+      vt100 パーサに食わせるため、切り出し境界が合成マーカーの内側に落ちると
+      `777;emterm;resize;80;24\a` のような残骸がリテラルテキストとして
+      エージェントの読み取り結果に混入する。
+    suggestion: >-
+      read_all() は raw のままにし、replay 経路専用の read_all_with_resize_markers() と
+      構造化アクセサ read_segments() を追加する。handle_read_pane は raw 版を使う。
+      構造化アクセサを先に切っておけば Candidate C への移行も呼び出し元の差し替えで済む。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送。D1' の構造化転送と同じ方向の指摘"
+
+  - stable_id: b546481e9c2fcc85
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 697
+    title: "Initial pane creation bypasses the shared resize-domain contract"
+    description: >-
+      MuxPane::new は未検証のコンストラクタ寸法を直接記録する一方、clamp_resize_dims を
+      呼ぶのは後段の resize 経路だけ。エンコーダは任意の u16 を書けるがデコーダは 1..=4096
+      しか受け付けないため、範囲外の寸法で pane を作ると最古の retained 出力が誤った寸法で
+      replay される。producer と consumer の定義域が pane 作成経路で統一されていない。
+    suggestion: >-
+      検証済みの寸法型を term_core 側に置き、pane 作成を含む全 producer 境界で要求する。
+      または PTY を開く前に clamp / reject する。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送"
+
+  - stable_id: ea222e74bb0a046c
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/reattach.rs
+    line: 234
+    title: "The frame-derived threshold still chunks snapshots that fit in one frame"
+    description: >-
+      プロトコルの frame body は 5 バイトヘッダ + payload なので MAX_FRAME_LENGTH - 5 まで
+      単一フレームに収まるが、REATTACH_CHUNK_SIZE は 1 MiB 丸ごと引いている。
+      15 MiB 〜 16 MiB - 5 の snapshot が、単一フレームで運べるのに marker-blind な
+      chunked PtyOutput 経路へ不要に回される。
+    suggestion: "frame body ヘッダサイズと MAX_PAYLOAD_LENGTH をプロトコル SSOT に定義し、それを単一フレームしきい値に使う"
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送"
+
+  - stable_id: c84c751810cbd8cb
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 228
+    title: "Read-time marker synthesis copies the entire scrollback twice"
+    description: >-
+      全 MuxPane が最低でも初期寸法マーカーを持つため、read_all_raw が retained buffer 全体を
+      確保・コピーし、read_all がさらに別の出力を確保してマーカーを挿入しながら全体を再コピー
+      する。本番では可視化再開 / pane 切替のたびに scrollback mutex を保持したまま同期実行され、
+      2 MiB リングでは約 4 MiB のコピーが PTY 記録をブロックする。
+    suggestion: >-
+      リングの 1〜2 個の時系列スライスとマーカー offset から合成結果を直接構築し、
+      中間 raw Vec と 2 度目の全体コピーを無くす。
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 4 rework へ回送。D1' の構造化転送を採れば read_all の合成自体が不要になる"
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: routed-to-rework
+  note: >-
+    residual critical/high はいずれも設計レベルの問題（marker をバイト列に載せる限り
+    再結合経路が塞ぎきれない / coalescing の帰属規則そのものが誤り）で、
+    単一ファイル限定の review-editor では対応できない。
+
+residual_critical_high: 7
+rework_required: true
