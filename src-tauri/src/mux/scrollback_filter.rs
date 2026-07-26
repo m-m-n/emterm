@@ -87,14 +87,59 @@ pub(in crate::mux) fn strip_replayable_rich_content(bytes: &[u8]) -> Vec<u8> {
 /// which sits directly in the PTY reader's write path — the ONLY place raw
 /// child-process bytes reach the scrollback ring. A genuine daemon-authored
 /// marker (`crate::mux::scrollback_buffer::resize_marker_bytes`, written by
-/// `MuxPane::new` / `MuxPane::resize`) is appended to the ring DIRECTLY,
-/// never through this filter — so stripping `resize` here can never remove
-/// a real marker. Combined, this establishes the invariant "every `resize`
-/// marker the replay stage ever sees was written by the daemon, never by
-/// PTY output" — the write path can't let a forged one in, and the daemon
-/// never routes its own markers through the function that would strip them.
+/// `MuxPane::new` / `MuxPane::resize`) is recorded into the ring's
+/// `dim_markers` side channel DIRECTLY (task0003 D1) — it never contributes
+/// a byte to the plain content stream this function filters, so stripping
+/// `resize` here can never remove a real marker. Combined, this establishes
+/// the invariant "every `resize` marker the replay stage ever sees was
+/// written by the daemon, never by PTY output" — the write path can't let a
+/// forged one in, and the daemon never routes its own markers through the
+/// function that would strip them.
+///
+/// task0003 D1 (review round-2 finding `15c54fb74bb91ec7`): the ANSI-
+/// structural strip above only removes a `resize`-kind body when it
+/// recognizes the ENCLOSING sequence as a standalone OSC — a forged marker
+/// nested inside a sequence this pass does not fully consume as a unit
+/// (e.g. one embedded in a non-SIXEL DCS body via a doubled-ESC passthrough
+/// framing) could otherwise survive verbatim. After the structural pass,
+/// [`strip_literal_resize_marker_occurrences`] runs a SECOND, ANSI-context-
+/// FREE pass using the exact same byte-pattern scan the replay decoder
+/// itself uses (`term_core::terminal_core::find_resize_marker`) to remove
+/// ANY literal occurrence of a well-formed marker sequence, however it is
+/// wrapped — closing the whole class of "nested inside something the
+/// structural pass keeps" forgeries at once, rather than chasing each
+/// nesting shape individually.
 pub(in crate::mux) fn strip_pty_output_for_scrollback_write(bytes: &[u8]) -> Vec<u8> {
-    strip_rich_content(bytes, true)
+    let structurally_stripped = strip_rich_content(bytes, true);
+    strip_literal_resize_marker_occurrences(&structurally_stripped)
+}
+
+/// Remove EVERY literal occurrence of a well-formed resize marker from
+/// `bytes`, regardless of surrounding ANSI structure (task0003 D1, review
+/// round-2 finding `15c54fb74bb91ec7`). Uses
+/// `term_core::terminal_core::find_resize_marker` directly — the SAME scan
+/// the replay decoder itself runs — so this can never disagree with the
+/// decoder about what counts as a marker: anything this misses, the decoder
+/// wouldn't have recognized either, and anything this removes could never
+/// have been misinterpreted as a marker at replay even if left in place.
+///
+/// Runs as an UNCONDITIONAL second pass after the ANSI-structural strip in
+/// [`strip_pty_output_for_scrollback_write`] — not case-by-case per
+/// enclosing sequence type — so it also closes the "sneaks past inside a
+/// DCS/APC/kept-OSC body the structural pass doesn't fully unwrap" class of
+/// forgery outright, rather than requiring a new special case each time a
+/// new nesting shape is found.
+pub(in crate::mux) fn strip_literal_resize_marker_occurrences(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut offset = 0usize;
+    while let Some((start, end, _cols, _rows)) =
+        term_core::terminal_core::find_resize_marker(bytes, offset)
+    {
+        out.extend_from_slice(&bytes[offset..start]);
+        offset = end;
+    }
+    out.extend_from_slice(&bytes[offset..]);
+    out
 }
 
 /// Shared implementation for [`strip_replayable_rich_content`] (snapshot
@@ -940,6 +985,41 @@ mod tests {
         assert_eq!(
             out, b"beforeafter",
             "a resize marker arriving as ordinary PTY output must be stripped at write time"
+        );
+    }
+
+    /// task0003 D1 (review round-2 finding `15c54fb74bb91ec7`): a forged
+    /// marker NESTED inside a non-SIXEL DCS body (mirroring
+    /// `printf '\ePtmux;\e\e]777;emterm;resize;100;40\a\e\\'` — a doubled
+    /// ESC is the tmux DCS passthrough convention for escaping a literal ESC
+    /// inside the passthrough body) must still be fully removed.
+    ///
+    /// This is ALREADY true of the pre-task0003 structural strip alone: an
+    /// un-consumed (non-SIXEL) DCS falls back to single-byte scanning, which
+    /// re-discovers the nested `ESC ]` as its own OSC candidate and strips
+    /// it via the ordinary `resize`-kind check — verified empirically
+    /// during this task by temporarily disabling
+    /// [`strip_literal_resize_marker_occurrences`] and confirming this
+    /// specific case still passed. The end-to-end AC-1 coverage for THIS
+    /// scenario (proving no code path lets it through, including via the
+    /// full write-filter -> ring -> snapshot -> replay pipeline) lives in
+    /// `mux::ipc::pty_spawn`'s AC-1 tests instead; this test is kept as a
+    /// direct, minimal pin on `strip_pty_output_for_scrollback_write`'s
+    /// observable behavior for this shape (regardless of which internal
+    /// mechanism currently provides it).
+    #[test]
+    fn strip_pty_output_for_scrollback_write_removes_resize_marker_nested_in_non_sixel_dcs() {
+        let mut input = b"before".to_vec();
+        input.extend_from_slice(b"\x1bPtmux;\x1b");
+        input.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(100, 40));
+        input.extend_from_slice(b"\x1b\\");
+        input.extend_from_slice(b"after");
+        let out = strip_pty_output_for_scrollback_write(&input);
+        assert!(
+            !out.windows(b"777;emterm;resize".len())
+                .any(|w| w == b"777;emterm;resize"),
+            "a resize marker nested inside a non-SIXEL DCS body must never \
+             survive the write-path strip: {out:?}"
         );
     }
 
