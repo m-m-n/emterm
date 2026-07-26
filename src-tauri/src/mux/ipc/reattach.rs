@@ -37,22 +37,27 @@ use crate::mux::snapshot_bytes::build_snapshot_bytes;
 /// themselves — `build_snapshot_bytes` decides whether to include it based
 /// on the parser's `alternate_screen()` flag.
 ///
-/// `scrollback` is read by the caller WITHOUT clearing (the buffer lives for
-/// the lifetime of the pane). An empty `scrollback` yields a valid
-/// clear + (optional) shadow snapshot (history replays as empty).
+/// `scrollback` / `scrollback_segments` are read by the caller WITHOUT
+/// clearing (the buffer lives for the lifetime of the pane), via
+/// `ScrollbackRingBuffer::read_segments` (task0004 round-4 rework D1'). An
+/// empty `scrollback` yields a valid clear + (optional) shadow snapshot
+/// (history replays as empty). Returns the assembled payload bytes and the
+/// segments re-expressed as offsets into THAT payload — see
+/// [`build_snapshot_bytes`] for why the offsets need adjusting.
 ///
 /// Used by both the reattach path (combined with ring buffer delta) and the
 /// on-demand `RequestPaneSnapshot` path.
 pub(super) fn build_shadow_parser_snapshot(
     shadow_parser: &SharedShadowParser,
     scrollback: &[u8],
-) -> Vec<u8> {
+    scrollback_segments: &[(usize, u16, u16)],
+) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
     let (screen_data, alt_screen) = {
         let parser = lock_shadow_parser(shadow_parser);
         let screen = parser.screen();
         (screen.contents_formatted(), screen.alternate_screen())
     };
-    build_snapshot_bytes(scrollback, &screen_data, alt_screen)
+    build_snapshot_bytes(scrollback, scrollback_segments, &screen_data, alt_screen)
 }
 
 /// Collect reattach data for panes in the given session.
@@ -84,10 +89,10 @@ pub(super) async fn collect_reattach_data(
     title_tx: &TitleChangeSender,
     new_kick: oneshot::Sender<()>,
     visible: bool,
-) -> Vec<(PaneId, Vec<u8>)> {
+) -> Vec<(PaneId, Vec<u8>, Vec<(usize, u16, u16)>)> {
     let mut new_kick_opt = Some(new_kick);
     let mut old_kick: Option<oneshot::Sender<()>> = None;
-    let mut data: Vec<(PaneId, Vec<u8>)> = Vec::new();
+    let mut data: Vec<(PaneId, Vec<u8>, Vec<(usize, u16, u16)>)> = Vec::new();
     {
         let mut mgr = session_manager.lock().await;
         if let Some(session) = mgr.get_session_mut(session_id) {
@@ -138,7 +143,7 @@ pub(super) async fn collect_reattach_data(
                             "collect_reattach: pane {} hidden reattach, kept Detached (snapshot deferred)",
                             pane.id
                         );
-                        data.push((pane.id, Vec::new()));
+                        data.push((pane.id, Vec::new(), Vec::new()));
                         continue;
                     }
 
@@ -149,13 +154,17 @@ pub(super) async fn collect_reattach_data(
                     // grid (populating its history) before the shadow snapshot
                     // overwrites the visible screen with a known good final
                     // state. Scrollback is read WITHOUT clearing (FR6: the
-                    // buffer lives for the lifetime of the pane).
+                    // buffer lives for the lifetime of the pane), via
+                    // `read_segments` (task0004 round-4 rework D1') so the
+                    // structural dimension segments travel alongside the
+                    // bytes instead of as in-band markers.
                     let (screen_data, is_alternate_screen) = {
                         let parser = lock_shadow_parser(&pane.shadow_parser);
                         let screen = parser.screen();
                         (screen.contents_formatted(), screen.alternate_screen())
                     };
-                    let scrollback_data = pane.scrollback.lock().unwrap().read_all();
+                    let (scrollback_data, scrollback_segments) =
+                        pane.scrollback.lock().unwrap().read_segments();
 
                     let mut target = pane.output_target.lock().unwrap();
                     let target_was = match &*target {
@@ -192,10 +201,14 @@ pub(super) async fn collect_reattach_data(
 
                     // Shared layout: ESC[3J ESC[H ESC[2J + scrollback (rich
                     // content stripped) + screen + alt-mode.
-                    let combined =
-                        build_snapshot_bytes(&scrollback_data, &screen_data, is_alternate_screen);
+                    let (combined, combined_segments) = build_snapshot_bytes(
+                        &scrollback_data,
+                        &scrollback_segments,
+                        &screen_data,
+                        is_alternate_screen,
+                    );
 
-                    data.push((pane.id, combined));
+                    data.push((pane.id, combined, combined_segments));
                 }
             }
         }
@@ -210,45 +223,42 @@ pub(super) async fn collect_reattach_data(
 }
 
 /// Maximum payload bytes per `PtyOutput` frame emitted during reattach replay
-/// — and (task0003 D7) the threshold above which a pane's snapshot falls
-/// back to marker-blind chunked framing at all.
+/// — and the threshold above which a pane's snapshot falls back to
+/// segment-blind chunked framing at all.
 ///
-/// A pane's ring buffer can hold up to `DEFAULT_SCROLLBACK_CAPACITY` (2 MiB)
-/// but a single codec frame must stay under `MAX_FRAME_LENGTH` (16 MiB).
-///
-/// task0003 D7 (review round-2 finding `98eec9bbef67704a`): "Snapshot
-/// identity must not depend on payload size" — the PREVIOUS value (8 MiB)
-/// was chosen as "comfortably above today's realistic max" rather than
-/// derived from the actual hard limit, so the fallback's un-reachability
-/// rested on today's `DEFAULT_SCROLLBACK_CAPACITY` happening to stay well
-/// under it — a coincidence of current configuration, not a structural
-/// guarantee. Raised to just under `MAX_FRAME_LENGTH` itself (leaving only
-/// headroom for the frame header) so the ONLY way to exceed this is to
-/// exceed the codec's own hard per-frame limit — at which point no single
-/// frame could carry the payload marker-aware OR marker-blind, so splitting
-/// is unavoidable regardless of this constant's value. Given
-/// `DEFAULT_SCROLLBACK_CAPACITY` is fixed at 2 MiB (out of scope for this
-/// task to change) plus a shadow-parser screen dump (bounded by cols × rows,
-/// a few hundred KiB at most even for a very large terminal), every
-/// realistic snapshot now takes the single-frame, marker-aware path.
-const REATTACH_CHUNK_SIZE: usize = MAX_FRAME_LENGTH - (1024 * 1024);
+/// task0004 round-4 rework (D4', review round-3 finding
+/// `ea222e74bb0a046c`): derived directly from the protocol's own hard limit
+/// (`mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD` = `MAX_FRAME_LENGTH` minus
+/// the fixed 5-byte frame header) rather than an ad-hoc "comfortably below
+/// today's realistic max" margin — the previous 1 MiB headroom had no
+/// structural justification and under-utilized the single-frame path for no
+/// reason. A pane's ring buffer holds at most `DEFAULT_SCROLLBACK_CAPACITY`
+/// (2 MiB) plus a shadow-parser screen dump (bounded by cols × rows, a few
+/// hundred KiB at most even for a very large terminal) plus the segment
+/// header's own small overhead, so every realistic snapshot still takes the
+/// single-frame path; only a pane whose payload genuinely exceeds the
+/// codec's hard per-frame limit needs to split at all.
+const REATTACH_CHUNK_SIZE: usize = MAX_SNAPSHOT_FRAME_PAYLOAD;
 
 /// Send reattach data (PaneCreated + buffered output) to the client.
 ///
-/// review round-1 rework, finding `20b2bed0aaf48f94`: a non-empty snapshot
-/// that fits in a single codec frame is sent as ONE `MessageType::SnapshotRestore`
-/// frame, not `PtyOutput`. The client's `apply_mux_message::Snapshot|SnapshotRestore`
-/// arm routes through `reset_and_replay`, which interprets in-band resize
-/// markers (`find_resize_marker`) baked into the snapshot by
-/// `MuxPane::new` / `MuxPane::resize`; the old `PtyOutput` live path does
-/// not, so a resize-spanning reattach replayed the same coordinate-drifted
-/// content the marker fix exists to prevent. A `SnapshotRestore` frame MUST
-/// arrive whole — the client resets its core before replaying it — so this
-/// only applies while the buffer fits in one frame. A buffer too large for a
-/// single frame (see [`REATTACH_CHUNK_SIZE`]'s doc for why this is not
-/// reachable by any realistic per-pane snapshot) falls back to the pre-fix
-/// chunked `PtyOutput` framing — marker-blind, but no worse than before this
-/// fix.
+/// A non-empty snapshot whose WIRE-ENCODED size (payload bytes +
+/// `mux_ipc::protocol::encode_snapshot_payload`'s structural segment header,
+/// task0004 round-4 rework D1') fits in a single codec frame is sent as ONE
+/// `MessageType::SnapshotRestore` frame carrying that encoded payload. The
+/// client's `apply_mux_message::Snapshot|SnapshotRestore` arm decodes the
+/// segments and routes through `reset_and_replay_segments`, which resizes
+/// per segment instead of scanning the payload for markers. A
+/// `SnapshotRestore` frame MUST arrive whole — the client resets its core
+/// before replaying it — so this only applies while the encoded buffer fits
+/// in one frame.
+///
+/// A buffer too large for a single frame (see [`REATTACH_CHUNK_SIZE`]'s doc
+/// for why this is not reachable by any realistic per-pane snapshot) falls
+/// back to chunked `PtyOutput` framing of the RAW (un-encoded, segment-less)
+/// bytes — segment-blind, but no worse than before D1': the client's live
+/// `process_pty_data` path never resized on marker bytes anyway, so this
+/// fallback is behaviorally unchanged from the pre-D1' design.
 ///
 /// Large per-pane buffers are split into multiple `PtyOutput` frames so each
 /// frame fits under `MAX_FRAME_LENGTH`. Without this split, a 34 MiB ring
@@ -257,12 +267,12 @@ const REATTACH_CHUNK_SIZE: usize = MAX_FRAME_LENGTH - (1024 * 1024);
 /// synthesises a Detached that drops the GUI out of mux mode mid-reattach.
 pub(super) async fn send_reattach_data<S>(
     framed: &mut Framed<S, MuxCodec>,
-    reattach_data: &[(PaneId, Vec<u8>)],
+    reattach_data: &[(PaneId, Vec<u8>, Vec<(usize, u16, u16)>)],
 ) -> Result<(), ()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    for (pane_id, buffered) in reattach_data {
+    for (pane_id, buffered, segments) in reattach_data {
         let resp = MuxMessage::control(MessageType::PaneCreated, *pane_id, pane_id);
         if framed.send(resp).await.is_err() {
             return Err(());
@@ -270,11 +280,12 @@ where
         if buffered.is_empty() {
             continue;
         }
-        if buffered.len() <= REATTACH_CHUNK_SIZE {
+        let encoded = crate::mux::session::pane::encode_snapshot_segments(buffered, segments);
+        if encoded.len() <= REATTACH_CHUNK_SIZE {
             let msg = MuxMessage {
                 msg_type: MessageType::SnapshotRestore,
                 pane_id: *pane_id,
-                payload: buffered.clone(),
+                payload: encoded,
             };
             if framed.send(msg).await.is_err() {
                 return Err(());
@@ -283,9 +294,9 @@ where
         }
         log::warn!(
             "reattach: pane {} snapshot {}B exceeds the single-frame limit \
-             ({}B); falling back to chunked PtyOutput framing (marker-blind)",
+             ({}B); falling back to chunked PtyOutput framing (segment-blind)",
             pane_id,
-            buffered.len(),
+            encoded.len(),
             REATTACH_CHUNK_SIZE
         );
         for chunk in buffered.chunks(REATTACH_CHUNK_SIZE) {
@@ -398,7 +409,7 @@ mod tests {
         parser.lock().unwrap().process(b"SCREEN-CONTENT");
         let scrollback = b"HISTORY-LINE-ONE";
 
-        let snapshot = build_shadow_parser_snapshot(&parser, scrollback);
+        let (snapshot, _segments) = build_shadow_parser_snapshot(&parser, scrollback, &[]);
 
         // Leading clear-and-home.
         assert!(
@@ -436,7 +447,7 @@ mod tests {
         parser.lock().unwrap().process(b"\x1b[?1049h");
         parser.lock().unwrap().process(b"ONLY-SCREEN");
 
-        let snapshot = build_shadow_parser_snapshot(&parser, b"");
+        let (snapshot, _segments) = build_shadow_parser_snapshot(&parser, b"", &[]);
 
         assert!(snapshot.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
         assert!(
@@ -515,12 +526,12 @@ mod tests {
         );
 
         // Verify pane IDs
-        let mut pane_ids: Vec<u32> = data.iter().map(|(id, _)| *id).collect();
+        let mut pane_ids: Vec<u32> = data.iter().map(|(id, _, _)| *id).collect();
         pane_ids.sort();
         assert_eq!(pane_ids, vec![1, 2], "Should contain pane IDs 1 and 2");
 
         // Verify all buffers start with the reset sequence (screen restoration)
-        for (_, buf) in &data {
+        for (_, buf, _) in &data {
             assert!(
                 !buf.is_empty(),
                 "Reattach data should include screen restoration"
@@ -575,7 +586,7 @@ mod tests {
         );
 
         // Verify both have buffered data
-        for (_, buf) in &data {
+        for (_, buf, _) in &data {
             assert!(!buf.is_empty(), "Detached panes should have buffered data");
         }
     }
@@ -873,7 +884,7 @@ mod tests {
         // Payload that spans just over two full chunks.
         let payload_len = REATTACH_CHUNK_SIZE * 2 + 123;
         let big: Vec<u8> = (0..payload_len).map(|i| (i % 251) as u8).collect();
-        let reattach_data = vec![(42u32, big.clone())];
+        let reattach_data = vec![(42u32, big.clone(), Vec::new())];
 
         // Sender task.
         let sender = tokio::spawn(async move {
@@ -920,7 +931,7 @@ mod tests {
         let mut server_framed = Framed::new(server, MuxCodec::new());
         let client_framed = Framed::new(client, MuxCodec::new());
 
-        let reattach_data = vec![(7u32, Vec::<u8>::new())];
+        let reattach_data = vec![(7u32, Vec::<u8>::new(), Vec::new())];
         let sender = tokio::spawn(async move {
             let mut framed = client_framed;
             send_reattach_data(&mut framed, &reattach_data).await
@@ -945,8 +956,12 @@ mod tests {
     /// review round-1 rework, finding 20b2bed0aaf48f94 / task0002 AC-6: a
     /// normal-sized (well under `REATTACH_CHUNK_SIZE`) non-empty buffer is
     /// sent as ONE `MessageType::SnapshotRestore` frame — not chunked
-    /// `PtyOutput` — so the client routes it through the marker-interpreting
-    /// `reset_and_replay` path.
+    /// `PtyOutput` — so the client routes it through the segment-aware
+    /// `reset_and_replay_segments` path (task0004 round-4 rework D1'). The
+    /// wire payload is the D1'-encoded form
+    /// (`mux_ipc::protocol::encode_snapshot_payload`); decoding it back must
+    /// recover the original bytes with no segments (this test supplies
+    /// none).
     #[tokio::test]
     async fn test_send_reattach_data_sends_snapshot_restore_for_normal_sized_buffer() {
         use futures::StreamExt;
@@ -957,7 +972,7 @@ mod tests {
         let client_framed = Framed::new(client, MuxCodec::new());
 
         let payload = b"\x1b[3J\x1b[H\x1b[2Jsome scrollback bytes".to_vec();
-        let reattach_data = vec![(9u32, payload.clone())];
+        let reattach_data = vec![(9u32, payload.clone(), Vec::new())];
         let sender = tokio::spawn(async move {
             let mut framed = client_framed;
             send_reattach_data(&mut framed, &reattach_data).await
@@ -970,21 +985,28 @@ mod tests {
         let second = server_framed.next().await.unwrap().unwrap();
         assert_eq!(second.msg_type, MessageType::SnapshotRestore);
         assert_eq!(second.pane_id, 9);
-        assert_eq!(second.payload, payload);
+        let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&second.payload);
+        assert!(segments.is_empty());
+        assert_eq!(content, payload.as_slice());
 
         sender.await.unwrap().expect("send_reattach_data ok");
     }
 
-    /// End-to-end companion to the above: a reattach snapshot containing a
-    /// resize marker, sent through `send_reattach_data` and decoded on the
-    /// client side via the SAME `MuxCodec` the real connection uses, is
-    /// recognized as `SnapshotRestore` and — once fed through
-    /// `TerminalCore::reset_and_replay`, mirroring what
-    /// `apply_mux_message` does for that arm — actually resizes the replay
-    /// core. This is the behavior the old `PtyOutput` framing could not
-    /// provide (the live path never calls `reset_and_replay`).
+    /// End-to-end companion to the above: a reattach snapshot whose
+    /// structural segments (task0004 round-4 rework D1') describe a
+    /// mid-stream dimension change, sent through `send_reattach_data` and
+    /// decoded on the client side via the SAME `MuxCodec` the real
+    /// connection uses, is recognized as `SnapshotRestore`, decodes back to
+    /// the same segments (`mux_ipc::protocol::decode_snapshot_payload`),
+    /// and — once fed through `TerminalCore::reset_and_replay_segments`,
+    /// mirroring what `apply_mux_message` does for that arm — actually
+    /// resizes the replay core mid-drain (witnessed via
+    /// `reflow_call_count`, since the final size always equals the
+    /// caller's target regardless of what happened mid-stream). This is
+    /// the behavior the old `PtyOutput` framing could not provide (the
+    /// live path never calls `reset_and_replay_segments`).
     #[tokio::test]
-    async fn test_send_reattach_data_snapshot_restore_payload_is_marker_interpretable() {
+    async fn test_send_reattach_data_snapshot_restore_payload_is_segment_interpretable() {
         use futures::StreamExt;
         use tokio_util::codec::Framed;
 
@@ -992,11 +1014,14 @@ mod tests {
         let mut server_framed = Framed::new(server, MuxCodec::new());
         let client_framed = Framed::new(client, MuxCodec::new());
 
-        let mut scrollback = b"before\r\n".to_vec();
-        scrollback.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(100, 30));
-        scrollback.extend_from_slice(b"after\r\n");
-        let snapshot = build_snapshot_bytes(&scrollback, b"", false);
-        let reattach_data = vec![(3u32, snapshot)];
+        let before = b"before\r\n".to_vec();
+        let after = b"after\r\n".to_vec();
+        let mut scrollback = before.clone();
+        scrollback.extend_from_slice(&after);
+        let segments = vec![(0usize, 80u16, 24u16), (before.len(), 100u16, 30u16)];
+        let (snapshot, snapshot_segments) =
+            build_snapshot_bytes(&scrollback, &segments, b"", false);
+        let reattach_data = vec![(3u32, snapshot, snapshot_segments)];
 
         let sender = tokio::spawn(async move {
             let mut framed = client_framed;
@@ -1007,8 +1032,28 @@ mod tests {
         let snapshot_frame = server_framed.next().await.unwrap().unwrap();
         assert_eq!(snapshot_frame.msg_type, MessageType::SnapshotRestore);
 
+        let (dim_segments, content) =
+            mux_ipc::protocol::decode_snapshot_payload(&snapshot_frame.payload);
+        assert!(
+            !dim_segments.is_empty(),
+            "the mid-stream dimension segment must survive the wire round-trip"
+        );
+        let replay_segments: Vec<term_core::terminal_core::ReplaySegment> = dim_segments
+            .iter()
+            .map(|d| term_core::terminal_core::ReplaySegment {
+                offset: d.offset,
+                cols: d.cols,
+                rows: d.rows,
+            })
+            .collect();
+
         let mut core = term_core::terminal_core::TerminalCore::new(80, 24, 1000);
-        core.reset_and_replay(&snapshot_frame.payload);
+        let before_reflows = core.reflow_call_count();
+        core.reset_and_replay_segments(content, &replay_segments);
+        assert!(
+            core.reflow_call_count() > before_reflows,
+            "the mid-stream segment must actually trigger a resize during replay"
+        );
         assert_eq!(
             core.cols(),
             80,
@@ -1019,17 +1064,20 @@ mod tests {
         sender.await.unwrap().expect("send_reattach_data ok");
     }
 
-    /// task0003 AC-5 (D7, review round-2 finding `98eec9bbef67704a`): a
-    /// reattach snapshot ABOVE the OLD 8 MiB chunking threshold still goes
-    /// out as ONE `SnapshotRestore` frame (not split into marker-blind
-    /// `PtyOutput` chunks) and replays with its resize marker honored —
-    /// exactly as a smaller snapshot does. Uses the same cursor-addressed
-    /// coordinate-drift technique
-    /// `mux::ipc::pty_spawn`'s `resize_marker_fix_tui_cursor_addressed_recording_replays_without_cross_line_mixing`
-    /// test proves catches a genuinely ignored marker, padded well past the
-    /// old threshold with plain scrollback content.
+    /// task0003 AC-5 (D7, review round-2 finding `98eec9bbef67704a`) /
+    /// task0004 AC-10 (D4', review round-3 finding `ea222e74bb0a046c`): a
+    /// reattach snapshot ABOVE the OLD 8 MiB chunking threshold (and
+    /// comfortably fitting the CURRENT `MAX_SNAPSHOT_FRAME_PAYLOAD`
+    /// derived-from-the-protocol-limit threshold) still goes out as ONE
+    /// `SnapshotRestore` frame (not split into segment-blind `PtyOutput`
+    /// chunks) and replays with its dimension segments honored — exactly
+    /// as a smaller snapshot does. Uses the same cursor-addressed
+    /// coordinate-drift technique `mux::ipc::pty_spawn`'s
+    /// `tui_cursor_addressed_recording_replays_without_cross_line_mixing`
+    /// test proves catches genuinely dropped segment attribution, padded
+    /// well past the old threshold with plain scrollback content.
     #[tokio::test]
-    async fn test_send_reattach_data_above_old_chunking_threshold_still_marker_aware() {
+    async fn test_send_reattach_data_above_old_chunking_threshold_still_segment_aware() {
         use futures::StreamExt;
         use tokio_util::codec::Framed;
 
@@ -1042,7 +1090,7 @@ mod tests {
         let cols: u16 = 100;
         let rows_a: u16 = 32;
         let rows_b: u16 = 30;
-        let mut recording = crate::mux::scrollback_buffer::resize_marker_bytes(cols, rows_a);
+        let mut recording = Vec::new();
         for i in 0..rows_a.max(rows_b) + 20 {
             recording.extend_from_slice(format!("chat history line {i}\r\n").as_bytes());
         }
@@ -1055,9 +1103,7 @@ mod tests {
                 format!("\x1b7\x1b[{rows_a};0fSTATUS-A[{tick}]\x1b8").as_bytes(),
             );
         }
-        recording.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
-            cols, rows_b,
-        ));
+        let mid_offset = recording.len();
         recording.extend_from_slice(b"\n\x1b7");
         recording.extend_from_slice(format!("\x1b[0;{}r", rows_b - 1).as_bytes());
         recording.extend_from_slice(b"\x1b8\x1b[1A");
@@ -1067,18 +1113,24 @@ mod tests {
                 format!("\x1b7\x1b[{rows_b};0fSTATUS-B[{tick}]\x1b8").as_bytes(),
             );
         }
-        // Pad (as plain scrollback content, no markers) past the OLD
-        // chunking threshold.
+        // Pad (as plain scrollback content, no segment authority attached)
+        // past the OLD chunking threshold.
         while recording.len() < OLD_CHUNK_THRESHOLD + 1024 {
             recording.extend_from_slice(b"padding line to grow past the old threshold\r\n");
         }
-        let snapshot = build_snapshot_bytes(&recording, b"", false);
+        let segments = vec![(0usize, cols, rows_a), (mid_offset, cols, rows_b)];
+        let (snapshot, snapshot_segments) = build_snapshot_bytes(&recording, &segments, b"", false);
         assert!(
             snapshot.len() > OLD_CHUNK_THRESHOLD,
             "test prerequisite: snapshot must exceed the OLD chunking threshold"
         );
+        assert!(
+            snapshot.len() <= REATTACH_CHUNK_SIZE,
+            "test prerequisite: snapshot must still fit the CURRENT single-frame \
+             threshold (derived from the protocol's actual payload limit)"
+        );
 
-        let reattach_data = vec![(5u32, snapshot)];
+        let reattach_data = vec![(5u32, snapshot, snapshot_segments)];
         let sender = tokio::spawn(async move {
             let mut framed = client_framed;
             send_reattach_data(&mut framed, &reattach_data).await
@@ -1090,12 +1142,21 @@ mod tests {
             frame.msg_type,
             MessageType::SnapshotRestore,
             "a snapshot above the OLD chunking threshold must still arrive \
-             as a single marker-aware SnapshotRestore frame, not chunked \
+             as a single segment-aware SnapshotRestore frame, not chunked \
              PtyOutput"
         );
 
+        let (dim_segments, content) = mux_ipc::protocol::decode_snapshot_payload(&frame.payload);
+        let replay_segments: Vec<term_core::terminal_core::ReplaySegment> = dim_segments
+            .iter()
+            .map(|d| term_core::terminal_core::ReplaySegment {
+                offset: d.offset,
+                cols: d.cols,
+                rows: d.rows,
+            })
+            .collect();
         let mut core = term_core::terminal_core::TerminalCore::new(cols, rows_a, 10_000);
-        core.reset_and_replay(&frame.payload);
+        core.reset_and_replay_segments(content, &replay_segments);
         let mut tainted = Vec::new();
         for r in 0..rows_a {
             let line = core.get_line_text(r);
@@ -1106,7 +1167,7 @@ mod tests {
         assert!(
             tainted.is_empty(),
             "a snapshot above the old chunking threshold must replay with \
-             its resize marker honored — zero cross-phase-mixed rows, got \
+             its dimension segments honored — zero cross-phase-mixed rows, got \
              {tainted:?}"
         );
 
@@ -1188,7 +1249,7 @@ mod tests {
         let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
 
         assert_eq!(data.len(), 1, "expected 1 entry");
-        let (pane_id, snapshot) = &data[0];
+        let (pane_id, snapshot, _segments) = &data[0];
         assert_eq!(*pane_id, 1);
         assert!(snapshot.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
         // The captured passthrough sequence must NOT be in the snapshot.
@@ -1266,7 +1327,7 @@ mod tests {
             collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, false).await;
 
         assert_eq!(data.len(), 1, "one entry for the live pane");
-        let (pane_id, snapshot) = &data[0];
+        let (pane_id, snapshot, _segments) = &data[0];
         assert_eq!(*pane_id, 1);
         assert!(
             snapshot.is_empty(),
@@ -1405,7 +1466,7 @@ mod tests {
         let data2 =
             collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx2, true).await;
         assert_eq!(data2.len(), 1);
-        let (_pid, snapshot) = &data2[0];
+        let (_pid, snapshot, _segments) = &data2[0];
         assert!(snapshot.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
         assert!(
             snapshot
