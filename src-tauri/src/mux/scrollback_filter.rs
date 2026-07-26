@@ -32,6 +32,16 @@ const AGENT_STATUS_OSC_KIND: &str = "agent-status";
 ///   `<kind> == resize` (the in-band resize marker, task0001,
 ///   `crate::mux::scrollback_buffer::resize_marker_bytes`), and any other
 ///   `<kind>` (status-bar, …) are KEPT.
+///
+///   **`resize` is a snapshot-time-only exemption.** This function is the
+///   SNAPSHOT assembly strip (`crate::mux::snapshot_bytes`) — by the time it
+///   runs, every `resize` marker still in the ring was written directly by
+///   `MuxPane::new` / `MuxPane::resize` (bypassing this module entirely), so
+///   keeping the kind here is what lets a genuine daemon-authored marker
+///   survive to replay. The PTY WRITE path uses the separate
+///   [`strip_pty_output_for_scrollback_write`] instead, which strips
+///   `resize` too — see that function's doc comment (review round-1 rework,
+///   finding `0c18ff55032328ab`).
 /// - Kitty graphics APC: `ESC _ G … ESC \`
 /// - SIXEL DCS: `ESC P <params> q …  ESC \` (only DCS whose final byte is
 ///   `q`; a DCS whose *data* merely contains `q`, e.g. DECRQSS, is KEPT).
@@ -57,6 +67,41 @@ const AGENT_STATUS_OSC_KIND: &str = "agent-status";
 /// OSC terminator search is likewise bounded — it stops at the first bare ESC,
 /// so it never scans past the introducer's own (short) run.
 pub(in crate::mux) fn strip_replayable_rich_content(bytes: &[u8]) -> Vec<u8> {
+    strip_rich_content(bytes, false)
+}
+
+/// Write-path variant of [`strip_replayable_rich_content`]: strips
+/// everything that function strips, PLUS a `resize` kind OSC 777 body.
+///
+/// **Why a separate function (review round-1 rework, finding
+/// `0c18ff55032328ab`, critical):** a child process can emit the exact
+/// resize-marker byte sequence itself (e.g. `cat`ing a hostile file, or
+/// tailing a remote log). Before this split, the SAME strip function served
+/// both the PTY write path and snapshot assembly, and it kept `resize` on
+/// both — so a PTY-originated forged marker survived into the ring and
+/// reached replay indistinguishably from a real daemon-authored one, with
+/// no upper bound on the dimensions it could carry (the decoder's dimension
+/// clamp is defense in depth, not the fix).
+///
+/// This function is called ONLY from [`crate::mux::ipc::pty_spawn::ScrollbackWriteFilter`],
+/// which sits directly in the PTY reader's write path — the ONLY place raw
+/// child-process bytes reach the scrollback ring. A genuine daemon-authored
+/// marker (`crate::mux::scrollback_buffer::resize_marker_bytes`, written by
+/// `MuxPane::new` / `MuxPane::resize`) is appended to the ring DIRECTLY,
+/// never through this filter — so stripping `resize` here can never remove
+/// a real marker. Combined, this establishes the invariant "every `resize`
+/// marker the replay stage ever sees was written by the daemon, never by
+/// PTY output" — the write path can't let a forged one in, and the daemon
+/// never routes its own markers through the function that would strip them.
+pub(in crate::mux) fn strip_pty_output_for_scrollback_write(bytes: &[u8]) -> Vec<u8> {
+    strip_rich_content(bytes, true)
+}
+
+/// Shared implementation for [`strip_replayable_rich_content`] (snapshot
+/// path, `strip_resize_marker == false`) and
+/// [`strip_pty_output_for_scrollback_write`] (PTY write path,
+/// `strip_resize_marker == true`).
+fn strip_rich_content(bytes: &[u8], strip_resize_marker: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     let n = bytes.len();
@@ -99,7 +144,7 @@ pub(in crate::mux) fn strip_replayable_rich_content(bytes: &[u8]) -> Vec<u8> {
                 // OSC: ESC ] ... (BEL | ESC \).
                 if let Some(end) = find_osc_terminator(bytes, i + 2) {
                     let body = &bytes[i + 2..osc_body_end(bytes, end)];
-                    if is_replayable_osc_body(body) {
+                    if is_replayable_osc_body(body, strip_resize_marker) {
                         i = end;
                         continue;
                     }
@@ -214,14 +259,24 @@ fn dcs_is_sixel(body: &[u8]) -> bool {
 
 /// Decide whether an OSC body (the bytes between `ESC ]` and the terminator)
 /// is a replayable rich-content launch sequence that must be stripped.
-fn is_replayable_osc_body(body: &[u8]) -> bool {
+///
+/// `strip_resize_marker` additionally strips a `resize` kind body — set only
+/// by [`strip_pty_output_for_scrollback_write`] (the PTY write path); the
+/// snapshot-time [`strip_replayable_rich_content`] always passes `false` so a
+/// genuine daemon-authored marker survives to replay. See both functions'
+/// doc comments (review round-1 rework, finding `0c18ff55032328ab`).
+fn is_replayable_osc_body(body: &[u8], strip_resize_marker: bool) -> bool {
     // OSC 777 viewer launch: `777;emterm;<kind>;…`. Strip only the viewer
     // kinds and `agent-status` (SPEC FR4: the OSC report itself is never
     // replayed — the daemon resyncs current state out-of-band after a
-    // snapshot); keep `fold` (fold marks) and any other kind (status-bar, …).
+    // snapshot); keep `fold` (fold marks) and any other kind (status-bar, …)
+    // except `resize` when `strip_resize_marker` is set.
     if let Some(rest) = body.strip_prefix(b"777;emterm;") {
         let kind = rest.split(|&c| c == b';').next().unwrap_or(rest);
         if kind == AGENT_STATUS_OSC_KIND.as_bytes() {
+            return true;
+        }
+        if strip_resize_marker && kind == b"resize" {
             return true;
         }
         return REPLAYABLE_VIEWER_KINDS.iter().any(|k| kind == k.as_bytes());
@@ -868,6 +923,37 @@ mod tests {
         assert_eq!(
             out, input,
             "resize marker must be preserved byte-for-byte by the strip pass"
+        );
+    }
+
+    /// review round-1 rework, finding `0c18ff55032328ab` (critical) / task0002
+    /// AC-1: the WRITE-path variant strips a `resize` marker too — a
+    /// PTY-originated (forged) marker must never reach the ring, unlike the
+    /// snapshot-time `strip_replayable_rich_content` which keeps it.
+    #[test]
+    fn strip_pty_output_for_scrollback_write_removes_resize_marker() {
+        let marker = crate::mux::scrollback_buffer::resize_marker_bytes(65535, 65535);
+        let mut input = b"before".to_vec();
+        input.extend_from_slice(&marker);
+        input.extend_from_slice(b"after");
+        let out = strip_pty_output_for_scrollback_write(&input);
+        assert_eq!(
+            out, b"beforeafter",
+            "a resize marker arriving as ordinary PTY output must be stripped at write time"
+        );
+    }
+
+    /// The write-path variant must still behave identically to the
+    /// snapshot-time stripper for everything else (viewer launches, fold
+    /// marks, device queries, plain text) — `strip_resize_marker` only adds
+    /// the `resize` kind to the strip set.
+    #[test]
+    fn strip_pty_output_for_scrollback_write_matches_snapshot_strip_for_non_resize_content() {
+        let input =
+            b"$ ls\r\n\x1b]777;emterm;markdown;begin\x07\x1b]777;emterm;fold;start;1\x07done";
+        assert_eq!(
+            strip_pty_output_for_scrollback_write(input),
+            strip_replayable_rich_content(input)
         );
     }
 

@@ -219,6 +219,22 @@ const REATTACH_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
 /// Send reattach data (PaneCreated + buffered output) to the client.
 ///
+/// review round-1 rework, finding `20b2bed0aaf48f94`: a non-empty snapshot
+/// that fits in a single codec frame is sent as ONE `MessageType::SnapshotRestore`
+/// frame, not `PtyOutput`. The client's `apply_mux_message::Snapshot|SnapshotRestore`
+/// arm routes through `reset_and_replay`, which interprets in-band resize
+/// markers (`find_resize_marker`) baked into the snapshot by
+/// `MuxPane::new` / `MuxPane::resize`; the old `PtyOutput` live path does
+/// not, so a resize-spanning reattach replayed the same coordinate-drifted
+/// content the marker fix exists to prevent. A `SnapshotRestore` frame MUST
+/// arrive whole — the client resets its core before replaying it — so this
+/// only applies while the buffer fits in one frame (comfortably true today:
+/// `DEFAULT_SCROLLBACK_CAPACITY` is 2 MiB per pane, well under
+/// `REATTACH_CHUNK_SIZE`). A buffer too large for a single frame
+/// (unreachable at today's capacity, kept as a safety net) falls back to
+/// the pre-fix chunked `PtyOutput` framing — marker-blind, but no worse
+/// than before this fix.
+///
 /// Large per-pane buffers are split into multiple `PtyOutput` frames so each
 /// frame fits under `MAX_FRAME_LENGTH`. Without this split, a 34 MiB ring
 /// buffer (e.g. a long-detached `glances` pane) produces a single oversized
@@ -236,6 +252,27 @@ where
         if framed.send(resp).await.is_err() {
             return Err(());
         }
+        if buffered.is_empty() {
+            continue;
+        }
+        if buffered.len() <= REATTACH_CHUNK_SIZE {
+            let msg = MuxMessage {
+                msg_type: MessageType::SnapshotRestore,
+                pane_id: *pane_id,
+                payload: buffered.clone(),
+            };
+            if framed.send(msg).await.is_err() {
+                return Err(());
+            }
+            continue;
+        }
+        log::warn!(
+            "reattach: pane {} snapshot {}B exceeds the single-frame limit \
+             ({}B); falling back to chunked PtyOutput framing (marker-blind)",
+            pane_id,
+            buffered.len(),
+            REATTACH_CHUNK_SIZE
+        );
         for chunk in buffered.chunks(REATTACH_CHUNK_SIZE) {
             let msg = MuxMessage::pty_output(*pane_id, chunk.to_vec());
             if framed.send(msg).await.is_err() {
@@ -888,6 +925,83 @@ mod tests {
             Ok(Some(Ok(frame))) => panic!("unexpected extra frame: {:?}", frame.msg_type),
             Ok(Some(Err(e))) => panic!("unexpected stream error: {}", e),
         }
+    }
+
+    /// review round-1 rework, finding 20b2bed0aaf48f94 / task0002 AC-6: a
+    /// normal-sized (well under `REATTACH_CHUNK_SIZE`) non-empty buffer is
+    /// sent as ONE `MessageType::SnapshotRestore` frame — not chunked
+    /// `PtyOutput` — so the client routes it through the marker-interpreting
+    /// `reset_and_replay` path.
+    #[tokio::test]
+    async fn test_send_reattach_data_sends_snapshot_restore_for_normal_sized_buffer() {
+        use futures::StreamExt;
+        use tokio_util::codec::Framed;
+
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let mut server_framed = Framed::new(server, MuxCodec::new());
+        let client_framed = Framed::new(client, MuxCodec::new());
+
+        let payload = b"\x1b[3J\x1b[H\x1b[2Jsome scrollback bytes".to_vec();
+        let reattach_data = vec![(9u32, payload.clone())];
+        let sender = tokio::spawn(async move {
+            let mut framed = client_framed;
+            send_reattach_data(&mut framed, &reattach_data).await
+        });
+
+        let first = server_framed.next().await.unwrap().unwrap();
+        assert_eq!(first.msg_type, MessageType::PaneCreated);
+        assert_eq!(first.pane_id, 9);
+
+        let second = server_framed.next().await.unwrap().unwrap();
+        assert_eq!(second.msg_type, MessageType::SnapshotRestore);
+        assert_eq!(second.pane_id, 9);
+        assert_eq!(second.payload, payload);
+
+        sender.await.unwrap().expect("send_reattach_data ok");
+    }
+
+    /// End-to-end companion to the above: a reattach snapshot containing a
+    /// resize marker, sent through `send_reattach_data` and decoded on the
+    /// client side via the SAME `MuxCodec` the real connection uses, is
+    /// recognized as `SnapshotRestore` and — once fed through
+    /// `TerminalCore::reset_and_replay`, mirroring what
+    /// `apply_mux_message` does for that arm — actually resizes the replay
+    /// core. This is the behavior the old `PtyOutput` framing could not
+    /// provide (the live path never calls `reset_and_replay`).
+    #[tokio::test]
+    async fn test_send_reattach_data_snapshot_restore_payload_is_marker_interpretable() {
+        use futures::StreamExt;
+        use tokio_util::codec::Framed;
+
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let mut server_framed = Framed::new(server, MuxCodec::new());
+        let client_framed = Framed::new(client, MuxCodec::new());
+
+        let mut scrollback = b"before\r\n".to_vec();
+        scrollback.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(100, 30));
+        scrollback.extend_from_slice(b"after\r\n");
+        let snapshot = build_snapshot_bytes(&scrollback, b"", false);
+        let reattach_data = vec![(3u32, snapshot)];
+
+        let sender = tokio::spawn(async move {
+            let mut framed = client_framed;
+            send_reattach_data(&mut framed, &reattach_data).await
+        });
+
+        let _pane_created = server_framed.next().await.unwrap().unwrap();
+        let snapshot_frame = server_framed.next().await.unwrap().unwrap();
+        assert_eq!(snapshot_frame.msg_type, MessageType::SnapshotRestore);
+
+        let mut core = term_core::terminal_core::TerminalCore::new(80, 24, 1000);
+        core.reset_and_replay(&snapshot_frame.payload);
+        assert_eq!(
+            core.cols(),
+            80,
+            "core must end back at the caller's original size"
+        );
+        assert_eq!(core.rows(), 24);
+
+        sender.await.unwrap().expect("send_reattach_data ok");
     }
 
     /// Test: session_list reports correct pane_count for multi-window session.
