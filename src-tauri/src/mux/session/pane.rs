@@ -7,7 +7,9 @@ use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
 use crate::agent_status::{AgentState, AgentStatusEvent};
-use crate::mux::scrollback_buffer::{DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer};
+use crate::mux::scrollback_buffer::{
+    DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer, resize_marker_bytes,
+};
 use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
@@ -618,6 +620,15 @@ impl MuxPane {
         writer: Box<dyn Write + Send>,
         master: Box<dyn MasterPty + Send>,
     ) -> Self {
+        let mut scrollback = ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY);
+        // IMPLEMENTATION.md D1/D2 (task0001): record the pane's INITIAL
+        // dimensions as the very first scrollback bytes, mirroring what
+        // `resize()` writes at every later transition. Without this, a
+        // replay has no marker to resize into before the EARLIEST retained
+        // segment (produced under THESE dims), reproducing the
+        // resize-interleaved coordinate drift for that leading segment even
+        // when every later resize is correctly marked.
+        scrollback.write(&resize_marker_bytes(cols, rows));
         Self {
             id,
             cols,
@@ -638,9 +649,7 @@ impl MuxPane {
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),
             passthrough_scanner: Arc::new(StdMutex::new(PassthroughScanner::new())),
-            scrollback: Arc::new(StdMutex::new(ScrollbackRingBuffer::new(
-                DEFAULT_SCROLLBACK_CAPACITY,
-            ))),
+            scrollback: Arc::new(StdMutex::new(scrollback)),
         }
     }
 
@@ -683,6 +692,25 @@ impl MuxPane {
                 pixel_height: 0,
             })
             .map_err(|e| format!("PTY resize failed: {}", e))?;
+        // IMPLEMENTATION.md D1/D2 (task0001): record an in-band resize
+        // marker into the scrollback stream so a later replay resizes its
+        // core to match the dimensions the FOLLOWING bytes were produced
+        // for. This is the fix for the resize-interleaved scrollback replay
+        // coordinate drift (PROBE D, `tmp/apt-progress-bar-regression-2026-07-09.md`):
+        // without it, a scrollback recording spanning a resize replays into
+        // a core fixed at one row count and misinterprets DECSTBM / CUP
+        // coordinates recorded for the other, mixing content from two
+        // logical output lines onto one row. Written directly into
+        // `self.scrollback` (not fed through the PTY reader thread) since
+        // it is synthesized here, not real PTY output; a marker-unaware
+        // replay consumer treats it as an inert, unrecognized OSC (see
+        // `scrollback_buffer::resize_marker_bytes`). Only recorded when the
+        // dimensions actually change, so a redundant Resize message does
+        // not pollute the stream.
+        if self.cols != cols || self.rows != rows {
+            let marker = resize_marker_bytes(cols, rows);
+            self.scrollback.lock().unwrap().write(&marker);
+        }
         self.cols = cols;
         self.rows = rows;
         let mut parser = lock_shadow_parser(&self.shadow_parser);
@@ -1016,6 +1044,86 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(pane.cols, 120);
         assert_eq!(pane.rows, 40);
+    }
+
+    // ── resize marker recording (task0001, IMPLEMENTATION.md D1/D2) ──────
+
+    /// `MuxPane::new` records the pane's INITIAL dimensions as the very
+    /// first scrollback bytes, so a replay always has a marker to resize
+    /// into before the earliest retained segment.
+    #[cfg(unix)]
+    #[test]
+    fn test_new_pane_records_initial_dims_marker_in_scrollback() {
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let pane = MuxPane::new(1, 80, 24, target, writer, pair.master);
+        assert_eq!(
+            pane.scrollback.lock().unwrap().read_all(),
+            crate::mux::scrollback_buffer::resize_marker_bytes(80, 24)
+        );
+    }
+
+    /// A resize that actually changes dimensions records a marker with the
+    /// NEW dimensions into the pane's scrollback ring.
+    #[cfg(unix)]
+    #[test]
+    fn test_resize_records_marker_in_scrollback_when_dims_change() {
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let mut pane = MuxPane::new(1, 80, 24, target, writer, pair.master);
+
+        pane.resize(120, 40).unwrap();
+
+        let recorded = pane.scrollback.lock().unwrap().read_all();
+        let expected_marker = crate::mux::scrollback_buffer::resize_marker_bytes(120, 40);
+        assert!(
+            recorded
+                .windows(expected_marker.len())
+                .any(|w| w == expected_marker),
+            "resize must record a marker with the new dimensions"
+        );
+    }
+
+    /// A no-op resize (same dimensions as current) must NOT record a
+    /// redundant marker — only `MuxPane::new`'s initial marker is present.
+    #[cfg(unix)]
+    #[test]
+    fn test_resize_same_dims_does_not_record_extra_marker() {
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let mut pane = MuxPane::new(1, 80, 24, target, writer, pair.master);
+
+        pane.resize(80, 24).unwrap(); // same dims as construction
+
+        assert_eq!(
+            pane.scrollback.lock().unwrap().read_all(),
+            crate::mux::scrollback_buffer::resize_marker_bytes(80, 24),
+            "a no-op resize must not add a second marker"
+        );
     }
 
     /// Build a `Detached` target with a `NetworkDetach`-only reason and

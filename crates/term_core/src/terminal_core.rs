@@ -635,9 +635,77 @@ impl TerminalCore {
     /// the resume loop (`process_pty_data_fully`) — a single
     /// `process_pty_data` call would drop everything after the first
     /// buffer-switch sequence inside the snapshot.
+    ///
+    /// Honors in-band resize markers (IMPLEMENTATION.md D1, task0001) via
+    /// [`Self::replay_with_resize_markers`] — see that method for the fix
+    /// this implements (the resize-interleaved scrollback replay coordinate
+    /// drift, `tmp/apt-progress-bar-regression-2026-07-09.md` PROBE D).
     pub fn reset_and_replay(&mut self, bytes: &[u8]) -> Vec<u8> {
         self.reset();
-        self.process_pty_data_fully(bytes)
+        // The non-cancellable entry point: delegates to the cancellable
+        // drain with a flag that is never set, so `reset_and_replay` and
+        // `build_from_snapshot`'s cancellable drain share one
+        // marker-interpretation implementation and cannot drift. `NEVER` is
+        // never stored to, so the drain always runs to completion and
+        // returns `Some` — the unwrap cannot fail.
+        static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        self.replay_with_resize_markers(bytes, &NEVER)
+            .expect("non-cancellable drain always completes")
+    }
+
+    /// Replay `bytes` into `self`, honoring any in-band resize markers
+    /// (IMPLEMENTATION.md D1, task0001) recorded by
+    /// `mux::scrollback_buffer::resize_marker_bytes` at each daemon-side
+    /// pane resize (`MuxPane::resize`): the stream is split at each marker,
+    /// and `self` is resized to the marker's dimensions before the bytes
+    /// recorded under THAT size are fed to the parser.
+    ///
+    /// This is the fix for the resize-interleaved scrollback replay
+    /// coordinate drift (`tmp/apt-progress-bar-regression-2026-07-09.md`
+    /// PROBE D): a replay core fixed at one row count misinterprets
+    /// DECSTBM / CUP coordinates recorded for a DIFFERENT row count, mixing
+    /// content from two logical output lines onto one row. Feeding each
+    /// segment under the row count it was produced for keeps the record and
+    /// replay coordinate systems in agreement throughout.
+    ///
+    /// After the final segment, `self` is resized back to its dimensions at
+    /// the START of this call (the caller's requested / current pane size)
+    /// if a marker changed them, so a replay with any number of intervening
+    /// resizes always ends at the size the caller asked for.
+    ///
+    /// A marker-free `bytes` never matches [`find_resize_marker`], so this
+    /// reduces to a single unsplit `process_pty_data_fully_cancellable`
+    /// call — byte-for-byte identical to the pre-marker-support replay
+    /// (task0001 AC-3).
+    ///
+    /// `cancel` is threaded straight through to each segment's
+    /// `process_pty_data_fully_cancellable`; a flag observed mid-drain
+    /// aborts the whole replay and returns `None`, matching that function's
+    /// contract (a superseded off-thread `build_from_snapshot` worker bails
+    /// out at the next chunk boundary instead of finishing the parse).
+    fn replay_with_resize_markers(
+        &mut self,
+        bytes: &[u8],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Option<Vec<u8>> {
+        let target_cols = self.cols;
+        let target_rows = self.rows;
+        let mut actions = Vec::new();
+        let mut offset = 0usize;
+        while let Some((marker_start, marker_end, cols, rows)) = find_resize_marker(bytes, offset) {
+            actions.extend(
+                self.process_pty_data_fully_cancellable(&bytes[offset..marker_start], cancel)?,
+            );
+            if (self.cols, self.rows) != (cols, rows) {
+                self.resize(cols, rows);
+            }
+            offset = marker_end;
+        }
+        actions.extend(self.process_pty_data_fully_cancellable(&bytes[offset..], cancel)?);
+        if (self.cols, self.rows) != (target_cols, target_rows) {
+            self.resize(target_cols, target_rows);
+        }
+        Some(actions)
     }
 
     /// Construct a fresh `TerminalCore` sized to `(cols, rows,
@@ -737,10 +805,23 @@ impl TerminalCore {
         // scrollback *contents* are intentionally not populated. The 2nd-pass
         // scrollback-restore worker needs the contents, so it sets
         // `bypass = false` and pays the per-row compression cost.
+        //
+        // Known narrow interaction (task0001): if `payload` contains a
+        // resize marker, `replay_with_resize_markers` below calls the
+        // content-preserving `resize` (full reflow) mid-drain, which is NOT
+        // bypass-aware and can populate `scrollback_slim` even while
+        // `bypass == true`. This does not corrupt the returned grid/cursor
+        // (the marker fix's correctness target) — it only means
+        // `evicted_total` / `get_scrollback_length()` may under-report by a
+        // few rows for a snapshot that BOTH crosses a resize AND is large
+        // enough to take this off-thread path (>= 64 KiB). Fully closing
+        // that gap would mean teaching `resize_reflow` about the bypass
+        // invariant, out of scope here (mux output-pipeline performance is
+        // a separate known topic, IMPLEMENTATION.md "Out of Scope").
         if bypass {
             core.enable_snapshot_bypass();
         }
-        let actions = match core.process_pty_data_fully_cancellable(payload, cancel) {
+        let actions = match core.replay_with_resize_markers(payload, cancel) {
             Some(a) => a,
             None => {
                 // Cancelled mid-drain: leave the core consistent (clear the
@@ -1252,11 +1333,187 @@ impl TerminalCore {
     }
 }
 
+// ── Resize-marker replay interpretation (IMPLEMENTATION.md D1/D2, task0001) ─
+
+/// Prefix of the in-band resize marker `mux::scrollback_buffer::resize_marker_bytes`
+/// (in the `emterm` daemon crate) writes into a pane's scrollback at each PTY
+/// resize: `ESC ] 777 ; emterm ; resize ; <cols> ; <rows> BEL`. `term_core`
+/// has no dependency on that crate, so this is a hand-kept mirror of the
+/// encoder's byte format — a contract on bytes, not shared Rust code. See
+/// that function's doc comment for the full rationale (why OSC 777, why it
+/// survives the daemon's scrollback filters, why it degrades gracefully for
+/// a marker-unaware consumer).
+const RESIZE_MARKER_PREFIX: &[u8] = b"\x1b]777;emterm;resize;";
+
+/// Scan `bytes[from..]` for the next complete, well-formed resize marker.
+/// Returns `(marker_start, marker_end, cols, rows)`: `marker_start..marker_end`
+/// is the marker's full byte span (introducer through the terminating BEL,
+/// inclusive) to excise from the replay stream, and `(cols, rows)` are its
+/// parsed dimensions.
+///
+/// Returns `None` when no marker is found. A candidate that starts with the
+/// marker prefix but is truncated (no BEL before the end of `bytes`) or
+/// malformed (non-numeric / zero fields / extra fields) is treated as "not a
+/// marker" and left for the normal ANSI parser to consume as an ordinary
+/// (harmless, unrecognized) OSC sequence — an unterminated candidate stops
+/// the scan entirely (mirrors the daemon-side scrollback filters' "leave a
+/// partial sequence alone" discipline), while a terminated-but-malformed one
+/// only skips past its own prefix so a later, well-formed marker is still
+/// found.
+fn find_resize_marker(bytes: &[u8], from: usize) -> Option<(usize, usize, u16, u16)> {
+    let mut search_from = from;
+    while search_from + RESIZE_MARKER_PREFIX.len() <= bytes.len() {
+        let rel = bytes[search_from..]
+            .windows(RESIZE_MARKER_PREFIX.len())
+            .position(|w| w == RESIZE_MARKER_PREFIX)?;
+        let marker_start = search_from + rel;
+        let body_start = marker_start + RESIZE_MARKER_PREFIX.len();
+        let bel_rel = bytes[body_start..].iter().position(|&b| b == 0x07)?;
+        let bel_at = body_start + bel_rel;
+        if let Some((cols, rows)) = parse_resize_marker_dims(&bytes[body_start..bel_at]) {
+            return Some((marker_start, bel_at + 1, cols, rows));
+        }
+        // Terminated but malformed body: not actually our marker. Resume
+        // scanning just past this candidate's introducer so an overlapping
+        // later match is still found, without looping on the same failed
+        // candidate.
+        search_from = marker_start + 1;
+    }
+    None
+}
+
+/// Parse a resize marker body (`<cols>;<rows>`, no leading/trailing bytes).
+/// Rejects a non-numeric, extra-field, or zero-valued dimension.
+fn parse_resize_marker_dims(body: &[u8]) -> Option<(u16, u16)> {
+    let s = std::str::from_utf8(body).ok()?;
+    let mut parts = s.split(';');
+    let cols: u16 = parts.next()?.parse().ok()?;
+    let rows: u16 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || cols == 0 || rows == 0 {
+        return None;
+    }
+    Some((cols, rows))
+}
+
 // ── Tests ────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Resize-marker scanning (task0001, IMPLEMENTATION.md D1/D2) ───────
+
+    #[test]
+    fn find_resize_marker_locates_well_formed_marker() {
+        let bytes = b"before\x1b]777;emterm;resize;120;48\x07after";
+        let found = find_resize_marker(bytes, 0).expect("marker must be found");
+        let (start, end, cols, rows) = found;
+        assert_eq!(&bytes[start..end], b"\x1b]777;emterm;resize;120;48\x07");
+        assert_eq!(cols, 120);
+        assert_eq!(rows, 48);
+        assert_eq!(&bytes[..start], b"before");
+        assert_eq!(&bytes[end..], b"after");
+    }
+
+    #[test]
+    fn find_resize_marker_none_when_absent() {
+        let bytes = b"plain text with no marker at all, not even an ESC";
+        assert!(find_resize_marker(bytes, 0).is_none());
+    }
+
+    #[test]
+    fn find_resize_marker_none_when_unterminated() {
+        // Starts the marker prefix but never reaches a BEL terminator.
+        let bytes = b"before\x1b]777;emterm;resize;120;48";
+        assert!(find_resize_marker(bytes, 0).is_none());
+    }
+
+    #[test]
+    fn find_resize_marker_skips_malformed_candidate_and_finds_next() {
+        // First candidate has a non-numeric field (malformed); the second,
+        // well-formed marker later in the stream must still be found.
+        let mut bytes = b"\x1b]777;emterm;resize;abc;48\x07".to_vec();
+        bytes.extend_from_slice(b"middle\x1b]777;emterm;resize;80;24\x07tail");
+        let (start, end, cols, rows) = find_resize_marker(&bytes, 0).expect("must find the second");
+        assert_eq!(cols, 80);
+        assert_eq!(rows, 24);
+        assert_eq!(&bytes[end..], b"tail");
+        assert!(start > 0, "must have skipped past the malformed candidate");
+    }
+
+    #[test]
+    fn find_resize_marker_rejects_zero_dimension() {
+        let bytes = b"\x1b]777;emterm;resize;0;48\x07";
+        assert!(find_resize_marker(bytes, 0).is_none());
+        let bytes2 = b"\x1b]777;emterm;resize;120;0\x07";
+        assert!(find_resize_marker(bytes2, 0).is_none());
+    }
+
+    #[test]
+    fn find_resize_marker_rejects_extra_field() {
+        let bytes = b"\x1b]777;emterm;resize;120;48;99\x07";
+        assert!(find_resize_marker(bytes, 0).is_none());
+    }
+
+    #[test]
+    fn find_resize_marker_search_from_offset_skips_earlier_marker() {
+        let bytes = b"\x1b]777;emterm;resize;10;10\x07\x1b]777;emterm;resize;20;20\x07";
+        // Search starting right after the first marker's introducer must
+        // skip the first and find the second.
+        let first_end = find_resize_marker(bytes, 0).unwrap().1;
+        let (_, _, cols, rows) = find_resize_marker(bytes, first_end).expect("second marker");
+        assert_eq!((cols, rows), (20, 20));
+    }
+
+    #[test]
+    fn parse_resize_marker_dims_accepts_well_formed_body() {
+        assert_eq!(parse_resize_marker_dims(b"120;48"), Some((120, 48)));
+    }
+
+    #[test]
+    fn parse_resize_marker_dims_rejects_non_numeric() {
+        assert_eq!(parse_resize_marker_dims(b"abc;48"), None);
+        assert_eq!(parse_resize_marker_dims(b"120;xyz"), None);
+    }
+
+    #[test]
+    fn parse_resize_marker_dims_rejects_missing_field() {
+        assert_eq!(parse_resize_marker_dims(b"120"), None);
+        assert_eq!(parse_resize_marker_dims(b""), None);
+    }
+
+    // ── replay_with_resize_markers / reset_and_replay marker interpretation ─
+
+    /// A single mid-stream marker resizes the core between the two
+    /// segments, and the core ends back at its ORIGINAL (caller-requested)
+    /// dimensions.
+    #[test]
+    fn reset_and_replay_resizes_mid_stream_and_restores_target_dims() {
+        let mut core = TerminalCore::new(80, 24, 1000);
+        let mut bytes = b"before-resize\r\n".to_vec();
+        bytes.extend_from_slice(&resize_marker(40, 10));
+        bytes.extend_from_slice(b"after-resize\r\n");
+        core.reset_and_replay(&bytes);
+        // Core ends back at the dims it was constructed with (80, 24), not
+        // the marker's intermediate (40, 10).
+        assert_eq!(core.cols(), 80);
+        assert_eq!(core.rows(), 24);
+        assert!(
+            core.get_line_text(0).contains("before-resize"),
+            "content before the marker must still be present"
+        );
+        assert!(
+            core.get_line_text(1).contains("after-resize"),
+            "content after the marker must still be present"
+        );
+    }
+
+    /// Test-only helper mirroring `mux::scrollback_buffer::resize_marker_bytes`'s
+    /// byte format, used directly by `terminal_core` unit tests (which have
+    /// no dependency on the `emterm` mux crate).
+    fn resize_marker(cols: u16, rows: u16) -> Vec<u8> {
+        format!("\x1b]777;emterm;resize;{cols};{rows}\x07").into_bytes()
+    }
 
     // ── Off-thread snapshot replay builder (FR1/FR6/NFR2/NFR3) ──
 
