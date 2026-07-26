@@ -391,6 +391,14 @@ pub struct TerminalCore {
     /// registered `action_type` and delivered through `on_osc`, so the host's
     /// callback can recognize it. Empty by default (vanilla terminal core).
     pub(crate) osc_app_params: Vec<(u16, u8)>,
+    /// Cumulative count of [`Self::resize`] calls (each one a full
+    /// content-preserving reflow) since construction. A diagnostic-only
+    /// counter — not touched by [`Self::reset`] — used to observe reflow
+    /// cost from a test (before/after delta around a specific replay call).
+    /// Introduced for review round-1 rework, finding `6ff208bbc674189c`
+    /// (task0002 AC-5): proves a run of consecutive resize markers with no
+    /// bytes between them costs at most ONE reflow, not one per marker.
+    pub(crate) reflow_call_count: u64,
 }
 
 impl TerminalCore {
@@ -474,6 +482,7 @@ impl TerminalCore {
             pending_fold_marks: VecDeque::new(),
             bypass_b_mark_texts: std::collections::HashMap::new(),
             osc_app_params: Vec::new(),
+            reflow_call_count: 0,
         };
         core.mark_all_dirty();
         core
@@ -536,9 +545,58 @@ impl TerminalCore {
         // written-cell tracking used by retroactive zero-width merge can no
         // longer be trusted afterwards.
         self.last_write = None;
+        self.reflow_call_count += 1;
         // Use reflow with current scrollback capacity
         let scrollback_lines = self.ring_capacity.saturating_sub(self.rows as usize) as u32;
         self.resize_reflow(new_cols, new_rows, scrollback_lines);
+        // Bypass invariant (review round-1 rework, finding
+        // `1698d9b52a89e241`, medium but correctness-relevant): the
+        // content-preserving `resize_reflow` above is NOT bypass-aware —
+        // called mid-drain while `scrollback_bypass` is on (a resize marker
+        // inside `replay_with_resize_markers` during the off-thread 1st-pass
+        // snapshot replay, `build_from_snapshot`), it can populate
+        // `scrollback_slim` with real rows even though the bypass's whole
+        // point is to keep that deque empty. If left in place, the 2nd-pass
+        // `merge_scrollback_from` later mistakes these leaked rows for
+        // genuine post-swap live-drain content (they sit at the FRONT of
+        // `self.scrollback_slim` exactly where merged rows get prepended),
+        // causing row duplication / reordering — not merely an accounting
+        // miscount. Restore the invariant on every call while bypass is
+        // active so it never has a chance to leak past this function.
+        if self.scrollback_bypass {
+            self.restore_bypass_invariant_after_reflow();
+        }
+    }
+
+    /// Drain any rows `resize_reflow` populated into `scrollback_slim` while
+    /// `scrollback_bypass` was on, folding their count into the SAME virtual
+    /// bookkeeping (`virtual_scrollback_len` / `scrollback_evicted_total`)
+    /// [`Self::enable_snapshot_bypass`] documents — i.e. treat them exactly
+    /// as `ring_push_blank`'s bypass branch would have, had it been the one
+    /// to evict them, so bookkeeping stays byte-identical instead of merely
+    /// "close". See [`Self::resize`]'s call site for why this must run.
+    fn restore_bypass_invariant_after_reflow(&mut self) {
+        let leaked = self.scrollback_slim.len();
+        if leaked == 0 {
+            debug_assert!(
+                self.scrollback_wrapped.is_empty(),
+                "scrollback_wrapped must track scrollback_slim 1:1"
+            );
+            return;
+        }
+        let drained: Vec<Vec<SlimCell>> = self.scrollback_slim.drain(..).collect();
+        for row in &drained {
+            self.release_slim_row(row);
+        }
+        self.scrollback_wrapped.clear();
+        let capacity = self.scrollback_capacity as u64;
+        let total = self.virtual_scrollback_len as u64 + leaked as u64;
+        if total <= capacity {
+            self.virtual_scrollback_len = total as u32;
+        } else {
+            self.virtual_scrollback_len = capacity as u32;
+            self.scrollback_evicted_total += total - capacity;
+        }
     }
 
     // ── Scroll Event ─────────────────────────────────────
@@ -683,6 +741,27 @@ impl TerminalCore {
     /// aborts the whole replay and returns `None`, matching that function's
     /// contract (a superseded off-thread `build_from_snapshot` worker bails
     /// out at the next chunk boundary instead of finishing the parse).
+    ///
+    /// **Reflow coalescing (review round-1 rework, finding
+    /// `6ff208bbc674189c`, high):** a resize is DEFERRED — tracked in
+    /// `pending` — rather than applied the instant its marker is found. It
+    /// is only actually applied (via [`Self::resize`], the content-preserving
+    /// full reflow) immediately before the next NON-EMPTY byte segment is
+    /// fed, or at the very end if the final segment is non-empty. A run of
+    /// consecutive markers with no bytes between them (e.g. a window drag
+    /// that stamps a marker per intermediate size before output resumes at
+    /// the final size) therefore costs at most ONE reflow — for the LAST
+    /// pending size — instead of one full-scrollback reflow per marker. If
+    /// no non-empty segment ever follows a pending resize (the recording
+    /// ends right after a marker run), zero reflows happen for it: nothing
+    /// was ever fed at any of those intermediate sizes, so there is nothing
+    /// to preserve content FOR. This also naturally satisfies "avoid the
+    /// final restore reflow when the pending dimensions already match the
+    /// target": the final `(self.cols, self.rows) != (target_cols,
+    /// target_rows)` check runs against whatever size was last actually
+    /// applied, so it is skipped whenever that already equals the target
+    /// (including the zero-reflow case above, where `self`'s size never
+    /// changed from the target at all).
     fn replay_with_resize_markers(
         &mut self,
         bytes: &[u8],
@@ -692,16 +771,31 @@ impl TerminalCore {
         let target_rows = self.rows;
         let mut actions = Vec::new();
         let mut offset = 0usize;
+        // Deferred resize target: the dimensions the NEXT non-empty segment
+        // must be fed at. `None` means no resize is currently pending.
+        let mut pending: Option<(u16, u16)> = None;
         while let Some((marker_start, marker_end, cols, rows)) = find_resize_marker(bytes, offset) {
-            actions.extend(
-                self.process_pty_data_fully_cancellable(&bytes[offset..marker_start], cancel)?,
-            );
-            if (self.cols, self.rows) != (cols, rows) {
-                self.resize(cols, rows);
+            let segment = &bytes[offset..marker_start];
+            if !segment.is_empty() {
+                if let Some((pending_cols, pending_rows)) = pending.take() {
+                    if (self.cols, self.rows) != (pending_cols, pending_rows) {
+                        self.resize(pending_cols, pending_rows);
+                    }
+                }
+                actions.extend(self.process_pty_data_fully_cancellable(segment, cancel)?);
             }
+            pending = Some((cols, rows));
             offset = marker_end;
         }
-        actions.extend(self.process_pty_data_fully_cancellable(&bytes[offset..], cancel)?);
+        let tail = &bytes[offset..];
+        if !tail.is_empty() {
+            if let Some((pending_cols, pending_rows)) = pending.take() {
+                if (self.cols, self.rows) != (pending_cols, pending_rows) {
+                    self.resize(pending_cols, pending_rows);
+                }
+            }
+            actions.extend(self.process_pty_data_fully_cancellable(tail, cancel)?);
+        }
         if (self.cols, self.rows) != (target_cols, target_rows) {
             self.resize(target_cols, target_rows);
         }
@@ -806,18 +900,23 @@ impl TerminalCore {
         // scrollback-restore worker needs the contents, so it sets
         // `bypass = false` and pays the per-row compression cost.
         //
-        // Known narrow interaction (task0001): if `payload` contains a
-        // resize marker, `replay_with_resize_markers` below calls the
+        // task0001 narrow interaction, closed by review round-1 rework
+        // (finding `1698d9b52a89e241`): if `payload` contains a resize
+        // marker, `replay_with_resize_markers` below calls the
         // content-preserving `resize` (full reflow) mid-drain, which is NOT
-        // bypass-aware and can populate `scrollback_slim` even while
-        // `bypass == true`. This does not corrupt the returned grid/cursor
-        // (the marker fix's correctness target) — it only means
-        // `evicted_total` / `get_scrollback_length()` may under-report by a
-        // few rows for a snapshot that BOTH crosses a resize AND is large
-        // enough to take this off-thread path (>= 64 KiB). Fully closing
-        // that gap would mean teaching `resize_reflow` about the bypass
-        // invariant, out of scope here (mux output-pipeline performance is
-        // a separate known topic, IMPLEMENTATION.md "Out of Scope").
+        // itself bypass-aware and can populate `scrollback_slim` even while
+        // `bypass == true`. `TerminalCore::resize` now restores the bypass
+        // invariant (drains any such leaked rows back out, folding their
+        // count into the SAME virtual bookkeeping `ring_push_blank`'s
+        // bypass branch would have used) on every call while
+        // `scrollback_bypass` is on, so this no longer corrupts EITHER the
+        // returned grid/cursor OR `evicted_total` / `get_scrollback_length()`
+        // — and, more importantly, no longer leaves residual rows for the
+        // 2nd-pass `merge_scrollback_from` to mistake for genuine post-swap
+        // live-drain content. The debug_assert right before
+        // `disable_snapshot_bypass` below is the regression guard: it fails
+        // loudly in tests if a FUTURE in-drain mutation path reintroduces a
+        // leak this fix doesn't already cover.
         if bypass {
             core.enable_snapshot_bypass();
         }
@@ -845,6 +944,20 @@ impl TerminalCore {
         // shell's stdin. Matches the synchronous `reset_frame_for_replay` path.
         let _ = core.take_response();
         if bypass {
+            // Regression guard (review round-1 rework, finding
+            // `1698d9b52a89e241`): `TerminalCore::resize` restores the
+            // bypass invariant on every call made while bypass is active
+            // (see that method), so `scrollback_slim` must always be empty
+            // here. A future in-drain mutation path that populates
+            // `scrollback_slim` WITHOUT going through `resize`'s restore
+            // step would silently break the 2nd-pass merge's row-dedup
+            // accounting; this makes that failure loud in tests instead.
+            debug_assert!(
+                core.scrollback_slim.is_empty(),
+                "snapshot-replay bypass invariant violated: scrollback_slim \
+                 is not empty before disable_snapshot_bypass (leaked {} rows)",
+                core.scrollback_slim.len()
+            );
             core.disable_snapshot_bypass();
         }
         Some(SnapshotReplay {
@@ -1557,6 +1670,91 @@ mod tests {
         format!("\x1b]777;emterm;resize;{cols};{rows}\x07").into_bytes()
     }
 
+    /// review round-1 rework, finding `6ff208bbc674189c` (high) / task0002
+    /// AC-5: N consecutive resize markers with NO bytes between them cost
+    /// at most TWO reflows total — one to apply the last pending size right
+    /// before the trailing non-empty segment, and one for the mandatory
+    /// final restore back to the caller's target size (since this run's
+    /// last marker's dims differ from the target) — never one reflow PER
+    /// MARKER. Observed directly via `reflow_call_count`. Pre-fix, each of
+    /// the 5 markers triggered its own immediate `resize()` call regardless
+    /// of whether any bytes ever followed it at that size, for 5 (marker)
+    /// + 1 (final restore) = 6 reflows on this same recording.
+    #[test]
+    fn replay_coalesces_consecutive_markers_into_a_single_reflow() {
+        let mut core = TerminalCore::new(80, 24, 1000);
+        let before = core.reflow_call_count;
+        let mut bytes = b"before\r\n".to_vec();
+        // Five consecutive markers, no bytes between any of them.
+        for (cols, rows) in [(40, 10), (100, 30), (60, 20), (120, 40), (90, 25)] {
+            bytes.extend_from_slice(&resize_marker(cols, rows));
+        }
+        bytes.extend_from_slice(b"after\r\n");
+        core.reset_and_replay(&bytes);
+        let reflows = core.reflow_call_count - before;
+        assert_eq!(
+            reflows, 2,
+            "a run of 5 consecutive markers followed by ONE non-empty segment \
+             must reflow at most twice (last pending size + final restore-to- \
+             target), never once per marker (which would be 6 here)"
+        );
+        assert_eq!(core.cols(), 80, "core must end back at the target size");
+        assert_eq!(core.rows(), 24);
+        assert!(core.get_line_text(0).contains("before"));
+        assert!(core.get_line_text(1).contains("after"));
+    }
+
+    /// AC-5 (zero-reflow edge case): if a run of consecutive markers is
+    /// never followed by any bytes at all (the recording ends right after
+    /// the last marker), NO reflow happens for any of them — there is
+    /// nothing to preserve content for, and the core never actually left
+    /// its target size, so even the final restore-to-target check is a
+    /// no-op.
+    #[test]
+    fn replay_trailing_consecutive_markers_with_no_following_bytes_reflow_zero_times() {
+        let mut core = TerminalCore::new(80, 24, 1000);
+        let before = core.reflow_call_count;
+        let mut bytes = b"only-content\r\n".to_vec();
+        for (cols, rows) in [(40, 10), (100, 30), (60, 20)] {
+            bytes.extend_from_slice(&resize_marker(cols, rows));
+        }
+        // No bytes after the last marker.
+        core.reset_and_replay(&bytes);
+        assert_eq!(
+            core.reflow_call_count - before,
+            0,
+            "a trailing marker run with nothing fed at any of its sizes must \
+             cost zero reflows"
+        );
+        assert_eq!(core.cols(), 80);
+        assert_eq!(core.rows(), 24);
+        assert!(core.get_line_text(0).contains("only-content"));
+    }
+
+    /// AC-5 (grid-equivalence variant, the ACs's stated alternative to a
+    /// counter): a run of consecutive markers ending in dims (D) followed
+    /// by content must produce a grid IDENTICAL to a recording containing
+    /// only the SINGLE final marker (D) followed by the same content — the
+    /// intermediate dimensions leave no observable trace either way.
+    #[test]
+    fn replay_consecutive_markers_grid_matches_single_final_dimension_case() {
+        let mut multi = TerminalCore::new(80, 24, 1000);
+        let mut multi_bytes = b"before\r\n".to_vec();
+        for (cols, rows) in [(40, 10), (100, 30), (60, 20)] {
+            multi_bytes.extend_from_slice(&resize_marker(cols, rows));
+        }
+        multi_bytes.extend_from_slice(b"after\r\n");
+        multi.reset_and_replay(&multi_bytes);
+
+        let mut single = TerminalCore::new(80, 24, 1000);
+        let mut single_bytes = b"before\r\n".to_vec();
+        single_bytes.extend_from_slice(&resize_marker(60, 20));
+        single_bytes.extend_from_slice(b"after\r\n");
+        single.reset_and_replay(&single_bytes);
+
+        assert_eq!(grid_fingerprint(&multi), grid_fingerprint(&single));
+    }
+
     // ── Off-thread snapshot replay builder (FR1/FR6/NFR2/NFR3) ──
 
     /// Collect the observable grid text + cursor into a comparable shape so
@@ -2197,6 +2395,134 @@ mod tests {
         );
         // Cell-by-cell scrollback equality (decompressed view, robust to
         // intern slot reassignment).
+        for (row_idx, (l, r)) in live
+            .scrollback_slim
+            .iter()
+            .zip(reference.core.scrollback_slim.iter())
+            .enumerate()
+        {
+            assert_eq!(l.len(), r.len(), "row {row_idx} length");
+            for (col_idx, (sa, sb)) in l.iter().zip(r.iter()).enumerate() {
+                let ca = crate::slim_cell::slim_to_cell(sa, &live.styles, &live.chars);
+                let cb = crate::slim_cell::slim_to_cell(
+                    sb,
+                    &reference.core.styles,
+                    &reference.core.chars,
+                );
+                assert_eq!(
+                    (ca.char_data, ca.char_len, ca.width, ca.fg, ca.bg, ca.flags),
+                    (cb.char_data, cb.char_len, cb.width, cb.fg, cb.bg, cb.flags),
+                    "row {row_idx} col {col_idx}"
+                );
+            }
+        }
+    }
+
+    /// review round-1 rework, finding `1698d9b52a89e241` (medium,
+    /// correctness-relevant) / task0002 AC-7: a snapshot >= 64 KiB
+    /// containing a ROW-COUNT-SHRINKING marker, taken through the SAME
+    /// production recipe as `test_bypass_plus_merge_equivalence` (bypass-on
+    /// 1st-pass -> bypass-off 2nd-pass -> merge), produces no
+    /// duplicated / out-of-order scrollback rows and reports the SAME
+    /// eviction bookkeeping as a fully synchronous (bypass-off) replay of
+    /// the same payload — not merely "close". Pre-fix, the mid-drain
+    /// resize's content-preserving reflow left real rows in the bypassed
+    /// 1st-pass core's `scrollback_slim`; the 2nd-pass merge then
+    /// mistook them for genuine post-swap live-drain content and
+    /// prepended the full rebuilt scrollback on top, duplicating rows.
+    #[test]
+    fn test_bypass_plus_merge_equivalence_across_row_shrinking_resize_marker() {
+        // Constructed at the SMALL size and ends at the SAME small size
+        // (grow mid-stream, then shrink back before the payload ends) so
+        // `replay_with_resize_markers`'s implicit final restore-to-target
+        // is a no-op. This sidesteps an UNRELATED, pre-existing bypass
+        // limitation this test is not about: growing rows during a bypass
+        // window can only pull history back from what bypass actually
+        // stored, so a resize that GROWS past content produced while
+        // bypass was on legitimately shows less history than a non-bypass
+        // reference — that is a separate, documented characteristic of the
+        // bypass mechanism, not the leak finding `1698d9b52a89e241` targets.
+        // Ending already at the target size (a SHRINK, which only ever
+        // needs to drop rows the viewport already holds, never pull extra
+        // history in) keeps this test isolated to the leak this fix closes.
+        let cols: u16 = 80;
+        let small_rows: u16 = 10;
+        let grown_rows: u16 = 24;
+        let mut payload: Vec<u8> = Vec::new();
+        // A handful of lines that fit within the small viewport with no
+        // eviction yet, so the upcoming grow needs no history bypass would
+        // have discarded.
+        for i in 0..5u32 {
+            payload.extend_from_slice(format!("early line {i}\r\n").as_bytes());
+        }
+        payload.extend_from_slice(&resize_marker(cols, grown_rows));
+        // Bulk content at the grown size — large enough to comfortably
+        // exceed 64 KiB and to populate substantial (virtual, under
+        // bypass) scrollback before the shrink.
+        for i in 0..3000u32 {
+            payload.extend_from_slice(
+                format!("grown-size scroll line {i} padded for size\r\n").as_bytes(),
+            );
+        }
+        // The row-count-SHRINKING marker under test (AC-7): pushes the
+        // rows that no longer fit the smaller viewport into scrollback —
+        // exactly the content-preserving reflow finding `1698d9b52a89e241`
+        // is about.
+        payload.extend_from_slice(&resize_marker(cols, small_rows));
+        // A few lines after the shrink so the segment following the marker
+        // is non-empty (the marker is actually applied) — this also
+        // leaves the core already at `small_rows`, matching the
+        // construction / target size.
+        for i in 0..5u32 {
+            payload.extend_from_slice(format!("after-shrink line {i}\r\n").as_bytes());
+        }
+        assert!(
+            payload.len() >= 64 * 1024,
+            "payload must be >= 64 KiB to match AC-7's off-thread-path scenario, got {}",
+            payload.len()
+        );
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+
+        // Reference: single synchronous bypass-off build.
+        let reference = TerminalCore::build_scrollback_only_from_snapshot(
+            cols, small_rows, 5000, &payload, &never,
+        )
+        .expect("reference build not cancelled");
+
+        // Production path: bypass-on 1st-pass + bypass-off 2nd-pass + merge.
+        let bypass_replay =
+            TerminalCore::build_from_snapshot(cols, small_rows, 5000, &payload, &never)
+                .expect("1st-pass");
+        let mut live = bypass_replay.core;
+        // Bypass leaves scrollback empty by design — this is the invariant
+        // the fix restores even across the mid-drain shrink.
+        assert_eq!(
+            live.scrollback_count(),
+            0,
+            "bypass-on 1st-pass core must have empty scrollback even after a \
+             mid-drain row-shrinking resize marker"
+        );
+        let rebuilt = TerminalCore::build_scrollback_only_from_snapshot(
+            cols, small_rows, 5000, &payload, &never,
+        )
+        .expect("2nd-pass");
+        live.merge_scrollback_from(rebuilt.core, 0);
+
+        assert_eq!(
+            grid_fingerprint(&live),
+            grid_fingerprint(&reference.core),
+            "viewport grid must match — the shrink never needs history bypass discarded"
+        );
+        assert_eq!(
+            live.scrollback_count(),
+            reference.core.scrollback_count(),
+            "scrollback row count must match — no duplicated / dropped rows from a bypass leak"
+        );
+        assert_eq!(
+            live.scrollback_evicted_total, reference.core.scrollback_evicted_total,
+            "eviction bookkeeping must be byte-identical, not merely close"
+        );
         for (row_idx, (l, r)) in live
             .scrollback_slim
             .iter()
