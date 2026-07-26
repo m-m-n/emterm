@@ -1,0 +1,273 @@
+round: 2
+executed_at: "2026-07-26T19:45:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
+  head_commit: 0705eea4a86e838aedf5f1318834596258ef7de1
+  changed_files:
+    - crates/term_core/src/snapshot.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+plan:
+  floor: [comprehensive, spec, security, performance, architecture]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: skipped, skip_reason: "codex performance が同一範囲をカバーし、round 1 の performance 指摘は rework 済みのため本ラウンドでは codex 側のみ実行"}
+
+findings:
+  - stable_id: a6ab9b340119beed
+    severity: critical
+    category: security
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 313
+    title: "偽造 resize マーカーが ScrollbackWriteFilter の pending 溢れ経路で strip を素通りしリングに到達する"
+    description: >-
+      round 1 の critical 0c18ff55032328ab に対する rework（write-path strip 分離）は
+      「replay が見る resize マーカーは必ず daemon 由来」という不変条件を確立したと
+      文書化しているが、成立していない。ScrollbackWriteFilter::feed は pending が
+      SCROLLBACK_FILTER_PENDING_CAP (512 KiB) を超えると strip を一切通さず
+      生バイトをそのまま返し、呼び出し元がそれをリングへ write する。
+      子プロセスが未終端 OSC 導入子 → 512 KiB の詰め物 → 末尾に偽造マーカー、
+      という順で出力するだけで偽造マーカーがリングに入る。生フラッシュされた
+      512 KiB には約 1.7 万個のマーカーを詰め込め、1 バイト挟めば coalescing も
+      効かずマーカー数ぶんの全 reflow が切替のたびに走る。
+    suggestion: >-
+      escape hatch でも strip を通す（完全形のマーカーは 1 パスで除去できる。cap の目的は
+      メモリ上限であって CPU 節約ではない）。より堅牢には、pane ごとのランダム nonce を
+      マーカー本体に含め、replay 側は現在の pane の nonce と一致するマーカーのみ解釈する。
+    sources: [claude:security, codex:security, codex:architecture]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "round 3 rework へ回送（round 1 critical の修正が不完全だった）"
+
+  - stable_id: 15c54fb74bb91ec7
+    severity: high
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 1485
+    title: "marker スキャンが ANSI 文脈非依存のため、剥がされない DCS/APC ボディ内部の偽 marker が replay に届く"
+    description: >-
+      write-path strip は OSC 単位でしか resize を剥がさないが、replay 側の
+      find_resize_marker は ANSI 文脈を無視した素のバイト走査。非 SIXEL DCS は仕様上
+      保持されるため、`printf '\ePtmux;\e\e]777;emterm;resize;2000;2000\a\e\\'`
+      を出力するだけで偽マーカーが replay に到達する（DCS の終端は ESC\ なので
+      内側の BEL では閉じない）。既存の偽造テストは裸の OSC しか流しておらず
+      この入れ子ケースを覆っていない。
+    suggestion: >-
+      marker の解釈を ANSI パーサ側に寄せる、あるいは DCS/APC 区間をスキップする
+      スキャナにする。より堅いのは、ScrollbackRingBuffer が既に持つ dim_markers
+      サイドチャネルから snapshot 組み立て時に daemon がマーカーを再生成し、
+      リング内のバイト列由来の marker は replay 側で一切信用しない設計。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 3 rework へ回送"
+
+  - stable_id: 200b2c8beeb68fe4
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/ipc/reattach.rs
+    line: 258
+    title: "reattach が pane ごとに SnapshotRestore を送るが、クライアント側の Snapshot 系アームは pane_id でフィルタしない"
+    description: >-
+      collect_reattach_data はセッション内の全 window / 全 pane を走査して pane ごとに
+      snapshot を積み、send_reattach_data がそれぞれを SnapshotRestore 単独フレームで送る。
+      一方 Tab::apply_mux_message の Snapshot | SnapshotRestore アームは msg.pane_id を
+      一切参照せず、無条件にタブ唯一のコアを reset + replay する（pane フィルタは
+      PtyOutput アーム側にしか無い）。変更前は PtyOutput framing だったのでフィルタが
+      効いていた。変更後は window が 2 つ以上あるセッションを reattach すると
+      非アクティブ window の内容が同じコアに適用され、最後に来た pane の画面が表示される。
+      本 feature が潰そうとしている「切替後に別内容が出る」症状を新経路で再導入している。
+      off-thread 経路では target_pane = active_pane_id() を使うため、別 pane の
+      スナップショットがアクティブ pane のものとしてスワップされる。
+    suggestion: >-
+      Tab::apply_mux_message の Snapshot | SnapshotRestore アームにも PtyOutput アームと
+      同じ pane フィルタを入れる（推奨・両サイトを一度に閉じられる）。
+      あるいは daemon 側で表示対象 pane のみ Snapshot 種別にする。
+    sources: [claude:architecture, claude:comprehensive, claude:spec, codex:performance]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "round 3 rework へ回送（rework が新規に持ち込んだ退行）"
+
+  - stable_id: 87ba3cc2911d104e
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 565
+    title: "visibility-resume も pane ごとに ChunkKind::Snapshot を送るため、同じ pane フィルタ欠落に当たる"
+    description: >-
+      200b2c8beeb68fe4 と同根の 2 つ目のサイト。handle_set_visibility(visible = true) は
+      全 window / 全 pane から候補を集めて pane ごとに resume_pane_with_permit を呼び、
+      それが MessageType::Snapshot として配送される。ウィンドウを隠して再表示するたびに
+      全 pane のスナップショットが同一コアへ順に適用され、最後の 1 つが勝つ。
+    suggestion: "200b2c8beeb68fe4 と同じ修正（クライアント側 pane フィルタ）で同時に閉じる"
+    sources: [claude:architecture, claude:comprehensive, claude:spec]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "round 3 rework へ回送"
+
+  - stable_id: c9773adeab150890
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 1769
+    title: "FR3 の「異なる terminal width」テストが構造上絶対に失敗しない（検出器が空振り）"
+    description: >-
+      round 1 finding 7aef70ff81703b90 の rework として追加された
+      resize_marker_fix_differing_terminal_widths_recording_replays_without_cross_line_mixing
+      は、修正の有無に関わらず必ず pass する。理由は 2 つ: (1) 行数が両フェーズで同一なので
+      PROBE D のドリフト機構自体が発火しない、(2) 汚染検出器が `contains("STATUS-") &&
+      contains(" line ")` なのに幅可変版の合成行は " line " を含まない文字列に変えられており
+      tainted が常に空。FR3 が要求する「failing before the fix」を満たしていない。
+    suggestion: >-
+      検出器方式ではなく live-feed 参照との fingerprint 完全一致方式にし、折り返しを起こす
+      長行（narrower + 20 文字）を含める。cols と rows の両方を変えてドリフト機構を実際に
+      発火させる。採用前に、マーカー解釈を無効化した状態でテストが実際に落ちることを確認する。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 3 rework へ回送"
+
+  - stable_id: 602e685494248cbb
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/terminal_core.rs
+    line: 1451
+    title: "The resize-marker protocol has no shared owner and already disagrees on its domain"
+    description: >-
+      エンコーダ（scrollback_buffer.rs）は MuxPane が受け付ける任意の u16 を書くが、
+      デコーダは round 1 auto-fix で入れた 2000 上限で 0 / 2000 超を棄却する。
+      daemon 側が 2000 を超える寸法で resize すると、クライアントはそのマーカーを
+      黙って無視し座標ドリフトが復活する。round 1 の防御的クランプが作った非対称性。
+    suggestion: >-
+      共有の ResizeMarker codec と検証済み terminal-size 型を依存中立なモジュールに置き、
+      PTY resize 自体もその型で検証してから行う。記録側と再生側が同じ encoder / decoder /
+      上限を使うようにする。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 3 rework へ回送（round 1 の auto-fix が作った非対称性）"
+
+  - stable_id: 893241823258fce3
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 566
+    title: "bypass 中の mid-drain resize は空の scrollback に対して reflow するため、行数拡大で履歴とカーソル位置が同期パスとずれる"
+    description: >-
+      bypass 中は scrollback_slim が意図的に空なので、行数を増やす marker では
+      非 bypass なら scrollback から履歴を引き上げるところが空行になり、カーソル再計算も
+      (new_rows - old_rows) だけずれる。64 KiB 以上の snapshot が 64 KiB 未満の同期パスと
+      異なる画面になる。AC-7 のテストは payload を「小 → 拡大 → 縮小で元に戻る」に組んで
+      このケースを意図的に外している。
+    suggestion: >-
+      bypass 中の mid-drain resize の直前だけ bypass を解除する、行数拡大 marker を含む
+      payload は bypass 経路を使わない、または 1st pass では dims の付け替えのみに留める。
+      行数を増やす marker を含む >= 64 KiB payload で bypass 経路と同期経路の
+      viewport fingerprint を比較するテストを追加する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 3 rework へ回送"
+
+  - stable_id: 0bebe3e6f7b416dd
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 729
+    title: "MuxPane::resize の scrollback ロック保持は片側の順序しか保証せず、resize 直前に read 済みのバイトが marker の後ろに入る窓が残る"
+    description: >-
+      ロック保持が閉じるのは「SIGWINCH 後のバイトが marker より前に記録される」方向だけ。
+      master.resize() の直前に read し終えた resize 前のバイトが、ロック解放待ちの間に
+      marker より後ろへ追記される窓は残る。むしろロックを ioctl に跨いで持つことで
+      この順序が確定的に起きやすくなる。その 1 read 分（最大 64 KiB の旧 dims 出力）は
+      replay 時に新しい dims で解釈され、まさに本 feature が潰そうとしている
+      座標ドリフトを起こす。実装コメントはこの片側性を反映していない。
+    suggestion: >-
+      reader スレッド側で read 完了時の pane dims を持ち回り、scrollback 追記時に
+      記録済み dims と食い違っていたら追記前に marker を書く。踏み込まない場合は
+      最低限コメントを片側保証である旨に修正し、残存窓を既知の制約として明記する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 3 rework へ回送"
+
+  - stable_id: 0b0c18ff4ab911f4
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 153
+    title: "Front-removal makes marker pruning quadratic"
+    description: >-
+      prune_dim_markers が Vec::remove(0) を繰り返すため、マーカーが多い長寿命 pane では
+      scrollback mutex を保持したまま大量のタプル移動が走り、resize と PTY 出力を止めうる。
+    suggestion: "dim_markers を VecDeque にして pop_front() で prune する、または論理 head index を持つ"
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 3 rework へ回送"
+
+  - stable_id: 98eec9bbef67704a
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/reattach.rs
+    line: 258
+    title: "Snapshot semantics are discarded when transport chunking is needed"
+    description: >-
+      同一の reattach スナップショットが 8 MiB 未満なら marker-aware な SnapshotRestore、
+      超えると marker-blind な PtyOutput になる。転送の都合がアプリケーション意味論を
+      変えており、大きい snapshot では replay が壊れたままになる。
+    suggestion: "snapshot の同一性を framing から独立させる（begin/chunk/end メッセージかクライアント側再組み立て）"
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 3 rework へ回送"
+
+  - stable_id: 5d1a4e9509365517
+    severity: medium
+    category: spec
+    file: crates/term_core/src/terminal_core.rs
+    line: 782
+    title: "NFR1: リサイズマーカーが ring に蓄積し、切り替えのたびにマーカー数ぶんの全 scrollback reflow が走る"
+    description: >-
+      rework の coalescing はマーカーが「バイト無しで連続」する場合しか畳めないが、
+      実際の SIGWINCH では TUI が各中間サイズで再描画バイトを出すためマーカー間はほぼ常に
+      非空になり coalescing が効かない。N 本のマーカーは N 回の全 scrollback reflow になり、
+      そのマーカー群が ring に残っている間の毎回の switch / reattach で繰り返し支払われる。
+      NFR1 の妥当性を示す計測も上限も diff に無い。
+    suggestion: >-
+      write_resize_marker 側で、直前のマーカー以降に実バイトがほぼ書かれていない場合は
+      既存マーカーを新寸法で置き換える。またはクライアント側でリサイズ送出をデバウンスする。
+      最低限、マーカー本数を変えた所要時間の計測を残す。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 3 rework へ回送"
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: routed-to-rework
+  note: >-
+    critical a6ab9b340119beed には単一ファイルの diff 提案があり機械適用は可能だったが、
+    セキュリティ修正をテスト無しで当てるより、TDD 規律を持つ implementer に
+    回帰テストごと実装させる方が強いと判断して auto-fix を回さず rework に回送した。
+    他の critical/high はいずれも複数ファイル・設計判断を含み、単一ファイル限定の
+    review-editor では実装できない。
+
+residual_critical_high: 5
+rework_required: true
