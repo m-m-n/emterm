@@ -117,6 +117,32 @@ pub struct PendingFoldMark {
     pub label: String,
 }
 
+// ── Structural replay segments (task0004 round-4 rework, D1') ───────────
+
+/// A structural dimension segment for [`TerminalCore::reset_and_replay_segments`]
+/// / [`TerminalCore::build_from_snapshot`]: content starting at byte `offset`
+/// into the replay payload was produced under `(cols, rows)`, until the next
+/// segment (if any, in the same slice) takes over.
+///
+/// Segments must be supplied in ascending `offset` order — the caller's
+/// responsibility (mirrors the ordering invariant the daemon-side
+/// `ScrollbackRingBuffer::dim_markers` structure already keeps; this module
+/// trusts it rather than re-validating).
+///
+/// Design D1' (mux-render-corruption round-4 rework): dimensions travel
+/// HERE, structurally, alongside the payload — never encoded as a
+/// recognizable byte sequence inside it. No byte sequence a child process
+/// can produce is therefore ever misinterpreted as a dimension change,
+/// because nothing scans the payload for one any more — this is the
+/// structural replacement for the in-band `OSC 777;emterm;resize;…` marker
+/// byte scan rounds 1-3 tried (and repeatedly failed) to filter safely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplaySegment {
+    pub offset: u32,
+    pub cols: u16,
+    pub rows: u16,
+}
+
 // ── Off-thread snapshot replay result ────────────────────
 
 /// Output of [`TerminalCore::build_from_snapshot`]: a freshly built core
@@ -151,6 +177,29 @@ pub struct SnapshotReplay {
     /// after a `build_from_snapshot` replay where the bypass was active).
     /// Empty when the replay was not performed via `build_from_snapshot`.
     pub bypass_b_mark_texts: std::collections::HashMap<u32, String>,
+    /// Whether `core.scrollback_slim` / `scrollback_wrapped` were actually
+    /// populated by this replay (task0004 round-4 rework D3', review
+    /// round-3 finding `b235e4dbc61cc4ba`).
+    ///
+    /// `build_scrollback_only_from_snapshot` (bypass off) always leaves this
+    /// `true`. `build_from_snapshot` (bypass on) leaves it `false` in the
+    /// common case (contents intentionally not populated — see
+    /// `build_from_snapshot`'s doc comment) — EXCEPT when
+    /// `build_from_snapshot_inner` downgrades out of the bypass for THIS
+    /// payload (a row-count-growing segment transition, D6), in which case
+    /// the drain ran fully populated despite going through the
+    /// `build_from_snapshot` entry point.
+    ///
+    /// The consumer (`tabs.rs::apply_offthread_swap`) MUST branch on this
+    /// flag rather than unconditionally spawning the 2nd-pass scrollback
+    /// restore worker: spawning it after a replay that ALREADY populated
+    /// scrollback would re-prepend the same history a second time,
+    /// duplicating it up to the ring's full capacity. Before this field
+    /// existed, the D6 bypass downgrade silently broke that assumption for
+    /// any payload where rows grew within the retained window (a maximized
+    /// window / font-size change survived across a reattach or window
+    /// switch) — a common, not exotic, sequence.
+    pub scrollback_populated: bool,
 }
 
 /// Compile-time guarantee that a built `TerminalCore` can be moved across
@@ -714,107 +763,108 @@ impl TerminalCore {
     /// `process_pty_data` call would drop everything after the first
     /// buffer-switch sequence inside the snapshot.
     ///
-    /// Honors in-band resize markers (IMPLEMENTATION.md D1, task0001) via
-    /// [`Self::replay_with_resize_markers`] — see that method for the fix
-    /// this implements (the resize-interleaved scrollback replay coordinate
-    /// drift, `tmp/apt-progress-bar-regression-2026-07-09.md` PROBE D).
+    /// Equivalent to [`Self::reset_and_replay_segments`] with an empty
+    /// segment list — a single, unsplit replay at `self`'s current
+    /// dimensions (task0004 round-4 rework D1' / AC-11: the documented
+    /// "no structural dimension info" degradation — this is what an older
+    /// daemon's snapshot, or any caller with nothing to attribute, gets).
     pub fn reset_and_replay(&mut self, bytes: &[u8]) -> Vec<u8> {
+        self.reset_and_replay_segments(bytes, &[])
+    }
+
+    /// Reset the grid + parser to the post-construction state, then replay
+    /// `bytes` under the dimensions `segments` describes structurally.
+    ///
+    /// This is the D1' replacement for the in-band `OSC 777;emterm;resize;…`
+    /// marker byte scan (rounds 1-3, `mux::scrollback_buffer`
+    /// `resize_marker_bytes` / `find_resize_marker`): dimensions are supplied
+    /// HERE, as a caller-provided parameter, never discovered by scanning
+    /// `bytes` for a recognizable pattern. No byte sequence appearing
+    /// anywhere in `bytes` — however it is shaped, split, or nested — can
+    /// therefore ever change what dimensions a replay applies; the forgery
+    /// class rounds 1-3 spent three attempts trying to filter out of the
+    /// byte stream is closed structurally instead (there is nothing left
+    /// that scans for one).
+    ///
+    /// `segments` must be in ascending `offset` order (the caller's
+    /// responsibility — mirrors the ordering invariant the daemon-side
+    /// `dim_markers` structure already keeps). For each segment, in order,
+    /// `self` is resized to `(segment.cols, segment.rows)` (only when they
+    /// differ from the current size) and then fed the byte range from this
+    /// segment's `offset` up to the NEXT segment's `offset` (or the end of
+    /// `bytes` for the last segment). An `offset` past `bytes.len()` is
+    /// clamped. After the last segment (or immediately, if `segments` is
+    /// empty), `self` is resized back to its dimensions at the START of this
+    /// call (the caller's requested / current pane size) if anything
+    /// changed them, so a replay with any number of intervening resizes
+    /// always ends at the size the caller asked for — matching the old
+    /// marker-scan replay's contract exactly, just driven by `segments`
+    /// instead of a byte scan.
+    ///
+    /// An empty `segments` reduces to a single unsplit
+    /// `process_pty_data_fully_cancellable` call at `self`'s current
+    /// dimensions — byte-for-byte identical to the pre-task0001 replay
+    /// (task0001 AC-3 / task0004 AC-11).
+    pub fn reset_and_replay_segments(
+        &mut self,
+        bytes: &[u8],
+        segments: &[ReplaySegment],
+    ) -> Vec<u8> {
         self.reset();
         // The non-cancellable entry point: delegates to the cancellable
-        // drain with a flag that is never set, so `reset_and_replay` and
-        // `build_from_snapshot`'s cancellable drain share one
-        // marker-interpretation implementation and cannot drift. `NEVER` is
-        // never stored to, so the drain always runs to completion and
-        // returns `Some` — the unwrap cannot fail.
+        // drain with a flag that is never set, so `reset_and_replay_segments`
+        // and `build_from_snapshot`'s cancellable drain share one replay
+        // implementation and cannot drift. `NEVER` is never stored to, so
+        // the drain always runs to completion and returns `Some` — the
+        // unwrap cannot fail.
         static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        self.replay_with_resize_markers(bytes, &NEVER)
+        self.replay_segments(bytes, segments, &NEVER)
             .expect("non-cancellable drain always completes")
     }
 
-    /// Replay `bytes` into `self`, honoring any in-band resize markers
-    /// (IMPLEMENTATION.md D1, task0001) recorded by
-    /// `mux::scrollback_buffer::resize_marker_bytes` at each daemon-side
-    /// pane resize (`MuxPane::resize`): the stream is split at each marker,
-    /// and `self` is resized to the marker's dimensions before the bytes
-    /// recorded under THAT size are fed to the parser.
-    ///
-    /// This is the fix for the resize-interleaved scrollback replay
-    /// coordinate drift (`tmp/apt-progress-bar-regression-2026-07-09.md`
-    /// PROBE D): a replay core fixed at one row count misinterprets
-    /// DECSTBM / CUP coordinates recorded for a DIFFERENT row count, mixing
-    /// content from two logical output lines onto one row. Feeding each
-    /// segment under the row count it was produced for keeps the record and
-    /// replay coordinate systems in agreement throughout.
-    ///
-    /// After the final segment, `self` is resized back to its dimensions at
-    /// the START of this call (the caller's requested / current pane size)
-    /// if a marker changed them, so a replay with any number of intervening
-    /// resizes always ends at the size the caller asked for.
-    ///
-    /// A marker-free `bytes` never matches [`find_resize_marker`], so this
-    /// reduces to a single unsplit `process_pty_data_fully_cancellable`
-    /// call — byte-for-byte identical to the pre-marker-support replay
-    /// (task0001 AC-3).
-    ///
-    /// `cancel` is threaded straight through to each segment's
-    /// `process_pty_data_fully_cancellable`; a flag observed mid-drain
-    /// aborts the whole replay and returns `None`, matching that function's
-    /// contract (a superseded off-thread `build_from_snapshot` worker bails
-    /// out at the next chunk boundary instead of finishing the parse).
-    ///
-    /// **Reflow coalescing (review round-1 rework, finding
-    /// `6ff208bbc674189c`, high):** a resize is DEFERRED — tracked in
-    /// `pending` — rather than applied the instant its marker is found. It
-    /// is only actually applied (via [`Self::resize`], the content-preserving
-    /// full reflow) immediately before the next NON-EMPTY byte segment is
-    /// fed, or at the very end if the final segment is non-empty. A run of
-    /// consecutive markers with no bytes between them (e.g. a window drag
-    /// that stamps a marker per intermediate size before output resumes at
-    /// the final size) therefore costs at most ONE reflow — for the LAST
-    /// pending size — instead of one full-scrollback reflow per marker. If
-    /// no non-empty segment ever follows a pending resize (the recording
-    /// ends right after a marker run), zero reflows happen for it: nothing
-    /// was ever fed at any of those intermediate sizes, so there is nothing
-    /// to preserve content FOR. This also naturally satisfies "avoid the
-    /// final restore reflow when the pending dimensions already match the
-    /// target": the final `(self.cols, self.rows) != (target_cols,
-    /// target_rows)` check runs against whatever size was last actually
-    /// applied, so it is skipped whenever that already equals the target
-    /// (including the zero-reflow case above, where `self`'s size never
-    /// changed from the target at all).
-    fn replay_with_resize_markers(
+    /// Cancellable implementation shared by [`Self::reset_and_replay_segments`]
+    /// and `build_from_snapshot_inner`. See
+    /// [`Self::reset_and_replay_segments`] for the segment-driven replay
+    /// contract; `cancel` is threaded straight through to each segment's
+    /// `process_pty_data_fully_cancellable`, and a flag observed mid-drain
+    /// aborts the whole replay and returns `None` (a superseded off-thread
+    /// `build_from_snapshot` worker bails out at the next chunk boundary
+    /// instead of finishing the parse).
+    fn replay_segments(
         &mut self,
         bytes: &[u8],
+        segments: &[ReplaySegment],
         cancel: &std::sync::atomic::AtomicBool,
     ) -> Option<Vec<u8>> {
         let target_cols = self.cols;
         let target_rows = self.rows;
         let mut actions = Vec::new();
-        let mut offset = 0usize;
-        // Deferred resize target: the dimensions the NEXT non-empty segment
-        // must be fed at. `None` means no resize is currently pending.
-        let mut pending: Option<(u16, u16)> = None;
-        while let Some((marker_start, marker_end, cols, rows)) = find_resize_marker(bytes, offset) {
-            let segment = &bytes[offset..marker_start];
-            if !segment.is_empty() {
-                if let Some((pending_cols, pending_rows)) = pending.take() {
-                    if (self.cols, self.rows) != (pending_cols, pending_rows) {
-                        self.resize(pending_cols, pending_rows);
-                    }
-                }
-                actions.extend(self.process_pty_data_fully_cancellable(segment, cancel)?);
-            }
-            pending = Some((cols, rows));
-            offset = marker_end;
+        if segments.is_empty() {
+            actions.extend(self.process_pty_data_fully_cancellable(bytes, cancel)?);
+            return Some(actions);
         }
-        let tail = &bytes[offset..];
-        if !tail.is_empty() {
-            if let Some((pending_cols, pending_rows)) = pending.take() {
-                if (self.cols, self.rows) != (pending_cols, pending_rows) {
-                    self.resize(pending_cols, pending_rows);
+        for (i, seg) in segments.iter().enumerate() {
+            let start = (seg.offset as usize).min(bytes.len());
+            let end = segments
+                .get(i + 1)
+                .map(|next| (next.offset as usize).min(bytes.len()))
+                .unwrap_or(bytes.len());
+            // The resize is applied ONLY when this segment actually has
+            // content to feed (`end > start`) — mirroring the round-1
+            // rework reflow-coalescing fix (finding `6ff208bbc674189c`): a
+            // run of segments whose content ranges are all empty (their
+            // offsets collapse together — no real bytes were ever recorded
+            // at those intermediate dimensions) costs ZERO reflows for the
+            // empty ones. Only the segment that actually has bytes to feed
+            // pays a reflow, for its OWN dimensions — never one reflow per
+            // segment regardless of content.
+            if end > start {
+                if (self.cols, self.rows) != (seg.cols, seg.rows) {
+                    self.resize(seg.cols, seg.rows);
                 }
+                actions
+                    .extend(self.process_pty_data_fully_cancellable(&bytes[start..end], cancel)?);
             }
-            actions.extend(self.process_pty_data_fully_cancellable(tail, cancel)?);
         }
         if (self.cols, self.rows) != (target_cols, target_rows) {
             self.resize(target_cols, target_rows);
@@ -867,9 +917,18 @@ impl TerminalCore {
         rows: u16,
         scrollback_lines: u32,
         payload: &[u8],
+        segments: &[ReplaySegment],
         cancel: &std::sync::atomic::AtomicBool,
     ) -> Option<SnapshotReplay> {
-        Self::build_from_snapshot_inner(cols, rows, scrollback_lines, payload, cancel, true)
+        Self::build_from_snapshot_inner(
+            cols,
+            rows,
+            scrollback_lines,
+            payload,
+            segments,
+            cancel,
+            true,
+        )
     }
 
     /// Sibling of [`Self::build_from_snapshot`] that runs the same replay
@@ -892,9 +951,18 @@ impl TerminalCore {
         rows: u16,
         scrollback_lines: u32,
         payload: &[u8],
+        segments: &[ReplaySegment],
         cancel: &std::sync::atomic::AtomicBool,
     ) -> Option<SnapshotReplay> {
-        Self::build_from_snapshot_inner(cols, rows, scrollback_lines, payload, cancel, false)
+        Self::build_from_snapshot_inner(
+            cols,
+            rows,
+            scrollback_lines,
+            payload,
+            segments,
+            cancel,
+            false,
+        )
     }
 
     /// Shared inner helper for [`Self::build_from_snapshot`] (bypass on) and
@@ -907,6 +975,7 @@ impl TerminalCore {
         rows: u16,
         scrollback_lines: u32,
         payload: &[u8],
+        segments: &[ReplaySegment],
         cancel: &std::sync::atomic::AtomicBool,
         bypass: bool,
     ) -> Option<SnapshotReplay> {
@@ -921,9 +990,15 @@ impl TerminalCore {
         // would violate this function's "scrollback_slim stays empty
         // throughout" contract for its caller, `build_from_snapshot`),
         // downgrade to the non-bypass recipe for the WHOLE replay whenever
-        // the payload contains any row-growing marker, so growth always
+        // `segments` contains any row-growing transition, so growth always
         // pulls real content exactly as the synchronous path does.
-        let bypass = bypass && !payload_has_row_growing_marker(rows, payload);
+        //
+        // task0004 round-4 rework (D1'): this is now a plain iteration over
+        // the (small, structural) `segments` slice — `segments_has_row_growth`
+        // — rather than a byte scan of `payload` (`payload_has_row_growing_marker`,
+        // removed). Trivially cheap and, unlike a byte scan, cannot be
+        // confused by anything a child process wrote into `payload`.
+        let bypass = bypass && !segments_has_row_growth(rows, segments);
         let mut core = TerminalCore::new(cols, rows, scrollback_lines);
         core.reset();
         // Snapshot-replay bypass: skip per-row SlimCell compression during the
@@ -935,26 +1010,25 @@ impl TerminalCore {
         // `bypass = false` and pays the per-row compression cost.
         //
         // task0001 narrow interaction, closed by review round-1 rework
-        // (finding `1698d9b52a89e241`): if `payload` contains a resize
-        // marker, `replay_with_resize_markers` below calls the
-        // content-preserving `resize` (full reflow) mid-drain, which is NOT
-        // itself bypass-aware and can populate `scrollback_slim` even while
-        // `bypass == true`. `TerminalCore::resize` now restores the bypass
-        // invariant (drains any such leaked rows back out, folding their
-        // count into the SAME virtual bookkeeping `ring_push_blank`'s
-        // bypass branch would have used) on every call while
-        // `scrollback_bypass` is on, so this no longer corrupts EITHER the
-        // returned grid/cursor OR `evicted_total` / `get_scrollback_length()`
-        // — and, more importantly, no longer leaves residual rows for the
-        // 2nd-pass `merge_scrollback_from` to mistake for genuine post-swap
-        // live-drain content. The debug_assert right before
-        // `disable_snapshot_bypass` below is the regression guard: it fails
-        // loudly in tests if a FUTURE in-drain mutation path reintroduces a
-        // leak this fix doesn't already cover.
+        // (finding `1698d9b52a89e241`): if `segments` describes a mid-drain
+        // resize, `replay_segments` below calls the content-preserving
+        // `resize` (full reflow) mid-drain, which is NOT itself bypass-aware
+        // and can populate `scrollback_slim` even while `bypass == true`.
+        // `TerminalCore::resize` now restores the bypass invariant (drains
+        // any such leaked rows back out, folding their count into the SAME
+        // virtual bookkeeping `ring_push_blank`'s bypass branch would have
+        // used) on every call while `scrollback_bypass` is on, so this no
+        // longer corrupts EITHER the returned grid/cursor OR `evicted_total`
+        // / `get_scrollback_length()` — and, more importantly, no longer
+        // leaves residual rows for the 2nd-pass `merge_scrollback_from` to
+        // mistake for genuine post-swap live-drain content. The debug_assert
+        // right before `disable_snapshot_bypass` below is the regression
+        // guard: it fails loudly in tests if a FUTURE in-drain mutation path
+        // reintroduces a leak this fix doesn't already cover.
         if bypass {
             core.enable_snapshot_bypass();
         }
-        let actions = match core.replay_with_resize_markers(payload, cancel) {
+        let actions = match core.replay_segments(payload, segments, cancel) {
             Some(a) => a,
             None => {
                 // Cancelled mid-drain: leave the core consistent (clear the
@@ -994,6 +1068,12 @@ impl TerminalCore {
             );
             core.disable_snapshot_bypass();
         }
+        // D3' (task0004 round-4 rework, review round-3 finding
+        // `b235e4dbc61cc4ba`): `scrollback_populated` tells the caller
+        // whether THIS replay actually populated `scrollback_slim` —
+        // `!bypass` covers both "bypass off by construction"
+        // (`build_scrollback_only_from_snapshot`) and "bypass downgraded for
+        // this payload" (the D6 row-growth guard above).
         Some(SnapshotReplay {
             core,
             actions,
@@ -1001,6 +1081,7 @@ impl TerminalCore {
             prompt_marks,
             fold_marks,
             bypass_b_mark_texts,
+            scrollback_populated: !bypass,
         })
     }
 
@@ -1480,194 +1561,79 @@ impl TerminalCore {
     }
 }
 
-// ── Resize-marker replay interpretation (IMPLEMENTATION.md D1/D2, task0001) ─
+// ── Structural resize-segment replay (task0004 round-4 rework, D1') ────
+//
+// Rounds 1-3 carried dimension changes as an in-band `OSC 777;emterm;resize;
+// <cols>;<rows> BEL` byte marker (IMPLEMENTATION.md D1/D2, task0001),
+// discovered at replay time by scanning the payload for that exact byte
+// pattern. Every round's residual critical/high findings trace back to this
+// choice: a marker embedded in the byte stream is, definitionally, also
+// forgeable BY the byte stream — three attempts at filtering it out of
+// PTY-sourced content each left a reconstruction path (splitting across
+// filter batches, nesting inside a non-SIXEL DCS, concatenation after a
+// strip pass, …).
+//
+// D1' removes the byte-scanning decoder entirely: dimensions are now
+// supplied to replay as a structural [`ReplaySegment`] parameter (see
+// [`TerminalCore::reset_and_replay_segments`] / [`TerminalCore::build_from_snapshot`]).
+// No function in this module scans a byte buffer for a marker pattern any
+// more, so there is nothing left for PTY output to forge.
 
-/// Prefix of the in-band resize marker: `ESC ] 777 ; emterm ; resize ;
-/// <cols> ; <rows> BEL`.
-///
-/// task0003 D2 (review round-2 finding `602e685494248cbb`): this byte format
-/// used to be independently duplicated — the encoder lived in the `emterm`
-/// daemon crate's `mux::scrollback_buffer::resize_marker_bytes` with its own
-/// literal prefix, while the decoder here held a SEPARATE literal and its
-/// own dimension bounds, so the two could drift (the daemon accepted any
-/// `u16` while this module rejected anything above 2000, silently dropping
-/// legitimate large resizes). `term_core` has no dependency on the daemon
-/// crate, but the daemon crate DOES depend on `term_core` (it already uses
-/// `TerminalCore` directly), so this module is now the single owner of both
-/// the byte format and the accepted dimension range: [`resize_marker_bytes`]
-/// (the encoder), [`find_resize_marker`] / [`parse_resize_marker_dims`] (the
-/// decoder), and [`RESIZE_MARKER_MAX_COLS`] / [`RESIZE_MARKER_MAX_ROWS`] (the
-/// shared bounds) are all `pub` so `mux::scrollback_buffer::resize_marker_bytes`
-/// can become a thin re-export instead of an independent literal, and so the
-/// daemon can validate a resize against the SAME bounds the decoder accepts
-/// at the point the resize is applied (`MuxPane::resize`), rather than
-/// silently losing a marker at replay time.
-const RESIZE_MARKER_PREFIX: &[u8] = b"\x1b]777;emterm;resize;";
-
-/// Encode an in-band resize marker: `ESC ] 777 ; emterm ; resize ; <cols> ;
-/// <rows> BEL`. SSOT for the marker byte format (task0003 D2) — see
-/// [`RESIZE_MARKER_PREFIX`]'s doc comment. `mux::scrollback_buffer::resize_marker_bytes`
-/// (in the `emterm` daemon crate) re-exports this rather than holding an
-/// independent literal.
-///
-/// Rides the same envelope as the other `emterm` OSC 777 extensions (fold /
-/// status-bar / agent-status / viewer launches): it is inert to a
-/// marker-unaware replay consumer, since an unrecognized, BEL-terminated OSC
-/// is parsed structurally and dropped without producing a visible cell.
-pub fn resize_marker_bytes(cols: u16, rows: u16) -> Vec<u8> {
-    format!("\x1b]777;emterm;resize;{cols};{rows}\x07").into_bytes()
-}
-
-/// Maximum length in bytes of a well-formed marker body (`<cols>;<rows>`),
-/// e.g. `"65535;65535"`. A BEL found beyond this many bytes past a
-/// candidate's prefix cannot terminate a valid marker body by definition,
-/// so the BEL scan is bounded to this window rather than running to the
-/// end of `bytes` (see `find_resize_marker`).
-const RESIZE_MARKER_MAX_BODY_LEN: usize = 11;
-
-/// Scan `bytes[from..]` for the next complete, well-formed resize marker.
-/// Returns `(marker_start, marker_end, cols, rows)`: `marker_start..marker_end`
-/// is the marker's full byte span (introducer through the terminating BEL,
-/// inclusive) to excise from the replay stream, and `(cols, rows)` are its
-/// parsed dimensions.
-///
-/// Returns `None` when no marker is found. A candidate that starts with the
-/// marker prefix but is truncated (no BEL before the end of `bytes`) or
-/// malformed (non-numeric / zero fields / extra fields) is treated as "not a
-/// marker" and left for the normal ANSI parser to consume as an ordinary
-/// (harmless, unrecognized) OSC sequence — an unterminated candidate stops
-/// the scan entirely (mirrors the daemon-side scrollback filters' "leave a
-/// partial sequence alone" discipline), while a terminated-but-malformed one
-/// only skips past its own prefix so a later, well-formed marker is still
-/// found. A BEL found only outside the `RESIZE_MARKER_MAX_BODY_LEN` window
-/// is likewise treated as "not our marker" (not a valid body length) and
-/// only skips past the candidate's own prefix.
-///
-/// `pub` (task0003 D2 / D1): besides the replay decoder (this module), the
-/// `emterm` daemon crate's write-path scrollback filter
-/// (`mux::scrollback_filter::strip_pty_output_for_scrollback_write`) calls
-/// this directly to scrub ANY literal occurrence of a marker-shaped byte
-/// sequence from PTY-sourced content — including one nested inside a
-/// sequence the daemon's ANSI-structural strip would otherwise preserve
-/// whole (e.g. a non-SIXEL DCS body; review round-2 finding
-/// `15c54fb74bb91ec7`) — using the EXACT same scan the decoder itself uses,
-/// so the two can never disagree about what counts as a marker.
-pub fn find_resize_marker(bytes: &[u8], from: usize) -> Option<(usize, usize, u16, u16)> {
-    let mut search_from = from;
-    while search_from + RESIZE_MARKER_PREFIX.len() <= bytes.len() {
-        let rel = bytes[search_from..]
-            .windows(RESIZE_MARKER_PREFIX.len())
-            .position(|w| w == RESIZE_MARKER_PREFIX)?;
-        let marker_start = search_from + rel;
-        let body_start = marker_start + RESIZE_MARKER_PREFIX.len();
-        let window_end = (body_start + RESIZE_MARKER_MAX_BODY_LEN + 1).min(bytes.len());
-        let bel_rel = match bytes[body_start..window_end]
-            .iter()
-            .position(|&b| b == 0x07)
-        {
-            Some(rel) => rel,
-            None if window_end == bytes.len() => return None,
-            None => {
-                // No BEL within the valid-body-length window, but the
-                // stream continues past it: this candidate is not our
-                // marker. Resume scanning just past this candidate's
-                // introducer so an overlapping later match is still found.
-                search_from = marker_start + 1;
-                continue;
-            }
-        };
-        let bel_at = body_start + bel_rel;
-        if let Some((cols, rows)) = parse_resize_marker_dims(&bytes[body_start..bel_at]) {
-            return Some((marker_start, bel_at + 1, cols, rows));
-        }
-        // Terminated but malformed body: not actually our marker. Resume
-        // scanning just past this candidate's introducer so an overlapping
-        // later match is still found, without looping on the same failed
-        // candidate.
-        search_from = marker_start + 1;
-    }
-    None
-}
-
-/// Scan `payload` for any resize marker whose `rows` exceeds the row count
-/// in effect immediately before it (starting from `initial_rows`, the
+/// Scan `segments` for any transition whose `rows` exceeds the row count in
+/// effect immediately before it (starting from `initial_rows`, the
 /// dimensions the replay core is constructed at) — task0003 D6, used by
 /// [`TerminalCore::build_from_snapshot_inner`] to decide whether the
-/// snapshot-replay bypass is safe for a given payload (see that function's
+/// snapshot-replay bypass is safe for a given replay (see that function's
 /// doc comment for why a row-count GROWTH during the bypass diverges from
 /// the synchronous path).
-fn payload_has_row_growing_marker(initial_rows: u16, payload: &[u8]) -> bool {
+///
+/// A plain iteration over the (small, structural) `segments` slice —
+/// task0004 round-4 rework's replacement for the byte-scanning
+/// `payload_has_row_growing_marker` this superseded.
+fn segments_has_row_growth(initial_rows: u16, segments: &[ReplaySegment]) -> bool {
     let mut prev_rows = initial_rows;
-    let mut offset = 0usize;
-    while let Some((_, end, _, marker_rows)) = find_resize_marker(payload, offset) {
-        if marker_rows > prev_rows {
+    for seg in segments {
+        if seg.rows > prev_rows {
             return true;
         }
-        prev_rows = marker_rows;
-        offset = end;
+        prev_rows = seg.rows;
     }
-    // `replay_with_resize_markers` always restores to `initial_rows` (the
-    // construction / target size) at the end of the drain, even when no
-    // marker explicitly asks for it. If the last marker (or the initial
-    // size, when there are none) left FEWER rows than that, this implicit
-    // final restore is itself a row-count growth and needs the same
-    // treatment as an explicit one.
+    // `replay_segments` always restores to `initial_rows` (the construction
+    // / target size) at the end of the drain, even when no segment
+    // explicitly asks for it. If the last segment (or the initial size,
+    // when there are none) left FEWER rows than that, this implicit final
+    // restore is itself a row-count growth and needs the same treatment as
+    // an explicit one.
     initial_rows > prev_rows
 }
 
-/// Defensive upper bound on a resize marker's `cols` field. Marker
-/// dimensions are replayed directly into `TerminalCore::resize`, which
-/// allocates `(scrollback_capacity + rows) * cols` cells — an unbounded
-/// value here would let a forged or corrupted marker trigger a huge
-/// allocation. Comfortably above any real terminal width.
+/// Defensive upper bound on a resize's `cols` field. Replay dimensions are
+/// fed directly into `TerminalCore::resize`, which allocates
+/// `(scrollback_capacity + rows) * cols` cells — an unbounded value here
+/// would let a forged or corrupted dimension trigger a huge allocation.
+/// Comfortably above any real terminal width.
 ///
-/// `pub` (task0003 D2, review round-2 finding `602e685494248cbb`): the
-/// daemon's encoder previously accepted any `u16` while this decoder
-/// rejected anything above the (private) old value of 2000, so a legitimate
-/// resize past that value silently lost its marker at replay — the two
-/// sides disagreed on the accepted range with nothing to catch the drift.
-/// Exporting this constant lets the daemon validate/clamp a resize against
-/// the SAME bound at the point it is applied (`MuxPane::resize`,
-/// `term_core::clamp_resize_dims`), so anything that reaches the encoder is
-/// guaranteed within what this decoder accepts.
+/// `pub` so the daemon can validate/clamp a resize against the SAME bound at
+/// the point it is applied (`MuxPane::resize`, `MuxPane::new`), so anything
+/// that reaches the wire is guaranteed within what replay accepts.
 pub const RESIZE_MARKER_MAX_COLS: u16 = 4096;
 
-/// Defensive upper bound on a resize marker's `rows` field. See
+/// Defensive upper bound on a resize's `rows` field. See
 /// [`RESIZE_MARKER_MAX_COLS`] for the rationale (both the `pub` visibility
 /// and the shared-bound reasoning apply identically here).
 pub const RESIZE_MARKER_MAX_ROWS: u16 = 4096;
 
-/// Clamp a requested resize to the range [`resize_marker_bytes`] /
-/// [`parse_resize_marker_dims`] agree on (`1..=RESIZE_MARKER_MAX_COLS` /
-/// `1..=RESIZE_MARKER_MAX_ROWS`), task0003 D2. Called at the point a resize
-/// is APPLIED (`MuxPane::resize`) so the dimensions that reach the marker
-/// encoder — and the PTY itself — can never be silently un-representable by
-/// the decoder later. `0` clamps up to `1` (a zero-sized terminal is not
-/// meaningful) rather than down, matching the decoder's zero rejection.
+/// Clamp a requested resize to `1..=RESIZE_MARKER_MAX_COLS` /
+/// `1..=RESIZE_MARKER_MAX_ROWS`. Called at the point a resize is APPLIED
+/// (`MuxPane::resize`, `MuxPane::new`) so the dimensions that reach the wire
+/// — and the PTY itself — are always within replay's accepted domain. `0`
+/// clamps up to `1` (a zero-sized terminal is not meaningful) rather than
+/// down.
 pub fn clamp_resize_dims(cols: u16, rows: u16) -> (u16, u16) {
     (
         cols.clamp(1, RESIZE_MARKER_MAX_COLS),
         rows.clamp(1, RESIZE_MARKER_MAX_ROWS),
     )
-}
-
-/// Parse a resize marker body (`<cols>;<rows>`, no leading/trailing bytes).
-/// Rejects a non-numeric, extra-field, zero-valued, or over-large dimension
-/// (see [`RESIZE_MARKER_MAX_COLS`] / [`RESIZE_MARKER_MAX_ROWS`]).
-fn parse_resize_marker_dims(body: &[u8]) -> Option<(u16, u16)> {
-    let s = std::str::from_utf8(body).ok()?;
-    let mut parts = s.split(';');
-    let cols: u16 = parts.next()?.parse().ok()?;
-    let rows: u16 = parts.next()?.parse().ok()?;
-    if parts.next().is_some()
-        || cols == 0
-        || rows == 0
-        || cols > RESIZE_MARKER_MAX_COLS
-        || rows > RESIZE_MARKER_MAX_ROWS
-    {
-        return None;
-    }
-    Some((cols, rows))
 }
 
 // ── Tests ────────────────────────────────────────────────
@@ -1676,142 +1642,110 @@ fn parse_resize_marker_dims(body: &[u8]) -> Option<(u16, u16)> {
 mod tests {
     use super::*;
 
-    // ── Resize-marker scanning (task0001, IMPLEMENTATION.md D1/D2) ───────
+    // ── task0004 round-4 rework (D1'): structural ReplaySegment replay ────
+    //
+    // Rounds 1-3's `find_resize_marker` / `resize_marker_bytes` /
+    // `parse_resize_marker_dims` byte-scanning decoder is GONE — replay
+    // authority moved to the `ReplaySegment` parameter. The tests below
+    // replace the old marker-scanning suite; AC-1's forgery tests are the
+    // direct successors of that suite's intent (proving a marker-SHAPED
+    // byte sequence can no longer do anything).
 
-    #[test]
-    fn find_resize_marker_locates_well_formed_marker() {
-        let bytes = b"before\x1b]777;emterm;resize;120;48\x07after";
-        let found = find_resize_marker(bytes, 0).expect("marker must be found");
-        let (start, end, cols, rows) = found;
-        assert_eq!(&bytes[start..end], b"\x1b]777;emterm;resize;120;48\x07");
-        assert_eq!(cols, 120);
-        assert_eq!(rows, 48);
-        assert_eq!(&bytes[..start], b"before");
-        assert_eq!(&bytes[end..], b"after");
+    /// Byte-for-byte the OLD (pre-round-4) marker wire format. Kept ONLY as
+    /// adversarial test fixture data for the AC-1 forgery tests below — it
+    /// is deliberately NOT wired to any production decoder any more.
+    fn legacy_marker_shaped_bytes(cols: u16, rows: u16) -> Vec<u8> {
+        format!("\x1b]777;emterm;resize;{cols};{rows}\x07").into_bytes()
     }
 
+    /// AC-1: a bare marker-shaped byte sequence embedded in the replay
+    /// payload, with NO segments supplied, must never change replay
+    /// dimensions — not even a single reflow. `reflow_call_count` is the
+    /// direct witness (per the task's test notes: `core.cols()`/`rows()`
+    /// after a replay always equal the caller's target regardless of what
+    /// happened mid-drain, so that alone would prove nothing; the reflow
+    /// counter is what would move if the marker-shaped bytes were honored).
+    ///
+    /// Confirmed to fail pre-fix: against the removed byte-scanning
+    /// `replay_with_resize_markers` (which called `find_resize_marker` on
+    /// the raw payload), this exact input was VALID and well-formed by that
+    /// decoder's own rules — it would locate the marker, call
+    /// `self.resize(120, 48)` before the trailing content, and
+    /// `reflow_call_count` would show 2 (the marker's resize + the final
+    /// restore-to-target), not 0.
     #[test]
-    fn find_resize_marker_none_when_absent() {
-        let bytes = b"plain text with no marker at all, not even an ESC";
-        assert!(find_resize_marker(bytes, 0).is_none());
-    }
-
-    #[test]
-    fn find_resize_marker_none_when_unterminated() {
-        // Starts the marker prefix but never reaches a BEL terminator.
-        let bytes = b"before\x1b]777;emterm;resize;120;48";
-        assert!(find_resize_marker(bytes, 0).is_none());
-    }
-
-    #[test]
-    fn find_resize_marker_skips_malformed_candidate_and_finds_next() {
-        // First candidate has a non-numeric field (malformed); the second,
-        // well-formed marker later in the stream must still be found.
-        let mut bytes = b"\x1b]777;emterm;resize;abc;48\x07".to_vec();
-        bytes.extend_from_slice(b"middle\x1b]777;emterm;resize;80;24\x07tail");
-        let (start, end, cols, rows) = find_resize_marker(&bytes, 0).expect("must find the second");
-        assert_eq!(cols, 80);
-        assert_eq!(rows, 24);
-        assert_eq!(&bytes[end..], b"tail");
-        assert!(start > 0, "must have skipped past the malformed candidate");
-    }
-
-    #[test]
-    fn find_resize_marker_rejects_zero_dimension() {
-        let bytes = b"\x1b]777;emterm;resize;0;48\x07";
-        assert!(find_resize_marker(bytes, 0).is_none());
-        let bytes2 = b"\x1b]777;emterm;resize;120;0\x07";
-        assert!(find_resize_marker(bytes2, 0).is_none());
-    }
-
-    #[test]
-    fn find_resize_marker_rejects_extra_field() {
-        let bytes = b"\x1b]777;emterm;resize;120;48;99\x07";
-        assert!(find_resize_marker(bytes, 0).is_none());
-    }
-
-    #[test]
-    fn find_resize_marker_search_from_offset_skips_earlier_marker() {
-        let bytes = b"\x1b]777;emterm;resize;10;10\x07\x1b]777;emterm;resize;20;20\x07";
-        // Search starting right after the first marker's introducer must
-        // skip the first and find the second.
-        let first_end = find_resize_marker(bytes, 0).unwrap().1;
-        let (_, _, cols, rows) = find_resize_marker(bytes, first_end).expect("second marker");
-        assert_eq!((cols, rows), (20, 20));
-    }
-
-    #[test]
-    fn parse_resize_marker_dims_accepts_well_formed_body() {
-        assert_eq!(parse_resize_marker_dims(b"120;48"), Some((120, 48)));
-    }
-
-    #[test]
-    fn parse_resize_marker_dims_rejects_non_numeric() {
-        assert_eq!(parse_resize_marker_dims(b"abc;48"), None);
-        assert_eq!(parse_resize_marker_dims(b"120;xyz"), None);
-    }
-
-    #[test]
-    fn parse_resize_marker_dims_rejects_missing_field() {
-        assert_eq!(parse_resize_marker_dims(b"120"), None);
-        assert_eq!(parse_resize_marker_dims(b""), None);
-    }
-
-    // ── task0003 AC-2 (D2, review round-2 finding `602e685494248cbb`):
-    // encoder and decoder share ONE accepted dimension range ─────────────
-
-    /// A dimension just past the OLD (private, pre-task0003) decoder cap of
-    /// 2000 — previously silently rejected even though the encoder accepted
-    /// it — is now accepted, because both sides read the same
-    /// `RESIZE_MARKER_MAX_COLS` / `RESIZE_MARKER_MAX_ROWS` constants.
-    #[test]
-    fn parse_resize_marker_dims_accepts_value_past_old_hardcoded_2000_cap() {
-        assert_eq!(parse_resize_marker_dims(b"2500;2500"), Some((2500, 2500)));
-    }
-
-    /// A dimension still beyond the (now-shared, wider) accepted range is
-    /// rejected — the range widened, but it did not disappear.
-    #[test]
-    fn parse_resize_marker_dims_still_rejects_dimension_past_shared_max() {
+    fn ac1_bare_marker_shaped_bytes_never_change_replay_dimensions() {
+        let mut core = TerminalCore::new(80, 24, 1000);
+        let before = core.reflow_call_count;
+        let mut bytes = b"before\r\n".to_vec();
+        bytes.extend_from_slice(&legacy_marker_shaped_bytes(120, 48));
+        bytes.extend_from_slice(b"after\r\n");
+        core.reset_and_replay(&bytes); // no segments supplied
         assert_eq!(
-            parse_resize_marker_dims(
-                format!("{};{}", RESIZE_MARKER_MAX_COLS + 1, RESIZE_MARKER_MAX_ROWS).as_bytes()
-            ),
-            None
+            core.reflow_call_count - before,
+            0,
+            "a marker-shaped byte sequence with no segment authority must \
+             never trigger a resize"
         );
-        assert_eq!(
-            parse_resize_marker_dims(
-                format!("{};{}", RESIZE_MARKER_MAX_COLS, RESIZE_MARKER_MAX_ROWS + 1).as_bytes()
-            ),
-            None
-        );
+        assert_eq!(core.cols(), 80);
+        assert_eq!(core.rows(), 24);
+        assert!(core.get_line_text(0).contains("before"));
+        // The marker-shaped bytes are parsed as an ordinary (harmless,
+        // unrecognized) OSC and produce no visible cell; "after" lands on
+        // the very next row, exactly as if the marker text were absent.
+        assert!(core.get_line_text(1).contains("after"));
     }
 
-    /// AC-2 end-to-end: a resize past the OLD hardcoded decoder range still
-    /// produces a marker that a replay honors (encoder -> decoder agree).
+    /// AC-1: the SAME marker-shaped bytes, but now genuine segments ARE
+    /// supplied (describing a completely different, fixed dimension) — the
+    /// embedded bytes must still have zero effect; only the supplied
+    /// segment's dims apply.
     #[test]
-    fn reset_and_replay_honors_a_resize_past_the_old_hardcoded_decoder_range() {
-        let cols: u16 = 80;
-        let rows: u16 = 24;
-        let wide_cols: u16 = 2500; // past the OLD 2000 decoder cap
-        let mut bytes = b"before-resize\r\n".to_vec();
-        bytes.extend_from_slice(&resize_marker_bytes(wide_cols, 40));
-        // A cursor-addressed write near the far right edge of `wide_cols`
-        // only lands correctly if the marker actually resized the core to
-        // `wide_cols` before this segment is fed — an ignored marker would
-        // clamp/wrap it at the caller's `cols` (80) instead.
-        bytes.extend_from_slice(format!("\x1b[1;{wide_cols}Hedge").as_bytes());
-        bytes.extend_from_slice(&resize_marker_bytes(cols, rows));
-        bytes.extend_from_slice(b"after-resize\r\n");
+    fn ac1_marker_shaped_bytes_do_not_override_supplied_segments() {
+        let mut core = TerminalCore::new(80, 24, 1000);
+        let mut bytes = b"before\r\n".to_vec();
+        bytes.extend_from_slice(&legacy_marker_shaped_bytes(999, 999));
+        bytes.extend_from_slice(b"after\r\n");
+        let segments = [ReplaySegment {
+            offset: 0,
+            cols: 80,
+            rows: 24,
+        }];
+        core.reset_and_replay_segments(&bytes, &segments);
+        assert_eq!(
+            core.cols(),
+            80,
+            "dimensions must come only from the segment field"
+        );
+        assert_eq!(core.rows(), 24);
+    }
 
-        let mut core = TerminalCore::new(cols, rows, 1000);
+    /// AC-1: a marker-shaped sequence "formed by concatenation" — split into
+    /// two halves that are each individually harmless but literally
+    /// concatenate into a complete marker byte-for-byte — still has zero
+    /// effect once fed to replay as a single joined buffer with no
+    /// segments. (The write-path splitting/stripping scenarios that could
+    /// have produced exactly this concatenation are covered end-to-end in
+    /// `mux::ipc::pty_spawn`'s AC-1 tests; this pins the term_core-level
+    /// guarantee that even a PERFECTLY formed marker occurring anywhere in
+    /// the byte stream is inert without segment authority.)
+    #[test]
+    fn ac1_marker_formed_by_concatenation_has_no_effect() {
+        let full = legacy_marker_shaped_bytes(4000, 4000);
+        let split = full.len() / 2;
+        let mut bytes = b"before\r\n".to_vec();
+        bytes.extend_from_slice(&full[..split]);
+        bytes.extend_from_slice(&full[split..]);
+        bytes.extend_from_slice(b"after\r\n");
+        let mut core = TerminalCore::new(80, 24, 1000);
+        let before = core.reflow_call_count;
         core.reset_and_replay(&bytes);
-
-        assert_eq!(core.cols(), cols, "core must end back at target size");
-        assert_eq!(core.rows(), rows);
+        assert_eq!(core.reflow_call_count - before, 0);
+        assert_eq!(core.cols(), 80);
+        assert_eq!(core.rows(), 24);
     }
 
-    // ── clamp_resize_dims (task0003 D2) ───────────────────────────────────
+    // ── clamp_resize_dims ──────────────────────────────────────────────
 
     #[test]
     fn clamp_resize_dims_leaves_in_range_values_untouched() {
@@ -1835,66 +1769,128 @@ mod tests {
         assert_eq!(clamp_resize_dims(0, 0), (1, 1));
     }
 
-    // ── replay_with_resize_markers / reset_and_replay marker interpretation ─
+    // ── reset_and_replay_segments: structural dimension replay ────────────
 
-    /// A single mid-stream marker resizes the core between the two
-    /// segments, and the core ends back at its ORIGINAL (caller-requested)
-    /// dimensions.
+    /// AC-2 / D1' equivalent of the old marker-based mid-stream resize test:
+    /// a single segment transition resizes the core between the two
+    /// content ranges, and the core ends back at its ORIGINAL
+    /// (caller-requested) dimensions.
     #[test]
-    fn reset_and_replay_resizes_mid_stream_and_restores_target_dims() {
+    fn reset_and_replay_segments_resizes_mid_stream_and_restores_target_dims() {
         let mut core = TerminalCore::new(80, 24, 1000);
-        let mut bytes = b"before-resize\r\n".to_vec();
-        bytes.extend_from_slice(&resize_marker(40, 10));
-        bytes.extend_from_slice(b"after-resize\r\n");
-        core.reset_and_replay(&bytes);
+        let before = b"before-resize\r\n";
+        let after = b"after-resize\r\n";
+        let mut bytes = before.to_vec();
+        bytes.extend_from_slice(after);
+        let segments = [
+            ReplaySegment {
+                offset: 0,
+                cols: 80,
+                rows: 24,
+            },
+            ReplaySegment {
+                offset: before.len() as u32,
+                cols: 40,
+                rows: 10,
+            },
+        ];
+        core.reset_and_replay_segments(&bytes, &segments);
         // Core ends back at the dims it was constructed with (80, 24), not
-        // the marker's intermediate (40, 10).
+        // the mid-stream segment's (40, 10).
         assert_eq!(core.cols(), 80);
         assert_eq!(core.rows(), 24);
         assert!(
             core.get_line_text(0).contains("before-resize"),
-            "content before the marker must still be present"
+            "content before the transition must still be present"
         );
         assert!(
             core.get_line_text(1).contains("after-resize"),
-            "content after the marker must still be present"
+            "content after the transition must still be present"
         );
     }
 
-    /// Test-only helper mirroring `mux::scrollback_buffer::resize_marker_bytes`'s
-    /// byte format, used directly by `terminal_core` unit tests (which have
-    /// no dependency on the `emterm` mux crate).
-    fn resize_marker(cols: u16, rows: u16) -> Vec<u8> {
-        format!("\x1b]777;emterm;resize;{cols};{rows}\x07").into_bytes()
+    /// AC-2: content recorded under one set of dimensions is always
+    /// replayed under those dimensions, including when a resize follows
+    /// within what WOULD have been the (now-removed) coalescing window — a
+    /// cursor-addressed write near the far edge of a wide segment only
+    /// lands correctly if that segment's dims actually applied while its
+    /// own bytes were fed.
+    #[test]
+    fn reset_and_replay_segments_honors_a_wide_dimension_segment() {
+        let cols: u16 = 80;
+        let rows: u16 = 24;
+        let wide_cols: u16 = 2500;
+        let before = b"before-resize\r\n".to_vec();
+        let wide = format!("\x1b[1;{wide_cols}Hedge").into_bytes();
+        let after = b"after-resize\r\n".to_vec();
+        let mut bytes = before.clone();
+        bytes.extend_from_slice(&wide);
+        bytes.extend_from_slice(&after);
+        let segments = [
+            ReplaySegment {
+                offset: 0,
+                cols,
+                rows: 40,
+            },
+            ReplaySegment {
+                offset: before.len() as u32,
+                cols: wide_cols,
+                rows: 40,
+            },
+            ReplaySegment {
+                offset: (before.len() + wide.len()) as u32,
+                cols,
+                rows,
+            },
+        ];
+
+        let mut core = TerminalCore::new(cols, rows, 1000);
+        core.reset_and_replay_segments(&bytes, &segments);
+
+        assert_eq!(core.cols(), cols, "core must end back at target size");
+        assert_eq!(core.rows(), rows);
     }
 
-    /// review round-1 rework, finding `6ff208bbc674189c` (high) / task0002
-    /// AC-5: N consecutive resize markers with NO bytes between them cost
-    /// at most TWO reflows total — one to apply the last pending size right
-    /// before the trailing non-empty segment, and one for the mandatory
-    /// final restore back to the caller's target size (since this run's
-    /// last marker's dims differ from the target) — never one reflow PER
-    /// MARKER. Observed directly via `reflow_call_count`. Pre-fix, each of
-    /// the 5 markers triggered its own immediate `resize()` call regardless
-    /// of whether any bytes ever followed it at that size, for 5 (marker)
-    /// + 1 (final restore) = 6 reflows on this same recording.
+    /// review round-1 rework, finding `6ff208bbc674189c` (high) — still
+    /// closed under the segment-driven replay: N consecutive segment
+    /// transitions with NO bytes between them (all offsets collapse
+    /// together) cost at most TWO reflows total — one for the last
+    /// transition's dims right before the trailing non-empty range, and one
+    /// for the mandatory final restore back to the target size — never one
+    /// reflow per transition.
     #[test]
-    fn replay_coalesces_consecutive_markers_into_a_single_reflow() {
+    fn replay_segments_coalesces_consecutive_empty_transitions_into_a_single_reflow() {
         let mut core = TerminalCore::new(80, 24, 1000);
         let before = core.reflow_call_count;
         let mut bytes = b"before\r\n".to_vec();
-        // Five consecutive markers, no bytes between any of them.
-        for (cols, rows) in [(40, 10), (100, 30), (60, 20), (120, 40), (90, 25)] {
-            bytes.extend_from_slice(&resize_marker(cols, rows));
-        }
+        let marker_offset = bytes.len() as u32;
         bytes.extend_from_slice(b"after\r\n");
-        core.reset_and_replay(&bytes);
+        // A leading segment at offset 0 covers "before\r\n" at the core's
+        // construction dims, then five consecutive segments, all at the
+        // SAME offset (no bytes between any of them) — only the LAST one's
+        // dims should ever apply to the trailing "after\r\n" range.
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols: 80,
+            rows: 24,
+        }];
+        segments.extend(
+            [(40, 10), (100, 30), (60, 20), (120, 40), (90, 25)]
+                .into_iter()
+                .map(|(cols, rows)| ReplaySegment {
+                    offset: marker_offset,
+                    cols,
+                    rows,
+                }),
+        );
+        core.reset_and_replay_segments(&bytes, &segments);
         let reflows = core.reflow_call_count - before;
         assert_eq!(
             reflows, 2,
-            "a run of 5 consecutive markers followed by ONE non-empty segment \
-             must reflow at most twice (last pending size + final restore-to- \
-             target), never once per marker (which would be 6 here)"
+            "a run of 5 same-offset transitions followed by ONE non-empty \
+             range must reflow at most twice (last transition's dims + \
+             final restore-to-target), never once per transition (which \
+             would be 6 here)"
         );
         assert_eq!(core.cols(), 80, "core must end back at the target size");
         assert_eq!(core.rows(), 24);
@@ -1902,55 +1898,115 @@ mod tests {
         assert!(core.get_line_text(1).contains("after"));
     }
 
-    /// AC-5 (zero-reflow edge case): if a run of consecutive markers is
-    /// never followed by any bytes at all (the recording ends right after
-    /// the last marker), NO reflow happens for any of them — there is
-    /// nothing to preserve content for, and the core never actually left
-    /// its target size, so even the final restore-to-target check is a
-    /// no-op.
+    /// Zero-reflow edge case: if a run of consecutive same-offset
+    /// transitions is never followed by any bytes at all (they describe the
+    /// tail of the payload), NO reflow happens for any of them.
     #[test]
-    fn replay_trailing_consecutive_markers_with_no_following_bytes_reflow_zero_times() {
+    fn replay_segments_trailing_consecutive_empty_transitions_reflow_zero_times() {
         let mut core = TerminalCore::new(80, 24, 1000);
         let before = core.reflow_call_count;
-        let mut bytes = b"only-content\r\n".to_vec();
-        for (cols, rows) in [(40, 10), (100, 30), (60, 20)] {
-            bytes.extend_from_slice(&resize_marker(cols, rows));
-        }
-        // No bytes after the last marker.
-        core.reset_and_replay(&bytes);
+        let bytes = b"only-content\r\n".to_vec();
+        let tail_offset = bytes.len() as u32;
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols: 80,
+            rows: 24,
+        }];
+        segments.extend(
+            [(40, 10), (100, 30), (60, 20)]
+                .into_iter()
+                .map(|(cols, rows)| ReplaySegment {
+                    offset: tail_offset,
+                    cols,
+                    rows,
+                }),
+        );
+        core.reset_and_replay_segments(&bytes, &segments);
         assert_eq!(
             core.reflow_call_count - before,
             0,
-            "a trailing marker run with nothing fed at any of its sizes must \
-             cost zero reflows"
+            "a trailing run of empty transitions with nothing fed at any of \
+             their sizes must cost zero reflows"
         );
         assert_eq!(core.cols(), 80);
         assert_eq!(core.rows(), 24);
         assert!(core.get_line_text(0).contains("only-content"));
     }
 
-    /// AC-5 (grid-equivalence variant, the ACs's stated alternative to a
-    /// counter): a run of consecutive markers ending in dims (D) followed
-    /// by content must produce a grid IDENTICAL to a recording containing
-    /// only the SINGLE final marker (D) followed by the same content — the
-    /// intermediate dimensions leave no observable trace either way.
+    /// Grid-equivalence variant: a run of consecutive same-offset
+    /// transitions ending in dims (D) followed by content must produce a
+    /// grid IDENTICAL to a recording containing only the SINGLE final
+    /// segment (D) followed by the same content.
     #[test]
-    fn replay_consecutive_markers_grid_matches_single_final_dimension_case() {
+    fn replay_segments_consecutive_transitions_grid_matches_single_final_dimension_case() {
         let mut multi = TerminalCore::new(80, 24, 1000);
         let mut multi_bytes = b"before\r\n".to_vec();
-        for (cols, rows) in [(40, 10), (100, 30), (60, 20)] {
-            multi_bytes.extend_from_slice(&resize_marker(cols, rows));
-        }
+        let marker_offset = multi_bytes.len() as u32;
         multi_bytes.extend_from_slice(b"after\r\n");
-        multi.reset_and_replay(&multi_bytes);
+        let mut multi_segments = vec![ReplaySegment {
+            offset: 0,
+            cols: 80,
+            rows: 24,
+        }];
+        multi_segments.extend(
+            [(40, 10), (100, 30), (60, 20)]
+                .into_iter()
+                .map(|(cols, rows)| ReplaySegment {
+                    offset: marker_offset,
+                    cols,
+                    rows,
+                }),
+        );
+        multi.reset_and_replay_segments(&multi_bytes, &multi_segments);
 
         let mut single = TerminalCore::new(80, 24, 1000);
         let mut single_bytes = b"before\r\n".to_vec();
-        single_bytes.extend_from_slice(&resize_marker(60, 20));
+        let single_offset = single_bytes.len() as u32;
         single_bytes.extend_from_slice(b"after\r\n");
-        single.reset_and_replay(&single_bytes);
+        let single_segments = [
+            ReplaySegment {
+                offset: 0,
+                cols: 80,
+                rows: 24,
+            },
+            ReplaySegment {
+                offset: single_offset,
+                cols: 60,
+                rows: 20,
+            },
+        ];
+        single.reset_and_replay_segments(&single_bytes, &single_segments);
 
         assert_eq!(grid_fingerprint(&multi), grid_fingerprint(&single));
+        assert!(
+            multi.get_line_text(0).contains("before"),
+            "leading content must actually be fed (not silently dropped by \
+             both variants, which would make this assertion vacuous)"
+        );
+    }
+
+    /// AC-11: replay with NO segments (an older daemon's snapshot, or any
+    /// caller with nothing to attribute) behaves as plain single-dimension
+    /// replay — byte-identical to feeding the same bytes through
+    /// `process_pty_data_fully` at the core's current size, with zero
+    /// reflows regardless of what the bytes contain.
+    #[test]
+    fn ac11_no_segments_degrades_to_single_dimension_replay() {
+        let payload = b"line one\r\nline two\r\n\x1b]777;emterm;resize;999;999\x07line three\r\n";
+
+        let mut via_segments = TerminalCore::new(80, 24, 1000);
+        let before = via_segments.reflow_call_count;
+        via_segments.reset_and_replay_segments(payload, &[]);
+        assert_eq!(via_segments.reflow_call_count - before, 0);
+
+        let mut via_process = TerminalCore::new(80, 24, 1000);
+        via_process.process_pty_data_fully(payload);
+
+        assert_eq!(
+            grid_fingerprint(&via_segments),
+            grid_fingerprint(&via_process),
+            "empty-segments replay must match a plain process_pty_data_fully call"
+        );
     }
 
     // ── Off-thread snapshot replay builder (FR1/FR6/NFR2/NFR3) ──
@@ -2003,7 +2059,7 @@ mod tests {
 
         // Off-thread builder path.
         let never = std::sync::atomic::AtomicBool::new(false);
-        let built = TerminalCore::build_from_snapshot(80, 24, 1000, &payload, &never)
+        let built = TerminalCore::build_from_snapshot(80, 24, 1000, &payload, &[], &never)
             .expect("not cancelled");
 
         assert_eq!(grid_fingerprint(&built.core), grid_fingerprint(&sync_core));
@@ -2024,8 +2080,8 @@ mod tests {
         let sync_folds = sync_core.take_fold_marks();
 
         let never = std::sync::atomic::AtomicBool::new(false);
-        let built =
-            TerminalCore::build_from_snapshot(80, 24, 100, b"", &never).expect("not cancelled");
+        let built = TerminalCore::build_from_snapshot(80, 24, 100, b"", &[], &never)
+            .expect("not cancelled");
 
         assert_eq!(grid_fingerprint(&built.core), grid_fingerprint(&sync_core));
         assert_eq!(built.actions, sync_actions);
@@ -2056,7 +2112,7 @@ mod tests {
         payload.extend_from_slice(b"\x1b[6n"); // CPR → `\x1b[<r>;<c>R`
 
         let never = std::sync::atomic::AtomicBool::new(false);
-        let built = TerminalCore::build_from_snapshot(80, 24, 100, &payload, &never)
+        let built = TerminalCore::build_from_snapshot(80, 24, 100, &payload, &[], &never)
             .expect("not cancelled");
 
         assert_eq!(
@@ -2081,7 +2137,7 @@ mod tests {
         let payload = b"hello off-thread\r\nsecond line\r\n".to_vec();
         let handle = std::thread::spawn(move || {
             static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-            TerminalCore::build_from_snapshot(80, 24, 100, &payload, &NEVER)
+            TerminalCore::build_from_snapshot(80, 24, 100, &payload, &[], &NEVER)
         });
         let built = handle
             .join()
@@ -2100,13 +2156,13 @@ mod tests {
 
         let cancelled = std::sync::atomic::AtomicBool::new(true);
         assert!(
-            TerminalCore::build_from_snapshot(80, 24, 100, &payload, &cancelled).is_none(),
+            TerminalCore::build_from_snapshot(80, 24, 100, &payload, &[], &cancelled).is_none(),
             "a pre-set cancel flag must abandon the build"
         );
 
         let live = std::sync::atomic::AtomicBool::new(false);
         assert!(
-            TerminalCore::build_from_snapshot(80, 24, 100, &payload, &live).is_some(),
+            TerminalCore::build_from_snapshot(80, 24, 100, &payload, &[], &live).is_some(),
             "a clear cancel flag must build normally"
         );
     }
@@ -2128,8 +2184,9 @@ mod tests {
         }
         let scrollback_lines: u32 = 10_000;
         let never = std::sync::atomic::AtomicBool::new(false);
-        let built = TerminalCore::build_from_snapshot(80, 24, scrollback_lines, &payload, &never)
-            .expect("not cancelled");
+        let built =
+            TerminalCore::build_from_snapshot(80, 24, scrollback_lines, &payload, &[], &never)
+                .expect("not cancelled");
         let mut core = built.core;
         // Immediately after replay: scrollback contents are NOT populated.
         assert_eq!(
@@ -2192,7 +2249,7 @@ mod tests {
         // build_from_snapshot path: the bypass must produce the same
         // `evicted_total`.
         let never = std::sync::atomic::AtomicBool::new(false);
-        let built = TerminalCore::build_from_snapshot(80, 24, small_c, &payload, &never)
+        let built = TerminalCore::build_from_snapshot(80, 24, small_c, &payload, &[], &never)
             .expect("not cancelled");
         assert_eq!(
             built.evicted_total, sync_evicted,
@@ -2239,7 +2296,7 @@ mod tests {
 
         // build_from_snapshot path.
         let never = std::sync::atomic::AtomicBool::new(false);
-        let built = TerminalCore::build_from_snapshot(80, 10, small_c, &payload, &never)
+        let built = TerminalCore::build_from_snapshot(80, 10, small_c, &payload, &[], &never)
             .expect("not cancelled");
 
         // Sanity: we exercised the saturation transition.
@@ -2297,7 +2354,7 @@ mod tests {
         }
 
         let never = std::sync::atomic::AtomicBool::new(false);
-        let built = TerminalCore::build_from_snapshot(80, 24, 100, &payload, &never)
+        let built = TerminalCore::build_from_snapshot(80, 24, 100, &payload, &[], &never)
             .expect("not cancelled");
 
         // 1. The side-table must be non-empty.
@@ -2370,7 +2427,7 @@ mod tests {
         // bypass-off off-thread build.
         let never = std::sync::atomic::AtomicBool::new(false);
         let built =
-            TerminalCore::build_scrollback_only_from_snapshot(80, 24, 100, &payload, &never)
+            TerminalCore::build_scrollback_only_from_snapshot(80, 24, 100, &payload, &[], &never)
                 .expect("not cancelled");
 
         // Viewport grid + drained marks + evicted_total: byte-identical.
@@ -2556,17 +2613,17 @@ mod tests {
         // Reference: single synchronous bypass-off build.
         let never = std::sync::atomic::AtomicBool::new(false);
         let reference =
-            TerminalCore::build_scrollback_only_from_snapshot(80, 24, 100, &payload, &never)
+            TerminalCore::build_scrollback_only_from_snapshot(80, 24, 100, &payload, &[], &never)
                 .expect("reference build not cancelled");
 
         // Production path: bypass-on 1st-pass + bypass-off 2nd-pass + merge.
-        let bypass_replay =
-            TerminalCore::build_from_snapshot(80, 24, 100, &payload, &never).expect("1st-pass");
+        let bypass_replay = TerminalCore::build_from_snapshot(80, 24, 100, &payload, &[], &never)
+            .expect("1st-pass");
         let mut live = bypass_replay.core;
         // Bypass leaves scrollback empty by design.
         assert_eq!(live.scrollback_count(), 0);
         let rebuilt =
-            TerminalCore::build_scrollback_only_from_snapshot(80, 24, 100, &payload, &never)
+            TerminalCore::build_scrollback_only_from_snapshot(80, 24, 100, &payload, &[], &never)
                 .expect("2nd-pass");
         // live_growth == 0: no trim necessary, merge whole rebuilt scrollback.
         live.merge_scrollback_from(rebuilt.core, 0);
@@ -2644,13 +2701,23 @@ mod tests {
         let small_rows: u16 = 10;
         let grown_rows: u16 = 24;
         let mut payload: Vec<u8> = Vec::new();
+        let mut segments: Vec<ReplaySegment> = Vec::new();
         // A handful of lines that fit within the small viewport with no
         // eviction yet, so the upcoming grow needs no history bypass would
         // have discarded.
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: small_rows,
+        });
         for i in 0..5u32 {
             payload.extend_from_slice(format!("early line {i}\r\n").as_bytes());
         }
-        payload.extend_from_slice(&resize_marker(cols, grown_rows));
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: grown_rows,
+        });
         // Bulk content at the grown size — large enough to comfortably
         // exceed 64 KiB and to populate substantial (virtual, under
         // bypass) scrollback before the shrink.
@@ -2659,14 +2726,18 @@ mod tests {
                 format!("grown-size scroll line {i} padded for size\r\n").as_bytes(),
             );
         }
-        // The row-count-SHRINKING marker under test (AC-7): pushes the
+        // The row-count-SHRINKING transition under test (AC-7): pushes the
         // rows that no longer fit the smaller viewport into scrollback —
         // exactly the content-preserving reflow finding `1698d9b52a89e241`
         // is about.
-        payload.extend_from_slice(&resize_marker(cols, small_rows));
-        // A few lines after the shrink so the segment following the marker
-        // is non-empty (the marker is actually applied) — this also
-        // leaves the core already at `small_rows`, matching the
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: small_rows,
+        });
+        // A few lines after the shrink so the range following the
+        // transition is non-empty (the resize is actually applied) — this
+        // also leaves the core already at `small_rows`, matching the
         // construction / target size.
         for i in 0..5u32 {
             payload.extend_from_slice(format!("after-shrink line {i}\r\n").as_bytes());
@@ -2681,15 +2752,15 @@ mod tests {
 
         // Reference: single synchronous bypass-off build.
         let reference = TerminalCore::build_scrollback_only_from_snapshot(
-            cols, small_rows, 5000, &payload, &never,
+            cols, small_rows, 5000, &payload, &segments, &never,
         )
         .expect("reference build not cancelled");
 
         // Under test: `build_from_snapshot` — D6 downgrades it out of the
-        // bypass for this payload (it contains a growing marker), so its
-        // result alone must already match the synchronous reference.
+        // bypass for this payload (it contains a growing transition), so
+        // its result alone must already match the synchronous reference.
         let bypass_replay =
-            TerminalCore::build_from_snapshot(cols, small_rows, 5000, &payload, &never)
+            TerminalCore::build_from_snapshot(cols, small_rows, 5000, &payload, &segments, &never)
                 .expect("build not cancelled");
         let live = bypass_replay.core;
 
@@ -2746,17 +2817,21 @@ mod tests {
         let small_rows: u16 = 10;
         let grown_rows: u16 = 40;
         let mut payload: Vec<u8> = Vec::new();
-        // Constructed AT the grown size, so the FIRST marker (below) is a
-        // shrink — history then accumulates in scrollback at the small
+        // Constructed AT the grown size, so the FIRST transition (below) is
+        // a shrink — history then accumulates in scrollback at the small
         // size (this is also where the bulk padding lives, so the payload
         // comfortably clears the 64 KiB off-thread bypass threshold), and
-        // the SECOND marker grows back to the construction size (a no-op
-        // for the implicit final restore). Nothing follows the grow, so
-        // the fingerprint comparison below looks at the just-grown
+        // the SECOND transition grows back to the construction size (a
+        // no-op for the implicit final restore). Nothing follows the grow,
+        // so the fingerprint comparison below looks at the just-grown
         // viewport directly — content added AFTER the grow would scroll
         // the transient post-grow state out of view before this test ever
         // inspects it, hiding the divergence being tested for.
-        payload.extend_from_slice(&resize_marker(cols, small_rows));
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: small_rows,
+        }];
         // History produced at the SMALL size, comfortably more than
         // `small_rows` so there is real content sitting in scrollback for
         // the upcoming growth to pull back up into the viewport.
@@ -2765,10 +2840,14 @@ mod tests {
                 format!("small-size scroll line {i} padded for size\r\n").as_bytes(),
             );
         }
-        // The row-count-GROWING marker under test (AC-9): the viewport
+        // The row-count-GROWING transition under test (AC-9): the viewport
         // widens back to the construction size and should pull rows back
         // up from the scrollback history just produced above.
-        payload.extend_from_slice(&resize_marker(cols, grown_rows));
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: grown_rows,
+        });
         assert!(
             payload.len() >= 64 * 1024,
             "payload must be >= 64 KiB to match AC-9's bypass-path scenario, got {}",
@@ -2779,31 +2858,31 @@ mod tests {
 
         // Reference: synchronous (non-bypass) path.
         let reference = TerminalCore::build_scrollback_only_from_snapshot(
-            cols, grown_rows, 5000, &payload, &never,
+            cols, grown_rows, 5000, &payload, &segments, &never,
         )
         .expect("reference build not cancelled");
 
         // Under test: bypass path (`build_from_snapshot`) — D6 downgrades
         // out of the bypass for this payload because it contains a
-        // row-growing marker.
+        // row-growing transition.
         let bypass_replay =
-            TerminalCore::build_from_snapshot(cols, grown_rows, 5000, &payload, &never)
+            TerminalCore::build_from_snapshot(cols, grown_rows, 5000, &payload, &segments, &never)
                 .expect("bypass-path build not cancelled");
 
         assert_eq!(
             grid_fingerprint(&bypass_replay.core),
             grid_fingerprint(&reference.core),
-            "bypass-path viewport must match the synchronous path across a row-growing marker"
+            "bypass-path viewport must match the synchronous path across a row-growing transition"
         );
     }
 
-    /// A marker that changes only COLS — rows stay constant throughout,
+    /// A transition that changes only COLS — rows stay constant throughout,
     /// including at the implicit final restore-to-target — does not trigger
     /// the D6 downgrade: `build_from_snapshot` still returns an EMPTY
     /// scrollback, matching the existing (pre-D6) bypass invariant other
     /// tests already rely on. (A genuine ROW shrink cannot serve as this
-    /// counter-example: `replay_with_resize_markers` always restores to the
-    /// construction/target row count at the end of the drain, so a payload
+    /// counter-example: `replay_segments` always restores to the
+    /// construction/target row count at the end of the drain, so a replay
     /// that ever shrinks rows always ends up growing back — explicitly or
     /// implicitly — by the time the drain finishes.)
     #[test]
@@ -2817,7 +2896,18 @@ mod tests {
         }
         // Only cols changes; rows stay the same throughout — D6 must not
         // fire (it is scoped to row growth, not cols).
-        payload.extend_from_slice(&resize_marker(cols_b, rows));
+        let segments = [
+            ReplaySegment {
+                offset: 0,
+                cols: cols_a,
+                rows,
+            },
+            ReplaySegment {
+                offset: payload.len() as u32,
+                cols: cols_b,
+                rows,
+            },
+        ];
         for i in 0..3000u32 {
             payload.extend_from_slice(
                 format!("padding line {i} padded for size padded padded\r\n").as_bytes(),
@@ -2826,12 +2916,13 @@ mod tests {
         assert!(payload.len() >= 64 * 1024);
 
         let never = std::sync::atomic::AtomicBool::new(false);
-        let bypass_replay = TerminalCore::build_from_snapshot(cols_a, rows, 5000, &payload, &never)
-            .expect("bypass-path build not cancelled");
+        let bypass_replay =
+            TerminalCore::build_from_snapshot(cols_a, rows, 5000, &payload, &segments, &never)
+                .expect("bypass-path build not cancelled");
         assert_eq!(
             bypass_replay.core.scrollback_count(),
             0,
-            "a marker that only changes cols (rows constant) must still take the bypass fast path"
+            "a transition that only changes cols (rows constant) must still take the bypass fast path"
         );
     }
 

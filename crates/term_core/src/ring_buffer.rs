@@ -1729,7 +1729,7 @@ mod tests {
 
         // Off-thread path: build_from_snapshot with scrollback_lines = 0.
         static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        let replay = TerminalCore::build_from_snapshot(80, 24, 0, &payload, &NEVER)
+        let replay = TerminalCore::build_from_snapshot(80, 24, 0, &payload, &[], &NEVER)
             .expect("build_from_snapshot must not be cancelled");
         let bypass_evicted = replay.evicted_total;
 

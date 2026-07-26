@@ -12,6 +12,26 @@ use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
 
+/// Encode `(bytes, segments)` into the D1' wire format
+/// (`mux_ipc::protocol::encode_snapshot_payload`) for a `Snapshot`-kind
+/// `PtyOutputChunk` (task0004 round-4 rework). Thin wrapper converting the
+/// mux-layer's plain `(usize, u16, u16)` segment tuples into
+/// `mux_ipc::protocol::DimSegment` at the wire boundary.
+pub(in crate::mux) fn encode_snapshot_segments(
+    bytes: &[u8],
+    segments: &[(usize, u16, u16)],
+) -> Vec<u8> {
+    let dim_segments: Vec<mux_ipc::protocol::DimSegment> = segments
+        .iter()
+        .map(|&(offset, cols, rows)| mux_ipc::protocol::DimSegment {
+            offset: offset as u32,
+            cols,
+            rows,
+        })
+        .collect();
+    mux_ipc::protocol::encode_snapshot_payload(&dim_segments, bytes)
+}
+
 /// Pane identifier.
 pub type PaneId = u32;
 
@@ -167,31 +187,47 @@ pub fn new_shadow_parser(rows: u16, cols: u16) -> ShadowParser {
 /// appended after the marker (since appending needs the same lock the
 /// resize call holds first) and get misattributed to the NEW dimensions
 /// even though they were produced under the OLD ones.
+///
+/// task0004 round-4 rework (review round-3 finding `ae43417cee647afa`):
+/// `cols` and `rows` are packed into a SINGLE `AtomicU32` (`cols` in the
+/// high 16 bits, `rows` in the low 16 bits) rather than two independent
+/// `AtomicU16`s. Two independent atomics let a concurrent [`Self::get`]
+/// observe a torn pair — e.g. `(old cols, new rows)` — that never actually
+/// existed as a real dimension pair, if it raced with [`Self::set`] between
+/// the two stores; that torn pair would then be recorded as a resize
+/// marker for a size the pane was never actually at. A single `AtomicU32`
+/// makes every `get`/`set` a single load/store, so no intermediate,
+/// never-real state is ever observable.
 #[derive(Debug)]
 pub struct PaneDims {
-    cols: std::sync::atomic::AtomicU16,
-    rows: std::sync::atomic::AtomicU16,
+    packed: std::sync::atomic::AtomicU32,
 }
 
 impl PaneDims {
+    fn pack(cols: u16, rows: u16) -> u32 {
+        ((cols as u32) << 16) | (rows as u32)
+    }
+
+    fn unpack(packed: u32) -> (u16, u16) {
+        ((packed >> 16) as u16, packed as u16)
+    }
+
     fn new(cols: u16, rows: u16) -> Self {
         Self {
-            cols: std::sync::atomic::AtomicU16::new(cols),
-            rows: std::sync::atomic::AtomicU16::new(rows),
+            packed: std::sync::atomic::AtomicU32::new(Self::pack(cols, rows)),
         }
     }
 
-    /// Current `(cols, rows)`.
+    /// Current `(cols, rows)` — a single atomic load, so the pair observed
+    /// is always one that was actually `set` together, never a torn mix of
+    /// an old and a new value.
     pub fn get(&self) -> (u16, u16) {
-        (
-            self.cols.load(std::sync::atomic::Ordering::Acquire),
-            self.rows.load(std::sync::atomic::Ordering::Acquire),
-        )
+        Self::unpack(self.packed.load(std::sync::atomic::Ordering::Acquire))
     }
 
     fn set(&self, cols: u16, rows: u16) {
-        self.cols.store(cols, std::sync::atomic::Ordering::Release);
-        self.rows.store(rows, std::sync::atomic::Ordering::Release);
+        self.packed
+            .store(Self::pack(cols, rows), std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -512,7 +548,8 @@ pub fn evaluate_output_target(
                         };
                         (screen_bytes, alt)
                     };
-                    let buffered = pane.scrollback.lock().unwrap().read_all();
+                    let (buffered, buffered_segments) =
+                        pane.scrollback.lock().unwrap().read_segments();
                     {
                         // raw_passthrough is drained + cleared (so it does
                         // not leak across detach cycles) but NOT concatenated
@@ -522,10 +559,17 @@ pub fn evaluate_output_target(
                         let _ = buf.read_all();
                         buf.clear();
                     }
-                    let snapshot =
-                        build_resume_snapshot_bytes(&buffered, &screen_bytes, alt_screen);
+                    let (snapshot, snapshot_segments) = build_resume_snapshot_bytes(
+                        &buffered,
+                        &buffered_segments,
+                        &screen_bytes,
+                        alt_screen,
+                    );
+                    let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
                     *target = PaneOutputTarget::Connected(owned_tx.clone());
-                    EvalResult::ResumeWithSnapshot { snapshot }
+                    EvalResult::ResumeWithSnapshot {
+                        snapshot: encoded_snapshot,
+                    }
                 }
             }
         }
@@ -591,7 +635,7 @@ pub fn resume_pane_with_permit(
                 };
                 (screen_bytes, alt)
             };
-            let buffered = pane.scrollback.lock().unwrap().read_all();
+            let (buffered, buffered_segments) = pane.scrollback.lock().unwrap().read_segments();
             {
                 // raw_passthrough is drained + cleared (so it does not leak
                 // across detach cycles) but NOT concatenated — replaying the
@@ -601,18 +645,21 @@ pub fn resume_pane_with_permit(
                 let _ = buf.read_all();
                 buf.clear();
             }
-            let snapshot = build_resume_snapshot_bytes(&buffered, &screen, alt_screen);
+            let (snapshot, snapshot_segments) =
+                build_resume_snapshot_bytes(&buffered, &buffered_segments, &screen, alt_screen);
+            let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
             // review round-1 rework, finding `20b2bed0aaf48f94`: tag this as
             // a Snapshot-kind chunk (not the default PtyOutput) so the mux
             // connection drain (`mux::ipc::connection`) sends it as
             // `MessageType::Snapshot` on the wire. The client's
-            // `apply_mux_message::Snapshot|SnapshotRestore` arm routes
-            // through `reset_and_replay`, which interprets in-band resize
-            // markers (`find_resize_marker`) — the plain `PtyOutput` live
-            // path used before this fix does not, so a resize-spanning
-            // visibility-resume snapshot replayed coordinate-drifted
-            // content just like the reattach path did.
-            permit.send(PtyOutputChunk::snapshot(pane.id, snapshot));
+            // `apply_mux_message::Snapshot|SnapshotRestore` arm decodes the
+            // structural dimension segments (task0004 round-4 rework D1')
+            // and routes through `reset_and_replay_segments`, resizing per
+            // segment instead of scanning the payload for markers — the
+            // plain `PtyOutput` live path used before this fix does not, so
+            // a resize-spanning visibility-resume snapshot replayed
+            // coordinate-drifted content just like the reattach path did.
+            permit.send(PtyOutputChunk::snapshot(pane.id, encoded_snapshot));
             *target = PaneOutputTarget::Connected(owned_tx.clone());
             ResumeOutcome::Resumed
         }
@@ -681,6 +728,15 @@ impl MuxPane {
         writer: Box<dyn Write + Send>,
         master: Box<dyn MasterPty + Send>,
     ) -> Self {
+        // task0004 round-4 rework (review round-3 finding `b546481e9c2fcc85`):
+        // validate the pane's INITIAL dimensions against the SAME domain
+        // `resize()` enforces (`term_core::terminal_core::clamp_resize_dims`)
+        // before recording them anywhere. Without this, a caller passing an
+        // out-of-domain size (the decoder's accepted range is `1..=4096`)
+        // would have its initial segment silently clamped/rejected only at
+        // REPLAY time, misaligning the earliest retained content's
+        // attributed dimensions from what was actually recorded here.
+        let (cols, rows) = term_core::terminal_core::clamp_resize_dims(cols, rows);
         let mut scrollback = ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY);
         // IMPLEMENTATION.md D1/D2 (task0001): record the pane's INITIAL
         // dimensions as the very first scrollback bytes, mirroring what
@@ -759,19 +815,21 @@ impl MuxPane {
             .master
             .as_ref()
             .ok_or_else(|| "PTY master closed".to_string())?;
-        // IMPLEMENTATION.md D1/D2 (task0001): record an in-band resize
-        // marker into the scrollback stream so a later replay resizes its
-        // core to match the dimensions the FOLLOWING bytes were produced
-        // for. This is the fix for the resize-interleaved scrollback replay
-        // coordinate drift (PROBE D, `tmp/apt-progress-bar-regression-2026-07-09.md`):
-        // without it, a scrollback recording spanning a resize replays into
-        // a core fixed at one row count and misinterprets DECSTBM / CUP
-        // coordinates recorded for the other, mixing content from two
-        // logical output lines onto one row. Written directly into
-        // `self.scrollback` (not fed through the PTY reader thread) since
-        // it is synthesized here, not real PTY output; a marker-unaware
-        // replay consumer treats it as an inert, unrecognized OSC (see
-        // `scrollback_buffer::resize_marker_bytes`). Only recorded when the
+        // IMPLEMENTATION.md D1/D2 (task0001), structural since task0004
+        // round-4 rework D1': record a resize segment into the scrollback
+        // ring's `dim_markers` side channel (`write_resize_marker`) so a
+        // later replay resizes its core to match the dimensions the
+        // FOLLOWING bytes were produced for. This is the fix for the
+        // resize-interleaved scrollback replay coordinate drift (PROBE D,
+        // `tmp/apt-progress-bar-regression-2026-07-09.md`): without it, a
+        // scrollback recording spanning a resize replays into a core fixed
+        // at one row count and misinterprets DECSTBM / CUP coordinates
+        // recorded for the other, mixing content from two logical output
+        // lines onto one row. Recorded directly into `self.scrollback`'s
+        // `dim_markers` (not fed through the PTY reader thread) since it is
+        // synthesized here, not real PTY output — no bytes are written, so
+        // there is nothing for PTY-sourced content to collide with (see
+        // `ScrollbackRingBuffer::read_segments`). Only recorded when the
         // dimensions actually change, so a redundant Resize message does
         // not pollute the stream.
         //
@@ -790,6 +848,22 @@ impl MuxPane {
         // marker is in place.
         if self.cols != cols || self.rows != rows {
             let mut scrollback = self.scrollback.lock().unwrap();
+            // task0004 round-4 rework (review round-3 finding
+            // `5ac1a5171a1e6a58`): publish the new dims via `self.dims`
+            // BEFORE `master.resize()` sends SIGWINCH — still inside this
+            // same scrollback-locked section. `master.resize()` is what
+            // makes the child observe the new size and start producing
+            // output at it; if the reader thread's `read()` returns that
+            // output and calls `PaneDims::get()` in the gap BETWEEN
+            // `master.resize()` and the OLD placement of this `set()` call
+            // (after resize + marker write), it would see the OLD dims and
+            // misattribute genuinely-new-size content via
+            // `ScrollbackRingBuffer::attribute_write`'s correction path —
+            // the opposite of what that path exists to prevent. Publishing
+            // first closes that window: by the time the child could
+            // possibly react to SIGWINCH, `PaneDims` already reports the
+            // size the reaction was produced under.
+            self.dims.set(cols, rows);
             master
                 .resize(portable_pty::PtySize {
                     rows,
@@ -799,10 +873,6 @@ impl MuxPane {
                 })
                 .map_err(|e| format!("PTY resize failed: {}", e))?;
             scrollback.write_resize_marker(cols, rows);
-            // task0003 D5: publish the new dims for the reader thread to
-            // observe (see `PaneDims`) — done in the SAME locked section as
-            // the marker write, mirroring the marker's own ordering point.
-            self.dims.set(cols, rows);
         } else {
             master
                 .resize(portable_pty::PtySize {
@@ -913,6 +983,15 @@ mod tests {
     fn make_output_target() -> SharedOutputTarget {
         let (tx, _rx) = mpsc::channel(1);
         Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx)))
+    }
+
+    /// Decode a `Snapshot`-kind chunk's / `EvalResult::ResumeWithSnapshot`'s
+    /// wire-encoded bytes (task0004 round-4 rework D1',
+    /// `mux_ipc::protocol::decode_snapshot_payload`) back into plain
+    /// content bytes, discarding the structural segment header — used by
+    /// tests that only care about the ANSI content layout.
+    fn decode_snapshot_content(data: &[u8]) -> Vec<u8> {
+        mux_ipc::protocol::decode_snapshot_payload(data).1.to_vec()
     }
 
     // ── AgentStatus (SPEC FR3, task0003 AC-1/AC-2/AC-6) ──────────────────
@@ -1038,6 +1117,99 @@ mod tests {
             Arc::strong_count(&status_handle),
             1,
             "agent_status must be discarded along with the destroyed pane"
+        );
+    }
+
+    // ── task0004 round-4 rework (review round-3 finding `b546481e9c2fcc85`):
+    // pane creation validates dims against the same domain resize() uses ──
+
+    /// AC-6: `MuxPane::new` clamps out-of-domain dimensions through the
+    /// SAME path `resize()` uses (`clamp_resize_dims`), instead of storing
+    /// the caller's raw values unvalidated. Uses a real PTY (like the
+    /// existing `test_new_pane_records_initial_dims_marker_in_scrollback`)
+    /// since the test-only `new_test`/`new_test_with_writer` constructors
+    /// are a separate, simplified path that does not call `MuxPane::new`
+    /// at all.
+    ///
+    /// Confirmed to fail pre-fix: before this change, `MuxPane::new` stored
+    /// `cols`/`rows` directly (no clamp call at all), so passing `(0, 0)`
+    /// left `pane.cols == 0` — outside `clamp_resize_dims`'s `1..=4096`
+    /// domain that this task's replay path assumes dimensions never
+    /// violate.
+    #[cfg(unix)]
+    #[test]
+    fn new_pane_clamps_out_of_domain_dimensions() {
+        let pty_system = portable_pty::native_pty_system();
+        // `portable_pty` itself may reject a literal 0x0 openpty size on
+        // some platforms, so this drives the clamp with an OVERSIZED value
+        // instead (still out of `clamp_resize_dims`'s domain) to keep the
+        // PTY open call itself valid.
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let pane = MuxPane::new(1, u16::MAX, u16::MAX, target, writer, pair.master);
+        assert_eq!(
+            (pane.cols, pane.rows),
+            (
+                term_core::terminal_core::RESIZE_MARKER_MAX_COLS,
+                term_core::terminal_core::RESIZE_MARKER_MAX_ROWS
+            ),
+            "oversized dimensions must clamp down to the shared max, matching clamp_resize_dims"
+        );
+        // The clamped dims are ALSO what gets recorded structurally (the
+        // initial segment `MuxPane::new` writes) — not the caller's raw,
+        // out-of-domain values.
+        let (_bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
+        assert_eq!(
+            segments,
+            vec![(
+                0usize,
+                term_core::terminal_core::RESIZE_MARKER_MAX_COLS,
+                term_core::terminal_core::RESIZE_MARKER_MAX_ROWS
+            )]
+        );
+    }
+
+    // ── task0004 round-4 rework (review round-3 finding `ae43417cee647afa`):
+    // PaneDims packs cols/rows into a single AtomicU32 ───────────────────
+
+    /// Pack/unpack round-trips for boundary values, including the shared
+    /// max the decoder accepts and adjacent-but-distinguishable pairs
+    /// (guards against a swapped high/low half).
+    #[test]
+    fn pane_dims_pack_unpack_round_trips_boundary_values() {
+        for (cols, rows) in [
+            (1u16, 1u16),
+            (80, 24),
+            (4096, 4096),
+            (65535, 65535),
+            (1, 65535),
+            (65535, 1),
+        ] {
+            let dims = PaneDims::new(cols, rows);
+            assert_eq!(dims.get(), (cols, rows));
+        }
+    }
+
+    /// `set` followed by `get` always observes the LATEST pair, never a mix
+    /// of an old and new value — trivially true for a single atomic, but
+    /// pinned here as the observable contract this field's whole design
+    /// exists to guarantee (review round-3 finding `ae43417cee647afa`).
+    #[test]
+    fn pane_dims_set_then_get_observes_the_latest_pair_atomically() {
+        let dims = PaneDims::new(80, 24);
+        assert_eq!(dims.get(), (80, 24));
+        dims.set(120, 40);
+        assert_eq!(
+            dims.get(),
+            (120, 40),
+            "must never observe a mix like (80, 40) or (120, 24)"
         );
     }
 
@@ -1168,9 +1340,12 @@ mod tests {
         let writer = pair.master.take_writer().unwrap();
         let target = make_output_target();
         let pane = MuxPane::new(1, 80, 24, target, writer, pair.master);
+        let (bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
+        assert!(bytes.is_empty(), "no content bytes were ever written");
         assert_eq!(
-            pane.scrollback.lock().unwrap().read_all(),
-            crate::mux::scrollback_buffer::resize_marker_bytes(80, 24)
+            segments,
+            vec![(0usize, 80u16, 24u16)],
+            "the initial dims must be recorded structurally, not as bytes"
         );
     }
 
@@ -1193,13 +1368,12 @@ mod tests {
 
         pane.resize(120, 40).unwrap();
 
-        let recorded = pane.scrollback.lock().unwrap().read_all();
-        let expected_marker = crate::mux::scrollback_buffer::resize_marker_bytes(120, 40);
+        let (_bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
         assert!(
-            recorded
-                .windows(expected_marker.len())
-                .any(|w| w == expected_marker),
-            "resize must record a marker with the new dimensions"
+            segments
+                .iter()
+                .any(|&(_, cols, rows)| (cols, rows) == (120, 40)),
+            "resize must record a segment with the new dimensions: {segments:?}"
         );
     }
 
@@ -1222,10 +1396,12 @@ mod tests {
 
         pane.resize(80, 24).unwrap(); // same dims as construction
 
+        let (bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
+        assert!(bytes.is_empty());
         assert_eq!(
-            pane.scrollback.lock().unwrap().read_all(),
-            crate::mux::scrollback_buffer::resize_marker_bytes(80, 24),
-            "a no-op resize must not add a second marker"
+            segments,
+            vec![(0usize, 80u16, 24u16)],
+            "a no-op resize must not add a second segment"
         );
     }
 
@@ -1368,6 +1544,7 @@ mod tests {
         let result = evaluate_output_target(&pane, false, true, &owned_tx);
         match result {
             EvalResult::ResumeWithSnapshot { snapshot } => {
+                let snapshot = decode_snapshot_content(&snapshot);
                 assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
                 let s = String::from_utf8_lossy(&snapshot);
                 assert!(
@@ -1541,20 +1718,19 @@ mod tests {
         // Snapshot is on the channel.
         let chunk = rx.try_recv().expect("snapshot enqueued under pane lock");
         assert_eq!(chunk.pane_id, 7);
-        assert!(chunk.data.starts_with(b"\x1b[H\x1b[2J"));
+        let content = decode_snapshot_content(&chunk.data);
+        assert!(content.starts_with(b"\x1b[H\x1b[2J"));
         // Captured passthrough must NOT be replayed (would re-render the image).
         let needle_passthrough = b"\x1b_Gi=7;PASS\x1b\\";
         assert!(
-            !chunk
-                .data
+            !content
                 .windows(needle_passthrough.len())
                 .any(|w| w == needle_passthrough),
             "snapshot must NOT contain captured passthrough"
         );
         // Plain-text ring history is still restored.
         assert!(
-            chunk
-                .data
+            content
                 .windows(b"ring-data".len())
                 .any(|w| w == b"ring-data"),
             "snapshot must contain ring data"
@@ -1565,8 +1741,7 @@ mod tests {
         // alone — this is the resume-path counterpart of the main/alt split
         // in `build_snapshot_bytes`.
         assert!(
-            !chunk
-                .data
+            !content
                 .windows(b"resume-shadow".len())
                 .any(|w| w == b"resume-shadow"),
             "main-buffer resume snapshot must omit the shadow screen dump"
@@ -1609,10 +1784,10 @@ mod tests {
 
         let chunk = rx.try_recv().expect("snapshot enqueued");
         assert_eq!(chunk.pane_id, 11);
-        assert!(chunk.data.starts_with(b"\x1b[H\x1b[2J"));
+        let content = decode_snapshot_content(&chunk.data);
+        assert!(content.starts_with(b"\x1b[H\x1b[2J"));
         assert!(
-            chunk
-                .data
+            content
                 .windows(b"ALT-RESUME-SHADOW".len())
                 .any(|w| w == b"ALT-RESUME-SHADOW"),
             "alt-screen resume snapshot must include the shadow screen dump"
