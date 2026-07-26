@@ -536,6 +536,29 @@ pub(super) async fn handle_request_pane_snapshot(
         snapshot_segments.len()
     );
 
+    // D6'' (task0005 rework, review round-4 finding `1d4a0c96821da0ef`):
+    // enforce the SAME frame-size policy `send_reattach_data` already
+    // applies (`mux_ipc::protocol::fits_single_snapshot_frame`) before
+    // enqueueing — this path previously sent unconditionally, so an
+    // oversized snapshot would reach the connection drain
+    // (`mux::ipc::connection`), fail the codec's single-frame encode, and
+    // tear the whole connection down. Practically unreachable today (a
+    // pane's ring is capped at `DEFAULT_SCROLLBACK_CAPACITY` = 2 MiB plus a
+    // bounded shadow-parser screen dump — see `REATTACH_CHUNK_SIZE`'s doc
+    // in `mux::ipc::reattach`), but the check now costs nothing and closes
+    // the gap between this producer and the reattach path.
+    if !mux_ipc::protocol::fits_single_snapshot_frame(encoded_snapshot.len()) {
+        log::warn!(
+            "RequestPaneSnapshot: pane {} snapshot {}B exceeds the single-frame \
+             limit ({}B); refusing rather than risk a codec encode failure \
+             tearing down the connection",
+            pane_id,
+            encoded_snapshot.len(),
+            mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD
+        );
+        return Ok(());
+    }
+
     // Send as a snapshot-tagged chunk so the drain encodes it as
     // `MessageType::Snapshot` (routing to the client's off-thread replay
     // path) while still interleaving correctly with any already-queued PTY

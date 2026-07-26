@@ -52,12 +52,31 @@ pub(super) fn build_shadow_parser_snapshot(
     scrollback: &[u8],
     scrollback_segments: &[(usize, u16, u16)],
 ) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
-    let (screen_data, alt_screen) = {
+    // D7'' (task0005 rework, review round-4 finding `5ba2063e993baf6c`):
+    // the shadow parser's OWN size is kept in lockstep with every
+    // `MuxPane::resize` call (`parser.screen_mut().set_size(rows, cols)`),
+    // so it is the pane's dimensions AT THE MOMENT this snapshot is
+    // assembled — exactly what `screen_data` (below) was produced at.
+    // Passed through so `build_snapshot_bytes` can tag the trailing screen
+    // dump with its OWN segment instead of silently inheriting whatever the
+    // last scrollback segment says.
+    let (screen_data, alt_screen, current_dims) = {
         let parser = lock_shadow_parser(shadow_parser);
         let screen = parser.screen();
-        (screen.contents_formatted(), screen.alternate_screen())
+        let (rows, cols) = screen.size();
+        (
+            screen.contents_formatted(),
+            screen.alternate_screen(),
+            (cols, rows),
+        )
     };
-    build_snapshot_bytes(scrollback, scrollback_segments, &screen_data, alt_screen)
+    build_snapshot_bytes(
+        scrollback,
+        scrollback_segments,
+        &screen_data,
+        alt_screen,
+        current_dims,
+    )
 }
 
 /// Collect reattach data for panes in the given session.
@@ -158,10 +177,20 @@ pub(super) async fn collect_reattach_data(
                     // `read_segments` (task0004 round-4 rework D1') so the
                     // structural dimension segments travel alongside the
                     // bytes instead of as in-band markers.
-                    let (screen_data, is_alternate_screen) = {
+                    // D7'' (task0005 rework, review round-4 finding
+                    // `5ba2063e993baf6c`): the shadow parser's own size
+                    // tracks every `MuxPane::resize` call, so it is the
+                    // pane's dims AT THE MOMENT this snapshot is assembled
+                    // — what `screen_data` was actually produced at.
+                    let (screen_data, is_alternate_screen, current_dims) = {
                         let parser = lock_shadow_parser(&pane.shadow_parser);
                         let screen = parser.screen();
-                        (screen.contents_formatted(), screen.alternate_screen())
+                        let (rows, cols) = screen.size();
+                        (
+                            screen.contents_formatted(),
+                            screen.alternate_screen(),
+                            (cols, rows),
+                        )
                     };
                     let (scrollback_data, scrollback_segments) =
                         pane.scrollback.lock().unwrap().read_segments();
@@ -206,6 +235,7 @@ pub(super) async fn collect_reattach_data(
                         &scrollback_segments,
                         &screen_data,
                         is_alternate_screen,
+                        current_dims,
                     );
 
                     data.push((pane.id, combined, combined_segments));
@@ -281,7 +311,14 @@ where
             continue;
         }
         let encoded = crate::mux::session::pane::encode_snapshot_segments(buffered, segments);
-        if encoded.len() <= REATTACH_CHUNK_SIZE {
+        // D6'' (task0005 rework, review round-4 finding `1d4a0c96821da0ef`):
+        // route through the SAME shared size-policy check
+        // `mux::ipc::handlers::handle_request_pane_snapshot` and the
+        // visibility-resume path now use, rather than each producer
+        // re-deriving its own comparison against `MAX_SNAPSHOT_FRAME_PAYLOAD`
+        // (here via the `REATTACH_CHUNK_SIZE` alias — same value, same
+        // check, one implementation).
+        if mux_ipc::protocol::fits_single_snapshot_frame(encoded.len()) {
             let msg = MuxMessage {
                 msg_type: MessageType::SnapshotRestore,
                 pane_id: *pane_id,
@@ -1020,7 +1057,7 @@ mod tests {
         scrollback.extend_from_slice(&after);
         let segments = vec![(0usize, 80u16, 24u16), (before.len(), 100u16, 30u16)];
         let (snapshot, snapshot_segments) =
-            build_snapshot_bytes(&scrollback, &segments, b"", false);
+            build_snapshot_bytes(&scrollback, &segments, b"", false, (80, 24));
         let reattach_data = vec![(3u32, snapshot, snapshot_segments)];
 
         let sender = tokio::spawn(async move {
@@ -1119,7 +1156,8 @@ mod tests {
             recording.extend_from_slice(b"padding line to grow past the old threshold\r\n");
         }
         let segments = vec![(0usize, cols, rows_a), (mid_offset, cols, rows_b)];
-        let (snapshot, snapshot_segments) = build_snapshot_bytes(&recording, &segments, b"", false);
+        let (snapshot, snapshot_segments) =
+            build_snapshot_bytes(&recording, &segments, b"", false, (80, 24));
         assert!(
             snapshot.len() > OLD_CHUNK_THRESHOLD,
             "test prerequisite: snapshot must exceed the OLD chunking threshold"
