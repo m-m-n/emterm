@@ -66,8 +66,8 @@ tasks:
     domains: [input-handling, ui, concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, NFR1, NFR2, NFR3]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "Investigation verdict: same root cause as PROBE D (resize-interleaved scrollback replay coordinate drift). Fix centralized in TerminalCore::replay_with_resize_markers; daemon.rs/handlers.rs/tabs.rs/app.rs/ring_buffer.rs left unmodified (predicted but unnecessary). Known limitation: marker inside >=64KiB off-thread snapshot payload can under-report evicted_total/scrollback_length (grid/cursor correctness unaffected)."
     branch: em-workflow/mux-render-corruption/task0001
 
 review:
