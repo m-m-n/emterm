@@ -45,6 +45,23 @@ static NEXT_TAB_STABLE_ID: AtomicU64 = AtomicU64::new(0);
 /// target machine differs.
 pub(crate) const OFFTHREAD_REPLAY_THRESHOLD_BYTES: usize = 64 * 1024;
 
+/// Segment count at or above which a `Snapshot`/`SnapshotRestore` frame
+/// replays off-thread regardless of `content_bytes.len()` (task0005 rework
+/// D3''/AC-5, review round-4 finding `b1de83542bfe60bc`).
+///
+/// `replay_segments` performs one full content-preserving reflow per
+/// non-empty dimension segment, and that reflow's cost is driven by the
+/// core's ACCUMULATED grid + scrollback size, not by how many NEW bytes
+/// this particular segment feeds — so a snapshot well under
+/// [`OFFTHREAD_REPLAY_THRESHOLD_BYTES`] can still carry enough segments
+/// (e.g. a resize-drag-shaped sequence) to cost tens to hundreds of
+/// milliseconds of reflow on the synchronous path. Set comfortably below
+/// `mux::scrollback_buffer::MAX_DIM_MARKERS` (the daemon-side cap on
+/// recorded segments, currently 16), so a snapshot anywhere near that cap —
+/// the shape this fix specifically targets — reliably takes the off-thread
+/// path even when its content happens to be small.
+pub(crate) const OFFTHREAD_REPLAY_SEGMENT_THRESHOLD: usize = 8;
+
 /// Upper bound on live output queued during a pending off-thread replay.
 /// While the worker parses, target-pane `PtyOutput` accumulates in
 /// `PendingSwitch.live_queue`; a fast-producing pane during a slow parse could
@@ -1331,7 +1348,17 @@ impl Tab {
                 // FR4: branch on payload size. Small snapshots replay
                 // synchronously (no perceptible block, no swap gap); large
                 // ones go off-thread so the switch stays responsive.
-                if content_bytes.len() < OFFTHREAD_REPLAY_THRESHOLD_BYTES {
+                //
+                // D3''/AC-5 (task0005 rework, review round-4 finding
+                // `b1de83542bfe60bc`): ALSO branch on segment count — a
+                // small-payload, many-segment snapshot (a resize-drag-shaped
+                // sequence) can still cost real reflow time on the
+                // synchronous path, since each segment's reflow cost scales
+                // with the core's accumulated size, not the segment's own
+                // byte count.
+                if content_bytes.len() < OFFTHREAD_REPLAY_THRESHOLD_BYTES
+                    && segments.len() < OFFTHREAD_REPLAY_SEGMENT_THRESHOLD
+                {
                     // Synchronous path (legacy). `reset_frame_for_replay`
                     // owns the recipe (prompt clear, fold rebuild, drain +
                     // backfill marks so `pending_frame_reset` latches) so the
@@ -5189,6 +5216,72 @@ mod tests {
         );
         // Active pane (index 0 → pane 10) is the queue target.
         assert_eq!(tab.test_pending_target(), Some(10));
+    }
+
+    /// AC-5 (task0005 rework D3'', review round-4 finding
+    /// `b1de83542bfe60bc`): a small-payload (well under
+    /// `OFFTHREAD_REPLAY_THRESHOLD_BYTES`), many-segment snapshot (at least
+    /// `OFFTHREAD_REPLAY_SEGMENT_THRESHOLD` entries) must dispatch
+    /// off-thread — the byte-size check alone would keep this synchronous,
+    /// defeating the purpose since each segment's reflow cost does not
+    /// scale with the segment's own byte count.
+    ///
+    /// Confirmed to fail pre-fix: before the segment-count branch existed,
+    /// a payload this small (well under 64 KiB) with many segments stayed
+    /// on the synchronous path regardless of segment count — this test's
+    /// `test_has_pending_switch()` assertion would have been `false`.
+    #[test]
+    fn ac5_small_payload_many_segment_snapshot_dispatches_off_thread() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+
+        let content = b"tiny".to_vec();
+        let segments: Vec<mux_ipc::protocol::DimSegment> = (0..OFFTHREAD_REPLAY_SEGMENT_THRESHOLD)
+            .map(|i| mux_ipc::protocol::DimSegment {
+                offset: 0,
+                cols: 80 + i as u16,
+                rows: 24,
+            })
+            .collect();
+        let encoded = mux_ipc::protocol::encode_snapshot_payload(&segments, &content);
+        assert!(
+            encoded.len() < OFFTHREAD_REPLAY_THRESHOLD_BYTES,
+            "test prerequisite: encoded payload must stay well under the \
+             byte-size threshold, got {}",
+            encoded.len()
+        );
+
+        tab.apply_mux_message(snapshot_msg(10, encoded));
+        assert!(
+            tab.test_has_pending_switch(),
+            "a small-payload snapshot at the segment-count threshold must \
+             still dispatch off-thread"
+        );
+    }
+
+    /// The byte-size threshold alone still governs when segment count is
+    /// LOW — a small payload with only a couple of segments stays
+    /// synchronous, exactly as before this fix. Pins the "no change to the
+    /// common case" half of the AC-5 contract.
+    #[test]
+    fn ac5_small_payload_low_segment_count_stays_synchronous() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+
+        let content = b"tiny".to_vec();
+        let segments = vec![mux_ipc::protocol::DimSegment {
+            offset: 0,
+            cols: 80,
+            rows: 24,
+        }];
+        assert!(segments.len() < OFFTHREAD_REPLAY_SEGMENT_THRESHOLD);
+        let encoded = mux_ipc::protocol::encode_snapshot_payload(&segments, &content);
+
+        tab.apply_mux_message(snapshot_msg(10, encoded));
+        assert!(
+            !tab.test_has_pending_switch(),
+            "a small payload with a low segment count must stay synchronous"
+        );
     }
 
     /// FR1: a large snapshot dispatch must NOT mutate the displayed core —

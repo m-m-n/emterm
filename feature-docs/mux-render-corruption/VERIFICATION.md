@@ -61,6 +61,14 @@
       (including detach → attach); no line-content mixing appears
 - [ ] MT-2: On-device — window switch / reattach latency feels unchanged
       from before the fix
+- [ ] MT-3 (task0005 rework, review round-4 finding `6c650908ea8e95e9`):
+      On-device — drag a mux window's edge to resize it repeatedly (a
+      continuous drag, not discrete resizes), producing dozens of grid-size
+      changes in quick succession against a pane with substantial
+      scrollback (e.g. a long-running `seq`/`glances`/log-tailing pane),
+      then immediately switch away to another window and back. The switch
+      completes without a multi-second stall and the restored content is
+      correct (no cross-phase-mixed rows).
 
 ## Verification Summary
 
@@ -68,4 +76,4 @@
 |----------|-------|-----------|-----|--------|
 | Build | 3 | 3 | 0 | 0 |
 | Tests | 6 (TS-1..TS-6) | 6 | 0 | 0 |
-| Manual | 2 (MT-1, MT-2) | 0 | 0 | 2 |
+| Manual | 3 (MT-1, MT-2, MT-3) | 0 | 0 | 3 |
