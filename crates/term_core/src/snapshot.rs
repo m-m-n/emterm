@@ -332,6 +332,9 @@ impl TerminalCore {
             // Snapshot replay cores process inner content only (no mux
             // transport frames), so no app-layer OSC override is needed.
             osc_app_params: Vec::new(),
+            // Diagnostic-only counter (task0002 AC-5); a restored core
+            // starts at zero like a freshly constructed one.
+            reflow_call_count: 0,
         })
     }
 
@@ -462,6 +465,9 @@ impl TerminalCore {
             // Snapshot replay cores process inner content only (no mux
             // transport frames), so no app-layer OSC override is needed.
             osc_app_params: Vec::new(),
+            // Diagnostic-only counter (task0002 AC-5); a restored core
+            // starts at zero like a freshly constructed one.
+            reflow_call_count: 0,
         })
     }
 
