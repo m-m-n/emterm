@@ -8,6 +8,16 @@
 //! `mux::session::pane` ↔ `mux::ipc::reattach` cycle that would otherwise
 //! arise from `pane.rs` importing `build_resume_snapshot_bytes` from
 //! `reattach.rs` while `reattach.rs` imports pane types from `pane.rs`.
+//!
+//! task0003 D1: the `scrollback` bytes this module receives already have
+//! any resize markers synthesized structurally by
+//! `ScrollbackRingBuffer::read_all` from its `dim_markers` side channel —
+//! PTY-sourced content can never contribute one (see that type's doc
+//! comment). The `resize`-kind exemption in
+//! [`strip_replayable_rich_content`] below is therefore no longer "trust
+//! this because the write path is assumed to have filtered it" but a
+//! structural guarantee: every `resize` marker reaching this function was
+//! synthesized by the ring, never by a child process.
 
 use crate::mux::scrollback_filter::strip_replayable_rich_content;
 

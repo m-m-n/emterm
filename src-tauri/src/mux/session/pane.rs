@@ -148,6 +148,56 @@ pub fn new_shadow_parser(rows: u16, cols: u16) -> ShadowParser {
     vt100::Parser::new_with_callbacks(rows, cols, 0, TitleSink::default())
 }
 
+/// Lock-free, shared snapshot of a pane's CURRENT dimensions (task0003 D5,
+/// review round-2 finding `0bebe3e6f7b416dd`).
+///
+/// `MuxPane::resize` updates this at the same point it records the resize
+/// marker (holding the scrollback lock); the PTY reader thread reads it
+/// (via [`Self::get`], no lock contention with the scrollback mutex)
+/// immediately after each `read()` call returns and passes the result to
+/// [`crate::mux::scrollback_buffer::ScrollbackRingBuffer::attribute_write`]
+/// so a chunk gets attributed to the dimensions actually in effect when it
+/// was PRODUCED, rather than trusting write-time lock ordering alone.
+///
+/// This closes the residual half of the ordering guarantee
+/// `MuxPane::resize`'s scrollback-lock holding established: that mechanism
+/// only ensures bytes the reader appends AFTER a resize land after the
+/// marker; it does not help bytes the reader had ALREADY READ (but not yet
+/// appended) before the resize call started — those could previously be
+/// appended after the marker (since appending needs the same lock the
+/// resize call holds first) and get misattributed to the NEW dimensions
+/// even though they were produced under the OLD ones.
+#[derive(Debug)]
+pub struct PaneDims {
+    cols: std::sync::atomic::AtomicU16,
+    rows: std::sync::atomic::AtomicU16,
+}
+
+impl PaneDims {
+    fn new(cols: u16, rows: u16) -> Self {
+        Self {
+            cols: std::sync::atomic::AtomicU16::new(cols),
+            rows: std::sync::atomic::AtomicU16::new(rows),
+        }
+    }
+
+    /// Current `(cols, rows)`.
+    pub fn get(&self) -> (u16, u16) {
+        (
+            self.cols.load(std::sync::atomic::Ordering::Acquire),
+            self.rows.load(std::sync::atomic::Ordering::Acquire),
+        )
+    }
+
+    fn set(&self, cols: u16, rows: u16) {
+        self.cols.store(cols, std::sync::atomic::Ordering::Release);
+        self.rows.store(rows, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Shared reference to a pane's [`PaneDims`], cloned into the reader thread.
+pub type SharedPaneDims = Arc<PaneDims>;
+
 /// Write `data` to a PTY through a cloned writer handle (see
 /// [`MuxPane::writer_handle`]), without going through a `MuxPane`
 /// reference or any surrounding lock.
@@ -616,6 +666,9 @@ pub struct MuxPane {
     /// detached; Phase C will switch to always-on writes so pre-detach
     /// scrollback is also retained.
     pub scrollback: SharedScrollback,
+    /// Lock-free snapshot of this pane's current dimensions (task0003 D5).
+    /// See [`PaneDims`] for the ordering guarantee this closes.
+    pub dims: SharedPaneDims,
 }
 
 impl MuxPane {
@@ -663,6 +716,7 @@ impl MuxPane {
             ))),
             passthrough_scanner: Arc::new(StdMutex::new(PassthroughScanner::new())),
             scrollback: Arc::new(StdMutex::new(scrollback)),
+            dims: Arc::new(PaneDims::new(cols, rows)),
         }
     }
 
@@ -692,7 +746,15 @@ impl MuxPane {
     }
 
     /// Resize the PTY to the given dimensions.
+    ///
+    /// task0003 D2 (review round-2 finding `602e685494248cbb`): `cols` /
+    /// `rows` are clamped to `term_core::terminal_core::clamp_resize_dims`'s
+    /// range BEFORE anything else — the same range the marker decoder
+    /// accepts — so the PTY's actual size, the shadow parser, and the
+    /// recorded marker can never disagree with what a replay is willing to
+    /// honor.
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), String> {
+        let (cols, rows) = term_core::terminal_core::clamp_resize_dims(cols, rows);
         let master = self
             .master
             .as_ref()
@@ -737,6 +799,10 @@ impl MuxPane {
                 })
                 .map_err(|e| format!("PTY resize failed: {}", e))?;
             scrollback.write_resize_marker(cols, rows);
+            // task0003 D5: publish the new dims for the reader thread to
+            // observe (see `PaneDims`) — done in the SAME locked section as
+            // the marker write, mirroring the marker's own ordering point.
+            self.dims.set(cols, rows);
         } else {
             master
                 .resize(portable_pty::PtySize {
@@ -835,6 +901,7 @@ impl MuxPane {
             scrollback: Arc::new(StdMutex::new(ScrollbackRingBuffer::new(
                 DEFAULT_SCROLLBACK_CAPACITY,
             ))),
+            dims: Arc::new(PaneDims::new(cols, rows)),
         }
     }
 }

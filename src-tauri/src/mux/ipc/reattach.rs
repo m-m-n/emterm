@@ -209,13 +209,29 @@ pub(super) async fn collect_reattach_data(
     data
 }
 
-/// Maximum payload bytes per `PtyOutput` frame emitted during reattach replay.
+/// Maximum payload bytes per `PtyOutput` frame emitted during reattach replay
+/// — and (task0003 D7) the threshold above which a pane's snapshot falls
+/// back to marker-blind chunked framing at all.
 ///
-/// A pane's ring buffer can hold up to `DEFAULT_SCROLLBACK_CAPACITY` but a
-/// single codec frame must stay under `MAX_FRAME_LENGTH` (16 MiB). Chosen well
-/// below the codec cap so the 5-byte frame-body header plus any future growth
-/// stays safely within bounds.
-const REATTACH_CHUNK_SIZE: usize = 8 * 1024 * 1024;
+/// A pane's ring buffer can hold up to `DEFAULT_SCROLLBACK_CAPACITY` (2 MiB)
+/// but a single codec frame must stay under `MAX_FRAME_LENGTH` (16 MiB).
+///
+/// task0003 D7 (review round-2 finding `98eec9bbef67704a`): "Snapshot
+/// identity must not depend on payload size" — the PREVIOUS value (8 MiB)
+/// was chosen as "comfortably above today's realistic max" rather than
+/// derived from the actual hard limit, so the fallback's un-reachability
+/// rested on today's `DEFAULT_SCROLLBACK_CAPACITY` happening to stay well
+/// under it — a coincidence of current configuration, not a structural
+/// guarantee. Raised to just under `MAX_FRAME_LENGTH` itself (leaving only
+/// headroom for the frame header) so the ONLY way to exceed this is to
+/// exceed the codec's own hard per-frame limit — at which point no single
+/// frame could carry the payload marker-aware OR marker-blind, so splitting
+/// is unavoidable regardless of this constant's value. Given
+/// `DEFAULT_SCROLLBACK_CAPACITY` is fixed at 2 MiB (out of scope for this
+/// task to change) plus a shadow-parser screen dump (bounded by cols × rows,
+/// a few hundred KiB at most even for a very large terminal), every
+/// realistic snapshot now takes the single-frame, marker-aware path.
+const REATTACH_CHUNK_SIZE: usize = MAX_FRAME_LENGTH - (1024 * 1024);
 
 /// Send reattach data (PaneCreated + buffered output) to the client.
 ///
@@ -228,12 +244,11 @@ const REATTACH_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 /// not, so a resize-spanning reattach replayed the same coordinate-drifted
 /// content the marker fix exists to prevent. A `SnapshotRestore` frame MUST
 /// arrive whole — the client resets its core before replaying it — so this
-/// only applies while the buffer fits in one frame (comfortably true today:
-/// `DEFAULT_SCROLLBACK_CAPACITY` is 2 MiB per pane, well under
-/// `REATTACH_CHUNK_SIZE`). A buffer too large for a single frame
-/// (unreachable at today's capacity, kept as a safety net) falls back to
-/// the pre-fix chunked `PtyOutput` framing — marker-blind, but no worse
-/// than before this fix.
+/// only applies while the buffer fits in one frame. A buffer too large for a
+/// single frame (see [`REATTACH_CHUNK_SIZE`]'s doc for why this is not
+/// reachable by any realistic per-pane snapshot) falls back to the pre-fix
+/// chunked `PtyOutput` framing — marker-blind, but no worse than before this
+/// fix.
 ///
 /// Large per-pane buffers are split into multiple `PtyOutput` frames so each
 /// frame fits under `MAX_FRAME_LENGTH`. Without this split, a 34 MiB ring
@@ -1000,6 +1015,100 @@ mod tests {
             "core must end back at the caller's original size"
         );
         assert_eq!(core.rows(), 24);
+
+        sender.await.unwrap().expect("send_reattach_data ok");
+    }
+
+    /// task0003 AC-5 (D7, review round-2 finding `98eec9bbef67704a`): a
+    /// reattach snapshot ABOVE the OLD 8 MiB chunking threshold still goes
+    /// out as ONE `SnapshotRestore` frame (not split into marker-blind
+    /// `PtyOutput` chunks) and replays with its resize marker honored —
+    /// exactly as a smaller snapshot does. Uses the same cursor-addressed
+    /// coordinate-drift technique
+    /// `mux::ipc::pty_spawn`'s `resize_marker_fix_tui_cursor_addressed_recording_replays_without_cross_line_mixing`
+    /// test proves catches a genuinely ignored marker, padded well past the
+    /// old threshold with plain scrollback content.
+    #[tokio::test]
+    async fn test_send_reattach_data_above_old_chunking_threshold_still_marker_aware() {
+        use futures::StreamExt;
+        use tokio_util::codec::Framed;
+
+        let (client, server) = tokio::io::duplex(64 * 1024 * 1024);
+        let mut server_framed = Framed::new(server, MuxCodec::new());
+        let client_framed = Framed::new(client, MuxCodec::new());
+
+        const OLD_CHUNK_THRESHOLD: usize = 8 * 1024 * 1024;
+
+        let cols: u16 = 100;
+        let rows_a: u16 = 32;
+        let rows_b: u16 = 30;
+        let mut recording = crate::mux::scrollback_buffer::resize_marker_bytes(cols, rows_a);
+        for i in 0..rows_a.max(rows_b) + 20 {
+            recording.extend_from_slice(format!("chat history line {i}\r\n").as_bytes());
+        }
+        recording.extend_from_slice(b"\n\x1b7");
+        recording.extend_from_slice(format!("\x1b[0;{}r", rows_a - 1).as_bytes());
+        recording.extend_from_slice(b"\x1b8\x1b[1A");
+        for tick in 0..3u32 {
+            recording.extend_from_slice(format!("chat reply A line {tick}\r\n").as_bytes());
+            recording.extend_from_slice(
+                format!("\x1b7\x1b[{rows_a};0fSTATUS-A[{tick}]\x1b8").as_bytes(),
+            );
+        }
+        recording.extend_from_slice(&crate::mux::scrollback_buffer::resize_marker_bytes(
+            cols, rows_b,
+        ));
+        recording.extend_from_slice(b"\n\x1b7");
+        recording.extend_from_slice(format!("\x1b[0;{}r", rows_b - 1).as_bytes());
+        recording.extend_from_slice(b"\x1b8\x1b[1A");
+        for tick in 0..3u32 {
+            recording.extend_from_slice(format!("chat reply B line {tick}\r\n").as_bytes());
+            recording.extend_from_slice(
+                format!("\x1b7\x1b[{rows_b};0fSTATUS-B[{tick}]\x1b8").as_bytes(),
+            );
+        }
+        // Pad (as plain scrollback content, no markers) past the OLD
+        // chunking threshold.
+        while recording.len() < OLD_CHUNK_THRESHOLD + 1024 {
+            recording.extend_from_slice(b"padding line to grow past the old threshold\r\n");
+        }
+        let snapshot = build_snapshot_bytes(&recording, b"", false);
+        assert!(
+            snapshot.len() > OLD_CHUNK_THRESHOLD,
+            "test prerequisite: snapshot must exceed the OLD chunking threshold"
+        );
+
+        let reattach_data = vec![(5u32, snapshot)];
+        let sender = tokio::spawn(async move {
+            let mut framed = client_framed;
+            send_reattach_data(&mut framed, &reattach_data).await
+        });
+
+        let _pane_created = server_framed.next().await.unwrap().unwrap();
+        let frame = server_framed.next().await.unwrap().unwrap();
+        assert_eq!(
+            frame.msg_type,
+            MessageType::SnapshotRestore,
+            "a snapshot above the OLD chunking threshold must still arrive \
+             as a single marker-aware SnapshotRestore frame, not chunked \
+             PtyOutput"
+        );
+
+        let mut core = term_core::terminal_core::TerminalCore::new(cols, rows_a, 10_000);
+        core.reset_and_replay(&frame.payload);
+        let mut tainted = Vec::new();
+        for r in 0..rows_a {
+            let line = core.get_line_text(r);
+            if line.contains("STATUS-") && line.contains(" line ") {
+                tainted.push(format!("row {r}: {line}"));
+            }
+        }
+        assert!(
+            tainted.is_empty(),
+            "a snapshot above the old chunking threshold must replay with \
+             its resize marker honored — zero cross-phase-mixed rows, got \
+             {tainted:?}"
+        );
 
         sender.await.unwrap().expect("send_reattach_data ok");
     }

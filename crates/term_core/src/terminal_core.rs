@@ -519,6 +519,26 @@ impl TerminalCore {
         self.scrollback_capacity as u32
     }
 
+    /// Cumulative count of [`Self::resize`] calls (each one a full
+    /// content-preserving reflow) since construction — see the
+    /// `reflow_call_count` field doc for the full rationale. `pub` so
+    /// external crates (the `emterm` daemon's regression tests) can observe
+    /// it directly: a replay that recognizes and applies NO resize marker
+    /// at all — including one that is present in the byte stream but
+    /// correctly treated as forged / inert — never calls [`Self::resize`],
+    /// so this stays at its pre-replay value. This is the reliable way to
+    /// prove "no marker was honored" for a forged-marker regression test:
+    /// checking the core's FINAL `cols()`/`rows()` after a full
+    /// `reset_and_replay` does NOT work for this, because
+    /// `replay_with_resize_markers` unconditionally restores the core to
+    /// its construction/target dimensions at the end of every replay
+    /// regardless of what happened (or didn't) mid-stream — a genuinely
+    /// honored forged marker and a correctly-ignored one both end up back
+    /// at the same final size.
+    pub fn reflow_call_count(&self) -> u64 {
+        self.reflow_call_count
+    }
+
     /// Set cell size in pixels (for CSI 14t/16t XTWINOPS responses).
     /// Called from TypeScript after measuring character dimensions.
     pub fn set_cell_size_px(&mut self, width: u16, height: u16) {
@@ -890,6 +910,20 @@ impl TerminalCore {
         cancel: &std::sync::atomic::AtomicBool,
         bypass: bool,
     ) -> Option<SnapshotReplay> {
+        // D6 (task0003, review round-2 finding `893241823258fce3`): a
+        // row-count-GROWING mid-drain resize needs to pull rows up from
+        // scrollback to populate the newly visible rows — but the bypass
+        // keeps `scrollback_slim` deliberately empty during the drain (see
+        // below), so those rows come up blank and the cursor's row
+        // recalculation drifts by `(new_rows - old_rows)`, diverging from
+        // what the synchronous (non-bypass) path produces for the SAME
+        // payload. Rather than a fragile mid-stream bypass toggle (which
+        // would violate this function's "scrollback_slim stays empty
+        // throughout" contract for its caller, `build_from_snapshot`),
+        // downgrade to the non-bypass recipe for the WHOLE replay whenever
+        // the payload contains any row-growing marker, so growth always
+        // pulls real content exactly as the synchronous path does.
+        let bypass = bypass && !payload_has_row_growing_marker(rows, payload);
         let mut core = TerminalCore::new(cols, rows, scrollback_lines);
         core.reset();
         // Snapshot-replay bypass: skip per-row SlimCell compression during the
@@ -1448,15 +1482,41 @@ impl TerminalCore {
 
 // ── Resize-marker replay interpretation (IMPLEMENTATION.md D1/D2, task0001) ─
 
-/// Prefix of the in-band resize marker `mux::scrollback_buffer::resize_marker_bytes`
-/// (in the `emterm` daemon crate) writes into a pane's scrollback at each PTY
-/// resize: `ESC ] 777 ; emterm ; resize ; <cols> ; <rows> BEL`. `term_core`
-/// has no dependency on that crate, so this is a hand-kept mirror of the
-/// encoder's byte format — a contract on bytes, not shared Rust code. See
-/// that function's doc comment for the full rationale (why OSC 777, why it
-/// survives the daemon's scrollback filters, why it degrades gracefully for
-/// a marker-unaware consumer).
+/// Prefix of the in-band resize marker: `ESC ] 777 ; emterm ; resize ;
+/// <cols> ; <rows> BEL`.
+///
+/// task0003 D2 (review round-2 finding `602e685494248cbb`): this byte format
+/// used to be independently duplicated — the encoder lived in the `emterm`
+/// daemon crate's `mux::scrollback_buffer::resize_marker_bytes` with its own
+/// literal prefix, while the decoder here held a SEPARATE literal and its
+/// own dimension bounds, so the two could drift (the daemon accepted any
+/// `u16` while this module rejected anything above 2000, silently dropping
+/// legitimate large resizes). `term_core` has no dependency on the daemon
+/// crate, but the daemon crate DOES depend on `term_core` (it already uses
+/// `TerminalCore` directly), so this module is now the single owner of both
+/// the byte format and the accepted dimension range: [`resize_marker_bytes`]
+/// (the encoder), [`find_resize_marker`] / [`parse_resize_marker_dims`] (the
+/// decoder), and [`RESIZE_MARKER_MAX_COLS`] / [`RESIZE_MARKER_MAX_ROWS`] (the
+/// shared bounds) are all `pub` so `mux::scrollback_buffer::resize_marker_bytes`
+/// can become a thin re-export instead of an independent literal, and so the
+/// daemon can validate a resize against the SAME bounds the decoder accepts
+/// at the point the resize is applied (`MuxPane::resize`), rather than
+/// silently losing a marker at replay time.
 const RESIZE_MARKER_PREFIX: &[u8] = b"\x1b]777;emterm;resize;";
+
+/// Encode an in-band resize marker: `ESC ] 777 ; emterm ; resize ; <cols> ;
+/// <rows> BEL`. SSOT for the marker byte format (task0003 D2) — see
+/// [`RESIZE_MARKER_PREFIX`]'s doc comment. `mux::scrollback_buffer::resize_marker_bytes`
+/// (in the `emterm` daemon crate) re-exports this rather than holding an
+/// independent literal.
+///
+/// Rides the same envelope as the other `emterm` OSC 777 extensions (fold /
+/// status-bar / agent-status / viewer launches): it is inert to a
+/// marker-unaware replay consumer, since an unrecognized, BEL-terminated OSC
+/// is parsed structurally and dropped without producing a visible cell.
+pub fn resize_marker_bytes(cols: u16, rows: u16) -> Vec<u8> {
+    format!("\x1b]777;emterm;resize;{cols};{rows}\x07").into_bytes()
+}
 
 /// Maximum length in bytes of a well-formed marker body (`<cols>;<rows>`),
 /// e.g. `"65535;65535"`. A BEL found beyond this many bytes past a
@@ -1482,7 +1542,17 @@ const RESIZE_MARKER_MAX_BODY_LEN: usize = 11;
 /// found. A BEL found only outside the `RESIZE_MARKER_MAX_BODY_LEN` window
 /// is likewise treated as "not our marker" (not a valid body length) and
 /// only skips past the candidate's own prefix.
-fn find_resize_marker(bytes: &[u8], from: usize) -> Option<(usize, usize, u16, u16)> {
+///
+/// `pub` (task0003 D2 / D1): besides the replay decoder (this module), the
+/// `emterm` daemon crate's write-path scrollback filter
+/// (`mux::scrollback_filter::strip_pty_output_for_scrollback_write`) calls
+/// this directly to scrub ANY literal occurrence of a marker-shaped byte
+/// sequence from PTY-sourced content — including one nested inside a
+/// sequence the daemon's ANSI-structural strip would otherwise preserve
+/// whole (e.g. a non-SIXEL DCS body; review round-2 finding
+/// `15c54fb74bb91ec7`) — using the EXACT same scan the decoder itself uses,
+/// so the two can never disagree about what counts as a marker.
+pub fn find_resize_marker(bytes: &[u8], from: usize) -> Option<(usize, usize, u16, u16)> {
     let mut search_from = from;
     while search_from + RESIZE_MARKER_PREFIX.len() <= bytes.len() {
         let rel = bytes[search_from..]
@@ -1519,17 +1589,67 @@ fn find_resize_marker(bytes: &[u8], from: usize) -> Option<(usize, usize, u16, u
     None
 }
 
+/// Scan `payload` for any resize marker whose `rows` exceeds the row count
+/// in effect immediately before it (starting from `initial_rows`, the
+/// dimensions the replay core is constructed at) — task0003 D6, used by
+/// [`TerminalCore::build_from_snapshot_inner`] to decide whether the
+/// snapshot-replay bypass is safe for a given payload (see that function's
+/// doc comment for why a row-count GROWTH during the bypass diverges from
+/// the synchronous path).
+fn payload_has_row_growing_marker(initial_rows: u16, payload: &[u8]) -> bool {
+    let mut prev_rows = initial_rows;
+    let mut offset = 0usize;
+    while let Some((_, end, _, marker_rows)) = find_resize_marker(payload, offset) {
+        if marker_rows > prev_rows {
+            return true;
+        }
+        prev_rows = marker_rows;
+        offset = end;
+    }
+    // `replay_with_resize_markers` always restores to `initial_rows` (the
+    // construction / target size) at the end of the drain, even when no
+    // marker explicitly asks for it. If the last marker (or the initial
+    // size, when there are none) left FEWER rows than that, this implicit
+    // final restore is itself a row-count growth and needs the same
+    // treatment as an explicit one.
+    initial_rows > prev_rows
+}
+
 /// Defensive upper bound on a resize marker's `cols` field. Marker
 /// dimensions are replayed directly into `TerminalCore::resize`, which
 /// allocates `(scrollback_capacity + rows) * cols` cells — an unbounded
 /// value here would let a forged or corrupted marker trigger a huge
 /// allocation. Comfortably above any real terminal width.
-const RESIZE_MARKER_MAX_COLS: u16 = 2000;
+///
+/// `pub` (task0003 D2, review round-2 finding `602e685494248cbb`): the
+/// daemon's encoder previously accepted any `u16` while this decoder
+/// rejected anything above the (private) old value of 2000, so a legitimate
+/// resize past that value silently lost its marker at replay — the two
+/// sides disagreed on the accepted range with nothing to catch the drift.
+/// Exporting this constant lets the daemon validate/clamp a resize against
+/// the SAME bound at the point it is applied (`MuxPane::resize`,
+/// `term_core::clamp_resize_dims`), so anything that reaches the encoder is
+/// guaranteed within what this decoder accepts.
+pub const RESIZE_MARKER_MAX_COLS: u16 = 4096;
 
 /// Defensive upper bound on a resize marker's `rows` field. See
-/// [`RESIZE_MARKER_MAX_COLS`] for the rationale. Comfortably above any real
-/// terminal height.
-const RESIZE_MARKER_MAX_ROWS: u16 = 2000;
+/// [`RESIZE_MARKER_MAX_COLS`] for the rationale (both the `pub` visibility
+/// and the shared-bound reasoning apply identically here).
+pub const RESIZE_MARKER_MAX_ROWS: u16 = 4096;
+
+/// Clamp a requested resize to the range [`resize_marker_bytes`] /
+/// [`parse_resize_marker_dims`] agree on (`1..=RESIZE_MARKER_MAX_COLS` /
+/// `1..=RESIZE_MARKER_MAX_ROWS`), task0003 D2. Called at the point a resize
+/// is APPLIED (`MuxPane::resize`) so the dimensions that reach the marker
+/// encoder — and the PTY itself — can never be silently un-representable by
+/// the decoder later. `0` clamps up to `1` (a zero-sized terminal is not
+/// meaningful) rather than down, matching the decoder's zero rejection.
+pub fn clamp_resize_dims(cols: u16, rows: u16) -> (u16, u16) {
+    (
+        cols.clamp(1, RESIZE_MARKER_MAX_COLS),
+        rows.clamp(1, RESIZE_MARKER_MAX_ROWS),
+    )
+}
 
 /// Parse a resize marker body (`<cols>;<rows>`, no leading/trailing bytes).
 /// Rejects a non-numeric, extra-field, zero-valued, or over-large dimension
@@ -1635,6 +1755,84 @@ mod tests {
     fn parse_resize_marker_dims_rejects_missing_field() {
         assert_eq!(parse_resize_marker_dims(b"120"), None);
         assert_eq!(parse_resize_marker_dims(b""), None);
+    }
+
+    // ── task0003 AC-2 (D2, review round-2 finding `602e685494248cbb`):
+    // encoder and decoder share ONE accepted dimension range ─────────────
+
+    /// A dimension just past the OLD (private, pre-task0003) decoder cap of
+    /// 2000 — previously silently rejected even though the encoder accepted
+    /// it — is now accepted, because both sides read the same
+    /// `RESIZE_MARKER_MAX_COLS` / `RESIZE_MARKER_MAX_ROWS` constants.
+    #[test]
+    fn parse_resize_marker_dims_accepts_value_past_old_hardcoded_2000_cap() {
+        assert_eq!(parse_resize_marker_dims(b"2500;2500"), Some((2500, 2500)));
+    }
+
+    /// A dimension still beyond the (now-shared, wider) accepted range is
+    /// rejected — the range widened, but it did not disappear.
+    #[test]
+    fn parse_resize_marker_dims_still_rejects_dimension_past_shared_max() {
+        assert_eq!(
+            parse_resize_marker_dims(
+                format!("{};{}", RESIZE_MARKER_MAX_COLS + 1, RESIZE_MARKER_MAX_ROWS).as_bytes()
+            ),
+            None
+        );
+        assert_eq!(
+            parse_resize_marker_dims(
+                format!("{};{}", RESIZE_MARKER_MAX_COLS, RESIZE_MARKER_MAX_ROWS + 1).as_bytes()
+            ),
+            None
+        );
+    }
+
+    /// AC-2 end-to-end: a resize past the OLD hardcoded decoder range still
+    /// produces a marker that a replay honors (encoder -> decoder agree).
+    #[test]
+    fn reset_and_replay_honors_a_resize_past_the_old_hardcoded_decoder_range() {
+        let cols: u16 = 80;
+        let rows: u16 = 24;
+        let wide_cols: u16 = 2500; // past the OLD 2000 decoder cap
+        let mut bytes = b"before-resize\r\n".to_vec();
+        bytes.extend_from_slice(&resize_marker_bytes(wide_cols, 40));
+        // A cursor-addressed write near the far right edge of `wide_cols`
+        // only lands correctly if the marker actually resized the core to
+        // `wide_cols` before this segment is fed — an ignored marker would
+        // clamp/wrap it at the caller's `cols` (80) instead.
+        bytes.extend_from_slice(format!("\x1b[1;{wide_cols}Hedge").as_bytes());
+        bytes.extend_from_slice(&resize_marker_bytes(cols, rows));
+        bytes.extend_from_slice(b"after-resize\r\n");
+
+        let mut core = TerminalCore::new(cols, rows, 1000);
+        core.reset_and_replay(&bytes);
+
+        assert_eq!(core.cols(), cols, "core must end back at target size");
+        assert_eq!(core.rows(), rows);
+    }
+
+    // ── clamp_resize_dims (task0003 D2) ───────────────────────────────────
+
+    #[test]
+    fn clamp_resize_dims_leaves_in_range_values_untouched() {
+        assert_eq!(clamp_resize_dims(80, 24), (80, 24));
+        assert_eq!(
+            clamp_resize_dims(RESIZE_MARKER_MAX_COLS, RESIZE_MARKER_MAX_ROWS),
+            (RESIZE_MARKER_MAX_COLS, RESIZE_MARKER_MAX_ROWS)
+        );
+    }
+
+    #[test]
+    fn clamp_resize_dims_clamps_above_max_down_to_max() {
+        assert_eq!(
+            clamp_resize_dims(u16::MAX, u16::MAX),
+            (RESIZE_MARKER_MAX_COLS, RESIZE_MARKER_MAX_ROWS)
+        );
+    }
+
+    #[test]
+    fn clamp_resize_dims_clamps_zero_up_to_one() {
+        assert_eq!(clamp_resize_dims(0, 0), (1, 1));
     }
 
     // ── replay_with_resize_markers / reset_and_replay marker interpretation ─
@@ -2420,31 +2618,28 @@ mod tests {
 
     /// review round-1 rework, finding `1698d9b52a89e241` (medium,
     /// correctness-relevant) / task0002 AC-7: a snapshot >= 64 KiB
-    /// containing a ROW-COUNT-SHRINKING marker, taken through the SAME
-    /// production recipe as `test_bypass_plus_merge_equivalence` (bypass-on
-    /// 1st-pass -> bypass-off 2nd-pass -> merge), produces no
+    /// containing a ROW-COUNT-SHRINKING marker produces no
     /// duplicated / out-of-order scrollback rows and reports the SAME
     /// eviction bookkeeping as a fully synchronous (bypass-off) replay of
-    /// the same payload — not merely "close". Pre-fix, the mid-drain
-    /// resize's content-preserving reflow left real rows in the bypassed
-    /// 1st-pass core's `scrollback_slim`; the 2nd-pass merge then
-    /// mistook them for genuine post-swap live-drain content and
-    /// prepended the full rebuilt scrollback on top, duplicating rows.
+    /// the same payload — not merely "close".
+    ///
+    /// task0003 D6 update (review round-2 finding `893241823258fce3`): this
+    /// payload's setup needs a GROW step before the shrink under test (to
+    /// produce grown-size content for the shrink to push into scrollback).
+    /// `build_from_snapshot_inner`'s D6 pre-scan sees that grow and
+    /// downgrades the WHOLE replay out of the bypass fast path (see that
+    /// function's doc comment), so `build_from_snapshot` alone now already
+    /// returns the complete, correct scrollback for this payload — the
+    /// former "manually run the 2nd-pass rebuild + merge, then assert the
+    /// 1st-pass core was left empty by the bypass" recipe no longer
+    /// applies (there is nothing left for a 2nd pass to add; that
+    /// combination is covered instead by `test_bypass_plus_merge_equivalence`
+    /// for a payload that genuinely stays bypassed). What still matters —
+    /// and what this test still proves — is that the RESULT is correct: no
+    /// duplicated / dropped rows and byte-identical eviction bookkeeping
+    /// against the synchronous reference.
     #[test]
     fn test_bypass_plus_merge_equivalence_across_row_shrinking_resize_marker() {
-        // Constructed at the SMALL size and ends at the SAME small size
-        // (grow mid-stream, then shrink back before the payload ends) so
-        // `replay_with_resize_markers`'s implicit final restore-to-target
-        // is a no-op. This sidesteps an UNRELATED, pre-existing bypass
-        // limitation this test is not about: growing rows during a bypass
-        // window can only pull history back from what bypass actually
-        // stored, so a resize that GROWS past content produced while
-        // bypass was on legitimately shows less history than a non-bypass
-        // reference — that is a separate, documented characteristic of the
-        // bypass mechanism, not the leak finding `1698d9b52a89e241` targets.
-        // Ending already at the target size (a SHRINK, which only ever
-        // needs to drop rows the viewport already holds, never pull extra
-        // history in) keeps this test isolated to the leak this fix closes.
         let cols: u16 = 80;
         let small_rows: u16 = 10;
         let grown_rows: u16 = 24;
@@ -2490,29 +2685,18 @@ mod tests {
         )
         .expect("reference build not cancelled");
 
-        // Production path: bypass-on 1st-pass + bypass-off 2nd-pass + merge.
+        // Under test: `build_from_snapshot` — D6 downgrades it out of the
+        // bypass for this payload (it contains a growing marker), so its
+        // result alone must already match the synchronous reference.
         let bypass_replay =
             TerminalCore::build_from_snapshot(cols, small_rows, 5000, &payload, &never)
-                .expect("1st-pass");
-        let mut live = bypass_replay.core;
-        // Bypass leaves scrollback empty by design — this is the invariant
-        // the fix restores even across the mid-drain shrink.
-        assert_eq!(
-            live.scrollback_count(),
-            0,
-            "bypass-on 1st-pass core must have empty scrollback even after a \
-             mid-drain row-shrinking resize marker"
-        );
-        let rebuilt = TerminalCore::build_scrollback_only_from_snapshot(
-            cols, small_rows, 5000, &payload, &never,
-        )
-        .expect("2nd-pass");
-        live.merge_scrollback_from(rebuilt.core, 0);
+                .expect("build not cancelled");
+        let live = bypass_replay.core;
 
         assert_eq!(
             grid_fingerprint(&live),
             grid_fingerprint(&reference.core),
-            "viewport grid must match — the shrink never needs history bypass discarded"
+            "viewport grid must match the synchronous reference"
         );
         assert_eq!(
             live.scrollback_count(),
@@ -2544,6 +2728,111 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── task0003 AC-9 (D6, review round-2 finding `893241823258fce3`):
+    // a row-count-GROWING marker inside a bypass-path (>= 64 KiB) snapshot
+    // must produce the SAME viewport fingerprint as the synchronous path ──
+
+    /// Demonstrates the divergence this fix closes: WITHOUT the D6 pre-scan
+    /// (i.e. bypass stays engaged across a row-growing mid-drain resize),
+    /// the grown rows come up blank instead of pulling real history —
+    /// diverging from the synchronous reference. With the fix,
+    /// `build_from_snapshot` (bypass path) matches
+    /// `build_scrollback_only_from_snapshot` (synchronous path) exactly.
+    #[test]
+    fn build_from_snapshot_bypass_path_matches_sync_path_across_row_growing_marker() {
+        let cols: u16 = 80;
+        let small_rows: u16 = 10;
+        let grown_rows: u16 = 40;
+        let mut payload: Vec<u8> = Vec::new();
+        // Constructed AT the grown size, so the FIRST marker (below) is a
+        // shrink — history then accumulates in scrollback at the small
+        // size (this is also where the bulk padding lives, so the payload
+        // comfortably clears the 64 KiB off-thread bypass threshold), and
+        // the SECOND marker grows back to the construction size (a no-op
+        // for the implicit final restore). Nothing follows the grow, so
+        // the fingerprint comparison below looks at the just-grown
+        // viewport directly — content added AFTER the grow would scroll
+        // the transient post-grow state out of view before this test ever
+        // inspects it, hiding the divergence being tested for.
+        payload.extend_from_slice(&resize_marker(cols, small_rows));
+        // History produced at the SMALL size, comfortably more than
+        // `small_rows` so there is real content sitting in scrollback for
+        // the upcoming growth to pull back up into the viewport.
+        for i in 0..3000u32 {
+            payload.extend_from_slice(
+                format!("small-size scroll line {i} padded for size\r\n").as_bytes(),
+            );
+        }
+        // The row-count-GROWING marker under test (AC-9): the viewport
+        // widens back to the construction size and should pull rows back
+        // up from the scrollback history just produced above.
+        payload.extend_from_slice(&resize_marker(cols, grown_rows));
+        assert!(
+            payload.len() >= 64 * 1024,
+            "payload must be >= 64 KiB to match AC-9's bypass-path scenario, got {}",
+            payload.len()
+        );
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+
+        // Reference: synchronous (non-bypass) path.
+        let reference = TerminalCore::build_scrollback_only_from_snapshot(
+            cols, grown_rows, 5000, &payload, &never,
+        )
+        .expect("reference build not cancelled");
+
+        // Under test: bypass path (`build_from_snapshot`) — D6 downgrades
+        // out of the bypass for this payload because it contains a
+        // row-growing marker.
+        let bypass_replay =
+            TerminalCore::build_from_snapshot(cols, grown_rows, 5000, &payload, &never)
+                .expect("bypass-path build not cancelled");
+
+        assert_eq!(
+            grid_fingerprint(&bypass_replay.core),
+            grid_fingerprint(&reference.core),
+            "bypass-path viewport must match the synchronous path across a row-growing marker"
+        );
+    }
+
+    /// A marker that changes only COLS — rows stay constant throughout,
+    /// including at the implicit final restore-to-target — does not trigger
+    /// the D6 downgrade: `build_from_snapshot` still returns an EMPTY
+    /// scrollback, matching the existing (pre-D6) bypass invariant other
+    /// tests already rely on. (A genuine ROW shrink cannot serve as this
+    /// counter-example: `replay_with_resize_markers` always restores to the
+    /// construction/target row count at the end of the drain, so a payload
+    /// that ever shrinks rows always ends up growing back — explicitly or
+    /// implicitly — by the time the drain finishes.)
+    #[test]
+    fn build_from_snapshot_stays_bypassed_for_a_cols_only_marker() {
+        let cols_a: u16 = 80;
+        let cols_b: u16 = 40;
+        let rows: u16 = 24;
+        let mut payload: Vec<u8> = Vec::new();
+        for i in 0..5u32 {
+            payload.extend_from_slice(format!("early line {i}\r\n").as_bytes());
+        }
+        // Only cols changes; rows stay the same throughout — D6 must not
+        // fire (it is scoped to row growth, not cols).
+        payload.extend_from_slice(&resize_marker(cols_b, rows));
+        for i in 0..3000u32 {
+            payload.extend_from_slice(
+                format!("padding line {i} padded for size padded padded\r\n").as_bytes(),
+            );
+        }
+        assert!(payload.len() >= 64 * 1024);
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let bypass_replay = TerminalCore::build_from_snapshot(cols_a, rows, 5000, &payload, &never)
+            .expect("bypass-path build not cancelled");
+        assert_eq!(
+            bypass_replay.core.scrollback_count(),
+            0,
+            "a marker that only changes cols (rows constant) must still take the bypass fast path"
+        );
     }
 
     // ── Grid construction ────────────────────────────────
