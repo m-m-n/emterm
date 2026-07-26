@@ -34,7 +34,7 @@ workflow:
     status: completed
     completed_at_commit: 097c6745466c5dbeed5861ec2c7c8d2d95ddc7d0
   - id: implement
-    status: completed
+    status: in_progress
     completed_at_commit: 455a56c1dc87f483d7d33d5ee1bec14386edf142
     base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
   - id: review
@@ -111,6 +111,29 @@ tasks:
     status: merged
     branch: em-workflow/mux-render-corruption/task0003
     notes: "review round 2 の residual critical/high からの rework。マーカーの権威を dim_markers サイドチャネルへ移し偽装クラスを根絶する方針をユーザーが選択。設計判断: RESIZE_MARKER_MAX_COLS/ROWS を 2000→4096 に引き上げ（共有 SSOT 化に伴う）、D7 は REATTACH_CHUNK_SIZE を MAX_FRAME_LENGTH 由来に変える範囲に留めた（chunked-snapshot 副プロトコルは Candidate C 同様スコープ外）。handlers.rs は変更不要だった"
+
+  task0004:
+    title: "Carry replay dimensions out-of-band (round 3 rework)"
+    plan: tasks/task0004.md
+    files:
+      - crates/mux_ipc/src/lib.rs
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/snapshot.rs
+      - src-tauri/src/mux/scrollback_buffer.rs
+      - src-tauri/src/mux/snapshot_bytes.rs
+      - src-tauri/src/mux/scrollback_filter.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/mux/ipc/reattach.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/tabs.rs
+    skills: [backend-impl]
+    domains: [input-handling, ui, concurrency, api-contract]
+    complexity: high
+    requirements: [FR2, FR3, NFR1, NFR2, NFR3]
+    status: in_progress
+    branch: em-workflow/mux-render-corruption/task0004
+    notes: "review round 3 の residual critical/high からの rework。寸法を snapshot の別フィールドで運び replay のバイト走査を廃する方針をユーザーが選択"
 
 review:
   status: pending
