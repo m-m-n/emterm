@@ -44,7 +44,29 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Confirm and fix replay coordinate drift behind post-switch render corruption"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/mux/scrollback_buffer.rs
+      - src-tauri/src/mux/scrollback_filter.rs
+      - src-tauri/src/mux/snapshot_bytes.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/daemon.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/ipc/reattach.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/app.rs
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/ring_buffer.rs
+    skills: [backend-impl]
+    domains: [input-handling, ui, concurrency]
+    complexity: high
+    requirements: [FR1, FR2, FR3, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -55,35 +77,35 @@ requirements:
     title: "Root-cause investigation incl. relationship to known replay coordinate-drift bug"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2]
   FR2:
     title: "Fix the root cause of post-switch line-content mixing"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2]
   FR3:
     title: "Regression tests reproducing the root-cause scenario"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-4]
   NFR1:
     title: "No noticeable window-switch/reattach latency degradation"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [MT-2]
   NFR2:
     title: "Linux and Windows builds keep compiling (CLI-only check stays green)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-6]
   NFR3:
     title: "No regression in existing Rust and TypeScript tests"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
