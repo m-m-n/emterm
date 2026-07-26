@@ -34,7 +34,7 @@ workflow:
     status: completed
     completed_at_commit: 097c6745466c5dbeed5861ec2c7c8d2d95ddc7d0
   - id: implement
-    status: completed
+    status: in_progress
     completed_at_commit: 6d42f73c0095357645e3d4a8a84caccce958e0c9
     base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
   - id: review
@@ -134,6 +134,28 @@ tasks:
     status: merged
     branch: em-workflow/mux-render-corruption/task0004
     notes: "review round 3 の residual critical/high からの rework。寸法を snapshot の別フィールドで運び replay のバイト走査を廃する方針をユーザーが選択。round 3 findings のうち 981230284d7d3273（resize storm の entry 数 bound）のみ未クローズ: 安全でないバイトしきい値 coalescing を正しさのため撤回した結果、1 ステップの再描画が 8 KiB を超える storm で dim_markers が無制限に増える経路が再び開いた。真の修正は resize 適用層でのデバウンスが必要と判断し、doc コメントと回帰テストで観測可能な形に留めた。Deviations: crates/term_core/src/{bench.rs,ring_buffer.rs} が API 変更に伴う機械的シグネチャ修正で expected_files 外"
+
+  task0005:
+    title: "Validate, bound, and version the segment protocol (round 4 rework)"
+    plan: tasks/task0005.md
+    files:
+      - crates/mux_ipc/src/protocol.rs
+      - crates/term_core/src/terminal_core.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/ipc/reattach.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/scrollback_buffer.rs
+      - src-tauri/src/mux/snapshot_bytes.rs
+      - src-tauri/src/tabs.rs
+      - feature-docs/mux-render-corruption/VERIFICATION.md
+    skills: [backend-impl]
+    domains: [input-handling, ui, concurrency, api-contract]
+    complexity: high
+    requirements: [FR2, FR3, NFR1, NFR2, NFR3]
+    status: in_progress
+    branch: em-workflow/mux-render-corruption/task0005
+    notes: "review round 4 の residual high からの rework。round 4 で偽装クラスは構造的に解消済みで、残るのは新設デコード経路の検証・replay コストの有界化・プロトコル版数・述語の適用漏れ"
 
 review:
   status: pending
