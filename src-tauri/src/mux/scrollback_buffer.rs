@@ -69,6 +69,42 @@ pub struct ScrollbackRingBuffer {
     dim_markers: VecDeque<(u64, u16, u16)>,
 }
 
+/// Hard ceiling on `dim_markers`' length, independent of redraw byte volume
+/// (task0005 rework D3'', review round-4 finding `6c650908ea8e95e9`,
+/// resolving the residual round-3 explicitly deferred as
+/// `981230284d7d3273`).
+///
+/// Measured replay cost (round-4, `crates/term_core/src/terminal_core.rs`'s
+/// `replay_segments`, a 0.95 MiB snapshot at the shipping 10 000-line
+/// scrollback default): 0 segments → 134 ms / 5 → 176 ms / 20 → 272 ms /
+/// 30 → 2078 ms / 50 → 3322 ms / 80 → 5350 ms — a resize-storm-shaped
+/// snapshot (a window-edge drag, which emits a `Resize` message per
+/// grid-size change with no debounce) can accumulate dozens of entries here
+/// with no per-step coalescing available (see [`Self::write_resize_marker`]'s
+/// doc for why round-4 reverted the byte-threshold coalescing that used to
+/// bound this — it silently misattributed content). Replay cost jumps
+/// sharply once segment count crosses roughly 20-30, so this ceiling stays
+/// comfortably below that: `crates/term_core/src/bench.rs`'s
+/// `segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap`
+/// empirically confirms replay at exactly this count stays well under 1
+/// second and does not exhibit the same superlinear growth within the
+/// bounded range.
+///
+/// Enforced by [`Self::enforce_dim_marker_cap`], called after every
+/// [`Self::write_resize_marker`] append: when exceeded, the OLDEST entry is
+/// merged into its successor (the successor's offset is pulled back to
+/// cover the oldest entry's span, and the oldest entry is dropped) —
+/// unlike the reverted byte-threshold coalescing, this only ever touches
+/// the SINGLE oldest span each time the cap is exceeded, so every entry
+/// more recent than that keeps its EXACT recorded attribution; only the
+/// oldest span's content is reattributed (to whichever dims its successor
+/// already used), never a more recent one. This does not reintroduce
+/// review round-3 finding `ab54fae335086db3` (misattributing RECENT
+/// content by retroactively rewriting an already-passed marker's
+/// dimensions) — precision is lost only in the single oldest surviving
+/// span, which is exactly the trade-off `D3''`'s suggestion (b) accepts.
+pub const MAX_DIM_MARKERS: usize = 16;
+
 impl ScrollbackRingBuffer {
     /// Create a new ring buffer with the specified capacity.
     pub fn new(capacity: usize) -> Self {
@@ -139,13 +175,14 @@ impl ScrollbackRingBuffer {
     /// literally nothing was recorded in between (offset unchanged).
     ///
     /// A resize storm whose every step emits real (non-zero) redraw bytes
-    /// therefore does grow `dim_markers` by one entry per step — bounded
-    /// only by [`Self::prune_dim_markers`]'s retained-window eviction, not
-    /// by this coalescing rule. Bounding that growth independently of
-    /// redraw byte volume (review round-3 finding `981230284d7d3273`) is a
-    /// known, separately-tracked residual: no worse than the design's
-    /// pre-round-2 baseline, and a byte-count threshold cannot fix it
-    /// without reintroducing the misattribution above.
+    /// therefore does grow `dim_markers` by one entry per step through THIS
+    /// coalescing rule alone — but [`Self::enforce_dim_marker_cap`] (called
+    /// right below, task0005 rework D3'') now bounds the total independent
+    /// of redraw byte volume, closing the round-3 residual
+    /// (`981230284d7d3273`) a byte-count threshold could not close without
+    /// reintroducing the misattribution above: the cap merges only the
+    /// SINGLE oldest span on overflow, never rewriting a more recent
+    /// entry's already-recorded dimensions.
     pub fn write_resize_marker(&mut self, cols: u16, rows: u16) {
         let offset = self.total_written;
         if let Some(last) = self.dim_markers.back_mut() {
@@ -157,6 +194,26 @@ impl ScrollbackRingBuffer {
         }
         self.dim_markers.push_back((offset, cols, rows));
         self.prune_dim_markers();
+        self.enforce_dim_marker_cap();
+    }
+
+    /// Bound `dim_markers` to at most [`MAX_DIM_MARKERS`] entries (task0005
+    /// rework D3''), independent of how many bytes separate each recorded
+    /// resize. When the cap is exceeded, the OLDEST entry is merged into
+    /// its successor: the successor's `offset` is pulled back to the
+    /// dropped entry's offset (extending its span to also cover what the
+    /// dropped entry used to describe), and the dropped entry's own
+    /// dimensions are discarded. See [`MAX_DIM_MARKERS`]'s doc for why this
+    /// only ever loses precision in the single oldest surviving span.
+    fn enforce_dim_marker_cap(&mut self) {
+        while self.dim_markers.len() > MAX_DIM_MARKERS {
+            let Some(dropped) = self.dim_markers.pop_front() else {
+                break;
+            };
+            if let Some(new_oldest) = self.dim_markers.front_mut() {
+                new_oldest.0 = dropped.0;
+            }
+        }
     }
 
     /// Drop `dim_markers` entries that can no longer be "the dimensions in
@@ -789,23 +846,26 @@ mod tests {
         );
     }
 
-    // ── review round-3 finding `981230284d7d3273` (performance, residual):
-    // a resize storm whose EVERY step emits real (non-empty) redraw bytes
-    // grows dim_markers by one entry per step — bounded only by
-    // prune_dim_markers' retained-window eviction, not by coalescing. This
-    // is the accepted trade-off of reverting the unsound byte-threshold
-    // coalescing above: correctness (never misattribute recorded content)
-    // takes priority over bounding entry count independent of redraw
-    // volume. Documented here rather than silently left unverified — see
-    // `write_resize_marker`'s doc comment for the full rationale.  ────────
+    // ── task0005 rework D3'' (review round-4 finding `6c650908ea8e95e9`,
+    // resolving the round-3 residual `981230284d7d3273`): a resize storm
+    // whose EVERY step emits real (non-empty) redraw bytes — so none of the
+    // steps can coalesce via the exact-offset rule above — must still
+    // produce a BOUNDED `dim_markers` count, independent of redraw byte
+    // volume, via `enforce_dim_marker_cap` (not a byte-threshold coalescing
+    // rule, which round-4 already proved unsound above). ──────────────────
 
-    /// A resize storm where each step's redraw exceeds the OLD 8 KiB
-    /// coalescing threshold produces one `dim_markers` entry per step (not
-    /// silently dropped or merged) — proving the reverted coalescing rule
-    /// does not pretend to bound this, rather than leaving the growth
-    /// unverified.
+    /// AC-4: a resize storm where each step's redraw exceeds the old 8 KiB
+    /// coalescing threshold — so exact-offset coalescing never fires — is
+    /// still bounded to `MAX_DIM_MARKERS` entries by the daemon-side cap,
+    /// regardless of how many steps occur.
+    ///
+    /// Confirmed to fail pre-fix: before `enforce_dim_marker_cap` existed,
+    /// this recorded exactly `step_count` (50) entries — the prior version
+    /// of this test asserted that UNBOUNDED growth as the then-accepted
+    /// trade-off (round-3 finding `981230284d7d3273`); task0005 changes
+    /// that trade-off, so this test now asserts the opposite.
     #[test]
-    fn resize_storm_with_large_per_step_redraw_grows_one_entry_per_step() {
+    fn resize_storm_with_large_per_step_redraw_stays_bounded_by_max_dim_markers() {
         let mut rb = ScrollbackRingBuffer::new(4 * 1024 * 1024);
         let step_count = 50u16;
         let redraw = vec![b'r'; 10 * 1024]; // > the old 8 KiB coalescing threshold
@@ -815,29 +875,126 @@ mod tests {
         }
         assert_eq!(
             rb.dim_markers_len(),
-            step_count as usize,
-            "each step's redraw exceeds the old coalescing threshold, so \
-             none of the {step_count} resize calls may coalesce"
+            MAX_DIM_MARKERS,
+            "even though none of the {step_count} resize calls could \
+             coalesce (each redraw exceeds the old 8 KiB coalescing \
+             threshold), the daemon-side cap must still bound the recorded \
+             segment count to MAX_DIM_MARKERS"
+        );
+    }
+
+    /// D3'' merge semantics: when the cap is exceeded, ONLY the single
+    /// oldest span is folded into its successor — every entry more recent
+    /// than that keeps its EXACT recorded dimensions. This is what
+    /// distinguishes the cap from the unsound byte-threshold coalescing
+    /// round-4 reverted (review round-3 finding `ab54fae335086db3`): that
+    /// fix retroactively rewrote an ALREADY-RECORDED entry's dimensions,
+    /// misattributing recent content; this cap only ever discards the
+    /// entry about to fall off the front, extending its SUCCESSOR's span
+    /// backward without touching the successor's own dimensions.
+    #[test]
+    fn enforce_dim_marker_cap_merges_only_the_oldest_span_preserving_recent_attribution() {
+        let mut rb = ScrollbackRingBuffer::new(4 * 1024 * 1024);
+        let extra = 3usize;
+        let total_steps = MAX_DIM_MARKERS + extra;
+        let content_per_step = b"distinct-step-content;";
+        for step in 0..total_steps {
+            // `rows` encodes the step index so each entry is
+            // distinguishable in the assertion below.
+            rb.write_resize_marker(80, 24 + step as u16);
+            rb.write(content_per_step);
+        }
+        assert_eq!(
+            rb.dim_markers_len(),
+            MAX_DIM_MARKERS,
+            "cap must hold even with {extra} entries beyond it"
+        );
+        let (_, segments) = rb.read_segments();
+        assert_eq!(segments.len(), MAX_DIM_MARKERS);
+        // The surviving entries' rows values are the MOST RECENT
+        // `MAX_DIM_MARKERS` steps — steps 0..extra were merged away (their
+        // OWN dimensions discarded, folded into step `extra`'s span), but
+        // every entry from `extra` onward survives with its EXACT
+        // originally-recorded dimensions.
+        let expected_rows: Vec<u16> = (extra..total_steps).map(|s| 24 + s as u16).collect();
+        let actual_rows: Vec<u16> = segments.iter().map(|&(_, _, rows)| rows).collect();
+        assert_eq!(
+            actual_rows, expected_rows,
+            "every surviving entry must keep its EXACT originally-recorded \
+             dimensions — only the discarded oldest entries lose precision"
         );
     }
 
     // ── task0003 AC-7 (D4, review round-2 finding `0b0c18ff4ab911f4`):
     // pruning is linear (VecDeque::pop_front), not quadratic ────────────
 
-    /// A large number of markers, each separated by real content (so none
-    /// collapse and `dim_markers` genuinely grows large) and all still
-    /// within the CURRENT retained window (so none are prunable yet),
-    /// followed by enough additional content to advance the retained window
-    /// past ALL of them at once — forcing a single `prune_dim_markers` call
-    /// to drop nearly the entire backlog in one pass. Asserts the
-    /// STRUCTURAL outcome (bounded final length), which a correct prune
-    /// must reach regardless of whether the underlying pop is O(1)
-    /// (`VecDeque`, this fix) or O(n) (the previous `Vec::remove(0)`,
-    /// quadratic overall for a pass dropping this many entries).
+    /// D3'' interaction: `enforce_dim_marker_cap` (count-based) and
+    /// `prune_dim_markers` (retained-window-based) cooperate correctly — a
+    /// resize storm whose total marker count exceeds `MAX_DIM_MARKERS` AND
+    /// whose accumulated content exceeds the ring's capacity (so BOTH
+    /// eviction mechanisms fire on the same run) never leaves `dim_markers`
+    /// above the cap, and `read_segments` still reconstructs a coherent
+    /// head segment for whatever content survives.
+    ///
+    /// Supersedes `prune_dim_markers_collapses_a_large_backlog_to_a_bounded_tail_in_one_pass`
+    /// (task0003 AC-7 / review round-2 finding `0b0c18ff4ab911f4`): that
+    /// test's premise — building a 2,000-entry `dim_markers` backlog before
+    /// a single mass-eviction write — can no longer be constructed now that
+    /// `enforce_dim_marker_cap` keeps the count at `MAX_DIM_MARKERS` (16)
+    /// continuously; a backlog that large would need exactly the unbounded
+    /// growth task0005 closes. The O(1)-vs-O(n) `pop_front` concern that
+    /// test guarded is consequently moot at this bound (16 entries is cheap
+    /// either way); this replacement instead pins the CORRECTNESS of the
+    /// two eviction mechanisms cooperating, which is the property that
+    /// actually matters now.
     #[test]
-    fn prune_dim_markers_collapses_a_large_backlog_to_a_bounded_tail_in_one_pass() {
+    fn dim_markers_stays_capped_when_window_pruning_and_count_cap_both_fire() {
+        let chunk_len = 4096;
+        let marker_count = 40u32; // well above MAX_DIM_MARKERS
+        // Small capacity relative to the total content written, so the
+        // retained-window pruning ALSO advances past many early markers —
+        // both eviction mechanisms are exercised on the same run.
+        let capacity = (marker_count as usize / 2) * chunk_len;
+        let mut rb = ScrollbackRingBuffer::new(capacity);
+        for i in 0..marker_count {
+            rb.write_resize_marker(80, 24 + (i % 50) as u16);
+            rb.write(&vec![b'q'; chunk_len]);
+            assert!(
+                rb.dim_markers_len() <= MAX_DIM_MARKERS,
+                "dim_markers must never exceed MAX_DIM_MARKERS, even \
+                 mid-storm (saw {} after marker {})",
+                rb.dim_markers_len(),
+                i
+            );
+        }
+        let (bytes, segments) = rb.read_segments();
+        assert_eq!(bytes.len(), capacity.min(marker_count as usize * chunk_len));
+        assert!(
+            !segments.is_empty(),
+            "a ring that recorded resize markers must still report a head \
+             segment for the retained window"
+        );
+        assert_eq!(
+            segments[0].0, 0,
+            "the head segment must always describe position 0 of the \
+             retained window"
+        );
+    }
+
+    /// Historical form of the test above, kept to pin the ORIGINAL
+    /// task0003 AC-7 guarantee in isolation: `prune_dim_markers` alone
+    /// (the count cap not yet in play, capacity comfortably larger than the
+    /// content written) still collapses a large backlog to a bounded tail
+    /// in one pass once the retained window is deliberately advanced past
+    /// it — the property this test previously required a 2,000-entry
+    /// backlog to observe now shows up at the (much smaller) count-cap
+    /// bound instead, so this variant caps the backlog at `MAX_DIM_MARKERS`
+    /// (the largest `dim_markers` can ever actually reach) rather than
+    /// asserting an unreachable precondition.
+    #[test]
+    fn prune_dim_markers_collapses_a_capped_backlog_to_a_bounded_tail_in_one_pass() {
         let chunk_len = 8 * 1024 + 1;
-        let marker_count = 2_000u32;
+        let marker_count = MAX_DIM_MARKERS as u32;
         // Capacity comfortably larger than the whole backlog so every
         // marker's offset is still within the retained window before the
         // deliberate mass-eviction write below.

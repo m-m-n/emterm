@@ -1304,7 +1304,7 @@ mod tests {
     fn build_snapshot_bytes_funnel_strips_da1_device_query() {
         use crate::mux::snapshot_bytes::build_snapshot_bytes;
         let scrollback = b"prompt$ \x1b[cdone"; // DA1 query in scrollback
-        let (out, _segments) = build_snapshot_bytes(scrollback, &[], b"", false);
+        let (out, _segments) = build_snapshot_bytes(scrollback, &[], b"", false, (80, 24));
         assert!(
             !out.windows(3).any(|w| w == b"\x1b[c"),
             "snapshot must not contain a removable DA1 device query: {out:?}"

@@ -1564,8 +1564,20 @@ mod tests {
     // spawned process, mirroring `mux::daemon::tests`' construction style
     // and socket-path isolation (task0001 Test Notes).
 
+    // task0005 rework: derived from `PREVIOUS_PROTOCOL_VERSION` rather than
+    // hardcoded to `1`. `recover_from_legacy_daemon`'s retry handshake uses
+    // `PREVIOUS_PROTOCOL_VERSION` (exactly one version behind whatever
+    // `PROTOCOL_VERSION` currently is) — a fixed literal here silently
+    // stopped matching that retry the moment `PROTOCOL_VERSION` moved past
+    // 2, at which point the fake daemon's `else` branch below rejects the
+    // retry, `recover_from_legacy_daemon` gives up (returns `Err`), and the
+    // fake daemon's `accept()` loop is left waiting forever for a THIRD
+    // connection that will never arrive — this test's `legacy.join()` below
+    // then hangs indefinitely. Tying this constant to
+    // `PREVIOUS_PROTOCOL_VERSION` keeps the fixture "one version behind
+    // current" through any future bump.
     #[cfg(unix)]
-    const FAKE_LEGACY_VERSION: u32 = 1;
+    const FAKE_LEGACY_VERSION: u32 = PREVIOUS_PROTOCOL_VERSION;
 
     #[cfg(unix)]
     fn read_frame<S: std::io::Read>(stream: &mut S) -> MuxMessage {
@@ -1678,8 +1690,7 @@ mod tests {
         let sock_path = dir.path().join("legacy-attach.sock");
         let legacy = spawn_fake_legacy_daemon(sock_path.clone());
 
-        let respawned: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> =
-            Arc::new(Mutex::new(None));
+        let respawned: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
         let respawned_for_closure = respawned.clone();
 
         let result = resolve_attach_socket_with(&sock_path, move |p| {
@@ -1719,7 +1730,9 @@ mod tests {
         );
 
         if let Some(handle) = respawned.lock().unwrap().take() {
-            handle.join().expect("fake respawned daemon thread panicked");
+            handle
+                .join()
+                .expect("fake respawned daemon thread panicked");
         }
     }
 
