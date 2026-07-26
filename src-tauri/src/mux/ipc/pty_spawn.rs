@@ -282,19 +282,47 @@ const SCROLLBACK_FILTER_PENDING_CAP: usize = 512 * 1024;
 /// predates this filter.
 pub(in crate::mux) struct ScrollbackWriteFilter {
     pending: Vec<u8>,
+    /// The `(cols, rows)` in effect when the CURRENT `pending` run started
+    /// accumulating (i.e. the read whose chunk first left an unterminated
+    /// strip-target introducer behind). `None` exactly when `pending` is
+    /// empty — task0005 rework D7'' (review round-4 finding
+    /// `0e3f8378913e1f4a`). See [`Self::feed`]'s doc for the attribution
+    /// rationale.
+    pending_started_dims: Option<(u16, u16)>,
 }
 
 impl ScrollbackWriteFilter {
     pub(in crate::mux) fn new() -> Self {
         Self {
             pending: Vec::new(),
+            pending_started_dims: None,
         }
     }
 
-    /// Feed one PTY read chunk. Returns the bytes safe to write to the
-    /// scrollback ring right now. Any trailing bytes belonging to an
-    /// unterminated strip-target introducer are held in `pending` until the
-    /// next feed.
+    /// Feed one PTY read chunk, produced under `current_dims`. Returns the
+    /// dims to attribute the returned bytes to, together with the bytes
+    /// themselves safe to write to the scrollback ring right now. Any
+    /// trailing bytes belonging to an unterminated strip-target introducer
+    /// are held in `pending` until the next feed.
+    ///
+    /// **Attribution (task0005 rework D7'', review round-4 finding
+    /// `0e3f8378913e1f4a`):** `pending` carries bytes across reads, so the
+    /// bytes a `feed` call RETURNS can include a run that was carried over
+    /// from an EARLIER read — produced under whatever dims were in effect
+    /// THEN, not necessarily `current_dims`. Returning `current_dims`
+    /// unconditionally (the pre-fix behavior) misattributes that carried-
+    /// over content to the dims of the read that merely happened to flush
+    /// it — normally a few bytes, but up to the full
+    /// [`SCROLLBACK_FILTER_PENDING_CAP`] (512 KiB) on the overflow escape
+    /// hatch below. Instead: when `pending` is EMPTY at the start of this
+    /// call, the call's whole output originates from `chunk` itself, so
+    /// `current_dims` applies directly (the overwhelmingly common case —
+    /// no resize raced an unterminated introducer). When `pending` already
+    /// held carried-over bytes, this call's output is attributed to the
+    /// dims recorded when THAT run started (`pending_started_dims`) — the
+    /// dims in effect for at least the leading portion of what is flushed,
+    /// which is a strictly more accurate attribution than blaming the
+    /// newest read for content mostly (or entirely) produced earlier.
     ///
     /// Overflow escape hatch: if `pending` (after appending `chunk`) exceeds
     /// [`SCROLLBACK_FILTER_PENDING_CAP`], the entire pending run is flushed
@@ -313,10 +341,23 @@ impl ScrollbackWriteFilter {
     /// unfiltered — the cap bounds MEMORY, not the strip guarantee; a
     /// complete marker is removed in a single linear pass regardless of how
     /// this batch was flushed.
-    pub(in crate::mux) fn feed(&mut self, chunk: &[u8]) -> Vec<u8> {
+    pub(in crate::mux) fn feed(
+        &mut self,
+        chunk: &[u8],
+        current_dims: (u16, u16),
+    ) -> ((u16, u16), Vec<u8>) {
         if chunk.is_empty() {
-            return Vec::new();
+            return (current_dims, Vec::new());
         }
+        let had_carry_over = !self.pending.is_empty();
+        let attribution_dims = if had_carry_over {
+            self.pending_started_dims.unwrap_or(current_dims)
+        } else {
+            // Fresh start: remember these dims in case `chunk` itself
+            // leaves an unterminated introducer pending past this call.
+            self.pending_started_dims = Some(current_dims);
+            current_dims
+        };
         self.pending.extend_from_slice(chunk);
 
         if self.pending.len() > SCROLLBACK_FILTER_PENDING_CAP {
@@ -325,15 +366,25 @@ impl ScrollbackWriteFilter {
                 SCROLLBACK_FILTER_PENDING_CAP
             );
             let pending = std::mem::take(&mut self.pending);
-            return strip_pty_output_for_scrollback_write(&pending);
+            self.pending_started_dims = None;
+            return (
+                attribution_dims,
+                strip_pty_output_for_scrollback_write(&pending),
+            );
         }
 
         let boundary = find_safe_boundary(&self.pending);
         if boundary == 0 {
-            return Vec::new();
+            return (attribution_dims, Vec::new());
         }
         let strippable: Vec<u8> = self.pending.drain(..boundary).collect();
-        strip_pty_output_for_scrollback_write(&strippable)
+        if self.pending.is_empty() {
+            self.pending_started_dims = None;
+        }
+        (
+            attribution_dims,
+            strip_pty_output_for_scrollback_write(&strippable),
+        )
     }
 
     /// Number of bytes currently held in `pending` (test / diagnostic).
@@ -634,12 +685,14 @@ fn pty_reader_loop(
                     if !alt_before && !alt_after { data } else { &[] }
                 };
                 if !to_write.is_empty() {
-                    let filtered = scrollback_filter.feed(to_write);
+                    let (attribution_dims, filtered) =
+                        scrollback_filter.feed(to_write, (read_cols, read_rows));
                     if !filtered.is_empty() {
-                        scrollback
-                            .lock()
-                            .unwrap()
-                            .attribute_write(read_cols, read_rows, &filtered);
+                        scrollback.lock().unwrap().attribute_write(
+                            attribution_dims.0,
+                            attribution_dims.1,
+                            &filtered,
+                        );
                     }
                 }
                 if let Some(new_title) = title_changed {
@@ -1019,7 +1072,10 @@ mod tests {
     fn feed_all(scrollback: &SharedScrollback, chunks: &[&[u8]]) -> ScrollbackWriteFilter {
         let mut filter = ScrollbackWriteFilter::new();
         for chunk in chunks {
-            let filtered = filter.feed(chunk);
+            // Dims are irrelevant to these content-shape tests; a fixed
+            // value keeps them from affecting `write` (plain content, no
+            // dim tracking involved).
+            let (_dims, filtered) = filter.feed(chunk, (80, 24));
             if !filtered.is_empty() {
                 scrollback.lock().unwrap().write(&filtered);
             }
@@ -1132,15 +1188,71 @@ mod tests {
         // until pending exceeds the cap. No terminator ever arrives.
         let mut filter = ScrollbackWriteFilter::new();
         let intro = b"\x1b]777;emterm;markdown;chunk;id=x;seq=0;data=";
-        let out = filter.feed(intro);
+        let (_dims, out) = filter.feed(intro, (80, 24));
         assert!(out.is_empty(), "introducer alone is held pending");
         // Feed 520 KiB of body without a terminator; sum crosses 512 KiB.
         let padding: Vec<u8> = std::iter::repeat_n(b'A', 520 * 1024).collect();
-        let flushed = filter.feed(&padding);
+        let (_dims, flushed) = filter.feed(&padding, (80, 24));
         // The cap escape hatch fired: pending drained raw, ring wrote the raw
         // bytes. The exact contents don't matter for correctness — the
         // invariant is that pending doesn't grow past the cap.
         assert!(!flushed.is_empty(), "cap escape hatch must emit raw bytes");
+        assert_eq!(filter.pending_len(), 0);
+    }
+
+    /// AC-10 (task0005 rework D7'', review round-4 finding
+    /// `0e3f8378913e1f4a`): bytes carried across reads in `pending` are
+    /// attributed to the dims in effect when the run STARTED, not the dims
+    /// of whatever later read happened to flush them.
+    ///
+    /// Confirmed to fail pre-fix: before `feed` took a `current_dims`
+    /// parameter, the caller (`pty_reader_loop`) unconditionally attributed
+    /// EVERY flush to the dims read at the top of the CURRENT call — so
+    /// this test's second `feed` call would have reported `dims_b`
+    /// `(120, 40)` instead of the expected `dims_a` `(80, 24)`.
+    #[test]
+    fn feed_attributes_a_carried_over_pending_run_to_the_dims_it_started_under() {
+        let dims_a = (80u16, 24u16);
+        let dims_b = (120u16, 40u16);
+        let mut filter = ScrollbackWriteFilter::new();
+
+        // A benign (non-strip-target — "fold" kind) OSC 777 left
+        // unterminated in this read, produced under dims_a.
+        let intro = b"\x1b]777;emterm;fold;start;42";
+        let (dims_first, out_first) = filter.feed(intro, dims_a);
+        assert!(
+            out_first.is_empty(),
+            "unterminated OSC must still be held pending"
+        );
+        assert_eq!(dims_first, dims_a);
+
+        // The SECOND read carries the terminator, but the pane resized to
+        // dims_b BETWEEN the two reads — the exact race the finding
+        // describes (the resize's marker can win the scrollback lock ahead
+        // of this flush).
+        let tail = b"\x07after";
+        let (dims_second, out_second) = filter.feed(tail, dims_b);
+        assert_eq!(
+            dims_second, dims_a,
+            "the flushed bytes must be attributed to the dims the pending \
+             run STARTED under (dims_a), not the dims of the read that \
+             merely flushed it (dims_b)"
+        );
+        assert_eq!(out_second, b"\x1b]777;emterm;fold;start;42\x07after");
+    }
+
+    /// AC-10 companion: the overwhelmingly common case — `pending` is EMPTY
+    /// when a chunk arrives and stays empty after it (no unterminated
+    /// introducer at all) — attributes directly to `current_dims`, exactly
+    /// as before this fix. Pins the "no divergence in the common path"
+    /// half of the contract.
+    #[test]
+    fn feed_attributes_a_fully_self_contained_chunk_to_current_dims() {
+        let dims = (100u16, 30u16);
+        let mut filter = ScrollbackWriteFilter::new();
+        let (attributed, out) = filter.feed(b"plain output, no ESC at all", dims);
+        assert_eq!(attributed, dims);
+        assert_eq!(out, b"plain output, no ESC at all");
         assert_eq!(filter.pending_len(), 0);
     }
 
@@ -1461,6 +1573,7 @@ mod tests {
                 &to_tuples(&segments),
                 b"",
                 false,
+                (cols, replay_rows),
             );
             let mut core = TerminalCore::new(cols, replay_rows, 10_000);
             core.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
@@ -1560,6 +1673,7 @@ mod tests {
                 &to_tuples(&segments),
                 b"",
                 false,
+                (cols, replay_rows),
             );
             let mut core = TerminalCore::new(cols, replay_rows, 10_000);
             core.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
@@ -1717,12 +1831,12 @@ mod tests {
         padding_and_marker.extend_from_slice(&legacy_marker_shaped_bytes(999, 999));
 
         let mut filter = ScrollbackWriteFilter::new();
-        let first = filter.feed(&intro);
+        let (_dims, first) = filter.feed(&intro, (80, 24));
         assert!(
             first.is_empty(),
             "introducer alone must still be held pending"
         );
-        let flushed = filter.feed(&padding_and_marker);
+        let (_dims, flushed) = filter.feed(&padding_and_marker, (80, 24));
         assert!(
             !flushed.is_empty(),
             "the overflow escape hatch must have fired for this test to be meaningful"
@@ -1824,8 +1938,13 @@ mod tests {
             let mut live = TerminalCore::new(cols, rows, 1000);
             live.process_pty_data_fully(&recording);
 
-            let (snap, snap_segments) =
-                crate::mux::snapshot_bytes::build_snapshot_bytes(&recording, &[], b"", false);
+            let (snap, snap_segments) = crate::mux::snapshot_bytes::build_snapshot_bytes(
+                &recording,
+                &[],
+                b"",
+                false,
+                (80, 24),
+            );
             let mut replayed = TerminalCore::new(cols, rows, 1000);
             replayed.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
 
@@ -1869,6 +1988,7 @@ mod tests {
                 &to_tuples(&segments),
                 b"",
                 false,
+                (cols, rows),
             );
             let mut replayed = TerminalCore::new(cols, rows, 1000);
             replayed.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
@@ -1973,6 +2093,7 @@ mod tests {
                 &to_tuples(&segments),
                 b"",
                 false,
+                (replay_cols, replay_rows),
             );
             let mut replayed = TerminalCore::new(replay_cols, replay_rows, 10_000);
             replayed.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));

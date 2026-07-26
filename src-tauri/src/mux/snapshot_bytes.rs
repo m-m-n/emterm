@@ -98,11 +98,21 @@ const SNAPSHOT_CLEAR_HOME: &[u8] = b"\x1b[3J\x1b[H\x1b[2J";
 /// `mux::session::pane`) goes via [`build_resume_snapshot_bytes`].
 /// They share the strip / main-alt-split logic but differ on the clear
 /// prefix and the trailing alt-mode toggle (see `build_resume_snapshot_bytes`).
+///
+/// `current_dims` (task0005 rework D7'', review round-4 finding
+/// `5ba2063e993baf6c`) is the pane's dimensions AT THE MOMENT this snapshot
+/// is assembled — the caller's shadow-parser size, which tracks every
+/// `MuxPane::resize` exactly. When `screen` is included (`alt_screen ==
+/// true`), it is produced under THESE dims, which can differ from the last
+/// `scrollback_segments` entry's dims after an `attribute_write` correction
+/// (see [`build_snapshot_bytes_with_layout`]'s doc for the scenario). See
+/// that function for how this closes the gap.
 pub(in crate::mux) fn build_snapshot_bytes(
     scrollback: &[u8],
     scrollback_segments: &[(usize, u16, u16)],
     screen: &[u8],
     alt_screen: bool,
+    current_dims: (u16, u16),
 ) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
     build_snapshot_bytes_with_layout(
         SNAPSHOT_CLEAR_HOME,
@@ -111,6 +121,7 @@ pub(in crate::mux) fn build_snapshot_bytes(
         screen,
         alt_screen,
         true,
+        current_dims,
     )
 }
 
@@ -144,6 +155,7 @@ pub(in crate::mux) fn build_resume_snapshot_bytes(
     scrollback_segments: &[(usize, u16, u16)],
     screen: &[u8],
     alt_screen: bool,
+    current_dims: (u16, u16),
 ) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
     build_snapshot_bytes_with_layout(
         b"\x1b[H\x1b[2J",
@@ -152,6 +164,7 @@ pub(in crate::mux) fn build_resume_snapshot_bytes(
         screen,
         alt_screen,
         false,
+        current_dims,
     )
 }
 
@@ -170,12 +183,28 @@ pub(in crate::mux) fn build_resume_snapshot_bytes(
 /// starts at position 0 — covering `clear_prefix` itself, which has no
 /// dimension-dependent effect (`ESC[3J`/`ESC[H`/`ESC[2J` behave identically
 /// regardless of grid size) — rather than at `clear_prefix.len()`. Every
-/// SUBSEQUENT segment is shifted forward by `clear_prefix.len()`. A segment
-/// whose range extends to the end of `scrollback` naturally absorbs the
-/// trailing `screen` + alt-mode bytes too (there is no segment boundary
-/// there), which is correct: those bytes are always produced at the pane's
-/// CURRENT dimensions, which is exactly what the last recorded segment
-/// describes in the steady state.
+/// SUBSEQUENT scrollback-derived segment is shifted forward by
+/// `clear_prefix.len()`.
+///
+/// **Trailing screen dump segment (task0005 rework D7'', review round-4
+/// finding `5ba2063e993baf6c`):** `screen` is produced at `current_dims` —
+/// the pane's dimensions AT THE MOMENT this snapshot is assembled — which
+/// can differ from the LAST `scrollback_segments` entry's dims after an
+/// `attribute_write` correction changes it (scenario: a resize records
+/// `(100, 40)`, then the reader's stale-chunk correction re-attributes
+/// intervening content to the OLD `(80, 24)` dims, leaving the newest
+/// recorded segment at `(80, 24)` even though the pane is genuinely at
+/// `(100, 40)` by the time this snapshot is built). Without an explicit
+/// segment for it, `screen` would silently inherit whatever the last
+/// scrollback segment says — potentially the WRONG dims. When `screen` is
+/// included (`alt_screen == true` and non-empty) and there is at least one
+/// scrollback segment to be consistent with, an extra segment for
+/// `current_dims` is appended at the position `screen` starts. This is
+/// unconditional (not gated on differing from the last segment's dims):
+/// when they DO match, replay's `(self.cols, self.rows) != (seg.cols,
+/// seg.rows)` check is a no-op, so no extra reflow is introduced in the
+/// steady state — only in the divergent case does it change behavior,
+/// which is exactly the point.
 fn build_snapshot_bytes_with_layout(
     clear_prefix: &[u8],
     scrollback: &[u8],
@@ -183,7 +212,24 @@ fn build_snapshot_bytes_with_layout(
     screen: &[u8],
     alt_screen: bool,
     emit_alt_toggle: bool,
+    current_dims: (u16, u16),
 ) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
+    // D8'' (task0005 rework, review round-4 finding `03c11d98f82dfa1c`):
+    // the segment-offset assembly below relies on "the first entry of
+    // `scrollback_segments`, if any, describes offset 0 of the retained
+    // window" — an invariant `ScrollbackRingBuffer::read_segments` upholds
+    // by construction but that was never enforced or documented AT THE
+    // POINT OF USE. Enforce it explicitly: a violation would silently
+    // misattribute bytes preceding the first segment to its dimensions
+    // (the exact drift this whole feature exists to prevent).
+    debug_assert!(
+        scrollback_segments
+            .first()
+            .is_none_or(|&(off, _, _)| off == 0),
+        "scrollback_segments' first entry must describe the retained \
+         window's head (offset 0) per ScrollbackRingBuffer::read_segments' \
+         contract"
+    );
     let watch_offsets: Vec<usize> = scrollback_segments.iter().map(|&(off, _, _)| off).collect();
     let (scrollback, remapped_offsets) = strip_rich_content_and_remap(scrollback, &watch_offsets);
     let screen_to_include: &[u8] = if alt_screen { screen } else { &[] };
@@ -201,10 +247,11 @@ fn build_snapshot_bytes_with_layout(
     );
     combined.extend_from_slice(clear_prefix);
     combined.extend_from_slice(&scrollback);
+    let screen_pos = combined.len();
     combined.extend_from_slice(screen_to_include);
     combined.extend_from_slice(alt_mode);
 
-    let combined_segments = scrollback_segments
+    let mut combined_segments: Vec<(usize, u16, u16)> = scrollback_segments
         .iter()
         .zip(remapped_offsets.iter())
         .enumerate()
@@ -217,6 +264,16 @@ fn build_snapshot_bytes_with_layout(
             (offset, cols, rows)
         })
         .collect();
+
+    // D7'' trailing screen dump segment: only when `screen` is actually
+    // included AND there is at least one scrollback segment to be
+    // consistent with (an empty `scrollback_segments` means the caller
+    // never tracked dims for this snapshot at all — degrade to the fully
+    // legacy no-segments contract rather than introduce a lone segment
+    // that would violate the offset-0 precondition above).
+    if !screen_to_include.is_empty() && !combined_segments.is_empty() {
+        combined_segments.push((screen_pos, current_dims.0, current_dims.1));
+    }
 
     (combined, combined_segments)
 }
@@ -239,7 +296,7 @@ mod tests {
     #[test]
     fn build_snapshot_bytes_strips_rich_content_from_scrollback() {
         let scrollback = b"prompt$ \x1b]777;emterm;markdown;begin\x07done";
-        let (out, _segments) = build_snapshot_bytes(scrollback, &[], b"SCREEN", true);
+        let (out, _segments) = build_snapshot_bytes(scrollback, &[], b"SCREEN", true, (80, 24));
         assert!(
             !contains(&out, b"\x1b]777;emterm;markdown"),
             "snapshot must not contain the viewer launch sequence"
@@ -263,16 +320,16 @@ mod tests {
     fn build_snapshot_bytes_layout_is_clear_scrollback_screen() {
         // Main-buffer pane (alt_screen = false): screen slice omitted,
         // trailing ESC[?1049l.
-        let (out, _) = build_snapshot_bytes(b"SB", &[], b"SC", false);
+        let (out, _) = build_snapshot_bytes(b"SB", &[], b"SC", false, (80, 24));
         assert_eq!(out, b"\x1b[3J\x1b[H\x1b[2JSB\x1b[?1049l");
         // Empty inputs: clear prefix + alt-mode normalization.
-        let (empty_out, _) = build_snapshot_bytes(b"", &[], b"", false);
+        let (empty_out, _) = build_snapshot_bytes(b"", &[], b"", false, (80, 24));
         assert_eq!(empty_out, b"\x1b[3J\x1b[H\x1b[2J\x1b[?1049l");
         // Alt-screen pane (alt_screen = true): screen slice included,
         // trailing ESC[?1049h.
-        let (out_alt, _) = build_snapshot_bytes(b"SB", &[], b"SC", true);
+        let (out_alt, _) = build_snapshot_bytes(b"SB", &[], b"SC", true, (80, 24));
         assert_eq!(out_alt, b"\x1b[3J\x1b[H\x1b[2JSBSC\x1b[?1049h");
-        let (empty_alt, _) = build_snapshot_bytes(b"", &[], b"", true);
+        let (empty_alt, _) = build_snapshot_bytes(b"", &[], b"", true, (80, 24));
         assert_eq!(empty_alt, b"\x1b[3J\x1b[H\x1b[2J\x1b[?1049h");
     }
 
@@ -284,7 +341,7 @@ mod tests {
     fn build_snapshot_bytes_main_buffer_omits_screen_part() {
         let scrollback = b"history-line";
         let screen = b"SCREEN-SHOULD-BE-ABSENT";
-        let (out, _) = build_snapshot_bytes(scrollback, &[], screen, false);
+        let (out, _) = build_snapshot_bytes(scrollback, &[], screen, false, (80, 24));
 
         // Screen slice must NOT appear anywhere in the output.
         assert!(
@@ -309,7 +366,8 @@ mod tests {
     fn build_snapshot_bytes_head_segment_covers_the_clear_prefix() {
         let scrollback = b"history";
         let segments = [(0usize, 80u16, 24u16)];
-        let (out, combined_segments) = build_snapshot_bytes(scrollback, &segments, b"", false);
+        let (out, combined_segments) =
+            build_snapshot_bytes(scrollback, &segments, b"", false, (80, 24));
         assert_eq!(combined_segments, vec![(0usize, 80u16, 24u16)]);
         assert!(contains(&out, b"history"));
     }
@@ -324,7 +382,8 @@ mod tests {
             (0usize, 80u16, 24u16),
             ("before-resize".len(), 120u16, 40u16),
         ];
-        let (out, combined_segments) = build_snapshot_bytes(scrollback, &segments, b"", false);
+        let (out, combined_segments) =
+            build_snapshot_bytes(scrollback, &segments, b"", false, (80, 24));
         let clear_prefix_len = b"\x1b[3J\x1b[H\x1b[2J".len();
         assert_eq!(
             combined_segments,
@@ -348,7 +407,8 @@ mod tests {
         scrollback.extend_from_slice(b"after-resize-content");
         let resize_offset = scrollback.len() - b"after-resize-content".len();
         let segments = [(0usize, 80u16, 24u16), (resize_offset, 120u16, 40u16)];
-        let (out, combined_segments) = build_snapshot_bytes(&scrollback, &segments, b"", false);
+        let (out, combined_segments) =
+            build_snapshot_bytes(&scrollback, &segments, b"", false, (80, 24));
         let clear_prefix_len = b"\x1b[3J\x1b[H\x1b[2J".len();
         assert_eq!(
             combined_segments,
@@ -363,6 +423,63 @@ mod tests {
         assert!(contains(&out, b"after-resize-content"));
     }
 
+    /// AC-11 (task0005 rework D7'', review round-4 finding
+    /// `5ba2063e993baf6c`): when `screen` is included (alt-screen pane), an
+    /// explicit segment for `current_dims` is appended at the position
+    /// `screen` starts — even when it differs from the LAST scrollback
+    /// segment's dims (the attribution-correction scenario the finding
+    /// describes: a resize recorded new dims, then a stale-chunk correction
+    /// re-attributed intervening content back to the OLD dims, leaving the
+    /// last recorded scrollback segment stale relative to the pane's actual
+    /// current size).
+    ///
+    /// Confirmed to fail pre-fix: before this fix, `screen` had NO segment
+    /// of its own — a caller feeding `combined_segments` into
+    /// `reset_and_replay_segments` would replay `screen`'s bytes under
+    /// whatever the LAST scrollback segment says (80, 24 here), not the
+    /// `current_dims` (100, 40) it was actually produced at — this test's
+    /// `combined_segments` assertion would then only contain the single
+    /// `(0, 80, 24)` entry, missing the trailing `(screen_pos, 100, 40)`
+    /// one.
+    #[test]
+    fn build_snapshot_bytes_appends_a_screen_segment_at_current_dims_even_when_stale_relative_to_last_scrollback_segment()
+     {
+        let scrollback = b"history";
+        // The last (only) recorded scrollback segment is STALE (80, 24) —
+        // simulating the attribution-correction scenario where the pane's
+        // actual current size has since moved on to `current_dims`.
+        let segments = [(0usize, 80u16, 24u16)];
+        let screen = b"SCREEN-CONTENT";
+        let current_dims = (100u16, 40u16);
+        let (out, combined_segments) =
+            build_snapshot_bytes(scrollback, &segments, screen, true, current_dims);
+
+        let clear_prefix_len = b"\x1b[3J\x1b[H\x1b[2J".len();
+        let screen_pos = clear_prefix_len + scrollback.len();
+        assert_eq!(
+            combined_segments,
+            vec![
+                (0usize, 80u16, 24u16),
+                (screen_pos, current_dims.0, current_dims.1),
+            ],
+            "an explicit trailing segment for the screen dump's ACTUAL \
+             current dims must be appended, even though it differs from \
+             the last recorded scrollback segment"
+        );
+        assert!(contains(&out, b"SCREEN-CONTENT"));
+    }
+
+    /// The trailing screen segment is NOT appended when `scrollback_segments`
+    /// is empty (a caller that never tracked dims at all for this
+    /// snapshot) — appending a lone segment there would violate the
+    /// offset-0 precondition (D8'') and mix a partially-segment-aware
+    /// payload with an otherwise fully-legacy one.
+    #[test]
+    fn build_snapshot_bytes_omits_screen_segment_when_no_scrollback_segments_were_ever_recorded() {
+        let (_, combined_segments) = build_snapshot_bytes(b"", &[], b"SCREEN", true, (100, 40));
+        assert!(combined_segments.is_empty());
+    }
+
     /// `build_resume_snapshot_bytes` (visibility-resume path) shares the
     /// strip + main/alt split with `build_snapshot_bytes` but uses the
     /// shorter clear prefix `ESC[H ESC[2J` (no `ESC[3J` — the client is
@@ -373,22 +490,22 @@ mod tests {
     fn build_resume_snapshot_bytes_layout_main_buffer_and_alt_screen() {
         // Main-buffer pane: screen slice omitted, no trailing toggle.
         assert_eq!(
-            build_resume_snapshot_bytes(b"SB", &[], b"SC", false).0,
+            build_resume_snapshot_bytes(b"SB", &[], b"SC", false, (80, 24)).0,
             b"\x1b[H\x1b[2JSB",
         );
         // Empty inputs, main-buffer: just the clear prefix.
         assert_eq!(
-            build_resume_snapshot_bytes(b"", &[], b"", false).0,
+            build_resume_snapshot_bytes(b"", &[], b"", false, (80, 24)).0,
             b"\x1b[H\x1b[2J",
         );
         // Alt-screen pane: screen slice included, no trailing toggle.
         assert_eq!(
-            build_resume_snapshot_bytes(b"SB", &[], b"SC", true).0,
+            build_resume_snapshot_bytes(b"SB", &[], b"SC", true, (80, 24)).0,
             b"\x1b[H\x1b[2JSBSC",
         );
         // Empty inputs, alt-screen: just the clear prefix.
         assert_eq!(
-            build_resume_snapshot_bytes(b"", &[], b"", true).0,
+            build_resume_snapshot_bytes(b"", &[], b"", true, (80, 24)).0,
             b"\x1b[H\x1b[2J",
         );
     }
@@ -399,7 +516,7 @@ mod tests {
     #[test]
     fn build_resume_snapshot_bytes_strips_rich_content_from_scrollback() {
         let scrollback = b"prompt$ \x1b]777;emterm;markdown;begin\x07done";
-        let (out, _) = build_resume_snapshot_bytes(scrollback, &[], b"SCREEN", true);
+        let (out, _) = build_resume_snapshot_bytes(scrollback, &[], b"SCREEN", true, (80, 24));
         assert!(
             !contains(&out, b"\x1b]777;emterm;markdown"),
             "resume snapshot must not contain the viewer launch sequence"
