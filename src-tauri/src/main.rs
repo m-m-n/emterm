@@ -83,8 +83,27 @@ fn main() {
         }
     }
 
-    // No subcommand matched — proceed to the GUI / image-viewer / settings
-    // path. The GUI owns the global logger.
+    // Top-level flag classification (FR1/FR2/FR5): must run — and, on the
+    // error/help paths, exit — before `logging::init()` and before any
+    // windowing is touched. The decision itself lives in
+    // `emterm::arg_dispatch` (D1) so it is covered by `cargo test --lib`;
+    // this call plus the stdout/stderr/exit side effects are all that
+    // belongs here.
+    match emterm::arg_dispatch::classify(&args[1..]) {
+        emterm::arg_dispatch::Classification::Help => {
+            println!("{}", emterm::arg_dispatch::usage_text());
+            std::process::exit(0);
+        }
+        emterm::arg_dispatch::Classification::Unknown(arg) => {
+            eprintln!("emterm: unrecognized argument '{arg}'");
+            eprintln!("{}", emterm::arg_dispatch::usage_text());
+            std::process::exit(2);
+        }
+        emterm::arg_dispatch::Classification::Proceed => {}
+    }
+
+    // No subcommand matched and no flag was rejected — proceed to the GUI
+    // / image-viewer / settings path. The GUI owns the global logger.
     logging::init();
 
     #[cfg(feature = "gui")]
@@ -94,54 +113,41 @@ fn main() {
 
     #[cfg(not(feature = "gui"))]
     {
-        eprintln!(
-            "emterm: this build provides only CLI subcommands.\n\
-             Usage: emterm <markdown|json|yaml|html|image> <file> [options]\n\
-             \x20      emterm agent-status <idle|working|blocked|done|clear> [--name <n>]\n\
-             Run `emterm <subcommand> --help` for details."
-        );
+        eprintln!("{}", emterm::arg_dispatch::usage_text());
         std::process::exit(2);
     }
 }
 
 #[cfg(feature = "gui")]
 fn run_gui(args: Vec<String>) {
-    // `--viewer <payload-path>` dispatches to the separate child viewer
-    // entry (Linux GTK/Wry window) before any terminal startup. The normal
-    // terminal path is taken when the flag is absent.
-    if let Some(pos) = args.iter().position(|a| a == "--viewer") {
-        let payload_path = args.get(pos + 1).cloned();
-        run_viewer(payload_path);
-        return;
-    }
-    // `--image-viewer <payload-path>` runs the native (winit + wgpu + egui)
-    // image viewer child window. Cross-platform, unlike the Wry Markdown
-    // viewer above.
-    if let Some(pos) = args.iter().position(|a| a == "--image-viewer") {
-        let payload_path = args.get(pos + 1).cloned();
-        run_image_viewer(payload_path);
-        return;
-    }
-    // `--data-viewer <payload-path>` runs the native JSON/YAML data viewer
-    // child window (same native stack as the image viewer).
-    if let Some(pos) = args.iter().position(|a| a == "--data-viewer") {
-        let payload_path = args.get(pos + 1).cloned();
-        run_data_viewer(payload_path);
-        return;
-    }
-    // `--html-viewer <payload-path>` runs the Wry HTML viewer child window
-    // (Decision D1 in IMPLEMENTATION.md — its own flag/window module,
-    // distinct from the Markdown `--viewer`, since the document is served
-    // verbatim rather than injected into the bundled renderer).
-    if let Some(pos) = args.iter().position(|a| a == "--html-viewer") {
-        let payload_path = args.get(pos + 1).cloned();
-        run_html_viewer(payload_path);
-        return;
-    }
-    // `--settings` runs the child settings window (GTK/Wry, reused WebView
-    // settings panel). No payload: the child reads settings.json itself.
-    if args.iter().any(|a| a == "--settings") {
-        run_settings_window();
+    // Dispatch the recognized child-window flags (`--viewer`,
+    // `--image-viewer`, `--data-viewer`, `--html-viewer`, `--settings`) by
+    // iterating `emterm::arg_dispatch::RECOGNIZED_FLAGS` — the same table
+    // `classify()` in `main()` checked arguments against above — rather
+    // than repeating each flag name as a separate literal here (D2 /
+    // NFR3). This keeps the flag-to-handler mapping in exactly one place,
+    // so it cannot drift from what the classifier accepts. The value-taking
+    // flags (all but `--settings`) read the immediately following argument
+    // verbatim as the payload path, unconditionally (D4). The normal
+    // terminal startup path below is taken when none of these flags are
+    // present.
+    use emterm::arg_dispatch::{GuiTarget, RECOGNIZED_FLAGS};
+    for flag in RECOGNIZED_FLAGS {
+        let Some(pos) = args.iter().position(|a| a == flag.name) else {
+            continue;
+        };
+        let payload_path = if flag.takes_value {
+            args.get(pos + 1).cloned()
+        } else {
+            None
+        };
+        match flag.target {
+            GuiTarget::Viewer => run_viewer(payload_path),
+            GuiTarget::ImageViewer => run_image_viewer(payload_path),
+            GuiTarget::DataViewer => run_data_viewer(payload_path),
+            GuiTarget::HtmlViewer => run_html_viewer(payload_path),
+            GuiTarget::Settings => run_settings_window(),
+        }
         return;
     }
 
