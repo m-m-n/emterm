@@ -59,7 +59,8 @@ workflow:
       触れていない）。MT-1..MT-4 はリリースビルドでの人手確認のため本 run の
       対象外。
   - id: retrospect
-    status: pending
+    status: completed
+    artifacts: [retrospect.yaml]
 
 tasks:
   task0001:
