@@ -1,0 +1,244 @@
+round: 1
+executed_at: "2026-07-28T02:38:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: adc99a4fe2d6dc7e5e47a8cf6a756c677490987c
+  head_commit: 205d69259fe33ed0ac15faebd60f4a9d0367a013
+  changed_files:
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/session/child_reaper.rs
+    - src-tauri/src/mux/session/mod.rs
+    - src-tauri/src/mux/session/pane.rs
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary:
+    - perspective: security
+      reason: "diff がプロセスシグナル送出 (ChildKiller::kill) とスレッド生成を追加するため、権限・対象特定の妥当性を検査する"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+
+findings:
+  - stable_id: acdc1370dd186421
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 162
+    line_end: 183
+    title: "register_pane_and_start_reader の中断パスが child ハンドルを reap せず捨てる"
+    description: >
+      `register_pane_and_start_reader` 冒頭の 4 つの `?`（session/window の解決失敗＝
+      並行 teardown とのレース）で早期 return すると、`spawn_command` 済みのシェルの
+      child ハンドルが `SpawnedPty` ごと drop される。master fd が閉じてシェルが終了
+      しても誰も `wait()` しないため、本機能が消そうとしている `<defunct>` が daemon
+      存続中ずっと残る。呼び出し元 `handlers.rs` の `handle_create_window` も
+      `create_window` 失敗時に同じ経路を通る。SPEC の Objectives「Retain the child
+      handle returned by spawn_command instead of dropping it」、US1 AC、Success
+      Criteria「No pane-teardown path bypasses the reap」に反する。FR8 が列挙する
+      4 経路（PTY-EOF / DestroyPane / DestroyWindow / graceful_shutdown）自体は
+      いずれも `mark_exited()` を通っており充足しているが、この spawn 後・登録前の
+      中断経路だけが `mark_exited()` に到達しない穴として残る。発生条件がレース／
+      失敗パス限定のため medium。
+    suggestion: >
+      中断パスで child を reaper へ渡す。冒頭の解決チェックを `?` から明示分岐に変え、
+      `None` を返す前に `child_reaper::spawn_reaper(pane_id, spawned.child)` を呼ぶ
+      （`SpawnedPty` は Drop 実装を持たないので partial move で問題ない）。
+      `spawn_reaper` は現在 `pub(super)`（`mux::session` 内限定）なので、
+      `mux::ipc` から呼ぶには `pub(in crate::mux)` へ可視性を広げるか、
+      `SpawnedPty` を消費する薄いヘルパを `session` 側に置く。あわせて
+      「pane 登録に失敗した spawn の child も reap される」回帰テストを追加すると、
+      この不変条件が将来のリファクタで再び破れない。
+    sources: [claude:spec, claude:architecture, claude:comprehensive]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: "medium のため R4 auto-fix ゲート（critical/high のみ）の対象外。3 観点が独立に同一サイトを指摘しており、フォローアップ対応を推奨"
+  - stable_id: 66766ce58d06867d
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 165
+    line_end: 170
+    title: "リープ責務が MuxPane::mark_exited 一点に固定され、pane にならなかった child が未リープで捨てられる"
+    description: >
+      回収の不変条件（「保持した child は必ずリープされる」）が `Box<dyn Child>` を
+      所有する型ではなく `MuxPane::mark_exited` という呼び出し規約に紐付いている。
+      `SpawnedPty` にも `MuxPane` にも `Drop` 実装がないため、pane 化前に落ちる経路
+      （register の teardown レース早期 return、handlers.rs の create_window 失敗）や
+      将来追加される spawn 経路が、コンパイラの助けなしに同じ穴を再生産する。加えて
+      `MuxPane::new` の child 引数が `Option<Box<dyn Child>>` で、`None` を渡すと
+      リープが黙って無効化される（本番コンストラクタにテスト用センチネルが同居）。
+      レイヤー構成（child_reaper の leaf 化、pane からの単方向依存）自体は妥当。
+    suggestion: >
+      (a) 推奨: `child_reaper` に `ReapableChild(Option<Box<dyn Child + Send + Sync>>)`
+      の newtype を置き、`Drop` で `spawn_reaper` を呼ぶ。`SpawnedPty.child` と
+      `MuxPane.child` をこの型に差し替え、`mark_exited` は `take()` で明示的に手放す。
+      pane 化前に落ちる経路と将来の新規経路が自動的に塞がる。
+      (b) 最小対処: 早期 return 前に明示的に `spawn_reaper` を呼ぶ（規約による担保の
+      ままなので、新しい spawn 経路が増えるたび同じレビューが要る）。
+      いずれにせよ `MuxPane::new` の `None` 許容はテスト用コンストラクタ側へ寄せ、
+      本番コンストラクタは `Box<dyn Child>` 必須にすると契約が型で表現できる。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium のため R4 auto-fix ゲートの対象外。acdc1370dd186421 と同一サイトの構造的側面"
+  - stable_id: 9d472d37fc952786
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 165
+    line_end: 170
+    title: "spawn 後に SpawnedPty を捨てる経路で child が reap されずゾンビが残る"
+    description: >
+      pane 生成に到達せず `SpawnedPty` ごと捨てられる経路が 2 つ残っている。
+      (1) `register_pane_and_start_reader` 冒頭の早期 return（165/166/169/170 行の `?`）。
+      (2) 呼び出し元 `handlers.rs` の `handle_create_window`（spawn 成功後に
+      `mgr.create_window(...)` が None を返して `return Ok(())` する経路）。
+      どちらも実シェルが起動済みで、master/writer/reader の drop でシェルは終了するが、
+      child ハンドルを誰も保持していないため `wait()` されず `<defunct>` が恒久的に残る。
+      本タスクの不変条件「spawn した child は必ずどこかで reap される」がここだけ破れて
+      いる。テストも AC-1/AC-7 は成功経路しか張っていない。
+    suggestion: >
+      spawn 済み child を捨てる直前に必ず reaper へ渡す。早期 return を明示分岐に変え、
+      `None` を返す前に `child_reaper::spawn_reaper(pane_id, spawned.child)` を呼ぶ。
+      `handle_create_window` の失敗パスも同様。可視性は `pub(in crate::mux)` へ拡張するか
+      薄いラッパを `mux::session` 側に用意する。早期 return パスの回帰テストも追加する。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium のため R4 auto-fix ゲートの対象外。acdc1370dd186421 と同一サイト"
+  - stable_id: 1910592913f73ded
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/session/pane.rs
+    line: 1266
+    line_end: 1283
+    title: "明示的 destroy 経路では hangup が届かず、猶予期間が常に満了して毎回 kill に落ちる"
+    description: >
+      `mark_exited()` は `writer` と `master` を `None` にするが、PTY マスタ fd の複製が
+      reader スレッド側に生き残る（`spawn_pty` の `try_clone_reader()` は master fd を
+      dup する）。`pty_reader_loop` は read の EOF／エラーでしか抜けず、`mark_exited()`
+      から reader を停止・close する経路が無い。したがってマスタ側の最後の fd が閉じず、
+      スレーブ側の foreground process group に SIGHUP が配送されない。結果、シェルが
+      生きたまま行われる 3 経路（handle_destroy_pane / handle_destroy_window /
+      graceful_shutdown）ではシェルが終了指示を受け取らず、`try_wait()` が `Ok(None)` を
+      返し続けて DEFAULT_GRACE_PERIOD (500ms) が必ず満了し `child.kill()`（SIGKILL）に
+      落ちる。SPEC Assumption A2 の「猶予期間は通常終了するシェルが kill 無しで回収される
+      長さ」および US2 の「kill エスカレーションは hangup を無視するシェルの例外ケース」
+      という枠付けと実挙動が食い違う。child_reaper.rs の doc コメントも同じ前提で書かれて
+      いる。PTY-EOF 経路（ユーザーが exit した場合）はシェルが終了済みなので影響なし。
+      ユーザー影響はペイン明示クローズ時に zsh/bash の exit hook・履歴フラッシュが走らない
+      こと。ゾンビ解消という主目的自体は満たされているため medium。
+    suggestion: >
+      (a) `mark_exited()` 時に reader スレッドが持つマスタ fd の複製を解放する
+      （reader の raw fd を pane 側で保持し、teardown で close して read を EOF に落とす）
+      ことで SPEC A2 の想定どおり猶予期間内に自然終了させる。
+      (b) 猶予期間開始前に明示的なハングアップを送る（Unix なら `child.process_id()` から
+      `libc::kill(pid, SIGHUP)`。portable-pty の `ChildKiller::kill()` は SIGKILL 相当なので
+      この用途には使えない）。
+      (c) 現挙動を正とするなら SPEC A2 と child_reaper.rs の doc コメントを
+      「明示的 destroy 経路では kill エスカレーションが通常経路である」と実態に合わせて改訂し、
+      シェルの exit hook が走らないことを許容と明記する。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "medium のため R4 auto-fix ゲートの対象外。SPEC 記述と実装のどちらを直すかの判断を伴うためフォローアップ推奨"
+  - stable_id: 42e7e2dcdcc9f5af
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/session/child_reaper.rs
+    line: 118
+    line_end: 124
+    title: "reap スレッド spawn 失敗時に child handle が wait されずに落ち、ゾンビが恒久的に残る"
+    description: >
+      `spawn_reaper` は child を `move` クロージャに入れて `Builder::spawn` する。spawn が
+      失敗すると `io::Result` は `Err` だけを返し、クロージャごと child handle がドロップ
+      される（`Err` 側から handle を回収する手段がない）。portable-pty の Unix child は
+      Drop で `wait()` しないため、そのプロセスは `<defunct>` として恒久的に残る。
+      `MuxPane::mark_exited` は既に `take()` 済みで pane 側にも handle が残らず、後続の
+      teardown でのリトライ余地もない。thread spawn の失敗（EAGAIN / ENOMEM）はスレッド・
+      プロセス数が逼迫している時にこそ起きるため、リークが起きやすい状況とリークが増える
+      方向が一致する。あわせて構造上の非効率が 1 点: 支配的な teardown 経路
+      （PTY EOF → pane-exit task → handle_destroy_pane → mark_exited）では child は既に
+      exit 済みで `try_wait()` 一回で回収できるにもかかわらず、必ず OS スレッドを 1 本立てて
+      いる。
+    suggestion: >
+      (a) spawn 前に非ブロッキングの高速回収パスを置く: `spawn_reaper` の冒頭で
+      `child.try_wait()` を一度呼び、`Ok(Some(_))` ならその場で回収完了として return する。
+      ブロックしないので NFR1 を壊さず、スレッド生成を生きている child の場合だけに限定できる。
+      (b) spawn 失敗時に handle を回収可能にする: child を
+      `Arc<Mutex<Option<Box<dyn Child + Send + Sync>>>>` に入れてクロージャには Arc の
+      クローンを渡し、`Err` 分岐では `take()` で handle を取り戻して非ブロッキングの
+      フォールバック（`kill()` → `try_wait()`）を実行する。
+    sources: [claude:performance]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium のため R4 auto-fix ゲートの対象外。2 観点が独立に同一サイトを指摘しており、フォローアップ対応を推奨"
+  - stable_id: b62f3af1baf746b5
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/child_reaper.rs
+    line: 113
+    line_end: 124
+    title: "reap スレッドの spawn 失敗時に child が warn ログだけで捨てられ、ゾンビ化する"
+    description: >
+      `spawn_reaper` は `std::thread::Builder::spawn` が `Err` を返した場合、warn を出して
+      終わる。このとき child はクロージャごと drop され、`wait()` も `kill()` も行われない
+      ため、その pane のシェルは終了後にゾンビとして残り続ける。`mark_exited` 側に
+      フォールバックが無く、ハンドルは既に `take()` 済みなので再試行の余地も無い。
+      スレッド生成が失敗するのはリソース枯渇時であり、まさにゾンビ蓄積が問題化する局面と
+      重なるうえ、ゾンビが増えると PID 枯渇でさらに悪化する方向に効く。
+    suggestion: >
+      spawn 失敗時にインラインのベストエフォート回収へフォールバックする。呼び出し元
+      （`mark_exited`）を止めないことが要件なので、ブロッキングな `wait()` ではなく
+      非ブロッキングな回収に留める: `Err` 分岐で `let _ = child.kill(); let _ = child.try_wait();`
+      を行う。同期の `reap_child_blocking` を選ぶ場合は NFR1 とのトレードオフをコメントで
+      明示する。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium のため R4 auto-fix ゲートの対象外。42e7e2dcdcc9f5af と同一サイト"
+  - stable_id: 8cd4a69dd9cfd6a1
+    severity: medium
+    category: security
+    file: src-tauri/src/mux/session/child_reaper.rs
+    line: 71
+    line_end: 89
+    title: "try_wait() エラー時の無条件 kill escalation は他プロセスへ SIGKILL を撃ちうる"
+    description: >
+      `reap_child_blocking` は `child.try_wait()` が `Err` を返した瞬間に kill へエスカレート
+      し、エラー種別を区別せず `child.kill()`（unix では SIGKILL）を発行する。`try_wait()` の
+      `Err` で現実的に起きるのは `ECHILD`（その子はもう自分の子ではない＝既に誰かに回収済み）。
+      std 側の pid 再利用ガードは std 自身が wait 済みの場合しか効かないため、外部で回収されて
+      いた場合は保持している pid が既に別プロセスへ再利用されている可能性がある。成立条件は
+      「daemon で SIGCHLD が SIG_IGN として継承されている／別経路で waitpid(-1) される」で、
+      現行コードベースには SIGCHLD ハンドラも waitpid(-1) も無いため現行デプロイでは踏まない。
+      ただし「状態を確認できなかった pid に SIGKILL を撃つ」は同一 uid の無関係プロセスを
+      落としうる古典的アンチパターン。ログ出力は pane_id と io::Error のみで機密情報の混入は
+      なく、攻撃者が任意プロセスの kill を誘発できる経路も無い。
+    suggestion: >
+      `Err(e)` アームで「子が既にいない」ことを示すエラーを kill 対象から外す。
+      `#[cfg(unix)]` ガード下で `e.raw_os_error() == Some(libc::ECHILD)` なら warn を出して
+      return し、それ以外の「判定不能」は SPEC どおり kill へ進める（`libc` は
+      `[target.'cfg(unix)'.dependencies]` なので cfg ガード必須）。SPEC のエラー表が
+      「判定不能 → kill」を要求している点との整合は、ECHILD が「判定不能」ではなく
+      「対象が存在しない」であるとして SPEC 側に注記を足す。
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium のため R4 auto-fix ゲートの対象外"
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: "R4 の候補ゲートは severity ∈ {critical, high}。全 7 件が medium のため候補ゼロで、auto-fix ループは実行されていない"
+residual_critical_high: 0
+rework_required: false
