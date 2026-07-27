@@ -31,7 +31,7 @@ workflow:
     skipped_reason: "可視 UI が無く、出力は stdout / stderr のテキストのみ"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
   - id: implement
     status: pending
     base_commit: null
@@ -44,7 +44,20 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Reject unknown top-level flags and add --help"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/arg_dispatch.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/src/main.rs
+    skills: []
+    domains: [input-handling, api-contract]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -55,56 +68,56 @@ requirements:
     title: "Unrecognized -leading argument prints error + usage to stderr and exits 2"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2, TS-8, TS-9]
   FR2:
     title: "Top-level --help / -h prints usage to stdout and exits 0, taking precedence over FR1"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-7]
   FR3:
     title: "Build-dependent recognized-flag set defined in one place; flag values are not classified"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4, TS-5, TS-6, TS-10, TS-12]
   FR4:
     title: "Usage text lists subcommands, GUI child-window flags, and the per-subcommand --help guidance line"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-13]
   FR5:
     title: "Classification runs before logging::init() and before any windowing"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [MT-1]
   FR6:
     title: "Bare-word subcommand dispatch is unchanged and takes precedence"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-11]
   NFR1:
     title: "Classification logic lives in the library crate and is covered by cargo test --lib"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-13]
   NFR2:
     title: "Identical behavior on Linux/Windows and in both gui and --no-default-features builds"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-10]
   NFR3:
     title: "Recognized-flag set does not drift from the flags run_gui branches on"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-12]
 
 batch:
   review_rework_count: 0
