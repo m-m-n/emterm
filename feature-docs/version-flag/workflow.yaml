@@ -68,8 +68,8 @@ tasks:
     domains: [config-infra]
     complexity: medium
     requirements: [FR3, NFR2]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "deviation: lockfile はワークスペースの root Cargo.lock が実体（src-tauri/Cargo.lock は旧名 emterm-native-poc の stale ファイル）のため、sync-version は root Cargo.lock を書き換える。worktree の build/test fail は fetch-fonts.sh 未実行の環境要因で diff は release.yml のみ"
     branch: em-workflow/version-flag/task0002
 
 review:
