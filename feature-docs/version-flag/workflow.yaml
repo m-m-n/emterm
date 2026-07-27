@@ -44,7 +44,30 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "emterm --version flag"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/main.rs
+      - src-tauri/tests/cli_subcommands.rs
+    skills: []
+    domains: [input-handling, api-contract]
+    complexity: low
+    requirements: [FR1, FR2, NFR1]
+    status: pending
+    notes: null
+  task0002:
+    title: "release.yml sync-version job"
+    plan: tasks/task0002.md
+    files:
+      - .github/workflows/release.yml
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: medium
+    requirements: [FR3, NFR2]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -55,32 +78,32 @@ requirements:
     title: "--version prints CARGO_PKG_VERSION to stdout and exits 0"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
   FR2:
     title: "--version works in both GUI and CLI-only builds, dispatched before any GUI/logging startup"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3, TS-4]
   FR3:
     title: "release.yml sync-version job commits tag version to main before create-release"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-5, TS-6]
   NFR1:
     title: "--version has no side effects; output is exactly version + newline"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2]
   NFR2:
     title: "existing build-time version stamping and workflow_dispatch path stay working"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-6]
 
 batch:
   review_rework_count: 0
