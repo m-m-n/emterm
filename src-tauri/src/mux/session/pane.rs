@@ -435,9 +435,28 @@ pub enum EvalResult {
     Unchanged,
     /// Pane was switched into Detached buffering mode.
     SwitchedToDetached,
-    /// Pane was switched (back) into Connected mode. The handler must send
-    /// `snapshot` on the channel before any subsequent reader chunk.
-    ResumeWithSnapshot { snapshot: Vec<u8> },
+    /// Pane was switched (back) into Connected mode. The handler MUST send
+    /// `chunk` on the pane's output channel before any subsequent reader
+    /// chunk.
+    ///
+    /// D6''''' (round-8 rework, review round-7 finding `426db84173e6b792`):
+    /// `chunk` is a `PtyOutputChunk` already tagged `ChunkKind::Snapshot`
+    /// (via `PtyOutputChunk::snapshot`, same as the sibling
+    /// `resume_pane_with_permit` path) — NOT the default `PtyOutput` kind.
+    /// This is enforced by the TYPE, not just documented: there is no way
+    /// for a caller to extract raw bytes here and send them as a plain
+    /// `PtyOutputChunk::pty_output(...)` instead, which is what round 1
+    /// finding `20b2bed0aaf48f94` fixed for `resume_pane_with_permit` (a
+    /// `PtyOutput`-tagged send here would render the `EMSNAP2` envelope +
+    /// binary segment table literally on screen instead of being decoded —
+    /// review round-4 finding `5299d50f586b8cb8`'s failure mode). This
+    /// branch is currently unreached by any production caller (the sole
+    /// production call site, `handlers.rs`'s `evaluate_output_target(...,
+    /// false, false, ...)`, only ever drives a Connected -> Detached
+    /// transition) — kept correct for the day a caller needs the
+    /// visible-resume path through THIS function instead of
+    /// `resume_pane_with_permit`.
+    ResumeWithSnapshot { chunk: PtyOutputChunk },
 }
 
 /// Outcome of `resume_pane_with_permit`. Mirrors the in-lock decision so
@@ -600,8 +619,14 @@ pub fn evaluate_output_target(
                         return EvalResult::Unchanged;
                     }
                     *target = PaneOutputTarget::Connected(owned_tx.clone());
+                    // D6''''' (round-8 rework, review round-7 finding
+                    // `426db84173e6b792`): tag as `ChunkKind::Snapshot`
+                    // right here — mirroring `resume_pane_with_permit`'s own
+                    // `PtyOutputChunk::snapshot(...)` call (round-1 finding
+                    // `20b2bed0aaf48f94`) — so the caller has no way to send
+                    // this as a plain `PtyOutput` chunk.
                     EvalResult::ResumeWithSnapshot {
-                        snapshot: encoded_snapshot,
+                        chunk: PtyOutputChunk::snapshot(pane.id, encoded_snapshot),
                     }
                 }
             }
@@ -1985,8 +2010,13 @@ mod tests {
             .append(b"\x1b_Gi=1;ZZ\x1b\\");
         let result = evaluate_output_target(&pane, false, true, &owned_tx);
         match result {
-            EvalResult::ResumeWithSnapshot { snapshot } => {
-                let snapshot = decode_snapshot_content(&snapshot);
+            EvalResult::ResumeWithSnapshot { chunk } => {
+                // D6''''' (AC-9): the chunk must already be tagged
+                // Snapshot-kind, not the default PtyOutput — a caller
+                // sending it as PtyOutput would render the raw envelope
+                // literally instead of decoding it.
+                assert_eq!(chunk.kind, ChunkKind::Snapshot);
+                let snapshot = decode_snapshot_content(&chunk.data);
                 assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
                 let s = String::from_utf8_lossy(&snapshot);
                 assert!(
@@ -2589,9 +2619,11 @@ mod tests {
 
         let result = evaluate_output_target(&pane, false, true, &owned_tx);
         match result {
-            EvalResult::ResumeWithSnapshot { snapshot } => {
+            EvalResult::ResumeWithSnapshot { chunk } => {
+                assert_eq!(chunk.kind, ChunkKind::Snapshot);
                 assert!(
-                    snapshot
+                    chunk
+                        .data
                         .windows(b"ring-bytes-x".len())
                         .any(|w| w == b"ring-bytes-x"),
                     "snapshot must include scrollback even after poisoned shadow lock"
