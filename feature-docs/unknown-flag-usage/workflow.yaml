@@ -1,0 +1,111 @@
+schema_version: 1
+feature: unknown-flag-usage
+created: 2026-07-28
+base_branch: main
+parent_branch: em-workflow/unknown-flag-usage/integration
+
+project:
+  license: MIT
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test cli_subcommands"
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib --no-default-features"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 3cbfd169e5b73a3283f3f0a1876540df591b5bbb
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "可視 UI が無く、出力は stdout / stderr のテキストのみ"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "Unrecognized -leading argument prints error + usage to stderr and exits 2"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "Top-level --help / -h prints usage to stdout and exits 0, taking precedence over FR1"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "Build-dependent recognized-flag set defined in one place; flag values are not classified"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "Usage text lists subcommands, GUI child-window flags, and the per-subcommand --help guidance line"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: "Classification runs before logging::init() and before any windowing"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: "Bare-word subcommand dispatch is unchanged and takes precedence"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Classification logic lives in the library crate and is covered by cargo test --lib"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Identical behavior on Linux/Windows and in both gui and --no-default-features builds"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Recognized-flag set does not drift from the flags run_gui branches on"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
