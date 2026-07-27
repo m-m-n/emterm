@@ -1,0 +1,175 @@
+round: 1
+executed_at: "2026-07-28T01:10:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a1671802820c74c025f36683292ac1029a261e89
+  head_commit: c1689a0a78ee6adbb5e05e4196d74c2d4944c6d5
+  changed_files:
+    - src-tauri/src/arg_dispatch.rs
+    - src-tauri/src/lib.rs
+    - src-tauri/src/main.rs
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+findings:
+  - stable_id: eeb1ad1c8abe0975
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/arg_dispatch.rs
+    line: 147
+    title: "usage_text() のフラグ一覧が RECOGNIZED_FLAGS と照合されず、TS-13 が部分実装のまま"
+    description: >-
+      モジュール冒頭の doc comment は RECOGNIZED_FLAGS を「このビルドが受け付ける
+      フラグの単一の真実」と宣言しているが、usage_text() はフラグ名・サブコマンド名を
+      手書き文字列として二重に持っている。classify と run_gui の間のドリフトは表の
+      共有で塞がれた一方、表とヘルプ出力の間のドリフトは塞がれていない。
+      VERIFICATION.md の TS-13 は usage text が全 bare-word サブコマンド・
+      `-h, --help` 行・guidance 行・(gui では) 5 つの child-window フラグを含むことを
+      要求し FR4 のカバレッジもこれ 1 本に紐づいているが、実装されたテストは
+      guidance 行しか assert していない。RECOGNIZED_FLAGS に 6 つ目のフラグを足して
+      run_gui にハンドラを追加しても --help 出力からそのフラグが抜け落ち、どのテストも
+      落ちない。
+    suggestion: >-
+      TS-13 の残りを実装して usage text を表と突き合わせるテストを追加する
+      （全サブコマンド名・`-h, --help` 行・RECOGNIZED_FLAGS の全フラグ名が
+      usage_text() に含まれることを assert する）。RECOGNIZED_FLAGS は CLI-only
+      ビルドでは空なのでループは両ビルドで通る。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium — R4 の自動修正候補ゲート（critical/high のみ）に掛からないため未処理"
+  - stable_id: b0eb4d32b06cd81c
+    severity: medium
+    category: architecture
+    file: src-tauri/src/arg_dispatch.rs
+    line: 147
+    title: "usage_text() が RECOGNIZED_FLAGS と別に同じフラグ集合をハードコードしている（SSOT が二重化）"
+    description: >-
+      RECOGNIZED_FLAGS を single source of truth と宣言しているが、同一モジュール内の
+      usage_text() が 5 つの child-window フラグを文字列リテラルとして二つ目のリストで
+      持っている。両者を突き合わせる仕組みは無い。同じ二重化はサブコマンド側にもあり、
+      main.rs の matches! が受理する集合を usage_text が散文で再掲している。
+      SPEC の Assumption A2 が「version-flag をマージする者が --version を FR3 の
+      recognized-flag set に追加する」と明記しているため、テーブルにだけ追加すると
+      `emterm --help` の Options 一覧から --version が抜け落ちたまま誰も気付かない。
+      NFR3 が守るのは classify と run_gui の一致だけで、ヘルプ出力とのドリフトは
+      今の構造では検出できない。
+    suggestion: >-
+      (a) RecognizedFlag に説明文フィールドを追加し usage_text() の Options ブロックを
+      RECOGNIZED_FLAGS から生成する、または (b) 最低限テストで結びつける
+      （全フラグ名が usage_text() に含まれること、CLI-only では含まれないこと）。
+      サブコマンド集合も main.rs の matches! と共有する定数に切り出すとドリフトが塞げる。
+      あわせてモジュール doc の「there is only one list」の記述を実態に合わせる。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium — R4 の自動修正候補ゲート（critical/high のみ）に掛からないため未処理"
+  - stable_id: 8488c894d8b1d1d7
+    severity: medium
+    category: security
+    file: src-tauri/src/main.rs
+    line: 98
+    title: "未知引数を無サニタイズで stderr にエコーし、端末制御シーケンス注入を許す"
+    description: >-
+      本 diff が新設した Unknown 経路は argv の文字列をそのまま stderr に書き出す。
+      変更前は未知フラグは黙って GUI 起動に流れており、argv が端末に反映される経路は
+      存在しなかったため、これは本変更で新たに生えた出力面。エコー先は eMterm 自身が
+      読む端末であり、eMterm は OSC 777 の独自拡張フレームを解釈して子 WebView
+      ウィンドウを開く。chunk の中身は base64 のインラインコンテンツで basedir も
+      指定できるため、argv 一発でファイルを用意せずに任意 HTML の子ビューアを
+      開かせられる。前提は argv を攻撃者が影響できるケースに限られるため
+      critical/high ではないが、本リポジトリには同種の信頼境界に対する既存の作法
+      （agent_status::sanitize_name の is_control フィルタ）があり、新しいエコー経路
+      だけがその作法から外れている。
+    suggestion: >-
+      エコー前に制御文字を落とす（agent_status::sanitize_name と同じ is_control
+      フィルタ）。代替として escape_debug で出す方式なら Cc に加えて Cf（bidi
+      override 等）も無害化できる。サニタイズ関数を arg_dispatch 側に置けば
+      cargo test --lib でユニットテストでき、D1 の方針とも揃う。
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium — R4 の自動修正候補ゲート（critical/high のみ）に掛からないため未処理"
+  - stable_id: 79f1c9d2e422601c
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/main.rs
+    line: 92
+    title: "`&args[1..]` は argv が空のとき panic する（従来の `args.get(1)` は安全だった）"
+    description: >-
+      classify(&args[1..]) はスライスのレンジ index なので args.len() == 0 のとき
+      panic し exit code 101 になる。std::env::args() は argc==0（空 argv で
+      execve された場合）に空のイテレータを返すため、この経路は到達可能。直前の
+      subcommand dispatch は args.get(1) を使っていて空 argv でも安全だったので、
+      この diff で新しく panic 経路が entry point に入った。実害は usage を出して
+      終わるはずの場面で panic メッセージが出るだけだが、修正は 1 行で済む。
+    suggestion: >-
+      レンジ index をやめて args.get(1..).unwrap_or_default() で安全に取得する
+      （&[T]: Default により空スライスが返る）。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium — R4 の自動修正候補ゲート（critical/high のみ）に掛からないため未処理"
+  - stable_id: a1e548a3d5e9365c
+    severity: medium
+    category: spec
+    file: src-tauri/src/arg_dispatch.rs
+    line: 181
+    title: "SPEC の Edge Cases 3 件に対応するテストが無い"
+    description: >-
+      SPEC の Test Scenarios は TS-1〜TS-10 に加えて Edge Cases として 3 つを列挙して
+      いる（値を取るフラグが末尾で値が無い場合は Proceed / `--settings --typo` は
+      Unknown("--typo") / 非 `-` の余剰引数は従来どおり）。TS-1〜TS-10 は mod tests に
+      1 対 1 で実装されているが、この 3 件に対応するテストは存在しない。挙動自体は
+      現行実装で正しく満たされているため機能欠落ではないが、いずれも classify の
+      スキャンループの分岐が壊れても検知されない箇所を突いている。特に値を取るフラグが
+      末尾のケースは i += 2 が args.len() を超える境界で、将来インデックス直接アクセスに
+      書き換えるとパニックし得る。
+    suggestion: >-
+      mod tests に 3 件追加する。末尾フラグと `--settings --typo` は gui ビルド側、
+      非 `-` 余剰引数は build 非依存。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "medium — R4 の自動修正候補ゲート（critical/high のみ）に掛からないため未処理"
+  - stable_id: 4cd4272d8471bf28
+    severity: medium
+    category: architecture
+    file: src-tauri/src/main.rs
+    line: 135
+    title: "同一テーブル上に文法の異なる 2 つのパーサ（classify の位置走査 と run_gui の position() 探索）が並存している"
+    description: >-
+      RECOGNIZED_FLAGS はフラグ名の定義を一本化したが、引数の解釈そのものは二重実装の
+      まま残っている。classify は左から順に走査し値を取るフラグは直後の引数を無条件に
+      消費する位置依存の文法（D4）を実装する一方、run_gui はテーブルを順に舐めて
+      args.iter().position() で引数列全体を検索し、その出現が先行フラグの値として既に
+      消費された位置かを一切考慮せず payload 抽出ロジックを再実装している。
+      具体的な乖離例: `emterm --html-viewer --viewer /p` を classify は Proceed と
+      解釈するが run_gui はテーブル順で先に --viewer を拾い Markdown ビューアを
+      起動する。現行の 5 フラグでは実害が既存挙動と同等に留まるが、値を取るフラグを
+      増やすたびに乖離面が広がる構造。
+    suggestion: >-
+      解決済みのディスパッチ情報を classify から受け渡し run_gui 側では再パースしない
+      形にする（Proceed に「確定した認識済みフラグとその消費値」を持たせ、run_gui は
+      その match でハンドラを呼ぶだけにする）。この形にできない場合は少なくとも
+      run_gui が classify と同じ左からの消費付き走査を使う共有ヘルパを用い、
+      コメントの「cannot drift」の主張を実態に合わせて限定する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium — R4 の自動修正候補ゲート（critical/high のみ）に掛からないため未処理"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

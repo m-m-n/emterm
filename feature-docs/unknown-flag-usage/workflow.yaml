@@ -1,0 +1,154 @@
+schema_version: 1
+feature: unknown-flag-usage
+created: 2026-07-28
+base_branch: main
+parent_branch: em-workflow/unknown-flag-usage/integration
+
+project:
+  license: MIT
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test cli_subcommands"
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib --no-default-features"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 3cbfd169e5b73a3283f3f0a1876540df591b5bbb
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "可視 UI が無く、出力は stdout / stderr のテキストのみ"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+  - id: implement
+    status: completed
+    completed_at_commit: 896c9a5889bd0a2dddbc1655e3496970ee852351
+    base_commit: a1671802820c74c025f36683292ac1029a261e89
+  - id: review
+    status: completed
+    completed_at_commit: c1689a0a78ee6adbb5e05e4196d74c2d4944c6d5
+  - id: verify
+    status: completed
+    result: pass
+    failed_items: []
+    notes: >-
+      TS-1..TS-10 / TS-12 は arg_dispatch のユニットテストで pass（gui 10 件 /
+      CLI-only 9 件）。TS-11 は cli_subcommands 21 件 pass。TS-13 は実装テストが
+      guidance 行のみを assert する部分実装だったため usage_text() の内容を直接
+      照合して pass を確認（全サブコマンド名・`-h, --help` 行・5 つの
+      child-window フラグ・guidance 行がいずれも存在）。テスト側の不足は review
+      round1 の findings eeb1ad1c8abe0975 / b0eb4d32b06cd81c として記録済み。
+      SC-1..SC-4 pass、SC-5 は main.rs の classify 呼び出しが logging::init() と
+      全ウィンドウ生成より前にあることをコード照合で確認。
+      cargo check は default / --no-default-features の双方 pass。
+      full --lib は tabs::tests 7 件が失敗するが、同一の 7 件が変更前の main
+      作業ツリー（aad6e6e）でも --test-threads=1 で同様に失敗するため本 feature の
+      回帰ではない（diff は arg_dispatch.rs / lib.rs / main.rs のみで tabs.rs に
+      触れていない）。MT-1..MT-4 はリリースビルドでの人手確認のため本 run の
+      対象外。
+  - id: retrospect
+    status: completed
+    artifacts: [retrospect.yaml]
+
+tasks:
+  task0001:
+    title: "Reject unknown top-level flags and add --help"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/arg_dispatch.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/src/main.rs
+    skills: []
+    domains: [input-handling, api-contract]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3]
+    status: merged
+    notes: "7 pre-existing tabs::tests failures (timing-sensitive off-thread replay worker) reproduced identically on the pre-change baseline via git stash; unrelated to this task's files. Worktree lacked gitignored bundled font assets which blocked build.rs; copied locally from the main tree to unblock verification (not a tracked change)."
+    branch: em-workflow/unknown-flag-usage/task0001
+
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, security, architecture, spec]
+    discretionary: []
+    codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    architecture: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Unrecognized -leading argument prints error + usage to stderr and exits 2"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-2, TS-8, TS-9]
+  FR2:
+    title: "Top-level --help / -h prints usage to stdout and exits 0, taking precedence over FR1"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-7]
+  FR3:
+    title: "Build-dependent recognized-flag set defined in one place; flag values are not classified"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-4, TS-5, TS-6, TS-10, TS-12]
+  FR4:
+    title: "Usage text lists subcommands, GUI child-window flags, and the per-subcommand --help guidance line"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-13]
+  FR5:
+    title: "Classification runs before logging::init() and before any windowing"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [MT-1]
+  FR6:
+    title: "Bare-word subcommand dispatch is unchanged and takes precedence"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-11]
+  NFR1:
+    title: "Classification logic lives in the library crate and is covered by cargo test --lib"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-13]
+  NFR2:
+    title: "Identical behavior on Linux/Windows and in both gui and --no-default-features builds"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-10]
+  NFR3:
+    title: "Recognized-flag set does not drift from the flags run_gui branches on"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-12]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
