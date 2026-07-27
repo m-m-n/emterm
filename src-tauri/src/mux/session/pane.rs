@@ -874,8 +874,20 @@ pub(crate) fn clamp_dims_to_wire_domain(cols: u16, rows: u16) -> (u16, u16) {
 /// ([`MAX_DIM_MARKERS`]), plus at most one synthesized head segment for a
 /// single cap eviction (`ScrollbackRingBuffer::read_segments`, D1'''''),
 /// plus at most one trailing screen-dump segment for an alt-screen pane
-/// (`build_snapshot_bytes_with_layout`'s D7'' segment). Well under the wire
-/// decoder's own `mux_ipc::protocol::MAX_SEGMENTS` (64) ceiling.
+/// (`build_snapshot_bytes_with_layout`'s D7'' segment).
+///
+/// D1'''''' (round-9 rework, review round-8 finding `6082de4e619d7f51`):
+/// with `MAX_DIM_MARKERS` raised to 62, this now evaluates to EXACTLY the
+/// wire decoder's own `mux_ipc::protocol::MAX_SEGMENTS` (64) ceiling, not
+/// comfortably under it — 62 was chosen as `MAX_SEGMENTS - 2` specifically
+/// so the largest daemon-producible segment list exactly saturates, never
+/// exceeds, what the decoder accepts. `decode_snapshot_payload_typed`
+/// rejects only `count > MAX_SEGMENTS` (strictly greater), so a `count ==
+/// MAX_SEGMENTS` payload still decodes as `Structured` — see
+/// `largest_daemon_producible_segment_list_round_trips_cleanly` and
+/// `largest_real_producer_segment_list_round_trips_cleanly` (the latter
+/// drives the REAL ring → snapshot → encode → decode path, not just this
+/// constant, closing review round-8 finding `45033eaafbdf8e25`).
 const MAX_DAEMON_SNAPSHOT_SEGMENTS: u64 = MAX_DIM_MARKERS as u64 + 2;
 
 /// Producer-side per-segment cell budget (D4''''', round-8 rework, review
@@ -886,19 +898,32 @@ const MAX_DAEMON_SNAPSHOT_SEGMENTS: u64 = MAX_DIM_MARKERS as u64 + 2;
 /// product to the decoder's PER-SEGMENT ceiling
 /// (`mux_ipc::protocol::MAX_SEGMENT_CELLS`, 1,000,000) alone — but the
 /// decoder ALSO enforces a CUMULATIVE ceiling across every segment in one
-/// payload (`MAX_CUMULATIVE_SEGMENT_CELLS`, 8,000,000). A daemon snapshot
-/// can legitimately carry up to [`MAX_DAEMON_SNAPSHOT_SEGMENTS`] (26)
-/// segments, each individually within `MAX_SEGMENT_CELLS` but at
-/// `1,000,000` cells apiece that sums to 26,000,000 — well past the
-/// cumulative ceiling, so the daemon's own peer would reject the ENTIRE
-/// snapshot as `Malformed` and the pane would keep showing stale content
-/// after every switch (the exact symptom this feature exists to fix).
-/// Deriving the producer's per-segment budget from the SAME cumulative
-/// ceiling divided by the largest segment count the daemon can ever emit
-/// guarantees a daemon-recorded snapshot's segments can never sum past it,
-/// regardless of how many distinct dimensions were recorded. `.min(...)`
-/// with the decoder's own per-segment ceiling is a belt-and-braces bound
-/// (the derived value, 307,692, is already well under it).
+/// payload (`MAX_CUMULATIVE_SEGMENT_CELLS`). A daemon snapshot can
+/// legitimately carry up to [`MAX_DAEMON_SNAPSHOT_SEGMENTS`] segments, each
+/// individually within `MAX_SEGMENT_CELLS` but at `1,000,000` cells apiece
+/// that would sum to far past the cumulative ceiling, so the daemon's own
+/// peer would reject the ENTIRE snapshot as `Malformed` and the pane would
+/// keep showing stale content after every switch (the exact symptom this
+/// feature exists to fix). Deriving the producer's per-segment budget from
+/// the SAME cumulative ceiling divided by the largest segment count the
+/// daemon can ever emit guarantees a daemon-recorded snapshot's segments
+/// can never sum past it, regardless of how many distinct dimensions were
+/// recorded. `.min(...)` with the decoder's own per-segment ceiling is a
+/// belt-and-braces bound (the derived value is already well under it).
+///
+/// D1'''''' (round-9 rework, review round-8 findings `6082de4e619d7f51` /
+/// `45033eaafbdf8e25`): `MAX_DAEMON_SNAPSHOT_SEGMENTS` rose from 26 to 64
+/// alongside the marker cap raise, which — left against the OLD
+/// `MAX_CUMULATIVE_SEGMENT_CELLS` (8,000,000) — would have shrunk this
+/// derived budget from 307,692 to 125,000, a real regression for a large
+/// display at a small font (`MAX_SEGMENT_CELLS`'s own doc estimates "a few
+/// hundred thousand cells" for that case — already above 125,000).
+/// `mux_ipc::protocol::MAX_CUMULATIVE_SEGMENT_CELLS` was raised in lockstep
+/// (32,000,000, its own doc) so this derived budget comes out to 500,000 —
+/// ABOVE the pre-round-9 value, not below it. See
+/// `producer_segment_cell_budget_fits_a_real_large_terminal` for an
+/// executable check that a realistically large terminal size still fits
+/// unclamped (AC-2).
 const PRODUCER_SEGMENT_CELL_BUDGET: u32 = {
     let derived = mux_ipc::protocol::MAX_CUMULATIVE_SEGMENT_CELLS / MAX_DAEMON_SNAPSHOT_SEGMENTS;
     let capped = if derived > mux_ipc::protocol::MAX_SEGMENT_CELLS as u64 {
@@ -960,7 +985,37 @@ impl MuxPane {
                 );
             }
         }
-        let (cols, rows) = (clamped_cols, clamped_rows);
+        // D4'''''' (round-9 rework, review round-8 finding
+        // `7be271b2ead1bf07`, independently confirmed by
+        // `codex:architecture`): read the PTY's ACTUAL size back rather than
+        // trusting `clamped_cols`/`clamped_rows` unconditionally. Before this
+        // fix, a `master.resize()` failure above was only logged — the PANE
+        // still recorded the clamped values as if the PTY had reached them,
+        // so every byte the child subsequently produces would be attributed
+        // to a size the PTY never actually had, reproducing the exact
+        // resize-interleaved coordinate drift this whole feature exists to
+        // fix. The sibling `Self::resize` rolls `self.dims` back to the
+        // PTY's last-known-good size on the same failure (D7'', task0005);
+        // this constructor has no "last known good" to roll back to, so it
+        // asks the PTY directly instead. `get_size()` failing too is
+        // vanishingly unlikely immediately after a successful `openpty` —
+        // fall back to the clamped values in that exceptional case (still
+        // in-domain, unlike the caller's raw request).
+        let (cols, rows) = match master.get_size() {
+            Ok(actual) => (actual.cols, actual.rows),
+            Err(e) => {
+                log::error!(
+                    "MuxPane::new: failed to query PTY {}'s actual size after \
+                     a resize attempt; recording the clamped dims {}x{} \
+                     on a best-effort basis: {}",
+                    id,
+                    clamped_cols,
+                    clamped_rows,
+                    e
+                );
+                (clamped_cols, clamped_rows)
+            }
+        };
         let mut scrollback = ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY);
         // IMPLEMENTATION.md D1/D2 (task0001): record the pane's INITIAL
         // dimensions as the very first scrollback bytes, mirroring what
@@ -1404,7 +1459,7 @@ mod tests {
     /// D4''''' (round-8 rework, review round-7 finding `4bc6ab813edd6d22`):
     /// the product ceiling this now clamps to is
     /// `PRODUCER_SEGMENT_CELL_BUDGET` (derived from the decoder's
-    /// CUMULATIVE budget, ~307,692), not the decoder's raw per-segment
+    /// CUMULATIVE budget), not the decoder's raw per-segment
     /// `MAX_SEGMENT_CELLS` (1,000,000) — see that constant's doc.
     #[cfg(unix)]
     #[test]
@@ -1518,15 +1573,22 @@ mod tests {
     /// AC-6 (D4''''', round-8 rework, review round-7 finding
     /// `4bc6ab813edd6d22`, independently confirmed by `codex:architecture`):
     /// the LARGEST segment list the daemon can actually produce — every one
-    /// of `MAX_DAEMON_SNAPSHOT_SEGMENTS` (26) segments at the producer's own
+    /// of `MAX_DAEMON_SNAPSHOT_SEGMENTS` segments at the producer's own
     /// per-segment cell budget — decodes successfully, not `Malformed`.
+    /// This test builds the segment LIST from the constants themselves
+    /// (a structural/tautological check); `largest_real_producer_segment_
+    /// list_round_trips_cleanly` below drives the REAL ring → snapshot →
+    /// encode → decode path instead, so a future drift between these
+    /// constants and what the producer actually emits is still caught
+    /// (review round-8 finding `45033eaafbdf8e25`, AC-7).
     ///
-    /// Confirmed to fail pre-fix: before this fix, `clamp_dims_to_wire_domain`
-    /// bounded every segment to the decoder's PER-SEGMENT ceiling alone
-    /// (`MAX_SEGMENT_CELLS`, 1,000,000) — 26 segments at that size sum to
-    /// 26,000,000 cells, ten times over `MAX_CUMULATIVE_SEGMENT_CELLS`
-    /// (8,000,000), so `decode_snapshot_payload_typed` would return
-    /// `Malformed` for this exact payload and the assertion below would fail.
+    /// Confirmed to fail pre-fix: before D4''''' existed,
+    /// `clamp_dims_to_wire_domain` bounded every segment to the decoder's
+    /// PER-SEGMENT ceiling alone (`MAX_SEGMENT_CELLS`, 1,000,000) — a full
+    /// `MAX_DAEMON_SNAPSHOT_SEGMENTS`-segment list at that size sums to far
+    /// more than `MAX_CUMULATIVE_SEGMENT_CELLS`, so
+    /// `decode_snapshot_payload_typed` would return `Malformed` for this
+    /// exact payload and the assertion below would fail.
     #[test]
     fn largest_daemon_producible_segment_list_round_trips_cleanly() {
         let (cols, rows) = clamp_dims_to_wire_domain(u16::MAX, u16::MAX);
@@ -1553,6 +1615,129 @@ mod tests {
                  ({segment_count} segments at {cols}x{rows}) must decode as \
                  Structured, not {other:?}"
             ),
+        }
+    }
+
+    /// AC-7, D5'''''' (round-9 rework, review round-8 finding
+    /// `45033eaafbdf8e25`): drives the REAL producer path — a real
+    /// `ScrollbackRingBuffer` → `read_segments` → `build_snapshot_bytes` →
+    /// `encode_snapshot_segments` → `decode_snapshot_payload_typed` — at
+    /// the LARGEST shape the daemon can actually produce (the cap
+    /// saturated with exactly one eviction, so `read_segments` synthesizes
+    /// a head segment, plus a trailing alt-screen segment), instead of
+    /// `largest_daemon_producible_segment_list_round_trips_cleanly`'s
+    /// structural check, which builds its segment list from
+    /// `MAX_DAEMON_SNAPSHOT_SEGMENTS`/`PRODUCER_SEGMENT_CELL_BUDGET`
+    /// themselves and so cannot detect either constant drifting from what
+    /// the real producer emits.
+    ///
+    /// Confirmed to fail pre-fix: reverting
+    /// `mux_ipc::protocol::MAX_CUMULATIVE_SEGMENT_CELLS` to its pre-
+    /// round-9 value (8,000,000) while leaving `MAX_DIM_MARKERS` at 62
+    /// (`MAX_DAEMON_SNAPSHOT_SEGMENTS` == 64) derives a per-segment budget
+    /// of 125,000 — the `assert_eq!` on `(cols, rows)` below (asserting
+    /// this test's 700×700 == 490,000-cell shape survives
+    /// `clamp_dims_to_wire_domain` UNCLAMPED) fails first, surfacing the
+    /// drift instead of masking it behind a silently-smaller recorded
+    /// size.
+    #[test]
+    fn largest_real_producer_segment_list_round_trips_cleanly() {
+        let (cols, rows) = clamp_dims_to_wire_domain(700, 700);
+        assert_eq!(
+            (cols, rows),
+            (700, 700),
+            "test prerequisite: this shape must fit PRODUCER_SEGMENT_CELL_BUDGET \
+             unclamped, or this test no longer drives the LARGEST real shape \
+             the producer can emit"
+        );
+
+        // Saturate `dim_markers` with exactly ONE cap eviction: MAX_DIM_MARKERS
+        // + 1 real resize markers, each separated by real content so none
+        // coalesce (`write_resize_marker` only coalesces when the offset is
+        // UNCHANGED since the last entry).
+        let content_per_step: &[u8] = b"real-producer-step;";
+        let step_count = MAX_DIM_MARKERS + 1;
+        let capacity = step_count * content_per_step.len() + 4096;
+        let mut rb = ScrollbackRingBuffer::new(capacity);
+        for _ in 0..step_count {
+            rb.write_resize_marker(cols, rows);
+            rb.write(content_per_step);
+        }
+        let (raw, segments) = rb.read_segments();
+        assert_eq!(
+            segments.len(),
+            MAX_DIM_MARKERS + 1,
+            "test prerequisite: exactly one cap eviction must synthesize the \
+             head segment (D1''''')"
+        );
+
+        // Trailing alt-screen dump segment (D7''): non-empty `screen` plus a
+        // non-empty `scrollback_segments` appends one more segment at
+        // `current_dims`, reaching the daemon's true maximum.
+        let screen = vec![b'S'; 100];
+        let (payload_bytes, snapshot_segments) = crate::mux::snapshot_bytes::build_snapshot_bytes(
+            &raw,
+            &segments,
+            &screen,
+            true,
+            (cols, rows),
+        );
+        assert_eq!(
+            snapshot_segments.len(),
+            MAX_DAEMON_SNAPSHOT_SEGMENTS as usize,
+            "test prerequisite: the trailing alt-screen segment must be \
+             present, reaching MAX_DAEMON_SNAPSHOT_SEGMENTS"
+        );
+
+        let wire_payload = encode_snapshot_segments(&payload_bytes, &snapshot_segments);
+        let decoded = mux_ipc::protocol::decode_snapshot_payload_typed(&wire_payload);
+        match decoded {
+            mux_ipc::protocol::DecodedSnapshotPayload::Structured {
+                segments: decoded_segments,
+                ..
+            } => {
+                assert_eq!(
+                    decoded_segments.len(),
+                    MAX_DAEMON_SNAPSHOT_SEGMENTS as usize
+                );
+            }
+            other => panic!(
+                "the largest segment list the REAL producer path emits \
+                 ({} segments at {cols}x{rows}) must decode as Structured, \
+                 not {other:?}",
+                MAX_DAEMON_SNAPSHOT_SEGMENTS
+            ),
+        }
+    }
+
+    /// AC-2 (round-9 rework, review round-8 finding `6082de4e619d7f51`):
+    /// raising `MAX_DIM_MARKERS` (and so `MAX_DAEMON_SNAPSHOT_SEGMENTS`)
+    /// must not shrink `PRODUCER_SEGMENT_CELL_BUDGET` underneath a REAL
+    /// large terminal size — not just avoid `Malformed` decodes for a
+    /// synthetic worst case. A large display at a small font
+    /// (`mux_ipc::protocol::MAX_SEGMENT_CELLS`'s own doc: "a few hundred
+    /// thousand cells") must fit unclamped.
+    ///
+    /// Confirmed to fail pre-fix: reverting
+    /// `mux_ipc::protocol::MAX_CUMULATIVE_SEGMENT_CELLS` to its pre-
+    /// round-9 value (8,000,000) against the raised
+    /// `MAX_DAEMON_SNAPSHOT_SEGMENTS` (64) derives a 125,000-cell budget —
+    /// every shape below (all comfortably under the pre-round-9 307,692
+    /// budget, which real terminal sizes were already expected to fit
+    /// under) exceeds 125,000 and gets silently clamped, failing the
+    /// assertion.
+    #[test]
+    fn producer_segment_cell_budget_fits_a_real_large_terminal() {
+        for (cols, rows) in [(400u16, 900u16), (700, 700), (1000, 500)] {
+            let (clamped_cols, clamped_rows) = clamp_dims_to_wire_domain(cols, rows);
+            assert_eq!(
+                (clamped_cols, clamped_rows),
+                (cols, rows),
+                "a real large terminal size ({cols}x{rows}, {} cells) must \
+                 fit PRODUCER_SEGMENT_CELL_BUDGET ({PRODUCER_SEGMENT_CELL_BUDGET}) \
+                 without being clamped down",
+                cols as u32 * rows as u32
+            );
         }
     }
 
@@ -1690,6 +1875,53 @@ mod tests {
         // dims.
         let (_bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
         assert_eq!(segments, vec![(0usize, 80u16, 24u16)]);
+    }
+
+    /// AC-6, D4'''''' (round-9 rework, review round-8 finding
+    /// `7be271b2ead1bf07`, independently confirmed by `codex:architecture`):
+    /// when the corrective `master.resize()` inside `MuxPane::new` FAILS,
+    /// the pane must record the PTY's ACTUAL size (queried via
+    /// `get_size()`), not the clamped values it never reached — mirroring
+    /// `MuxPane::resize`'s own rollback on the same failure just above
+    /// (D7'', task0005). Reuses `FailingResizeMaster` (this module,
+    /// `get_size()` reports a fixed `(80, 24)`, `resize()` always errors).
+    ///
+    /// Confirmed to fail pre-fix: before this change, `MuxPane::new`
+    /// recorded `(clamped_cols, clamped_rows)` unconditionally once the
+    /// resize attempt returned (log-and-continue), so this test — whose
+    /// `FailingResizeMaster.resize()` always errors — would have left
+    /// `pane.cols`/`pane.rows` at the CLAMPED
+    /// `(RESIZE_MARKER_MAX_COLS, ...)` values instead of the simulated
+    /// PTY's real, never-changed `(80, 24)`, and the initial scrollback
+    /// segment would describe a size the PTY does not have.
+    #[cfg(unix)]
+    #[test]
+    fn new_pane_records_actual_pty_size_when_resize_fails() {
+        let target = make_output_target();
+        // u16::MAX is out of domain — triggers the clamp-then-resize path;
+        // the resize call always fails via `FailingResizeMaster`.
+        let pane = MuxPane::new(
+            1,
+            u16::MAX,
+            u16::MAX,
+            target,
+            Box::new(std::io::sink()),
+            Box::new(FailingResizeMaster),
+        );
+        assert_eq!(
+            (pane.cols, pane.rows),
+            (80, 24),
+            "when the corrective resize fails, MuxPane::new must record the \
+             PTY's ACTUAL size (FailingResizeMaster's get_size(), (80, 24)), \
+             not the clamped values it never reached"
+        );
+        let (_bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
+        assert_eq!(
+            segments,
+            vec![(0usize, 80u16, 24u16)],
+            "the initial scrollback segment must match what the PTY \
+             actually has, not the refused clamp"
+        );
     }
 
     #[test]
