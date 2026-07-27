@@ -932,4 +932,159 @@ mod benches {
              2nd-pass reflow upstream)"
         );
     }
+
+    /// D5''''' (round-8 rework, review round-7 finding `a4f4e36fef377d05`):
+    /// the daemon-cap boundary shape the finding names directly — a prefix
+    /// carrying the daemon's own `MAX_DIM_MARKERS` (24) worth of segments,
+    /// right at `BYPASS_PREFIX_MAX_BYTES` (64 KiB), paired with a suffix
+    /// just over `BYPASS_SUFFIX_MIN_BYTES` (4 KiB) — must NOT engage the
+    /// split. Distinguishes itself from
+    /// `large_prefix_small_suffix_bench_does_not_engage_the_split` above
+    /// (~200 KiB prefix / 40 segments, comfortably PAST every threshold):
+    /// this shape sits AT the byte bound with the daemon's REALISTIC
+    /// maximum segment count, the exact boundary case round 7's bench
+    /// missed (review round-6 finding `7c70216c5a5d5c24` / round-7 finding
+    /// `a4f4e36fef377d05`).
+    ///
+    /// The deterministic assertion (`scrollback_populated`) is ALSO pinned
+    /// as a normal, non-ignored unit test
+    /// (`terminal_core::tests::prefix_at_byte_bound_with_non_dominating_suffix_does_not_engage_the_split`
+    /// / `..._prefix_with_too_many_segments_...`) so deleting the gate
+    /// fails a plain `cargo test`, not only this release-mode timing bench.
+    ///
+    /// Confirmed to fail pre-fix: reverting the "suffix must dominate"
+    /// requirement (`suffix_len >= split_at`) makes this payload's split
+    /// engage — `scrollback_populated` comes back `false` and the
+    /// assertion below fails.
+    ///
+    /// Gated `#[ignore]` (release-mode timing bench). Invoke with:
+    ///
+    /// ```sh
+    /// CARGO_TARGET_DIR=src-tauri/target cargo test --release \
+    ///   --manifest-path crates/term_core/Cargo.toml --lib \
+    ///   daemon_cap_prefix_with_small_suffix_bench_does_not_engage_the_split \
+    ///   -- --nocapture --include-ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn daemon_cap_prefix_with_small_suffix_bench_does_not_engage_the_split() {
+        use crate::terminal_core::{ReplaySegment, TerminalCore};
+        use std::sync::atomic::AtomicBool;
+        use std::time::Instant;
+
+        const SHIPPING_SCROLLBACK_LINES: u32 = 10_000;
+        const DAEMON_MAX_DIM_MARKERS: usize = 24;
+        let cols: u16 = 100;
+        let target_rows: u16 = 30;
+        let other_rows: u16 = 24;
+
+        let filler = b"daemon-cap prefix line padded a bit for size\r\n";
+        let mut payload: Vec<u8> = Vec::new();
+        let mut segments = Vec::with_capacity(DAEMON_MAX_DIM_MARKERS + 1);
+        // PREFIX: exactly the daemon's own MAX_DIM_MARKERS worth of
+        // segments, sized so the whole prefix lands AT/UNDER 64 KiB — never
+        // add a chunk that would push the RUNNING total over the bound
+        // (unlike a naive per-segment target, which can overshoot by up to
+        // one segment's worth and accidentally land past
+        // BYPASS_PREFIX_MAX_BYTES, no longer isolating the NEW "suffix must
+        // dominate" / segment-count gates this bench targets).
+        const PREFIX_BYTE_BUDGET: usize = 64 * 1024;
+        let per_segment_target = PREFIX_BYTE_BUDGET / DAEMON_MAX_DIM_MARKERS;
+        for i in 0..DAEMON_MAX_DIM_MARKERS {
+            segments.push(ReplaySegment {
+                offset: payload.len() as u32,
+                cols,
+                rows: if i % 2 == 0 {
+                    other_rows
+                } else {
+                    other_rows + 1
+                },
+            });
+            let start = payload.len();
+            while payload.len() + filler.len() <= start + per_segment_target
+                && payload.len() + filler.len() <= PREFIX_BYTE_BUDGET
+            {
+                payload.extend_from_slice(filler);
+            }
+        }
+        let prefix_len = payload.len();
+
+        // SUFFIX: small, just over BYPASS_SUFFIX_MIN_BYTES (4096) — dwarfed
+        // by the prefix, the exact shape the byte-only gate alone let
+        // through.
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: target_rows,
+        });
+        let suffix_filler = b"suffix line padded out a bit for size\r\n";
+        let suffix_start = payload.len();
+        while payload.len() < suffix_start + 4096 + 512 {
+            payload.extend_from_slice(suffix_filler);
+        }
+        let suffix_len = payload.len() - prefix_len;
+
+        assert!(
+            prefix_len <= PREFIX_BYTE_BUDGET,
+            "test prerequisite: prefix must be at/under BYPASS_PREFIX_MAX_BYTES, \
+             got {prefix_len}"
+        );
+        assert!(
+            suffix_len >= 4096 && suffix_len < prefix_len,
+            "test prerequisite: suffix must clear BYPASS_SUFFIX_MIN_BYTES \
+             but NOT dominate the prefix"
+        );
+
+        // Warm-up.
+        let cancel = AtomicBool::new(false);
+        let _ = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            SHIPPING_SCROLLBACK_LINES,
+            &payload,
+            &segments,
+            &cancel,
+        );
+
+        let cancel = AtomicBool::new(false);
+        let start = Instant::now();
+        let replay = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            SHIPPING_SCROLLBACK_LINES,
+            &payload,
+            &segments,
+            &cancel,
+        )
+        .expect("not cancelled");
+        let t_from_snapshot = start.elapsed();
+
+        let cancel = AtomicBool::new(false);
+        let start = Instant::now();
+        let _reference = TerminalCore::build_scrollback_only_from_snapshot(
+            cols,
+            target_rows,
+            SHIPPING_SCROLLBACK_LINES,
+            &payload,
+            &segments,
+            &cancel,
+        )
+        .expect("not cancelled");
+        let t_reference = start.elapsed();
+
+        eprintln!(
+            "[bench] daemon-cap prefix ({prefix_len}B, {DAEMON_MAX_DIM_MARKERS} \
+             segs) + small-suffix ({suffix_len}B) split gate: \
+             build_from_snapshot → {:?} | whole-drain reference → {:?}",
+            t_from_snapshot, t_reference,
+        );
+
+        assert!(
+            replay.scrollback_populated,
+            "the split must NOT engage for a prefix at the daemon's own \
+             MAX_DIM_MARKERS cap, right at BYPASS_PREFIX_MAX_BYTES, with \
+             only a small non-dominating suffix — scrollback_populated \
+             must be true, not false"
+        );
+    }
 }
