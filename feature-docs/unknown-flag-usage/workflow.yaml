@@ -37,7 +37,8 @@ workflow:
     completed_at_commit: 896c9a5889bd0a2dddbc1655e3496970ee852351
     base_commit: a1671802820c74c025f36683292ac1029a261e89
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: c1689a0a78ee6adbb5e05e4196d74c2d4944c6d5
   - id: verify
     status: pending
     result: null
@@ -62,12 +63,19 @@ tasks:
     branch: em-workflow/unknown-flag-usage/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, architecture, spec]
     discretionary: []
     codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    architecture: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
