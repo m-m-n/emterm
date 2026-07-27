@@ -10,6 +10,7 @@ use crate::agent_status::{AgentState, AgentStatusEvent};
 use crate::mux::scrollback_buffer::{
     DEFAULT_SCROLLBACK_CAPACITY, MAX_DIM_MARKERS, ScrollbackRingBuffer,
 };
+use crate::mux::session::child_reaper;
 use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
@@ -788,6 +789,13 @@ pub struct MuxPane {
     writer: Option<Arc<StdMutex<Box<dyn Write + Send>>>>,
     /// Master PTY handle, retained after reader/writer extraction for resize support.
     master: Option<Box<dyn MasterPty + Send>>,
+    /// Shell child-process handle from spawn (task0001 SPEC FR2), retained
+    /// for the pane's lifetime and taken + handed to
+    /// [`child_reaper::spawn_reaper`] on [`Self::mark_exited`]. `None` for
+    /// panes constructed without spawning a command (`new_test` /
+    /// `new_test_with_writer`, and this module's own tests that open a real
+    /// PTY but never call `spawn_command`).
+    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     /// Whether this pane's PTY has exited.
     pub exited: bool,
     /// Shadow VT100 parser for screen state tracking (used for reattach restoration).
@@ -936,6 +944,12 @@ const PRODUCER_SEGMENT_CELL_BUDGET: u32 = {
 
 impl MuxPane {
     /// Create a new pane (PTY spawn handled by caller).
+    ///
+    /// `child` is the shell child-process handle `spawn_command` returned
+    /// (task0001 SPEC FR2), retained for the pane's lifetime and reaped on
+    /// [`Self::mark_exited`]. `None` for panes constructed without spawning
+    /// a command (`new_test` / `new_test_with_writer`, and direct-PTY test
+    /// call sites in this module's own tests).
     pub fn new(
         id: PaneId,
         cols: u16,
@@ -943,6 +957,7 @@ impl MuxPane {
         output_target: SharedOutputTarget,
         writer: Box<dyn Write + Send>,
         master: Box<dyn MasterPty + Send>,
+        child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     ) -> Self {
         // task0004 round-4 rework (review round-3 finding `b546481e9c2fcc85`):
         // validate the pane's INITIAL dimensions against the SAME domain
@@ -1037,6 +1052,7 @@ impl MuxPane {
             output_target,
             writer: Some(Arc::new(StdMutex::new(writer))),
             master: Some(master),
+            child,
             exited: false,
             shadow_parser: Arc::new(StdMutex::new(new_shadow_parser(rows, cols))),
             cwd: Arc::new(StdMutex::new(None)),
@@ -1090,6 +1106,14 @@ impl MuxPane {
     #[cfg(test)]
     fn master_size(&self) -> Option<portable_pty::PtySize> {
         self.master.as_ref().and_then(|m| m.get_size().ok())
+    }
+
+    /// Whether this pane currently holds a child handle (task0001 TS-2
+    /// observer): `true` from construction with `Some(child)` until
+    /// [`Self::mark_exited`] takes it.
+    #[cfg(test)]
+    fn has_child(&self) -> bool {
+        self.child.is_some()
     }
 
     /// Resize the PTY to the given dimensions.
@@ -1237,11 +1261,26 @@ impl MuxPane {
         status.revision
     }
 
-    /// Mark PTY as exited.
+    /// Mark PTY as exited (task0001 SPEC FR3/FR4, task plan D2).
+    ///
+    /// Clears the writer/master (dropping the master delivers the hangup to
+    /// the shell) and — when a child handle is present — takes it out of
+    /// the pane and hands it off to [`child_reaper::spawn_reaper`] for a
+    /// bounded, off-thread reap. Taking the handle here is the multi-call
+    /// gate: a second `mark_exited` (concurrent teardown paths racing, e.g.
+    /// destroy-pane racing graceful-shutdown, or the PTY-EOF reap racing an
+    /// explicit destroy) finds no handle and starts no second reap.
+    ///
+    /// Returns immediately: performs no waiting of any kind, so callers
+    /// holding the `SessionManager` lock are never blocked on the child's
+    /// exit (NFR1).
     pub fn mark_exited(&mut self) {
         self.exited = true;
         self.writer = None;
         self.master = None;
+        if let Some(child) = self.child.take() {
+            child_reaper::spawn_reaper(self.id, child);
+        }
     }
 
     /// Create a pane without a PTY master, for testing only.
@@ -1268,6 +1307,7 @@ impl MuxPane {
             output_target,
             writer: Some(Arc::new(StdMutex::new(writer))),
             master: None,
+            child: None,
             exited: false,
             shadow_parser: Arc::new(StdMutex::new(new_shadow_parser(rows, cols))),
             cwd: Arc::new(StdMutex::new(None)),
@@ -1478,7 +1518,7 @@ mod tests {
         let pair = pty_system.openpty(size).unwrap();
         let writer = pair.master.take_writer().unwrap();
         let target = make_output_target();
-        let pane = MuxPane::new(1, u16::MAX, u16::MAX, target, writer, pair.master);
+        let pane = MuxPane::new(1, u16::MAX, u16::MAX, target, writer, pair.master, None);
         let expected_cols = term_core::terminal_core::RESIZE_MARKER_MAX_COLS;
         let expected_rows = (PRODUCER_SEGMENT_CELL_BUDGET / expected_cols as u32) as u16;
         assert_eq!(
@@ -1853,6 +1893,7 @@ mod tests {
             target,
             Box::new(std::io::sink()),
             Box::new(FailingResizeMaster),
+            None,
         );
         let before = pane.dims.get();
         assert_eq!(before, (80, 24));
@@ -1907,6 +1948,7 @@ mod tests {
             target,
             Box::new(std::io::sink()),
             Box::new(FailingResizeMaster),
+            None,
         );
         assert_eq!(
             (pane.cols, pane.rows),
@@ -1936,6 +1978,141 @@ mod tests {
         // Writing should fail after exit
         let result = pane.write_input(b"hello");
         assert!(result.is_err());
+    }
+
+    // ── Child handle retention + reap (task0001) ───────────────────────────
+
+    /// A child double that never reports an exit and is deliberately slow
+    /// to respond to any query — used to prove `mark_exited` never
+    /// synchronously touches the child at all (TS-10, NFR1). If a future
+    /// regression made `mark_exited` call any `Child`/`ChildKiller` method
+    /// itself, this double's artificial delay would make that regression
+    /// obvious in the timing assertion below. The reap this double is
+    /// eventually handed off to runs on a detached background thread, so
+    /// its slowness never blocks test completion.
+    #[derive(Debug)]
+    struct SlowExitChild;
+
+    impl portable_pty::ChildKiller for SlowExitChild {
+        fn kill(&mut self) -> std::io::Result<()> {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            Ok(())
+        }
+
+        fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+            unimplemented!("not exercised by this test")
+        }
+    }
+
+    impl portable_pty::Child for SlowExitChild {
+        fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            Ok(None)
+        }
+
+        fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            Ok(portable_pty::ExitStatus::with_exit_code(0))
+        }
+
+        fn process_id(&self) -> Option<u32> {
+            None
+        }
+
+        #[cfg(windows)]
+        fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
+            None
+        }
+    }
+
+    /// AC-2 (TS-1): `mark_exited` on a pane with no child handle (the
+    /// `new_test` construction, which never had a child to begin with)
+    /// starts no reap and does not panic.
+    #[test]
+    fn mark_exited_on_childless_pane_does_not_panic() {
+        let target = make_output_target();
+        let mut pane = MuxPane::new_test(1, 80, 24, target);
+        assert!(!pane.has_child());
+
+        pane.mark_exited(); // must not panic
+
+        assert!(pane.exited);
+    }
+
+    /// AC-3 (TS-2): `mark_exited` removes the child handle from the pane —
+    /// a second call (concurrent teardown paths racing) finds no handle,
+    /// does not panic, and starts no second reap.
+    #[cfg(unix)]
+    #[test]
+    fn mark_exited_removes_child_handle_and_second_call_is_a_noop() {
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let mut pane = MuxPane::new(
+            1,
+            80,
+            24,
+            target,
+            writer,
+            pair.master,
+            Some(Box::new(SlowExitChild)),
+        );
+        assert!(pane.has_child());
+
+        pane.mark_exited();
+        assert!(
+            !pane.has_child(),
+            "the handle must be removed so a second mark_exited starts no second reap"
+        );
+
+        // A second call must find nothing and not panic.
+        pane.mark_exited();
+        assert!(!pane.has_child());
+    }
+
+    /// AC-3, NFR1 (TS-10): `mark_exited` returns promptly even when the
+    /// pane holds a child whose exit-status/kill/wait calls are
+    /// deliberately slow — proving it hands the child off to the reaper
+    /// rather than waiting on it itself. A wide margin (well below the
+    /// double's multi-second delay) keeps this assertion CI-safe.
+    #[cfg(unix)]
+    #[test]
+    fn mark_exited_returns_promptly_even_with_a_slow_to_reap_child() {
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let mut pane = MuxPane::new(
+            1,
+            80,
+            24,
+            target,
+            writer,
+            pair.master,
+            Some(Box::new(SlowExitChild)),
+        );
+
+        let started = std::time::Instant::now();
+        pane.mark_exited();
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "mark_exited must return promptly regardless of the child's own \
+             responsiveness — its runtime must be independent of the \
+             child's exit behavior (NFR1)"
+        );
     }
 
     #[test]
@@ -2012,7 +2189,7 @@ mod tests {
         let writer = pair.master.take_writer().unwrap();
 
         let target = make_output_target();
-        let mut pane = MuxPane::new(1, 80, 24, target, writer, pair.master);
+        let mut pane = MuxPane::new(1, 80, 24, target, writer, pair.master, None);
 
         let result = pane.resize(120, 40);
         assert!(result.is_ok());
@@ -2038,7 +2215,7 @@ mod tests {
         let pair = pty_system.openpty(size).unwrap();
         let writer = pair.master.take_writer().unwrap();
         let target = make_output_target();
-        let pane = MuxPane::new(1, 80, 24, target, writer, pair.master);
+        let pane = MuxPane::new(1, 80, 24, target, writer, pair.master, None);
         let (bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
         assert!(bytes.is_empty(), "no content bytes were ever written");
         assert_eq!(
@@ -2063,7 +2240,7 @@ mod tests {
         let pair = pty_system.openpty(size).unwrap();
         let writer = pair.master.take_writer().unwrap();
         let target = make_output_target();
-        let mut pane = MuxPane::new(1, 80, 24, target, writer, pair.master);
+        let mut pane = MuxPane::new(1, 80, 24, target, writer, pair.master, None);
 
         pane.resize(120, 40).unwrap();
 
@@ -2091,7 +2268,7 @@ mod tests {
         let pair = pty_system.openpty(size).unwrap();
         let writer = pair.master.take_writer().unwrap();
         let target = make_output_target();
-        let mut pane = MuxPane::new(1, 80, 24, target, writer, pair.master);
+        let mut pane = MuxPane::new(1, 80, 24, target, writer, pair.master, None);
 
         pane.resize(80, 24).unwrap(); // same dims as construction
 
@@ -2128,7 +2305,7 @@ mod tests {
         let pair = pty_system.openpty(size).unwrap();
         let writer = pair.master.take_writer().unwrap();
         let target = make_output_target();
-        let mut pane = MuxPane::new(1, 80, 24, target, writer, pair.master);
+        let mut pane = MuxPane::new(1, 80, 24, target, writer, pair.master, None);
         let scrollback = pane.scrollback.clone();
 
         // Hold the scrollback lock from the TEST thread first, standing in

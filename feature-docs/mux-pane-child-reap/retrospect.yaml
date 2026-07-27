@@ -1,0 +1,50 @@
+feature: mux-pane-child-reap
+collected_at: "2026-07-28T02:50:00+09:00"
+session_ids: ["901dcc22-d28a-47b9-8506-8f8488aeead9"]
+
+signals:
+  review_critical_high: []          # severity critical/high の findings は 0 件
+
+  conflict_reworks: []              # implementer 報告の conflict_retries は 0
+
+  file_prediction_misses: []        # implementer 報告の deviations は空
+                                    # （planner の files 予測 4 件が実際の変更と完全一致）
+
+  verification_failures: []         # verify は pass。tabs::tests の失敗は
+                                    # ベースライン main @ aad6e6e で同一再現するため
+                                    # 本 feature 起因ではなく failed_items に非計上
+
+  discretionary_perspectives:
+    - perspective: security
+      reason: "diff がプロセスシグナル送出 (ChildKiller::kill) とスレッド生成を追加するため、権限・対象特定の妥当性を検査する"
+
+  declined_findings: []             # resolution: declined の findings は 0 件
+
+lessons_candidates:
+  - note: >
+      同一サイト (pty_spawn.rs の spawn 後・pane 登録前の中断パス) を
+      architecture / spec / comprehensive の 3 観点が独立に medium で指摘した。
+      3 観点合意にもかかわらず R4 の auto-fix ゲートは severity ∈ {critical, high}
+      なので候補にならず、residual_critical_high == 0 で review が completed になる。
+      「複数観点が独立合意した medium」を昇格させるか、少なくとも完了報告で
+      強調する仕組みがあると、この種の不変条件の穴が素通りしにくい。
+  - note: >
+      指摘の性質が「この feature が確立しようとしている不変条件そのものの穴」
+      （spawn した child は必ず reap される、が spawn 直後の中断パスで破れる）
+      だった。severity 判定が「発生頻度」に引っ張られて medium になったが、
+      feature の Success Criteria (「No pane-teardown path bypasses the reap」)
+      への直接違反という軸で見ると評価が変わりうる。severity 判定基準に
+      「SPEC の Success Criteria に直接違反するか」を加える余地がある。
+  - note: >
+      integration worktree / task worktree の双方で、gitignore 対象の
+      src-tauri/assets/fonts/ にバンドルフォントが存在せず、承認済み test コマンド
+      （examples/ をコンパイルする）が通らなかった。implementer も verify も
+      個別にメインツリー / システムフォントからコピーして回避しており、同じ手戻りが
+      2 回発生した。worktree 作成直後に gitignored なビルド前提物を同期する
+      ステップがあると解消する。なお `cargo test --lib` は examples/ を
+      ビルドしないため影響を受けない。
+  - note: >
+      codex CLI がこの環境に無いため、create-spec の Codex 相談ループと
+      review の codex クロスバリデーション（complexity: high で発火条件は成立）が
+      両方スキップされた。batch 実行の品質保証が Claude 単独になる点は、
+      無人実行環境のプロビジョニング要件として記録しておく価値がある。
