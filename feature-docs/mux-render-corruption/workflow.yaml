@@ -34,7 +34,7 @@ workflow:
     status: completed
     completed_at_commit: 097c6745466c5dbeed5861ec2c7c8d2d95ddc7d0
   - id: implement
-    status: completed
+    status: in_progress
     completed_at_commit: 40f96a14e69df1d4525d25118df377953de979e0
     base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
   - id: review
@@ -199,10 +199,31 @@ tasks:
     branch: em-workflow/mux-render-corruption/task0007
     notes: "review round 6 の residual high からの rework。中核は cap 発火時に evict される head の寸法を保持すること（現状は未修正時より混線が増える実測がある）と、それを守るテストを弁別可能にすること"
 
+  task0008:
+    title: "Leave the capped gap unattributed; negotiate pane dimensions (round 7 rework)"
+    plan: tasks/task0008.md
+    files:
+      - src-tauri/src/mux/scrollback_buffer.rs
+      - src-tauri/src/mux/snapshot_bytes.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/tabs.rs
+      - crates/mux_ipc/src/protocol.rs
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/bench.rs
+      - feature-docs/mux-render-corruption/VERIFICATION.md
+    skills: [backend-impl]
+    domains: [input-handling, ui, concurrency, api-contract]
+    complexity: high
+    requirements: [FR2, FR3, NFR1, NFR2, NFR3]
+    status: in_progress
+    branch: em-workflow/mux-render-corruption/task0008
+    notes: "review round 7 の residual high からの rework。FR2 の修正案はレビュアーが実測検証済み（eviction >= 2 なら head を合成しない → 全ケース 0 混線）"
+
 review:
   status: pending
-  rounds_completed: 6
-  residual_critical_high: 3
+  rounds_completed: 7
+  residual_critical_high: 2
   needs_rework: true
   perspectives:
     comprehensive: completed
