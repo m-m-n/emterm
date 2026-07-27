@@ -38,7 +38,7 @@ workflow:
     completed_at_commit: 21933e0b23ad409befe714681aac08f873d9e82c
     base_commit: 68b1009cd77b64611cce11edc136ec6051b24348
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -74,8 +74,12 @@ tasks:
     branch: em-workflow/version-flag/task0002
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, spec, security, architecture]
+    discretionary: []
+    codex_cross_validation: true
 
 requirements:
   FR1:
