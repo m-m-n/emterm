@@ -311,6 +311,32 @@ pub struct TerminalCore {
     /// cost during a closed-form payload replay where the scrollback contents
     /// are not needed.
     pub(crate) scrollback_bypass: bool,
+    /// Gates [`Self::push_pending_prompt_mark`]'s eager B-mark text capture
+    /// into `bypass_b_mark_texts` (D4'''', round-7 rework, review round-6
+    /// finding `0bed3c30e41e2389`).
+    ///
+    /// Deliberately SEPARATE from `scrollback_bypass`: that flag tracks
+    /// whether the ring-eviction FAST PATH is active RIGHT NOW, but
+    /// `build_from_snapshot_inner`'s D1''' prefix/suffix split replays its
+    /// PREFIX with `scrollback_bypass` still `false` (a plain,
+    /// full-fidelity replay) and only turns bypass on afterward for the
+    /// suffix — yet the prefix's real scrollback is ALSO about to be
+    /// discarded (folded into virtual bookkeeping by
+    /// `restore_bypass_invariant_after_reflow`, right before bypass turns
+    /// on). Gating capture on `scrollback_bypass` alone therefore missed
+    /// every B mark emitted during the prefix: not captured into
+    /// `bypass_b_mark_texts` (bypass was off when it fired), and not
+    /// recoverable from scrollback either (the prefix's real rows are
+    /// gone by the time the consumer looks). This flag instead spans the
+    /// WHOLE bypass-engaged replay (prefix AND suffix) — set to
+    /// `bypass_engaged` once, immediately after `reset()`, before any
+    /// bytes are replayed — so a prefix-phase B mark is captured exactly
+    /// like a suffix-phase one. `false` on the non-bypass whole-drain path
+    /// (`build_scrollback_only_from_snapshot`) and on the live-PTY path,
+    /// matching `bypass_b_mark_texts`'s existing "only populated during a
+    /// snapshot-replay bypass" contract. Reset to `false` by
+    /// [`Self::disable_snapshot_bypass`] and [`Self::reset`].
+    pub(crate) capture_bypass_b_marks: bool,
     /// Stand-in for `scrollback_count() as u32` while
     /// `scrollback_bypass` is on. Reset to `0` when the bypass is enabled
     /// or disabled. On each `ring_push_blank` eviction under bypass: if
@@ -417,19 +443,22 @@ pub struct TerminalCore {
     /// the WebView `isAlternateBuffer` guard. Capped at
     /// `MAX_PENDING_FOLD_MARKS`.
     pub(crate) pending_fold_marks: VecDeque<PendingFoldMark>,
-    /// Side-table populated only during a snapshot-replay bypass
-    /// (`scrollback_bypass == true`). When an OSC 133 B (CommandStart) mark
-    /// is emitted while the bypass is on, the plain text of the cursor row
-    /// at that instant is captured here under `abs_row → text`. This is
-    /// necessary because the bypass intentionally discards scrollback
-    /// contents: once the row scrolls past the viewport into the virtual
-    /// scrollback it is irrecoverable. The downstream consumer
+    /// Side-table populated only during a snapshot replay whose PREFIX or
+    /// SUFFIX (or both) will discard real scrollback content — gated by
+    /// [`Self::capture_bypass_b_marks`], not directly by
+    /// `scrollback_bypass` (D4'''', round-7 rework, see that field's doc
+    /// for why). When an OSC 133 B (CommandStart) mark is emitted while
+    /// capture is on, the plain text of the cursor row at that instant is
+    /// captured here under `abs_row → text`. This is necessary because the
+    /// bypass intentionally discards scrollback contents: once the row
+    /// scrolls past the viewport into the virtual scrollback it is
+    /// irrecoverable. The downstream consumer
     /// (`tabs.rs::extract_line_text`) prefers this pre-captured text over a
     /// scrollback lookup when processing the drained `SnapshotReplay`.
     /// Drained by `take_bypass_b_mark_texts` (called from
     /// `build_from_snapshot` and shipped on `SnapshotReplay`). Cleared by
-    /// `reset()`. Only populated while the bypass is active; remains empty
-    /// on the normal live-PTY path.
+    /// `reset()`. Only populated during a bypass-engaged snapshot replay;
+    /// remains empty on the normal live-PTY path.
     pub(crate) bypass_b_mark_texts: std::collections::HashMap<u32, String>,
     /// Application-layer OSC parameter overrides: `(osc_param, action_type)`.
     ///
@@ -485,6 +514,7 @@ impl TerminalCore {
             scrollback_capacity,
             scrollback_evicted_total: 0,
             scrollback_bypass: false,
+            capture_bypass_b_marks: false,
             virtual_scrollback_len: 0,
             styles: StyleTable::new(),
             chars: CharTable::new(),
@@ -1074,7 +1104,15 @@ impl TerminalCore {
             .get(k)
             .map(|s| (s.offset as usize).min(payload.len()))
             .unwrap_or(payload.len());
-        let bypass_split = bypass && k > 0 && payload.len() - split_at >= BYPASS_SUFFIX_MIN_BYTES;
+        // D5'''' (round-7 rework, review round-6 finding `e519916efd5fdc42`):
+        // also gate on the PREFIX being cheap (`split_at` is exactly its
+        // byte length) — see `BYPASS_PREFIX_MAX_BYTES`'s doc for why an
+        // expensive prefix makes the split pay its own "fast path" cost
+        // twice instead of once.
+        let bypass_split = bypass
+            && k > 0
+            && payload.len() - split_at >= BYPASS_SUFFIX_MIN_BYTES
+            && split_at <= BYPASS_PREFIX_MAX_BYTES;
         // Whether `enable_snapshot_bypass` will actually be called anywhere
         // below — `k == 0` is the pre-round-6 "no transition at all" fast
         // path (segments already open at the target); `bypass_split` is the
@@ -1089,6 +1127,12 @@ impl TerminalCore {
 
         let mut core = TerminalCore::new(cols, rows, scrollback_lines);
         core.reset();
+        // D4'''' (round-7 rework, review round-6 finding `0bed3c30e41e2389`):
+        // set BEFORE any bytes are replayed (including the PREFIX, which
+        // runs before `enable_snapshot_bypass` below) so a B mark emitted
+        // during the prefix is captured just like one emitted during the
+        // suffix — see `capture_bypass_b_marks`'s doc.
+        core.capture_bypass_b_marks = bypass_engaged;
 
         let actions = if bypass_split {
             let (prefix_bytes, suffix_bytes) = payload.split_at(split_at);
@@ -1220,6 +1264,7 @@ impl TerminalCore {
     pub(crate) fn disable_snapshot_bypass(&mut self) {
         self.virtual_scrollback_len = 0;
         self.scrollback_bypass = false;
+        self.capture_bypass_b_marks = false;
     }
 
     /// Consume `other` and prepend its scrollback rows onto `self`,
@@ -1402,6 +1447,7 @@ impl TerminalCore {
         // Bypass B-mark text side-table: a reset starts a new parse frame, so
         // any pre-captured row texts from a previous bypass session are stale.
         self.bypass_b_mark_texts.clear();
+        self.capture_bypass_b_marks = false;
         // Note: callbacks are NOT cleared on reset (terminal reset != dispose)
         self.mark_all_dirty();
         // cursor-settings-fix FR4: tell the host a full reset just ran, in
@@ -1441,13 +1487,18 @@ impl TerminalCore {
             }
         }
         self.pending_prompt_marks.push_back(mark);
-        // Under the snapshot-replay bypass, the scrollback contents are
-        // intentionally discarded, so once this row scrolls off the viewport
-        // its text is irrecoverable from the bypassed store. Capture the
-        // cursor row's plain text NOW, at B-mark emission time, so the
-        // downstream consumer can use it instead of a scrollback lookup.
-        // Only B (CommandStart) carries command text; A/C/D do not need this.
-        if self.scrollback_bypass && kind == b'B' {
+        // D4'''' (round-7 rework, review round-6 finding `0bed3c30e41e2389`):
+        // gated on `capture_bypass_b_marks`, NOT `scrollback_bypass` — see
+        // that field's doc for why. Under a bypass-engaged snapshot replay
+        // (prefix OR suffix of the D1''' split, or the whole drain when
+        // `k == 0`), the scrollback contents this mark's row lives in are
+        // intentionally discarded, so once this row scrolls off the
+        // viewport its text is irrecoverable from the bypassed store.
+        // Capture the cursor row's plain text NOW, at B-mark emission time,
+        // so the downstream consumer can use it instead of a scrollback
+        // lookup. Only B (CommandStart) carries command text; A/C/D do not
+        // need this.
+        if self.capture_bypass_b_marks && kind == b'B' {
             // Secondary cap: if bypass_b_mark_texts is already at the limit
             // (possible when B marks arrive faster than pending_prompt_marks
             // fills — e.g. duplicate abs_rows), evict the oldest pending mark's
@@ -1735,6 +1786,34 @@ fn stable_target_suffix_start(
 /// is orders of magnitude larger than this, so the gate never affects the
 /// case NFR1 targets.
 const BYPASS_SUFFIX_MIN_BYTES: usize = 4096;
+
+/// Maximum prefix size (bytes) for which `build_from_snapshot_inner`'s
+/// D1''' prefix/suffix split is worth engaging (D5'''', round-7 rework,
+/// review round-6 finding `e519916efd5fdc42`).
+///
+/// [`BYPASS_SUFFIX_MIN_BYTES`] alone gates on the SUFFIX being big enough
+/// to be worth bypassing, but says nothing about the PREFIX's own cost:
+/// the prefix always replays via the full, non-bypass
+/// `replay_segments` — correct, but exactly as expensive per byte as the
+/// whole-drain fallback this split exists to avoid. A payload that is
+/// almost entirely prefix with only a small qualifying suffix (a large
+/// multi-segment retained window with resizes scattered through most of
+/// it, followed by a stable tail just over `BYPASS_SUFFIX_MIN_BYTES`)
+/// would otherwise still engage the split: pay the full non-bypass cost
+/// for the (huge) prefix as its "fast" first pass, discard that prefix's
+/// real scrollback into virtual bookkeeping
+/// (`restore_bypass_invariant_after_reflow`), report
+/// `scrollback_populated: false`, and then pay THAT SAME non-bypass cost
+/// a SECOND time when the background 2nd-pass worker
+/// (`tabs.rs::apply_offthread_swap`) redoes the whole drain to actually
+/// populate real scrollback — roughly doubling the work for a shape the
+/// split cannot actually speed up (the ordinary-switch shape it targets
+/// has a TINY prefix by construction). Below this bound, the prefix's own
+/// cost is negligible either way (mirrors `tabs::OFFTHREAD_REPLAY_THRESHOLD_BYTES`'s
+/// reasoning: 64 KiB is small enough that even a full non-bypass reflow
+/// of it does not matter), so the split still engages whenever the
+/// suffix qualifies.
+const BYPASS_PREFIX_MAX_BYTES: usize = 64 * 1024;
 
 /// Defensive upper bound on a resize's `cols` field. Replay dimensions are
 /// fed directly into `TerminalCore::resize`, which allocates
@@ -3088,14 +3167,30 @@ mod tests {
         );
     }
 
-    /// AC-5 (round-6 rework D1'''): the ACTUAL prefix/suffix split —
-    /// `build_from_snapshot`'s "ordinary switch" shape (a small HEAD
-    /// segment differing from the target, `MuxPane::new`'s spawn-size
-    /// marker, followed by a bulk tail already AT the target — the pane's
-    /// real history) — produces a grid/cursor identical to the fully
+    /// AC-5 (round-6 rework D1'''; strengthened round-7, review round-6
+    /// finding `d139e51d1c8d03c8`): the ACTUAL prefix/suffix split —
+    /// `build_from_snapshot`'s "ordinary switch" shape (a HEAD segment
+    /// differing from the target, `MuxPane::new`'s spawn-size marker,
+    /// followed by a bulk tail already AT the target — the pane's real
+    /// history) — produces a grid/cursor identical to the fully
     /// synchronous reference (`build_scrollback_only_from_snapshot`) for
     /// the SAME payload, even though the split engages bypass for the
     /// suffix (verified, not assumed, per the task's AC-5 mandate).
+    ///
+    /// Round-7 rework: the HEAD is now longer than the viewport (spawn_rows
+    /// = 24) so `restore_bypass_invariant_after_reflow`'s fold-in path
+    /// actually runs (round-6's 5-line HEAD left `scrollback_slim` empty
+    /// after the prefix, so that call's `leaked == 0` early-return path was
+    /// the ONLY one ever exercised — the fold-in bookkeeping this split
+    /// depends on was never actually tested). The comparison against the
+    /// reference now also covers `evicted_total` and the full
+    /// `prompt_marks` / `fold_marks` lists (previously only
+    /// `grid_fingerprint`, i.e. viewport + cursor), and the payload embeds
+    /// OSC 133 A/B/C/D marks in BOTH the prefix and the suffix — this is
+    /// also the direct regression test for D4'''' (review round-6 finding
+    /// `0bed3c30e41e2389`): the PREFIX's B mark must have its command text
+    /// captured into `bypass_b_mark_texts` even though it fires before
+    /// `enable_snapshot_bypass` runs.
     ///
     /// Distinguishes itself from `..._row_growing_marker` /
     /// `..._cols_only_marker` above: those fixtures have NO content after
@@ -3103,30 +3198,50 @@ mod tests {
     /// `bypass_split == false`), so they exercise the "no benefit" fallback
     /// path unchanged. This fixture's tail is deliberately >=
     /// `BYPASS_SUFFIX_MIN_BYTES` so the split actually activates — confirmed
-    /// below by asserting the reflow count differs between the two paths
-    /// (the bypass path does far fewer FULL reflows), which is the
-    /// discriminating signal that this test exercises the split and not
-    /// merely the pre-existing whole-drain-downgrade fallback.
+    /// below by asserting `scrollback_populated` differs between the two
+    /// paths, which is the discriminating signal that this test exercises
+    /// the split and not merely the pre-existing whole-drain-downgrade
+    /// fallback.
+    ///
+    /// Confirmed to fail pre-fix (D4''''): reverting `capture_bypass_b_marks`
+    /// (restoring the `scrollback_bypass`-gated capture) makes the
+    /// `bypass_b_mark_texts` assertion for the PREFIX's B mark fail — that
+    /// mark fires before `enable_snapshot_bypass`, so `scrollback_bypass`
+    /// was still `false` at the time and the text was never captured, and
+    /// by the time the consumer looks, the prefix's real scrollback row
+    /// has already been folded into virtual bookkeeping and is
+    /// unrecoverable.
     #[test]
     fn bypass_split_matches_reference_viewport_and_cursor_for_ordinary_switch() {
         let cols: u16 = 80;
         let spawn_rows: u16 = 24;
         let target_rows: u16 = 30;
 
-        // HEAD: a shell-banner-sized amount of content at the daemon's
-        // spawn size — differs from the target.
+        // HEAD: OSC 133 A/B/C/D around a command, THEN enough filler lines
+        // to scroll the B-marked row well past the 24-row viewport within
+        // the prefix's OWN replay — long enough that
+        // `restore_bypass_invariant_after_reflow` actually folds non-empty
+        // real scrollback (`leaked > 0`), not the trivial `leaked == 0`
+        // early return round-6's 5-line HEAD only ever exercised.
         let mut payload: Vec<u8> = Vec::new();
-        for i in 0..5u32 {
-            payload.extend_from_slice(format!("spawn-size banner line {i}\r\n").as_bytes());
+        payload.extend_from_slice(b"\x1b]133;A\x07$ prefix-cmd\x1b]133;B\x07");
+        payload.extend_from_slice(b"\r\n\x1b]133;C\x07prefix cmd output\r\n\x1b]133;D;0\x07");
+        for i in 0..40u32 {
+            payload.extend_from_slice(format!("prefix filler line {i}\r\n").as_bytes());
         }
         let head_len = payload.len() as u32;
 
-        // TAIL: the pane's real history, already at the target size —
-        // comfortably over `BYPASS_SUFFIX_MIN_BYTES` (4096) so the split
-        // actually engages bypass for it, and large enough (with a small
-        // scrollback capacity) to force real scrolling / eviction, the
-        // exact mechanism the split's viewport/cursor equivalence claim
-        // depends on.
+        // TAIL: OSC 133 A/B/C/D around a DIFFERENT command plus a fold
+        // begin/end pair, then the pane's real history, already at the
+        // target size — comfortably over `BYPASS_SUFFIX_MIN_BYTES` (4096)
+        // so the split actually engages bypass for it, and large enough
+        // (with a small scrollback capacity) to force real scrolling /
+        // eviction, the exact mechanism the split's viewport/cursor
+        // equivalence claim depends on.
+        payload.extend_from_slice(b"\x1b]133;A\x07$ suffix-cmd\x1b]133;B\x07");
+        payload.extend_from_slice(b"\r\n\x1b]133;C\x07suffix cmd output\r\n");
+        payload.extend_from_slice(b"\x1b]777;emterm;fold;begin\x07folded suffix text\r\n");
+        payload.extend_from_slice(b"\x1b]777;emterm;fold;end\x07\x1b]133;D;0\x07");
         for i in 0..500u32 {
             payload.extend_from_slice(
                 format!("pane history line {i} padded out a bit for size\r\n").as_bytes(),
@@ -3177,15 +3292,10 @@ mod tests {
         // tail — `scrollback_populated` is `false` exactly when SOME part
         // of the replay ran under bypass (real scrollback content was
         // skipped), vs the fully synchronous reference, which is always
-        // `true`. Reflow COUNT alone does not distinguish this shape: both
-        // paths perform the SAME two reflows (target→spawn on an empty
-        // core, spawn→target on a still-tiny 5-line core) regardless of
-        // bypass — the split's savings come from skipping per-row
-        // SlimCell compression while draining the 500-line tail, not from
-        // fewer reflow calls. Without this check, the equivalence
-        // assertion below could vacuously pass because BOTH paths took the
-        // identical whole-drain, non-bypass route (the `..._marker` tests'
-        // shape) — this discriminator is what actually distinguishes them.
+        // `true`. Without this check, the equivalence assertions below
+        // could vacuously pass because BOTH paths took the identical
+        // whole-drain, non-bypass route (the `..._marker` tests' shape) —
+        // this discriminator is what actually distinguishes them.
         assert!(
             !bypass_replay.scrollback_populated,
             "the split must engage bypass for the tail (scrollback_populated \
@@ -3197,12 +3307,78 @@ mod tests {
             "test prerequisite: the fully synchronous reference always \
              populates scrollback"
         );
+        // Test prerequisite (round-7): the prefix must actually have
+        // produced real scrollback the fold-in path had to convert — a
+        // higher `evicted_total`/mark count than a trivial payload would
+        // confirm the prefix's OWN reflow really scrolled past the
+        // viewport, not merely that the suffix did.
+        assert!(
+            reference.evicted_total > 0 || reference.prompt_marks.len() >= 4,
+            "test prerequisite: fixture must exercise real scrolling / \
+             mark stamping in both phases"
+        );
 
         assert_eq!(
             grid_fingerprint(&bypass_replay.core),
             grid_fingerprint(&reference.core),
             "the prefix/suffix split's viewport + cursor must match the \
              fully synchronous reference for the ordinary-switch shape"
+        );
+        // AC-5: the split must not silently corrupt eviction accounting or
+        // the prompt/fold mark lists it hands the caller for
+        // `backfill_prompt_marks` / `backfill_fold_marks` — round-6's
+        // 5-line HEAD never exercised `restore_bypass_invariant_after_reflow`'s
+        // non-trivial fold-in path, so a regression there could have passed
+        // silently.
+        assert_eq!(
+            bypass_replay.evicted_total, reference.evicted_total,
+            "the split must preserve evicted_total byte-identically"
+        );
+        assert_eq!(
+            bypass_replay.prompt_marks, reference.prompt_marks,
+            "the split must preserve prompt_marks byte-identically \
+             (kind, abs_row, evicted_total, exit_code)"
+        );
+        assert_eq!(
+            bypass_replay.fold_marks, reference.fold_marks,
+            "the split must preserve fold_marks byte-identically"
+        );
+
+        // D4'''' regression: both the PREFIX's and the SUFFIX's B mark
+        // command text must be captured into `bypass_b_mark_texts` — the
+        // prefix's fires before `enable_snapshot_bypass` runs, so gating
+        // capture on `scrollback_bypass` alone (round-6) missed it.
+        let b_marks: Vec<_> = bypass_replay
+            .prompt_marks
+            .iter()
+            .filter(|m| m.kind == b'B')
+            .collect();
+        assert_eq!(
+            b_marks.len(),
+            2,
+            "test prerequisite: exactly one B mark in the prefix and one \
+             in the suffix, got {b_marks:?}"
+        );
+        let prefix_b_abs_row = b_marks[0].abs_row;
+        let suffix_b_abs_row = b_marks[1].abs_row;
+        assert!(
+            bypass_replay
+                .bypass_b_mark_texts
+                .get(&prefix_b_abs_row)
+                .is_some_and(|text| text.contains("prefix-cmd")),
+            "the PREFIX's B mark command text must be captured into \
+             bypass_b_mark_texts even though it fires before bypass is \
+             enabled — got {:?}",
+            bypass_replay.bypass_b_mark_texts.get(&prefix_b_abs_row)
+        );
+        assert!(
+            bypass_replay
+                .bypass_b_mark_texts
+                .get(&suffix_b_abs_row)
+                .is_some_and(|text| text.contains("suffix-cmd")),
+            "the SUFFIX's B mark command text must be captured into \
+             bypass_b_mark_texts — got {:?}",
+            bypass_replay.bypass_b_mark_texts.get(&suffix_b_abs_row)
         );
     }
 
