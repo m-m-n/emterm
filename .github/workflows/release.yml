@@ -19,7 +19,12 @@ env:
 jobs:
   sync-version:
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # Only runs when a version is actually resolvable (workflow_dispatch
+    # with a tag input, or an actual tag push); otherwise skip so
+    # create-release below still proceeds (NFR2). `continue-on-error` is
+    # deliberately not used here: a real failure (e.g. push rejected by
+    # branch protection) must block the release (FR3), not be swallowed.
+    if: ${{ github.event.inputs.tag != '' || startsWith(github.ref, 'refs/tags/') }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -45,13 +50,25 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.get-version.outputs.version }}
         run: |
+          set -euo pipefail
           VERSION="${RELEASE_VERSION#v}"
-          case "$VERSION" in
-            [0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::refusing to sync non-semver version '$VERSION' into main"; exit 1 ;;
-          esac
+          # Anchored, full-string semver match (not a `case` prefix glob):
+          # only a bare X.Y.Z, optionally followed by one `-`/`+` suffix of
+          # alnum/dot/hyphen, may reach sed/awk below. The error message
+          # intentionally omits the raw value.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::refusing to sync a non-semver version into main"
+            exit 1
+          fi
           echo "Syncing version to $VERSION"
+
           sed -i -E "/^\[package\]/,/^\[/ { /^version = / s/.*/version = \"$VERSION\"/; }" src-tauri/Cargo.toml
+          TOML_VERSION=$(sed -n -E '/^\[package\]/,/^\[/{ /^version = "/ s/^version = "(.*)"$/\1/p }' src-tauri/Cargo.toml | head -n1)
+          if [ "$TOML_VERSION" != "$VERSION" ]; then
+            echo "::error::src-tauri/Cargo.toml version did not update to the expected value"
+            exit 1
+          fi
+
           # The workspace's single Cargo.lock lives at the repo root (this
           # workspace's manifest is ./Cargo.toml, members = ["src-tauri", ...]);
           # cargo never reads/writes a src-tauri/Cargo.lock, so that path is not
@@ -61,7 +78,18 @@ jobs:
             /^name = "emterm"$/ { in_target = 1 }
             in_target && /^version = / && !done { print "version = \"" ver "\""; done = 1; next }
             { print }
+            END { if (!done) { print "no emterm [[package]] entry found in Cargo.lock" > "/dev/stderr"; exit 1 } }
           ' Cargo.lock > Cargo.lock.tmp && mv Cargo.lock.tmp Cargo.lock
+
+          LOCK_VERSION=$(awk '
+            /^\[\[package\]\]$/ { in_target = 0 }
+            /^name = "emterm"$/ { in_target = 1 }
+            in_target && /^version = "/ { gsub(/version = "|"/, ""); print; exit }
+          ' Cargo.lock)
+          if [ "$LOCK_VERSION" != "$VERSION" ]; then
+            echo "::error::Cargo.lock version did not update to the expected value"
+            exit 1
+          fi
 
       - name: Commit and push version bump
         env:
@@ -79,6 +107,11 @@ jobs:
 
   create-release:
     needs: sync-version
+    # Proceed when sync-version succeeded OR was skipped (no resolvable
+    # version — NFR2 skip path); block when it actually failed or was
+    # cancelled, so a real failure (e.g. push rejected) stops the release
+    # instead of racing ahead of the version bump (FR3).
+    if: ${{ always() && needs.sync-version.result != 'failure' && needs.sync-version.result != 'cancelled' }}
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create-release.outputs.id }}

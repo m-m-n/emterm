@@ -260,3 +260,53 @@ fn version_flag_with_extra_args_behaves_identically() {
         "--version with trailing args should produce no stderr output"
     );
 }
+
+// References task0003 AC-6: a stdout write/flush failure must not panic —
+// the process must still exit 0. `/dev/full` always fails writes with
+// ENOSPC, which reproduces a broken/full pipe deterministically (no
+// process-teardown timing race).
+#[test]
+#[cfg(unix)]
+fn version_flag_exits_zero_even_when_stdout_write_fails() {
+    let Ok(dev_full) = std::fs::OpenOptions::new().write(true).open("/dev/full") else {
+        // /dev/full is Linux-specific; skip on Unix targets without it.
+        return;
+    };
+    let exe = env!("CARGO_BIN_EXE_emterm");
+    let status = std::process::Command::new(exe)
+        .arg("--version")
+        .stdout(dev_full)
+        .status()
+        .expect("spawn emterm --version with /dev/full as stdout");
+
+    assert!(
+        status.success(),
+        "--version should exit 0 even when the stdout write fails"
+    );
+}
+
+// References task0003 AC-8 (TS-2): `--version` must not touch the app log
+// directory. Redirects `XDG_DATA_HOME` to an empty temp dir and asserts the
+// app's log subdirectory was never created.
+#[test]
+#[cfg(unix)]
+fn version_flag_does_not_create_log_directory() {
+    let exe = env!("CARGO_BIN_EXE_emterm");
+    let data_home = tempfile::tempdir().expect("create temp XDG_DATA_HOME");
+    let output = std::process::Command::new(exe)
+        .arg("--version")
+        .env("XDG_DATA_HOME", data_home.path())
+        .output()
+        .expect("spawn emterm --version with XDG_DATA_HOME override");
+
+    assert!(
+        output.status.success(),
+        "--version should exit with status 0"
+    );
+    let log_dir = data_home.path().join("net.laser5.app.emterm");
+    assert!(
+        !log_dir.exists(),
+        "--version should not create the app log directory ({})",
+        log_dir.display()
+    );
+}
