@@ -60,6 +60,17 @@ fn build_event_loop() -> EventLoop {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
+    // `--version` — print the compile-time crate version and exit, before
+    // `logging::init()`, any settings read, or any `#[cfg(feature = "gui")]`
+    // code (D1 in IMPLEMENTATION.md). Identical in the GUI and CLI-only
+    // builds since it sits outside all feature gates. Only the first
+    // argument position is inspected, so trailing arguments are ignored
+    // (`emterm --version anything` still succeeds).
+    if args.get(1).is_some_and(|a| a == "--version") {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        std::process::exit(0);
+    }
+
     // CLI subcommand dispatch (markdown / json / yaml / image / mux).
     // Bare-word subcommands are recognized BEFORE `logging::init()` because
     // each subcommand owns its own logger (mux bridge / daemon write to
