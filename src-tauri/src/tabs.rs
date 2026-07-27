@@ -434,6 +434,24 @@ impl Tab {
         notification_sink: Arc<dyn crate::callbacks::NotificationSink>,
         spawn_overrides: Option<crate::profiles::SpawnOverrides>,
     ) -> Self {
+        // D3'''''' (round-9 rework, review round-8 finding
+        // `1e7e069001cf22dc`): clamp to the SAME wire domain `Tab::resize` /
+        // `MuxPane::new` apply, BEFORE spawning the local PTY or
+        // constructing this tab's core — not just on the first later
+        // `Tab::resize` call. Without this, a tab whose FIRST-ever dims are
+        // already out of domain (the caller's raw window size before any
+        // resize) spawns its PTY and core unclamped; if this tab then
+        // becomes mux-connected (a `Welcome`/`PaneCreated` landing before
+        // the first `Tab::resize`), the daemon's `MuxPane::new` clamps its
+        // OWN pane to the same domain while this tab's core stays
+        // unclamped, disagreeing with what the daemon actually holds. A
+        // plain local (non-mux) tab is clamped the same way here as
+        // `Tab::resize` already clamps it unconditionally today — the wire
+        // domain's ceilings (4096 per axis; the current
+        // `PRODUCER_SEGMENT_CELL_BUDGET` product) are far above any real
+        // terminal window, so this is not expected to narrow a legitimate
+        // local tab's size in practice.
+        let (cols, rows) = crate::mux::session::pane::clamp_dims_to_wire_domain(cols, rows);
         // bounded(4096): allows up to ~64MB of in-flight PTY chunks
         // (4096 × 16KB reader buffer) before the reader thread blocks
         // on send. The previous 256-slot queue (~4MB) made bursty
@@ -5509,6 +5527,44 @@ mod tests {
             "the client's core must be resized to the CLAMPED wire-domain \
              dims, matching what MuxPane::new/resize would accept — not \
              the caller's raw, out-of-domain request"
+        );
+    }
+
+    /// AC-5, D3'''''' (round-9 rework, review round-8 finding
+    /// `1e7e069001cf22dc`): `Tab::spawn_shell` clamps its FIRST-ever
+    /// dimensions the same way `Tab::resize` clamps every later one, so a
+    /// tab's initial core is never out of the wire domain even before any
+    /// resize has happened.
+    ///
+    /// Confirmed to fail pre-fix: before this change, `Tab::spawn_shell`
+    /// passed the caller's raw `cols`/`rows` straight into `TerminalCore::new`
+    /// with no clamp at all — with this test's `u16::MAX` input, that means
+    /// a `u16::MAX × u16::MAX`-cell grid allocation, which aborts the test
+    /// process outright (a real allocation failure, not just a mismatched
+    /// assertion) rather than settling on the clamped wire-domain values
+    /// asserted below.
+    #[test]
+    fn spawn_shell_clamps_the_initial_core_to_the_wire_domain() {
+        let tab = Tab::spawn_shell(
+            "test",
+            u16::MAX,
+            u16::MAX,
+            100,
+            Arc::new(Settings::default()),
+            None,
+            None,
+            Arc::new(NoopSink),
+            None,
+        );
+        let (expected_cols, expected_rows) =
+            crate::mux::session::pane::clamp_dims_to_wire_domain(u16::MAX, u16::MAX);
+        let core = tab.core.lock();
+        assert_eq!(
+            (core.cols(), core.rows()),
+            (expected_cols, expected_rows),
+            "the tab's INITIAL core must already be clamped to the wire \
+             domain, matching what a later Tab::resize (or MuxPane::new) \
+             would accept — not the caller's raw, out-of-domain request"
         );
     }
 

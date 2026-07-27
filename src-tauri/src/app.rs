@@ -3734,6 +3734,20 @@ impl App {
 
     /// Propagate a new grid size to all PTYs.
     pub fn set_grid_size(&mut self, cols: u16, rows: u16) {
+        // D3'''''' (round-9 rework, review round-8 finding
+        // `1e7e069001cf22dc`, AC-5): clamp HERE, before comparing against or
+        // assigning `self.cell_size` — `Tab::resize` below applies the
+        // IDENTICAL pure `clamp_dims_to_wire_domain` clamp to every tab's
+        // own core, so computing it once up front and using the SAME
+        // clamped value for both `self.cell_size` and the per-tab loop
+        // keeps the app's own grid record from ever disagreeing with what
+        // the core it drives actually holds. Before this fix,
+        // `self.cell_size` recorded the caller's RAW request while
+        // `Tab::resize` silently narrowed each tab's core to a smaller
+        // wire-domain size — renderer / hit-testing / `window_host::grid_size`
+        // all read `self.cell_size`, so they described a size the core
+        // itself was never actually at.
+        let (cols, rows) = crate::mux::session::pane::clamp_dims_to_wire_domain(cols, rows);
         if self.cell_size.cols == cols && self.cell_size.rows == rows {
             return;
         }
@@ -8792,6 +8806,44 @@ mod tests {
         assert!(
             app.tabs[0].folds.get_region_at_line(5).is_some(),
             "fold regions kept on height-only resize"
+        );
+    }
+
+    /// AC-5, D3'''''' (round-9 rework, review round-8 finding
+    /// `1e7e069001cf22dc`): `App::set_grid_size` must clamp BEFORE recording
+    /// `self.cell_size`, so the app's own grid record always agrees with
+    /// what `Tab::resize` actually applies to the core it drives — never
+    /// the caller's raw, out-of-wire-domain request.
+    ///
+    /// Confirmed to fail pre-fix: before this change, `self.cell_size` was
+    /// assigned the caller's RAW `(cols, rows)` and only `Tab::resize`
+    /// (called per-tab afterward) clamped the core — so
+    /// `app.cell_size.rows` would come out as `u16::MAX` while
+    /// `core.rows()` was already the clamped value, disagreeing with each
+    /// other exactly as the finding describes.
+    #[test]
+    fn set_grid_size_clamps_cell_size_to_agree_with_the_core() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.set_grid_size(u16::MAX, u16::MAX);
+        let (expected_cols, expected_rows) =
+            crate::mux::session::pane::clamp_dims_to_wire_domain(u16::MAX, u16::MAX);
+        assert_eq!(
+            (app.cell_size.cols, app.cell_size.rows),
+            (expected_cols, expected_rows),
+            "the app's own grid record must be the CLAMPED wire-domain \
+             dims, not the caller's raw, out-of-domain request"
+        );
+        let core = app.tabs[0].core.lock();
+        assert_eq!(
+            (core.cols(), core.rows()),
+            (expected_cols, expected_rows),
+            "the tab's core must match the app's own grid record exactly"
+        );
+        assert_eq!(
+            (app.cell_size.cols, app.cell_size.rows),
+            (core.cols(), core.rows()),
+            "App::cell_size and the tab's core must never disagree"
         );
     }
 

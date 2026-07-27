@@ -1906,15 +1906,22 @@ mod tests {
     /// since they are chronologically the OLDEST markers) — no SINGLE
     /// gap-dims choice (last-evicted, as round 7 used; or none, as
     /// D1''''' uses) can correctly render two genuinely-different regimes
-    /// under one dims value. Measured here: eviction_count=4 gives 1 mixed
-    /// row, eviction_count=28 gives 13 (both `> full_mixed == 0` but `<=
-    /// no_segments_mixed`), and reverting D1''''' to round-7's
+    /// under one dims value. At `MAX_DIM_MARKERS == 24` (round-8):
+    /// eviction_count=4 gave 1 mixed row, eviction_count=28 gave 13 (both
+    /// `> full_mixed == 0` but `<= no_segments_mixed`). Re-measured at
+    /// `MAX_DIM_MARKERS == 62` (round-9, D1''''''): eviction_count=4 still
+    /// gives 1, eviction_count=28 now gives 12 — a small numeric shift
+    /// from the longer storm this fixture now needs to reach the same
+    /// eviction count, not a change in kind. Reverting D1''''' to round-7's
     /// `capped_head_dims`-for-any-eviction-count behavior on this SAME
-    /// fixture reproduces the IDENTICAL mixed-row counts (round 7's
-    /// single-dims guess is no better here) — this is a genuine,
+    /// fixture reproduces the IDENTICAL (per-cap) mixed-row counts (round
+    /// 7's single-dims guess is no better here) — this is a genuine,
     /// measured residual documented as an accepted precision loss (mirrors
-    /// `MAX_DIM_MARKERS`'s own doc), not a regression D1''''' introduces.
-    /// `VERIFICATION.md`'s FR2 coverage reflects this (AC-10).
+    /// `MAX_DIM_MARKERS`'s own doc), not a regression D1''''' introduces,
+    /// AND NOT one D1'''''' (raising the cap) closes: it persists at any
+    /// cap value once a storm forces 2+ evictions, per this same
+    /// implementer's re-measurement at 62. `VERIFICATION.md`'s FR2
+    /// coverage reflects this (AC-10).
     ///
     /// Confirmed to fail pre-fix: reverting D1''''' (restoring round-7's
     /// unconditional `capped_head_dims` fallback for ANY eviction count)
@@ -1926,7 +1933,15 @@ mod tests {
     fn resize_storm_beyond_marker_cap_replays_no_worse_than_full_attribution() {
         use crate::mux::scrollback_buffer::MAX_DIM_MARKERS;
 
-        for eviction_count in [1usize, 4, 28] {
+        // AC-1 (round-9 rework, D1''''''): `eviction_count = 0` is a storm
+        // whose total recorded markers land EXACTLY at the new cap (62) —
+        // "a resize storm of any length up to the wire ceiling" — added
+        // alongside the raised cap to pin the boundary case the round-8
+        // sweep's "marker 26/32/52 vs cap 62" measurement relies on: no
+        // eviction ever happens, so `read_segments` returns every marker
+        // and `capped_segments` is IDENTICAL to `full_segments`, not merely
+        // "no worse".
+        for eviction_count in [0usize, 1, 4, 28] {
             let (no_segments_mixed, full_mixed, capped_mixed, capped_segments, full_segments, _) =
                 run_resize_storm_cap_eviction_case(eviction_count);
 
@@ -1953,7 +1968,29 @@ mod tests {
                  nothing"
             );
 
-            if eviction_count == 1 {
+            if eviction_count == 0 {
+                // AC-1 (round-9 rework, D1''''''): a storm landing EXACTLY
+                // at the cap needs no eviction at all — `read_segments`
+                // returns every recorded marker, so the capped segment list
+                // is not merely "no worse" but IDENTICAL to full uncapped
+                // attribution, byte for byte.
+                assert_eq!(
+                    capped_segments.len(),
+                    MAX_DIM_MARKERS,
+                    "with zero evictions, every recorded marker survives — \
+                     no head segment is synthesized because none is needed"
+                );
+                assert_eq!(
+                    capped_segments, full_segments,
+                    "with zero cap evictions, the capped segment list must \
+                     be IDENTICAL to full uncapped attribution"
+                );
+                assert_eq!(
+                    capped_mixed, full_mixed,
+                    "with zero cap evictions, capped replay must mix \
+                     EXACTLY as many rows as full uncapped attribution"
+                );
+            } else if eviction_count == 1 {
                 // D1''''' guarantees EXACT recovery of full attribution for
                 // a single eviction (capped_head_dims names exactly the one
                 // entry that was evicted) — the strongest possible check.
@@ -1976,7 +2013,8 @@ mod tests {
                 // discriminator against reverting the fix (see doc above);
                 // it is NOT asserted that `capped_mixed <= full_mixed` here
                 // — see this test's doc comment for the measured
-                // counter-example.
+                // counter-example, which round-9's cap raise does not
+                // close (only how long a storm must be to reach it).
                 assert_eq!(
                     capped_segments.len(),
                     MAX_DIM_MARKERS,
