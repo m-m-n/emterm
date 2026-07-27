@@ -118,23 +118,47 @@ pub struct ScrollbackRingBuffer {
 /// resolving the residual round-3 explicitly deferred as
 /// `981230284d7d3273`).
 ///
-/// D1''' (round-6 rework, review round-5 finding `abb36fa1ad4c89ea`):
-/// raised from 16 to 24 — round-4's own measurement (a 0.95 MiB snapshot
-/// at the shipping 10 000-line scrollback default: 20 segments → 272 ms /
-/// 30 → 2078 ms) puts 24 comfortably before the cliff between 20 and 30,
-/// the largest safe margin without new measurement data for the
-/// in-between range. This ceiling no longer needs to trade an ORDINARY
-/// switch's latency for resize-storm headroom the way it did pre-round-6:
+/// D1'''''' (round-9 rework, review round-8 finding `6082de4e619d7f51`):
+/// raised from 24 to 62. Every eviction — regardless of this constant's
+/// value — is either 0/1 entries (exact match with full uncapped
+/// attribution, see [`Self::read_segments`]'s doc) or 2+ entries (a
+/// bounded-but-nonzero divergence that persists no matter how large this
+/// cap is: this implementer re-measured it directly against the real
+/// eviction mechanism and confirmed forcing 2+ evictions still mixes rows
+/// at cap 62, exactly as it did at cap 24 — raising the cap does not make
+/// that fallback smarter). What raising it changes is HOW LONG a resize
+/// storm can run before it needs ANY eviction at all: at cap 24, a storm
+/// recording more than 24 distinct dimensions already risked the 2+-
+/// eviction case; at cap 62, a storm needs more than 62 distinct
+/// dimensions to reach it. The round-8 reviewer's cap sweep (three fixed-
+/// length storms, 26/32/52 total recorded markers, against caps 24/32/48/
+/// 62) measured mixed rows 3/3/3 → 0/0/3 → 0/0/3 → **0/0/0**: each zero is
+/// a storm short enough that the cap in question needed no eviction at
+/// all, not a smarter fallback. 62 is the LARGEST cap that still keeps
+/// this trivially-lossless regime, because it is the wire budget's
+/// ceiling: `crates/mux_ipc::protocol::MAX_SEGMENTS` (64) minus one slot
+/// for a synthesized head segment (single-eviction case) and one for a
+/// trailing alt-screen dump segment (`build_snapshot_bytes_with_layout`'s
+/// D7'' segment) — see `mux::session::pane::MAX_DAEMON_SNAPSHOT_SEGMENTS`.
+/// AC-1's "resize storm of any length up to the wire ceiling" is this
+/// exact regime: storms recording at most 62 distinct dimensions never
+/// need the 2+-eviction fallback, so they always match full attribution;
+/// a storm longer than that still only degrades to "never worse than no
+/// attribution at all" (the pre-existing D2''''' hard gate), which this
+/// change does not weaken.
+///
+/// This ceiling no longer needs to trade an ORDINARY switch's latency for
+/// resize-storm headroom the way it did pre-round-6:
 /// `TerminalCore::build_from_snapshot_inner`'s prefix/suffix split keeps
 /// the (typically large) trailing run of segments that already match the
 /// caller's target on the fast bypass path regardless of how many EARLIER
 /// segments this ring recorded, so an ordinary switch's cost no longer
-/// depends on this constant at all — raising it only affects the
-/// resize-STORM case (which the split does not speed up — see that
-/// function's doc), where AC-3's requirement is zero cross-line mixing,
-/// not latency. Stays well below `crates/mux_ipc::protocol::MAX_SEGMENTS`
-/// (the wire decoder's ceiling, aligned to a small multiple of this
-/// constant — review round-5 finding `bfebad60b3862d3e`).
+/// depends on this constant at all (round-8 measured 1.57 ms for an
+/// ordinary switch against a segment-free 8.23 ms, both independent of the
+/// cap) — raising it only affects the resize-STORM path (which the split
+/// does not speed up — see that function's doc), where AC-1's requirement
+/// is zero cross-line mixing, not latency. See `VERIFICATION.md` for the
+/// storm-path latency measured at this new cap.
 ///
 /// Enforced by [`Self::enforce_dim_marker_cap`], called after every
 /// [`Self::write_resize_marker`] append: when exceeded, the OLDEST entry is
@@ -145,7 +169,7 @@ pub struct ScrollbackRingBuffer {
 /// surviving span, never a more recent one, and (D1'''', round-7 rework)
 /// attributes that lost span to the LAST evicted entry's own dimensions
 /// via `capped_head_dims` rather than to an unrelated later survivor's.
-pub const MAX_DIM_MARKERS: usize = 24;
+pub const MAX_DIM_MARKERS: usize = 62;
 
 impl ScrollbackRingBuffer {
     /// Create a new ring buffer with the specified capacity.
@@ -400,15 +424,28 @@ impl ScrollbackRingBuffer {
         // dimensions can replay MORE cross-line mixing than not attributing
         // the gap at all (reviewer measurement: up to 13 mixed rows under
         // that fallback vs 3 for "no segments", against 0 for full
-        // attribution, on one tested shape). The reviewer verified the fix
-        // by measurement across every tested shape: when 2+ entries have
-        // been evicted, leave `head` unattributed entirely rather than
-        // guess — [`TerminalCore::replay_segments`] then replays the
+        // attribution, on one tested shape). Leaving `head` unattributed
+        // instead — [`TerminalCore::replay_segments`] then replays the
         // leading gap (before the first surviving segment's own offset) at
-        // the caller's target dimensions, which the measurement showed
-        // matches full uncapped attribution's mixed-row count in every
-        // tested case. Every surviving marker keeps its own true position
-        // regardless (the `mid` vec below is unaffected).
+        // the caller's target dimensions — is never WORSE than "no
+        // segments" (round-8 finding `6082de4e619d7f51`'s 216-shape sweep:
+        // 0/216 shapes came out worse; this is the D2''''' hard gate this
+        // ring's own tests enforce). It is NOT the same as full uncapped
+        // attribution, though: round-9 rework (D2'''''', finding
+        // `6eeccc889cb15d87`) corrected a prior version of this comment
+        // that claimed otherwise — re-measured directly (this
+        // implementer's own reproduction, `pty_spawn::tests::
+        // resize_storm_beyond_marker_cap_replays_no_worse_than_full_attribution`),
+        // 2+ evictions mix MORE rows than full attribution regardless of
+        // how large [`MAX_DIM_MARKERS`] is (still true at 62, exactly as it
+        // was at 24) — raising the cap does not change this fallback's
+        // OUTCOME for a storm that genuinely needs 2+ evictions; it only
+        // raises how many distinct dimensions a storm can record before it
+        // needs any eviction at all (see [`MAX_DIM_MARKERS`]'s own doc).
+        // Sibling doc `pty_spawn.rs`'s cap-eviction test states this same
+        // guarantee correctly; this comment previously did not. Every
+        // surviving marker keeps its own true position regardless (the
+        // `mid` vec below is unaffected).
         //
         // Round-6 instead spliced `mid[0]` (the OLDEST SURVIVING marker) in
         // at position 0, discarding its true (later) offset — measured by
@@ -1051,9 +1088,9 @@ mod tests {
     ///
     /// Confirmed to fail pre-fix: round-7's `capped_head_dims` fallback
     /// (used unconditionally whenever ANY eviction had ever happened) makes
-    /// `segments.len()` come out as `MAX_DIM_MARKERS + 1` (25, not 24) with
-    /// `segments[0]` at position 0 carrying the LAST evicted entry's
-    /// (wrong, partial-gap) dimensions — both assertions below fail.
+    /// `segments.len()` come out as `MAX_DIM_MARKERS + 1` (one more than the
+    /// cap) with `segments[0]` at position 0 carrying the LAST evicted
+    /// entry's (wrong, partial-gap) dimensions — both assertions below fail.
     #[test]
     fn enforce_dim_marker_cap_with_multiple_evictions_leaves_the_gap_unattributed() {
         let mut rb = ScrollbackRingBuffer::new(4 * 1024 * 1024);

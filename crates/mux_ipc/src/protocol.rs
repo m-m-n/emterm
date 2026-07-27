@@ -147,22 +147,30 @@ const SNAPSHOT_PAYLOAD_MAGIC: [u8; 8] = *b"EMSNAP2\0";
 /// `count`, so a frame well under the 64 KiB off-thread-replay threshold
 /// could still declare a segment table approaching `MAX_FRAME_LENGTH / 8`
 /// (~2,000,000 entries) and force that many synchronous reflows on the
-/// caller's UI thread. Round-6 tightened the ceiling itself: 4096 was
-/// still ~170x the daemon's OWN recording bound
-/// (`mux::scrollback_buffer::MAX_DIM_MARKERS`, 24) — since every non-empty
-/// segment costs a reflow, a compact hostile frame well under any
-/// byte-size threshold could still buy replay-worker time proportional to
-/// segment count (round-4 measured 80 segments / 0.95 MiB → 5.35 s). This
-/// value is a small, generous multiple of `MAX_DIM_MARKERS` (duplicated
-/// here as a literal — `mux_ipc` has no dependency on the daemon crate,
-/// keep the two in sync if either changes) rather than that exact value,
-/// so a legitimate producer never has to track this decoder-side ceiling
-/// precisely; a genuine daemon-recorded payload never gets remotely close
-/// to it either way. Rejecting anything above it as
-/// [`DecodedSnapshotPayload::Malformed`] costs no legitimate payload while
-/// making the size of `count` itself part of the checked upfront
-/// validation ([`decode_snapshot_payload_typed`]) rather than something
-/// only a full per-entry scan would discover.
+/// caller's UI thread. Round-6 tightened the ceiling itself to a small,
+/// generous multiple of the daemon's OWN recording bound
+/// (`mux::scrollback_buffer::MAX_DIM_MARKERS`, then 24) — since every
+/// non-empty segment costs a reflow, a compact hostile frame well under
+/// any byte-size threshold could still buy replay-worker time
+/// proportional to segment count (round-4 measured 80 segments / 0.95 MiB
+/// → 5.35 s).
+///
+/// D1'''''' (round-9 rework, review round-8 finding `6082de4e619d7f51`):
+/// the DERIVATION direction reversed. `MAX_DIM_MARKERS` was raised to 62 —
+/// `mux::scrollback_buffer::MAX_DAEMON_SNAPSHOT_SEGMENTS`'s doc explains
+/// why — chosen as `MAX_SEGMENTS - 2` (one slot for a synthesized head
+/// segment, one for a trailing alt-screen dump), so a genuine
+/// daemon-recorded payload can now legitimately reach this ceiling
+/// EXACTLY, not "never remotely close to it" as before. This is
+/// intentional and still safe: `count > MAX_SEGMENTS` is the rejection
+/// test (strictly greater), so a legitimate `count == MAX_SEGMENTS`
+/// payload decodes cleanly (see
+/// `largest_daemon_producible_segment_list_round_trips_cleanly` /
+/// `largest_real_producer_segment_list_round_trips_cleanly` in
+/// `mux::session::pane`'s tests) while a hostile frame still cannot
+/// exceed it. `mux_ipc` has no dependency on the daemon crate, so the
+/// daemon-side constant is duplicated here as a literal; keep the two in
+/// sync if either changes.
 pub const MAX_SEGMENTS: usize = 64;
 
 /// Maximum total cell count (`cols as u32 * rows as u32`) a single
@@ -193,12 +201,25 @@ pub const MAX_SEGMENT_CELLS: u32 = 1_000_000;
 /// replay SYNCHRONOUSLY on the caller's UI thread, so this is not merely a
 /// background-CPU concern — it can stall the switch outright. A REAL
 /// daemon-recorded payload never approaches this: the daemon's own
-/// `MAX_DIM_MARKERS` (24) already bounds segment count, and a real
-/// terminal's cell count is orders of magnitude below `MAX_SEGMENT_CELLS`.
-/// Set to 8x `MAX_SEGMENT_CELLS` — comfortably above any real resize
-/// storm's total cost, well below the worst case a full `MAX_SEGMENTS`
-/// table of max-size segments could declare.
-pub const MAX_CUMULATIVE_SEGMENT_CELLS: u64 = 8 * MAX_SEGMENT_CELLS as u64;
+/// `MAX_DIM_MARKERS` bounds segment count, and a real terminal's cell
+/// count is orders of magnitude below `MAX_SEGMENT_CELLS`.
+///
+/// D1'''''' (round-9 rework, review round-8 finding `6082de4e619d7f51` /
+/// `45033eaafbdf8e25`): raised from 8x to 32x `MAX_SEGMENT_CELLS` (8,000,000
+/// → 32,000,000). `MAX_DIM_MARKERS` rose to 62 (`mux::scrollback_buffer`'s
+/// doc) alongside `MAX_DAEMON_SNAPSHOT_SEGMENTS` rising to 64
+/// (`mux::session::pane`'s doc), which — left at the OLD 8,000,000 —
+/// would derive a producer per-segment budget of 8,000,000 / 64 =
+/// 125,000 cells: not comfortably above "a 4K display at a tiny font"
+/// (this constant's sibling [`MAX_SEGMENT_CELLS`] doc's own "a few
+/// hundred thousand cells" estimate already exceeds it). Raised so the
+/// derived per-segment producer budget (32,000,000 / 64 = 500,000) stays
+/// ABOVE the old budget (307,692 at the old 26-segment count) instead of
+/// shrinking underneath a wider real display — real terminal dimensions
+/// fit comfortably again rather than by coincidence. Still well below the
+/// worst case a full `MAX_SEGMENTS` table of max-size segments could
+/// declare (64,000,000).
+pub const MAX_CUMULATIVE_SEGMENT_CELLS: u64 = 32 * MAX_SEGMENT_CELLS as u64;
 
 /// Result of decoding a snapshot payload (task0005 rework D2'', replacing
 /// the ambiguous `(Vec<DimSegment>, &[u8])` tuple [`decode_snapshot_payload`]
