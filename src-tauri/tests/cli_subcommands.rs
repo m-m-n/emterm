@@ -198,3 +198,115 @@ fn image_subcommand_unsupported_format_returns_one() {
         "unsupported image format should map to exit code 1"
     );
 }
+
+// --- --version flag ---
+// References task0001 AC-1..AC-3. The flag is handled in `main()` before
+// `logging::init()`, so its behavior can only be observed by spawning the
+// built binary (unlike the subcommands above, which go through the
+// in-process `cli::run` facade). `CARGO_BIN_EXE_emterm` is the same
+// technique `mux_throughput.rs` uses to spawn the built binary.
+
+#[test]
+fn version_flag_prints_crate_version_and_exits_zero() {
+    let exe = env!("CARGO_BIN_EXE_emterm");
+    let output = std::process::Command::new(exe)
+        .arg("--version")
+        .output()
+        .expect("spawn emterm --version");
+
+    assert!(output.status.success(), "--version should exit with status 0");
+    let expected = format!("{}\n", env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        expected,
+        "--version should print exactly the crate version followed by one newline"
+    );
+}
+
+#[test]
+fn version_flag_stderr_is_empty() {
+    let exe = env!("CARGO_BIN_EXE_emterm");
+    let output = std::process::Command::new(exe)
+        .arg("--version")
+        .output()
+        .expect("spawn emterm --version");
+
+    assert!(
+        output.stderr.is_empty(),
+        "--version should produce no stderr output"
+    );
+}
+
+#[test]
+fn version_flag_with_extra_args_behaves_identically() {
+    let exe = env!("CARGO_BIN_EXE_emterm");
+    let output = std::process::Command::new(exe)
+        .args(["--version", "anything"])
+        .output()
+        .expect("spawn emterm --version anything");
+
+    assert!(
+        output.status.success(),
+        "--version with trailing args should still exit with status 0"
+    );
+    let expected = format!("{}\n", env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        expected,
+        "--version with trailing args should print the same version output as --version alone"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "--version with trailing args should produce no stderr output"
+    );
+}
+
+// References task0003 AC-6: a stdout write/flush failure must not panic —
+// the process must still exit 0. `/dev/full` always fails writes with
+// ENOSPC, which reproduces a broken/full pipe deterministically (no
+// process-teardown timing race).
+#[test]
+#[cfg(unix)]
+fn version_flag_exits_zero_even_when_stdout_write_fails() {
+    let Ok(dev_full) = std::fs::OpenOptions::new().write(true).open("/dev/full") else {
+        // /dev/full is Linux-specific; skip on Unix targets without it.
+        return;
+    };
+    let exe = env!("CARGO_BIN_EXE_emterm");
+    let status = std::process::Command::new(exe)
+        .arg("--version")
+        .stdout(dev_full)
+        .status()
+        .expect("spawn emterm --version with /dev/full as stdout");
+
+    assert!(
+        status.success(),
+        "--version should exit 0 even when the stdout write fails"
+    );
+}
+
+// References task0003 AC-8 (TS-2): `--version` must not touch the app log
+// directory. Redirects `XDG_DATA_HOME` to an empty temp dir and asserts the
+// app's log subdirectory was never created.
+#[test]
+#[cfg(unix)]
+fn version_flag_does_not_create_log_directory() {
+    let exe = env!("CARGO_BIN_EXE_emterm");
+    let data_home = tempfile::tempdir().expect("create temp XDG_DATA_HOME");
+    let output = std::process::Command::new(exe)
+        .arg("--version")
+        .env("XDG_DATA_HOME", data_home.path())
+        .output()
+        .expect("spawn emterm --version with XDG_DATA_HOME override");
+
+    assert!(
+        output.status.success(),
+        "--version should exit with status 0"
+    );
+    let log_dir = data_home.path().join("net.laser5.app.emterm");
+    assert!(
+        !log_dir.exists(),
+        "--version should not create the app log directory ({})",
+        log_dir.display()
+    );
+}

@@ -60,6 +60,39 @@ fn build_event_loop() -> EventLoop {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
+    // `--version` — print the compile-time crate version and exit, before
+    // `logging::init()`, any settings read, or any `#[cfg(feature = "gui")]`
+    // code (D1 in IMPLEMENTATION.md). Identical in the GUI and CLI-only
+    // builds since it sits outside all feature gates. Only the first
+    // argument position is inspected, so trailing arguments are ignored
+    // (`emterm --version anything` still succeeds).
+    if args.get(1).is_some_and(|a| a == "--version") {
+        // On Windows, release GUI builds link the `windows` subsystem (see
+        // the crate attribute above), so the process starts with no console
+        // attached and a stdout write goes to a dead handle. Attach to the
+        // parent console (the shell that launched us, e.g. cmd.exe /
+        // PowerShell) before printing so `--version` is visible there. This
+        // is a no-op / harmless failure when there is no parent console
+        // (e.g. launched from Explorer) or on non-Windows builds. Uses the
+        // `windows-sys` crate (already a dependency for the mux bridge's
+        // console handling) rather than a hand-written `extern` block.
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+            unsafe {
+                AttachConsole(ATTACH_PARENT_PROCESS);
+            }
+        }
+        // `println!` panics if the write (or its implicit flush) fails —
+        // e.g. a closed/broken stdout pipe. `--version` must always exit 0,
+        // so the write is attempted best-effort and any failure ignored.
+        use std::io::Write;
+        let mut stdout = std::io::stdout();
+        let _ = writeln!(stdout, "{}", env!("CARGO_PKG_VERSION"));
+        let _ = stdout.flush();
+        std::process::exit(0);
+    }
+
     // CLI subcommand dispatch (markdown / json / yaml / image / mux).
     // Bare-word subcommands are recognized BEFORE `logging::init()` because
     // each subcommand owns its own logger (mux bridge / daemon write to
