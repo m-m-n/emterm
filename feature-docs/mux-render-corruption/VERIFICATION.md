@@ -22,8 +22,9 @@
   command above ever runs, since `term_core` is a separate workspace
   package): `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib`
 - Command (web): `bun test`
-- Command (NFR1 latency benches, round-6 rework, cap raised round-9; not
-  part of the default `--lib` run — release-mode timing, AC-1/AC-3):
+- Command (NFR1 latency benches, round-6 rework, cap raised round-9,
+  hard latency assertion restored round-10 (D3, AC-6) — not part of the
+  default `--lib` run — release-mode timing, AC-1/AC-3):
   ```sh
   CARGO_TARGET_DIR=src-tauri/target cargo test --release \
     --manifest-path crates/term_core/Cargo.toml --lib \
@@ -31,6 +32,10 @@
     ordinary_switch_bench_950kib_matches_segment_free_cost \
     segment_bounded_replay_bench_950kib
   ```
+  `segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap`
+  now asserts (not merely reports) that the storm-path replay at the
+  daemon cap stays within a stated small multiple of the segment-free
+  baseline — see the NFR1 Measured Latency section below.
 
 ### Known pre-existing failures (out of scope, AC-9)
 
@@ -48,10 +53,14 @@ starting point) — they are not caused by, and not fixed by, this task:
 - `tabs::tests::welcome_without_windows_leaves_group_none`
 
 All other tests pass: 2737 passed / 7 failed (above) / 3 ignored for the
-`emterm lib` command; 744 passed / 0 failed / 11 ignored for the
-`term_core lib` command. "All pass" is therefore not a literal claim this
-run supports for the `emterm lib` gate — the 7 above are the sole,
-documented exception.
+`emterm lib` command; 753 passed / 0 failed / 11 ignored for the
+`term_core lib` command (round-10 rework, task0010, adds 9 direct
+equivalence tests — `reflow::tests::same_width_fast_path_matches_reference_*`
+and `..._falls_back_to_reference_...` — comparing the new same-width
+resize path against the pre-round-10 reference implementation, on top of
+round-9's 744). "All pass" is therefore not a literal claim this run
+supports for the `emterm lib` gate — the 7 above are the sole, documented
+exception.
 
 ### Test Scenarios from SPEC.md
 
@@ -115,68 +124,88 @@ to the wire ceiling**") already scopes to the regime this table confirms;
 this note exists so a future reader does not read AC-1 as a universal
 claim it never made.
 
-### NFR1 Measured Latency (round-6 rework, AC-1/AC-2/AC-4/AC-13; re-measured round-9 at the raised cap, AC-3)
+### NFR1 Measured Latency (round-6 rework, AC-1/AC-2/AC-4/AC-13; re-measured round-9 at the raised cap, AC-3; round-10 rework closes the storm-path cost, task0010 AC-1/AC-3/AC-4/AC-6)
 
 Release build, `ordinary_switch_bench_950kib_matches_segment_free_cost` +
 `segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap`
 (0.95 MiB payload, 100x30 grid, 10 000-line scrollback default — the
-round-4/round-5 measurement methodology). Round-9 raised
-`DAEMON_SEGMENT_CAP` in this bench from 24 to 62 to mirror `MAX_DIM_MARKERS`
-and re-measured directly (not extrapolated):
+round-4/round-5 measurement methodology), re-measured after round-10's
+fix (D1: `TerminalCore::resize_same_width` no longer re-wraps retained
+scrollback for a same-width resize — see `crates/term_core/src/reflow.rs`
+and that bench's own doc comment):
 
 | Shape | Latency |
 |-------|---------|
-| Segment-free (baseline) | ~8-10 ms |
-| Ordinary switch (small differing head + bulk tail at target — the shape a real spawn-size head marker + settled GUI grid produces) | ~1.5-2.2 ms (round-9: 1.54 ms, cap-independent — confirmed unaffected by the cap raise) |
-| Single segment differing, no stable tail (contrived worst case; the split cannot help) | ~270-300 ms |
-| Resize storm, 15 segments (quarter of the new `MAX_DIM_MARKERS`=62) | ~234-237 ms |
-| Resize storm, 24 segments | ~323-330 ms (matches the round-8 reviewer's own ~338 ms at this same point) |
-| Resize storm, 32 segments | ~2.49-2.52 **seconds** |
-| Resize storm, 48 segments | ~3.65-3.69 **seconds** |
-| Resize storm, 62 segments (at the new daemon cap) | ~4.5-4.7 **seconds** |
+| Segment-free (baseline) | ~8-9 ms |
+| Ordinary switch (small differing head + bulk tail at target — the shape a real spawn-size head marker + settled GUI grid produces) | ~1.4-2.2 ms, cap-independent (unaffected by round-10 — the prefix/suffix split, not this bench's storm path, is what makes this shape fast) |
+| Single segment differing, no stable tail (contrived worst case; the split cannot help) | ~160-170 ms (round-9: ~270-300 ms — improved incidentally because this segment's dims differ only in ROWS, the same-width shape round-10 makes cheap) |
+| Resize storm, 15 segments (quarter of the new `MAX_DIM_MARKERS`=62) | ~18-20 ms (round-9: ~234-237 ms) |
+| Resize storm, 24 segments | ~17-18 ms (round-9: ~323-330 ms) |
+| Resize storm, 32 segments | ~160-170 ms (round-9: ~2.49-2.52 **seconds**) |
+| Resize storm, 48 segments | ~160-170 ms (round-9: ~3.65-3.69 **seconds**) |
+| Resize storm, 62 segments (at the daemon cap) | ~160-170 ms (round-9: ~4.5-4.7 **seconds**) |
 
-**This diverges sharply from the round-8 reviewer's own extrapolation**
-("24 segs 338ms → 62 segs ~500-600ms estimated"), which assumed roughly
-linear scaling from two points (6 and 24 segments) that both happen to sit
-BEFORE a cliff in the cost curve. The real curve is superlinear between 24
-and 48 segments — consistent with round-4's ORIGINAL unbounded measurement
-of this same shape family, which already showed a cliff between 20 and 30
-segments (272 ms → 2078 ms, a ~7.6x jump for a 1.5x segment increase). The
-reviewer's estimate was off by roughly 8x; the measured cost at the new
-cap is closer to 4.5-4.7 SECONDS than to 500-600 ms.
+**D1 closes the NFR1 question round-9 left open.** The storm-path cost
+that scaled to seconds is gone: every row above stays within roughly
+20x of the segment-free baseline instead of climbing to 500-600x. This
+implementer verified the mechanism directly during development (not just
+the aggregate timing): `resize_same_width`'s own inputs — the number of
+rows moved between viewport and scrollback per call — stay bounded by
+`|rows_a - rows_b|` (6, in this bench's fixture) for EVERY segment
+transition regardless of how much scrollback has accumulated or how many
+segments the storm contains, confirming the fix removes the dependency on
+accumulated content, not merely the specific numbers above.
+
+The storm rows do NOT flatten to a single constant value (24/15 segments
+measure ~10x cheaper than 32/48/62) — this residual variation is NOT
+resize cost: it traces to how much real scrollback-compression work
+(`cell_to_slim` on rows that genuinely scroll off — an ordinary,
+pre-existing PTY-output cost this task does not touch) a given storm
+shape happens to trigger, which this implementer confirmed varies with
+segment count independent of the resize path (the per-resize row-movement
+count stays 0-6 in every case measured, in both the cheap and the not-as-
+cheap segment counts). AC-1's "within a stated small multiple of the
+segment-free baseline" is satisfied by the worst measured row (~160-170 ms
+against ~8-9 ms, roughly 20x) — `segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap`
+asserts this directly as a hard bound (`t_cap < t_baseline*60 + 200ms`,
+comfortably above the ~160-170 ms measured and comfortably below the
+pre-D1 multi-second cost), restoring the automated latency gate round-9
+downgraded to informational (AC-6). Confirmed to fail without D1:
+reverting `resize_same_width` to call the pre-round-10 reference
+implementation unconditionally reproduces the exact round-9 numbers above
+(re-measured by this implementer, not merely cited) and fails the
+restored bound by roughly 7x.
 
 AC-4 is judged on the "ordinary switch" row: it is not measurably slower
-than segment-free (well under the bench's 3x + 20ms bound), independent of
-the cap raise — confirmed by direct re-measurement, not assumption. The
-resize-storm rows are the axis this task's cap raise deliberately trades
-against FR2 correctness: **this is now a much larger cost than previously
-documented, and the verify phase should treat this as an open NFR1
-question, not a settled one.** SPEC.md's NFR1 states no numeric threshold
-("must not noticeably degrade... latency"), and the storm shape (a
-continuous resize drag producing 24+ distinct dimensions with no
-intervening switch, per MT-3) is rare relative to the "ordinary switch"
-case NFR1 primarily concerns — but 4.5+ seconds for that rare case is a
-concrete, user-visible stall if it occurs, and this implementer does not
-consider it self-evidently within "not noticeably degrade." If the verify
-phase judges this unacceptable, the round-8 reviewer's suggestion (b) —
-changing `enforce_dim_marker_cap`'s victim-selection strategy instead of
-(or in addition to) raising the cap — is the documented next step; this
-task's own plan explicitly excludes pursuing it pre-emptively
-("Out of Scope", `feature-docs/mux-render-corruption/tasks/task0009.md`).
+than segment-free (well under the bench's 3x + 20ms bound), unaffected by
+round-10 (that shape was already fast via the prefix/suffix split, an
+unrelated mechanism this task does not change) — confirmed by direct
+re-measurement, not assumption.
 
-The resize-storm rows are UNCHANGED IN KIND from round 4/5/8 (segment
-count still gates their cost; the prefix/suffix split does not apply when
-no stable tail exists) — their correctness (zero cross-line mixing), not
-their latency, is what AC-1 requires. Round-6 rework (review round-6
-finding `004fe3021b5d0c15`): SPEC.md's NFR1 states no numeric threshold
-("must not noticeably degrade... latency"), so the resize-storm rows above
-are presented here as measurements against that qualitative bar, not
-against an invented ceiling — the "noticeably degrade" judgement for this
-shape is left to the verify phase / MT-3 rather than resolved here by
-rewriting the criterion. Round-9 additionally flags (immediately above)
-that the magnitude at the new cap is now large enough (seconds, not
-hundreds of milliseconds) that this implementer believes the judgement
-deserves explicit verify-phase attention rather than a default pass.
+The round-8/round-9 concern this section previously carried — "the
+verify phase should treat this as an open NFR1 question" — is resolved:
+the round-8 reviewer's suggestion (b) (changing
+`enforce_dim_marker_cap`'s victim-selection strategy) is no longer the
+only path to an acceptable NFR1 outcome at this cap, because the cap's
+own latency trade-off (`MAX_DIM_MARKERS`'s doc, `scrollback_buffer.rs`)
+no longer applies now that the storm-path resize cost is flat.
+
+**Scope of the fix, stated explicitly (not folded silently into the
+numbers above):** D1's cheap path applies to a SAME-WIDTH resize only —
+`cols` unchanged, only `rows` differs — which is what `dim_markers`
+records for this ring (a `(cols, rows)` pair) and what every fixture in
+this codebase's storm/cap-sweep tests actually exercises (a height-only
+window drag; `crates/term_core/src/bench.rs`'s storm payload and
+`pty_spawn.rs`'s `run_resize_storm_cap_eviction_case` both hold `cols`
+fixed). A resize that ALSO changes `cols` still goes through the
+pre-existing full content-preserving reflow (`resize_full_reflow`,
+unchanged by this task) and still costs what it did before — this task
+did not attempt the harder general case (re-wrapping deferred across a
+mix of past COLUMN widths, not just row counts), because it is not the
+shape any measured benchmark, cap-sweep test, or MT-3's own wording
+(a vertical/height drag) exercises. If a real corner-drag resize storm
+that also varies width turns out to matter, it is not covered by this
+measurement and would need its own investigation.
 
 ## Code Quality Verification
 
@@ -198,9 +227,9 @@ deserves explicit verify-phase attention rather than a default pass.
 | Requirement | Tasks | Verification |
 |-------------|-------|--------------|
 | FR1 | task0001 | SC-1 (investigation verdict with test evidence) |
-| FR2 | task0001, task0006, task0009 | TS-1, TS-2, TS-7, TS-7b, FR2 cap-sweep re-measurement above |
-| FR3 | task0001, task0006, task0009 | TS-1, TS-2, TS-3, TS-4, TS-7, TS-9, TS-10, TS-11, TS-12, TS-13 |
-| NFR1 | task0001, task0006, task0009 | MT-2 (manual latency feel check) + NFR1 Measured Latency table above (automated; re-measured at the raised cap round-9 — see the open question flagged there) |
+| FR2 | task0001, task0006, task0009, task0010 | TS-1, TS-2, TS-7, TS-7b, FR2 cap-sweep re-measurement above; re-confirmed unaffected by task0010's resize-path change (`pty_spawn::tests::resize_storm_beyond_marker_cap_replays_no_worse_than_full_attribution` and the other cap-sweep/fingerprint tests in that module re-run green — task0010 does not touch `scrollback_buffer.rs`'s marker logic, only `term_core`'s resize implementation) |
+| FR3 | task0001, task0006, task0009, task0010 | TS-1, TS-2, TS-3, TS-4, TS-7, TS-9, TS-10, TS-11, TS-12, TS-13; task0010 adds 9 direct equivalence tests (`crates/term_core/src/reflow.rs`, `same_width_fast_path_matches_reference_*`) comparing the new same-width resize path against the pre-round-10 reference on grid, cursor, scrollback content/wrapped-flags, eviction total, and intern-table state across grow/shrink/zero-capacity/mid-viewport-cursor/fallback shapes |
+| NFR1 | task0001, task0006, task0009, task0010 | MT-2 (manual latency feel check) + NFR1 Measured Latency table above — **task0010 closes the open NFR1 question round-9 left**: the storm-path resize cost that scaled to seconds is now flat (~160-170 ms worst case), and the automated latency bound is a hard assertion again (AC-6) |
 | NFR2 | task0001, task0009 | TS-6 (re-confirmed green after this task's changes) |
 | NFR3 | task0001, task0009 | TS-5 (updated round-9 to include `term_core lib` and state the 7 pre-existing failures) |
 
@@ -211,14 +240,14 @@ deserves explicit verify-phase attention rather than a default pass.
 - [ ] MT-2: On-device — window switch / reattach latency feels unchanged
       from before the fix
 - [ ] MT-3 (task0005 rework, review round-4 finding `6c650908ea8e95e9`;
-      **round-9 note, AC-3**: the automated NFR1 measurement above now
-      shows this exact shape — dozens of grid-size changes in quick
-      succession — costing 2.5-4.7 SECONDS at 32-62 recorded dimensions,
-      not the sub-second cost this scenario's original wording assumed.
-      This on-device check may now genuinely observe a multi-second stall
-      depending on how many resizes the drag records; treat that
-      observation as data for the verify phase's NFR1 judgement, not as an
-      unexpected failure to work around):
+      **round-9 note, AC-3**, superseded by **round-10, task0010 AC-8**:
+      round-9 flagged that this exact shape — dozens of grid-size changes
+      in quick succession — measured 2.5-4.7 SECONDS at 32-62 recorded
+      dimensions, and warned this on-device check might observe a
+      multi-second stall. Round-10's `TerminalCore::resize_same_width` fix
+      (D1) closes that: the same shape now measures ~160-170 ms (see the
+      NFR1 Measured Latency table above), so this check is not expected to
+      observe a multi-second stall any longer):
       On-device — drag a mux window's edge to resize it repeatedly (a
       continuous drag, not discrete resizes), producing dozens of grid-size
       changes in quick succession against a pane with substantial

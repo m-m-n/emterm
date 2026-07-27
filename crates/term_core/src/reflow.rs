@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 
 use crate::cell::*;
 use crate::char_table::CharTable;
-use crate::slim_cell::{cell_to_slim, slim_overflow_str, slim_to_cell};
+use crate::slim_cell::{SlimCell, cell_to_slim, slim_overflow_str, slim_to_cell};
 use crate::style_table::StyleTable;
 use crate::terminal_core::TerminalCore;
 
@@ -29,8 +29,251 @@ pub(crate) struct LogicalLine {
 }
 
 impl TerminalCore {
-    /// Same-width resize: just adjust row count.
+    /// Same-width resize: adjusts row count without re-wrapping any cell
+    /// content — a same-width resize can never change how a physical line
+    /// wraps, since wrapping is purely a function of COLUMN width, which is
+    /// unchanged here. Touches only the rows that actually cross the
+    /// viewport/scrollback boundary as a result of the height change —
+    /// never the rows that stay untouched on either side of that boundary.
+    ///
+    /// D1 (round-10 rework, mux-render-corruption task0010): this REPLACES
+    /// an implementation that unconditionally ran a full
+    /// `reflow_drain` + `repopulate_ring_from_lines` round trip —
+    /// decompressing EVERY accumulated scrollback row into `Cell` and then
+    /// re-interning EVERY retained row into brand-new `StyleTable`/
+    /// `CharTable`s — even though a same-width resize never needs to
+    /// re-wrap anything. That round trip's cost grew with the SIZE OF
+    /// ACCUMULATED SCROLLBACK, not with the height CHANGE itself, which is
+    /// what made a resize storm's replay cost scale (super-linearly, since
+    /// scrollback itself grows across the storm) with segment count — see
+    /// `crates/term_core/src/bench.rs`'s
+    /// `segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap`,
+    /// whose storm shape alternates ROWS only (cols fixed), the exact cost
+    /// this rework removes. Confirmed to fail without this fix: reverting
+    /// this function to call `resize_same_width_reference` unconditionally
+    /// reproduces the multi-second storm latency that same bench measures.
+    ///
+    /// The `skip`/`keep`/cursor-tracking arithmetic below is copied
+    /// VERBATIM from [`Self::resize_same_width_reference`] — it depends
+    /// only on ROW COUNTS (`scrollback_slim.len()`, `old_rows`, `new_rows`,
+    /// `scrollback_capacity`, `cursor_row`), never on cell content, so
+    /// keeping it exact costs nothing. What differs is HOW the resulting
+    /// row membership (which rows end up in scrollback vs. viewport vs.
+    /// dropped outright — the reference's cursor-visibility logic can drop
+    /// a bounded number of the NEWEST rows too, not just the oldest, when
+    /// capacity eviction would otherwise scroll the cursor out of view; see
+    /// `trailing_drop` below) gets REALIZED: instead of decompressing and
+    /// re-interning the whole drained sequence, only the rows whose side of
+    /// the viewport/scrollback boundary actually changes get compressed
+    /// (viewport → scrollback, shrink direction) or decompressed
+    /// (scrollback → viewport, grow direction); rows that stay on the same
+    /// side are moved with a plain `Cell` copy (viewport → viewport) or are
+    /// not touched at all (scrollback → scrollback).
+    ///
+    /// Falls back to [`Self::resize_same_width_reference`] — the always-
+    /// correct, O(total-content) path this replaces — for the one case
+    /// this fast path does not attempt: `skip` (rows dropped from the
+    /// front of scrollback to fit the new capacity) exceeding the CURRENT
+    /// scrollback length, i.e. eviction reaching into rows that are still
+    /// part of the CURRENT viewport. That needs a shrinking scrollback
+    /// CAPACITY (not row count — capacity is fixed for the whole duration
+    /// of a snapshot replay) big enough that the height change alone
+    /// cannot compensate, in the SAME call that also changes the row
+    /// count; it is never exercised by replay and vanishingly rare live.
     pub(crate) fn resize_same_width(
+        &mut self,
+        new_rows: u16,
+        scrollback_lines: u32,
+        cursor_col: usize,
+        cursor_row: usize,
+    ) -> (usize, usize) {
+        let scrollback_capacity = scrollback_lines as usize;
+        let new_rows_usize = new_rows as usize;
+        let old_rows = self.rows as usize;
+        let cols = self.cols as usize;
+
+        let sc = self.scrollback_slim.len();
+        let total_lines = sc + old_rows;
+        let cursor_abs = sc + cursor_row;
+        let total_capacity = scrollback_capacity + new_rows_usize;
+        let keep = total_lines.min(total_capacity);
+        let desired_vp_row = cursor_row.min(new_rows_usize.saturating_sub(1));
+        let skip = if total_lines <= total_capacity {
+            0
+        } else {
+            let ideal = cursor_abs
+                .saturating_sub(keep.saturating_sub(new_rows_usize))
+                .saturating_sub(desired_vp_row);
+            ideal.min(total_lines.saturating_sub(keep))
+        };
+
+        if skip > sc {
+            // See doc comment: needs a shrinking CAPACITY big enough to eat
+            // into the current viewport in the same call — never hit
+            // during replay, rare live. Defer to the always-correct path
+            // rather than extending the fast path to a case that costs
+            // nothing in the scenario this rework targets.
+            return self.resize_same_width_reference(
+                new_rows,
+                scrollback_lines,
+                cursor_col,
+                cursor_row,
+            );
+        }
+
+        // Cursor tracking — identical expressions to the reference
+        // implementation; depends only on the row counts above, never on
+        // cell content.
+        let cursor_abs_new = cursor_abs.saturating_sub(skip);
+        let vp_start_new = keep.saturating_sub(new_rows_usize);
+        let new_cursor_row = cursor_abs_new.saturating_sub(vp_start_new);
+
+        // How many of the OLDEST rows in the combined [old scrollback, old
+        // viewport] sequence never make it into the new state at all —
+        // not moved to scrollback, not kept in the viewport (the
+        // reference's cursor-visibility `skip` can choose to drop some of
+        // the NEWEST content instead of the oldest; see the doc comment).
+        // Bounded by `skip_min`, which is itself bounded by the row-count
+        // delta, never by accumulated scrollback size.
+        let skip_min = total_lines.saturating_sub(total_capacity);
+        let trailing_drop = skip_min.saturating_sub(skip);
+        // Rows of the CURRENT viewport that still participate — the
+        // bottom `trailing_drop` rows are the ones being dropped outright.
+        let eov = old_rows.saturating_sub(trailing_drop);
+
+        // Drop the oldest `skip` scrollback rows — never touches the
+        // viewport, never touches a row that survives.
+        for _ in 0..skip {
+            if let Some(old) = self.scrollback_slim.pop_front() {
+                self.release_slim_row(&old);
+            }
+            self.scrollback_wrapped.pop_front();
+        }
+        let rsc = self.scrollback_slim.len(); // == sc - skip
+
+        let new_total = new_rows_usize * cols;
+        let mut new_grid = vec![Cell::EMPTY; new_total];
+        let mut new_wrapped = vec![false; new_rows_usize];
+        let mut new_overflow = OverflowTable::new();
+
+        if eov >= new_rows_usize {
+            // SHRINK (or unchanged height): the top `shrink_amount` rows of
+            // the surviving viewport portion move into scrollback
+            // (compressed — O(shrink_amount), never touches existing
+            // scrollback rows); the bottom `new_rows` become the new
+            // viewport (a plain `Cell` copy, no reflow).
+            let shrink_amount = eov - new_rows_usize;
+            for r in 0..shrink_amount {
+                let abs = self.viewport_abs(r as u16);
+                let base = abs * cols;
+                let abs32 = abs as u32;
+                let mut slim_row: Vec<SlimCell> = Vec::with_capacity(cols);
+                for c in 0..cols {
+                    let cell = self.ring_cells[base + c];
+                    let overflow_str = if cell.is_overflow() {
+                        self.overflow.get(&(c as u32, abs32)).cloned()
+                    } else {
+                        None
+                    };
+                    slim_row.push(cell_to_slim(
+                        &cell,
+                        overflow_str.as_deref(),
+                        &mut self.styles,
+                        &mut self.chars,
+                    ));
+                }
+                let wrapped = self.ring_wrapped[abs];
+                self.scrollback_slim.push_back(slim_row);
+                self.scrollback_wrapped.push_back(wrapped);
+            }
+            for r in 0..new_rows_usize {
+                let old_abs = self.viewport_abs((shrink_amount + r) as u16);
+                let old_base = old_abs * cols;
+                let new_base = r * cols;
+                new_grid[new_base..new_base + cols]
+                    .copy_from_slice(&self.ring_cells[old_base..old_base + cols]);
+                new_wrapped[r] = self.ring_wrapped[old_abs];
+                if !self.overflow.is_empty() {
+                    for c in 0..cols {
+                        if let Some(s) = self.overflow.get(&(c as u32, old_abs as u32)) {
+                            new_overflow.insert((c as u32, r as u32), s.clone());
+                        }
+                    }
+                }
+            }
+        } else {
+            // GROW: pull the `grow_amount` most-recent rows back OUT of
+            // scrollback (decompressed — O(grow_amount), the rest of
+            // scrollback is never touched) into the TOP of the new
+            // (taller) viewport, immediately followed by the surviving
+            // old viewport (`eov` rows, a plain `Cell` copy). If there
+            // isn't enough combined history to fill `new_rows` at all
+            // (`keep < new_rows` — see `Self::resize_same_width_reference`'s
+            // `vp_start = keep.saturating_sub(new_rows)` saturating to 0),
+            // the shortfall is left as trailing BLANK rows at the BOTTOM
+            // (`new_grid`'s pre-initialized `Cell::EMPTY` / `wrapped:
+            // false` defaults for the untouched tail) — matching the
+            // reference's own behavior of breaking out of its fill loop
+            // once `keep` lines are placed, rather than shifting existing
+            // content down to make room for padding above it.
+            let grow_amount = new_rows_usize - eov;
+            let pulled = grow_amount.min(rsc);
+            for i in 0..pulled {
+                let slim_row = self
+                    .scrollback_slim
+                    .pop_back()
+                    .expect("pulled <= scrollback_slim.len()");
+                let wrapped = self.scrollback_wrapped.pop_back().unwrap_or(false);
+                let vp_row = pulled - 1 - i;
+                let base = vp_row * cols;
+                for c in 0..cols {
+                    let slim = slim_row.get(c).copied().unwrap_or(SlimCell::EMPTY);
+                    let cell = slim_to_cell(&slim, &self.styles, &self.chars);
+                    if cell.is_overflow() {
+                        let s = slim_overflow_str(&slim, &self.chars).to_string();
+                        new_overflow.insert((c as u32, vp_row as u32), s);
+                    }
+                    new_grid[base + c] = cell;
+                }
+                new_wrapped[vp_row] = wrapped;
+                self.release_slim_row(&slim_row);
+            }
+            for r in 0..eov {
+                let old_abs = self.viewport_abs(r as u16);
+                let old_base = old_abs * cols;
+                let new_r = pulled + r;
+                let new_base = new_r * cols;
+                new_grid[new_base..new_base + cols]
+                    .copy_from_slice(&self.ring_cells[old_base..old_base + cols]);
+                new_wrapped[new_r] = self.ring_wrapped[old_abs];
+                if !self.overflow.is_empty() {
+                    for c in 0..cols {
+                        if let Some(s) = self.overflow.get(&(c as u32, old_abs as u32)) {
+                            new_overflow.insert((c as u32, new_r as u32), s.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        self.ring_cells = new_grid;
+        self.ring_wrapped = new_wrapped;
+        self.ring_head = 0;
+        self.ring_size = new_rows_usize;
+        self.ring_capacity = scrollback_capacity + new_rows_usize;
+        self.scrollback_capacity = scrollback_capacity;
+        self.overflow = new_overflow;
+        self.overflow_ridx = overflow_ridx_rebuild(&self.overflow);
+
+        (cursor_col, new_cursor_row)
+    }
+
+    /// Reference (pre-round-10) same-width resize: full `reflow_drain` +
+    /// `repopulate_ring_from_lines` round trip. Kept as (a) the fallback
+    /// [`Self::resize_same_width`] defers to for the rare case it does not
+    /// attempt, and (b) the equivalence baseline this task's tests compare
+    /// the fast path against — see `reflow::tests::same_width_fast_path_matches_reference_*`.
+    pub(crate) fn resize_same_width_reference(
         &mut self,
         new_rows: u16,
         scrollback_lines: u32,
@@ -845,5 +1088,243 @@ mod tests {
             assert!(core.overflow_ridx.contains_key(&row));
             assert!(core.overflow_ridx[&row].contains(&col));
         }
+    }
+
+    // ── D1 (round-10 rework, mux-render-corruption task0010): same-width
+    // fast path vs. reference equivalence ────────────────────────────
+    //
+    // "Equivalence is the gate, not an assumption" (task0010's plan) — each
+    // test below builds two IDENTICAL cores from the same byte payload,
+    // resizes one via the real `resize_reflow` entry point (which now
+    // calls the fast `resize_same_width`) and the other via
+    // `resize_via_reference` (which calls `resize_same_width_reference`,
+    // the pre-round-10 full-`reflow_drain` implementation kept
+    // specifically as this comparison baseline), then asserts the full
+    // observable state — viewport text + wrapped flags, cursor, scrollback
+    // text + wrapped flags, eviction bookkeeping, and intern-table live
+    // counts — is identical. `same_width_fast_path_matches_reference_grow_with_little_scrollback_pads_bottom`
+    // is confirmed to fail without the fix in this file: an earlier
+    // version of the fast path padded a too-small grown viewport at the
+    // TOP instead of the BOTTOM, which this test caught (and which also
+    // broke `test_resize_reflow_same_width_grow` /
+    // `test_overflow_survives_same_width_resize` /
+    // `terminal_core::tests::test_resize_grow_shrink_rows`, all pre-existing
+    // tests in this suite).
+
+    /// Mirrors `ring_buffer.rs::resize_reflow`, but calls the reference
+    /// same-width implementation instead of the fast path — the
+    /// comparison baseline for the tests below.
+    fn resize_via_reference(
+        core: &mut TerminalCore,
+        new_cols: u16,
+        new_rows: u16,
+        scrollback_lines: u32,
+    ) {
+        let cursor_col = core.cursor.col as usize;
+        let cursor_row = core.cursor.row as usize;
+        let (final_col, final_row) = if new_cols == core.cols {
+            core.resize_same_width_reference(new_rows, scrollback_lines, cursor_col, cursor_row)
+        } else {
+            core.resize_full_reflow(new_cols, new_rows, scrollback_lines, cursor_col, cursor_row)
+        };
+        core.resize_post_cleanup(new_cols, new_rows);
+        core.cursor.col = (final_col as u16).min(new_cols.saturating_sub(1));
+        core.cursor.row = (final_row as u16).min(new_rows.saturating_sub(1));
+    }
+
+    /// Full observable fingerprint: viewport text + wrapped flags per row,
+    /// cursor position, scrollback text + wrapped flags per row, eviction
+    /// bookkeeping, and intern-table live-entry counts (a proxy for "no
+    /// leaked or double-freed refcounts" — the same property
+    /// `test_post_reflow_intern_tables_match_rebuild` checks against a
+    /// from-scratch rebuild).
+    #[allow(clippy::type_complexity)]
+    fn full_fingerprint(
+        core: &TerminalCore,
+    ) -> (
+        Vec<(String, bool)>,
+        u16,
+        u16,
+        Vec<(String, bool)>,
+        u32,
+        u64,
+        usize,
+        usize,
+    ) {
+        let mut viewport = Vec::with_capacity(core.rows() as usize);
+        for r in 0..core.rows() {
+            let mut line = String::new();
+            for c in 0..core.cols() {
+                line.push_str(&core.get_cell_char(c, r));
+            }
+            viewport.push((line, core.get_line_wrapped(r)));
+        }
+        let sb_len = core.get_scrollback_length();
+        let mut scrollback = Vec::with_capacity(sb_len as usize);
+        for i in 0..sb_len {
+            scrollback.push((
+                core.get_scrollback_text(i),
+                core.get_scrollback_line_wrapped(i),
+            ));
+        }
+        (
+            viewport,
+            core.get_cursor_col(),
+            core.get_cursor_row(),
+            scrollback,
+            sb_len,
+            core.get_scrollback_evicted_total(),
+            core.styles.live_entries(),
+            core.chars.live_entries(),
+        )
+    }
+
+    /// Builds a payload mixing: varying-color scrolled lines (real
+    /// scrollback growth with distinct interned styles), a ZWJ family
+    /// emoji every 7th line (overflow-table content moving between
+    /// viewport and scrollback), and a trailing run with no CR/LF long
+    /// enough to wrap across multiple physical rows (exercises `wrapped`
+    /// flags).
+    fn build_rich_payload(cols: usize, scrolled_lines: usize) -> Vec<u8> {
+        let zwj = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+        let mut payload = Vec::new();
+        for i in 0..scrolled_lines {
+            payload.extend_from_slice(
+                format!(
+                    "\x1b[38;2;{};{};{}m",
+                    (i * 7) % 256,
+                    (i * 13) % 256,
+                    (i * 29) % 256
+                )
+                .as_bytes(),
+            );
+            if i % 7 == 3 {
+                payload.extend_from_slice(zwj.as_bytes());
+            }
+            payload.extend_from_slice(format!("line-{i:05}").as_bytes());
+            payload.extend_from_slice(b"\r\n");
+        }
+        payload.extend_from_slice(b"\x1b[0m");
+        let long_line: String = (0..(cols * 2 + 3))
+            .map(|i| char::from(b'a' + (i % 26) as u8))
+            .collect();
+        payload.extend_from_slice(long_line.as_bytes());
+        payload
+    }
+
+    /// Runs one grow/shrink scenario through both paths and asserts
+    /// identical results.
+    fn assert_fast_path_matches_reference(
+        cols: u16,
+        old_rows: u16,
+        new_rows: u16,
+        scrollback_before: u32,
+        scrollback_after: u32,
+        scrolled_lines: usize,
+        pin_cursor_row: Option<u16>,
+    ) {
+        let payload = build_rich_payload(cols as usize, scrolled_lines);
+
+        let mut fast = TerminalCore::new(cols, old_rows, scrollback_before);
+        fast.process_pty_data_fully(&payload);
+        let mut reference = TerminalCore::new(cols, old_rows, scrollback_before);
+        reference.process_pty_data_fully(&payload);
+
+        // Sanity: identical starting state before either resize runs.
+        assert_eq!(
+            full_fingerprint(&fast),
+            full_fingerprint(&reference),
+            "test setup produced non-identical starting cores"
+        );
+
+        if let Some(row) = pin_cursor_row {
+            let col = fast.get_cursor_col();
+            let clamped = row.min(old_rows.saturating_sub(1));
+            fast.set_cursor(col, clamped);
+            reference.set_cursor(col, clamped);
+        }
+
+        fast.resize_reflow(cols, new_rows, scrollback_after);
+        resize_via_reference(&mut reference, cols, new_rows, scrollback_after);
+
+        assert_eq!(
+            full_fingerprint(&fast),
+            full_fingerprint(&reference),
+            "fast path diverged from reference for cols={cols} old_rows={old_rows} \
+             new_rows={new_rows} sb_before={scrollback_before} sb_after={scrollback_after} \
+             scrolled_lines={scrolled_lines} pin_cursor_row={pin_cursor_row:?}"
+        );
+    }
+
+    #[test]
+    fn same_width_fast_path_matches_reference_grow_with_ample_scrollback() {
+        assert_fast_path_matches_reference(20, 5, 12, 500, 500, 80, None);
+    }
+
+    #[test]
+    fn same_width_fast_path_matches_reference_shrink_with_ample_scrollback() {
+        assert_fast_path_matches_reference(20, 12, 5, 500, 500, 80, None);
+    }
+
+    #[test]
+    fn same_width_fast_path_matches_reference_grow_with_little_scrollback_pads_bottom() {
+        // Total content (little scrolled history + a small old viewport)
+        // is smaller than the grown viewport — the "not enough history"
+        // shape. Confirmed to fail without the fix: an earlier version of
+        // this rework placed the shortfall as BLANK padding at the TOP of
+        // the new viewport (shifting existing content down), which this
+        // assertion catches by comparing against the reference's actual
+        // behavior (shortfall left as blank rows at the BOTTOM).
+        assert_fast_path_matches_reference(20, 3, 15, 500, 500, 2, None);
+    }
+
+    #[test]
+    fn same_width_fast_path_matches_reference_grow_with_zero_capacity() {
+        assert_fast_path_matches_reference(20, 5, 12, 0, 0, 20, None);
+    }
+
+    #[test]
+    fn same_width_fast_path_matches_reference_shrink_forces_capacity_eviction_cursor_at_bottom() {
+        // Enough scrolled content to overrun a small capacity; cursor left
+        // at its natural resting position (bottom row) after heavy
+        // output — the "resize storm" shape this task's bench measures.
+        assert_fast_path_matches_reference(20, 30, 24, 40, 40, 300, None);
+    }
+
+    #[test]
+    fn same_width_fast_path_matches_reference_shrink_forces_capacity_eviction_cursor_mid_viewport()
+    {
+        // Cursor pinned well inside the new (smaller) viewport while
+        // capacity eviction is also in play — exercises the reference's
+        // cursor-visibility `trailing_drop` branch (dropping some of the
+        // NEWEST rows instead of only the oldest) that the fast path has
+        // to reproduce rather than assume away.
+        assert_fast_path_matches_reference(20, 30, 10, 40, 40, 300, Some(2));
+    }
+
+    #[test]
+    fn same_width_fast_path_matches_reference_capacity_shrinks_to_zero_same_row_count() {
+        // Row count UNCHANGED, only scrollback capacity drops to 0 (the
+        // shape `test_reflow_rebuilds_tables_drops_stale_entries` checks
+        // via `resize_reflow` directly) — drives it through the
+        // fast-vs-reference comparison too, including intern-table counts.
+        assert_fast_path_matches_reference(10, 6, 6, 20, 0, 15, None);
+    }
+
+    #[test]
+    fn same_width_fast_path_matches_reference_unchanged_height_is_a_no_op_shape() {
+        assert_fast_path_matches_reference(20, 10, 10, 200, 200, 50, None);
+    }
+
+    #[test]
+    fn same_width_fast_path_falls_back_to_reference_when_capacity_eviction_reaches_the_viewport() {
+        // A capacity collapse (large -> 1) combined with a large height
+        // shrink, engineered so `skip` (rows dropped to fit the new
+        // capacity) would exceed the CURRENT scrollback length — the one
+        // case `resize_same_width` declines to attempt itself and defers
+        // to `resize_same_width_reference` for. Still must match the
+        // reference exactly (it degrades TO the reference, not an
+        // approximation of it).
+        assert_fast_path_matches_reference(20, 40, 3, 5, 1, 60, Some(0));
     }
 }
