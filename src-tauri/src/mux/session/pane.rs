@@ -825,7 +825,15 @@ pub struct MuxPane {
 /// rejecting the resize outright — mirroring `clamp_resize_dims`'s own
 /// "clamp, don't reject" policy so callers never need special-case error
 /// handling for an oversized resize request.
-fn clamp_dims_to_wire_domain(cols: u16, rows: u16) -> (u16, u16) {
+///
+/// D3''''' (round-8 rework, review round-7 finding `1d1b6b6297e3b6a0`):
+/// `pub(crate)` so `tabs.rs` (the GUI client side, same crate) can apply the
+/// IDENTICAL clamp before resizing its own `TerminalCore` and before sending
+/// the `Resize` control message — a deterministic, PURE function of
+/// `(cols, rows)` shared by both ends means the client's core and the
+/// daemon's PTY always agree on the accepted dimensions without any wire
+/// round-trip acknowledgment: same function, same input, same output.
+pub(crate) fn clamp_dims_to_wire_domain(cols: u16, rows: u16) -> (u16, u16) {
     let (cols, rows) = term_core::terminal_core::clamp_resize_dims(cols, rows);
     if (cols as u32) * (rows as u32) <= mux_ipc::protocol::MAX_SEGMENT_CELLS {
         return (cols, rows);
@@ -856,7 +864,36 @@ impl MuxPane {
         // `clamp_dims_to_wire_domain` also bounds the PRODUCT to what the
         // wire decoder accepts (`MAX_SEGMENT_CELLS`), not just each axis —
         // see its doc for why the per-axis clamp alone let this drift.
-        let (cols, rows) = clamp_dims_to_wire_domain(cols, rows);
+        let (clamped_cols, clamped_rows) = clamp_dims_to_wire_domain(cols, rows);
+        // D3''''' (round-8 rework, review round-7 finding `1d1b6b6297e3b6a0`,
+        // AC-5): `master` was already opened by the caller (`spawn_pty`) at
+        // the ORIGINAL, possibly out-of-domain `cols`/`rows` — BEFORE the
+        // clamp above runs. Without this, the recorded fields / shadow
+        // parser / initial segment would describe dimensions the PTY itself
+        // does not actually have (pane creation recording a value the PTY
+        // never had). Resize the PTY to the accepted dims whenever the
+        // clamp actually changed something, so it can never disagree with
+        // what gets recorded below.
+        if (clamped_cols, clamped_rows) != (cols, rows) {
+            if let Err(e) = master.resize(portable_pty::PtySize {
+                rows: clamped_rows,
+                cols: clamped_cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            }) {
+                log::warn!(
+                    "MuxPane::new: failed to resize PTY {} to clamped dims \
+                     {}x{} (requested {}x{}): {}",
+                    id,
+                    clamped_cols,
+                    clamped_rows,
+                    cols,
+                    rows,
+                    e
+                );
+            }
+        }
+        let (cols, rows) = (clamped_cols, clamped_rows);
         let mut scrollback = ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY);
         // IMPLEMENTATION.md D1/D2 (task0001): record the pane's INITIAL
         // dimensions as the very first scrollback bytes, mirroring what
@@ -919,6 +956,18 @@ impl MuxPane {
     /// write+flush, preserving atomic-per-request write semantics.
     pub fn writer_handle(&self) -> Option<Arc<StdMutex<Box<dyn Write + Send>>>> {
         self.writer.clone()
+    }
+
+    /// The underlying PTY's ACTUAL current size, as the kernel reports it —
+    /// not `self.cols`/`self.rows` (the daemon's own recorded bookkeeping).
+    /// AC-5 regression test observer (D3''''', round-8 rework, review
+    /// round-7 finding `1d1b6b6297e3b6a0`): lets a test confirm `MuxPane::new`
+    /// actually resized the PTY to match the clamped dims it records, rather
+    /// than recording a value the PTY never had. `None` once the pane's
+    /// master has been dropped ([`Self::mark_exited`]).
+    #[cfg(test)]
+    fn master_size(&self) -> Option<portable_pty::PtySize> {
+        self.master.as_ref().and_then(|m| m.get_size().ok())
     }
 
     /// Resize the PTY to the given dimensions.
@@ -1321,6 +1370,26 @@ mod tests {
         // out-of-domain values.
         let (_bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
         assert_eq!(segments, vec![(0usize, expected_cols, expected_rows)]);
+        // AC-5 (D3''''', round-8 rework, review round-7 finding
+        // `1d1b6b6297e3b6a0`): the PTY itself was opened at (80, 24) — a
+        // DIFFERENT size than the clamped dims recorded above. `MuxPane::new`
+        // must resize the ACTUAL PTY to match what it records, not leave it
+        // at whatever size the caller happened to open it at.
+        //
+        // Confirmed to fail pre-fix: before this change, `MuxPane::new`
+        // never resized `master` at all, so `master_size()` would still
+        // report the PTY's ORIGINAL open size (80, 24) — disagreeing with
+        // the (4096, 244) this test records above.
+        let actual = pane
+            .master_size()
+            .expect("PTY master must still be present");
+        assert_eq!(
+            (actual.cols, actual.rows),
+            (expected_cols, expected_rows),
+            "MuxPane::new must resize the underlying PTY to the CLAMPED \
+             dims it records, not leave it at whatever size the caller \
+             originally opened it at"
+        );
     }
 
     /// AC-8 (D6'''', round-7 rework, review round-6 finding
