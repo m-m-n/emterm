@@ -180,6 +180,26 @@ pub const MAX_SEGMENTS: usize = 64;
 /// happens costs no legitimate payload.
 pub const MAX_SEGMENT_CELLS: u32 = 1_000_000;
 
+/// Maximum CUMULATIVE cell count (`sum of cols as u64 * rows as u64`)
+/// across every segment a single decoded payload may declare (round-7
+/// rework, D2'''', review round-6 finding `02bb52aaff9638e5`).
+///
+/// [`MAX_SEGMENT_CELLS`] bounds one segment's own declared cost, but not
+/// the SUM across up to [`MAX_SEGMENTS`] (64) of them — a small,
+/// individually-valid payload can still declare 64 segments each at the
+/// per-segment ceiling, forcing roughly 64,000,000 cells of grid
+/// allocation / reflow work. Fewer than
+/// `tabs::OFFTHREAD_REPLAY_SEGMENT_THRESHOLD` (8) non-empty segments still
+/// replay SYNCHRONOUSLY on the caller's UI thread, so this is not merely a
+/// background-CPU concern — it can stall the switch outright. A REAL
+/// daemon-recorded payload never approaches this: the daemon's own
+/// `MAX_DIM_MARKERS` (24) already bounds segment count, and a real
+/// terminal's cell count is orders of magnitude below `MAX_SEGMENT_CELLS`.
+/// Set to 8x `MAX_SEGMENT_CELLS` — comfortably above any real resize
+/// storm's total cost, well below the worst case a full `MAX_SEGMENTS`
+/// table of max-size segments could declare.
+pub const MAX_CUMULATIVE_SEGMENT_CELLS: u64 = 8 * MAX_SEGMENT_CELLS as u64;
+
 /// Result of decoding a snapshot payload (task0005 rework D2'', replacing
 /// the ambiguous `(Vec<DimSegment>, &[u8])` tuple [`decode_snapshot_payload`]
 /// still returns for existing callers). The tuple form could not
@@ -306,6 +326,14 @@ pub fn decode_snapshot_payload_typed(payload: &[u8]) -> DecodedSnapshotPayload<'
     // whole snapshot — before any per-segment allocation happens — if any
     // segment's total cell count exceeds a budget no legitimate terminal
     // size approaches.
+    //
+    // D2'''' (round-7 rework, review round-6 finding `02bb52aaff9638e5`):
+    // the per-segment budget bounds ONE segment but not their SUM — track
+    // the running total (as `u64`; `MAX_SEGMENTS * MAX_SEGMENT_CELLS` is
+    // ~64,000,000, far below any overflow risk) and reject the whole
+    // snapshot the moment it exceeds `MAX_CUMULATIVE_SEGMENT_CELLS`, before
+    // any per-segment allocation happens.
+    let mut cumulative_cells: u64 = 0;
     for _ in 0..count {
         // Bounds already verified above (`table_end <= rest.len()`); this
         // slice cannot panic.
@@ -325,7 +353,12 @@ pub fn decode_snapshot_payload_typed(payload: &[u8]) -> DecodedSnapshotPayload<'
             return DecodedSnapshotPayload::Malformed;
         }
         prev_offset = Some(offset);
-        if (cols as u32) * (rows as u32) > MAX_SEGMENT_CELLS {
+        let cell_count = (cols as u32) * (rows as u32);
+        if cell_count > MAX_SEGMENT_CELLS {
+            return DecodedSnapshotPayload::Malformed;
+        }
+        cumulative_cells += cell_count as u64;
+        if cumulative_cells > MAX_CUMULATIVE_SEGMENT_CELLS {
             return DecodedSnapshotPayload::Malformed;
         }
         segments.push(DimSegment { offset, cols, rows });
@@ -2452,6 +2485,81 @@ mod tests {
                 segments: decoded, ..
             } => {
                 assert_eq!(decoded, segments)
+            }
+            other => panic!("expected Structured, got {other:?}"),
+        }
+    }
+
+    // ── D2'''' (round-7 rework, review round-6 finding
+    // `02bb52aaff9638e5`): a CUMULATIVE budget across all segments, not
+    // just a per-segment one ────────────────────────────────────────────
+
+    /// The per-segment budget bounds ONE segment but not their SUM — a
+    /// payload with `MAX_CUMULATIVE_SEGMENT_CELLS / MAX_SEGMENT_CELLS + 1`
+    /// segments, each individually AT the per-segment ceiling (valid on
+    /// its own), sums to MORE than `MAX_CUMULATIVE_SEGMENT_CELLS` and must
+    /// be rejected as Malformed before any per-segment allocation happens.
+    ///
+    /// Confirmed to fail pre-fix: without the cumulative running-total
+    /// check, every segment individually passes the `MAX_SEGMENT_CELLS`
+    /// check (exactly at the ceiling, never over it), so decode would have
+    /// returned `Structured` with all of them.
+    #[test]
+    fn decode_snapshot_payload_typed_rejects_cumulative_cost_over_budget() {
+        let segment_count = (MAX_CUMULATIVE_SEGMENT_CELLS / MAX_SEGMENT_CELLS as u64) as usize + 1;
+        let segments: Vec<DimSegment> = (0..segment_count)
+            .map(|_| DimSegment {
+                offset: 0,
+                cols: 1000,
+                rows: 1000,
+            })
+            .collect();
+        assert_eq!(
+            (segments[0].cols as u32) * (segments[0].rows as u32),
+            MAX_SEGMENT_CELLS,
+            "test prerequisite: each segment individually at the \
+             per-segment ceiling"
+        );
+        let total: u64 = segments
+            .iter()
+            .map(|s| (s.cols as u64) * (s.rows as u64))
+            .sum();
+        assert!(
+            total > MAX_CUMULATIVE_SEGMENT_CELLS,
+            "test prerequisite: fixture must actually exceed the \
+             cumulative budget"
+        );
+        let encoded = encode_snapshot_payload(&segments, b"");
+        assert_eq!(
+            decode_snapshot_payload_typed(&encoded),
+            DecodedSnapshotPayload::Malformed
+        );
+    }
+
+    /// The cumulative budget rejects EXCESS, not the boundary itself: a
+    /// payload whose segments sum to EXACTLY `MAX_CUMULATIVE_SEGMENT_CELLS`
+    /// still decodes.
+    #[test]
+    fn decode_snapshot_payload_typed_accepts_cumulative_cost_at_budget() {
+        let segment_count = (MAX_CUMULATIVE_SEGMENT_CELLS / MAX_SEGMENT_CELLS as u64) as usize;
+        let segments: Vec<DimSegment> = (0..segment_count)
+            .map(|_| DimSegment {
+                offset: 0,
+                cols: 1000,
+                rows: 1000,
+            })
+            .collect();
+        let total: u64 = segments
+            .iter()
+            .map(|s| (s.cols as u64) * (s.rows as u64))
+            .sum();
+        assert_eq!(total, MAX_CUMULATIVE_SEGMENT_CELLS);
+        let encoded = encode_snapshot_payload(&segments, b"");
+        match decode_snapshot_payload_typed(&encoded) {
+            DecodedSnapshotPayload::Structured {
+                segments: decoded, ..
+            } => {
+                assert_eq!(decoded.len(), segment_count)
             }
             other => panic!("expected Structured, got {other:?}"),
         }
