@@ -76,9 +76,29 @@ pub struct ScrollbackRingBuffer {
     /// plain unattributed bytes, no segment). Only once the cap has ACTUALLY
     /// dropped an entry can that same "no qualifying head" state instead
     /// mean "a predecessor that WOULD have qualified was forgotten" —
-    /// [`Self::read_segments`]'s oldest-surviving-marker fallback must only
-    /// engage in that case, never the former. Reset by [`Self::clear`].
+    /// [`Self::read_segments`]'s fallback must only engage in that case,
+    /// never the former. Reset by [`Self::clear`].
     dim_markers_evicted_by_cap: bool,
+    /// Dimensions of the MOST RECENTLY evicted `dim_markers` entry (D1'''',
+    /// round-7 rework, review round-6 finding `bb3353636b0206cb`).
+    ///
+    /// [`Self::enforce_dim_marker_cap`] pops entries oldest-first; the LAST
+    /// one it pops on any given call is therefore the one describing the
+    /// span immediately preceding the oldest entry that survives — exactly
+    /// the dimensions [`Self::read_segments`] needs for position 0 when no
+    /// surviving marker qualifies as head. Round-6 instead reused the
+    /// oldest SURVIVING marker's dimensions for that gap (`mid[0]`, spliced
+    /// to position 0) — those are the dimensions of the span that starts
+    /// AFTER the gap, not the ones that produced it, so round-6 replayed the
+    /// entire evicted-and-then-some span under an unrelated later resize's
+    /// dimensions. Measured by the round-6 reviewer: an apt-style phase
+    /// followed by 26 resize markers (28 total, cap 24) replayed 7 mixed
+    /// rows under that fallback, vs 3 for no attribution at all and 0 for
+    /// full uncapped attribution — the round-6 fallback was worse than
+    /// shipping nothing. Retaining the true evicted predecessor's
+    /// dimensions here fixes that without rewriting any surviving entry's
+    /// own recorded attribution. Reset by [`Self::clear`].
+    capped_head_dims: Option<(u16, u16)>,
 }
 
 /// Hard ceiling on `dim_markers`' length, independent of redraw byte volume
@@ -110,7 +130,9 @@ pub struct ScrollbackRingBuffer {
 /// the successor's offset back to cover the dropped span) — every entry
 /// more recent than the dropped one keeps its EXACT recorded attribution;
 /// [`Self::read_segments`] loses precision only in the single oldest
-/// surviving span, never a more recent one.
+/// surviving span, never a more recent one, and (D1'''', round-7 rework)
+/// attributes that lost span to the LAST evicted entry's own dimensions
+/// via `capped_head_dims` rather than to an unrelated later survivor's.
 pub const MAX_DIM_MARKERS: usize = 24;
 
 impl ScrollbackRingBuffer {
@@ -124,6 +146,7 @@ impl ScrollbackRingBuffer {
             total_written: 0,
             dim_markers: VecDeque::new(),
             dim_markers_evicted_by_cap: false,
+            capped_head_dims: None,
         }
     }
 
@@ -220,19 +243,27 @@ impl ScrollbackRingBuffer {
     /// entire retained window ended up replayed at a single mid-storm
     /// dimension pair (the coordinate drift this whole marker mechanism
     /// exists to prevent, reintroduced by the fix meant to bound
-    /// `dim_markers`'s growth). [`Self::read_segments`] tolerates the
-    /// resulting gap: when no surviving marker's offset is at or before the
-    /// retained window's head, it falls back to the OLDEST SURVIVING
-    /// marker's dimensions for position 0 instead. Precision is lost only
-    /// in that single oldest span (between the retained window's start and
-    /// that marker's own recorded offset) — never a more recent one, and no
-    /// entry's own recorded attribution is ever rewritten.
+    /// `dim_markers`'s growth).
+    ///
+    /// D1'''' (round-7 rework, review round-6 finding `bb3353636b0206cb`):
+    /// [`Self::read_segments`] tolerates the resulting gap by falling back
+    /// to [`Self::capped_head_dims`] — the dimensions of the entry THIS
+    /// method most recently dropped — for position 0, when no surviving
+    /// marker's offset is at or before the retained window's head. Round-6
+    /// instead fell back to the oldest SURVIVING marker's dimensions, which
+    /// describes the span AFTER the gap, not the one that produced it;
+    /// measured by the round-6 reviewer as replaying MORE mixed rows than
+    /// not attributing the gap at all. Precision is lost only in the single
+    /// oldest span (between the retained window's start and the oldest
+    /// surviving marker's own recorded offset) — never a more recent one,
+    /// and no entry's own recorded attribution is ever rewritten.
     fn enforce_dim_marker_cap(&mut self) {
         while self.dim_markers.len() > MAX_DIM_MARKERS {
-            if self.dim_markers.pop_front().is_none() {
+            let Some((_, cols, rows)) = self.dim_markers.pop_front() else {
                 break;
-            }
+            };
             self.dim_markers_evicted_by_cap = true;
+            self.capped_head_dims = Some((cols, rows));
         }
     }
 
@@ -341,24 +372,37 @@ impl ScrollbackRingBuffer {
                 mid.push((pos, cols, rows));
             }
         }
-        // D1''' (round-6 rework): `enforce_dim_marker_cap` no longer pulls a
-        // surviving entry's offset back to cover a dropped one, so after a
-        // cap-triggered drop EVERY surviving marker's offset can be past
-        // `oldest_offset` (nothing above qualified as `head`). Falling back
-        // to the OLDEST surviving marker (the front of `mid`, since
-        // `dim_markers` — and therefore `mid` — is built in ascending
-        // offset order) for position 0 avoids leaving the retained window's
-        // earliest bytes with no segment at all, which a segment-aware
-        // replay would otherwise silently drop rather than merely losing
-        // precision for a single span. Gated on `dim_markers_evicted_by_cap`
-        // — WITHOUT a prior cap eviction, "no qualifying head" is the
-        // NORMAL, legitimate case of content that genuinely predates the
-        // first-ever recorded resize (`prune_dim_markers` alone always
-        // keeps a qualifying entry when one exists), and must stay
-        // unattributed rather than be misassigned to a later resize's dims.
-        if head.is_none() && self.dim_markers_evicted_by_cap && !mid.is_empty() {
-            let (_, cols, rows) = mid.remove(0);
-            head = Some((cols, rows));
+        // D1'''' (round-7 rework, review round-6 finding `bb3353636b0206cb`):
+        // `enforce_dim_marker_cap` no longer pulls a surviving entry's
+        // offset back to cover a dropped one, so after a cap-triggered drop
+        // EVERY surviving marker's offset can be past `oldest_offset`
+        // (nothing above qualified as `head`). Falling back to
+        // `capped_head_dims` — the dimensions of the entry the cap most
+        // recently evicted — for position 0 avoids leaving the retained
+        // window's earliest bytes with no segment at all, which a
+        // segment-aware replay would otherwise silently drop rather than
+        // merely losing precision for a single span.
+        //
+        // Round-6 instead spliced `mid[0]` (the OLDEST SURVIVING marker) in
+        // at position 0, discarding its true (later) offset. That describes
+        // the span AFTER the gap, not the one that produced it, so round-6
+        // replayed the ENTIRE evicted span under an unrelated later
+        // resize's dimensions — measured by the round-6 reviewer as MORE
+        // mixed rows than not attributing the gap at all (7 vs 3, against 0
+        // for full uncapped attribution). `capped_head_dims` is the actual
+        // predecessor of the oldest survivor, so this closes that gap
+        // without discarding `mid[0]`'s own (correct, unmodified) position.
+        //
+        // Gated on `dim_markers_evicted_by_cap` — WITHOUT a prior cap
+        // eviction, "no qualifying head" is the NORMAL, legitimate case of
+        // content that genuinely predates the first-ever recorded resize
+        // (`prune_dim_markers` alone always keeps a qualifying entry when
+        // one exists), and must stay unattributed rather than be
+        // misassigned to a later resize's dims.
+        if head.is_none() && self.dim_markers_evicted_by_cap {
+            if let Some((cols, rows)) = self.capped_head_dims {
+                head = Some((cols, rows));
+            }
         }
 
         let mut segments = Vec::with_capacity(mid.len() + 1);
@@ -402,6 +446,7 @@ impl ScrollbackRingBuffer {
         self.total_written = 0;
         self.dim_markers.clear();
         self.dim_markers_evicted_by_cap = false;
+        self.capped_head_dims = None;
     }
 
     /// Current data length in bytes.
@@ -926,15 +971,27 @@ mod tests {
         );
     }
 
-    /// D3'' merge semantics: when the cap is exceeded, ONLY the single
-    /// oldest span is folded into its successor — every entry more recent
-    /// than that keeps its EXACT recorded dimensions. This is what
-    /// distinguishes the cap from the unsound byte-threshold coalescing
-    /// round-4 reverted (review round-3 finding `ab54fae335086db3`): that
-    /// fix retroactively rewrote an ALREADY-RECORDED entry's dimensions,
-    /// misattributing recent content; this cap only ever discards the
-    /// entry about to fall off the front, extending its SUCCESSOR's span
-    /// backward without touching the successor's own dimensions.
+    /// D1'''' merge semantics (round-7 rework, review round-6 finding
+    /// `bb3353636b0206cb`): when the cap is exceeded, every SURVIVING entry
+    /// keeps its EXACT recorded dimensions AT ITS OWN RECORDED POSITION, and
+    /// the gap left by the evicted entries becomes its OWN additional head
+    /// segment carrying the LAST EVICTED entry's dimensions — not the
+    /// oldest SURVIVOR's dimensions spliced in at position 0 the way
+    /// round-6 did. This is what distinguishes the cap from the unsound
+    /// byte-threshold coalescing round-4 reverted (review round-3 finding
+    /// `ab54fae335086db3`): that fix retroactively rewrote an
+    /// ALREADY-RECORDED entry's dimensions, misattributing recent content;
+    /// this cap discards only the entries about to fall off the front and
+    /// attributes the gap they leave to what ACTUALLY produced it, without
+    /// touching any surviving entry's own dimensions OR position.
+    ///
+    /// Confirmed to fail pre-fix: reverting to round-6's fallback (splice
+    /// `mid[0]` — the oldest SURVIVOR — into position 0 instead of
+    /// synthesizing a separate head from the last EVICTED entry) makes
+    /// `segments.len()` come out as `MAX_DIM_MARKERS` (24, not 25) and
+    /// `actual_rows[0]` come out as `24 + extra` (the oldest survivor's own
+    /// rows, step `extra`) instead of `24 + extra - 1` (the last evicted
+    /// entry's rows, step `extra - 1`) — both assertions below fail.
     #[test]
     fn enforce_dim_marker_cap_merges_only_the_oldest_span_preserving_recent_attribution() {
         let mut rb = ScrollbackRingBuffer::new(4 * 1024 * 1024);
@@ -953,18 +1010,43 @@ mod tests {
             "cap must hold even with {extra} entries beyond it"
         );
         let (_, segments) = rb.read_segments();
-        assert_eq!(segments.len(), MAX_DIM_MARKERS);
-        // The surviving entries' rows values are the MOST RECENT
-        // `MAX_DIM_MARKERS` steps — steps 0..extra were merged away (their
-        // OWN dimensions discarded, folded into step `extra`'s span), but
-        // every entry from `extra` onward survives with its EXACT
-        // originally-recorded dimensions.
+        // One MORE than MAX_DIM_MARKERS: the `MAX_DIM_MARKERS` surviving
+        // entries each keep their own segment, PLUS one synthesized head
+        // segment for the gap the evicted entries left behind.
+        assert_eq!(
+            segments.len(),
+            MAX_DIM_MARKERS + 1,
+            "the evicted entries' gap must become its OWN segment, not be \
+             folded onto a surviving entry's position"
+        );
+        assert_eq!(
+            segments[0].0, 0,
+            "the head segment always starts at position 0"
+        );
+        assert_eq!(
+            segments[0].2,
+            24 + (extra - 1) as u16,
+            "the head segment must carry the LAST EVICTED entry's rows \
+             (step `extra - 1`), not the oldest SURVIVOR's (step `extra`)"
+        );
+        // Every SURVIVING entry (step `extra` onward) keeps its EXACT
+        // originally-recorded dimensions, in its ORIGINAL relative order —
+        // only the head segment (index 0) is synthesized; segments[1..]
+        // mirror `dim_markers` one-to-one.
         let expected_rows: Vec<u16> = (extra..total_steps).map(|s| 24 + s as u16).collect();
-        let actual_rows: Vec<u16> = segments.iter().map(|&(_, _, rows)| rows).collect();
+        let actual_rows: Vec<u16> = segments[1..].iter().map(|&(_, _, rows)| rows).collect();
         assert_eq!(
             actual_rows, expected_rows,
             "every surviving entry must keep its EXACT originally-recorded \
              dimensions — only the discarded oldest entries lose precision"
+        );
+        // The oldest SURVIVOR (segments[1]) keeps its OWN real position —
+        // round-6 discarded this by overwriting it to position 0.
+        let step_extra_offset = extra * content_per_step.len();
+        assert_eq!(
+            segments[1].0, step_extra_offset,
+            "the oldest surviving marker must keep its OWN recorded \
+             position, not be spliced to position 0"
         );
     }
 
