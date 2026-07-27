@@ -69,23 +69,27 @@ fn main() {
     if args.get(1).is_some_and(|a| a == "--version") {
         // On Windows, release GUI builds link the `windows` subsystem (see
         // the crate attribute above), so the process starts with no console
-        // attached and `println!` writes to a dead handle. Attach to the
+        // attached and a stdout write goes to a dead handle. Attach to the
         // parent console (the shell that launched us, e.g. cmd.exe /
         // PowerShell) before printing so `--version` is visible there. This
         // is a no-op / harmless failure when there is no parent console
-        // (e.g. launched from Explorer) or on non-Windows builds.
+        // (e.g. launched from Explorer) or on non-Windows builds. Uses the
+        // `windows-sys` crate (already a dependency for the mux bridge's
+        // console handling) rather than a hand-written `extern` block.
         #[cfg(windows)]
         {
-            #[link(name = "kernel32")]
-            unsafe extern "system" {
-                fn AttachConsole(dw_process_id: u32) -> i32;
-            }
-            const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+            use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
             unsafe {
                 AttachConsole(ATTACH_PARENT_PROCESS);
             }
         }
-        println!("{}", env!("CARGO_PKG_VERSION"));
+        // `println!` panics if the write (or its implicit flush) fails —
+        // e.g. a closed/broken stdout pipe. `--version` must always exit 0,
+        // so the write is attempted best-effort and any failure ignored.
+        use std::io::Write;
+        let mut stdout = std::io::stdout();
+        let _ = writeln!(stdout, "{}", env!("CARGO_PKG_VERSION"));
+        let _ = stdout.flush();
         std::process::exit(0);
     }
 
