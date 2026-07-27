@@ -34,7 +34,7 @@ workflow:
     status: completed
     completed_at_commit: 097c6745466c5dbeed5861ec2c7c8d2d95ddc7d0
   - id: implement
-    status: completed
+    status: in_progress
     completed_at_commit: f1bcd21221367737cdfed08236c88ae7a1c98479
     base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
   - id: review
@@ -220,10 +220,29 @@ tasks:
     branch: em-workflow/mux-render-corruption/task0008
     notes: "review round 7 の residual high からの rework。AC-1..AC-11 を 6 コミットで実装。**重要な残件**: 実装者は「eviction 2 件以上で gap が複数の寸法レジームにまたがり、検出対象コンテンツが 2 つ以上のレジームに存在する場合、round 8 の無属性化でも round 7 の最終 evict 寸法でも混線は消えない」具体的な反例を実測したと報告。round 7 レビュアーの実測（全ケース 0 混線）と食い違うため round 8 の spec レビューで裁定が必要。また term_core クレート単体のテスト 744 件は workspace の --lib コマンドでは実行されないことが判明（検証コマンドの穴）"
 
+  task0009:
+    title: "Raise the marker cap to close FR2; unify the client clamp (round 8 rework)"
+    plan: tasks/task0009.md
+    files:
+      - src-tauri/src/mux/scrollback_buffer.rs
+      - crates/mux_ipc/src/protocol.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/app.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - feature-docs/mux-render-corruption/VERIFICATION.md
+    skills: [backend-impl]
+    domains: [input-handling, ui, api-contract]
+    complexity: medium
+    requirements: [FR2, FR3, NFR1, NFR2, NFR3]
+    status: in_progress
+    branch: em-workflow/mux-render-corruption/task0009
+    notes: "review round 8 の residual high 1 件からの rework。spec レビュアーが 216 形状スイープと cap スイープで原因を MAX_DIM_MARKERS=24 に特定し、cap 62 で全 storm 混線 0 になることを実測済み"
+
 review:
   status: pending
-  rounds_completed: 7
-  residual_critical_high: 2
+  rounds_completed: 8
+  residual_critical_high: 1
   needs_rework: true
   perspectives:
     comprehensive: completed
