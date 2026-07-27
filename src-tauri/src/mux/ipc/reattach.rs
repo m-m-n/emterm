@@ -283,18 +283,27 @@ const REATTACH_CHUNK_SIZE: usize = MAX_SNAPSHOT_FRAME_PAYLOAD;
 /// before replaying it — so this only applies while the encoded buffer fits
 /// in one frame.
 ///
-/// A buffer too large for a single frame (see [`REATTACH_CHUNK_SIZE`]'s doc
-/// for why this is not reachable by any realistic per-pane snapshot) falls
-/// back to chunked `PtyOutput` framing of the RAW (un-encoded, segment-less)
-/// bytes — segment-blind, but no worse than before D1': the client's live
-/// `process_pty_data` path never resized on marker bytes anyway, so this
-/// fallback is behaviorally unchanged from the pre-D1' design.
+/// D6''' (round-6 rework, review round-5 finding `c1605e6978ee5e48`): a
+/// buffer too large for a single frame (see [`REATTACH_CHUNK_SIZE`]'s doc
+/// for why this is not reachable by any realistic per-pane snapshot) no
+/// longer falls back to chunked `PtyOutput` framing of the RAW
+/// (un-encoded, segment-less) bytes. That fallback discarded the segment
+/// table entirely and replayed every byte at the client's CURRENT
+/// dimensions regardless of what a resize-spanning buffer actually
+/// recorded — precisely the rendering-corruption class this feature exists
+/// to close, reintroduced by a payload-size threshold with no relation to
+/// whether the buffer spans a resize. Full segment-preserving multi-frame
+/// snapshot framing (a versioned chunked format carrying identity,
+/// ordering, completion, and per-chunk segment metadata) is out of scope
+/// for this task; until it exists, an oversize pane FAILS RECOVERABLY
+/// instead: this pane's buffered history is skipped (the client still gets
+/// its `PaneCreated`, so the pane itself attaches — just without
+/// scrollback) rather than replayed under changed semantics. No other
+/// pane's reattach is affected.
 ///
-/// Large per-pane buffers are split into multiple `PtyOutput` frames so each
-/// frame fits under `MAX_FRAME_LENGTH`. Without this split, a 34 MiB ring
-/// buffer (e.g. a long-detached `glances` pane) produces a single oversized
-/// frame, the codec encode fails, the socket tears down, and the bridge
-/// synthesises a Detached that drops the GUI out of mux mode mid-reattach.
+/// Large per-pane buffers therefore never produce an oversized single
+/// frame (the codec would fail to encode it, tearing the socket down) —
+/// this size check is what prevents that, not a multi-frame split.
 pub(super) async fn send_reattach_data<S>(
     framed: &mut Framed<S, MuxCodec>,
     reattach_data: &[(PaneId, Vec<u8>, Vec<(usize, u16, u16)>)],
@@ -329,19 +338,15 @@ where
             }
             continue;
         }
-        log::warn!(
+        log::error!(
             "reattach: pane {} snapshot {}B exceeds the single-frame limit \
-             ({}B); falling back to chunked PtyOutput framing (segment-blind)",
+             ({}B); skipping this pane's buffered history rather than \
+             replaying it segment-blind at the client's current dimensions \
+             (D6''')",
             pane_id,
             encoded.len(),
             REATTACH_CHUNK_SIZE
         );
-        for chunk in buffered.chunks(REATTACH_CHUNK_SIZE) {
-            let msg = MuxMessage::pty_output(*pane_id, chunk.to_vec());
-            if framed.send(msg).await.is_err() {
-                return Err(());
-            }
-        }
     }
     Ok(())
 }
@@ -906,11 +911,22 @@ mod tests {
         );
     }
 
-    /// Regression test: a pane whose ring buffer exceeds `MAX_FRAME_LENGTH` must
-    /// be sent as multiple `PtyOutput` frames. A single oversized frame would
-    /// make the codec encoder fail, tearing down the reattach connection.
+    /// D6''' (round-6 rework, review round-5 finding `c1605e6978ee5e48`): a
+    /// pane whose ENCODED snapshot exceeds the single-frame limit must skip
+    /// its buffered history entirely (`PaneCreated` still arrives, so the
+    /// pane attaches) rather than falling back to segment-blind chunked
+    /// `PtyOutput` framing — that fallback discarded the segment table and
+    /// replayed the whole buffer at the client's CURRENT dimensions,
+    /// reproducing the coordinate-drift class this feature exists to close
+    /// for any oversize resize-spanning buffer. A single oversized frame
+    /// would ALSO make the codec encoder fail and tear the connection down,
+    /// which is exactly why this size check exists at all.
+    ///
+    /// Confirmed to fail pre-fix: the old fallback emitted 3 `PtyOutput`
+    /// chunks reassembling to the original buffer — this test's "no further
+    /// frames" assertion would have seen the first chunk instead.
     #[tokio::test]
-    async fn test_send_reattach_data_splits_large_buffer() {
+    async fn test_send_reattach_data_skips_history_for_oversize_buffer() {
         use futures::StreamExt;
         use tokio_util::codec::Framed;
 
@@ -918,44 +934,35 @@ mod tests {
         let mut server_framed = Framed::new(server, MuxCodec::new());
         let client_framed = Framed::new(client, MuxCodec::new());
 
-        // Payload that spans just over two full chunks.
+        // Payload that spans just over two full chunks — its ENCODED form
+        // exceeds `MAX_SNAPSHOT_FRAME_PAYLOAD`.
         let payload_len = REATTACH_CHUNK_SIZE * 2 + 123;
         let big: Vec<u8> = (0..payload_len).map(|i| (i % 251) as u8).collect();
         let reattach_data = vec![(42u32, big.clone(), Vec::new())];
 
-        // Sender task.
         let sender = tokio::spawn(async move {
             let mut framed = client_framed;
             send_reattach_data(&mut framed, &reattach_data).await
         });
 
-        // First frame: PaneCreated.
+        // First (and only) frame: PaneCreated — the pane still attaches.
         let first = server_framed.next().await.unwrap().unwrap();
         assert_eq!(first.msg_type, MessageType::PaneCreated);
         assert_eq!(first.pane_id, 42);
 
-        // Subsequent frames: PtyOutput chunks, each <= REATTACH_CHUNK_SIZE.
-        // Concatenated payload must reproduce the original big buffer byte-for-byte.
-        let mut reassembled = Vec::with_capacity(payload_len);
-        let mut chunks_seen = 0;
-        while reassembled.len() < payload_len {
-            let frame = server_framed.next().await.unwrap().unwrap();
-            assert_eq!(frame.msg_type, MessageType::PtyOutput);
-            assert_eq!(frame.pane_id, 42);
-            assert!(
-                frame.payload.len() <= REATTACH_CHUNK_SIZE,
-                "chunk {} len {} exceeded REATTACH_CHUNK_SIZE {}",
-                chunks_seen,
-                frame.payload.len(),
-                REATTACH_CHUNK_SIZE
-            );
-            reassembled.extend_from_slice(&frame.payload);
-            chunks_seen += 1;
-        }
-        assert_eq!(chunks_seen, 3, "expected 3 chunks (2 full + 1 partial)");
-        assert_eq!(reassembled, big, "reassembled payload must match input");
-
         sender.await.unwrap().expect("send_reattach_data ok");
+
+        // No history frames follow — dropping the sender closes the stream.
+        let next =
+            tokio::time::timeout(std::time::Duration::from_millis(50), server_framed.next()).await;
+        match next {
+            Ok(None) | Err(_) => {} // stream closed or timed out: both OK
+            Ok(Some(Ok(frame))) => panic!(
+                "unexpected extra frame for an oversize buffer: {:?}",
+                frame.msg_type
+            ),
+            Ok(Some(Err(e))) => panic!("unexpected stream error: {}", e),
+        }
     }
 
     /// Empty buffer emits PaneCreated and nothing else.
