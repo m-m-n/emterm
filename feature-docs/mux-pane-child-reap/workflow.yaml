@@ -25,7 +25,7 @@ workflow:
     skipped_reason: "デーモン内部のプロセス回収修正で、利用者から見える UI 表面が無いため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: aad6e6e09b1ca3a37c40f4a9f5baa499ff84f010
