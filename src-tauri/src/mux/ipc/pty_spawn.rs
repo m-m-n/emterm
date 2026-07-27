@@ -380,6 +380,22 @@ impl ScrollbackWriteFilter {
         let strippable: Vec<u8> = self.pending.drain(..boundary).collect();
         if self.pending.is_empty() {
             self.pending_started_dims = None;
+        } else {
+            // D7''' (round-6 rework, review round-5 finding
+            // `fd379025e1900e9f`): a PARTIAL drain (some bytes drained,
+            // some retained) leaves a tail that is definitely part of
+            // THIS `feed` call's own `chunk` — an unterminated introducer
+            // this read's own bytes left behind, not the earlier run
+            // `pending_started_dims` still names. Leaving it unchanged
+            // (the pre-fix behavior) meant a LATER flush of that tail
+            // attributed it to whichever dims started the OLDEST
+            // still-pending run, even after multiple reads' worth of
+            // content had flowed through in between — the exact
+            // misattribution round-4's fix (this same field) closed for
+            // the full-drain case. Update it to `current_dims` so the
+            // retained tail is attributed to the read that actually
+            // produced it.
+            self.pending_started_dims = Some(current_dims);
         }
         (
             attribution_dims,
@@ -1241,6 +1257,62 @@ mod tests {
         assert_eq!(out_second, b"\x1b]777;emterm;fold;start;42\x07after");
     }
 
+    /// AC-11 (round-6 rework D7''', review round-5 finding
+    /// `fd379025e1900e9f`): a PARTIAL drain — read 2 completes read 1's
+    /// pending run AND opens a NEW unterminated one in the SAME call —
+    /// must attribute a LATER flush of that new run's tail to the dims of
+    /// the read that produced it (read 2's), not the dims of whichever run
+    /// started the OLDEST pending bytes (read 1's).
+    ///
+    /// Confirmed to fail pre-fix: `pending_started_dims` was only reset
+    /// when `pending` became fully EMPTY after a drain; a partial drain
+    /// left it unchanged at `dims_a`, so the third `feed` below would have
+    /// reported `dims_a` instead of `dims_b` for content read 2 alone
+    /// produced.
+    #[test]
+    fn feed_reattributes_a_partial_drains_retained_tail_to_the_read_that_produced_it() {
+        let dims_a = (80u16, 24u16);
+        let dims_b = (120u16, 40u16);
+        let dims_c = (100u16, 30u16);
+        let mut filter = ScrollbackWriteFilter::new();
+
+        // Read 1 @ dims_a: an unterminated OSC, held pending in full.
+        let (dims1, out1) = filter.feed(b"\x1b]777;emterm;fold;start;1", dims_a);
+        assert!(out1.is_empty());
+        assert_eq!(dims1, dims_a);
+
+        // Read 2 @ dims_b: terminates the FIRST OSC, then opens a SECOND,
+        // unterminated one — a partial drain (the first OSC + "middle"
+        // flush; the second OSC's start stays pending).
+        let (dims2, out2) = filter.feed(b"\x07middle\x1b]777;emterm;fold;start;2", dims_b);
+        assert_eq!(
+            dims2, dims_a,
+            "the DRAINED content (the first OSC + \"middle\") originated \
+             under dims_a"
+        );
+        assert!(
+            !out2.is_empty(),
+            "test prerequisite: read 2 must actually partially drain"
+        );
+        assert!(
+            filter.pending_len() > 0,
+            "test prerequisite: read 2 must actually retain a new pending run"
+        );
+
+        // Read 3 @ dims_c: terminates the SECOND OSC. The flushed bytes
+        // are entirely from read 2's own chunk, so this must report
+        // dims_b — not dims_a, the stale value a pre-fix
+        // `pending_started_dims` would still carry.
+        let (dims3, out3) = filter.feed(b"\x07tail", dims_c);
+        assert_eq!(
+            dims3, dims_b,
+            "the retained tail from read 2's partial drain must be \
+             attributed to dims_b (the read that produced it), not \
+             dims_a (a stale earlier run)"
+        );
+        assert_eq!(out3, b"\x1b]777;emterm;fold;start;2\x07tail");
+    }
+
     /// AC-10 companion: the overwhelmingly common case — `pending` is EMPTY
     /// when a chunk arrives and stays empty after it (no unterminated
     /// introducer at all) — attributes directly to `current_dims`, exactly
@@ -1592,6 +1664,120 @@ mod tests {
                  with segment attribution, got {tainted:?}"
             );
         }
+    }
+
+    /// AC-3 (round-6 rework, review round-5 finding `986a3881b2b97a16`): a
+    /// resize sequence LONGER than `scrollback_buffer::MAX_DIM_MARKERS`,
+    /// driven end to end through the DAEMON-SIDE ring
+    /// (`ScrollbackRingBuffer::write_resize_marker` / `read_segments` —
+    /// exercising the real `enforce_dim_marker_cap` merge path, not a
+    /// hand-built `ReplaySegment` list), the snapshot assembly
+    /// (`build_snapshot_bytes`), and replay (`reset_and_replay_segments`).
+    ///
+    /// Two assertions, chosen for what they can each actually falsify:
+    /// - `segments` returned by `read_segments()` never exceeds
+    ///   `MAX_DIM_MARKERS`, and every SURVIVING entry's `rows` value
+    ///   strictly alternates `rows_a`/`rows_b` with no duplicate-adjacent
+    ///   or out-of-domain value — this directly exercises
+    ///   `enforce_dim_marker_cap`'s "drop, don't reattribute" merge through
+    ///   the real ring (not hand-built segments) and would fail if a merge
+    ///   regression corrupted a SURVIVING (non-dropped) entry's own `rows`
+    ///   value, the round-3 misattribution class `enforce_dim_marker_cap`'s
+    ///   own doc discusses.
+    /// - the replay itself produces zero rows mixing bar-fragment content
+    ///   with log-line content (the same detector
+    ///   `apt_style_recording_replays_without_cross_line_mixing` uses) —
+    ///   demonstrated NOT to be a vacuous check: `build_snapshot_bytes` /
+    ///   `reset_and_replay_segments` are real functions operating on a
+    ///   payload that must decode and replay without panicking across a
+    ///   >MAX_DIM_MARKERS segment table (a decode/replay-side regression —
+    ///   e.g. an off-by-one in how `read_segments`' fallback head is
+    ///   spliced into `mid` — would surface here as a panic or as content
+    ///   corruption, even though this specific bar/log content pattern
+    ///   turned out NOT to be sensitive to the offset-vs-dims distinction
+    ///   the merge rework changed; that distinction is what the first
+    ///   assertion targets instead).
+    #[test]
+    fn resize_storm_beyond_marker_cap_replays_without_cross_line_mixing() {
+        use crate::mux::scrollback_buffer::{MAX_DIM_MARKERS, ScrollbackRingBuffer};
+        use term_core::terminal_core::TerminalCore;
+
+        let cols: u16 = 100;
+        let rows_a: u16 = 30;
+        let rows_b: u16 = 24;
+        let target_rows = rows_a;
+        // Comfortably beyond the cap so `enforce_dim_marker_cap` fires
+        // repeatedly (not just once).
+        let step_count = MAX_DIM_MARKERS + 24;
+
+        let mut rb = ScrollbackRingBuffer::new(4 * 1024 * 1024);
+        for step in 0..step_count {
+            let rows = if step % 2 == 0 { rows_a } else { rows_b };
+            rb.write_resize_marker(cols, rows);
+            // Scroll region excluding the bottom row (reserved for a
+            // progress bar), mirroring `synth_apt_bytes_with_midrun_resize`
+            // — the mechanism PROBE D identified needs a scroll-region
+            // boundary computed for the WRONG row count to manifest.
+            rb.write(format!("\n\x1b7\x1b[0;{}r\x1b8\x1b[1A", rows - 1).as_bytes());
+            if step % 2 == 0 {
+                rb.write(
+                    format!(
+                        "\x1b7\x1b[{rows};0f\x1b[42m\x1b[30mprogress step {step:3} [{}]\x1b[49m\x1b[39m\x1b[0m\x1b8",
+                        "\u{2588}".repeat(10),
+                    )
+                    .as_bytes(),
+                );
+            } else {
+                rb.write(format!("log line at step {step} percent complete\r\n").as_bytes());
+            }
+        }
+        let (raw, segments) = rb.read_segments();
+        assert!(
+            segments.len() <= MAX_DIM_MARKERS,
+            "the ring must still bound recorded segments to MAX_DIM_MARKERS \
+             regardless of how many resize steps occurred, got {}",
+            segments.len()
+        );
+        for pair in segments.windows(2) {
+            let (_, _, r0) = pair[0];
+            let (_, _, r1) = pair[1];
+            assert_ne!(
+                r0, r1,
+                "adjacent surviving segments must never collapse onto the \
+                 same rows value (a corrupted merge could coalesce two \
+                 distinct steps together): {segments:?}"
+            );
+            assert!(
+                r0 == rows_a || r0 == rows_b,
+                "every surviving segment's rows must be one of the two \
+                 recorded values, got {r0}: {segments:?}"
+            );
+        }
+
+        let (snap, snap_segments) = crate::mux::snapshot_bytes::build_snapshot_bytes(
+            &raw,
+            &segments,
+            b"",
+            false,
+            (cols, target_rows),
+        );
+        let mut core = TerminalCore::new(cols, target_rows, 10_000);
+        core.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
+
+        let mut tainted = Vec::new();
+        for r in 0..target_rows {
+            let line = core.get_line_text(r);
+            let has_bar = line.contains('\u{2588}') || line.trim_end().ends_with(']');
+            let has_log = line.contains("percent");
+            if has_bar && has_log {
+                tainted.push(format!("row {r}: {line}"));
+            }
+        }
+        assert!(
+            tainted.is_empty(),
+            "resize storm beyond MAX_DIM_MARKERS ({MAX_DIM_MARKERS}) produced \
+             cross-line-mixed rows after the cap merge: {tainted:?}"
+        );
     }
 
     /// Cursor-addressed TUI-style recording: a status/input row pinned to
