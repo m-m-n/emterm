@@ -31,7 +31,7 @@ workflow:
     skipped_reason: "可視 UI が無く、出力は stdout / stderr のテキストのみ"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: null
