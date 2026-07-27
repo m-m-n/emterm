@@ -160,6 +160,36 @@ pub struct ScrollbackRingBuffer {
 /// is zero cross-line mixing, not latency. See `VERIFICATION.md` for the
 /// storm-path latency measured at this new cap.
 ///
+/// D1 (round-10 rework, task0010, D2): round-9 raised this to 62 purely
+/// on wire-budget grounds because the STORM path's latency was, at the
+/// time, a genuine trade-off against that raise — `TerminalCore::resize`
+/// re-wrapped the entire scrollback accumulated so far on every
+/// intermediate resize, so a longer-lived cap meant more segments meant
+/// seconds of replay (see `crates/term_core/src/bench.rs`'s
+/// `segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap`'s
+/// pre-round-10 doc: 24 segs → 323 ms / 62 → 4.5 s). Round-10's
+/// `TerminalCore::resize_same_width` no longer re-wraps retained
+/// scrollback for a same-width resize — a SAME-WIDTH resize storm (only
+/// `rows` differs between markers; `cols` constant) is what every storm
+/// fixture in this codebase's own tests actually drives this cap against
+/// (this ring's own cap-sweep test, `pty_spawn.rs`'s
+/// `run_resize_storm_cap_eviction_case`, and the bench above all hold
+/// `cols` fixed) — so for that shape, the storm-path latency trade-off
+/// this comment used to describe no longer applies to this constant's
+/// VALUE: raising it further would still cost only the row-count-bounded
+/// work D1 introduces, not work proportional to how many entries the cap
+/// allows. A storm that ALSO varies `cols` between markers still pays the
+/// pre-existing full-reflow cost per intermediate resize (D1 did not
+/// attempt that harder, more general case — see `VERIFICATION.md`'s NFR1
+/// section for the explicit scope statement). **62 remains the correct
+/// value regardless**, because the wire budget (`MAX_SEGMENTS` minus the
+/// head/screen slots, described above) is a separate, harder ceiling that
+/// a flat same-width resize cost does not relax — this note exists so a
+/// future reader does not see the wire-budget derivation above and wonder
+/// whether a NOW-STALE latency trade-off still competes with it for the
+/// SAME-WIDTH case. See `VERIFICATION.md`'s NFR1 section for the
+/// re-measured storm-path latency at this cap after round-10.
+///
 /// Enforced by [`Self::enforce_dim_marker_cap`], called after every
 /// [`Self::write_resize_marker`] append: when exceeded, the OLDEST entry is
 /// simply dropped (see that method's doc for why round-6 stopped pulling
