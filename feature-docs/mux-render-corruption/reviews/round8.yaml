@@ -1,0 +1,240 @@
+round: 8
+executed_at: "2026-07-27T11:50:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
+  head_commit: 587c3619807c2f75fbda4be0870f1a880fa6234e
+  changed_files:
+    - crates/mux_ipc/src/protocol.rs
+    - crates/term_core/src/bench.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/tabs.rs
+plan:
+  floor: [comprehensive, spec, security, performance, architecture]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: spec, source: claude, status: completed, note: "FR2 の測定食い違いを自前ハーネスで裁定。216 形状のスイープと cap スイープを実施"}
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed, note: "findings ゼロ。3 ラウンド連続でクリーン"}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: security, source: claude, status: skipped, skip_reason: "round 6 で残存リスク無しと明言済み"}
+  - {perspective: architecture, source: claude, status: skipped, skip_reason: "codex architecture が同一範囲をカバー"}
+  - {perspective: performance, source: claude, status: skipped, skip_reason: "spec レビューが NFR1 を実測込みで扱ったため"}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "round 7 で findings なし。round 8 の変更は性能特性を変えない"}
+
+headline: >-
+  **security は 3 ラウンド連続 findings ゼロ**。residual high は 1 件のみで、
+  しかも spec レビュアーが自前ハーネスで裁定・原因特定・修正案の実測まで完了させた。
+  FR2 の残件の唯一の原因は本 feature が導入した MAX_DIM_MARKERS = 24 であり、
+  cap スイープで **62 にすると全 storm 形状で混線 0（full attribution と一致）**。
+  NFR1 の通常切替 1.57ms は cap 非依存（prefix/suffix split の効果）であることも
+  ベンチで確認済みなので、cap を上げても通常切替は悪化しない。
+
+adjudication:
+  question: "round 7 spec レビュアー(A) と round 8 実装者(B) の実測が食い違っていた（A: eviction>=2 で head 非合成なら全形状 0 混線 / B: 消えない反例あり）"
+  verdict: "**(B) 実装者が正しい**"
+  evidence: >-
+    レビュアーは現行 ScrollbackRingBuffer をコピーして head 合成ポリシーだけ差し替え可能にし、
+    リポジトリ自身の fixture / レイアウト / 混線カウンタで測定した。まず A の 47/48 行を
+    完全再現（未修正=3、full=0、round7 実装=0/1/3/13）してハーネスの妥当性を確認したうえで、
+    同じハーネスで現行（round 8）を測ると target=47 で 0/3/3/3 になり、
+    A が「全形状 0 混線」と報告した変種が実際には evict>=2 で 3 行混線することを示した。
+
+findings:
+  - stable_id: 6082de4e619d7f51
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 424
+    title: "FR2 未達: cap eviction 2 件以上で行混線が残る（実測で裁定）"
+    description: >-
+      SPEC FR2 は「without mixing content from distinct lines」という絶対要件だが、
+      dim_markers の cap eviction が 2 件以上の領域で満たされていない。
+      216 形状のスイープ（row ペア 6 種 × target 3 種 × eviction 1..12）の結果:
+      - 現行が未修正(segments=[])より悪い形状: **0/216**（round 7 の退行は解消）
+      - 現行が未修正と同値＝改善ゼロの形状: **86/216**（全て evict>=2）
+      - full uncapped attribution は **全 216 形状で 0 混線**
+      - 現行 vs round 7 実装（evict>=2, 198 形状）: 現行が良い 27 / round 7 が良い 28 / 同値 143
+        → round 8 の変更は混線数では純改善ではなく、確実な利得は
+        「round 7 が持っていた『未修正より悪い』ケースの解消」
+      **残件の唯一の原因は本 feature が導入した MAX_DIM_MARKERS = 24**。
+      cap スイープ（rows 47/48, target 47, marker 26/32/52 の混線数）:
+      cap 24 → 3/3/3 / cap 32 → 0/0/3 / cap 48 → 0/0/3 / **cap 62 → 0/0/0**。
+      さらに NFR1 ベンチを release 実行した結果、通常切替は 1.57ms（segment-free 8.23ms）で
+      MAX_DIM_MARKERS に依存せず（prefix/suffix split の効果）、cap が効くのは storm 経路のみ
+      （6 segs 234ms / 24 segs 338ms）。つまり NFR1 はもはや 24 という値を強制していない。
+      MT-3（連続ドラッグ = 数十回 resize）はまさにこの破綻域で、本 feature が解こうとしている
+      症状そのものが 1〜13 行残る。
+    suggestion: >-
+      (a) 推奨・実測済み: MAX_DIM_MARKERS を wire 予算いっぱい
+      （MAX_SEGMENTS 64 − head 1 − screen 1 = 62）まで引き上げる。cap 62 は全 storm で混線 0。
+      付随して MAX_DAEMON_SNAPSHOT_SEGMENTS が 64 になり PRODUCER_SEGMENT_CELL_BUDGET が
+      8,000,000/64 = 125,000 cells に下がるので、実運用寸法（例 300x100 = 30,000）に対して
+      十分かを確認し、不足なら MAX_CUMULATIVE_SEGMENT_CELLS を producer 側上限から
+      逆算して引き上げること。NFR1 は storm 経路のみ悪化（24 segs 338ms → 62 segs で
+      500〜600ms 程度の外挿）で、通常切替 1.57ms は不変。
+      (b) 超長ドラッグ向けの構造的策: enforce_dim_marker_cap の犠牲者選択を
+      「常に最古」から「削っても失うものが最も少ないエントリ」に変える
+      （現行が最古を落とすのは retained window で最も大きく検出対象を最も多く抱える区間を
+      捨てる最悪の選択で、86/216 形状で改善ゼロなのはこれが原因）。
+      (c) (a)(b) を採らないなら SPEC FR2 に許容条件を明記して合意し直すこと。
+      現状は SPEC が絶対要件・VERIFICATION が「accepted precision loss」・
+      コード doc が「full と一致」と三者バラバラ。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 9 rework へ回送。修正案 (a) は cap スイープで実測済み"
+
+  - stable_id: 6eeccc889cb15d87
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 402
+    title: "read_segments の doc が実測に反する保証を記しており、同リポジトリのテスト doc とも矛盾する"
+    description: >-
+      read_segments 内の D1''''' 説明コメントが「the measurement showed matches full uncapped
+      attribution's mixed-row count in every tested case」と書いているが、これは実測で偽。
+      現行実装は evict>=2 のとき full(0 行) に対し 1〜13 行の混線を出し、216 形状のスイープでも
+      evict>=2 で full と一致した形状は 1 つも無い。
+      同じリポジトリ内の pty_spawn.rs のテスト doc は正反対に正しく書いており
+      （「no SINGLE gap-dims choice can correctly render two genuinely-different regimes」）、
+      SSOT が食い違っている。将来の保守者が scrollback_buffer.rs 側の誤った保証を根拠に
+      pty_spawn.rs 側の残件記述やアサーションを弱める危険がある。
+    suggestion: >-
+      当該コメントを実測に合わせて訂正する。(1) evict == 1 のときのみ full と厳密一致、
+      (2) evict >= 2 では full(0) に対し 1〜13 行の残存混線があり round 7 案でも消えない、
+      (3) 弁別根拠は混線数ではなく構造（capped_segments.len() == MAX_DIM_MARKERS）、
+      (4) round 8 の確実な利得は「未修正より悪くならない」の担保であって
+      round 7 に対する混線数の純改善ではないこと（実測: round8 良 27 / round7 良 28 / 同値 143）。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 9 rework へ回送"
+
+  - stable_id: ba7953c458050780
+    severity: medium
+    category: spec
+    file: feature-docs/mux-render-corruption/VERIFICATION.md
+    line: 18
+    title: "NFR3 / TS-5 の検証コマンドが term_core クレートのテストを一切実行しない"
+    description: >-
+      VERIFICATION.md が挙げる test コマンドは
+      `cargo test --manifest-path src-tauri/Cargo.toml --lib` だけで、
+      別パッケージである crates/term_core のテストは 1 件も走らない。
+      本 feature は crates/term_core/src/terminal_core.rs に 1945 行を加えており、
+      そこに **21 個の新規 #[test]** がある（replay_segments の leading gap 再生、
+      build_from_snapshot の prefix/suffix split、bypass/sync 等価性など FR2/FR3 の中核を
+      守るテスト）。それらが feature 自身の検証コマンドで一度も実行されない。
+      BYPASS_PREFIX_MAX_BYTES のゲートを消しても documented gate は緑のまま通る。
+      （オーケストレーター注: 別途手動実行し 744 passed / 0 failed を確認済み。
+      ただし検証コマンドの穴自体は残っている）
+    suggestion: >-
+      Test Verification のコマンド群に term_core を含める
+      （`cargo test --workspace --lib -- --test-threads=1` か、
+      `cargo test --manifest-path crates/term_core/Cargo.toml --lib` を 1 行追加）。
+      TS-5 の行も「emterm lib + term_core lib + bun test」と読める記述に直す。
+      既知の pre-existing 失敗（tabs::tests 7 件）が base でも落ちる事実も明記し、
+      「All pass」の期待値と実態の乖離を残さないこと。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 9 rework へ回送"
+
+  - stable_id: 1e7e069001cf22dc
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/tabs.rs
+    line: 3256
+    title: "wire-domain clamp が client 側で Tab::resize にしか入っておらず、他の寸法決定経路が素通りする"
+    description: >-
+      D3''''' の主張は「client と daemon が同じ純関数を同じ入力に適用するので一致する」だが、
+      clamp が入ったのは Tab::resize の 1 経路のみ。
+      (1) App::set_grid_size は clamp 前の値を self.cell_size に保存したまま tab.resize を呼ぶため、
+      Tab::resize が rows を縮めても App 側にフィードバックが無く、App.cell_size と core.rows() が
+      食い違う（renderer / hit-testing / window_host::grid_size は App 側の値を使う）。
+      (2) Tab::spawn_shell の TerminalCore::new は clamp しない。最初の Tab::resize より前に
+      Welcome / PaneCreated が着くと、未 clamp のまま ResizeMsg に載る。daemon 側は必ず
+      clamp を通すので、round 7 finding 1d1b6b6297e3b6a0 が閉じたはずの状態が残る。
+      (3) Tab::resize は mux 非接続のローカル tab にも共通なので、mux ワイヤ由来の定数が
+      mux と無関係な端末のグリッドまで縛る。
+      到達性は低いが、round 8 で budget が 1,000,000 → 307,692 と 3.25 倍厳しくなり、
+      かつ client 側にも適用されたので round 7 以前より発火しやすくなっている。
+      codex:architecture も独立に同じ指摘。
+    suggestion: >-
+      (a) Tab::spawn_shell の core 生成と ResizeMsg 送出でも clamp を通し、client 側の
+      「寸法を決める点」を 1 箇所に揃える（最低限これは必要）。
+      (b) Tab::resize が clamp 後の実寸を返し App::set_grid_size がその値で cell_size を更新する。
+      (c) clamp を mux 経路だけに寄せて非 mux tab をワイヤ定数から解放する。
+    sources: [claude:comprehensive, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "round 9 rework へ回送"
+
+  - stable_id: 7be271b2ead1bf07
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 944
+    title: "MuxPane::new は補正 master.resize() が失敗しても clamp 後の寸法を記録し続ける（resize() のロールバックと非対称）"
+    description: >-
+      AC-5 で追加された「clamp が値を変えたら PTY 自体もその寸法へ resize する」処理は
+      失敗時に log::warn! するだけで先へ進み、clamp 後の値を self.cols/rows・PaneDims・
+      shadow parser・最初の DimSegment へ確定させる。PTY は元の（domain 外の）サイズのままなので、
+      子プロセスの出力全バイトが誤った寸法に attribute され、この feature が消そうとしている
+      座標ドリフトをそのまま再現する。兄弟の MuxPane::resize は同じ失敗に対して dims を
+      ロールバックして Err を返す設計で、扱いが非対称。codex:architecture も独立に同じ指摘。
+    suggestion: >-
+      失敗時は clamp 後の値を記録しない。get_size() で PTY の実サイズを読み直してから
+      clamp を通した値を記録するか、pane 生成自体を失敗させて呼び出し元に返す
+      （MuxPane::new を Result にする）。best-effort で続けるなら log::error! に上げたうえで
+      乖離を型/戻り値で表現すること。
+    sources: [claude:comprehensive, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "round 9 rework へ回送"
+
+  - stable_id: 45033eaafbdf8e25
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 879
+    title: "MAX_DAEMON_SNAPSHOT_SEGMENTS（累積予算の分母）を実 producer 出力と突き合わせるテストが無く、回帰が silent"
+    description: >-
+      PRODUCER_SEGMENT_CELL_BUDGET は MAX_CUMULATIVE_SEGMENT_CELLS / MAX_DAEMON_SNAPSHOT_SEGMENTS
+      （8,000,000 / 26 = 307,692）で導出され、26 × 307,692 = 7,999,992 と上限に対して
+      マージンが 8 セルしかない。この整合は「daemon が 1 スナップショットで出せる segment 数は
+      絶対に 26 以下」という不変条件に完全依存するが、検証しているテストは定数自身から
+      segment を組み立ててデコードするトートロジーで、定数が実 producer 出力と乖離しても
+      検出できない。乖離時は decode がスナップショット全体を Malformed にし、client は
+      frame を捨てるだけなので、ユーザーには「切替後もずっと古い内容が残る」= この feature が
+      直そうとしている症状として現れ、警告は release ログにしか出ない。
+      MAX_DIM_MARKERS を上げる / 合成 segment を足す / alt-screen segment を足す、
+      のいずれでも静かに壊れる（注: 上記 6082de4e619d7f51 の修正案 (a) はまさに
+      MAX_DIM_MARKERS を上げるので、この点は同時に対処が必要）。
+    suggestion: >-
+      read_segments → build_snapshot_bytes → encode_snapshot_segments →
+      decode_snapshot_payload_typed を通す end-to-end 回帰テストを 1 本足す。
+      cap eviction をちょうど 1 回起こして dim_markers を満杯にし、alt-screen 有効で
+      最大形状のスナップショットを組み立て、(a) segment 数が上限以下、
+      (b) デコード結果が Structured であることを **実 producer 出力に対して** assert する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 9 rework へ回送"
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: routed-to-rework
+  note: >-
+    residual high は 1 件で、修正は MAX_DIM_MARKERS の変更 + それに伴う
+    PRODUCER_SEGMENT_CELL_BUDGET の再導出 + doc 訂正にまたがるため単一ファイルでは扱えない。
+
+residual_critical_high: 1
+rework_required: true
