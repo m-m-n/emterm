@@ -463,31 +463,42 @@ mod benches {
     }
 
     /// Perf bench (NFR1, task0005 rework D3'', review round-4 finding
-    /// `6c650908ea8e95e9`): reproduces the round-4 measurement methodology —
+    /// `6c650908ea8e95e9`; round-6 rework D1''', review round-5 finding
+    /// `abb36fa1ad4c89ea`): reproduces the round-4 measurement methodology —
     /// a ~0.95 MiB snapshot replayed through `TerminalCore::build_from_snapshot`
-    /// at the shipping scrollback default, varying segment count — and
-    /// asserts replay stays fast at the segment-count bound this task's fix
-    /// enforces daemon-side
-    /// (`src-tauri/src/mux/scrollback_buffer.rs::MAX_DIM_MARKERS`, currently
-    /// 16). `term_core` has no dependency on the daemon crate, so that
-    /// value is duplicated here as a literal, cross-referenced by name —
-    /// keep the two in sync if either changes.
+    /// at the shipping scrollback default — varying segment COUNT (this
+    /// bench's original axis) AND, per AC-2, whether a single segment's
+    /// dims differ from the replay target (the axis round-5's own bench
+    /// missed: its two arms, 4 and 16 segments, BOTH already paid the
+    /// bypass-downgrade cost, so the measured 1.09 ratio never approached
+    /// the 1-second bound it asserted against). `term_core` has no
+    /// dependency on the daemon crate, so `DAEMON_SEGMENT_CAP` duplicates
+    /// `src-tauri/src/mux/scrollback_buffer.rs::MAX_DIM_MARKERS` as a
+    /// literal, cross-referenced by name — keep the two in sync if either
+    /// changes.
     ///
     /// Round-4's raw (unbounded) measurement: segments=0 → 134 ms / 5 →
     /// 176 ms / 20 → 272 ms / 30 → 2078 ms / 50 → 3322 ms / 80 → 5350 ms —
     /// replay cost jumps sharply once segment count crosses roughly 20-30.
-    /// This task's fix does not change `replay_segments`' per-call reflow
-    /// cost; instead it keeps every REAL snapshot's segment count on the
-    /// cheap side of that cliff by bounding what the daemon ever records
-    /// (see `scrollback_buffer.rs`'s `MAX_DIM_MARKERS` tests for the
-    /// recording-side guarantee). This bench validates that choice
-    /// empirically: replay at the FULL bound (16 segments) stays under 1
-    /// second — comfortably under the several-second blowup the unbounded
-    /// case measured — and going from a quarter of the bound to the full
-    /// bound (4x the segment count) does not multiply cost anywhere near
-    /// the ~8x jump round-4 measured for only a 1.5x count increase (20 →
-    /// 30), ruling out the same superlinear blowup within the bounded
-    /// range.
+    /// Round-5's measurement (finding `abb36fa1ad4c89ea`) isolated the axis
+    /// that actually drives THAT curve: not segment count itself, but
+    /// whether `build_from_snapshot_inner` downgrades out of the
+    /// snapshot-replay bypass for the WHOLE drain (pre-round-6, it did so
+    /// whenever ANY segment differed from the target) — 1 segment already
+    /// AT the target → 7 ms; 1 segment differing → 220 ms, a ~30x jump for
+    /// a SINGLE segment, dwarfing the count-driven curve above. Round-6's
+    /// `build_from_snapshot_inner` prefix/suffix split (D1''') closes that
+    /// gap for the realistic "ordinary switch" shape (a small differing
+    /// HEAD segment followed by the pane's bulk history already at the
+    /// target) WITHOUT raising `DAEMON_SEGMENT_CAP` enough to matter for
+    /// speed — this bench's `t_ordinary_switch` arm is the direct
+    /// regression guard for that (see also
+    /// `ordinary_switch_bench_950kib_matches_segment_free_cost` below,
+    /// which asserts the AC-4 bound in isolation). The COUNT-scaling arms
+    /// below (`t_quarter` / `t_cap`) still matter for the genuine
+    /// resize-STORM shape the split does not help (no stable tail — see
+    /// that function's doc), which is why `DAEMON_SEGMENT_CAP` stays
+    /// bounded at all (AC-3's correctness requirement, not a speed one).
     ///
     /// Gated `#[ignore]` (release-mode timing bench, not part of the
     /// default `--lib` run). Invoke with:
@@ -506,7 +517,7 @@ mod benches {
         use std::time::Instant;
 
         // Mirrors `src-tauri/src/mux/scrollback_buffer.rs::MAX_DIM_MARKERS`.
-        const DAEMON_SEGMENT_CAP: usize = 16;
+        const DAEMON_SEGMENT_CAP: usize = 24;
         // Mirrors `src-tauri/src/settings.rs::DEFAULT_SCROLLBACK_LINES`.
         const SHIPPING_SCROLLBACK_LINES: u32 = 10_000;
         const TARGET_PAYLOAD_LEN: usize = 950 * 1024;
@@ -514,14 +525,22 @@ mod benches {
         let rows_a: u16 = 30;
         let rows_b: u16 = 24;
 
-        let build_payload = |segment_count: usize| -> (Vec<u8>, Vec<ReplaySegment>) {
-            let filler = b"line of scrollback content padded out a bit\r\n";
+        let filler = b"line of scrollback content padded out a bit\r\n";
+        let fill_to = |len: usize| -> Vec<u8> {
+            let mut payload = Vec::with_capacity(len + filler.len());
+            while payload.len() < len {
+                payload.extend_from_slice(filler);
+            }
+            payload
+        };
+
+        // Alternating-dims payload with NO stable tail (every segment,
+        // including the last, differs from its predecessor and from the
+        // replay target `rows_a` whenever `segment_count` is even) — the
+        // resize-STORM shape the prefix/suffix split does not speed up.
+        let build_storm_payload = |segment_count: usize| -> (Vec<u8>, Vec<ReplaySegment>) {
             if segment_count == 0 {
-                let mut payload = Vec::with_capacity(TARGET_PAYLOAD_LEN + filler.len());
-                while payload.len() < TARGET_PAYLOAD_LEN {
-                    payload.extend_from_slice(filler);
-                }
-                return (payload, Vec::new());
+                return (fill_to(TARGET_PAYLOAD_LEN), Vec::new());
             }
             let per_segment = TARGET_PAYLOAD_LEN / segment_count;
             let mut payload = Vec::with_capacity(TARGET_PAYLOAD_LEN + filler.len() * segment_count);
@@ -540,8 +559,7 @@ mod benches {
             (payload, segments)
         };
 
-        let measure = |segment_count: usize| -> std::time::Duration {
-            let (payload, segments) = build_payload(segment_count);
+        let measure = |payload: &[u8], segments: &[ReplaySegment]| -> std::time::Duration {
             // Warm-up.
             {
                 let cancel = AtomicBool::new(false);
@@ -549,8 +567,8 @@ mod benches {
                     cols,
                     rows_a,
                     SHIPPING_SCROLLBACK_LINES,
-                    &payload,
-                    &segments,
+                    payload,
+                    segments,
                     &cancel,
                 );
             }
@@ -560,8 +578,8 @@ mod benches {
                 cols,
                 rows_a,
                 SHIPPING_SCROLLBACK_LINES,
-                &payload,
-                &segments,
+                payload,
+                segments,
                 &cancel,
             );
             let elapsed = start.elapsed();
@@ -569,18 +587,43 @@ mod benches {
             elapsed
         };
 
-        let t_baseline = measure(0);
-        let t_quarter = measure(DAEMON_SEGMENT_CAP / 4);
-        let t_cap = measure(DAEMON_SEGMENT_CAP);
+        let (storm_baseline_payload, _) = build_storm_payload(0);
+        let t_baseline = measure(&storm_baseline_payload, &[]);
+        let (storm_quarter_payload, storm_quarter_segments) =
+            build_storm_payload(DAEMON_SEGMENT_CAP / 4);
+        let t_quarter = measure(&storm_quarter_payload, &storm_quarter_segments);
+        let (storm_cap_payload, storm_cap_segments) = build_storm_payload(DAEMON_SEGMENT_CAP);
+        let t_cap = measure(&storm_cap_payload, &storm_cap_segments);
+
+        // AC-2: the axis that actually costs — a single segment ALREADY at
+        // the target vs one that DIFFERS, spanning the whole payload (no
+        // stable tail for the split to exploit).
+        let one_equal_segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: rows_a,
+        }];
+        let one_equal_payload = fill_to(TARGET_PAYLOAD_LEN);
+        let t_one_equal = measure(&one_equal_payload, &one_equal_segments);
+        let one_differing_segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: rows_b,
+        }];
+        let one_differing_payload = fill_to(TARGET_PAYLOAD_LEN);
+        let t_one_differing = measure(&one_differing_payload, &one_differing_segments);
 
         eprintln!(
             "[bench] segment-bounded replay (0.95 MiB, {cols}x{rows_a}, sb={SHIPPING_SCROLLBACK_LINES}): \
-             0 segs → {:?} | {} segs → {:?} | {} segs (daemon cap) → {:?}",
+             0 segs → {:?} | {} segs (storm) → {:?} | {} segs (storm, daemon cap) → {:?} | \
+             1 seg == target → {:?} | 1 seg != target (no stable tail) → {:?}",
             t_baseline,
             DAEMON_SEGMENT_CAP / 4,
             t_quarter,
             DAEMON_SEGMENT_CAP,
             t_cap,
+            t_one_equal,
+            t_one_differing,
         );
 
         let bound = std::time::Duration::from_millis(1000);
@@ -610,6 +653,138 @@ mod benches {
             t_cap,
             ratio,
             t_quarter,
+        );
+        // AC-2 (informational, not asserted): `t_one_equal` should track
+        // `t_baseline` closely (no resize at all — the pre-round-5 fast
+        // path) while `t_one_differing` is expected to stay slow (no
+        // stable tail for the split to exploit) — the point of this arm is
+        // to make that cost SHAPE visible, not to bound it; AC-4's bound on
+        // the "ordinary switch" shape lives in
+        // `ordinary_switch_bench_950kib_matches_segment_free_cost`.
+    }
+
+    /// AC-1 / AC-4 (round-6 rework, review round-5 finding
+    /// `abb36fa1ad4c89ea`): a ~0.95 MiB snapshot replayed as the "ordinary
+    /// window switch" shape — a tiny HEAD segment at the daemon's
+    /// hardcoded spawn size (`MuxPane::new`'s 80x24), differing from the
+    /// replay target, followed by the pane's bulk history already at the
+    /// target (the shape one subsequent `MuxPane::resize` produces once
+    /// the GUI's grid has settled) — costs approximately what a
+    /// segment-free replay of the same payload costs, via
+    /// `TerminalCore::build_from_snapshot_inner`'s D1''' prefix/suffix
+    /// split. Confirmed to fail pre-fix: reverting the split (bypass
+    /// downgrading for the whole drain whenever ANY segment differs from
+    /// the target, rounds 1-5's behavior) measured ~220 ms for this exact
+    /// shape against ~7 ms segment-free — a ratio the bound below would
+    /// reject.
+    ///
+    /// Gated `#[ignore]` (release-mode timing bench). Invoke with:
+    ///
+    /// ```sh
+    /// CARGO_TARGET_DIR=src-tauri/target cargo test --release \
+    ///   --manifest-path crates/term_core/Cargo.toml --lib \
+    ///   ordinary_switch_bench_950kib_matches_segment_free_cost \
+    ///   -- --nocapture --include-ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn ordinary_switch_bench_950kib_matches_segment_free_cost() {
+        use crate::terminal_core::{ReplaySegment, TerminalCore};
+        use std::sync::atomic::AtomicBool;
+        use std::time::Instant;
+
+        const SHIPPING_SCROLLBACK_LINES: u32 = 10_000;
+        const TARGET_PAYLOAD_LEN: usize = 950 * 1024;
+        let cols: u16 = 100;
+        let target_rows: u16 = 30;
+        let spawn_rows: u16 = 24;
+
+        let filler = b"line of scrollback content padded out a bit\r\n";
+        let fill_to = |len: usize| -> Vec<u8> {
+            let mut payload = Vec::with_capacity(len + filler.len());
+            while payload.len() < len {
+                payload.extend_from_slice(filler);
+            }
+            payload
+        };
+
+        let measure = |payload: &[u8], segments: &[ReplaySegment]| -> std::time::Duration {
+            {
+                let cancel = AtomicBool::new(false);
+                let _ = TerminalCore::build_from_snapshot(
+                    cols,
+                    target_rows,
+                    SHIPPING_SCROLLBACK_LINES,
+                    payload,
+                    segments,
+                    &cancel,
+                );
+            }
+            let cancel = AtomicBool::new(false);
+            let start = Instant::now();
+            let replay = TerminalCore::build_from_snapshot(
+                cols,
+                target_rows,
+                SHIPPING_SCROLLBACK_LINES,
+                payload,
+                segments,
+                &cancel,
+            );
+            let elapsed = start.elapsed();
+            std::hint::black_box(replay);
+            elapsed
+        };
+
+        let payload = fill_to(TARGET_PAYLOAD_LEN);
+        let t_free = measure(&payload, &[]);
+
+        // Head segment covers a small, fixed prefix (a shell banner's worth
+        // of bytes) — comfortably below `BYPASS_SUFFIX_MIN_BYTES`'s
+        // complement, so the split's suffix (the rest of the payload) is
+        // the part that actually gets replayed under bypass.
+        let head_len: u32 = 2048;
+        let ordinary_segments = vec![
+            ReplaySegment {
+                offset: 0,
+                cols,
+                rows: spawn_rows,
+            },
+            ReplaySegment {
+                offset: head_len,
+                cols,
+                rows: target_rows,
+            },
+        ];
+        let t_ordinary = measure(&payload, &ordinary_segments);
+
+        // No stable tail (reported only) — the shape the split cannot
+        // help, for contrast.
+        let single_differing_segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: spawn_rows,
+        }];
+        let t_single_differing = measure(&payload, &single_differing_segments);
+
+        eprintln!(
+            "[bench] ordinary switch vs segment-free (0.95 MiB, {cols}x{target_rows}, \
+             sb={SHIPPING_SCROLLBACK_LINES}): segment-free → {:?} | ordinary switch \
+             (head+target-tail) → {:?} | single differing segment (no stable tail) → {:?}",
+            t_free, t_ordinary, t_single_differing,
+        );
+
+        // AC-4: an ordinary window switch is not measurably slower than a
+        // segment-free replay. A generous multiplicative + absolute floor
+        // absorbs scheduler / measurement noise on a single sample.
+        let bound = t_free.mul_f64(3.0) + std::time::Duration::from_millis(20);
+        assert!(
+            t_ordinary < bound,
+            "ordinary switch {:?} is not close to segment-free {:?} (bound \
+             {:?}) — the prefix/suffix split (D1''') is not engaging for \
+             this shape",
+            t_ordinary,
+            t_free,
+            bound,
         );
     }
 }
