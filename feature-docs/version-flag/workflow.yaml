@@ -38,7 +38,8 @@ workflow:
     completed_at_commit: ab622a8046b80e7862336a926a8832b1c19f5aaf
     base_commit: 68b1009cd77b64611cce11edc136ec6051b24348
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 5428b4114a136ceb1727d76cbd4bc96f9cb1f3dd
   - id: verify
     status: pending
     result: null
@@ -88,8 +89,8 @@ tasks:
     branch: em-workflow/version-flag/task0002
 
 review:
-  status: in_progress
-  rounds_completed: 1
+  status: completed
+  rounds_completed: 2
   plan:
     floor: [comprehensive, spec, security, architecture]
     discretionary: []
@@ -99,8 +100,8 @@ review:
     spec: completed
     security: completed
     architecture: completed
-  residual_critical_high: 3
-  needs_rework: true
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
