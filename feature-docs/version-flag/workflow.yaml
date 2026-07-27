@@ -70,8 +70,9 @@ tasks:
     domains: [config-infra, input-handling, api-contract]
     complexity: medium
     requirements: [FR1, FR3, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/version-flag/task0003
   task0002:
     title: "release.yml sync-version job"
     plan: tasks/task0002.md
