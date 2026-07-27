@@ -139,21 +139,46 @@ const SNAPSHOT_PAYLOAD_MAGIC: [u8; 8] = *b"EMSNAP2\0";
 
 /// Maximum number of [`DimSegment`] entries a decoded structured payload may
 /// declare (task0005 rework D2'', review round-4 finding
-/// `1cd7b5e593f3b901`).
+/// `1cd7b5e593f3b901`; round-6 rework D4''', review round-5 finding
+/// `bfebad60b3862d3e`).
 ///
 /// The old decoder's `count.min(4096)` only bounded the initial `Vec`
 /// allocation — the per-entry parse loop still ran the FULL declared
 /// `count`, so a frame well under the 64 KiB off-thread-replay threshold
 /// could still declare a segment table approaching `MAX_FRAME_LENGTH / 8`
 /// (~2,000,000 entries) and force that many synchronous reflows on the
-/// caller's UI thread. A genuine daemon-recorded payload never approaches
-/// this bound — `mux::scrollback_buffer::MAX_DIM_MARKERS` caps the daemon's
-/// OWN recording an order of magnitude below it — so rejecting anything
-/// above it as [`DecodedSnapshotPayload::Malformed`] costs no legitimate
-/// payload while making the size of `count` itself part of the checked
-/// upfront validation ([`decode_snapshot_payload_typed`]) rather than
-/// something only a full per-entry scan would discover.
-pub const MAX_SEGMENTS: usize = 4096;
+/// caller's UI thread. Round-6 tightened the ceiling itself: 4096 was
+/// still ~170x the daemon's OWN recording bound
+/// (`mux::scrollback_buffer::MAX_DIM_MARKERS`, 24) — since every non-empty
+/// segment costs a reflow, a compact hostile frame well under any
+/// byte-size threshold could still buy replay-worker time proportional to
+/// segment count (round-4 measured 80 segments / 0.95 MiB → 5.35 s). This
+/// value is a small, generous multiple of `MAX_DIM_MARKERS` (duplicated
+/// here as a literal — `mux_ipc` has no dependency on the daemon crate,
+/// keep the two in sync if either changes) rather than that exact value,
+/// so a legitimate producer never has to track this decoder-side ceiling
+/// precisely; a genuine daemon-recorded payload never gets remotely close
+/// to it either way. Rejecting anything above it as
+/// [`DecodedSnapshotPayload::Malformed`] costs no legitimate payload while
+/// making the size of `count` itself part of the checked upfront
+/// validation ([`decode_snapshot_payload_typed`]) rather than something
+/// only a full per-entry scan would discover.
+pub const MAX_SEGMENTS: usize = 64;
+
+/// Maximum total cell count (`cols as u32 * rows as u32`) a single
+/// [`DimSegment`] may declare (round-6 rework D5''', review round-5 finding
+/// `1227fc04fb9368d0`).
+///
+/// `term_core::clamp_resize_dims` bounds `cols` and `rows` individually to
+/// 4096 each, but a single segment at exactly that bound still allocates a
+/// grid on the order of half a gigabyte (4096 × 4096 cells at 32 bytes/cell,
+/// before accounting for the previous grid it replaces or any scrollback
+/// capacity added on top) — clamping each DIMENSION separately still admits
+/// an adversarial PRODUCT. No real terminal approaches this cell count (a
+/// 4K display at a tiny font is on the order of a few hundred thousand
+/// cells); rejecting the whole snapshot before any per-segment allocation
+/// happens costs no legitimate payload.
+pub const MAX_SEGMENT_CELLS: u32 = 1_000_000;
 
 /// Result of decoding a snapshot payload (task0005 rework D2'', replacing
 /// the ambiguous `(Vec<DimSegment>, &[u8])` tuple [`decode_snapshot_payload`]
@@ -262,6 +287,25 @@ pub fn decode_snapshot_payload_typed(payload: &[u8]) -> DecodedSnapshotPayload<'
     }
     let mut segments = Vec::with_capacity(count);
     let mut cursor = 4usize;
+    // D2''' (round-6 rework, review round-5 finding `58db33c799bedf87`):
+    // validated ALONGSIDE parsing, not as a separate pass — a leading
+    // offset that isn't 0, a non-monotonic offset, or one past `content`'s
+    // length are all malformed-envelope conditions (never assigned
+    // authority over content, per the same policy the count/table-length
+    // checks above already apply), each one letting `TerminalCore::
+    // replay_segments` silently DROP a byte range instead: a non-zero
+    // first offset drops `content[0..offset]`; a non-monotonic entry
+    // produces an `end < start` range that also drops content.
+    let content_len = rest.len() - table_end;
+    let mut prev_offset: Option<u32> = None;
+    // D5''' (round-6 rework, review round-5 finding `1227fc04fb9368d0`):
+    // clamping `cols`/`rows` to `RESIZE_MARKER_MAX_COLS`/`_ROWS`
+    // individually (term_core's `clamp_resize_dims`, applied again at
+    // replay time) still admits a single segment whose PRODUCT allocates
+    // on the order of half a gigabyte (4096 × 4096 cells). Reject the
+    // whole snapshot — before any per-segment allocation happens — if any
+    // segment's total cell count exceeds a budget no legitimate terminal
+    // size approaches.
     for _ in 0..count {
         // Bounds already verified above (`table_end <= rest.len()`); this
         // slice cannot panic.
@@ -269,6 +313,21 @@ pub fn decode_snapshot_payload_typed(payload: &[u8]) -> DecodedSnapshotPayload<'
         let offset = u32::from_le_bytes(seg_bytes[0..4].try_into().expect("4-byte slice"));
         let cols = u16::from_le_bytes(seg_bytes[4..6].try_into().expect("2-byte slice"));
         let rows = u16::from_le_bytes(seg_bytes[6..8].try_into().expect("2-byte slice"));
+        if prev_offset.is_none() && offset != 0 {
+            return DecodedSnapshotPayload::Malformed;
+        }
+        if let Some(prev) = prev_offset {
+            if offset < prev {
+                return DecodedSnapshotPayload::Malformed;
+            }
+        }
+        if offset as usize > content_len {
+            return DecodedSnapshotPayload::Malformed;
+        }
+        prev_offset = Some(offset);
+        if (cols as u32) * (rows as u32) > MAX_SEGMENT_CELLS {
+            return DecodedSnapshotPayload::Malformed;
+        }
         segments.push(DimSegment { offset, cols, rows });
         cursor += 8;
     }
@@ -2104,6 +2163,10 @@ mod tests {
 
     #[test]
     fn encode_decode_snapshot_payload_round_trips_multiple_segments() {
+        // Offsets must be non-decreasing, start at 0, and stay within
+        // `bytes`' length (D2''' round-6 rework) — this test's `bytes` is
+        // 42 bytes, so the third segment's offset is chosen accordingly
+        // rather than the earlier (unrealistic, content-exceeding) 4096.
         let segments = vec![
             DimSegment {
                 offset: 0,
@@ -2111,17 +2174,18 @@ mod tests {
                 rows: 24,
             },
             DimSegment {
-                offset: 42,
+                offset: 20,
                 cols: 120,
                 rows: 40,
             },
             DimSegment {
-                offset: 4096,
+                offset: 40,
                 cols: 200,
                 rows: 50,
             },
         ];
         let bytes = b"hello resize world, this is plain content".to_vec();
+        assert!(bytes.len() >= 40, "test fixture offsets assume len >= 40");
         let encoded = encode_snapshot_payload(&segments, &bytes);
         let (decoded_segments, decoded_bytes) = decode_snapshot_payload(&encoded);
         assert_eq!(decoded_segments, segments);
@@ -2211,9 +2275,14 @@ mod tests {
     /// legitimate ceiling itself.
     #[test]
     fn decode_snapshot_payload_accepts_a_count_exactly_at_max_segments() {
+        // Every entry at offset 0 (all describing the SAME content byte,
+        // legitimate per the coalescing rule the daemon-side recorder
+        // applies) — this test is about the COUNT ceiling, not offsets, so
+        // the fixture must satisfy D2''' round-6's offset validation
+        // (leading zero / non-decreasing / within content) trivially.
         let segments: Vec<DimSegment> = (0..MAX_SEGMENTS)
-            .map(|i| DimSegment {
-                offset: i as u32,
+            .map(|_| DimSegment {
+                offset: 0,
                 cols: 80,
                 rows: 24,
             })
@@ -2223,6 +2292,167 @@ mod tests {
             DecodedSnapshotPayload::Structured {
                 segments: decoded, ..
             } => assert_eq!(decoded.len(), MAX_SEGMENTS),
+            other => panic!("expected Structured, got {other:?}"),
+        }
+    }
+
+    // ── D2''' (round-6 rework, review round-5 finding
+    // `58db33c799bedf87`): segment OFFSETS are validated, not just
+    // dimensions and count. Each test below builds a well-formed table by
+    // `count`/length rules but violates exactly one offset rule, and
+    // confirms `decode_snapshot_payload_typed` rejects it as `Malformed`
+    // rather than silently producing a segment list `TerminalCore::
+    // replay_segments` would drop content against.
+
+    /// A non-zero LEADING offset would make `replay_segments` silently
+    /// drop `content[0..offset]` (never fed to any segment) — rejected as
+    /// `Malformed` before that content is even reachable.
+    #[test]
+    fn decode_snapshot_payload_typed_rejects_non_zero_leading_offset() {
+        let segments = vec![DimSegment {
+            offset: 5,
+            cols: 80,
+            rows: 24,
+        }];
+        let encoded = encode_snapshot_payload(&segments, b"0123456789");
+        assert_eq!(
+            decode_snapshot_payload_typed(&encoded),
+            DecodedSnapshotPayload::Malformed
+        );
+    }
+
+    /// A non-monotonic (decreasing) offset would make `replay_segments`
+    /// compute an `end < start` range for the offending segment, silently
+    /// dropping the bytes in between — rejected as `Malformed`.
+    #[test]
+    fn decode_snapshot_payload_typed_rejects_non_monotonic_offset() {
+        let segments = vec![
+            DimSegment {
+                offset: 0,
+                cols: 80,
+                rows: 24,
+            },
+            DimSegment {
+                offset: 8,
+                cols: 100,
+                rows: 30,
+            },
+            DimSegment {
+                offset: 4, // goes BACKWARD relative to the previous entry
+                cols: 120,
+                rows: 40,
+            },
+        ];
+        let encoded = encode_snapshot_payload(&segments, b"0123456789");
+        assert_eq!(
+            decode_snapshot_payload_typed(&encoded),
+            DecodedSnapshotPayload::Malformed
+        );
+    }
+
+    /// An offset past the end of `content` can never be reached by any
+    /// segment's byte range — rejected as `Malformed` rather than silently
+    /// producing a segment `replay_segments` would clamp to `bytes.len()`
+    /// (making the segment's declared start meaningless).
+    #[test]
+    fn decode_snapshot_payload_typed_rejects_offset_past_content_length() {
+        let segments = vec![DimSegment {
+            offset: 0,
+            cols: 80,
+            rows: 24,
+        }];
+        let content = b"short";
+        let mut encoded = encode_snapshot_payload(&segments, content);
+        // Hand-corrupt the SECOND segment's offset (appended below,
+        // bypassing `encode_snapshot_payload`'s single-segment table) so
+        // the table declares an offset beyond `content`'s true length
+        // without extending `content` to match.
+        encoded[SNAPSHOT_PAYLOAD_MAGIC.len()..SNAPSHOT_PAYLOAD_MAGIC.len() + 4]
+            .copy_from_slice(&2u32.to_le_bytes());
+        let mut with_second = encoded[..SNAPSHOT_PAYLOAD_MAGIC.len() + 4 + 8].to_vec();
+        with_second.extend_from_slice(&(content.len() as u32 + 100).to_le_bytes()); // offset
+        with_second.extend_from_slice(&100u16.to_le_bytes()); // cols
+        with_second.extend_from_slice(&30u16.to_le_bytes()); // rows
+        with_second.extend_from_slice(content);
+        assert_eq!(
+            decode_snapshot_payload_typed(&with_second),
+            DecodedSnapshotPayload::Malformed
+        );
+    }
+
+    /// A segment's offset EQUAL to `content.len()` (a zero-length trailing
+    /// segment — the shape a real head-marker-only snapshot with no
+    /// further content yet would produce) is the valid boundary, not an
+    /// off-by-one Malformed rejection.
+    #[test]
+    fn decode_snapshot_payload_typed_accepts_offset_equal_to_content_length() {
+        let segments = vec![DimSegment {
+            offset: 0,
+            cols: 80,
+            rows: 24,
+        }];
+        let content = b"exact";
+        let mut encoded = encode_snapshot_payload(&segments, content);
+        encoded[SNAPSHOT_PAYLOAD_MAGIC.len()..SNAPSHOT_PAYLOAD_MAGIC.len() + 4]
+            .copy_from_slice(&2u32.to_le_bytes());
+        let mut with_second = encoded[..SNAPSHOT_PAYLOAD_MAGIC.len() + 4 + 8].to_vec();
+        with_second.extend_from_slice(&(content.len() as u32).to_le_bytes());
+        with_second.extend_from_slice(&100u16.to_le_bytes());
+        with_second.extend_from_slice(&30u16.to_le_bytes());
+        with_second.extend_from_slice(content);
+        match decode_snapshot_payload_typed(&with_second) {
+            DecodedSnapshotPayload::Structured { segments, .. } => assert_eq!(segments.len(), 2),
+            other => panic!("expected Structured, got {other:?}"),
+        }
+    }
+
+    // ── D5''' (round-6 rework, review round-5 finding
+    // `1227fc04fb9368d0`): a segment's dimension PRODUCT is bounded, not
+    // just each dimension individually. ───────────────────────────────────
+
+    /// A segment at `RESIZE_MARKER_MAX_COLS` x `RESIZE_MARKER_MAX_ROWS`
+    /// (4096 x 4096, each individually within term_core's per-dimension
+    /// clamp) still exceeds `MAX_SEGMENT_CELLS` and must be rejected before
+    /// any allocation happens downstream.
+    #[test]
+    fn decode_snapshot_payload_typed_rejects_segment_exceeding_dimension_budget() {
+        let segments = vec![DimSegment {
+            offset: 0,
+            cols: 4096,
+            rows: 4096,
+        }];
+        assert!(
+            (segments[0].cols as u32) * (segments[0].rows as u32) > MAX_SEGMENT_CELLS,
+            "test prerequisite: fixture must actually exceed the budget"
+        );
+        let encoded = encode_snapshot_payload(&segments, b"content");
+        assert_eq!(
+            decode_snapshot_payload_typed(&encoded),
+            DecodedSnapshotPayload::Malformed
+        );
+    }
+
+    /// A segment whose product is exactly at `MAX_SEGMENT_CELLS` decodes
+    /// successfully — the budget rejects EXCESS, not the boundary itself.
+    #[test]
+    fn decode_snapshot_payload_typed_accepts_segment_at_dimension_budget() {
+        // 1000 x 1000 = 1_000_000 == MAX_SEGMENT_CELLS.
+        let segments = vec![DimSegment {
+            offset: 0,
+            cols: 1000,
+            rows: 1000,
+        }];
+        assert_eq!(
+            (segments[0].cols as u32) * (segments[0].rows as u32),
+            MAX_SEGMENT_CELLS
+        );
+        let encoded = encode_snapshot_payload(&segments, b"content");
+        match decode_snapshot_payload_typed(&encoded) {
+            DecodedSnapshotPayload::Structured {
+                segments: decoded, ..
+            } => {
+                assert_eq!(decoded, segments)
+            }
             other => panic!("expected Structured, got {other:?}"),
         }
     }
