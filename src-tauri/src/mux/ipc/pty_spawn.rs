@@ -1666,117 +1666,271 @@ mod tests {
         }
     }
 
-    /// AC-3 (round-6 rework, review round-5 finding `986a3881b2b97a16`): a
-    /// resize sequence LONGER than `scrollback_buffer::MAX_DIM_MARKERS`,
-    /// driven end to end through the DAEMON-SIDE ring
-    /// (`ScrollbackRingBuffer::write_resize_marker` / `read_segments` —
-    /// exercising the real `enforce_dim_marker_cap` merge path, not a
-    /// hand-built `ReplaySegment` list), the snapshot assembly
-    /// (`build_snapshot_bytes`), and replay (`reset_and_replay_segments`).
-    ///
-    /// Two assertions, chosen for what they can each actually falsify:
-    /// - `segments` returned by `read_segments()` never exceeds
-    ///   `MAX_DIM_MARKERS`, and every SURVIVING entry's `rows` value
-    ///   strictly alternates `rows_a`/`rows_b` with no duplicate-adjacent
-    ///   or out-of-domain value — this directly exercises
-    ///   `enforce_dim_marker_cap`'s "drop, don't reattribute" merge through
-    ///   the real ring (not hand-built segments) and would fail if a merge
-    ///   regression corrupted a SURVIVING (non-dropped) entry's own `rows`
-    ///   value, the round-3 misattribution class `enforce_dim_marker_cap`'s
-    ///   own doc discusses.
-    /// - the replay itself produces zero rows mixing bar-fragment content
-    ///   with log-line content (the same detector
-    ///   `apt_style_recording_replays_without_cross_line_mixing` uses) —
-    ///   demonstrated NOT to be a vacuous check: `build_snapshot_bytes` /
-    ///   `reset_and_replay_segments` are real functions operating on a
-    ///   payload that must decode and replay without panicking across a
-    ///   >MAX_DIM_MARKERS segment table (a decode/replay-side regression —
-    ///   e.g. an off-by-one in how `read_segments`' fallback head is
-    ///   spliced into `mid` — would surface here as a panic or as content
-    ///   corruption, even though this specific bar/log content pattern
-    ///   turned out NOT to be sensitive to the offset-vs-dims distinction
-    ///   the merge rework changed; that distinction is what the first
-    ///   assertion targets instead).
-    #[test]
-    fn resize_storm_beyond_marker_cap_replays_without_cross_line_mixing() {
-        use crate::mux::scrollback_buffer::{MAX_DIM_MARKERS, ScrollbackRingBuffer};
-        use term_core::terminal_core::TerminalCore;
-
-        let cols: u16 = 100;
-        let rows_a: u16 = 30;
-        let rows_b: u16 = 24;
-        let target_rows = rows_a;
-        // Comfortably beyond the cap so `enforce_dim_marker_cap` fires
-        // repeatedly (not just once).
-        let step_count = MAX_DIM_MARKERS + 24;
-
-        let mut rb = ScrollbackRingBuffer::new(4 * 1024 * 1024);
-        for step in 0..step_count {
-            let rows = if step % 2 == 0 { rows_a } else { rows_b };
-            rb.write_resize_marker(cols, rows);
-            // Scroll region excluding the bottom row (reserved for a
-            // progress bar), mirroring `synth_apt_bytes_with_midrun_resize`
-            // — the mechanism PROBE D identified needs a scroll-region
-            // boundary computed for the WRONG row count to manifest.
-            rb.write(format!("\n\x1b7\x1b[0;{}r\x1b8\x1b[1A", rows - 1).as_bytes());
-            if step % 2 == 0 {
-                rb.write(
-                    format!(
-                        "\x1b7\x1b[{rows};0f\x1b[42m\x1b[30mprogress step {step:3} [{}]\x1b[49m\x1b[39m\x1b[0m\x1b8",
-                        "\u{2588}".repeat(10),
-                    )
-                    .as_bytes(),
-                );
+    /// Test-only oracle mirroring `ScrollbackRingBuffer::read_segments`'s
+    /// head/mid split, but over a marker history that was NEVER capped to
+    /// `MAX_DIM_MARKERS` — the theoretical FULL attribution the real cap
+    /// only approximates. Unlike the real method this never needs a
+    /// cap-eviction fallback: the full history's very first marker (offset
+    /// 0) always qualifies as `head` (`0 <= oldest_offset` always holds),
+    /// so there is no gap to attribute at all.
+    fn full_attribution_segments(
+        markers: &[(u64, u16, u16)],
+        oldest_offset: u64,
+        raw_len: usize,
+    ) -> Vec<(usize, u16, u16)> {
+        let mut head: Option<(u16, u16)> = None;
+        let mut mid: Vec<(usize, u16, u16)> = Vec::new();
+        for &(offset, cols, rows) in markers {
+            if offset <= oldest_offset {
+                head = Some((cols, rows));
             } else {
-                rb.write(format!("log line at step {step} percent complete\r\n").as_bytes());
+                let pos = ((offset - oldest_offset) as usize).min(raw_len);
+                mid.push((pos, cols, rows));
             }
         }
-        let (raw, segments) = rb.read_segments();
-        assert!(
-            segments.len() <= MAX_DIM_MARKERS,
-            "the ring must still bound recorded segments to MAX_DIM_MARKERS \
-             regardless of how many resize steps occurred, got {}",
-            segments.len()
-        );
-        for pair in segments.windows(2) {
-            let (_, _, r0) = pair[0];
-            let (_, _, r1) = pair[1];
-            assert_ne!(
-                r0, r1,
-                "adjacent surviving segments must never collapse onto the \
-                 same rows value (a corrupted merge could coalesce two \
-                 distinct steps together): {segments:?}"
-            );
-            assert!(
-                r0 == rows_a || r0 == rows_b,
-                "every surviving segment's rows must be one of the two \
-                 recorded values, got {r0}: {segments:?}"
-            );
+        let mut segments = Vec::with_capacity(mid.len() + 1);
+        if let Some((cols, rows)) = head {
+            segments.push((0usize, cols, rows));
         }
+        segments.extend(mid);
+        segments
+    }
 
-        let (snap, snap_segments) = crate::mux::snapshot_bytes::build_snapshot_bytes(
-            &raw,
-            &segments,
-            b"",
-            false,
-            (cols, target_rows),
-        );
-        let mut core = TerminalCore::new(cols, target_rows, 10_000);
-        core.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
-
-        let mut tainted = Vec::new();
+    /// Counts rows in `core`'s current viewport (`0..target_rows`) that mix
+    /// a progress-bar fragment with log-line content — the cross-line-
+    /// mixing shape `apt_style_recording_replays_without_cross_line_mixing`
+    /// and PROBE D both use.
+    fn count_mixed_rows(core: &term_core::terminal_core::TerminalCore, target_rows: u16) -> usize {
+        let mut count = 0;
         for r in 0..target_rows {
             let line = core.get_line_text(r);
             let has_bar = line.contains('\u{2588}') || line.trim_end().ends_with(']');
             let has_log = line.contains("percent");
             if has_bar && has_log {
-                tainted.push(format!("row {r}: {line}"));
+                count += 1;
             }
         }
+        count
+    }
+
+    /// AC-1, AC-2 (round-7 rework, review round-6 findings
+    /// `bb3353636b0206cb` / `4254f3a66c1c3f5e`): replaces
+    /// `resize_storm_beyond_marker_cap_replays_without_cross_line_mixing`,
+    /// which could not fail — its fixture was too small to wrap the ring,
+    /// so the round-5/6 buggy implementation and the fix produced
+    /// IDENTICAL segment lists and replay grids, and its mixing detector
+    /// found nothing to detect in either case (review round-6 finding
+    /// `4254f3a66c1c3f5e`).
+    ///
+    /// This version:
+    /// 1. Puts detectable apt-style bar/log content (phase 0, the SAME
+    ///    fixture `apt_style_recording_replays_without_cross_line_mixing`
+    ///    uses, proven to mix when replayed under the wrong dims) BEFORE a
+    ///    resize storm, keeping the storm's own redraws small so phase 0
+    ///    stays on the replayed grid rather than scrolling out of view.
+    /// 2. Drives a REAL `ScrollbackRingBuffer` (not hand-built segments)
+    ///    with a capacity small enough that it ACTUALLY WRAPS (content
+    ///    bytes get evicted), so `enforce_dim_marker_cap` (count, beyond
+    ///    `MAX_DIM_MARKERS` markers) fires against a genuinely wrapped
+    ///    ring — sized so EXACTLY one entry (phase 0's own initial marker)
+    ///    is evicted. This isolates the fix's OWN correctness from a
+    ///    separate, harder property: collapsing SEVERAL evicted entries
+    ///    that span several distinct dimension regimes into one carries an
+    ///    accepted, documented precision loss (`MAX_DIM_MARKERS`'s doc) no
+    ///    single fallback value can eliminate — this test targets whether
+    ///    the ONE entry the cap actually discards is attributed correctly,
+    ///    not that property.
+    /// 3. Asserts its OWN discrimination premise inline: replaying the
+    ///    exact same retained bytes with NO segments at all must mix MORE
+    ///    rows than replaying with FULL, uncapped attribution (computed
+    ///    independently via `full_attribution_segments`) — if that premise
+    ///    ever stops holding, this test fails outright instead of silently
+    ///    passing.
+    /// 4. Asserts the capped (real, `MAX_DIM_MARKERS`-bounded) segment list
+    ///    is STRUCTURALLY IDENTICAL to the full-attribution oracle (a
+    ///    single eviction must be recovered exactly), that the capped head
+    ///    segment's dimensions match the one entry the cap evicted (D1''''
+    ///    fix), not the oldest SURVIVING marker's (the round-6 bug), and
+    ///    that the capped replay mixes NO MORE rows than the
+    ///    full-attribution replay (AC-1).
+    ///
+    /// Confirmed to fail pre-fix: reverting the D1'''' fix in
+    /// `ScrollbackRingBuffer::read_segments` (restoring round-6's
+    /// `mid.remove(0)` fallback, which discards `mid[0]`'s own position and
+    /// dims and splices them onto position 0 instead of synthesizing a
+    /// head from the evicted entry) makes both the head-segment assertion
+    /// and the `capped_segments == full_segments` assertion below fail
+    /// immediately.
+    #[test]
+    fn resize_storm_beyond_marker_cap_replays_no_worse_than_full_attribution() {
+        use crate::mux::scrollback_buffer::{MAX_DIM_MARKERS, ScrollbackRingBuffer};
+        use term_core::terminal_core::TerminalCore;
+
+        let cols: u16 = 120;
+        let rows_a: u16 = 47;
+        let rows_b: u16 = 48;
+        let target_rows: u16 = rows_a;
+
+        let (phase0_bytes, phase0_segments) =
+            synth_apt_bytes_with_midrun_resize(cols, rows_a, rows_b);
+        assert_eq!(phase0_segments.len(), 2, "test prerequisite");
+
+        // Storm: enough additional resize steps that the TOTAL marker count
+        // (phase 0's 2 + the storm's) exceeds MAX_DIM_MARKERS by EXACTLY 1
+        // — a single cap-eviction event, so the D1'''' fallback's
+        // `capped_head_dims` is seeded from EXACTLY the one entry it
+        // discards (phase 0's own initial marker) and no OTHER evicted
+        // entry's dims get silently discarded along the way. This isolates
+        // the fix's own correctness from a separate, harder property
+        // (collapsing SEVERAL evicted entries spanning several distinct
+        // dimension regimes into one is an accepted, documented precision
+        // loss — see `MAX_DIM_MARKERS`'s doc — not what this test targets).
+        // Each step's redraw is a small bar/log fragment (not a full apt
+        // cycle) so phase 0 stays within the final viewport.
+        let storm_steps = MAX_DIM_MARKERS + 1 - phase0_segments.len();
+        let storm_rows = [rows_a, rows_b];
+        let mut storm_chunks: Vec<(u16, u16, Vec<u8>)> = Vec::with_capacity(storm_steps);
+        for step in 0..storm_steps {
+            let rows = storm_rows[step % 2];
+            let redraw = if step % 2 == 0 {
+                format!("\x1b7\x1b[{rows};0f[{}\u{2588}]\x1b8", step % 10).into_bytes()
+            } else {
+                format!("storm log at step {step} percent\r\n").into_bytes()
+            };
+            storm_chunks.push((cols, rows, redraw));
+        }
+
+        // Ring capacity: small enough that the total content (phase 0 +
+        // storm) overruns it by a modest margin, so the ring ACTUALLY
+        // WRAPS (AC-2) — evicting a slice of phase 0's own leading filler
+        // text (plain unrelated history, not part of the mixing
+        // detector's pattern), while everything the detector cares about
+        // survives.
+        let storm_len: usize = storm_chunks.iter().map(|(_, _, c)| c.len()).sum();
+        let total_len = phase0_bytes.len() + storm_len;
+        let margin = 500usize;
         assert!(
-            tainted.is_empty(),
-            "resize storm beyond MAX_DIM_MARKERS ({MAX_DIM_MARKERS}) produced \
-             cross-line-mixed rows after the cap merge: {tainted:?}"
+            total_len > margin * 2,
+            "test prerequisite: fixture must be large enough to leave a \
+             wrap margin"
+        );
+        let capacity = total_len - margin;
+
+        let mut rb = ScrollbackRingBuffer::new(capacity);
+        let mut full_markers: Vec<(u64, u16, u16)> = Vec::new();
+        let mut total_written: u64 = 0;
+
+        // Replay phase 0 through the REAL ring, chunked at ITS OWN
+        // recorded segment boundaries, so `write_resize_marker` records
+        // the same offsets `synth_apt_bytes_with_midrun_resize` assumes.
+        for (i, seg) in phase0_segments.iter().enumerate() {
+            let end = phase0_segments
+                .get(i + 1)
+                .map(|s| s.offset as usize)
+                .unwrap_or(phase0_bytes.len());
+            rb.write_resize_marker(seg.cols, seg.rows);
+            full_markers.push((total_written, seg.cols, seg.rows));
+            let chunk = &phase0_bytes[seg.offset as usize..end];
+            rb.write(chunk);
+            total_written += chunk.len() as u64;
+        }
+        for (step_cols, step_rows, chunk) in &storm_chunks {
+            rb.write_resize_marker(*step_cols, *step_rows);
+            full_markers.push((total_written, *step_cols, *step_rows));
+            rb.write(chunk);
+            total_written += chunk.len() as u64;
+        }
+        assert_eq!(
+            full_markers.len(),
+            MAX_DIM_MARKERS + 1,
+            "test prerequisite: total recorded markers must exceed \
+             MAX_DIM_MARKERS by exactly one, so the cap evicts EXACTLY one \
+             entry (phase 0's own initial marker)"
+        );
+
+        let (raw, capped_segments) = rb.read_segments();
+        assert!(
+            raw.len() < total_len,
+            "test prerequisite: the ring must actually have evicted some \
+             content (AC-2 — the ring wraps during this test), got \
+             raw.len()={} of total_len={total_len}",
+            raw.len(),
+        );
+        assert_eq!(
+            capped_segments.len(),
+            MAX_DIM_MARKERS + 1,
+            "the D1'''' fix always synthesizes exactly one extra head \
+             segment for the evicted gap, on top of the MAX_DIM_MARKERS \
+             survivors"
+        );
+
+        // D1'''' assertion: the capped head segment's dimensions must be
+        // the LAST evicted entry's (index `eviction_count - 1` in the
+        // full, never-capped history) — not the oldest SURVIVING marker's
+        // (what round-6 used instead).
+        let eviction_count = full_markers.len() - MAX_DIM_MARKERS;
+        let (_, expected_head_cols, expected_head_rows) = full_markers[eviction_count - 1];
+        assert_eq!(
+            capped_segments[0],
+            (0usize, expected_head_cols, expected_head_rows),
+            "capped head segment must carry the LAST EVICTED entry's dims, \
+             not the oldest surviving marker's"
+        );
+
+        // The oracle: FULL, never-capped attribution over the SAME
+        // retained bytes. With EXACTLY one eviction, this must come out
+        // STRUCTURALLY IDENTICAL to `capped_segments` — the single evicted
+        // entry (phase 0's own initial marker) is exactly what
+        // `capped_head_dims` retains, and every surviving entry (including
+        // phase 0's own mid-run resize marker) keeps its own real position
+        // in both. This is a stronger, more direct check than comparing
+        // mixed-row COUNTS below: it pins the exact mechanism D1'''' fixes,
+        // not just an outcome that could coincidentally match.
+        let oldest_offset = total_written.saturating_sub(capacity as u64);
+        let full_segments = full_attribution_segments(&full_markers, oldest_offset, raw.len());
+        assert_eq!(
+            capped_segments, full_segments,
+            "with exactly one cap eviction, the capped segment list must be \
+             IDENTICAL to full uncapped attribution — the D1'''' fallback \
+             must recover the discarded entry's exact dims"
+        );
+
+        let replay = |segments: &[(usize, u16, u16)]| -> usize {
+            let (snap, snap_segments) = crate::mux::snapshot_bytes::build_snapshot_bytes(
+                &raw,
+                segments,
+                b"",
+                false,
+                (cols, target_rows),
+            );
+            let mut core = TerminalCore::new(cols, target_rows, 10_000);
+            core.reset_and_replay_segments(&snap, &to_replay_segments(&snap_segments));
+            count_mixed_rows(&core, target_rows)
+        };
+
+        let no_segments_mixed = replay(&[]);
+        let full_mixed = replay(&full_segments);
+        let capped_mixed = replay(&capped_segments);
+
+        // Discrimination premise (hard gate, D2''''): this fixture must be
+        // ABLE to show a difference, or the assertions below are vacuous.
+        assert!(
+            no_segments_mixed > full_mixed,
+            "fixture is not discriminating: no-segment replay \
+             ({no_segments_mixed} mixed rows) must mix MORE than \
+             full-attribution replay ({full_mixed} mixed rows) — if this \
+             ever stops holding, rebuild the fixture rather than weaken \
+             this assertion"
+        );
+
+        // AC-1: the capped replay must show no MORE mixing than full
+        // attribution.
+        assert!(
+            capped_mixed <= full_mixed,
+            "resize storm beyond MAX_DIM_MARKERS produced MORE cross-line \
+             mixing ({capped_mixed} rows) than full uncapped attribution \
+             ({full_mixed} rows) — the cap-eviction fallback is \
+             misattributing the gap"
         );
     }
 
