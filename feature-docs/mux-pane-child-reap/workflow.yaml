@@ -34,9 +34,22 @@ workflow:
   - id: review
     status: pending
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: >
+      build (default) / build (--no-default-features, TS-13) / format check は
+      いずれも exit 0。TS-1..TS-11 の 12 テスト（child_reaper 5 / pane 4 /
+      child_reap_e2e 3）は全て pass。TS-12 (NFR2, manual inspection) は security
+      レビュアーの査読で「外部 PID を受け取る kill 経路なし・mark_exited 呼び出し元
+      4 箇所はいずれも正当な teardown 経路」を確認し pass 扱い。
+      未実行: MT-1 (実機 daemon soak) / MT-2 (wedged shell 強制クローズ) /
+      MT-3 (Windows クロスビルド) — いずれも手動項目で無人実行では回せない。
+      既知の非該当失敗: `cargo test` 全体で tabs::tests が 16 件 (並列) /
+      7 件 (--test-threads=1) 失敗するが、未変更のベースライン main @ aad6e6e で
+      同一の 7 件が同一メッセージで失敗することを確認済み (2737 passed / 7 failed)。
+      本 feature の diff は tabs.rs に一切触れておらず、既存の環境依存問題として
+      failed_items には計上しない。
   - id: retrospect
     status: pending
 
