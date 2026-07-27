@@ -34,8 +34,8 @@ workflow:
     status: completed
     completed_at_commit: 097c6745466c5dbeed5861ec2c7c8d2d95ddc7d0
   - id: implement
-    status: in_progress
-    completed_at_commit: cb4e7c894df9d324435e056fea60ac82f85fd273
+    status: completed
+    completed_at_commit: 40f96a14e69df1d4525d25118df377953de979e0
     base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
   - id: review
     status: pending
@@ -195,7 +195,7 @@ tasks:
     domains: [input-handling, ui, concurrency, api-contract]
     complexity: high
     requirements: [FR2, FR3, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-render-corruption/task0007
     notes: "review round 6 の residual high からの rework。中核は cap 発火時に evict される head の寸法を保持すること（現状は未修正時より混線が増える実測がある）と、それを守るテストを弁別可能にすること"
 
