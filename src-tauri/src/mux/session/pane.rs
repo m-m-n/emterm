@@ -7,7 +7,9 @@ use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
 use crate::agent_status::{AgentState, AgentStatusEvent};
-use crate::mux::scrollback_buffer::{DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer};
+use crate::mux::scrollback_buffer::{
+    DEFAULT_SCROLLBACK_CAPACITY, MAX_DIM_MARKERS, ScrollbackRingBuffer,
+};
 use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
@@ -835,12 +837,52 @@ pub struct MuxPane {
 /// round-trip acknowledgment: same function, same input, same output.
 pub(crate) fn clamp_dims_to_wire_domain(cols: u16, rows: u16) -> (u16, u16) {
     let (cols, rows) = term_core::terminal_core::clamp_resize_dims(cols, rows);
-    if (cols as u32) * (rows as u32) <= mux_ipc::protocol::MAX_SEGMENT_CELLS {
+    if (cols as u32) * (rows as u32) <= PRODUCER_SEGMENT_CELL_BUDGET {
         return (cols, rows);
     }
-    let max_rows = (mux_ipc::protocol::MAX_SEGMENT_CELLS / cols as u32).max(1) as u16;
+    let max_rows = (PRODUCER_SEGMENT_CELL_BUDGET / cols as u32).max(1) as u16;
     (cols, rows.min(max_rows))
 }
+
+/// The largest number of `DimSegment`s a single daemon-assembled snapshot
+/// can ever contain: every surviving `dim_markers` entry
+/// ([`MAX_DIM_MARKERS`]), plus at most one synthesized head segment for a
+/// single cap eviction (`ScrollbackRingBuffer::read_segments`, D1'''''),
+/// plus at most one trailing screen-dump segment for an alt-screen pane
+/// (`build_snapshot_bytes_with_layout`'s D7'' segment). Well under the wire
+/// decoder's own `mux_ipc::protocol::MAX_SEGMENTS` (64) ceiling.
+const MAX_DAEMON_SNAPSHOT_SEGMENTS: u64 = MAX_DIM_MARKERS as u64 + 2;
+
+/// Producer-side per-segment cell budget (D4''''', round-8 rework, review
+/// round-7 finding `4bc6ab813edd6d22`, independently confirmed by
+/// `codex:architecture`).
+///
+/// `clamp_dims_to_wire_domain` previously bounded every segment's own
+/// product to the decoder's PER-SEGMENT ceiling
+/// (`mux_ipc::protocol::MAX_SEGMENT_CELLS`, 1,000,000) alone — but the
+/// decoder ALSO enforces a CUMULATIVE ceiling across every segment in one
+/// payload (`MAX_CUMULATIVE_SEGMENT_CELLS`, 8,000,000). A daemon snapshot
+/// can legitimately carry up to [`MAX_DAEMON_SNAPSHOT_SEGMENTS`] (26)
+/// segments, each individually within `MAX_SEGMENT_CELLS` but at
+/// `1,000,000` cells apiece that sums to 26,000,000 — well past the
+/// cumulative ceiling, so the daemon's own peer would reject the ENTIRE
+/// snapshot as `Malformed` and the pane would keep showing stale content
+/// after every switch (the exact symptom this feature exists to fix).
+/// Deriving the producer's per-segment budget from the SAME cumulative
+/// ceiling divided by the largest segment count the daemon can ever emit
+/// guarantees a daemon-recorded snapshot's segments can never sum past it,
+/// regardless of how many distinct dimensions were recorded. `.min(...)`
+/// with the decoder's own per-segment ceiling is a belt-and-braces bound
+/// (the derived value, 307,692, is already well under it).
+const PRODUCER_SEGMENT_CELL_BUDGET: u32 = {
+    let derived = mux_ipc::protocol::MAX_CUMULATIVE_SEGMENT_CELLS / MAX_DAEMON_SNAPSHOT_SEGMENTS;
+    let capped = if derived > mux_ipc::protocol::MAX_SEGMENT_CELLS as u64 {
+        mux_ipc::protocol::MAX_SEGMENT_CELLS as u64
+    } else {
+        derived
+    };
+    capped as u32
+};
 
 impl MuxPane {
     /// Create a new pane (PTY spawn handled by caller).
@@ -1331,9 +1373,14 @@ mod tests {
     /// D6'''' (round-7 rework, review round-6 finding `6cefb1dd16c126b6`):
     /// `u16::MAX` per axis clamps to `RESIZE_MARKER_MAX_COLS` /
     /// `RESIZE_MARKER_MAX_ROWS` (4096 each) — a product of 16,777,216,
-    /// still far above `MAX_SEGMENT_CELLS` (1,000,000) the wire decoder
-    /// accepts. `rows` must clamp FURTHER, down to
-    /// `MAX_SEGMENT_CELLS / cols`, preserving `cols` at the per-axis max.
+    /// still far above the wire decoder's per-segment ceiling. `rows` must
+    /// clamp FURTHER, preserving `cols` at the per-axis max.
+    ///
+    /// D4''''' (round-8 rework, review round-7 finding `4bc6ab813edd6d22`):
+    /// the product ceiling this now clamps to is
+    /// `PRODUCER_SEGMENT_CELL_BUDGET` (derived from the decoder's
+    /// CUMULATIVE budget, ~307,692), not the decoder's raw per-segment
+    /// `MAX_SEGMENT_CELLS` (1,000,000) — see that constant's doc.
     #[cfg(unix)]
     #[test]
     fn new_pane_clamps_out_of_domain_dimensions() {
@@ -1353,7 +1400,7 @@ mod tests {
         let target = make_output_target();
         let pane = MuxPane::new(1, u16::MAX, u16::MAX, target, writer, pair.master);
         let expected_cols = term_core::terminal_core::RESIZE_MARKER_MAX_COLS;
-        let expected_rows = (mux_ipc::protocol::MAX_SEGMENT_CELLS / expected_cols as u32) as u16;
+        let expected_rows = (PRODUCER_SEGMENT_CELL_BUDGET / expected_cols as u32) as u16;
         assert_eq!(
             (pane.cols, pane.rows),
             (expected_cols, expected_rows),
@@ -1440,6 +1487,47 @@ mod tests {
                  ({cols}, {rows}) produced a segment the wire decoder \
                  rejected as Malformed: {decoded:?}"
             );
+        }
+    }
+
+    /// AC-6 (D4''''', round-8 rework, review round-7 finding
+    /// `4bc6ab813edd6d22`, independently confirmed by `codex:architecture`):
+    /// the LARGEST segment list the daemon can actually produce — every one
+    /// of `MAX_DAEMON_SNAPSHOT_SEGMENTS` (26) segments at the producer's own
+    /// per-segment cell budget — decodes successfully, not `Malformed`.
+    ///
+    /// Confirmed to fail pre-fix: before this fix, `clamp_dims_to_wire_domain`
+    /// bounded every segment to the decoder's PER-SEGMENT ceiling alone
+    /// (`MAX_SEGMENT_CELLS`, 1,000,000) — 26 segments at that size sum to
+    /// 26,000,000 cells, ten times over `MAX_CUMULATIVE_SEGMENT_CELLS`
+    /// (8,000,000), so `decode_snapshot_payload_typed` would return
+    /// `Malformed` for this exact payload and the assertion below would fail.
+    #[test]
+    fn largest_daemon_producible_segment_list_round_trips_cleanly() {
+        let (cols, rows) = clamp_dims_to_wire_domain(u16::MAX, u16::MAX);
+        let segment_count = MAX_DAEMON_SNAPSHOT_SEGMENTS as usize;
+        let segments: Vec<mux_ipc::protocol::DimSegment> = (0..segment_count)
+            .map(|i| mux_ipc::protocol::DimSegment {
+                offset: i as u32,
+                cols,
+                rows,
+            })
+            .collect();
+        let content = vec![b'x'; segment_count];
+        let payload = mux_ipc::protocol::encode_snapshot_payload(&segments, &content);
+        let decoded = mux_ipc::protocol::decode_snapshot_payload_typed(&payload);
+        match decoded {
+            mux_ipc::protocol::DecodedSnapshotPayload::Structured {
+                segments: decoded_segments,
+                ..
+            } => {
+                assert_eq!(decoded_segments.len(), segment_count);
+            }
+            other => panic!(
+                "the largest segment list the daemon can produce \
+                 ({segment_count} segments at {cols}x{rows}) must decode as \
+                 Structured, not {other:?}"
+            ),
         }
     }
 
