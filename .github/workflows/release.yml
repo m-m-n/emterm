@@ -19,6 +19,7 @@ env:
 jobs:
   sync-version:
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -33,8 +34,11 @@ jobs:
         run: |
           if [ -n "$INPUT_TAG" ]; then
             echo "version=$INPUT_TAG" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$GITHUB_REF_VAR" != "${GITHUB_REF_VAR#refs/tags/}" ]; then
             echo "version=${GITHUB_REF_VAR#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::tag input is empty and $GITHUB_REF_VAR is not a tag ref"
+            exit 1
           fi
 
       - name: Sync version into Cargo manifest and lockfile
@@ -42,6 +46,10 @@ jobs:
           RELEASE_VERSION: ${{ steps.get-version.outputs.version }}
         run: |
           VERSION="${RELEASE_VERSION#v}"
+          case "$VERSION" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::refusing to sync non-semver version '$VERSION' into main"; exit 1 ;;
+          esac
           echo "Syncing version to $VERSION"
           sed -i -E "/^\[package\]/,/^\[/ { /^version = / s/.*/version = \"$VERSION\"/; }" src-tauri/Cargo.toml
           # The workspace's single Cargo.lock lives at the repo root (this
