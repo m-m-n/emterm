@@ -67,37 +67,49 @@ pub struct ScrollbackRingBuffer {
     /// long-lived pane that had accumulated many markers before any of them
     /// aged out).
     dim_markers: VecDeque<(u64, u16, u16)>,
-    /// Whether [`Self::enforce_dim_marker_cap`] has ever popped an entry
-    /// for THIS ring (D1''', round-6 rework). [`Self::prune_dim_markers`]
-    /// maintains the invariant "if a qualifying head entry exists, keep at
-    /// least it" on its own, so a `read_segments` call finding no entry at
-    /// or before the retained window's head is otherwise a NORMAL, legitimate
-    /// state (content genuinely predates the first-ever recorded resize —
-    /// plain unattributed bytes, no segment). Only once the cap has ACTUALLY
-    /// dropped an entry can that same "no qualifying head" state instead
-    /// mean "a predecessor that WOULD have qualified was forgotten" —
-    /// [`Self::read_segments`]'s fallback must only engage in that case,
-    /// never the former. Reset by [`Self::clear`].
-    dim_markers_evicted_by_cap: bool,
+    /// Cumulative count of `dim_markers` entries [`Self::enforce_dim_marker_cap`]
+    /// has EVER popped for THIS ring (D1''''', round-8 rework, review
+    /// round-7 finding `01f91fe698ceb287`; supersedes the round-6
+    /// `dim_markers_evicted_by_cap: bool`, which could not distinguish
+    /// "exactly one entry ever evicted" from "many").
+    ///
+    /// [`Self::prune_dim_markers`] maintains the invariant "if a qualifying
+    /// head entry exists, keep at least it" on its own, so a `read_segments`
+    /// call finding no entry at or before the retained window's head is
+    /// otherwise a NORMAL, legitimate state (content genuinely predates the
+    /// first-ever recorded resize — plain unattributed bytes, no segment).
+    /// Only once the cap has ACTUALLY dropped entries can that same "no
+    /// qualifying head" state instead mean "a predecessor that WOULD have
+    /// qualified was forgotten". [`Self::read_segments`] uses the exact
+    /// count, not just whether it is non-zero: reviewer measurement (round-7
+    /// finding `01f91fe698ceb287`) showed [`Self::capped_head_dims`]'s
+    /// single-entry fallback recovers EXACTLY the full-attribution result
+    /// when precisely one entry was ever evicted, but attributing the WHOLE
+    /// multi-entry gap to only the LAST of several evicted entries'
+    /// dimensions can replay MORE cross-line mixing than not attributing the
+    /// gap at all (e.g. 13 mixed rows vs 3 for "no segments" on one measured
+    /// shape). Reset by [`Self::clear`].
+    dim_markers_cap_eviction_count: u64,
     /// Dimensions of the MOST RECENTLY evicted `dim_markers` entry (D1'''',
     /// round-7 rework, review round-6 finding `bb3353636b0206cb`).
     ///
     /// [`Self::enforce_dim_marker_cap`] pops entries oldest-first; the LAST
     /// one it pops on any given call is therefore the one describing the
     /// span immediately preceding the oldest entry that survives — exactly
-    /// the dimensions [`Self::read_segments`] needs for position 0 when no
-    /// surviving marker qualifies as head. Round-6 instead reused the
-    /// oldest SURVIVING marker's dimensions for that gap (`mid[0]`, spliced
-    /// to position 0) — those are the dimensions of the span that starts
-    /// AFTER the gap, not the ones that produced it, so round-6 replayed the
-    /// entire evicted-and-then-some span under an unrelated later resize's
-    /// dimensions. Measured by the round-6 reviewer: an apt-style phase
-    /// followed by 26 resize markers (28 total, cap 24) replayed 7 mixed
-    /// rows under that fallback, vs 3 for no attribution at all and 0 for
-    /// full uncapped attribution — the round-6 fallback was worse than
-    /// shipping nothing. Retaining the true evicted predecessor's
-    /// dimensions here fixes that without rewriting any surviving entry's
-    /// own recorded attribution. Reset by [`Self::clear`].
+    /// the dimensions [`Self::read_segments`] needs for position 0 when
+    /// EXACTLY ONE entry has ever been evicted (D1''''', round-8 rework):
+    /// with two or more evictions this no longer describes the WHOLE gap
+    /// (only its most recent slice), so `read_segments` stops using it as a
+    /// head fallback in that case — see [`Self::dim_markers_cap_eviction_count`].
+    /// Round-6 instead reused the oldest SURVIVING marker's dimensions for
+    /// the gap (`mid[0]`, spliced to position 0) — those are the dimensions
+    /// of the span that starts AFTER the gap, not the ones that produced it,
+    /// so round-6 replayed the entire evicted-and-then-some span under an
+    /// unrelated later resize's dimensions. Measured by the round-6
+    /// reviewer: an apt-style phase followed by 26 resize markers (28 total,
+    /// cap 24) replayed 7 mixed rows under that fallback, vs 3 for no
+    /// attribution at all and 0 for full uncapped attribution — the round-6
+    /// fallback was worse than shipping nothing. Reset by [`Self::clear`].
     capped_head_dims: Option<(u16, u16)>,
 }
 
@@ -145,7 +157,7 @@ impl ScrollbackRingBuffer {
             len: 0,
             total_written: 0,
             dim_markers: VecDeque::new(),
-            dim_markers_evicted_by_cap: false,
+            dim_markers_cap_eviction_count: 0,
             capped_head_dims: None,
         }
     }
@@ -262,7 +274,7 @@ impl ScrollbackRingBuffer {
             let Some((_, cols, rows)) = self.dim_markers.pop_front() else {
                 break;
             };
-            self.dim_markers_evicted_by_cap = true;
+            self.dim_markers_cap_eviction_count += 1;
             self.capped_head_dims = Some((cols, rows));
         }
     }
@@ -372,34 +384,44 @@ impl ScrollbackRingBuffer {
                 mid.push((pos, cols, rows));
             }
         }
-        // D1'''' (round-7 rework, review round-6 finding `bb3353636b0206cb`):
+        // D1''''' (round-8 rework, review round-7 finding `01f91fe698ceb287`):
         // `enforce_dim_marker_cap` no longer pulls a surviving entry's
         // offset back to cover a dropped one, so after a cap-triggered drop
         // EVERY surviving marker's offset can be past `oldest_offset`
-        // (nothing above qualified as `head`). Falling back to
-        // `capped_head_dims` — the dimensions of the entry the cap most
-        // recently evicted — for position 0 avoids leaving the retained
-        // window's earliest bytes with no segment at all, which a
-        // segment-aware replay would otherwise silently drop rather than
-        // merely losing precision for a single span.
+        // (nothing above qualified as `head`). When EXACTLY ONE entry has
+        // ever been evicted, falling back to `capped_head_dims` — the
+        // dimensions of that one entry — for position 0 recovers full
+        // uncapped attribution exactly (the reviewer's measurement:
+        // 0 mixed rows, matching the never-capped oracle).
+        //
+        // With TWO OR MORE evictions, `capped_head_dims` only names the
+        // LAST of them — the gap spans everything every evicted entry
+        // described, and attributing the whole thing to just the last one's
+        // dimensions can replay MORE cross-line mixing than not attributing
+        // the gap at all (reviewer measurement: up to 13 mixed rows under
+        // that fallback vs 3 for "no segments", against 0 for full
+        // attribution, on one tested shape). The reviewer verified the fix
+        // by measurement across every tested shape: when 2+ entries have
+        // been evicted, leave `head` unattributed entirely rather than
+        // guess — [`TerminalCore::replay_segments`] then replays the
+        // leading gap (before the first surviving segment's own offset) at
+        // the caller's target dimensions, which the measurement showed
+        // matches full uncapped attribution's mixed-row count in every
+        // tested case. Every surviving marker keeps its own true position
+        // regardless (the `mid` vec below is unaffected).
         //
         // Round-6 instead spliced `mid[0]` (the OLDEST SURVIVING marker) in
-        // at position 0, discarding its true (later) offset. That describes
-        // the span AFTER the gap, not the one that produced it, so round-6
-        // replayed the ENTIRE evicted span under an unrelated later
-        // resize's dimensions — measured by the round-6 reviewer as MORE
-        // mixed rows than not attributing the gap at all (7 vs 3, against 0
-        // for full uncapped attribution). `capped_head_dims` is the actual
-        // predecessor of the oldest survivor, so this closes that gap
-        // without discarding `mid[0]`'s own (correct, unmodified) position.
+        // at position 0, discarding its true (later) offset — measured by
+        // the round-6 reviewer as MORE mixed rows than not attributing the
+        // gap at all (7 vs 3, against 0 for full uncapped attribution).
         //
-        // Gated on `dim_markers_evicted_by_cap` — WITHOUT a prior cap
-        // eviction, "no qualifying head" is the NORMAL, legitimate case of
-        // content that genuinely predates the first-ever recorded resize
-        // (`prune_dim_markers` alone always keeps a qualifying entry when
-        // one exists), and must stay unattributed rather than be
-        // misassigned to a later resize's dims.
-        if head.is_none() && self.dim_markers_evicted_by_cap {
+        // Gated on `dim_markers_cap_eviction_count` — WITHOUT a prior cap
+        // eviction (count == 0), "no qualifying head" is the NORMAL,
+        // legitimate case of content that genuinely predates the
+        // first-ever recorded resize (`prune_dim_markers` alone always
+        // keeps a qualifying entry when one exists), and must stay
+        // unattributed rather than be misassigned to a later resize's dims.
+        if head.is_none() && self.dim_markers_cap_eviction_count == 1 {
             if let Some((cols, rows)) = self.capped_head_dims {
                 head = Some((cols, rows));
             }
@@ -445,7 +467,7 @@ impl ScrollbackRingBuffer {
         self.len = 0;
         self.total_written = 0;
         self.dim_markers.clear();
-        self.dim_markers_evicted_by_cap = false;
+        self.dim_markers_cap_eviction_count = 0;
         self.capped_head_dims = None;
     }
 
@@ -971,29 +993,69 @@ mod tests {
         );
     }
 
-    /// D1'''' merge semantics (round-7 rework, review round-6 finding
-    /// `bb3353636b0206cb`): when the cap is exceeded, every SURVIVING entry
-    /// keeps its EXACT recorded dimensions AT ITS OWN RECORDED POSITION, and
-    /// the gap left by the evicted entries becomes its OWN additional head
-    /// segment carrying the LAST EVICTED entry's dimensions — not the
-    /// oldest SURVIVOR's dimensions spliced in at position 0 the way
-    /// round-6 did. This is what distinguishes the cap from the unsound
-    /// byte-threshold coalescing round-4 reverted (review round-3 finding
-    /// `ab54fae335086db3`): that fix retroactively rewrote an
-    /// ALREADY-RECORDED entry's dimensions, misattributing recent content;
-    /// this cap discards only the entries about to fall off the front and
-    /// attributes the gap they leave to what ACTUALLY produced it, without
-    /// touching any surviving entry's own dimensions OR position.
+    /// D1''''' (round-8 rework, review round-7 finding `01f91fe698ceb287`):
+    /// with EXACTLY ONE eviction, `capped_head_dims` still synthesizes a
+    /// head segment at position 0 carrying the ONE evicted entry's exact
+    /// dimensions — this recovers full uncapped attribution exactly (the
+    /// reviewer measured 0 mixed rows for this shape, matching the oracle).
+    /// Every surviving entry keeps its own recorded position/dims unchanged.
     ///
-    /// Confirmed to fail pre-fix: reverting to round-6's fallback (splice
-    /// `mid[0]` — the oldest SURVIVOR — into position 0 instead of
-    /// synthesizing a separate head from the last EVICTED entry) makes
-    /// `segments.len()` come out as `MAX_DIM_MARKERS` (24, not 25) and
-    /// `actual_rows[0]` come out as `24 + extra` (the oldest survivor's own
-    /// rows, step `extra`) instead of `24 + extra - 1` (the last evicted
-    /// entry's rows, step `extra - 1`) — both assertions below fail.
+    /// Confirmed to fail pre-fix: reverting D1''''' to always fall back
+    /// to the oldest-SURVIVING marker's position (round-6's behavior)
+    /// instead of `capped_head_dims` makes the `segments[0]` assertions
+    /// below fail (position would be non-zero and rows would be the
+    /// survivor's, not the evicted entry's).
     #[test]
-    fn enforce_dim_marker_cap_merges_only_the_oldest_span_preserving_recent_attribution() {
+    fn enforce_dim_marker_cap_with_exactly_one_eviction_recovers_full_attribution_exactly() {
+        let mut rb = ScrollbackRingBuffer::new(4 * 1024 * 1024);
+        let extra = 1usize;
+        let total_steps = MAX_DIM_MARKERS + extra;
+        let content_per_step = b"distinct-step-content;";
+        for step in 0..total_steps {
+            rb.write_resize_marker(80, 24 + step as u16);
+            rb.write(content_per_step);
+        }
+        assert_eq!(rb.dim_markers_len(), MAX_DIM_MARKERS);
+        let (_, segments) = rb.read_segments();
+        assert_eq!(
+            segments.len(),
+            MAX_DIM_MARKERS + 1,
+            "with exactly one eviction, the single evicted entry's gap \
+             still becomes its own head segment"
+        );
+        assert_eq!(segments[0].0, 0, "the head segment starts at position 0");
+        assert_eq!(
+            segments[0].2,
+            24 + (extra - 1) as u16,
+            "the head segment must carry the ONE evicted entry's rows \
+             (step `extra - 1` == 0), recovering full attribution exactly"
+        );
+        let expected_rows: Vec<u16> = (extra..total_steps).map(|s| 24 + s as u16).collect();
+        let actual_rows: Vec<u16> = segments[1..].iter().map(|&(_, _, rows)| rows).collect();
+        assert_eq!(actual_rows, expected_rows);
+    }
+
+    /// D1''''' (round-8 rework, review round-7 finding `01f91fe698ceb287`):
+    /// with TWO OR MORE evictions, the cap no longer synthesizes ANY head
+    /// segment for the gap — round-7's `capped_head_dims` fallback only
+    /// names the LAST of several evicted entries, and the reviewer measured
+    /// that attributing the WHOLE multi-entry gap to it can replay MORE
+    /// cross-line mixing than leaving the gap unattributed entirely (up to
+    /// 13 mixed rows vs 3 for "no segments" on one tested shape, against 0
+    /// for full attribution). Leaving `head` unset here means
+    /// `TerminalCore::replay_segments` treats the leading gap as ordinary
+    /// content at the caller's TARGET dimensions (AC-3) instead of
+    /// misattributing it to a single evicted resize's dims. Every
+    /// surviving entry keeps its own recorded position/dims unchanged —
+    /// only the synthesized head disappears.
+    ///
+    /// Confirmed to fail pre-fix: round-7's `capped_head_dims` fallback
+    /// (used unconditionally whenever ANY eviction had ever happened) makes
+    /// `segments.len()` come out as `MAX_DIM_MARKERS + 1` (25, not 24) with
+    /// `segments[0]` at position 0 carrying the LAST evicted entry's
+    /// (wrong, partial-gap) dimensions — both assertions below fail.
+    #[test]
+    fn enforce_dim_marker_cap_with_multiple_evictions_leaves_the_gap_unattributed() {
         let mut rb = ScrollbackRingBuffer::new(4 * 1024 * 1024);
         let extra = 3usize;
         let total_steps = MAX_DIM_MARKERS + extra;
@@ -1010,43 +1072,32 @@ mod tests {
             "cap must hold even with {extra} entries beyond it"
         );
         let (_, segments) = rb.read_segments();
-        // One MORE than MAX_DIM_MARKERS: the `MAX_DIM_MARKERS` surviving
-        // entries each keep their own segment, PLUS one synthesized head
-        // segment for the gap the evicted entries left behind.
+        // Exactly MAX_DIM_MARKERS: no synthesized head segment for the
+        // multi-entry gap — only the surviving entries, each at its own
+        // real position.
         assert_eq!(
             segments.len(),
-            MAX_DIM_MARKERS + 1,
-            "the evicted entries' gap must become its OWN segment, not be \
-             folded onto a surviving entry's position"
-        );
-        assert_eq!(
-            segments[0].0, 0,
-            "the head segment always starts at position 0"
-        );
-        assert_eq!(
-            segments[0].2,
-            24 + (extra - 1) as u16,
-            "the head segment must carry the LAST EVICTED entry's rows \
-             (step `extra - 1`), not the oldest SURVIVOR's (step `extra`)"
+            MAX_DIM_MARKERS,
+            "with 2+ evictions, no head segment is synthesized for the gap \
+             — only the surviving entries appear"
         );
         // Every SURVIVING entry (step `extra` onward) keeps its EXACT
-        // originally-recorded dimensions, in its ORIGINAL relative order —
-        // only the head segment (index 0) is synthesized; segments[1..]
-        // mirror `dim_markers` one-to-one.
+        // originally-recorded dimensions, in its ORIGINAL relative order.
         let expected_rows: Vec<u16> = (extra..total_steps).map(|s| 24 + s as u16).collect();
-        let actual_rows: Vec<u16> = segments[1..].iter().map(|&(_, _, rows)| rows).collect();
+        let actual_rows: Vec<u16> = segments.iter().map(|&(_, _, rows)| rows).collect();
         assert_eq!(
             actual_rows, expected_rows,
             "every surviving entry must keep its EXACT originally-recorded \
              dimensions — only the discarded oldest entries lose precision"
         );
-        // The oldest SURVIVOR (segments[1]) keeps its OWN real position —
-        // round-6 discarded this by overwriting it to position 0.
+        // The oldest SURVIVOR (segments[0]) keeps its OWN real, NON-ZERO
+        // position — no head segment is spliced in ahead of it.
         let step_extra_offset = extra * content_per_step.len();
         assert_eq!(
-            segments[1].0, step_extra_offset,
+            segments[0].0, step_extra_offset,
             "the oldest surviving marker must keep its OWN recorded \
-             position, not be spliced to position 0"
+             position; the gap ahead of it is left unattributed, not \
+             folded into a segment at position 0"
         );
     }
 

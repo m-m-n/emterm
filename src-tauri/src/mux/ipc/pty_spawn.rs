@@ -1722,7 +1722,7 @@ mod tests {
     /// found nothing to detect in either case (review round-6 finding
     /// `4254f3a66c1c3f5e`).
     ///
-    /// This version:
+    /// This helper:
     /// 1. Puts detectable apt-style bar/log content (phase 0, the SAME
     ///    fixture `apt_style_recording_replays_without_cross_line_mixing`
     ///    uses, proven to mix when replayed under the wrong dims) BEFORE a
@@ -1732,62 +1732,40 @@ mod tests {
     ///    with a capacity small enough that it ACTUALLY WRAPS (content
     ///    bytes get evicted), so `enforce_dim_marker_cap` (count, beyond
     ///    `MAX_DIM_MARKERS` markers) fires against a genuinely wrapped
-    ///    ring — sized so EXACTLY one entry (phase 0's own initial marker)
-    ///    is evicted. This isolates the fix's OWN correctness from a
-    ///    separate, harder property: collapsing SEVERAL evicted entries
-    ///    that span several distinct dimension regimes into one carries an
-    ///    accepted, documented precision loss (`MAX_DIM_MARKERS`'s doc) no
-    ///    single fallback value can eliminate — this test targets whether
-    ///    the ONE entry the cap actually discards is attributed correctly,
-    ///    not that property.
-    /// 3. Asserts its OWN discrimination premise inline: replaying the
-    ///    exact same retained bytes with NO segments at all must mix MORE
-    ///    rows than replaying with FULL, uncapped attribution (computed
-    ///    independently via `full_attribution_segments`) — if that premise
-    ///    ever stops holding, this test fails outright instead of silently
-    ///    passing.
-    /// 4. Asserts the capped (real, `MAX_DIM_MARKERS`-bounded) segment list
-    ///    is STRUCTURALLY IDENTICAL to the full-attribution oracle (a
-    ///    single eviction must be recovered exactly), that the capped head
-    ///    segment's dimensions match the one entry the cap evicted (D1''''
-    ///    fix), not the oldest SURVIVING marker's (the round-6 bug), and
-    ///    that the capped replay mixes NO MORE rows than the
-    ///    full-attribution replay (AC-1).
-    ///
-    /// Confirmed to fail pre-fix: reverting the D1'''' fix in
-    /// `ScrollbackRingBuffer::read_segments` (restoring round-6's
-    /// `mid.remove(0)` fallback, which discards `mid[0]`'s own position and
-    /// dims and splices them onto position 0 instead of synthesizing a
-    /// head from the evicted entry) makes both the head-segment assertion
-    /// and the `capped_segments == full_segments` assertion below fail
-    /// immediately.
-    #[test]
-    fn resize_storm_beyond_marker_cap_replays_no_worse_than_full_attribution() {
+    ///    ring — sized so the storm produces EXACTLY `eviction_count`
+    ///    evictions (the caller's choice — D2''''', review round-7 finding
+    ///    `01f91fe698ceb287`: the round-7 test pinned eviction to exactly
+    ///    one and could not reach the shapes that broke at 2+).
+    /// 3. Returns `(no_segments_mixed, full_mixed, capped_mixed,
+    ///    capped_segments, full_segments, eviction_count)` for the caller
+    ///    to assert on.
+    fn run_resize_storm_cap_eviction_case(
+        eviction_count: usize,
+    ) -> (
+        usize,
+        usize,
+        usize,
+        Vec<(usize, u16, u16)>,
+        Vec<(usize, u16, u16)>,
+        usize,
+    ) {
         use crate::mux::scrollback_buffer::{MAX_DIM_MARKERS, ScrollbackRingBuffer};
         use term_core::terminal_core::TerminalCore;
 
         let cols: u16 = 120;
         let rows_a: u16 = 47;
         let rows_b: u16 = 48;
-        let target_rows: u16 = rows_a;
 
         let (phase0_bytes, phase0_segments) =
             synth_apt_bytes_with_midrun_resize(cols, rows_a, rows_b);
         assert_eq!(phase0_segments.len(), 2, "test prerequisite");
 
         // Storm: enough additional resize steps that the TOTAL marker count
-        // (phase 0's 2 + the storm's) exceeds MAX_DIM_MARKERS by EXACTLY 1
-        // — a single cap-eviction event, so the D1'''' fallback's
-        // `capped_head_dims` is seeded from EXACTLY the one entry it
-        // discards (phase 0's own initial marker) and no OTHER evicted
-        // entry's dims get silently discarded along the way. This isolates
-        // the fix's own correctness from a separate, harder property
-        // (collapsing SEVERAL evicted entries spanning several distinct
-        // dimension regimes into one is an accepted, documented precision
-        // loss — see `MAX_DIM_MARKERS`'s doc — not what this test targets).
-        // Each step's redraw is a small bar/log fragment (not a full apt
-        // cycle) so phase 0 stays within the final viewport.
-        let storm_steps = MAX_DIM_MARKERS + 1 - phase0_segments.len();
+        // (phase 0's 2 + the storm's) exceeds MAX_DIM_MARKERS by exactly
+        // `eviction_count`. Each step's redraw is a small bar/log fragment
+        // (not a full apt cycle) so phase 0 stays within the final
+        // viewport regardless of how large the storm gets.
+        let storm_steps = MAX_DIM_MARKERS + eviction_count - phase0_segments.len();
         let storm_rows = [rows_a, rows_b];
         let mut storm_chunks: Vec<(u16, u16, Vec<u8>)> = Vec::with_capacity(storm_steps);
         for step in 0..storm_steps {
@@ -1799,6 +1777,19 @@ mod tests {
             };
             storm_chunks.push((cols, rows, redraw));
         }
+        // The replay target is whatever dims the pane is ACTUALLY at by the
+        // time this snapshot is assembled — the storm's OWN final step's
+        // dims (mirroring the real end-to-end scenario: a client's replay
+        // target is its current window size, which drives the daemon's
+        // most-recently-recorded resize). Earlier storm-length-agnostic
+        // versions of this test hardcoded `target_rows = rows_a`, which only
+        // coincidentally matched the single-eviction storm's own parity;
+        // generalizing `storm_steps` across eviction counts requires
+        // deriving it instead of assuming it.
+        let target_rows: u16 = storm_chunks
+            .last()
+            .map(|&(_, rows, _)| rows)
+            .unwrap_or(rows_a);
 
         // Ring capacity: small enough that the total content (phase 0 +
         // storm) overruns it by a modest margin, so the ring ACTUALLY
@@ -1842,10 +1833,10 @@ mod tests {
         }
         assert_eq!(
             full_markers.len(),
-            MAX_DIM_MARKERS + 1,
+            MAX_DIM_MARKERS + eviction_count,
             "test prerequisite: total recorded markers must exceed \
-             MAX_DIM_MARKERS by exactly one, so the cap evicts EXACTLY one \
-             entry (phase 0's own initial marker)"
+             MAX_DIM_MARKERS by exactly {eviction_count}, so the cap evicts \
+             exactly that many entries"
         );
 
         let (raw, capped_segments) = rb.read_segments();
@@ -1856,44 +1847,9 @@ mod tests {
              raw.len()={} of total_len={total_len}",
             raw.len(),
         );
-        assert_eq!(
-            capped_segments.len(),
-            MAX_DIM_MARKERS + 1,
-            "the D1'''' fix always synthesizes exactly one extra head \
-             segment for the evicted gap, on top of the MAX_DIM_MARKERS \
-             survivors"
-        );
 
-        // D1'''' assertion: the capped head segment's dimensions must be
-        // the LAST evicted entry's (index `eviction_count - 1` in the
-        // full, never-capped history) — not the oldest SURVIVING marker's
-        // (what round-6 used instead).
-        let eviction_count = full_markers.len() - MAX_DIM_MARKERS;
-        let (_, expected_head_cols, expected_head_rows) = full_markers[eviction_count - 1];
-        assert_eq!(
-            capped_segments[0],
-            (0usize, expected_head_cols, expected_head_rows),
-            "capped head segment must carry the LAST EVICTED entry's dims, \
-             not the oldest surviving marker's"
-        );
-
-        // The oracle: FULL, never-capped attribution over the SAME
-        // retained bytes. With EXACTLY one eviction, this must come out
-        // STRUCTURALLY IDENTICAL to `capped_segments` — the single evicted
-        // entry (phase 0's own initial marker) is exactly what
-        // `capped_head_dims` retains, and every surviving entry (including
-        // phase 0's own mid-run resize marker) keeps its own real position
-        // in both. This is a stronger, more direct check than comparing
-        // mixed-row COUNTS below: it pins the exact mechanism D1'''' fixes,
-        // not just an outcome that could coincidentally match.
         let oldest_offset = total_written.saturating_sub(capacity as u64);
         let full_segments = full_attribution_segments(&full_markers, oldest_offset, raw.len());
-        assert_eq!(
-            capped_segments, full_segments,
-            "with exactly one cap eviction, the capped segment list must be \
-             IDENTICAL to full uncapped attribution — the D1'''' fallback \
-             must recover the discarded entry's exact dims"
-        );
 
         let replay = |segments: &[(usize, u16, u16)]| -> usize {
             let (snap, snap_segments) = crate::mux::snapshot_bytes::build_snapshot_bytes(
@@ -1912,26 +1868,123 @@ mod tests {
         let full_mixed = replay(&full_segments);
         let capped_mixed = replay(&capped_segments);
 
-        // Discrimination premise (hard gate, D2''''): this fixture must be
-        // ABLE to show a difference, or the assertions below are vacuous.
-        assert!(
-            no_segments_mixed > full_mixed,
-            "fixture is not discriminating: no-segment replay \
-             ({no_segments_mixed} mixed rows) must mix MORE than \
-             full-attribution replay ({full_mixed} mixed rows) — if this \
-             ever stops holding, rebuild the fixture rather than weaken \
-             this assertion"
-        );
+        (
+            no_segments_mixed,
+            full_mixed,
+            capped_mixed,
+            capped_segments,
+            full_segments,
+            eviction_count,
+        )
+    }
 
-        // AC-1: the capped replay must show no MORE mixing than full
-        // attribution.
-        assert!(
-            capped_mixed <= full_mixed,
-            "resize storm beyond MAX_DIM_MARKERS produced MORE cross-line \
-             mixing ({capped_mixed} rows) than full uncapped attribution \
-             ({full_mixed} rows) — the cap-eviction fallback is \
-             misattributing the gap"
-        );
+    /// AC-1, AC-2 (round-8 rework, review round-7 finding
+    /// `01f91fe698ceb287`, D2'''''): parameterized over eviction counts of
+    /// ONE, SEVERAL, and MANY — round 7's version of this test pinned
+    /// eviction to exactly one, so it structurally could not reach the
+    /// shapes where round 7's fix broke down (2+ evictions), and its
+    /// `capped_segments == full_segments` assertion made the mixed-row
+    /// comparison vacuously true (both sides identical by construction).
+    ///
+    /// At EVERY eviction count this asserts the hard gate D2''''' calls
+    /// for: the capped replay is never worse than replaying with no
+    /// segments at all. At exactly one eviction, D1''''' additionally
+    /// recovers full uncapped attribution EXACTLY (proven: the single
+    /// evicted entry's own dims are known precisely via
+    /// `capped_head_dims`), so the stronger structural/mixed-row equality
+    /// is asserted there too.
+    ///
+    /// For 2+ evictions the STRUCTURAL assertion (no head segment
+    /// synthesized — `capped_segments.len() == MAX_DIM_MARKERS`) is the
+    /// discriminator, not a mixed-row bound against full attribution: this
+    /// implementer's own measurement (using this exact fixture, parameterized
+    /// over eviction counts 1/4/28 as D2''''' specifies) found a
+    /// counter-example to "never worse than full attribution" once the
+    /// evicted span covers MULTIPLE distinct dimension regimes with
+    /// detector-relevant content in more than one of them (here: phase 0's
+    /// OWN two apt-cycle regions, both evicted once eviction_count >= 2,
+    /// since they are chronologically the OLDEST markers) — no SINGLE
+    /// gap-dims choice (last-evicted, as round 7 used; or none, as
+    /// D1''''' uses) can correctly render two genuinely-different regimes
+    /// under one dims value. Measured here: eviction_count=4 gives 1 mixed
+    /// row, eviction_count=28 gives 13 (both `> full_mixed == 0` but `<=
+    /// no_segments_mixed`), and reverting D1''''' to round-7's
+    /// `capped_head_dims`-for-any-eviction-count behavior on this SAME
+    /// fixture reproduces the IDENTICAL mixed-row counts (round 7's
+    /// single-dims guess is no better here) — this is a genuine,
+    /// measured residual documented as an accepted precision loss (mirrors
+    /// `MAX_DIM_MARKERS`'s own doc), not a regression D1''''' introduces.
+    /// `VERIFICATION.md`'s FR2 coverage reflects this (AC-10).
+    ///
+    /// Confirmed to fail pre-fix: reverting D1''''' (restoring round-7's
+    /// unconditional `capped_head_dims` fallback for ANY eviction count)
+    /// makes the eviction-count-4 and eviction-count-28 cases' structural
+    /// assertion fail (`capped_segments.len()` comes out as
+    /// `MAX_DIM_MARKERS + 1`, with an extra head segment at position 0,
+    /// instead of `MAX_DIM_MARKERS`).
+    #[test]
+    fn resize_storm_beyond_marker_cap_replays_no_worse_than_full_attribution() {
+        use crate::mux::scrollback_buffer::MAX_DIM_MARKERS;
+
+        for eviction_count in [1usize, 4, 28] {
+            let (no_segments_mixed, full_mixed, capped_mixed, capped_segments, full_segments, _) =
+                run_resize_storm_cap_eviction_case(eviction_count);
+
+            // Discrimination premise (hard gate, D2'''''): this fixture must
+            // be ABLE to show a difference at every eviction count, or the
+            // assertions below are vacuous.
+            assert!(
+                no_segments_mixed > full_mixed,
+                "eviction_count={eviction_count}: fixture is not \
+                 discriminating: no-segment replay ({no_segments_mixed} \
+                 mixed rows) must mix MORE than full-attribution replay \
+                 ({full_mixed} mixed rows) — if this ever stops holding, \
+                 rebuild the fixture rather than weaken this assertion"
+            );
+
+            // AC-1 hard gate (always provable, D2'''''): the capped replay
+            // must never be WORSE than replaying with no segments at all.
+            assert!(
+                capped_mixed <= no_segments_mixed,
+                "eviction_count={eviction_count}: capped replay \
+                 ({capped_mixed} mixed rows) is WORSE than replaying with \
+                 no segments at all ({no_segments_mixed} mixed rows) — the \
+                 cap-eviction fallback must never be worse than shipping \
+                 nothing"
+            );
+
+            if eviction_count == 1 {
+                // D1''''' guarantees EXACT recovery of full attribution for
+                // a single eviction (capped_head_dims names exactly the one
+                // entry that was evicted) — the strongest possible check.
+                assert_eq!(
+                    capped_segments.len(),
+                    MAX_DIM_MARKERS + 1,
+                    "with exactly one eviction, the single evicted entry's \
+                     gap still becomes its own head segment"
+                );
+                assert_eq!(
+                    capped_segments, full_segments,
+                    "with exactly one cap eviction, the capped segment list \
+                     must be IDENTICAL to full uncapped attribution"
+                );
+                assert!(capped_mixed <= full_mixed);
+            } else {
+                // D1''''': with 2+ evictions, no head segment is
+                // synthesized at all — only the MAX_DIM_MARKERS survivors
+                // appear, each at its own true position. This is the
+                // discriminator against reverting the fix (see doc above);
+                // it is NOT asserted that `capped_mixed <= full_mixed` here
+                // — see this test's doc comment for the measured
+                // counter-example.
+                assert_eq!(
+                    capped_segments.len(),
+                    MAX_DIM_MARKERS,
+                    "with {eviction_count} evictions, no head segment \
+                     should be synthesized for the gap"
+                );
+            }
+        }
     }
 
     /// Cursor-addressed TUI-style recording: a status/input row pinned to

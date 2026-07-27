@@ -884,6 +884,23 @@ impl TerminalCore {
             actions.extend(self.process_pty_data_fully_cancellable(bytes, cancel)?);
             return Some(actions);
         }
+        // D1''''' (round-8 rework, review round-7 finding `01f91fe698ceb287`):
+        // `segments` is no longer guaranteed to have its first entry at
+        // offset 0 — the daemon-side cap-eviction gap (2+ evicted
+        // `dim_markers` entries) is now left unattributed by
+        // `ScrollbackRingBuffer::read_segments` rather than synthesizing a
+        // (potentially wrong) head segment for it. Replay that leading gap,
+        // if any, BEFORE the first segment's own dims are applied — at
+        // whatever dims `self` already has, which is exactly
+        // `target_cols`/`target_rows` here since nothing has resized `self`
+        // yet. This is what "leave the gap unattributed" cashes out to at
+        // replay time: those bytes replay under the caller's TARGET size,
+        // never silently dropped.
+        let first_offset = (segments[0].offset as usize).min(bytes.len());
+        if first_offset > 0 {
+            actions
+                .extend(self.process_pty_data_fully_cancellable(&bytes[..first_offset], cancel)?);
+        }
         for (i, seg) in segments.iter().enumerate() {
             let start = (seg.offset as usize).min(bytes.len());
             let end = segments
@@ -1978,6 +1995,47 @@ mod tests {
     }
 
     // ── reset_and_replay_segments: structural dimension replay ────────────
+
+    /// AC-3 (round-8 rework, review round-7 finding `01f91fe698ceb287`): a
+    /// segment list whose FIRST entry does NOT start at offset 0 (the shape
+    /// `ScrollbackRingBuffer::read_segments` now produces when 2+
+    /// `dim_markers` entries have been evicted, leaving the leading gap
+    /// deliberately unattributed) must still replay the leading gap's bytes
+    /// — at the caller's TARGET dimensions (`self`'s size at the start of
+    /// the call), never silently dropped.
+    ///
+    /// Confirmed to fail pre-fix: before this fix, the loop started at
+    /// `segments[0].offset`, so `bytes[..segments[0].offset]` was never fed
+    /// to any segment and the leading gap's content (`"gap-content"` below)
+    /// was silently dropped — `get_line_text(0)` would not contain it.
+    #[test]
+    fn reset_and_replay_segments_replays_a_leading_gap_before_the_first_segment_at_target_dims() {
+        let mut core = TerminalCore::new(80, 24, 1000);
+        let gap = b"gap-content\r\n";
+        let after = b"after-first-segment\r\n";
+        let mut bytes = gap.to_vec();
+        bytes.extend_from_slice(after);
+        // First (and only) segment starts AFTER the gap, at a DIFFERENT
+        // size than the core's target (80, 24) — so if the gap were
+        // (incorrectly) fed under the segment's dims instead of being fed
+        // separately first, this would still be observable as a missing
+        // first line.
+        let segments = [ReplaySegment {
+            offset: gap.len() as u32,
+            cols: 40,
+            rows: 10,
+        }];
+        core.reset_and_replay_segments(&bytes, &segments);
+        assert!(
+            core.get_line_text(0).contains("gap-content"),
+            "the leading gap's content must be replayed, not dropped: {:?}",
+            core.get_line_text(0)
+        );
+        assert!(core.get_line_text(1).contains("after-first-segment"));
+        // Core ends back at its ORIGINAL target dims (80, 24).
+        assert_eq!(core.cols(), 80);
+        assert_eq!(core.rows(), 24);
+    }
 
     /// AC-2 / D1' equivalent of the old marker-based mid-stream resize test:
     /// a single segment transition resizes the core between the two
