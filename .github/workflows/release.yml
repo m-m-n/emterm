@@ -17,7 +17,60 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  sync-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Get version from tag
+        id: get-version
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          GITHUB_REF_VAR: ${{ github.ref }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            echo "version=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_VAR#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync version into Cargo manifest and lockfile
+        env:
+          RELEASE_VERSION: ${{ steps.get-version.outputs.version }}
+        run: |
+          VERSION="${RELEASE_VERSION#v}"
+          echo "Syncing version to $VERSION"
+          sed -i -E "/^\[package\]/,/^\[/ { /^version = / s/.*/version = \"$VERSION\"/; }" src-tauri/Cargo.toml
+          # The workspace's single Cargo.lock lives at the repo root (this
+          # workspace's manifest is ./Cargo.toml, members = ["src-tauri", ...]);
+          # cargo never reads/writes a src-tauri/Cargo.lock, so that path is not
+          # the file to rewrite here.
+          awk -v ver="$VERSION" '
+            /^\[\[package\]\]$/ { in_target = 0 }
+            /^name = "emterm"$/ { in_target = 1 }
+            in_target && /^version = / && !done { print "version = \"" ver "\""; done = 1; next }
+            { print }
+          ' Cargo.lock > Cargo.lock.tmp && mv Cargo.lock.tmp Cargo.lock
+
+      - name: Commit and push version bump
+        env:
+          RELEASE_VERSION: ${{ steps.get-version.outputs.version }}
+        run: |
+          if git diff --quiet; then
+            echo "Version already matches $RELEASE_VERSION; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/Cargo.toml Cargo.lock
+          git commit -m "chore: sync version to ${RELEASE_VERSION#v}"
+          git push origin HEAD:main
+
   create-release:
+    needs: sync-version
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create-release.outputs.id }}
