@@ -198,3 +198,65 @@ fn image_subcommand_unsupported_format_returns_one() {
         "unsupported image format should map to exit code 1"
     );
 }
+
+// --- --version flag ---
+// References task0001 AC-1..AC-3. The flag is handled in `main()` before
+// `logging::init()`, so its behavior can only be observed by spawning the
+// built binary (unlike the subcommands above, which go through the
+// in-process `cli::run` facade). `CARGO_BIN_EXE_emterm` is the same
+// technique `mux_throughput.rs` uses to spawn the built binary.
+
+#[test]
+fn version_flag_prints_crate_version_and_exits_zero() {
+    let exe = env!("CARGO_BIN_EXE_emterm");
+    let output = std::process::Command::new(exe)
+        .arg("--version")
+        .output()
+        .expect("spawn emterm --version");
+
+    assert!(output.status.success(), "--version should exit with status 0");
+    let expected = format!("{}\n", env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        expected,
+        "--version should print exactly the crate version followed by one newline"
+    );
+}
+
+#[test]
+fn version_flag_stderr_is_empty() {
+    let exe = env!("CARGO_BIN_EXE_emterm");
+    let output = std::process::Command::new(exe)
+        .arg("--version")
+        .output()
+        .expect("spawn emterm --version");
+
+    assert!(
+        output.stderr.is_empty(),
+        "--version should produce no stderr output"
+    );
+}
+
+#[test]
+fn version_flag_with_extra_args_behaves_identically() {
+    let exe = env!("CARGO_BIN_EXE_emterm");
+    let output = std::process::Command::new(exe)
+        .args(["--version", "anything"])
+        .output()
+        .expect("spawn emterm --version anything");
+
+    assert!(
+        output.status.success(),
+        "--version with trailing args should still exit with status 0"
+    );
+    let expected = format!("{}\n", env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        expected,
+        "--version with trailing args should print the same version output as --version alone"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "--version with trailing args should produce no stderr output"
+    );
+}
