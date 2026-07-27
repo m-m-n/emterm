@@ -308,14 +308,23 @@ pub fn decode_snapshot_payload_typed(payload: &[u8]) -> DecodedSnapshotPayload<'
     let mut segments = Vec::with_capacity(count);
     let mut cursor = 4usize;
     // D2''' (round-6 rework, review round-5 finding `58db33c799bedf87`):
-    // validated ALONGSIDE parsing, not as a separate pass — a leading
-    // offset that isn't 0, a non-monotonic offset, or one past `content`'s
-    // length are all malformed-envelope conditions (never assigned
-    // authority over content, per the same policy the count/table-length
-    // checks above already apply), each one letting `TerminalCore::
-    // replay_segments` silently DROP a byte range instead: a non-zero
-    // first offset drops `content[0..offset]`; a non-monotonic entry
-    // produces an `end < start` range that also drops content.
+    // validated ALONGSIDE parsing, not as a separate pass — a non-monotonic
+    // offset, or one past `content`'s length, are malformed-envelope
+    // conditions (never assigned authority over content, per the same
+    // policy the count/table-length checks above already apply): a
+    // non-monotonic entry produces an `end < start` range that drops
+    // content.
+    //
+    // D1''''' (round-8 rework, review round-7 finding `01f91fe698ceb287`):
+    // a non-zero LEADING offset is NO LONGER rejected here. The daemon-side
+    // cap-eviction gap (`ScrollbackRingBuffer::read_segments`, 2+ evicted
+    // `dim_markers` entries) now legitimately produces a segment list whose
+    // first entry starts after offset 0, leaving that leading span
+    // deliberately unattributed. `TerminalCore::replay_segments` was fixed
+    // in lockstep to replay that leading span (at the caller's target dims)
+    // instead of silently dropping it — see that function's doc — so a
+    // non-zero leading offset is a normal, well-formed payload now, not the
+    // "drops content" hazard the pre-fix comment described.
     let content_len = rest.len() - table_end;
     let mut prev_offset: Option<u32> = None;
     // D5''' (round-6 rework, review round-5 finding `1227fc04fb9368d0`):
@@ -341,9 +350,6 @@ pub fn decode_snapshot_payload_typed(payload: &[u8]) -> DecodedSnapshotPayload<'
         let offset = u32::from_le_bytes(seg_bytes[0..4].try_into().expect("4-byte slice"));
         let cols = u16::from_le_bytes(seg_bytes[4..6].try_into().expect("2-byte slice"));
         let rows = u16::from_le_bytes(seg_bytes[6..8].try_into().expect("2-byte slice"));
-        if prev_offset.is_none() && offset != 0 {
-            return DecodedSnapshotPayload::Malformed;
-        }
         if let Some(prev) = prev_offset {
             if offset < prev {
                 return DecodedSnapshotPayload::Malformed;
@@ -2337,21 +2343,32 @@ mod tests {
     // rather than silently producing a segment list `TerminalCore::
     // replay_segments` would drop content against.
 
-    /// A non-zero LEADING offset would make `replay_segments` silently
-    /// drop `content[0..offset]` (never fed to any segment) — rejected as
-    /// `Malformed` before that content is even reachable.
+    /// AC-3 (round-8 rework, review round-7 finding `01f91fe698ceb287`): a
+    /// non-zero LEADING offset is now ACCEPTED, not rejected — it is the
+    /// shape `ScrollbackRingBuffer::read_segments` legitimately produces
+    /// when 2+ `dim_markers` entries have been evicted by the cap
+    /// (D1'''''), leaving the leading span deliberately unattributed.
+    /// `TerminalCore::replay_segments` was fixed in lockstep to replay that
+    /// leading span at the caller's target dims rather than drop it, so
+    /// this is no longer a malformed-envelope condition.
+    ///
+    /// Confirmed to fail pre-fix: before this fix, the decoder rejected any
+    /// non-zero leading offset as `Malformed` — the assertion below
+    /// (expecting `Structured`) would instead see `Malformed`.
     #[test]
-    fn decode_snapshot_payload_typed_rejects_non_zero_leading_offset() {
+    fn decode_snapshot_payload_typed_accepts_a_non_zero_leading_offset() {
         let segments = vec![DimSegment {
             offset: 5,
             cols: 80,
             rows: 24,
         }];
         let encoded = encode_snapshot_payload(&segments, b"0123456789");
-        assert_eq!(
-            decode_snapshot_payload_typed(&encoded),
-            DecodedSnapshotPayload::Malformed
-        );
+        match decode_snapshot_payload_typed(&encoded) {
+            DecodedSnapshotPayload::Structured {
+                segments: decoded, ..
+            } => assert_eq!(decoded, segments),
+            other => panic!("expected Structured, got {other:?}"),
+        }
     }
 
     /// A non-monotonic (decreasing) offset would make `replay_segments`
