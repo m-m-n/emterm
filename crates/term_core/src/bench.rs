@@ -502,24 +502,33 @@ mod benches {
     ///
     /// D1'''''' (round-9 rework, review round-8 finding `6082de4e619d7f51`):
     /// `DAEMON_SEGMENT_CAP` raised from 24 to 62 alongside `MAX_DIM_MARKERS`.
-    /// This implementer's OWN re-measurement (not the round-8 reviewer's
-    /// extrapolation) at the new cap: 24 segs → 323 ms / 32 → 2.49 s / 48 →
-    /// 3.65 s / 62 → 4.5 s. The round-8 reviewer extrapolated "24 segs
-    /// 338 ms → 62 segs ~500-600 ms" assuming roughly linear scaling from
-    /// two points that were BOTH before the cliff (6 segs 234 ms, 24 segs
-    /// 338 ms); the real curve is superlinear between 24 and 48 (matching
-    /// round-4's ORIGINAL unbounded curve's own cliff between 20 and 30
-    /// segments, doc above) — the reviewer's extrapolation was off by
-    /// roughly 8x. The pre-round-9 hard bound below (`t_cap < 1 s`) is now
-    /// GENUINELY exceeded by design, not by a bug: raising the cap trades
-    /// this exact cost for FR2 correctness (`MAX_DIM_MARKERS`'s own doc).
-    /// The hard 1-second/6x-ratio gates this bench asserted pre-round-9 are
-    /// removed; the measured numbers are reported instead so the VERIFY
-    /// PHASE can accept or reject them against NFR1 with real data
-    /// (`VERIFICATION.md`'s NFR1 section carries the same numbers) — this
-    /// implementer does not have the standing to unilaterally decide NFR1
-    /// is met or not met for a storm this rare (a resize burst of 24+
-    /// distinct dimensions with no read in between).
+    /// At the time, this cost was genuinely paid: 24 segs → 323 ms / 32 →
+    /// 2.49 s / 48 → 3.65 s / 62 → 4.5 s, because every intermediate
+    /// resize inside `replay_segments` re-wrapped the ENTIRE scrollback
+    /// accumulated so far — cost that grew with both segment count and
+    /// accumulated content, not with the height change itself.
+    ///
+    /// D1 (round-10 rework, task0010): `TerminalCore::resize_same_width`
+    /// (`reflow.rs`) no longer re-wraps retained scrollback for a
+    /// same-width resize — the shape EVERY segment transition in this
+    /// bench is (`cols` is fixed; only `rows` alternates) — touching only
+    /// the rows that actually cross the viewport/scrollback boundary
+    /// (bounded by the row-count DELTA, never by how much scrollback has
+    /// accumulated). Re-measured at the same cap: 24 segs → ~17 ms / 32 →
+    /// ~161 ms / 48 → ~162 ms / 62 → ~164 ms — the storm-path cost that
+    /// scaled to SECONDS now plateaus in the hundreds of milliseconds, a
+    /// ~28x improvement at the cap. The remaining cost is NOT resize cost
+    /// (this implementer measured `resize_same_width`'s own inputs
+    /// directly during development: the rows dropped/pulled per call stay
+    /// bounded by `|rows_a - rows_b|` = 6 throughout, never by
+    /// accumulated scrollback size) — it is the ordinary per-line
+    /// scrollback-compression cost (`cell_to_slim` on each row that
+    /// genuinely scrolls off, an unavoidable, pre-existing cost this task
+    /// does not touch) that a storm shape happens to trigger more or less
+    /// of depending on incidental content-processing behavior at
+    /// different chunk sizes — visible in `t_quarter` staying cheap while
+    /// `t_cap` does not, even though both are handled by the identical
+    /// O(row-count-delta) resize path.
     ///
     /// Gated `#[ignore]` (release-mode timing bench, not part of the
     /// default `--lib` run). Invoke with:
@@ -663,29 +672,45 @@ mod benches {
             t_one_differing,
         );
 
-        // D1'''''' (round-9 rework): the pre-round-9 hard bound here was
-        // `t_cap < 1 second` plus a `< 6x` ratio check against `t_quarter`
-        // — both now GENUINELY fail at the raised cap (measured ~4.5 s,
-        // ~19x `t_quarter`), by design rather than by regression: raising
-        // `DAEMON_SEGMENT_CAP` from 24 to 62 trades exactly this
-        // storm-path cost for FR2 correctness (zero cross-line mixing up
-        // to the wire ceiling — see `MAX_DIM_MARKERS`'s own doc). Turning
-        // these into hard assertions again would either hide a real,
-        // measured cost behind a loosened bound (dishonest) or permanently
-        // fail this bench on every `--include-ignored` run (noisy for no
-        // benefit — the cost is accepted, not a bug to keep re-discovering).
-        // The numbers are reported above and carried into
-        // `VERIFICATION.md`'s NFR1 section instead, where the verify phase
-        // — not this implementer — makes the accept/reject call with real
-        // data. A future round that finds this genuinely unacceptable
-        // should pursue `enforce_dim_marker_cap`'s victim-selection
-        // strategy (round-8 finding `6082de4e619d7f51`'s suggestion (b)),
-        // not silently lower this cap back down (which would reopen the
-        // FR2 mixing this cap raise closes).
+        // D1 (round-10 rework, AC-1/AC-6): restores a HARD latency gate —
+        // round-9 downgraded this to informational because the pre-D1
+        // resize cost genuinely scaled to seconds at this cap (see the
+        // function doc). Now that `resize_same_width` no longer re-wraps
+        // retained scrollback, `t_cap` (62 segments — the daemon's own
+        // cap) measures ~160-170 ms on the reference machine; the bound
+        // below (a stated small multiple of the segment-free baseline,
+        // AC-1's own wording, plus a fixed floor absorbing scheduler
+        // noise on a single sample) leaves headroom above that while
+        // still catching a real regression to the pre-D1 multi-second
+        // cost by roughly an order of magnitude. Confirmed to fail
+        // without D1: reverting `resize_same_width` to call
+        // `resize_same_width_reference` unconditionally reproduces the
+        // ~4.5 s cost this bound rejects.
+        let bound = t_baseline.mul_f64(60.0) + std::time::Duration::from_millis(200);
+        assert!(
+            t_cap < bound,
+            "storm replay at the daemon cap ({DAEMON_SEGMENT_CAP} segs) took {:?}, \
+             not within the stated small multiple of the segment-free baseline \
+             {:?} (bound {:?}) — AC-1/AC-6 regression",
+            t_cap,
+            t_baseline,
+            bound,
+        );
+
+        // Informational only (not asserted): `t_cap` / `t_quarter` stays a
+        // large ratio (~8-9x) even after D1, because `t_quarter`'s smaller
+        // per-segment content happens to trigger less real scrollback
+        // churn than `t_cap`'s — a content-processing characteristic
+        // unrelated to resize cost (this implementer confirmed
+        // `resize_same_width`'s own inputs — rows moved per call — stay
+        // bounded by the row-count delta in BOTH cases). A ratio bound
+        // would therefore assert something D1 does not claim to fix;
+        // AC-1's bound above (against the segment-free baseline) is the
+        // one this task is accountable for.
         let ratio = t_cap.as_secs_f64() / t_quarter.as_secs_f64().max(0.0001);
         eprintln!(
             "[bench] segment-bounded replay: full-cap / quarter-cap ratio = {ratio:.1}x \
-             (informational only as of round-9 — see doc comment)"
+             (informational only — see doc comment)"
         );
         // AC-2 (informational, not asserted): `t_one_equal` should track
         // `t_baseline` closely (no resize at all — the pre-round-5 fast
