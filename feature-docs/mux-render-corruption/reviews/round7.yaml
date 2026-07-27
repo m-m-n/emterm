@@ -1,0 +1,229 @@
+round: 7
+executed_at: "2026-07-27T10:30:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
+  head_commit: 090d1f8001153b4591c77463c3a62c5bc8a30c3d
+  changed_files:
+    - crates/mux_ipc/src/protocol.rs
+    - crates/term_core/src/bench.rs
+    - crates/term_core/src/ring_buffer.rs
+    - crates/term_core/src/snapshot.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/mux/cli.rs
+    - src-tauri/src/mux/daemon.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/tabs.rs
+plan:
+  floor: [comprehensive, spec, security, performance, architecture]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed, note: "findings ゼロ。MAX_CUMULATIVE_SEGMENT_CELLS が round 6 のギャップを閉じたと確認"}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: security, source: claude, status: skipped, skip_reason: "round 6 で findings ゼロ・残存リスク無しと明言済み。round 7 の変更は security 面に触れない"}
+  - {perspective: architecture, source: claude, status: skipped, skip_reason: "codex architecture が同一範囲をカバー"}
+  - {perspective: performance, source: claude, status: skipped, skip_reason: "claude:spec が NFR1 を実測込みで扱ったため"}
+
+headline: >-
+  **security は 2 ラウンド連続で findings ゼロ**（round 6 claude / round 7 codex）。
+  NFR1 の実測もレビュアー側の再実行と一致し、VERIFICATION.md の記述も SPEC 由来に是正された。
+  FR2 は eviction がちょうど 1 件のケースでは完全に解消（full attribution と一致）したが、
+  2 件以上では未解消で、8 件以上では未修正より悪化する。
+  重要: レビュアーが**修正案を実測で検証済み** — 「eviction が 2 件以上のときは head segment を
+  合成しない（gap を無属性のまま残す）」で全テストケースが 0 混線・full attribution と一致した。
+
+findings:
+  - stable_id: 01f91fe698ceb287
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 402
+    title: "FR2 未達（継続）: cap が 2 件以上 evict すると replay は依然として行を混ぜ、形状によっては未修正より悪い"
+    description: >-
+      round 7 の D1'''' 修正（capped_head_dims = 直近に evict した 1 件の寸法を position 0 に使う）は
+      eviction がちょうど 1 件の場合しか成立しない。enforce_dim_marker_cap は marker が増えるたび
+      1 件ずつ pop するので、MAX_DIM_MARKERS(24) を N 件超えるドラッグでは N 件 evict され、
+      head gap は「evict された全 marker がカバーしていた複合区間」になる。そこに最後に evict した
+      1 件の寸法を当てると、gap の大部分（= retained window の最も古い = 最も大きい部分）が
+      storm 中の寸法で replay される。
+      レビュアーによる実測（実 ScrollbackRingBuffer + term_core、100% 決定的。
+      apt fixture 120x47→48 を phase 0 とし resize storm を付与、target 120x47、ring は wrap）:
+      |storm|marker数|eviction|未修正|full|round6|round7現行|
+      |47/48|25|1|3|0|1|**0**|
+      |47/48|28|4|3|0|3|1|
+      |47/48|32|8|3|0|3|3|
+      |47/48|52|28|3|0|3|**13**|
+      |30/31|28|4|8|0|7|7|
+      |30/31|32|8|8|0|7|**9**|
+      |30/31|52|28|16|0|7|**19**|
+      要点: eviction=1 では full と完全一致（修正は有効）。round 6 で報告された
+      28 marker/4 eviction は 7 → 7 で一切改善していない。eviction 8 以上では現行が
+      未修正を上回り round 6 実装よりも悪い。MT-3 が想定する連続ドラッグ（数十回 resize）は
+      まさにこの破綻域。
+      検証側の齟齬: 新 TS-7 は storm_steps を eviction ちょうど 1 に絞っており破綻域に
+      構造的に到達できない（テスト doc も「several evicted entries は accepted precision loss」と明記）。
+      eviction=1 では round 6 実装だと落ちること（弁別性）は確認済みだが、
+      VERIFICATION.md の FR2 カバレッジ行が TS-7 を根拠に挙げているのは成立していない。
+    suggestion: >-
+      レビュアーが実測で検証した最小修正 (a): **evict が 2 件以上のときは head segment を
+      合成しない**（gap を無属性のまま残し、core の現在 = target 寸法で replay させる）。
+      生存 marker は真の position のまま維持する。上表の全ケースで 0 混線・full uncapped
+      attribution と一致した。1 eviction のときだけ現行の capped_head_dims を使えば
+      TS-7 の既存アサーションもそのまま通る。実装上は read_segments が evict 件数を持ち、
+      >= 2 のとき head を push しないこと、および build_snapshot_bytes_with_layout の
+      「先頭 segment は必ず offset 0」前提を「先頭が 0 でない segment 列も clear_prefix 分だけ
+      一律シフトして通す」に緩めることが必要。
+      代替 (b)（最古 evict の寸法を使う）は実測で 47/48 storm 3 / 30/31 storm 8 混線と
+      (a) に劣ったので、採るなら再測定すること。
+      テスト側 (c): TS-7 を eviction 件数 1 / 4 / 28 でパラメタライズし、各件数で
+      capped_mixed <= no_segments_mixed（未修正より悪くしない）を追加でアサートすること。
+      現行テストは capped == full を先にアサートしているため混線数比較が恒真になっている。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 8 rework へ回送。修正案は実測検証済み"
+
+  - stable_id: 1d1b6b6297e3b6a0
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 828
+    title: "Wire-domain clamping is not propagated across the pane-size contract"
+    description: >-
+      clamp_dims_to_wire_domain は round 6 の repro 2000x600 を 2000x500 にするが、
+      それは daemon 内部だけ。クライアントは既に自分の TerminalCore を 2000x600 に resize しており、
+      一方向の ResizeMsg を送るだけで受理サイズの応答は無く、snapshot replay も
+      クライアントコアを元の target 寸法に戻す。結果、以後のライブ出力は 2000x500 の PTY が
+      生成し 2000x600 のクライアントグリッドが解釈する。作成時も同じ分裂がある:
+      MuxPane::new は既に作成済みの MasterPty を受け取った後に記録フィールド / パーサ /
+      segment だけを clamp し、その master を resize しない。
+      この変更は Malformed snapshot を防ぐが、端から端までの寸法 SSOT を確立していないので
+      レンダリングのドリフトは依然として起こりうる。
+    suggestion: >-
+      受理された pane 寸法をプロトコルレベルの交渉値にする。クライアントのコア resize と
+      daemon の PTY 作成の両方の前に共有の clamp を適用するか、daemon が受理した寸法を
+      返す / broadcast してクライアントコアを更新する。MuxPane::new は検証済みの寸法型を
+      受け取り、渡された PTY をその値に初期化 / resize すること。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 8 rework へ回送"
+
+  - stable_id: 7c70216c5a5d5c24
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/bench.rs
+    line: 826
+    title: "round 7 の BYPASS_PREFIX_MAX_BYTES ゲートは既定テスト実行では一切検証されない"
+    description: >-
+      このゲートを検証する唯一のアサーションは large_prefix_small_suffix_bench の
+      assert!(replay.scrollback_populated) だが、この関数は #[test] #[ignore] でゲートされている。
+      リポジトリ全体でこの定数を実行時に踏むテストは他に無く、terminal_core 側の非 ignore テストは
+      prefix が小さい形状しか通らない。つまり gate 条件を削除しても cargo test は緑のまま通る。
+      当該アサーション自体は時間計測ではなく決定的な真偽値なので、ignore に同居させる必然性が無い。
+      round 6 で実害が観測された修正がリグレッションガード無しで出荷される状態。
+    suggestion: >-
+      scrollback_populated の決定的アサーションだけを terminal_core.rs の mod tests へ
+      非 ignore テストとして切り出す。境界の両側（prefix > 64 KiB で split しない /
+      prefix <= 64 KiB かつ suffix 十分で split する）を固定する。
+      時間計測アームは bench.rs に #[ignore] のまま残してよい。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 8 rework へ回送"
+
+  - stable_id: 4bc6ab813edd6d22
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 828
+    title: "producer 側 clamp は per-segment 上限しか閉じておらず、round 7 で追加された累積上限とドリフトしている"
+    description: >-
+      clamp_dims_to_wire_domain は cols * rows <= MAX_SEGMENT_CELLS (1,000,000) を保証するが、
+      同じ round 7 で decoder 側に追加された MAX_CUMULATIVE_SEGMENT_CELLS (8,000,000) は
+      全 segment の合計を見るため、producer 側に対応する制約が無い。
+      daemon が 1 snapshot に載せうる segment 数は最大 26（MAX_DIM_MARKERS + head 合成 + screen）。
+      1 segment あたり平均 307,692 cells を超えると、daemon が正当に生成した snapshot を
+      peer の decode が Malformed として弾き、tabs.rs がフレームを丸ごと破棄するため
+      そのペインは切替のたびに古い内容が出たままになる（本 feature が解消しようとしている症状）。
+      AC-8 のテストは単一 segment しか round-trip しないためこの差分を検出できない。
+      codex:architecture も独立に同じ指摘（9 segments × 1M で 8M 超過）。
+    suggestion: >-
+      (a) producer 側の clamp を累積上限から導く（MAX_CUMULATIVE_SEGMENT_CELLS /
+      (MAX_DIM_MARKERS + 2)）。(b) decoder 側の累積上限を producer 上限側に合わせて引き上げ、
+      DoS 上限は MAX_SEGMENTS ではなく producer 上限で縛る。
+      いずれの場合もテストを「daemon が出しうる最大 segment 数を並べた round-trip」に拡張する。
+    sources: [claude:comprehensive, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "round 8 rework へ回送"
+
+  - stable_id: 426db84173e6b792
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 436
+    title: "EvalResult::ResumeWithSnapshot の契約が EMSNAP2 エンコード後も更新されていない"
+    description: >-
+      この分岐は round 7 で encode_snapshot_segments の出力（EMSNAP2 マジック + segment テーブル +
+      本体）を返すようになったが、enum の doc は「handler は snapshot を channel に送ること」としか
+      書いておらず、ChunkKind::Snapshot として送る必要がある（PtyOutput として送ると
+      クライアントがバイト列をそのまま端末に流す）ことが表現されていない。
+      対になる resume_pane_with_permit は round 1 finding 20b2bed0aaf48f94 でまさにこの理由から
+      変更済み。現状この分岐は本番では到達しないが、コメントは「将来の visible == true の
+      呼び出し元が契約を無料で受け取る」と明記してこの分岐を意図的に生かしている。
+      その将来の呼び出し元が doc どおり pty_output で送ると EMSNAP2 + バイナリテーブルが
+      literal で描画される（round 4 finding 5299d50f586b8cb8 と同じ失敗モード）。
+    suggestion: >-
+      (a) ResumeWithSnapshot が既に ChunkKind::Snapshot でタグ付けされた PtyOutputChunk を
+      持つようにして呼び出し元が送信種別を選べないようにする（型で強制）。
+      (b) 最低限 enum の doc に送信種別の要求を明記し resume_pane_with_permit 側から相互参照する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 8 rework へ回送"
+
+  - stable_id: a4f4e36fef377d05
+    severity: medium
+    category: performance
+    file: crates/term_core/src/terminal_core.rs
+    line: 1112
+    title: "The byte-only prefix gate still permits costly near-all-prefix replays"
+    description: >-
+      64 KiB の inclusive gate は 65,536 バイトの prefix + 4,096 バイトの target サイズ suffix でも
+      engage するため、payload の約 94% が非 bypass で処理され、その後 tabs.rs の
+      scrollback restore でもう一度処理される。prefix に最大 24 個の非空 segment を含む
+      現実的な resize storm があるとコストが高い（tabs.rs 自身が「segment reflow コストは
+      バイト数ではなく蓄積コアサイズに依存する」と認めている）。
+      新しい bench は約 200 KiB prefix / 40 segments としきい値から十分離れた形しか試しておらず、
+      この境界ケースを覆っていない。
+    suggestion: >-
+      suffix が prefix を実質的に支配することも要求し、prefix の reflow コストを bound する
+      （suffix_len >= split_at + prefix の segment / 累積セル上限）。
+      daemon cap の 24 segment・64 KiB prefix・4 KiB suffix で split しないことを
+      assert する回帰アームを追加する。
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 8 rework へ回送。7c70216c5a5d5c24 と同じ gate の話なのでまとめて扱う"
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: routed-to-rework
+  note: >-
+    residual high 2 件は scrollback_buffer.rs + snapshot_bytes.rs（FR2）と
+    pane.rs + tabs.rs + protocol.rs（寸法契約）にまたがるため単一ファイルでは扱えない。
+
+residual_critical_high: 2
+rework_required: true
