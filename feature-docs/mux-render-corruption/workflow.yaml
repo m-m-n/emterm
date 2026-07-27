@@ -34,7 +34,7 @@ workflow:
     status: completed
     completed_at_commit: 097c6745466c5dbeed5861ec2c7c8d2d95ddc7d0
   - id: implement
-    status: completed
+    status: in_progress
     completed_at_commit: cb4e7c894df9d324435e056fea60ac82f85fd273
     base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
   - id: review
@@ -178,6 +178,26 @@ tasks:
     status: merged
     branch: em-workflow/mux-render-corruption/task0006
     notes: "review round 5 の residual high からの rework。FR2 退行（cap 併合の offset 連鎖）と NFR1 退行（bypass 降格が通常切替を 25 倍遅くする）は同一原因（寸法変更ごとの全 scrollback reflow）に帰着するため、中間セグメントの resize を安価にして両方を根本解決する方針をユーザーが選択"
+
+  task0007:
+    title: "Preserve the capped head's dimensions and make the cap test discriminate (round 6 rework)"
+    plan: tasks/task0007.md
+    files:
+      - src-tauri/src/mux/scrollback_buffer.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/bench.rs
+      - crates/mux_ipc/src/protocol.rs
+      - feature-docs/mux-render-corruption/VERIFICATION.md
+    skills: [backend-impl]
+    domains: [input-handling, ui, concurrency, api-contract]
+    complexity: high
+    requirements: [FR2, FR3, NFR1, NFR2, NFR3]
+    status: in_progress
+    branch: em-workflow/mux-render-corruption/task0007
+    notes: "review round 6 の residual high からの rework。中核は cap 発火時に evict される head の寸法を保持すること（現状は未修正時より混線が増える実測がある）と、それを守るテストを弁別可能にすること"
 
 review:
   status: pending
