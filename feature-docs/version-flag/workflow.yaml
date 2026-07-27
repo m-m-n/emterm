@@ -41,9 +41,20 @@ workflow:
     status: completed
     completed_at_commit: 5428b4114a136ceb1727d76cbd4bc96f9cb1f3dd
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: >-
+      TS-1/TS-2 (cli_subcommands: version_flag_* 5 件) pass、TS-3/TS-4
+      (cargo check default / --no-default-features) pass、TS-5/TS-6
+      (release.yml: 有効な YAML・sync-version ジョブ存在・create-release.needs
+      に含む・get-version と同一のバージョン解決・git diff --quiet による
+      差分時のみ commit/push・Cargo.toml と root Cargo.lock 双方を書き換え+
+      検証) pass。SC-3: lib テストは tabs::tests 7 件が --test-threads=1 でも
+      失敗するが、同一コミットの main worktree でも同じ 7 件が同様に失敗する
+      ため本 feature の回帰ではない（diff は main.rs / cli_subcommands.rs /
+      release.yml のみで tabs.rs に触れていない）。MT-1 は実タグ push 後の
+      人手確認のため本 run の対象外。
   - id: retrospect
     status: pending
 
