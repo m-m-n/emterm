@@ -34,8 +34,8 @@ workflow:
     status: completed
     completed_at_commit: 097c6745466c5dbeed5861ec2c7c8d2d95ddc7d0
   - id: implement
-    status: in_progress
-    completed_at_commit: 65bc6cfdf29a23adfd06e0b548d498831145c723
+    status: completed
+    completed_at_commit: 8ea1a0a828f9e27e136653c498bcac17af8dd41a
     base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
   - id: review
     status: pending
@@ -252,7 +252,7 @@ tasks:
     domains: [ui, api-contract]
     complexity: high
     requirements: [FR2, FR3, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-render-corruption/task0010
     notes: "round 9 で cap 62 により FR2 の混線は解消したが storm 経路が 4.5-4.7 秒になった（レビュアー外推 500-600ms の 8 倍）。round 4 で提案され未実装のままだった「中間 resize で scrollback を再ラップしない」を実装してコスト自体を潰す方針をユーザーが選択。round 6 の prefix/suffix split は通常ケースのみ解決していた"
 
