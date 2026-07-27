@@ -1,0 +1,152 @@
+schema_version: 1
+feature: version-flag
+created: 2026-07-27
+base_branch: main
+parent_branch: em-workflow/version-flag/integration
+
+project:
+  license: MIT
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: ""
+      e2e_test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test cli_subcommands"
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 4ffc1209f28d276f676be0ab0238c7033ad00768
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "CLI フラグと CI ワークフローのみで可視 UI が無い"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 06e18ea65f86193cab57a5626cd26ab8213e8283
+  - id: implement
+    status: completed
+    completed_at_commit: ab622a8046b80e7862336a926a8832b1c19f5aaf
+    base_commit: 68b1009cd77b64611cce11edc136ec6051b24348
+  - id: review
+    status: completed
+    completed_at_commit: 5428b4114a136ceb1727d76cbd4bc96f9cb1f3dd
+  - id: verify
+    status: completed
+    result: pass
+    failed_items: []
+    notes: >-
+      TS-1/TS-2 (cli_subcommands: version_flag_* 5 件) pass、TS-3/TS-4
+      (cargo check default / --no-default-features) pass、TS-5/TS-6
+      (release.yml: 有効な YAML・sync-version ジョブ存在・create-release.needs
+      に含む・get-version と同一のバージョン解決・git diff --quiet による
+      差分時のみ commit/push・Cargo.toml と root Cargo.lock 双方を書き換え+
+      検証) pass。SC-3: lib テストは tabs::tests 7 件が --test-threads=1 でも
+      失敗するが、同一コミットの main worktree でも同じ 7 件が同様に失敗する
+      ため本 feature の回帰ではない（diff は main.rs / cli_subcommands.rs /
+      release.yml のみで tabs.rs に触れていない）。MT-1 は実タグ push 後の
+      人手確認のため本 run の対象外。
+  - id: retrospect
+    status: completed
+    artifacts: [retrospect.yaml]
+
+tasks:
+  task0001:
+    title: "emterm --version flag"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/main.rs
+      - src-tauri/tests/cli_subcommands.rs
+    skills: []
+    domains: [input-handling, api-contract]
+    complexity: low
+    requirements: [FR1, FR2, NFR1]
+    status: merged
+    notes: "全 AC 検証済み。full cargo test で tabs::tests の既知の非決定的 flakiness を観測（本変更と無関係、--test-threads=1 で安定する既知事象）"
+    branch: em-workflow/version-flag/task0001
+  task0003:
+    title: "review round 1 rework (sync-version hardening + --version robustness)"
+    plan: tasks/task0003.md
+    files:
+      - .github/workflows/release.yml
+      - src-tauri/src/main.rs
+      - src-tauri/tests/cli_subcommands.rs
+    skills: [infra-impl]
+    domains: [config-infra, input-handling, api-contract]
+    complexity: medium
+    requirements: [FR1, FR3, NFR1, NFR2]
+    status: merged
+    notes: "全 AC 検証済み。unscoped cargo test は既存の環境要因 2 件（examples/swash_emoji.rs のフォント欠落コンパイルエラー / tabs.rs の spin-timeout flakiness）で完走しないが、いずれも本 diff と無関係で integration ブランチでも同一再現"
+    branch: em-workflow/version-flag/task0003
+  task0002:
+    title: "release.yml sync-version job"
+    plan: tasks/task0002.md
+    files:
+      - .github/workflows/release.yml
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: medium
+    requirements: [FR3, NFR2]
+    status: merged
+    notes: "deviation: lockfile はワークスペースの root Cargo.lock が実体（src-tauri/Cargo.lock は旧名 emterm-native-poc の stale ファイル）のため、sync-version は root Cargo.lock を書き換える。worktree の build/test fail は fetch-fonts.sh 未実行の環境要因で diff は release.yml のみ"
+    branch: em-workflow/version-flag/task0002
+
+review:
+  status: completed
+  rounds_completed: 2
+  plan:
+    floor: [comprehensive, spec, security, architecture]
+    discretionary: []
+    codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    security: completed
+    architecture: completed
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "--version prints CARGO_PKG_VERSION to stdout and exits 0"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-1]
+  FR2:
+    title: "--version works in both GUI and CLI-only builds, dispatched before any GUI/logging startup"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-3, TS-4]
+  FR3:
+    title: "release.yml sync-version job commits tag version to main before create-release"
+    status: ok
+    tbd_reason: null
+    tasks: [task0002]
+    tests: [TS-5, TS-6]
+  NFR1:
+    title: "--version has no side effects; output is exactly version + newline"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-2]
+  NFR2:
+    title: "existing build-time version stamping and workflow_dispatch path stay working"
+    status: ok
+    tbd_reason: null
+    tasks: [task0002]
+    tests: [TS-6]
+
+batch:
+  review_rework_count: 1
+  verify_rework_count: 0

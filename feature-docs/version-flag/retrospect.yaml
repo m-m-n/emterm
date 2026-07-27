@@ -1,0 +1,60 @@
+feature: version-flag
+collected_at: "2026-07-28T00:14:00+09:00"
+session_ids: [fcd77639-2bd4-4569-a355-eb09beab13d2]
+signals:
+  review_critical_high:
+    - stable_id: e5b14f942a384003
+      category: comprehensive
+      file: src-tauri/src/main.rs
+      title: "Windows のリリース GUI ビルドでは --version の出力が消える"
+      resolution: fixed
+    - stable_id: b8f4473ba546db63
+      category: comprehensive
+      file: .github/workflows/release.yml
+      title: "semver case グロブを通過する文字列で sed コマンド注入が成立する"
+      resolution: unresolved（rework task0003 で対応）
+    - stable_id: 1a56eee65f8b253c
+      category: security
+      file: .github/workflows/release.yml
+      title: "sync-version guard is unanchored — sed script injection / CI RCE still reachable"
+      resolution: unresolved（rework task0003 で対応）
+    - stable_id: 28af69c7ff93f357
+      category: spec
+      file: .github/workflows/release.yml
+      title: "tag 無し dispatch が skip でなく job 失敗 + continue-on-error で NFR2/FR3 のどちらかを壊す"
+      resolution: unresolved（rework task0003 で対応）
+    - stable_id: 6ef9a3a6f8e1b032
+      category: architecture
+      file: .github/workflows/release.yml
+      title: "sync-version が push する main とビルド対象コミット（タグ）が別物 / needs による可用性低下"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0002
+      files: [Cargo.lock]
+      note: >-
+        計画では src-tauri/Cargo.lock を書き換える想定だったが、実体は
+        ワークスペース root の Cargo.lock（src-tauri/Cargo.lock は旧名
+        emterm-native-poc 時代の stale ファイル）。SPEC.md FR3 / A5 も
+        round 1 完了処理で訂正した。
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings:
+    - stable_id: c230cb6eec6764e2
+      category: comprehensive
+      resolution_reason: >-
+        同期コミットがタグに載らない件は、タスク起票時に明示された受容済み
+        制約（REQUIREMENTS.md §2 / SPEC Accepted Constraints）と同内容。
+lessons_candidates:
+  - >-
+    CI ワークフローの shell 展開に外部入力（タグ名 / workflow_dispatch 入力）が
+    入る変更は、review の security / comprehensive が同一サイトに別々の処方を
+    出して conflict グループになりやすい。batch では site skip → rework 委譲に
+    なるため、round 数を 1 つ余分に消費した。
+  - >-
+    `always()` を含むジョブゲートは round 1 の修正で導入され、round 2 で
+    「キャンセルを無視する」として medium 指摘に化けた。auto-fix が入れた
+    ゲート条件は次ラウンドの重点確認対象にする価値がある。
+  - >-
+    lockfile のようなワークスペース構造依存のパスは、計画段階で実ファイルの
+    所在を確認しないと files 予測を外す（task0002）。
