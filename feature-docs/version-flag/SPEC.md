@@ -32,8 +32,8 @@ the tag's version into the repository before the release is created.
   `sync-version` job that runs on tag push (`v*`) before `create-release`:
   it checks out the default branch (`main`), rewrites the `[package]` version
   in `src-tauri/Cargo.toml` to the tag version (with the `v` prefix
-  stripped), updates the matching package entry in `src-tauri/Cargo.lock`,
-  and commits and pushes the change to `main`. When the version already
+  stripped), updates the `emterm` package entry in the workspace lockfile
+  `Cargo.lock` (repo root), and commits and pushes the change to `main`. When the version already
   matches, the job succeeds without committing. `create-release` depends on
   `sync-version`.
 
@@ -71,8 +71,8 @@ Add a `sync-version` job to `.github/workflows/release.yml`:
   `workflow_dispatch`. The job resolves the version exactly like the
   existing `get-version` step (input tag wins over `github.ref`).
 - Steps: checkout `main` (not the tag), rewrite the version with the same
-  `sed` expression the build jobs use, update `src-tauri/Cargo.lock` for the
-  package whose manifest is `src-tauri/Cargo.toml` (e.g.
+  `sed` expression the build jobs use, update the workspace root `Cargo.lock`
+  entry for the package whose manifest is `src-tauri/Cargo.toml` (e.g.
   `cargo update --workspace` scoped to that package, or an equivalent
   targeted edit), then `git commit` + `git push` using the workflow's
   `GITHUB_TOKEN` (the workflow already has `permissions: contents: write`).
@@ -149,8 +149,11 @@ environment, so all decisions were made by the orchestrating agent):
   "before the release is created" and `needs:` expresses that directly.
 - **A4:** The push target is the default branch `main`; the tag is not
   re-pointed (the task explicitly accepts the resulting version skew).
-- **A5:** `src-tauri/Cargo.lock` is updated together with `Cargo.toml` so
-  the committed lockfile stays consistent.
+- **A5:** The workspace root `Cargo.lock` is updated together with
+  `src-tauri/Cargo.toml` so the committed lockfile stays consistent. (The
+  tracked `src-tauri/Cargo.lock` is a stale pre-workspace leftover carrying
+  the old `emterm-native-poc` package name; cargo does not read it and it is
+  not a sync target.)
 
 ## Open Questions
 

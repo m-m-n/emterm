@@ -34,11 +34,10 @@ workflow:
     status: completed
     completed_at_commit: 06e18ea65f86193cab57a5626cd26ab8213e8283
   - id: implement
-    status: completed
-    completed_at_commit: 21933e0b23ad409befe714681aac08f873d9e82c
+    status: pending
     base_commit: 68b1009cd77b64611cce11edc136ec6051b24348
   - id: review
-    status: in_progress
+    status: pending
   - id: verify
     status: pending
     result: null
@@ -60,6 +59,19 @@ tasks:
     status: merged
     notes: "全 AC 検証済み。full cargo test で tabs::tests の既知の非決定的 flakiness を観測（本変更と無関係、--test-threads=1 で安定する既知事象）"
     branch: em-workflow/version-flag/task0001
+  task0003:
+    title: "review round 1 rework (sync-version hardening + --version robustness)"
+    plan: tasks/task0003.md
+    files:
+      - .github/workflows/release.yml
+      - src-tauri/src/main.rs
+      - src-tauri/tests/cli_subcommands.rs
+    skills: [infra-impl]
+    domains: [config-infra, input-handling, api-contract]
+    complexity: medium
+    requirements: [FR1, FR3, NFR1, NFR2]
+    status: pending
+    notes: null
   task0002:
     title: "release.yml sync-version job"
     plan: tasks/task0002.md
@@ -74,12 +86,19 @@ tasks:
     branch: em-workflow/version-flag/task0002
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
   plan:
     floor: [comprehensive, spec, security, architecture]
     discretionary: []
     codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    security: completed
+    architecture: completed
+  residual_critical_high: 3
+  needs_rework: true
 
 requirements:
   FR1:
@@ -114,5 +133,5 @@ requirements:
     tests: [TS-6]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework_count: 0
