@@ -7,7 +7,9 @@ use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
 use crate::agent_status::{AgentState, AgentStatusEvent};
-use crate::mux::scrollback_buffer::{DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer};
+use crate::mux::scrollback_buffer::{
+    DEFAULT_SCROLLBACK_CAPACITY, MAX_DIM_MARKERS, ScrollbackRingBuffer,
+};
 use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
@@ -433,9 +435,28 @@ pub enum EvalResult {
     Unchanged,
     /// Pane was switched into Detached buffering mode.
     SwitchedToDetached,
-    /// Pane was switched (back) into Connected mode. The handler must send
-    /// `snapshot` on the channel before any subsequent reader chunk.
-    ResumeWithSnapshot { snapshot: Vec<u8> },
+    /// Pane was switched (back) into Connected mode. The handler MUST send
+    /// `chunk` on the pane's output channel before any subsequent reader
+    /// chunk.
+    ///
+    /// D6''''' (round-8 rework, review round-7 finding `426db84173e6b792`):
+    /// `chunk` is a `PtyOutputChunk` already tagged `ChunkKind::Snapshot`
+    /// (via `PtyOutputChunk::snapshot`, same as the sibling
+    /// `resume_pane_with_permit` path) — NOT the default `PtyOutput` kind.
+    /// This is enforced by the TYPE, not just documented: there is no way
+    /// for a caller to extract raw bytes here and send them as a plain
+    /// `PtyOutputChunk::pty_output(...)` instead, which is what round 1
+    /// finding `20b2bed0aaf48f94` fixed for `resume_pane_with_permit` (a
+    /// `PtyOutput`-tagged send here would render the `EMSNAP2` envelope +
+    /// binary segment table literally on screen instead of being decoded —
+    /// review round-4 finding `5299d50f586b8cb8`'s failure mode). This
+    /// branch is currently unreached by any production caller (the sole
+    /// production call site, `handlers.rs`'s `evaluate_output_target(...,
+    /// false, false, ...)`, only ever drives a Connected -> Detached
+    /// transition) — kept correct for the day a caller needs the
+    /// visible-resume path through THIS function instead of
+    /// `resume_pane_with_permit`.
+    ResumeWithSnapshot { chunk: PtyOutputChunk },
 }
 
 /// Outcome of `resume_pane_with_permit`. Mirrors the in-lock decision so
@@ -598,8 +619,14 @@ pub fn evaluate_output_target(
                         return EvalResult::Unchanged;
                     }
                     *target = PaneOutputTarget::Connected(owned_tx.clone());
+                    // D6''''' (round-8 rework, review round-7 finding
+                    // `426db84173e6b792`): tag as `ChunkKind::Snapshot`
+                    // right here — mirroring `resume_pane_with_permit`'s own
+                    // `PtyOutputChunk::snapshot(...)` call (round-1 finding
+                    // `20b2bed0aaf48f94`) — so the caller has no way to send
+                    // this as a plain `PtyOutput` chunk.
                     EvalResult::ResumeWithSnapshot {
-                        snapshot: encoded_snapshot,
+                        chunk: PtyOutputChunk::snapshot(pane.id, encoded_snapshot),
                     }
                 }
             }
@@ -825,14 +852,62 @@ pub struct MuxPane {
 /// rejecting the resize outright — mirroring `clamp_resize_dims`'s own
 /// "clamp, don't reject" policy so callers never need special-case error
 /// handling for an oversized resize request.
-fn clamp_dims_to_wire_domain(cols: u16, rows: u16) -> (u16, u16) {
+///
+/// D3''''' (round-8 rework, review round-7 finding `1d1b6b6297e3b6a0`):
+/// `pub(crate)` so `tabs.rs` (the GUI client side, same crate) can apply the
+/// IDENTICAL clamp before resizing its own `TerminalCore` and before sending
+/// the `Resize` control message — a deterministic, PURE function of
+/// `(cols, rows)` shared by both ends means the client's core and the
+/// daemon's PTY always agree on the accepted dimensions without any wire
+/// round-trip acknowledgment: same function, same input, same output.
+pub(crate) fn clamp_dims_to_wire_domain(cols: u16, rows: u16) -> (u16, u16) {
     let (cols, rows) = term_core::terminal_core::clamp_resize_dims(cols, rows);
-    if (cols as u32) * (rows as u32) <= mux_ipc::protocol::MAX_SEGMENT_CELLS {
+    if (cols as u32) * (rows as u32) <= PRODUCER_SEGMENT_CELL_BUDGET {
         return (cols, rows);
     }
-    let max_rows = (mux_ipc::protocol::MAX_SEGMENT_CELLS / cols as u32).max(1) as u16;
+    let max_rows = (PRODUCER_SEGMENT_CELL_BUDGET / cols as u32).max(1) as u16;
     (cols, rows.min(max_rows))
 }
+
+/// The largest number of `DimSegment`s a single daemon-assembled snapshot
+/// can ever contain: every surviving `dim_markers` entry
+/// ([`MAX_DIM_MARKERS`]), plus at most one synthesized head segment for a
+/// single cap eviction (`ScrollbackRingBuffer::read_segments`, D1'''''),
+/// plus at most one trailing screen-dump segment for an alt-screen pane
+/// (`build_snapshot_bytes_with_layout`'s D7'' segment). Well under the wire
+/// decoder's own `mux_ipc::protocol::MAX_SEGMENTS` (64) ceiling.
+const MAX_DAEMON_SNAPSHOT_SEGMENTS: u64 = MAX_DIM_MARKERS as u64 + 2;
+
+/// Producer-side per-segment cell budget (D4''''', round-8 rework, review
+/// round-7 finding `4bc6ab813edd6d22`, independently confirmed by
+/// `codex:architecture`).
+///
+/// `clamp_dims_to_wire_domain` previously bounded every segment's own
+/// product to the decoder's PER-SEGMENT ceiling
+/// (`mux_ipc::protocol::MAX_SEGMENT_CELLS`, 1,000,000) alone — but the
+/// decoder ALSO enforces a CUMULATIVE ceiling across every segment in one
+/// payload (`MAX_CUMULATIVE_SEGMENT_CELLS`, 8,000,000). A daemon snapshot
+/// can legitimately carry up to [`MAX_DAEMON_SNAPSHOT_SEGMENTS`] (26)
+/// segments, each individually within `MAX_SEGMENT_CELLS` but at
+/// `1,000,000` cells apiece that sums to 26,000,000 — well past the
+/// cumulative ceiling, so the daemon's own peer would reject the ENTIRE
+/// snapshot as `Malformed` and the pane would keep showing stale content
+/// after every switch (the exact symptom this feature exists to fix).
+/// Deriving the producer's per-segment budget from the SAME cumulative
+/// ceiling divided by the largest segment count the daemon can ever emit
+/// guarantees a daemon-recorded snapshot's segments can never sum past it,
+/// regardless of how many distinct dimensions were recorded. `.min(...)`
+/// with the decoder's own per-segment ceiling is a belt-and-braces bound
+/// (the derived value, 307,692, is already well under it).
+const PRODUCER_SEGMENT_CELL_BUDGET: u32 = {
+    let derived = mux_ipc::protocol::MAX_CUMULATIVE_SEGMENT_CELLS / MAX_DAEMON_SNAPSHOT_SEGMENTS;
+    let capped = if derived > mux_ipc::protocol::MAX_SEGMENT_CELLS as u64 {
+        mux_ipc::protocol::MAX_SEGMENT_CELLS as u64
+    } else {
+        derived
+    };
+    capped as u32
+};
 
 impl MuxPane {
     /// Create a new pane (PTY spawn handled by caller).
@@ -856,7 +931,36 @@ impl MuxPane {
         // `clamp_dims_to_wire_domain` also bounds the PRODUCT to what the
         // wire decoder accepts (`MAX_SEGMENT_CELLS`), not just each axis —
         // see its doc for why the per-axis clamp alone let this drift.
-        let (cols, rows) = clamp_dims_to_wire_domain(cols, rows);
+        let (clamped_cols, clamped_rows) = clamp_dims_to_wire_domain(cols, rows);
+        // D3''''' (round-8 rework, review round-7 finding `1d1b6b6297e3b6a0`,
+        // AC-5): `master` was already opened by the caller (`spawn_pty`) at
+        // the ORIGINAL, possibly out-of-domain `cols`/`rows` — BEFORE the
+        // clamp above runs. Without this, the recorded fields / shadow
+        // parser / initial segment would describe dimensions the PTY itself
+        // does not actually have (pane creation recording a value the PTY
+        // never had). Resize the PTY to the accepted dims whenever the
+        // clamp actually changed something, so it can never disagree with
+        // what gets recorded below.
+        if (clamped_cols, clamped_rows) != (cols, rows) {
+            if let Err(e) = master.resize(portable_pty::PtySize {
+                rows: clamped_rows,
+                cols: clamped_cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            }) {
+                log::warn!(
+                    "MuxPane::new: failed to resize PTY {} to clamped dims \
+                     {}x{} (requested {}x{}): {}",
+                    id,
+                    clamped_cols,
+                    clamped_rows,
+                    cols,
+                    rows,
+                    e
+                );
+            }
+        }
+        let (cols, rows) = (clamped_cols, clamped_rows);
         let mut scrollback = ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY);
         // IMPLEMENTATION.md D1/D2 (task0001): record the pane's INITIAL
         // dimensions as the very first scrollback bytes, mirroring what
@@ -919,6 +1023,18 @@ impl MuxPane {
     /// write+flush, preserving atomic-per-request write semantics.
     pub fn writer_handle(&self) -> Option<Arc<StdMutex<Box<dyn Write + Send>>>> {
         self.writer.clone()
+    }
+
+    /// The underlying PTY's ACTUAL current size, as the kernel reports it —
+    /// not `self.cols`/`self.rows` (the daemon's own recorded bookkeeping).
+    /// AC-5 regression test observer (D3''''', round-8 rework, review
+    /// round-7 finding `1d1b6b6297e3b6a0`): lets a test confirm `MuxPane::new`
+    /// actually resized the PTY to match the clamped dims it records, rather
+    /// than recording a value the PTY never had. `None` once the pane's
+    /// master has been dropped ([`Self::mark_exited`]).
+    #[cfg(test)]
+    fn master_size(&self) -> Option<portable_pty::PtySize> {
+        self.master.as_ref().and_then(|m| m.get_size().ok())
     }
 
     /// Resize the PTY to the given dimensions.
@@ -1282,9 +1398,14 @@ mod tests {
     /// D6'''' (round-7 rework, review round-6 finding `6cefb1dd16c126b6`):
     /// `u16::MAX` per axis clamps to `RESIZE_MARKER_MAX_COLS` /
     /// `RESIZE_MARKER_MAX_ROWS` (4096 each) — a product of 16,777,216,
-    /// still far above `MAX_SEGMENT_CELLS` (1,000,000) the wire decoder
-    /// accepts. `rows` must clamp FURTHER, down to
-    /// `MAX_SEGMENT_CELLS / cols`, preserving `cols` at the per-axis max.
+    /// still far above the wire decoder's per-segment ceiling. `rows` must
+    /// clamp FURTHER, preserving `cols` at the per-axis max.
+    ///
+    /// D4''''' (round-8 rework, review round-7 finding `4bc6ab813edd6d22`):
+    /// the product ceiling this now clamps to is
+    /// `PRODUCER_SEGMENT_CELL_BUDGET` (derived from the decoder's
+    /// CUMULATIVE budget, ~307,692), not the decoder's raw per-segment
+    /// `MAX_SEGMENT_CELLS` (1,000,000) — see that constant's doc.
     #[cfg(unix)]
     #[test]
     fn new_pane_clamps_out_of_domain_dimensions() {
@@ -1304,7 +1425,7 @@ mod tests {
         let target = make_output_target();
         let pane = MuxPane::new(1, u16::MAX, u16::MAX, target, writer, pair.master);
         let expected_cols = term_core::terminal_core::RESIZE_MARKER_MAX_COLS;
-        let expected_rows = (mux_ipc::protocol::MAX_SEGMENT_CELLS / expected_cols as u32) as u16;
+        let expected_rows = (PRODUCER_SEGMENT_CELL_BUDGET / expected_cols as u32) as u16;
         assert_eq!(
             (pane.cols, pane.rows),
             (expected_cols, expected_rows),
@@ -1321,6 +1442,26 @@ mod tests {
         // out-of-domain values.
         let (_bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
         assert_eq!(segments, vec![(0usize, expected_cols, expected_rows)]);
+        // AC-5 (D3''''', round-8 rework, review round-7 finding
+        // `1d1b6b6297e3b6a0`): the PTY itself was opened at (80, 24) — a
+        // DIFFERENT size than the clamped dims recorded above. `MuxPane::new`
+        // must resize the ACTUAL PTY to match what it records, not leave it
+        // at whatever size the caller happened to open it at.
+        //
+        // Confirmed to fail pre-fix: before this change, `MuxPane::new`
+        // never resized `master` at all, so `master_size()` would still
+        // report the PTY's ORIGINAL open size (80, 24) — disagreeing with
+        // the (4096, 244) this test records above.
+        let actual = pane
+            .master_size()
+            .expect("PTY master must still be present");
+        assert_eq!(
+            (actual.cols, actual.rows),
+            (expected_cols, expected_rows),
+            "MuxPane::new must resize the underlying PTY to the CLAMPED \
+             dims it records, not leave it at whatever size the caller \
+             originally opened it at"
+        );
     }
 
     /// AC-8 (D6'''', round-7 rework, review round-6 finding
@@ -1371,6 +1512,47 @@ mod tests {
                  ({cols}, {rows}) produced a segment the wire decoder \
                  rejected as Malformed: {decoded:?}"
             );
+        }
+    }
+
+    /// AC-6 (D4''''', round-8 rework, review round-7 finding
+    /// `4bc6ab813edd6d22`, independently confirmed by `codex:architecture`):
+    /// the LARGEST segment list the daemon can actually produce — every one
+    /// of `MAX_DAEMON_SNAPSHOT_SEGMENTS` (26) segments at the producer's own
+    /// per-segment cell budget — decodes successfully, not `Malformed`.
+    ///
+    /// Confirmed to fail pre-fix: before this fix, `clamp_dims_to_wire_domain`
+    /// bounded every segment to the decoder's PER-SEGMENT ceiling alone
+    /// (`MAX_SEGMENT_CELLS`, 1,000,000) — 26 segments at that size sum to
+    /// 26,000,000 cells, ten times over `MAX_CUMULATIVE_SEGMENT_CELLS`
+    /// (8,000,000), so `decode_snapshot_payload_typed` would return
+    /// `Malformed` for this exact payload and the assertion below would fail.
+    #[test]
+    fn largest_daemon_producible_segment_list_round_trips_cleanly() {
+        let (cols, rows) = clamp_dims_to_wire_domain(u16::MAX, u16::MAX);
+        let segment_count = MAX_DAEMON_SNAPSHOT_SEGMENTS as usize;
+        let segments: Vec<mux_ipc::protocol::DimSegment> = (0..segment_count)
+            .map(|i| mux_ipc::protocol::DimSegment {
+                offset: i as u32,
+                cols,
+                rows,
+            })
+            .collect();
+        let content = vec![b'x'; segment_count];
+        let payload = mux_ipc::protocol::encode_snapshot_payload(&segments, &content);
+        let decoded = mux_ipc::protocol::decode_snapshot_payload_typed(&payload);
+        match decoded {
+            mux_ipc::protocol::DecodedSnapshotPayload::Structured {
+                segments: decoded_segments,
+                ..
+            } => {
+                assert_eq!(decoded_segments.len(), segment_count);
+            }
+            other => panic!(
+                "the largest segment list the daemon can produce \
+                 ({segment_count} segments at {cols}x{rows}) must decode as \
+                 Structured, not {other:?}"
+            ),
         }
     }
 
@@ -1828,8 +2010,13 @@ mod tests {
             .append(b"\x1b_Gi=1;ZZ\x1b\\");
         let result = evaluate_output_target(&pane, false, true, &owned_tx);
         match result {
-            EvalResult::ResumeWithSnapshot { snapshot } => {
-                let snapshot = decode_snapshot_content(&snapshot);
+            EvalResult::ResumeWithSnapshot { chunk } => {
+                // D6''''' (AC-9): the chunk must already be tagged
+                // Snapshot-kind, not the default PtyOutput — a caller
+                // sending it as PtyOutput would render the raw envelope
+                // literally instead of decoding it.
+                assert_eq!(chunk.kind, ChunkKind::Snapshot);
+                let snapshot = decode_snapshot_content(&chunk.data);
                 assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
                 let s = String::from_utf8_lossy(&snapshot);
                 assert!(
@@ -2432,9 +2619,11 @@ mod tests {
 
         let result = evaluate_output_target(&pane, false, true, &owned_tx);
         match result {
-            EvalResult::ResumeWithSnapshot { snapshot } => {
+            EvalResult::ResumeWithSnapshot { chunk } => {
+                assert_eq!(chunk.kind, ChunkKind::Snapshot);
                 assert!(
-                    snapshot
+                    chunk
+                        .data
                         .windows(b"ring-bytes-x".len())
                         .any(|w| w == b"ring-bytes-x"),
                     "snapshot must include scrollback even after poisoned shadow lock"
