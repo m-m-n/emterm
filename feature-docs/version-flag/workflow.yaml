@@ -56,7 +56,8 @@ workflow:
       release.yml のみで tabs.rs に触れていない）。MT-1 は実タグ push 後の
       人手確認のため本 run の対象外。
   - id: retrospect
-    status: pending
+    status: completed
+    artifacts: [retrospect.yaml]
 
 tasks:
   task0001:
