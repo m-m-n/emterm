@@ -34,7 +34,8 @@ workflow:
     status: completed
     completed_at_commit: 06e18ea65f86193cab57a5626cd26ab8213e8283
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: ab622a8046b80e7862336a926a8832b1c19f5aaf
     base_commit: 68b1009cd77b64611cce11edc136ec6051b24348
   - id: review
     status: pending
@@ -70,8 +71,8 @@ tasks:
     domains: [config-infra, input-handling, api-contract]
     complexity: medium
     requirements: [FR1, FR3, NFR1, NFR2]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "全 AC 検証済み。unscoped cargo test は既存の環境要因 2 件（examples/swash_emoji.rs のフォント欠落コンパイルエラー / tabs.rs の spin-timeout flakiness）で完走しないが、いずれも本 diff と無関係で integration ブランチでも同一再現"
     branch: em-workflow/version-flag/task0003
   task0002:
     title: "release.yml sync-version job"
