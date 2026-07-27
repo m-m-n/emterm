@@ -58,8 +58,8 @@ tasks:
     branch: em-workflow/mux-pane-child-reap/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, performance, architecture, spec]
     discretionary:
@@ -67,11 +67,11 @@ review:
         reason: "diff がプロセスシグナル送出 (ChildKiller::kill) とスレッド生成を追加するため、権限・対象特定の妥当性を検査する"
     codex_cross_validation: true
   perspectives:
-    comprehensive: pending
-    performance: pending
-    architecture: pending
-    spec: pending
-    security: pending
+    comprehensive: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+    security: completed
   residual_critical_high: 0
   needs_rework: false
 
