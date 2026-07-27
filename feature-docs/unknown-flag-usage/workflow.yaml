@@ -40,9 +40,24 @@ workflow:
     status: completed
     completed_at_commit: c1689a0a78ee6adbb5e05e4196d74c2d4944c6d5
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: >-
+      TS-1..TS-10 / TS-12 は arg_dispatch のユニットテストで pass（gui 10 件 /
+      CLI-only 9 件）。TS-11 は cli_subcommands 21 件 pass。TS-13 は実装テストが
+      guidance 行のみを assert する部分実装だったため usage_text() の内容を直接
+      照合して pass を確認（全サブコマンド名・`-h, --help` 行・5 つの
+      child-window フラグ・guidance 行がいずれも存在）。テスト側の不足は review
+      round1 の findings eeb1ad1c8abe0975 / b0eb4d32b06cd81c として記録済み。
+      SC-1..SC-4 pass、SC-5 は main.rs の classify 呼び出しが logging::init() と
+      全ウィンドウ生成より前にあることをコード照合で確認。
+      cargo check は default / --no-default-features の双方 pass。
+      full --lib は tabs::tests 7 件が失敗するが、同一の 7 件が変更前の main
+      作業ツリー（aad6e6e）でも --test-threads=1 で同様に失敗するため本 feature の
+      回帰ではない（diff は arg_dispatch.rs / lib.rs / main.rs のみで tabs.rs に
+      触れていない）。MT-1..MT-4 はリリースビルドでの人手確認のため本 run の
+      対象外。
   - id: retrospect
     status: pending
 
