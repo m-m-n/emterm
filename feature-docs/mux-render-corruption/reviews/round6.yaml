@@ -1,0 +1,294 @@
+round: 6
+executed_at: "2026-07-27T09:20:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
+  head_commit: c5f16dbaf22e3ea104c039c361784907c84baf1b
+  changed_files:
+    - crates/mux_ipc/src/protocol.rs
+    - crates/term_core/src/bench.rs
+    - crates/term_core/src/ring_buffer.rs
+    - crates/term_core/src/snapshot.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/mux/cli.rs
+    - src-tauri/src/mux/daemon.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/tabs.rs
+plan:
+  floor: [comprehensive, spec, security, performance, architecture]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed, note: "findings ゼロ。round 5 の取りこぼし分も含めて検証し、残存リスク無しと明言"}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: skipped, skip_reason: "codex architecture が同一範囲をカバー"}
+  - {perspective: performance, source: claude, status: skipped, skip_reason: "claude:spec が NFR1 を実測込みで扱ったため"}
+
+headline: >-
+  **security は初めて findings ゼロ**。claude:security が forgery クラスの production 経路が
+  一切残っていないこと、wire 入力検証が全項目で機能していること、prefix/suffix split に
+  panic / DoS 経路が無いことを明示的に確認した（codex:security も cumulative cost の
+  medium 1 件のみ）。NFR1 の通常切替も 170-220ms → 1.58ms に回復した。
+  一方で **FR2 は依然未達で、しかも特定条件では未修正時より悪い**:
+  cap 発火（>24 resize）時に retained window 先頭の寸法が失われ、実測で混線行が
+  full attribution 0 / 未修正 3 / 現行 7 になる。修正自体は小さく特定済み。
+
+findings:
+  - stable_id: bb3353636b0206cb
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 359
+    title: "FR2 未達: cap 発火時に retained window 先頭の寸法が失われ、replay が未修正時より多く行を混ぜる"
+    description: >-
+      enforce_dim_marker_cap は overflow 時に常に front を pop するため、
+      retained window 先頭を記述しているエントリ自体が捨てられる。その結果
+      read_segments の head が None になり、fallback が「最も古い生き残りマーカーの寸法」を
+      position 0 に割り当てる。cap で消えた寸法下で生成された先行コンテンツ全体が、
+      storm 中の寸法で replay される。
+      実測（レビュアーが term_core を直接叩いて再現、100% 決定的）:
+      apt fixture(120x47→48) を phase 0 とし 26 回の resize marker を付けて計 28 マーカーに
+      すると、cap 後の head は (offset 0, 120x30) になり、120x47 へ replay した結果:
+      full(cap なし)=混線行 0 / 現行 cap 済み=混線行 7 / segment 一切なし(修正前)=混線行 3。
+      つまり 24 回を超える resize 列では本 feature の修正が「未修正より悪い」結果を出す。
+      トリガーは VERIFICATION.md MT-3 が明示的に想定しているドラッグ操作そのもの。
+      doc の「precision is lost only in that single oldest span」は、その span が
+      cap で消えた全マーカー分に膨らむ点を過小評価している。
+    suggestion: >-
+      cap が front を pop するとき、その寸法を capped_head_dims 等へ退避し、
+      read_segments の head が None のときは「最後に pop されたエントリの寸法」を
+      position 0 に使う。最後に pop されたエントリは最古の生存マーカーの直前の span を
+      記述しているので、head 隣接 span の帰属が正しくなる。
+      代替: overflow 時に front ではなく dim_markers[1]（内部 span）を落とし、
+      retained window 先頭を記述するエントリは常に残す。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 7 rework へ回送。修正は小さく特定済み"
+
+  - stable_id: 4254f3a66c1c3f5e
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 1700
+    title: "FR3 未達: cap 発火後の replay 忠実性テスト TS-7 が非弁別 — 無修正でも合格する"
+    description: >-
+      round 5 の指摘（cap 併合後の replay 忠実性テストが無い）に対して追加された
+      resize_storm_beyond_marker_cap_replays_without_cross_line_mixing は、
+      2 つの assertion のどちらも修正前後を弁別できない（レビュアーが同じ fixture を
+      再現して確認）。(1) 混線検出は segments=[] でも 0 行で完全に vacuous。
+      (2) rows 交互性 assertion は round 5 の不具合実装でもそのまま通る。さらに
+      この fixture は ring 容量に対し内容が極小で wraparound しないため、旧実装と
+      round 6 実装の segment 列が完全一致し、replay グリッドも同一だった。
+      つまりこのテストは守るはずの回帰(986a3881b2b97a16)を通してしまう。
+      VERIFICATION.md の TS-7 行と FR2/FR3 カバレッジ表は成立していない検証を
+      成立していると記載している。
+      なお AC-2 の apt_style テストは健全（segments=[] で混線 3/1/3 → 修正後 0）。
+    suggestion: >-
+      (a) storm の前に検出可能なコンテンツを持つ phase 0 を置き、storm 部分は
+      スクロールしない数バイトにする。(b) 同じバイト列を segments=[] と
+      full uncapped attribution でも replay し、no_segments > 0 かつ full == 0 を
+      test 内で前提として assert する（検出器が vacuous になったら即落ちる）。
+      (c) ring を実際に wraparound させる容量で read_segments を呼び、
+      cap と retained-window pruning の両方が効いた head segment の寸法を assert する。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 7 rework へ回送。rounds 1-6 で 6 回連続の「非弁別テスト」"
+
+  - stable_id: 46c29c2c65970d26
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 701
+    title: "Oversize resume leaves visibility and pane state permanently inconsistent"
+    description: >-
+      過大な visibility-resume snapshot で NoChange を返しつつ
+      PaneOutputTarget::Detached { reason: HiddenByVisibility } を維持するが、
+      handle_set_visibility は既に connection の visibility を true に latch しており
+      outcome を無視し、以降の true 通知を no-op として扱う。pane はライブ出力を
+      streaming せずバッファし続け、自動リトライも状態遷移も無い。
+      round 6 で導入した「回復可能なフレームサイズ失敗」が、無期限に凍結した pane に変わる。
+      なお claude:comprehensive は同経路について「resume_pane_with_permit が reason を
+      書き換えず返すため hide→show サイクルで再試行され、かつトリガ（encoded snapshot
+      > 16 MiB、ring は 2 MiB 固定）が実質到達不能」と判定しており、評価が割れている。
+    suggestion: >-
+      oversize を独立した ResumeOutcome として表現し、visibility controller に回復を
+      持たせる。履歴を意図的に落とす bounded fallback snapshot で接続するか、
+      resize / 出力変化で駆動される明示的なリトライ状態を保持する。
+      visible_state == true のまま pane が HiddenByVisibility で detached に留まる状態を作らない。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 7 rework へ回送。到達性の評価がレビュアー間で割れているので、まず到達性を確定させること"
+
+  - stable_id: 0bed3c30e41e2389
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 1107
+    title: "D1''' の prefix 区間で OSC 133 B マークのコマンド文字列が失われる（fold ラベルが空/別行になる）"
+    description: >-
+      bypass_b_mark_texts への行テキスト捕捉は push_pending_prompt_mark の
+      `if self.scrollback_bypass && kind == b'B'` でゲートされている。round 6 の split では
+      prefix を bypass OFF で replay するため、prefix 中の B マークはこの側テーブルに入らない。
+      さらに prefix の実 scrollback は直後の restore_bypass_invariant_after_reflow で
+      drain+release され、viewport に残っていた行も suffix の bypass 下で捨てられる。
+      結果 tabs.rs の fallback extract_line_text が suffix 由来の無関係な viewport 行か
+      空文字を返す。round 6 で入った退行（rounds 1-5 では k>0 なら全ドレイン非 bypass、
+      k==0 なら全区間 bypass だったのでどちらの穴も無かった）。
+      発火条件は「pane spawn と GUI の最初の Resize の間にシェル出力があり OSC 133 B を含む」
+      = ordinary switch の典型形。影響は fold のコマンドラベルのみ。
+      付随: bypass_split の閾値は suffix 側しか見ておらず prefix 長を見ていないため、
+      prefix 2 MiB / suffix 4 KiB のような利得ゼロの形でも split が engage する。
+    suggestion: >-
+      B マークテキストの捕捉条件を「bypass 中」から「snapshot replay 中」に広げる、
+      または restore_bypass_invariant_after_reflow の直前に prefix の実 scrollback /
+      viewport から B テキストを回収して bypass_b_mark_texts に投入する。
+      あわせて bypass_split の gate に prefix 側の上限を加える。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 7 rework へ回送"
+
+  - stable_id: d139e51d1c8d03c8
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 3111
+    title: "split の唯一のテストが prefix スクロールを起こさず、bookkeeping 折り込みの正当性を検証していない"
+    description: >-
+      bypass_split_matches_reference_viewport_and_cursor_for_ordinary_switch は
+      HEAD が 5 行（spawn 24 行に対して）なので restore_bypass_invariant_after_reflow が
+      leaked == 0 で即 return し、round 6 が新設した「非 bypass prefix の実 scrollback を
+      virtual_scrollback_len に折り込む」経路と enable_snapshot_bypass の precondition 緩和が
+      一度も実行されない。比較対象も grid_fingerprint（viewport + カーソル）だけなので、
+      折り込み演算が壊れても通る。実際に壊れるのは evicted_total と、それに依存する
+      prompt_marks / fold_marks の abs_row 正規化。
+      同ファイルの test_build_from_snapshot_matches_reset_and_replay は
+      evicted_total とマークまで比較しているのに、split のテストだけがその比較を持たない。
+      コード自体は現状正しいが、この不変条件を守るテストが無い。
+    suggestion: >-
+      HEAD の行数を viewport より十分多くして prefix 自体が実 scrollback を生む形にし、
+      アサーションに evicted_total 一致と take_prompt_marks/take_fold_marks の一致を加える。
+      payload の prefix と suffix 両方に OSC 133 A/B/C/D を埋めれば 0bed3c30e41e2389 も捕まる。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "round 7 rework へ回送"
+
+  - stable_id: 004fe3021b5d0c15
+    severity: medium
+    category: spec
+    file: crates/term_core/src/terminal_core.rs
+    line: 1077
+    title: "NFR1: resize storm 形状の切替が segment-free 比 30-40 倍（8ms → 332ms）に劣化"
+    description: >-
+      レビュアーが release で再実行した実測（VERIFICATION.md の表と整合）:
+      segment-free 8.15ms / ordinary switch 1.58ms / 1 seg differing 282.9ms /
+      6 segs storm 235.3ms / 24 segs storm(cap) 332.3ms。
+      通常切替は round 5 の退行（170-220ms）が解消されており AC-4 も満たす。
+      残る問題は storm 形状: prefix/suffix split は「target と一致する末尾 run」が
+      BYPASS_SUFFIX_MIN_BYTES(4096) 以上ある場合しか効かないため、ドラッグ直後に
+      切り替えるケースは whole-drain non-bypass に落ちて 235-332ms を払う。
+      本 feature 導入前はどの形状でも segment-free 相当の ~8ms だった。
+      VERIFICATION.md は「1-second NFR1 ceiling」と述べているが SPEC NFR1 に
+      1 秒という閾値は無く、判定基準が SPEC より緩い方向に書き換えられている。
+    suggestion: >-
+      (a) SPEC NFR1 に対する合意済みの許容値を SPEC 側に明示し、VERIFICATION.md の
+      判定基準を SPEC 由来にする。(b) storm 形状でも bypass を効かせる
+      （閾値を下げるだけでは足りず、中間 segment の resize が全 scrollback reflow を
+      要求している点がコストの本体）。(c) 最低限 MT-2/MT-3 でこの形状の体感を
+      明示的に評価対象にする。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "round 7 rework へ回送。SPEC 側の許容値明示が最小コストの解"
+
+  - stable_id: 02bb52aaff9638e5
+    severity: medium
+    category: security
+    file: crates/mux_ipc/src/protocol.rs
+    line: 166
+    title: "Per-segment limits still permit replay resource exhaustion"
+    description: >-
+      デコーダは最大 64 個の非空 segment を受け入れ、各々が最大 1,000,000 セルを
+      宣言できる。悪意ある mux ピアは小さく妥当な snapshot で最大 64 回の大きな
+      grid 確保 / reflow（約 6400 万セル分の仕事）を強制できる。8 未満なら
+      tabs.rs で同期 replay されるため UI を stall させられ、それ以上でも
+      CPU 消費が off-thread に移るだけで拒否はされない。
+    suggestion: >-
+      typed decode 中に非空 segment 範囲の累積 replay コスト予算を計算し、
+      超過する payload を拒否する。同期 / off-thread の判定にも寸法由来のコストを含める。
+    sources: [codex:security]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 7 rework へ回送"
+
+  - stable_id: 6cefb1dd16c126b6
+    severity: medium
+    category: architecture
+    file: crates/mux_ipc/src/protocol.rs
+    line: 328
+    title: "Snapshot dimension policy has drifted between producer and decoder"
+    description: >-
+      round 6 のデコーダは MAX_SEGMENT_CELLS を超える segment を拒否するが、
+      MuxPane::new / MuxPane::resize は各軸を clamp_resize_dims で検証するだけで
+      4096x4096 までの積を記録する。2000x600 のような寸法は daemon に受理され
+      PTY に適用され snapshot にエンコードされるが、同じプロトコルのクライアントが
+      Malformed として捨てる。public encoder が、対になる decoder が拒否する
+      payload を作れる状態。
+    suggestion: >-
+      積の制約を共有の検証済み寸法 / segment 契約の一部にする。
+      pane 作成や PTY resize の前に適用し、同じ validator を snapshot の
+      エンコードとデコードで再利用する。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 7 rework へ回送"
+
+  - stable_id: e519916efd5fdc42
+    severity: medium
+    category: performance
+    file: crates/term_core/src/terminal_core.rs
+    line: 1077
+    title: "Late stable suffixes can nearly double full snapshot replay work"
+    description: >-
+      split は stable target suffix が 4 KiB あるだけで有効になり、prefix のコストを
+      考慮しない。0.95-2 MiB の retained window の大半に寸法変更が散在し、末尾に
+      target サイズの小さな再描画が >= 4 KiB ある形では、1st pass が payload のほぼ全体に
+      対してフル圧縮と reflow を行い、その populate した prefix scrollback を捨てて
+      scrollback_populated: false を報告し、tabs.rs が payload 全体の 2nd pass 非 bypass
+      replay を起動する。旧来の高い初回 swap レイテンシを保ったまま、ほぼ全ての
+      高コスト処理を背景で繰り返す。どちらの bench もこの hybrid を捕まえない。
+    suggestion: >-
+      split の gate を suffix サイズだけでなく prefix コストにも掛ける
+      （小さい絶対 prefix、または payload を支配する suffix を要求する）。
+      そうでなければ既存の whole-drain 非 bypass 結果を保持し 2nd pass をスキップする。
+      大きな multi-segment prefix + 4-8 KiB target-size suffix の bench を追加する。
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "round 7 rework へ回送。0bed3c30e41e2389 の付随指摘（prefix 長を見ない gate）と同根"
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: routed-to-rework
+  note: >-
+    residual high 3 件のうち 2 件（bb3353636b0206cb / 4254f3a66c1c3f5e）は
+    修正内容が具体的に特定されており規模も小さいが、scrollback_buffer.rs と
+    pty_spawn.rs の複数箇所にまたがるため単一ファイルの review-editor では扱えない。
+
+residual_critical_high: 3
+rework_required: true

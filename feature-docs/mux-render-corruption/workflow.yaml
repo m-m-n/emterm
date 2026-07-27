@@ -181,8 +181,8 @@ tasks:
 
 review:
   status: pending
-  rounds_completed: 5
-  residual_critical_high: 4
+  rounds_completed: 6
+  residual_critical_high: 3
   needs_rework: true
   perspectives:
     comprehensive: completed
