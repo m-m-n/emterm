@@ -51,7 +51,7 @@ workflow:
       本 feature の diff は tabs.rs に一切触れておらず、既存の環境依存問題として
       failed_items には計上しない。
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
