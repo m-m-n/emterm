@@ -3243,6 +3243,17 @@ impl Tab {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        // D3''''' (round-8 rework, review round-7 finding `1d1b6b6297e3b6a0`):
+        // clamp to the SAME wire domain `MuxPane::new`/`MuxPane::resize`
+        // apply on the daemon side, BEFORE resizing this tab's own core and
+        // BEFORE the `Resize` control frame is sent below. Both ends run the
+        // identical, pure `clamp_dims_to_wire_domain` function against the
+        // identical input, so they always agree on the accepted dimensions
+        // without any wire round-trip acknowledgment — closing the gap
+        // where the daemon silently clamped a pane's dims into the wire
+        // domain while nothing told the client its own (unclamped) core was
+        // now describing a PTY of a different size.
+        let (cols, rows) = crate::mux::session::pane::clamp_dims_to_wire_domain(cols, rows);
         if let Some(p) = &self.pty {
             p.resize(cols, rows);
         }
@@ -5469,6 +5480,36 @@ mod tests {
         tab.resize(cols, rows);
         assert!(tab.test_has_pending_switch());
         assert_eq!(tab.test_pending_target(), Some(10));
+    }
+
+    /// AC-4 (D3''''', round-8 rework, review round-7 finding
+    /// `1d1b6b6297e3b6a0`): `Tab::resize` clamps to the SAME wire domain the
+    /// daemon applies (`MuxPane::new` / `MuxPane::resize`'s
+    /// `clamp_dims_to_wire_domain`) BEFORE resizing its own core, so the
+    /// dimensions the client renders at are always the dimensions the
+    /// daemon would accept for a pane — never the caller's raw,
+    /// out-of-wire-domain request. Both ends run the SAME pure function
+    /// against the SAME input, so they agree without a wire round trip.
+    ///
+    /// Confirmed to fail pre-fix: before this change, `Tab::resize` resized
+    /// `self.core` directly to the caller's raw `(cols, rows)` with no
+    /// clamp at all — `core.cols()`/`core.rows()` would come out as
+    /// `(u16::MAX, u16::MAX)` instead of the clamped wire-domain values
+    /// asserted below.
+    #[test]
+    fn resize_clamps_to_the_wire_domain_before_resizing_the_core() {
+        let mut tab = test_tab();
+        tab.resize(u16::MAX, u16::MAX);
+        let (expected_cols, expected_rows) =
+            crate::mux::session::pane::clamp_dims_to_wire_domain(u16::MAX, u16::MAX);
+        let core = tab.core.lock();
+        assert_eq!(
+            (core.cols(), core.rows()),
+            (expected_cols, expected_rows),
+            "the client's core must be resized to the CLAMPED wire-domain \
+             dims, matching what MuxPane::new/resize would accept — not \
+             the caller's raw, out-of-domain request"
+        );
     }
 
     /// A small snapshot payload whose first row replays to `marker` (stays on
