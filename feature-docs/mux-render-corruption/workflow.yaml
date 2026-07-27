@@ -261,6 +261,32 @@ review:
   rounds_completed: 9
   residual_critical_high: 1
   needs_rework: true
+  merged_to_base_with_open_review: true
+  merge_decision: >-
+    2026-07-27、ユーザーの明示的な指示により、review が open のまま
+    em-workflow/mux-render-corruption/integration を main へマージした。
+    ワークフローの完了ゲート（residual_critical_high == 0）は満たしていない。
+    マージ時点の未解決事項:
+      - residual high 1 件: 幅が変わる resize storm 直後の window 切替が
+        2.2〜7.8 秒（reviews/round9.yaml の 15066b68ab9bfc98）。
+        feature 導入前は同ペイロード 8.7ms なので本 feature が持ち込んだ退行。
+        高さのみのドラッグは 341ms に解消済み。
+      - medium 7 件（reviews/round9.yaml 参照）。うち FR2 は
+        MAX_DIM_MARKERS(62) を超える resize storm で 1〜13 行の混線が残る
+        （ただし「寸法情報なし replay」を上回らないことは 216 形状で確認済み）。
+        SPEC FR2 の無条件文言と実装保証の不一致は未解消。
+      - verify / retrospect フェーズは未実行。
+      - 実機確認（MT-1 / MT-2 / MT-3）は未実施。リリースビルドは
+        integration worktree の src-tauri/target-host/release/emterm に存在。
+    達成事項:
+      - 報告された症状の真因を特定し修正（PROBE D と同根の座標ドリフト）。
+        apt 形式・TUI 形式・幅可変の回帰テストがあり、いずれも修正を外すと落ちる。
+      - security: round 6(claude) / round 7(codex) / round 8(codex) の
+        3 ラウンド連続で findings ゼロ。marker 偽装クラスは構造的に解消。
+      - 通常の window 切替は 1.4-1.8ms（segment-free baseline 8.2ms より速い）。
+      - term_core lib 753 pass / emterm lib 2737 pass（既存の 7 件失敗は
+        base commit でも同一）/ bun test 311 pass / CLI-only check クリーン。
+    PROTOCOL_VERSION を 2 → 3 に変更しているため、旧 daemon との併用は不可。
   perspectives:
     comprehensive: completed
     spec: completed
