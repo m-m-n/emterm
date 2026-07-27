@@ -787,4 +787,149 @@ mod benches {
             bound,
         );
     }
+
+    /// AC-6 (D5'''', round-7 rework, review round-6 finding
+    /// `e519916efd5fdc42`): a payload that is MOSTLY PREFIX (a large,
+    /// multi-segment retained window with resizes scattered through most
+    /// of it) with only a SMALL qualifying suffix (just over
+    /// `BYPASS_SUFFIX_MIN_BYTES`) must NOT engage the D1''' prefix/suffix
+    /// split. Before `BYPASS_PREFIX_MAX_BYTES` gated the split on the
+    /// prefix's own size, the suffix alone clearing
+    /// `BYPASS_SUFFIX_MIN_BYTES` was enough to engage it: the (expensive)
+    /// prefix still paid its full non-bypass reflow cost as the split's
+    /// "fast" first pass, but that pass then discarded the prefix's real
+    /// scrollback into virtual bookkeeping and reported
+    /// `scrollback_populated: false` — signalling the caller
+    /// (`tabs.rs::apply_offthread_swap`) to redo the ENTIRE drain a SECOND
+    /// time in the background, roughly doubling the work for a shape the
+    /// split cannot actually speed up (the split's benefit is a CHEAP
+    /// prefix; this shape's prefix is the expensive part regardless of
+    /// whether the split engages).
+    ///
+    /// Confirmed to fail pre-fix: reverting `BYPASS_PREFIX_MAX_BYTES`'s
+    /// gate (keeping only the suffix-size check) makes this payload's
+    /// split engage, so `scrollback_populated` comes back `false` and the
+    /// assertion below fails.
+    ///
+    /// Gated `#[ignore]` (release-mode timing bench; reports latency
+    /// alongside the hard `scrollback_populated` regression guard).
+    /// Invoke with:
+    ///
+    /// ```sh
+    /// CARGO_TARGET_DIR=src-tauri/target cargo test --release \
+    ///   --manifest-path crates/term_core/Cargo.toml --lib \
+    ///   large_prefix_small_suffix_bench_does_not_engage_the_split \
+    ///   -- --nocapture --include-ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn large_prefix_small_suffix_bench_does_not_engage_the_split() {
+        use crate::terminal_core::{ReplaySegment, TerminalCore};
+        use std::sync::atomic::AtomicBool;
+        use std::time::Instant;
+
+        const SHIPPING_SCROLLBACK_LINES: u32 = 10_000;
+        let cols: u16 = 100;
+        let target_rows: u16 = 30;
+        let other_rows: u16 = 24;
+
+        let filler = b"prefix line of scrollback content padded out a bit\r\n";
+        let fill_to = |buf: &mut Vec<u8>, len: usize| {
+            let start = buf.len();
+            while buf.len() < start + len {
+                buf.extend_from_slice(filler);
+            }
+        };
+
+        // PREFIX: a large, multi-segment retained window — resizes
+        // scattered through ~200 KiB, comfortably over
+        // `BYPASS_PREFIX_MAX_BYTES` (64 KiB).
+        let segment_count = 40usize;
+        let prefix_target_len = 200 * 1024;
+        let per_segment = prefix_target_len / segment_count;
+        let mut payload = Vec::with_capacity(prefix_target_len + 8 * 1024);
+        let mut segments = Vec::with_capacity(segment_count + 1);
+        for i in 0..segment_count {
+            segments.push(ReplaySegment {
+                offset: payload.len() as u32,
+                cols,
+                rows: if i % 2 == 0 { other_rows } else { target_rows },
+            });
+            fill_to(&mut payload, per_segment);
+        }
+        let prefix_len = payload.len();
+
+        // SUFFIX: a small tail already at the target — just over
+        // `BYPASS_SUFFIX_MIN_BYTES` (4096), the shape that alone (ignoring
+        // the prefix) would qualify the split.
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: target_rows,
+        });
+        fill_to(&mut payload, 4096 + 512);
+        let suffix_len = payload.len() - prefix_len;
+
+        assert!(
+            prefix_len > 64 * 1024,
+            "test prerequisite: prefix must exceed BYPASS_PREFIX_MAX_BYTES"
+        );
+        assert!(
+            suffix_len >= 4096,
+            "test prerequisite: suffix must clear BYPASS_SUFFIX_MIN_BYTES"
+        );
+
+        // Warm-up.
+        let cancel = AtomicBool::new(false);
+        let _ = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            SHIPPING_SCROLLBACK_LINES,
+            &payload,
+            &segments,
+            &cancel,
+        );
+
+        let cancel = AtomicBool::new(false);
+        let start = Instant::now();
+        let replay = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            SHIPPING_SCROLLBACK_LINES,
+            &payload,
+            &segments,
+            &cancel,
+        )
+        .expect("not cancelled");
+        let t_from_snapshot = start.elapsed();
+
+        let cancel = AtomicBool::new(false);
+        let start = Instant::now();
+        let _reference = TerminalCore::build_scrollback_only_from_snapshot(
+            cols,
+            target_rows,
+            SHIPPING_SCROLLBACK_LINES,
+            &payload,
+            &segments,
+            &cancel,
+        )
+        .expect("not cancelled");
+        let t_reference = start.elapsed();
+
+        eprintln!(
+            "[bench] large-prefix ({prefix_len}B, {segment_count} segs) + \
+             small-suffix ({suffix_len}B) split gate: build_from_snapshot \
+             → {:?} | whole-drain reference → {:?}",
+            t_from_snapshot, t_reference,
+        );
+
+        assert!(
+            replay.scrollback_populated,
+            "the split must NOT engage for a large multi-segment prefix \
+             with only a small qualifying suffix — scrollback_populated \
+             must be true (the whole-drain fallback populated it \
+             directly), not false (which would trigger a redundant full \
+             2nd-pass reflow upstream)"
+        );
+    }
 }
