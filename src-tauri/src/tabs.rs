@@ -20,8 +20,8 @@ use crate::pty::{ExitReason, PtyEvent, PtySession};
 use crate::render::theme::Theme;
 use crate::settings::Settings;
 use mux_ipc::protocol::{
-    MessageType, MuxMessage, RenameWindowMsg, ResizeMsg, StatusUpdateMsg, WelcomeMsg,
-    decode_snapshot_payload,
+    DecodedSnapshotPayload, MessageType, MuxMessage, RenameWindowMsg, ResizeMsg, StatusUpdateMsg,
+    WelcomeMsg, decode_snapshot_payload_typed,
 };
 use term_core::terminal_core::ReplaySegment;
 
@@ -1331,11 +1331,37 @@ impl Tab {
                 }
                 // task0004 round-4 rework (D1'): decode the wire payload
                 // into its structural dimension segments + plain content
-                // bytes (`mux_ipc::protocol::decode_snapshot_payload`). An
-                // older daemon's payload (no magic prefix) decodes with an
-                // empty segment list, degrading to single-dimension replay
-                // (AC-11) — see `reset_and_replay_segments`'s doc comment.
-                let (dim_segments, content_bytes) = decode_snapshot_payload(&msg.payload);
+                // bytes (`mux_ipc::protocol::decode_snapshot_payload_typed`).
+                // An older daemon's payload (no magic prefix) decodes as
+                // `Legacy`, degrading to single-dimension replay (AC-11) —
+                // see `reset_and_replay_segments`'s doc comment.
+                //
+                // D3''' (round-6 rework, review round-5 finding
+                // `b45fb09344067621`): use the TYPED result, not the tuple
+                // compatibility wrapper — `Malformed` there maps to
+                // `(Vec::new(), &[])`, which this arm would apply as "empty
+                // snapshot," blanking the pane the same way rendering the
+                // corrupt envelope literally would have. A `Malformed`
+                // frame here instead logs and skips applying it entirely,
+                // leaving whatever is currently displayed intact.
+                let (dim_segments, content_bytes) =
+                    match decode_snapshot_payload_typed(&msg.payload) {
+                        DecodedSnapshotPayload::Legacy(content) => (Vec::new(), content.to_vec()),
+                        DecodedSnapshotPayload::Structured { segments, content } => {
+                            (segments, content.to_vec())
+                        }
+                        DecodedSnapshotPayload::Malformed => {
+                            log::warn!(
+                                "mux apc: dropping malformed {:?} payload ({} bytes) for tab {:?} \
+                             (pane {}); keeping the current display",
+                                msg.msg_type,
+                                msg.payload.len(),
+                                self.title,
+                                msg.pane_id
+                            );
+                            return false;
+                        }
+                    };
                 let segments: Vec<ReplaySegment> = dim_segments
                     .iter()
                     .map(|d| ReplaySegment {
@@ -1344,7 +1370,6 @@ impl Tab {
                         rows: d.rows,
                     })
                     .collect();
-                let content_bytes = content_bytes.to_vec();
                 // FR4: branch on payload size. Small snapshots replay
                 // synchronously (no perceptible block, no swap gap); large
                 // ones go off-thread so the switch stays responsive.

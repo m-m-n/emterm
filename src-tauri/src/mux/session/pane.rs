@@ -573,24 +573,29 @@ pub fn evaluate_output_target(
                         current_dims,
                     );
                     let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
-                    // D6'' (task0005 rework, review round-4 finding
-                    // `1d4a0c96821da0ef`): this producer previously enqueued
-                    // unconditionally, with no size check at all — flag it
-                    // via the SAME shared policy `mux::ipc::reattach` /
-                    // `mux::ipc::handlers` now use, so a snapshot large
-                    // enough to blow the codec's single-frame limit is at
-                    // least visible in the log rather than silently tearing
-                    // the connection down. Practically unreachable (see
-                    // `REATTACH_CHUNK_SIZE`'s doc in `mux::ipc::reattach`
-                    // for why a real pane's snapshot never approaches this).
+                    // D6''' (round-6 rework, review round-5 finding
+                    // `89b58cd82d7aa713`): this producer used to enqueue
+                    // unconditionally after only LOGGING an oversize
+                    // snapshot — the connection codec then rejects any
+                    // frame over `MAX_SNAPSHOT_FRAME_PAYLOAD` and the
+                    // connection loop ends, so "visible in the log" was not
+                    // actually a safe degradation. Enforce the size policy
+                    // FOR REAL here: on oversize, fail recoverably by
+                    // leaving the pane Detached (never transition to
+                    // Connected, never hand back a doomed-to-be-rejected
+                    // frame) rather than changing replay semantics by
+                    // sending something the codec will tear the connection
+                    // down over.
                     if !mux_ipc::protocol::fits_single_snapshot_frame(encoded_snapshot.len()) {
-                        log::warn!(
+                        log::error!(
                             "visibility-resume: pane {} snapshot {}B exceeds the \
-                             single-frame limit ({}B)",
+                             single-frame limit ({}B); staying detached rather \
+                             than enqueuing a frame the codec would reject",
                             pane.id,
                             encoded_snapshot.len(),
                             mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD
                         );
+                        return EvalResult::Unchanged;
                     }
                     *target = PaneOutputTarget::Connected(owned_tx.clone());
                     EvalResult::ResumeWithSnapshot {
@@ -685,19 +690,25 @@ pub fn resume_pane_with_permit(
                 current_dims,
             );
             let encoded_snapshot = encode_snapshot_segments(&snapshot, &snapshot_segments);
-            // D6'' (task0005 rework, review round-4 finding
-            // `1d4a0c96821da0ef`): see the parallel check in
+            // D6''' (round-6 rework, review round-5 finding
+            // `89b58cd82d7aa713`): see the parallel check in
             // `evaluate_output_target`'s `ResumeWithSnapshot` branch above —
-            // same shared policy, same "practically unreachable but now
-            // visible instead of silent" rationale.
+            // same shared policy. On oversize, drop the reserved `permit`
+            // WITHOUT sending (releasing its slot) and return `NoChange`
+            // instead of `Resumed` — the pane stays Detached (fail
+            // recoverably) rather than being handed a frame the codec will
+            // reject, which previously tore the whole connection down.
             if !mux_ipc::protocol::fits_single_snapshot_frame(encoded_snapshot.len()) {
-                log::warn!(
+                log::error!(
                     "visibility-resume: pane {} snapshot {}B exceeds the \
-                     single-frame limit ({}B)",
+                     single-frame limit ({}B); staying detached rather \
+                     than enqueuing a frame the codec would reject",
                     pane.id,
                     encoded_snapshot.len(),
                     mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD
                 );
+                drop(permit);
+                return ResumeOutcome::NoChange;
             }
             // review round-1 rework, finding `20b2bed0aaf48f94`: tag this as
             // a Snapshot-kind chunk (not the default PtyOutput) so the mux
@@ -1736,6 +1747,39 @@ mod tests {
         assert_eq!(pane.raw_passthrough.lock().unwrap().len(), 0);
     }
 
+    /// D6''' (round-6 rework, review round-5 finding `89b58cd82d7aa713`):
+    /// mirrors `test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit`
+    /// for `evaluate_output_target`'s parallel `ResumeWithSnapshot` branch
+    /// — an oversize encoded snapshot must not transition the pane to
+    /// Connected at all.
+    #[test]
+    fn test_evaluate_output_target_stays_detached_when_snapshot_exceeds_frame_limit() {
+        let (owned_tx, _rx) = mpsc::channel(16);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+        }));
+        let pane = MuxPane::new_test(2, 80, 24, target.clone());
+        let oversize_capacity = mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD + 1024 * 1024;
+        *pane.scrollback.lock().unwrap() =
+            crate::mux::scrollback_buffer::ScrollbackRingBuffer::new(oversize_capacity);
+        pane.scrollback
+            .lock()
+            .unwrap()
+            .write(&vec![b'x'; oversize_capacity]);
+
+        let result = evaluate_output_target(&pane, false, true, &owned_tx);
+        assert!(
+            matches!(result, EvalResult::Unchanged),
+            "oversize snapshot must not resume the pane"
+        );
+        assert!(
+            matches!(*target.lock().unwrap(), PaneOutputTarget::Detached { .. }),
+            "pane must stay Detached rather than swap to Connected with an \
+             unsendable snapshot"
+        );
+    }
+
     #[test]
     fn test_evaluate_output_target_already_connected_visible_no_op() {
         let (owned_tx, _rx) = mpsc::channel(16);
@@ -2014,6 +2058,54 @@ mod tests {
             PaneOutputTarget::Detached { .. }
         ));
         assert!(b_rx.try_recv().is_err(), "no snapshot must reach B");
+    }
+
+    /// D6''' (round-6 rework, review round-5 finding `89b58cd82d7aa713`):
+    /// an encoded snapshot too large for a single codec frame must NOT be
+    /// enqueued — the pane stays Detached (fail recoverably) rather than
+    /// being handed a frame `mux::ipc::connection`'s codec would reject
+    /// (which previously tore the whole connection down).
+    ///
+    /// Confirmed to fail pre-fix: the oversize check only LOGGED and still
+    /// unconditionally sent + swapped to Connected — this test's
+    /// `ResumeOutcome::NoChange` / `PaneOutputTarget::Detached` /
+    /// "nothing enqueued" assertions would all have failed.
+    #[tokio::test]
+    async fn test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit() {
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+        }));
+        let pane = MuxPane::new_test(12, 80, 24, target.clone());
+        // Replace the default (2 MiB) ring with one large enough to hold
+        // content that, once encoded, exceeds `MAX_SNAPSHOT_FRAME_PAYLOAD`
+        // (~16 MiB) — the default ring's own cap makes this unreachable
+        // otherwise (real panes never approach the codec's frame limit).
+        let oversize_capacity = mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD + 1024 * 1024;
+        *pane.scrollback.lock().unwrap() =
+            crate::mux::scrollback_buffer::ScrollbackRingBuffer::new(oversize_capacity);
+        pane.scrollback
+            .lock()
+            .unwrap()
+            .write(&vec![b'x'; oversize_capacity]);
+
+        let permit = owned_tx.reserve().await.expect("reserve permit");
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        assert!(
+            matches!(outcome, ResumeOutcome::NoChange),
+            "oversize snapshot must not resume the pane"
+        );
+        assert!(
+            matches!(*target.lock().unwrap(), PaneOutputTarget::Detached { .. }),
+            "pane must stay Detached rather than swap to Connected with an \
+             unsendable snapshot"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no snapshot may reach the channel when it would exceed the \
+             single-frame limit"
+        );
     }
 
     #[test]
