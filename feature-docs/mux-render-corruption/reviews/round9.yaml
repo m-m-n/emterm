@@ -1,0 +1,290 @@
+round: 9
+executed_at: "2026-07-27T20:45:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: a8d4bed2df5e2f41f524bd0c1ff59fb07f76f025
+  head_commit: d63a2c0f463151c83fac8c919b29f172f8fa475f
+  changed_files:
+    - crates/mux_ipc/src/protocol.rs
+    - crates/term_core/src/bench.rs
+    - crates/term_core/src/reflow.rs
+    - crates/term_core/src/ring_buffer.rs
+    - crates/term_core/src/snapshot.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/mux/cli.rs
+    - src-tauri/src/mux/daemon.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - src-tauri/src/mux/scrollback_buffer.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/snapshot_bytes.rs
+    - src-tauri/src/tabs.rs
+plan:
+  floor: [comprehensive, spec, security, performance, architecture]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed, note: "resize_same_width 書き換えの等価性を独立検証。crate を複製しランダム 4000 単発 + 600 多段シーケンスで viewport/wrapped/cursor/scrollback/evicted_total/intern live 数まで比較し **差分ゼロ**"}
+  - {perspective: spec, source: claude, status: completed, note: "幅可変 storm のレイテンシを自前ハーネスで実測して NFR1 を裁定"}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: security, source: claude, status: skipped, skip_reason: "round 6 で残存リスク無しと明言。round 9-10 の変更は term_core の reflow とレイテンシで security 面に触れない"}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "round 7-8 で 2 ラウンド連続 findings ゼロ"}
+
+headline: >-
+  **round 10 の resize_same_width 書き換えは独立検証で等価性が確認された**
+  （ランダム 4600 ケースで参照実装と差分ゼロ）。高さのみのドラッグは
+  4.5-4.7 秒 → 164ms に解消し、bench の hard assertion も復活した。
+  ただし **幅が変わるドラッグ（左右エッジ / 角）は未対応で、実測 2.2〜7.8 秒**。
+  安価パスは同一幅限定で、幅変化は原理的に再ラップが要るため同じ手が使えない。
+  feature 導入前は同ペイロード 8.7ms だったので、これは本 feature が持ち込んだ退行。
+  MT-3 の文言自体が「drag a mux window's edge」で縦方向に限定していない点にも注意。
+
+findings:
+  - stable_id: 15066b68ab9bfc98
+    severity: high
+    category: spec
+    file: crates/term_core/src/reflow.rs
+    line: 83
+    title: "NFR1 未達: 幅が変わる resize storm の切替が実測 2.2〜7.8 秒（round 10 の安価パスは同一幅限定）"
+    description: >-
+      レビュアーが自前ハーネスで実測して裁定した。
+      【round 10 の主張は再現】リポジトリの bench を release 実行:
+      62 segs storm（同一幅）= 164.6ms / 163.7ms、ordinary switch = 1.38ms
+      （MuxPane::new の実 spawn 寸法 80x24 に差し替えても 1.76ms）。
+      hard assertion も復活済み。同一幅に限れば NFR1 は満たされる。
+      【未測定だった幅可変形状】同じ 0.95MiB / 62 segs で cols も交互に変えるだけ:
+      |形状|0.95MiB|2MiB（daemon の DEFAULT_SCROLLBACK_CAPACITY）|
+      |同一幅|163ms|353ms|
+      |幅+高さ可変|**6.20s**|**7.44s**|
+      MT-3 に最も近い形（2MiB 履歴の pane 末尾でドラッグ、1 ステップ小さな redraw）:
+      |ドラッグ|16 steps|32 steps|62 steps|
+      |高さのみ|345ms|346ms|341ms|
+      |横/角（cols も変化）|**2.16s**|**4.09s**|**7.76s**|
+      feature 導入前（base a8d4bed）は ReplaySegment 自体が無く replay は単一寸法の 1 パスで
+      同ペイロード 8.7ms だったので、これは本 feature が持ち込んだ退行。
+      round 9 が NFR1 未達と判定した同一幅 4.5-4.7 秒より悪い。
+      【scope 制限が spec と整合しない理由】
+      (1) SPEC FR3 が「including a scenario where the scrollback contains lines produced at
+      different terminal widths」と幅可変を明示的にスコープに入れている。テスト側は
+      differing_dimensions_recording_matches_live_feed_fingerprint（cols 100↔40）で
+      これを満たしているのに、NFR1 の測定だけがその形状を外している。
+      (2) MT-3 の本文は「drag a mux window's edge to resize it repeatedly」で縦方向に
+      限定していない。VERIFICATION.md が MT-3 を「a vertical/height drag」と読み替えているのは
+      自身の手動テスト文言の狭め。
+      MAX_DIM_MARKERS を 62 に上げた round 9 の判断がこの形状のコストを直接増幅している。
+    suggestion: >-
+      (a) 幅変化を含む resize でも安価にする（保持 scrollback の再ラップを次回参照時まで
+      遅延させる / 論理行キャッシュを持つ）。同一幅パスの「行数デルタ境界だけ触る」原理は
+      cols 変化には使えないので別設計が要る。
+      (b) replay 側で段数を束ねる（同一 cols が連続する区間を 1 回の reflow にまとめる、
+      または prefix/suffix split を「最後の cols 変化以降」に一般化して、それ以前の
+      幅変化区間は 1 回の full reflow に畳む）。
+      (c) daemon 側で cols が変わるマーカーだけ別枠に制限し、幅可変 storm の段数を
+      4-8 程度に絞る。FR2 の混線とのトレードオフを実測して決める。
+      (d) どれも採らないなら SPEC NFR1 に「幅が変わる連続 resize 直後の切替は最大数秒
+      かかりうる」ことを明記してユーザーと再合意し、bench に幅可変アームを informational で
+      追加して将来の退行を可視化する。
+    sources: [claude:spec, codex:performance]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "ユーザー判断待ち。round 10 の方針選択と同じ構図で、product 上のトレードオフ"
+
+  - stable_id: 0d8e4a40769480b5
+    severity: medium
+    category: performance
+    file: crates/term_core/src/bench.rs
+    line: 689
+    title: "The restored latency assertion permits a several-fold regression"
+    description: >-
+      境界が `60 * t_baseline + 200ms`。実測の segment-free baseline 約 7-8ms では
+      約 620-680ms まで通ってしまい、主張する 160-170ms の約 4 倍。
+      さらに t_baseline は 1 サンプルなので、スケジューラ遅延 1 回が 60 倍されて
+      数秒の退行まで通す緩さになりうる。row-only storm という意図した形状は
+      踏んでいるが、閾値が測定した改善を守っていない。
+    suggestion: >-
+      複数サンプルの中央値 / 最小値を baseline にし、較正した絶対上限と
+      もっと厳しい正規化境界の両方を assert する。
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "次の rework へ回送"
+
+  - stable_id: 0917297443e8fe5a
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 491
+    title: "FR2 の絶対要件が cap eviction 2 件以上で依然未達（216 形状スイープを cap 62 で再実行して確認）"
+    description: >-
+      round 8 の 216 形状スイープを現行コード（MAX_DIM_MARKERS=62 + round 10 の
+      resize_same_width）に対して再実行した結果:
+      - capped が no-segments より悪い形状: **0/216**（hard gate は成立）
+      - capped が full attribution より悪い形状: **124/216**（混線 1〜13 行、full は全形状 0）
+      - capped == no-segments（改善ゼロ）: 148/216
+      - eviction 0（storm がちょうど cap に収まる）: **6/6 形状で capped=0、full と完全一致**
+      つまり cap 24→62 は「62 個までの storm なら eviction が起きないので混線 0」という
+      regime を広げただけで、62 を超える storm では round 8 時点と同じ混線が残る。
+      実装が doc に嘘をついている訳ではなく（コード doc と VERIFICATION.md は正直に記述）、
+      残る不整合は SPEC FR2 側。round 8 finding の修正案 (c)「SPEC に許容条件を明記して
+      合意し直す」が未実行で、完了判定の基準文書と実装保証がずれている。
+      到達性: 62 マーカー超には redraw を伴う resize が 63 回以上必要。cap 24 時代より
+      大幅に狭まったが、毎 SIGWINCH 再描画するアプリでの長めのドラッグでは到達しうる。
+    suggestion: >-
+      (a) SPEC.md の FR2 に許容条件を明記して再合意する（例: 「1 スナップショット中に
+      記録された distinct dimensions が MAX_DIM_MARKERS 以下である限り行内容の混在を
+      生じない。超える storm では『dimension 情報を一切使わない replay』を上回らないことのみ
+      保証する」）。SPEC / VERIFICATION / コード doc の三者が同じ保証文言を指すようにする。
+      (b) より強い保証が要るなら round 8 の修正案 (b)（enforce_dim_marker_cap の犠牲者選択を
+      「常に最古」から「捨てても失うものが最小のエントリ」へ）を実装する。
+      148/216 が改善ゼロなのは最古を落とす選択が原因。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "次の rework へ回送。SPEC 側の明記はユーザー合意が必要"
+
+  - stable_id: 11df9c4961da8742
+    severity: medium
+    category: spec
+    file: feature-docs/mux-render-corruption/VERIFICATION.md
+    line: 137
+    title: "NFR1 の検証記録が『closed』と結論しているが、測定条件が shipping 条件と SPEC FR3 の要求形状を外している"
+    description: >-
+      (1) NFR1 表の最悪行「62 segments → ~160-170 ms」は 0.95MiB ペイロードでの値。
+      daemon の実 scrollback 容量は DEFAULT_SCROLLBACK_CAPACITY = 2 MiB で、同じ同一幅 storm を
+      2MiB で測ると 353ms（baseline 8.7ms の約 40x）。
+      (2) 「Scope of the fix」段落が MT-3 を「a vertical/height drag」と記述しているが、
+      MT-3 本文は「drag a mux window's edge to resize it repeatedly」で縦方向に限定していない。
+      左右エッジ / 角のドラッグは 2MiB 履歴 + 62 ステップで 7.76 秒。
+      (3) 「D1 closes the NFR1 question round-9 left open」および coverage 表の
+      「task0010 closes the open NFR1 question」は同一幅に限れば正しいが無条件の記述。
+      (4) MT-3 の注記「this check is not expected to observe a multi-second stall any longer」は
+      横/角ドラッグを行うユーザーに対して偽。
+    suggestion: >-
+      (1) NFR1 表に 2MiB 行と幅可変行を実測値つきで追加し worst measured row を更新する。
+      (2) 「Scope of the fix」から MT-3 を根拠に挙げる記述を削り、MT-3 の注記を実測値つきで
+      書き換える。(3) 「closes the NFR1 question」を同一幅に限定する。
+      (4) MT-3 を「高さドラッグ」と「横/角ドラッグ」の 2 項目に分け、後者を既知の残件として明示する。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "次の rework へ回送"
+
+  - stable_id: 76999083df36d1fa
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 1866
+    title: "BYPASS_PREFIX_MAX_SEGMENTS は 24 のまま — round 9 の MAX_DIM_MARKERS 24→62 と SSOT ドリフト"
+    description: >-
+      定数の doc は「a resize storm packs up to the daemon's own MAX_DIM_MARKERS (24,
+      kept as a literal here …)」と書いているが MAX_DIM_MARKERS は 62 に引き上げ済み。
+      bench の DAEMON_SEGMENT_CAP と mux_ipc の doc は 62 に追随しており、この定数だけが
+      取り残されている。挙動にも影響し、split gate は k <= BYPASS_PREFIX_MAX_SEGMENTS なので
+      prefix が 25〜62 セグメントになる payload（storm-then-settle 形）では split が engage せず
+      whole-drain 非 bypass 経路へ黙って落ちる。この帯域は raise によって新しく発生した。
+      既存テストは定数相対で書かれているため値をどちらに動かしても緑のまま。
+      codex:architecture も独立に同じ指摘。
+    suggestion: >-
+      (a) daemon 側 cap をミラーするなら 62（head 込みなら 63）に上げて doc を訂正する。
+      (b) 24 が独立した判断値なら doc から MAX_DIM_MARKERS 由来の記述を外し、
+      1 セグメントあたりの reflow コスト × 許容レイテンシで導出し直したうえで
+      25〜62 の prefix が whole-drain へ落ちるのは意図的である旨を書く。
+      いずれの場合も「daemon が実際に出し得る最大 prefix セグメント数」を定数相対で
+      固定するアサーションを足す。
+    sources: [claude:comprehensive, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "次の rework へ回送"
+
+  - stable_id: 0ed98a8281258910
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/scrollback_buffer.rs
+    line: 1196
+    title: "dim_markers_stays_capped_when_window_pruning_and_count_cap_both_fire が enforce_dim_marker_cap を一度も踏まない"
+    description: >-
+      テストは marker_count = 40 を「well above MAX_DIM_MARKERS」として両機構の
+      同時発火を検証すると宣言しているが、MAX_DIM_MARKERS は現在 62 なので 40 は超えない。
+      さらに構造上 capacity = (marker_count/2) * chunk_len なので prune が先に効いて
+      dim_markers は 21 件で頭打ちになり、cap の while ループは一度も真にならない
+      （シミュレーション: cap_evictions = 0 / prune_evictions = 19 / max_len = 21）。
+      cap 側の eviction は capped_head_dims を通じて read_segments の head 合成可否を
+      左右する（round 7-8 で critical/high が繰り返し出た箇所）ので、
+      そこのリグレッションガードが実質失われている。
+    suggestion: >-
+      二相構成にする。第1相で MAX_DIM_MARKERS + 10 回、各マーカー後に 1 バイトだけ書く
+      （count cap が発火）→ 第2相で capacity + 1 バイトを一括で書いてからマーカーを 1 本
+      記録する（prune が発火）。あわせて marker_count を定数相対にし、
+      dim_markers_cap_eviction_count を観測できる cfg(test) アクセサを足して
+      「cap が実際に発火したこと」を前提としてアサートする。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "次の rework へ回送"
+
+  - stable_id: 78539e1304c0e9f0
+    severity: medium
+    category: architecture
+    file: src-tauri/src/tabs.rs
+    line: 437
+    title: "Client and local-terminal sizing depend on daemon session policy"
+    description: >-
+      Tab::spawn_shell / Tab::resize / App::set_grid_size が
+      mux::session::pane::clamp_dims_to_wire_domain を直接呼んでいる。このヘルパーは
+      daemon session 層に属し、その積上限は daemon の snapshot-segment 容量から導かれる。
+      結果、mux の wire 予算ポリシーを変えると mux 非接続の通常タブが受け付ける
+      最大グリッドまで静かに変わり、GUI 層を daemon 実装から独立に再利用できない。
+    suggestion: >-
+      検証済み寸法型と共有 wire-domain ルールを中立なプロトコル / ドメインクレートへ移す。
+      端末割り当ての安全性と mux snapshot 予算ポリシーを分離し、後者は mux 境界で明示的に適用する。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "次の rework へ回送"
+
+  - stable_id: 1d11ff0179505f1a
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/reflow.rs
+    line: 95
+    title: "Fast and fallback paths duplicate the resize retention policy"
+    description: >-
+      高速パスが keep / skip / trailing-drop / cursor-placement の算術を
+      resize_same_width_reference から独立にコピーしており、参照実装は
+      eviction が viewport に達するケースの production フォールバックとして残っている。
+      将来カーソル可視性 / パディング / eviction 意味論を直すときは両方を直す必要があり、
+      片方を忘れると同一幅 resize が skip > scrollback_slim.len() かどうかで
+      挙動が変わる。サンプリング等価性テストは現状のケースを守るが
+      shotgun surgery の必要性は消えない。
+    suggestion: >-
+      行数 / 容量 / カーソル位置から計算される純粋な SameWidthResizePlan を切り出し、
+      高速マテリアライザと参照 / フォールバックの両方がその単一のプランを消費して
+      データ移動だけが異なる形にする。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "次の rework へ回送"
+
+verification_note: >-
+  round 10 の resize_same_width 書き換え（この feature で最も深いコアロジック変更）は
+  comprehensive レビュアーが独立検証した: scratchpad にクレートを複製し、
+  拡大/縮小・scrollback 空/満杯/途中・容量増減・カーソル固定位置をランダム化した
+  単発 4000 ケース + 出力を挟む多段リサイズ 600 シーケンスで、viewport・wrapped・
+  カーソル・scrollback 内容・evicted_total・intern テーブル live 数まで比較して **差分ゼロ**。
+  row-count 算術も各分岐について代数的に参照実装と一致することを確認。
+  alt screen は resize_no_reflow の別経路で影響外。
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: routed-to-user-decision
+  note: >-
+    residual high 1 件（幅可変 storm のレイテンシ）は product 上のトレードオフ判断を含むため
+    ユーザー確認へ回した。
+
+residual_critical_high: 1
+rework_required: true
