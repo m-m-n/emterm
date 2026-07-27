@@ -698,6 +698,28 @@ pub fn resume_pane_with_permit(
             // instead of `Resumed` — the pane stays Detached (fail
             // recoverably) rather than being handed a frame the codec will
             // reject, which previously tore the whole connection down.
+            //
+            // D3'''' (round-7 rework, review round-6 finding
+            // `46c29c2c65970d26`): reachability of a PERMANENT freeze here
+            // was disputed between round-6 reviewers — settled as
+            // RECOVERABLE, not permanent. This branch's early `return`
+            // happens BEFORE `*target` or `*reason` is ever touched, so the
+            // pane is left in EXACTLY the state it was in on entry
+            // (`Detached { HiddenByVisibility, .. }`). `handle_set_visibility`
+            // (the only production caller) re-invokes this function for
+            // every non-exited pane on every `visible -> true` edge that
+            // is not itself a repeated no-op (its `prev == visible` guard
+            // only suppresses a SECOND consecutive `true`, not a
+            // false-then-true cycle) — so a later hide -> show toggle (the
+            // client minimizing/restoring, or switching panes away and
+            // back) unconditionally retries this exact call, and succeeds
+            // once whatever inflated the snapshot (typically an
+            // extreme-dimension alt-screen `contents_formatted()` dump,
+            // D6'''' narrows the dimensions that can produce one) is no
+            // longer true. See
+            // `resume_pane_with_permit_recovers_after_oversize_condition_clears`
+            // for the regression test pinning this: the pane is never left
+            // detached with visibility latched on forever.
             if !mux_ipc::protocol::fits_single_snapshot_frame(encoded_snapshot.len()) {
                 log::error!(
                     "visibility-resume: pane {} snapshot {}B exceeds the \
@@ -780,6 +802,38 @@ pub struct MuxPane {
     pub dims: SharedPaneDims,
 }
 
+/// Clamp `(cols, rows)` to the domain the wire decoder ACTUALLY accepts for
+/// a snapshot segment (D6'''', round-7 rework, review round-6 finding
+/// `6cefb1dd16c126b6`).
+///
+/// `term_core::terminal_core::clamp_resize_dims` bounds each axis
+/// independently to `1..=4096`, but `mux_ipc::protocol`'s segment decoder
+/// additionally rejects any segment whose `cols * rows` product exceeds
+/// `MAX_SEGMENT_CELLS` (1_000_000) — a legitimate-looking size like
+/// 2000x600 (product 1,200,000) or the per-axis ceiling itself
+/// (4096x4096 = 16,777,216) clears the per-axis clamp untouched but is
+/// `Malformed` on the wire. Before this fix, `MuxPane::new` / `resize`
+/// validated ONLY the per-axis domain, so a pane could be created/resized
+/// to dimensions whose own initial segment (or a later resize segment) its
+/// own peer would reject when decoding the resulting snapshot — the
+/// producer's accepted domain and the decoder's accepted domain had
+/// drifted apart even though both are meant to share one contract.
+///
+/// When the per-axis-clamped product still exceeds the ceiling, `rows` is
+/// reduced to fit under it (preserving `cols`, since column count is
+/// usually the more consequential axis for terminal rendering) rather than
+/// rejecting the resize outright — mirroring `clamp_resize_dims`'s own
+/// "clamp, don't reject" policy so callers never need special-case error
+/// handling for an oversized resize request.
+fn clamp_dims_to_wire_domain(cols: u16, rows: u16) -> (u16, u16) {
+    let (cols, rows) = term_core::terminal_core::clamp_resize_dims(cols, rows);
+    if (cols as u32) * (rows as u32) <= mux_ipc::protocol::MAX_SEGMENT_CELLS {
+        return (cols, rows);
+    }
+    let max_rows = (mux_ipc::protocol::MAX_SEGMENT_CELLS / cols as u32).max(1) as u16;
+    (cols, rows.min(max_rows))
+}
+
 impl MuxPane {
     /// Create a new pane (PTY spawn handled by caller).
     pub fn new(
@@ -792,13 +846,17 @@ impl MuxPane {
     ) -> Self {
         // task0004 round-4 rework (review round-3 finding `b546481e9c2fcc85`):
         // validate the pane's INITIAL dimensions against the SAME domain
-        // `resize()` enforces (`term_core::terminal_core::clamp_resize_dims`)
-        // before recording them anywhere. Without this, a caller passing an
-        // out-of-domain size (the decoder's accepted range is `1..=4096`)
-        // would have its initial segment silently clamped/rejected only at
-        // REPLAY time, misaligning the earliest retained content's
-        // attributed dimensions from what was actually recorded here.
-        let (cols, rows) = term_core::terminal_core::clamp_resize_dims(cols, rows);
+        // `resize()` enforces before recording them anywhere. Without this,
+        // a caller passing an out-of-domain size would have its initial
+        // segment silently clamped/rejected only at REPLAY time,
+        // misaligning the earliest retained content's attributed
+        // dimensions from what was actually recorded here.
+        //
+        // D6'''' (round-7 rework, review round-6 finding `6cefb1dd16c126b6`):
+        // `clamp_dims_to_wire_domain` also bounds the PRODUCT to what the
+        // wire decoder accepts (`MAX_SEGMENT_CELLS`), not just each axis —
+        // see its doc for why the per-axis clamp alone let this drift.
+        let (cols, rows) = clamp_dims_to_wire_domain(cols, rows);
         let mut scrollback = ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY);
         // IMPLEMENTATION.md D1/D2 (task0001): record the pane's INITIAL
         // dimensions as the very first scrollback bytes, mirroring what
@@ -866,13 +924,14 @@ impl MuxPane {
     /// Resize the PTY to the given dimensions.
     ///
     /// task0003 D2 (review round-2 finding `602e685494248cbb`): `cols` /
-    /// `rows` are clamped to `term_core::terminal_core::clamp_resize_dims`'s
-    /// range BEFORE anything else — the same range the marker decoder
-    /// accepts — so the PTY's actual size, the shadow parser, and the
+    /// `rows` are clamped to the domain the marker decoder accepts BEFORE
+    /// anything else — so the PTY's actual size, the shadow parser, and the
     /// recorded marker can never disagree with what a replay is willing to
-    /// honor.
+    /// honor. D6'''' (round-7 rework, review round-6 finding
+    /// `6cefb1dd16c126b6`): that domain is `clamp_dims_to_wire_domain`'s,
+    /// not `clamp_resize_dims`'s alone — see its doc.
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), String> {
-        let (cols, rows) = term_core::terminal_core::clamp_resize_dims(cols, rows);
+        let (cols, rows) = clamp_dims_to_wire_domain(cols, rows);
         let master = self
             .master
             .as_ref()
@@ -1207,9 +1266,9 @@ mod tests {
     // pane creation validates dims against the same domain resize() uses ──
 
     /// AC-6: `MuxPane::new` clamps out-of-domain dimensions through the
-    /// SAME path `resize()` uses (`clamp_resize_dims`), instead of storing
-    /// the caller's raw values unvalidated. Uses a real PTY (like the
-    /// existing `test_new_pane_records_initial_dims_marker_in_scrollback`)
+    /// SAME path `resize()` uses (`clamp_dims_to_wire_domain`), instead of
+    /// storing the caller's raw values unvalidated. Uses a real PTY (like
+    /// the existing `test_new_pane_records_initial_dims_marker_in_scrollback`)
     /// since the test-only `new_test`/`new_test_with_writer` constructors
     /// are a separate, simplified path that does not call `MuxPane::new`
     /// at all.
@@ -1219,6 +1278,13 @@ mod tests {
     /// left `pane.cols == 0` — outside `clamp_resize_dims`'s `1..=4096`
     /// domain that this task's replay path assumes dimensions never
     /// violate.
+    ///
+    /// D6'''' (round-7 rework, review round-6 finding `6cefb1dd16c126b6`):
+    /// `u16::MAX` per axis clamps to `RESIZE_MARKER_MAX_COLS` /
+    /// `RESIZE_MARKER_MAX_ROWS` (4096 each) — a product of 16,777,216,
+    /// still far above `MAX_SEGMENT_CELLS` (1,000,000) the wire decoder
+    /// accepts. `rows` must clamp FURTHER, down to
+    /// `MAX_SEGMENT_CELLS / cols`, preserving `cols` at the per-axis max.
     #[cfg(unix)]
     #[test]
     fn new_pane_clamps_out_of_domain_dimensions() {
@@ -1237,26 +1303,75 @@ mod tests {
         let writer = pair.master.take_writer().unwrap();
         let target = make_output_target();
         let pane = MuxPane::new(1, u16::MAX, u16::MAX, target, writer, pair.master);
+        let expected_cols = term_core::terminal_core::RESIZE_MARKER_MAX_COLS;
+        let expected_rows = (mux_ipc::protocol::MAX_SEGMENT_CELLS / expected_cols as u32) as u16;
         assert_eq!(
             (pane.cols, pane.rows),
-            (
-                term_core::terminal_core::RESIZE_MARKER_MAX_COLS,
-                term_core::terminal_core::RESIZE_MARKER_MAX_ROWS
-            ),
-            "oversized dimensions must clamp down to the shared max, matching clamp_resize_dims"
+            (expected_cols, expected_rows),
+            "oversized dimensions must clamp down to the wire domain \
+             (per-axis max, THEN product ceiling), matching \
+             clamp_dims_to_wire_domain"
+        );
+        assert!(
+            (pane.cols as u32) * (pane.rows as u32) <= mux_ipc::protocol::MAX_SEGMENT_CELLS,
+            "clamped dims must never exceed MAX_SEGMENT_CELLS as a product"
         );
         // The clamped dims are ALSO what gets recorded structurally (the
         // initial segment `MuxPane::new` writes) — not the caller's raw,
         // out-of-domain values.
         let (_bytes, segments) = pane.scrollback.lock().unwrap().read_segments();
-        assert_eq!(
-            segments,
-            vec![(
-                0usize,
-                term_core::terminal_core::RESIZE_MARKER_MAX_COLS,
-                term_core::terminal_core::RESIZE_MARKER_MAX_ROWS
-            )]
-        );
+        assert_eq!(segments, vec![(0usize, expected_cols, expected_rows)]);
+    }
+
+    /// AC-8 (D6'''', round-7 rework, review round-6 finding
+    /// `6cefb1dd16c126b6`): dimensions the daemon accepts always produce a
+    /// snapshot segment the wire decoder ALSO accepts — round-trips
+    /// `clamp_dims_to_wire_domain`'s output through the REAL
+    /// `mux_ipc::protocol` encode/decode path, not just an inline product
+    /// check, so a drift between the two crates' notions of "in domain"
+    /// would surface here even if a future change duplicated the ceiling
+    /// incorrectly instead of sharing `MAX_SEGMENT_CELLS`.
+    ///
+    /// Confirmed to fail pre-fix: before `clamp_dims_to_wire_domain`
+    /// existed, `clamp_resize_dims(2000, 600)` returned `(2000, 600)`
+    /// unchanged (both axes are within `1..=4096`) — a product of
+    /// 1,200,000, which `mux_ipc::protocol`'s segment decoder rejects as
+    /// `Malformed` (`> MAX_SEGMENT_CELLS`). This test's "round-trips
+    /// cleanly" assertion would fail against that dimension pair.
+    #[test]
+    fn clamp_dims_to_wire_domain_output_always_decodes_cleanly() {
+        for (raw_cols, raw_rows) in [
+            (2000u16, 600u16), // in-per-axis-domain, over-product (the finding's exact repro)
+            (4096, 4096),      // both axes at the per-axis max
+            (u16::MAX, u16::MAX),
+            (1, 1),
+            (80, 24),
+        ] {
+            let (cols, rows) = clamp_dims_to_wire_domain(raw_cols, raw_rows);
+            assert!(
+                (cols as u32) * (rows as u32) <= mux_ipc::protocol::MAX_SEGMENT_CELLS,
+                "clamp_dims_to_wire_domain({raw_cols}, {raw_rows}) = \
+                 ({cols}, {rows}) still exceeds MAX_SEGMENT_CELLS as a product"
+            );
+            // Round-trip through the REAL wire encode/decode, mirroring
+            // what a snapshot carrying this pane's initial segment does.
+            let segments = [mux_ipc::protocol::DimSegment {
+                offset: 0,
+                cols,
+                rows,
+            }];
+            let payload = mux_ipc::protocol::encode_snapshot_payload(&segments, b"x");
+            let decoded = mux_ipc::protocol::decode_snapshot_payload_typed(&payload);
+            assert!(
+                matches!(
+                    decoded,
+                    mux_ipc::protocol::DecodedSnapshotPayload::Structured { .. }
+                ),
+                "clamp_dims_to_wire_domain({raw_cols}, {raw_rows}) = \
+                 ({cols}, {rows}) produced a segment the wire decoder \
+                 rejected as Malformed: {decoded:?}"
+            );
+        }
     }
 
     // ── task0004 round-4 rework (review round-3 finding `ae43417cee647afa`):
@@ -2105,6 +2220,92 @@ mod tests {
             rx.try_recv().is_err(),
             "no snapshot may reach the channel when it would exceed the \
              single-frame limit"
+        );
+    }
+
+    /// D3'''' (round-7 rework, review round-6 finding `46c29c2c65970d26`):
+    /// settles the reachability question the round-6 reviewers disagreed
+    /// on — does an oversize resume failure freeze the pane permanently
+    /// (`Detached { HiddenByVisibility }` forever), or does a later
+    /// visibility cycle re-drive a successful resume once the oversize
+    /// condition clears?
+    ///
+    /// `resume_pane_with_permit`'s oversize branch returns `NoChange`
+    /// WITHOUT touching `*target` or `*reason` at all (see its body: the
+    /// early return happens before any assignment) — the pane is left in
+    /// EXACTLY the state it was in before the attempt. `handle_set_visibility`
+    /// is the only production caller, and it re-invokes
+    /// `resume_pane_with_permit` for every non-exited pane on EVERY
+    /// `visible -> true` edge it does not short-circuit as a no-op (its
+    /// `prev == visible` guard only suppresses a REPEATED `true` with no
+    /// intervening `false`) — so a hide -> show cycle (a connection
+    /// toggling visibility false then true again, e.g. the client
+    /// minimizing and restoring the window) unconditionally retries this
+    /// exact call. This test proves the retry actually recovers: the first
+    /// call (oversize) leaves the pane detached, and a second call — after
+    /// the condition that caused the oversize snapshot clears (mirroring
+    /// what a later resize or scrollback eviction does in production) —
+    /// resumes cleanly. The pane is therefore never left detached with
+    /// visibility latched on FOREVER: recovery is reachable via the next
+    /// visibility toggle, without any state-machine change being required.
+    #[tokio::test]
+    async fn resume_pane_with_permit_recovers_after_oversize_condition_clears() {
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+        }));
+        let pane = MuxPane::new_test(13, 80, 24, target.clone());
+        let oversize_capacity = mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD + 1024 * 1024;
+        *pane.scrollback.lock().unwrap() =
+            crate::mux::scrollback_buffer::ScrollbackRingBuffer::new(oversize_capacity);
+        pane.scrollback
+            .lock()
+            .unwrap()
+            .write(&vec![b'x'; oversize_capacity]);
+
+        // First attempt: oversize, must stay detached (same assertion as
+        // `test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit`).
+        let permit = owned_tx.reserve().await.expect("reserve permit");
+        let first_outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        assert!(
+            matches!(first_outcome, ResumeOutcome::NoChange),
+            "first (oversize) attempt must not resume the pane"
+        );
+        assert!(
+            matches!(*target.lock().unwrap(), PaneOutputTarget::Detached { .. }),
+            "pane must stay Detached after the oversize attempt"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no snapshot may reach the channel on the oversize attempt"
+        );
+
+        // The condition that caused the oversize snapshot clears (e.g. a
+        // later resize / scrollback eviction shrinks it back under the
+        // frame limit) — the pane's own `output_target` was NEVER touched
+        // by the failed attempt above, so it is still exactly
+        // `Detached { HiddenByVisibility, owner }`.
+        *pane.scrollback.lock().unwrap() =
+            crate::mux::scrollback_buffer::ScrollbackRingBuffer::new(4096);
+        pane.scrollback.lock().unwrap().write(b"small content now");
+
+        // Second attempt (what a hide -> show cycle re-drives): must
+        // resume cleanly.
+        let permit = owned_tx.reserve().await.expect("reserve permit");
+        let second_outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        assert!(
+            matches!(second_outcome, ResumeOutcome::Resumed),
+            "the retry must resume the pane once the oversize condition \
+             has cleared — the pane must never stay detached forever"
+        );
+        assert!(
+            matches!(*target.lock().unwrap(), PaneOutputTarget::Connected(_)),
+            "pane must be Connected after the retry succeeds"
+        );
+        assert!(
+            rx.try_recv().is_ok(),
+            "the retry must enqueue a snapshot chunk"
         );
     }
 

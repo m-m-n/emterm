@@ -37,7 +37,7 @@
 | TS-4 | Marker-bearing recording through full pipeline (write filter → snapshot → replay) | Marker bytes never appear as visible cells | Unit |
 | TS-5 | Existing Rust `--lib` suite (single-threaded) + `bun test` | All pass | Unit/Integration |
 | TS-6 | CLI-only feature check (`--no-default-features`) | Compiles clean | Build |
-| TS-7 (round-6, AC-3) | Resize sequence longer than `MAX_DIM_MARKERS`, driven through the real ring / snapshot assembly / replay | Zero cross-line mixing; segment count still bounded | Unit |
+| TS-7 (round-7 rework, AC-1/AC-2) | Resize sequence longer than `MAX_DIM_MARKERS`, driven through the real ring / snapshot assembly / replay. Rebuilt in round 7 (review round-6 finding `4254f3a66c1c3f5e`): the round-5/6 version could not fail — its fixture never wrapped the ring, so the buggy implementation and the fix produced identical segments and replay grids. The round-7 version asserts its own discrimination premise inline (a no-segment replay must mix strictly more than a full-uncapped-attribution replay, or the test fails outright), and — sized so the cap evicts exactly one entry — asserts the capped segment list is STRUCTURALLY IDENTICAL to full attribution and that the head segment's dims match the evicted entry's (not the round-6 bug's oldest-survivor splice) | Unit |
 | TS-8 (round-6, AC-5) | `build_from_snapshot`'s prefix/suffix split for the "ordinary switch" shape (small differing head + bulk tail at target) | Grid/cursor identical to the fully synchronous reference | Unit |
 | TS-9 (round-6, AC-6/AC-9) | Malformed segment offsets (non-zero-leading / non-monotonic / past content length) and an over-budget segment dimension product | Decoder rejects as `Malformed` before replay / allocation | Unit |
 | TS-10 (round-6, AC-7) | A malformed structured snapshot frame reaching `Tab::apply_mux_message` | Frame is skipped (logged), current display unchanged — not blanked | Unit |
@@ -64,8 +64,15 @@ regression (170-220ms for this exact shape) is closed. The resize-storm
 rows are UNCHANGED in kind from round 4/5 (segment count still gates their
 cost; the prefix/suffix split does not apply when no stable tail exists) —
 their correctness (zero cross-line mixing), not their latency, is what
-AC-3 requires, and `MAX_DIM_MARKERS` (raised from 16 to 24) keeps them
-comfortably under the 1-second NFR1 ceiling.
+AC-3 requires.
+
+Round-6 rework (review round-6 finding `004fe3021b5d0c15`): SPEC.md's NFR1
+states no numeric threshold ("must not noticeably degrade... latency"),
+so the resize-storm rows above (~240-350 ms) are presented here as
+measurements against that qualitative bar, not against an invented
+"1-second ceiling" — the "noticeably degrade" judgement for this shape is
+left to the verify phase / MT-3 rather than resolved here by rewriting the
+criterion.
 
 ## Code Quality Verification
 
