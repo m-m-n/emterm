@@ -33,7 +33,8 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 896c9a5889bd0a2dddbc1655e3496970ee852351
     base_commit: a1671802820c74c025f36683292ac1029a261e89
   - id: review
     status: pending
@@ -56,8 +57,8 @@ tasks:
     domains: [input-handling, api-contract]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "7 pre-existing tabs::tests failures (timing-sensitive off-thread replay worker) reproduced identically on the pre-change baseline via git stash; unrelated to this task's files. Worktree lacked gitignored bundled font assets which blocked build.rs; copied locally from the main tree to unblock verification (not a tracked change)."
     branch: em-workflow/unknown-flag-usage/task0001
 
 review:
