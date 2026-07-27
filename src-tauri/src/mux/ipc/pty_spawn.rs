@@ -45,6 +45,11 @@ pub(super) struct SpawnedPty {
     pub(super) master: Box<dyn MasterPty + Send>,
     pub(super) writer: Box<dyn std::io::Write + Send>,
     pub(super) reader: Box<dyn std::io::Read + Send>,
+    /// Shell child-process handle returned by `spawn_command` (task0001
+    /// FR1). Carried through to `MuxPane` so it can be reaped on teardown
+    /// instead of being discarded here, which previously left the process
+    /// as an unreaped zombie once it exited.
+    pub(super) child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
 /// Build the fixed environment variables set on every newly spawned mux
@@ -106,7 +111,12 @@ pub(super) fn spawn_pty(cols: u16, rows: u16, public_pane_id: &str) -> Result<Sp
         cmd.cwd(&home);
     }
 
-    pair.slave
+    // task0001 FR1: retain the child handle instead of discarding it — an
+    // unreaped exited child stays a zombie (`<defunct>`) in the kernel
+    // process table forever, since neither `std::process::Child` nor
+    // portable-pty's Unix implementation calls `wait()` on drop.
+    let child = pair
+        .slave
         .spawn_command(cmd)
         .map_err(|e| format!("Failed to spawn shell: {}", e))?;
 
@@ -123,6 +133,7 @@ pub(super) fn spawn_pty(cols: u16, rows: u16, public_pane_id: &str) -> Result<Sp
         master: pair.master,
         writer,
         reader,
+        child,
     })
 }
 
@@ -168,6 +179,7 @@ pub(super) fn register_pane_and_start_reader(
         output_target.clone(),
         spawned.writer,
         spawned.master,
+        Some(spawned.child),
     );
     let shadow_parser = pane.shadow_parser.clone();
     let pane_cwd = pane.cwd.clone();
@@ -2535,6 +2547,119 @@ mod tests {
                 "dims ({cols_a},{rows_a})->({cols_b},{rows_b}) replay@({replay_cols},{replay_rows}): \
                  replayed grid must match the live-fed reference"
             );
+        }
+    }
+
+    // ── End-to-end child reap (task0001 AC-1/AC-7; TS-7, TS-8, TS-9) ──────
+    //
+    // Uses the real spawn path (`spawn_pty`), builds a `MuxPane` directly
+    // from the resulting `SpawnedPty` (mirroring exactly what
+    // `register_pane_and_start_reader` does with `spawned.writer` /
+    // `spawned.master` / `spawned.child`), tears down via `mark_exited`,
+    // then polls the process table until the spawned PID is gone. Unix-only
+    // (`/proc` observation, SPEC A4); skips cleanly when the environment
+    // cannot open a PTY.
+    #[cfg(all(test, unix))]
+    mod child_reap_e2e {
+        use super::*;
+        use std::time::{Duration, Instant};
+
+        fn make_output_target() -> SharedOutputTarget {
+            let (tx, _rx) = mpsc::channel(1);
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx)))
+        }
+
+        /// Poll `/proc/<pid>` until the pid is gone entirely, with a
+        /// deadline. Returns `true` if the pid was still present (i.e. not
+        /// reaped) when the deadline elapsed.
+        fn pid_left_unreaped(pid: u32, deadline: Duration) -> bool {
+            let start = Instant::now();
+            loop {
+                if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                    return false;
+                }
+                if start.elapsed() >= deadline {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        /// Spawn a real PTY + shell and build a `MuxPane` from the
+        /// resulting `SpawnedPty`, exactly as `register_pane_and_start_reader`
+        /// does. Returns `None` when the environment cannot open a PTY
+        /// (SPEC A4: skip cleanly) rather than failing the test.
+        fn spawn_pane_for_reap_test(id: PaneId) -> Option<(MuxPane, u32)> {
+            let spawned = spawn_pty(80, 24, "test-pane").ok()?;
+            let pid = spawned.child.process_id()?;
+            let target = make_output_target();
+            let pane = MuxPane::new(
+                id,
+                80,
+                24,
+                target,
+                spawned.writer,
+                spawned.master,
+                Some(spawned.child),
+            );
+            Some((pane, pid))
+        }
+
+        /// AC-1 (TS-7): the child handle returned by the real spawn call is
+        /// carried all the way into the pane and reaped on teardown. A
+        /// child left un-stored (discarded at the spawn site, the pre-fix
+        /// behavior) would never be reaped here and this assertion would
+        /// time out with the pid still present.
+        #[test]
+        fn spawned_child_is_stored_and_reaped_on_mark_exited() {
+            let Some((mut pane, pid)) = spawn_pane_for_reap_test(1) else {
+                eprintln!("skipping: environment cannot open a PTY");
+                return;
+            };
+            pane.mark_exited();
+            assert!(
+                !pid_left_unreaped(pid, Duration::from_secs(3)),
+                "pid {pid} must not remain unreaped after mark_exited"
+            );
+        }
+
+        /// AC-3/AC-7 (TS-8): the same teardown path used by every
+        /// production caller (`mark_exited`) reaps the child — pins the
+        /// shared gate all four teardown call sites converge on (D4).
+        #[test]
+        fn mark_exited_reaps_child_after_the_shell_has_run_briefly() {
+            let Some((mut pane, pid)) = spawn_pane_for_reap_test(2) else {
+                eprintln!("skipping: environment cannot open a PTY");
+                return;
+            };
+            // Let the shell actually run briefly before tearing it down,
+            // closer to a real teardown than an immediate mark_exited.
+            std::thread::sleep(Duration::from_millis(50));
+            pane.mark_exited();
+            assert!(!pid_left_unreaped(pid, Duration::from_secs(3)));
+        }
+
+        /// AC-7 (TS-9): repeatedly opening and tearing down panes leaves no
+        /// test-owned pid behind unreaped — a regression guard for the
+        /// zombie-accumulation bug this feature exists to fix.
+        #[test]
+        fn repeated_open_close_leaves_no_unreaped_children() {
+            const N: usize = 5;
+            let mut pids = Vec::with_capacity(N);
+            for i in 0..N {
+                let Some((mut pane, pid)) = spawn_pane_for_reap_test(10 + i as PaneId) else {
+                    eprintln!("skipping: environment cannot open a PTY");
+                    return;
+                };
+                pane.mark_exited();
+                pids.push(pid);
+            }
+            for pid in pids {
+                assert!(
+                    !pid_left_unreaped(pid, Duration::from_secs(3)),
+                    "pid {pid} must not remain unreaped"
+                );
+            }
         }
     }
 }
