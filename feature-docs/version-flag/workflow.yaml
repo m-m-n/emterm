@@ -56,8 +56,8 @@ tasks:
     domains: [input-handling, api-contract]
     complexity: low
     requirements: [FR1, FR2, NFR1]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "全 AC 検証済み。full cargo test で tabs::tests の既知の非決定的 flakiness を観測（本変更と無関係、--test-threads=1 で安定する既知事象）"
     branch: em-workflow/version-flag/task0001
   task0002:
     title: "release.yml sync-version job"
