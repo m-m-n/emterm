@@ -884,6 +884,23 @@ impl TerminalCore {
             actions.extend(self.process_pty_data_fully_cancellable(bytes, cancel)?);
             return Some(actions);
         }
+        // D1''''' (round-8 rework, review round-7 finding `01f91fe698ceb287`):
+        // `segments` is no longer guaranteed to have its first entry at
+        // offset 0 — the daemon-side cap-eviction gap (2+ evicted
+        // `dim_markers` entries) is now left unattributed by
+        // `ScrollbackRingBuffer::read_segments` rather than synthesizing a
+        // (potentially wrong) head segment for it. Replay that leading gap,
+        // if any, BEFORE the first segment's own dims are applied — at
+        // whatever dims `self` already has, which is exactly
+        // `target_cols`/`target_rows` here since nothing has resized `self`
+        // yet. This is what "leave the gap unattributed" cashes out to at
+        // replay time: those bytes replay under the caller's TARGET size,
+        // never silently dropped.
+        let first_offset = (segments[0].offset as usize).min(bytes.len());
+        if first_offset > 0 {
+            actions
+                .extend(self.process_pty_data_fully_cancellable(&bytes[..first_offset], cancel)?);
+        }
         for (i, seg) in segments.iter().enumerate() {
             let start = (seg.offset as usize).min(bytes.len());
             let end = segments
@@ -1109,10 +1126,26 @@ impl TerminalCore {
         // byte length) — see `BYPASS_PREFIX_MAX_BYTES`'s doc for why an
         // expensive prefix makes the split pay its own "fast path" cost
         // twice instead of once.
+        //
+        // D5''''' (round-8 rework, review round-7 finding
+        // `a4f4e36fef377d05`): the byte-only gate above still let a payload
+        // that is OVERWHELMINGLY prefix engage the split — a 64 KiB prefix
+        // (right at `BYPASS_PREFIX_MAX_BYTES`, inclusive) paired with just
+        // over `BYPASS_SUFFIX_MIN_BYTES` (4096) of suffix is ~94% prefix by
+        // volume, yet both individual thresholds are satisfied. Additionally
+        // require the SUFFIX to actually DOMINATE the prefix
+        // (`suffix_len >= split_at`) — not merely clear an absolute floor —
+        // and bound the PREFIX's own segment count
+        // (`k <= BYPASS_PREFIX_MAX_SEGMENTS`), independent of its byte
+        // length: a prefix built from many small segments still pays one
+        // reflow per segment regardless of how few total bytes they cover.
+        let suffix_len = payload.len() - split_at;
         let bypass_split = bypass
             && k > 0
-            && payload.len() - split_at >= BYPASS_SUFFIX_MIN_BYTES
-            && split_at <= BYPASS_PREFIX_MAX_BYTES;
+            && k <= BYPASS_PREFIX_MAX_SEGMENTS
+            && suffix_len >= BYPASS_SUFFIX_MIN_BYTES
+            && split_at <= BYPASS_PREFIX_MAX_BYTES
+            && suffix_len >= split_at;
         // Whether `enable_snapshot_bypass` will actually be called anywhere
         // below — `k == 0` is the pre-round-6 "no transition at all" fast
         // path (segments already open at the target); `bypass_split` is the
@@ -1815,6 +1848,23 @@ const BYPASS_SUFFIX_MIN_BYTES: usize = 4096;
 /// suffix qualifies.
 const BYPASS_PREFIX_MAX_BYTES: usize = 64 * 1024;
 
+/// Maximum number of segments the PREFIX may contain for
+/// `build_from_snapshot_inner`'s D1''' prefix/suffix split to be worth
+/// engaging (D5''''', round-8 rework, review round-7 finding
+/// `a4f4e36fef377d05`).
+///
+/// [`BYPASS_PREFIX_MAX_BYTES`] bounds the prefix's total BYTE length, but a
+/// prefix built from many small segments still pays one full,
+/// content-preserving reflow PER SEGMENT (`replay_segments`'s per-segment
+/// resize), regardless of how few total bytes those segments cover — a
+/// resize storm packs up to the daemon's own `MAX_DIM_MARKERS` (24, kept as
+/// a literal here — `term_core` has no dependency on the mux daemon crate;
+/// see `mux_ipc::protocol::MAX_SEGMENTS`'s doc for the same duplication) worth
+/// of segments into a comparatively small byte span. Bounding segment COUNT
+/// independent of byte length keeps that shape from silently slipping
+/// through the byte-only gate.
+const BYPASS_PREFIX_MAX_SEGMENTS: usize = 24;
+
 /// Defensive upper bound on a resize's `cols` field. Replay dimensions are
 /// fed directly into `TerminalCore::resize`, which allocates
 /// `(scrollback_capacity + rows) * cols` cells — an unbounded value here
@@ -1978,6 +2028,47 @@ mod tests {
     }
 
     // ── reset_and_replay_segments: structural dimension replay ────────────
+
+    /// AC-3 (round-8 rework, review round-7 finding `01f91fe698ceb287`): a
+    /// segment list whose FIRST entry does NOT start at offset 0 (the shape
+    /// `ScrollbackRingBuffer::read_segments` now produces when 2+
+    /// `dim_markers` entries have been evicted, leaving the leading gap
+    /// deliberately unattributed) must still replay the leading gap's bytes
+    /// — at the caller's TARGET dimensions (`self`'s size at the start of
+    /// the call), never silently dropped.
+    ///
+    /// Confirmed to fail pre-fix: before this fix, the loop started at
+    /// `segments[0].offset`, so `bytes[..segments[0].offset]` was never fed
+    /// to any segment and the leading gap's content (`"gap-content"` below)
+    /// was silently dropped — `get_line_text(0)` would not contain it.
+    #[test]
+    fn reset_and_replay_segments_replays_a_leading_gap_before_the_first_segment_at_target_dims() {
+        let mut core = TerminalCore::new(80, 24, 1000);
+        let gap = b"gap-content\r\n";
+        let after = b"after-first-segment\r\n";
+        let mut bytes = gap.to_vec();
+        bytes.extend_from_slice(after);
+        // First (and only) segment starts AFTER the gap, at a DIFFERENT
+        // size than the core's target (80, 24) — so if the gap were
+        // (incorrectly) fed under the segment's dims instead of being fed
+        // separately first, this would still be observable as a missing
+        // first line.
+        let segments = [ReplaySegment {
+            offset: gap.len() as u32,
+            cols: 40,
+            rows: 10,
+        }];
+        core.reset_and_replay_segments(&bytes, &segments);
+        assert!(
+            core.get_line_text(0).contains("gap-content"),
+            "the leading gap's content must be replayed, not dropped: {:?}",
+            core.get_line_text(0)
+        );
+        assert!(core.get_line_text(1).contains("after-first-segment"));
+        // Core ends back at its ORIGINAL target dims (80, 24).
+        assert_eq!(core.cols(), 80);
+        assert_eq!(core.rows(), 24);
+    }
 
     /// AC-2 / D1' equivalent of the old marker-based mid-stream resize test:
     /// a single segment transition resizes the core between the two
@@ -3379,6 +3470,277 @@ mod tests {
             "the SUFFIX's B mark command text must be captured into \
              bypass_b_mark_texts — got {:?}",
             bypass_replay.bypass_b_mark_texts.get(&suffix_b_abs_row)
+        );
+    }
+
+    /// D5''''' (round-8 rework, review round-7 findings `7c70216c5a5d5c24`
+    /// / `a4f4e36fef377d05`): a deterministic, non-ignored regression
+    /// pinning the split gate's boundary — the ONLY prior assertion of
+    /// this shape lived in an `#[ignore]`d timing bench
+    /// (`bench.rs::large_prefix_small_suffix_bench_does_not_engage_the_split`),
+    /// so deleting the gate left the normal `cargo test` run green.
+    ///
+    /// Pins the side of the boundary where the split must NOT engage: a
+    /// prefix JUST OVER `BYPASS_PREFIX_MAX_BYTES` (64 KiB), even paired
+    /// with a suffix that clears (and dominates) `BYPASS_SUFFIX_MIN_BYTES`.
+    /// The companion test below pins the other side (prefix AT/under the
+    /// byte bound, with a dominating suffix, DOES engage).
+    ///
+    /// Confirmed to fail pre-fix: deleting the `split_at <=
+    /// BYPASS_PREFIX_MAX_BYTES` gate entirely makes this payload's split
+    /// engage (since the suffix here easily clears `BYPASS_SUFFIX_MIN_BYTES`
+    /// and dominates the prefix), so `scrollback_populated` comes back
+    /// `false` and the assertion below fails.
+    #[test]
+    fn prefix_just_over_the_byte_bound_does_not_engage_the_split() {
+        let cols: u16 = 100;
+        let target_rows: u16 = 30;
+        let other_rows: u16 = 24;
+
+        let filler = b"prefix line padded out a bit for size\r\n";
+        let mut payload: Vec<u8> = Vec::new();
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: other_rows,
+        }];
+        while payload.len() <= 64 * 1024 {
+            payload.extend_from_slice(filler);
+        }
+        let prefix_len = payload.len();
+        assert!(
+            prefix_len > 64 * 1024,
+            "test prerequisite: prefix must exceed BYPASS_PREFIX_MAX_BYTES"
+        );
+
+        // Suffix: at the target dims, large enough to DOMINATE the prefix
+        // (bigger than it) — isolates the BYTE-BOUND gate as the ONLY
+        // reason this must not split (the "suffix dominates" and
+        // "segment count" gates are satisfied here).
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: target_rows,
+        });
+        while payload.len() - prefix_len <= prefix_len {
+            payload.extend_from_slice(filler);
+        }
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let replay = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            10_000,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("not cancelled");
+        assert!(
+            replay.scrollback_populated,
+            "a prefix just over BYPASS_PREFIX_MAX_BYTES must not engage the \
+             split, even with a dominating suffix — scrollback_populated \
+             must be true (whole-drain fallback), not false"
+        );
+    }
+
+    /// D5''''' companion (see the test above): a prefix AT/under
+    /// `BYPASS_PREFIX_MAX_BYTES`, with a suffix that DOMINATES it (at least
+    /// as large) and a segment count within `BYPASS_PREFIX_MAX_SEGMENTS`,
+    /// DOES engage the split — pins the other side of the boundary so a
+    /// future change cannot silently turn the gate into "never split".
+    #[test]
+    fn prefix_at_the_byte_bound_with_a_dominating_suffix_engages_the_split() {
+        let cols: u16 = 100;
+        let target_rows: u16 = 30;
+        let other_rows: u16 = 24;
+
+        let filler = b"prefix line padded out a bit for size\r\n";
+        let mut payload: Vec<u8> = Vec::new();
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: other_rows,
+        }];
+        // A small prefix, comfortably under the byte bound and with a
+        // single segment (comfortably under BYPASS_PREFIX_MAX_SEGMENTS).
+        while payload.len() < 8192 {
+            payload.extend_from_slice(filler);
+        }
+        let prefix_len = payload.len();
+        assert!(prefix_len <= 64 * 1024, "test prerequisite");
+
+        // Suffix: at the target dims, larger than the prefix (dominates)
+        // and clears BYPASS_SUFFIX_MIN_BYTES.
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: target_rows,
+        });
+        while payload.len() - prefix_len < prefix_len.max(4096) * 2 {
+            payload.extend_from_slice(filler);
+        }
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let replay = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            10_000,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("not cancelled");
+        assert!(
+            !replay.scrollback_populated,
+            "a small prefix with a dominating suffix (both within the byte \
+             and segment-count bounds) must engage the split — \
+             scrollback_populated must be false"
+        );
+    }
+
+    /// D5''''' (round-8 rework, review round-7 finding `a4f4e36fef377d05`):
+    /// the EXACT repro the finding names — a prefix AT the byte bound (64
+    /// KiB) with only a small suffix JUST over `BYPASS_SUFFIX_MIN_BYTES`
+    /// (4096, ~16x smaller than the prefix) must NOT engage the split. The
+    /// byte-only gate alone (`split_at <= BYPASS_PREFIX_MAX_BYTES` AND
+    /// `suffix_len >= BYPASS_SUFFIX_MIN_BYTES`) is satisfied by this
+    /// payload — only the NEW "suffix must dominate" requirement
+    /// (`suffix_len >= split_at`) rejects it.
+    ///
+    /// Confirmed to fail pre-fix: reverting to the byte-only gate (dropping
+    /// `suffix_len >= split_at`) makes this payload's split engage —
+    /// `scrollback_populated` comes back `false` and the assertion below
+    /// fails.
+    #[test]
+    fn prefix_at_byte_bound_with_non_dominating_suffix_does_not_engage_the_split() {
+        let cols: u16 = 100;
+        let target_rows: u16 = 30;
+        let other_rows: u16 = 24;
+
+        let filler = b"prefix line padded out a bit for size\r\n";
+        let mut payload: Vec<u8> = Vec::new();
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: other_rows,
+        }];
+        // Prefix: right at BYPASS_PREFIX_MAX_BYTES (64 KiB) — never add a
+        // chunk that would push it OVER the bound.
+        while payload.len() + filler.len() <= 64 * 1024 {
+            payload.extend_from_slice(filler);
+        }
+        let prefix_len = payload.len();
+        assert!(
+            prefix_len <= 64 * 1024,
+            "test prerequisite: prefix must clear BYPASS_PREFIX_MAX_BYTES"
+        );
+
+        // Suffix: just over BYPASS_SUFFIX_MIN_BYTES (4096) — clears the
+        // absolute floor but is dwarfed by the prefix (does NOT dominate).
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: target_rows,
+        });
+        while payload.len() - prefix_len < 4096 + 512 {
+            payload.extend_from_slice(filler);
+        }
+        let suffix_len = payload.len() - prefix_len;
+        assert!(
+            suffix_len >= 4096,
+            "test prerequisite: suffix must clear BYPASS_SUFFIX_MIN_BYTES"
+        );
+        assert!(
+            suffix_len < prefix_len,
+            "test prerequisite: suffix must NOT dominate the prefix"
+        );
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let replay = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            10_000,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("not cancelled");
+        assert!(
+            replay.scrollback_populated,
+            "a prefix at the byte bound with a small, non-dominating \
+             suffix must not engage the split — scrollback_populated must \
+             be true (whole-drain fallback), not false"
+        );
+    }
+
+    /// D5''''' (round-8 rework, review round-7 finding `a4f4e36fef377d05`):
+    /// the segment-count bound — a prefix with MORE than
+    /// `BYPASS_PREFIX_MAX_SEGMENTS` segments must not engage the split,
+    /// even when its byte length is tiny and its suffix dominates (both of
+    /// which are otherwise sufficient).
+    ///
+    /// Confirmed to fail pre-fix: dropping the `k <=
+    /// BYPASS_PREFIX_MAX_SEGMENTS` gate makes this payload's split engage —
+    /// `scrollback_populated` comes back `false` and the assertion below
+    /// fails.
+    #[test]
+    fn prefix_with_too_many_segments_does_not_engage_the_split_regardless_of_byte_length() {
+        let cols: u16 = 100;
+        let target_rows: u16 = 30;
+        let other_rows: u16 = 24;
+
+        let segment_count = BYPASS_PREFIX_MAX_SEGMENTS + 1;
+        let filler = b"tiny\r\n";
+        let mut payload: Vec<u8> = Vec::new();
+        let mut segments = Vec::with_capacity(segment_count + 1);
+        for i in 0..segment_count {
+            segments.push(ReplaySegment {
+                offset: payload.len() as u32,
+                cols,
+                rows: if i % 2 == 0 {
+                    other_rows
+                } else {
+                    other_rows + 1
+                },
+            });
+            payload.extend_from_slice(filler);
+        }
+        let prefix_len = payload.len();
+        assert!(
+            prefix_len <= 64 * 1024,
+            "test prerequisite: prefix must clear BYPASS_PREFIX_MAX_BYTES \
+             despite the excess segment count"
+        );
+
+        // Suffix: large enough to dominate the (tiny) prefix and clear
+        // BYPASS_SUFFIX_MIN_BYTES.
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: target_rows,
+        });
+        let suffix_filler = b"suffix line padded out a bit for size\r\n";
+        while payload.len() - prefix_len < 8192 {
+            payload.extend_from_slice(suffix_filler);
+        }
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let replay = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            10_000,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("not cancelled");
+        assert!(
+            replay.scrollback_populated,
+            "a prefix with more than BYPASS_PREFIX_MAX_SEGMENTS segments \
+             must not engage the split, even with a tiny byte length and a \
+             dominating suffix — scrollback_populated must be true, not \
+             false"
         );
     }
 

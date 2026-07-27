@@ -215,20 +215,20 @@ fn build_snapshot_bytes_with_layout(
     current_dims: (u16, u16),
 ) -> (Vec<u8>, Vec<(usize, u16, u16)>) {
     // D8'' (task0005 rework, review round-4 finding `03c11d98f82dfa1c`):
-    // the segment-offset assembly below relies on "the first entry of
-    // `scrollback_segments`, if any, describes offset 0 of the retained
-    // window" — an invariant `ScrollbackRingBuffer::read_segments` upholds
-    // by construction but that was never enforced or documented AT THE
-    // POINT OF USE. Enforce it explicitly: a violation would silently
-    // misattribute bytes preceding the first segment to its dimensions
-    // (the exact drift this whole feature exists to prevent).
+    // the segment-offset assembly below used to rely on "the first entry
+    // of `scrollback_segments`, if any, describes offset 0 of the retained
+    // window". D1''''' (round-8 rework, review round-7 finding
+    // `01f91fe698ceb287`) relaxes that: when 2+ `dim_markers` entries have
+    // ever been evicted by the cap, `ScrollbackRingBuffer::read_segments`
+    // now DELIBERATELY leaves a leading gap unattributed (no head segment
+    // at all) rather than guess — see that method's doc. What still must
+    // hold is the ORDERING invariant: entries are non-decreasing in offset,
+    // which is what makes the shift-by-`clear_prefix.len()` below correct
+    // regardless of whether the first entry starts at 0.
     debug_assert!(
-        scrollback_segments
-            .first()
-            .is_none_or(|&(off, _, _)| off == 0),
-        "scrollback_segments' first entry must describe the retained \
-         window's head (offset 0) per ScrollbackRingBuffer::read_segments' \
-         contract"
+        scrollback_segments.windows(2).all(|w| w[0].0 <= w[1].0),
+        "scrollback_segments must be in non-decreasing offset order per \
+         ScrollbackRingBuffer::read_segments' contract"
     );
     let watch_offsets: Vec<usize> = scrollback_segments.iter().map(|&(off, _, _)| off).collect();
     let (scrollback, remapped_offsets) = strip_rich_content_and_remap(scrollback, &watch_offsets);
@@ -251,12 +251,22 @@ fn build_snapshot_bytes_with_layout(
     combined.extend_from_slice(screen_to_include);
     combined.extend_from_slice(alt_mode);
 
+    // D1''''' (round-8 rework, review round-7 finding `01f91fe698ceb287`):
+    // the FIRST entry only gets folded onto position 0 (covering
+    // `clear_prefix`, which has no dimension-dependent effect) when it
+    // ACTUALLY describes offset 0 of the retained window — the historical
+    // case. When `read_segments` left the leading gap unattributed (2+ cap
+    // evictions), the first entry's own ORIGINAL offset is already > 0, so
+    // it is shifted by `clear_prefix.len()` exactly like every other entry
+    // instead of being forced to 0 — the gap ahead of it (now covering
+    // `clear_prefix` too) stays a genuine gap, which
+    // `TerminalCore::replay_segments` replays at the caller's target dims.
     let mut combined_segments: Vec<(usize, u16, u16)> = scrollback_segments
         .iter()
         .zip(remapped_offsets.iter())
         .enumerate()
-        .map(|(i, (&(_, cols, rows), &remapped))| {
-            let offset = if i == 0 {
+        .map(|(i, (&(orig_off, cols, rows), &remapped))| {
+            let offset = if i == 0 && orig_off == 0 {
                 0
             } else {
                 remapped + clear_prefix.len()
@@ -269,8 +279,7 @@ fn build_snapshot_bytes_with_layout(
     // included AND there is at least one scrollback segment to be
     // consistent with (an empty `scrollback_segments` means the caller
     // never tracked dims for this snapshot at all — degrade to the fully
-    // legacy no-segments contract rather than introduce a lone segment
-    // that would violate the offset-0 precondition above).
+    // legacy no-segments contract instead of introducing a lone segment).
     if !screen_to_include.is_empty() && !combined_segments.is_empty() {
         combined_segments.push((screen_pos, current_dims.0, current_dims.1));
     }
@@ -394,6 +403,39 @@ mod tests {
         );
         assert!(contains(&out, b"before-resize"));
         assert!(contains(&out, b"after-resize"));
+    }
+
+    /// AC-3 (round-8 rework, review round-7 finding `01f91fe698ceb287`): a
+    /// `scrollback_segments` list whose FIRST entry is NOT at offset 0 (the
+    /// shape `ScrollbackRingBuffer::read_segments` now produces when 2+
+    /// `dim_markers` entries have been evicted by the cap, leaving the
+    /// leading gap deliberately unattributed) must not panic, and must NOT
+    /// be forced to position 0 — it is shifted by `clear_prefix.len()`
+    /// exactly like any other entry, leaving the gap ahead of it (now
+    /// covering `clear_prefix` too) genuinely unattributed for
+    /// `TerminalCore::replay_segments` to replay at the caller's target
+    /// dims.
+    ///
+    /// Confirmed to fail pre-fix: the old unconditional `if i == 0 { 0 }`
+    /// branch forced this entry to position 0, discarding its true (later)
+    /// offset — the assertion below (expecting the shifted, non-zero
+    /// position) would fail against that behavior.
+    #[test]
+    fn build_snapshot_bytes_handles_a_segment_list_whose_first_entry_is_not_at_offset_zero() {
+        let scrollback = b"unattributed-gapafter-first-segment";
+        let first_offset = "unattributed-gap".len();
+        let segments = [(first_offset, 100u16, 30u16)];
+        let (out, combined_segments) =
+            build_snapshot_bytes(scrollback, &segments, b"", false, (80, 24));
+        let clear_prefix_len = b"\x1b[3J\x1b[H\x1b[2J".len();
+        assert_eq!(
+            combined_segments,
+            vec![(clear_prefix_len + first_offset, 100u16, 30u16)],
+            "a non-zero-leading first entry must be shifted like any other \
+             entry, not forced to position 0"
+        );
+        assert!(contains(&out, b"unattributed-gap"));
+        assert!(contains(&out, b"after-first-segment"));
     }
 
     /// A segment recorded AFTER a rich-content sequence that gets stripped
