@@ -67,6 +67,18 @@ pub struct ScrollbackRingBuffer {
     /// long-lived pane that had accumulated many markers before any of them
     /// aged out).
     dim_markers: VecDeque<(u64, u16, u16)>,
+    /// Whether [`Self::enforce_dim_marker_cap`] has ever popped an entry
+    /// for THIS ring (D1''', round-6 rework). [`Self::prune_dim_markers`]
+    /// maintains the invariant "if a qualifying head entry exists, keep at
+    /// least it" on its own, so a `read_segments` call finding no entry at
+    /// or before the retained window's head is otherwise a NORMAL, legitimate
+    /// state (content genuinely predates the first-ever recorded resize —
+    /// plain unattributed bytes, no segment). Only once the cap has ACTUALLY
+    /// dropped an entry can that same "no qualifying head" state instead
+    /// mean "a predecessor that WOULD have qualified was forgotten" —
+    /// [`Self::read_segments`]'s oldest-surviving-marker fallback must only
+    /// engage in that case, never the former. Reset by [`Self::clear`].
+    dim_markers_evicted_by_cap: bool,
 }
 
 /// Hard ceiling on `dim_markers`' length, independent of redraw byte volume
@@ -74,36 +86,32 @@ pub struct ScrollbackRingBuffer {
 /// resolving the residual round-3 explicitly deferred as
 /// `981230284d7d3273`).
 ///
-/// Measured replay cost (round-4, `crates/term_core/src/terminal_core.rs`'s
-/// `replay_segments`, a 0.95 MiB snapshot at the shipping 10 000-line
-/// scrollback default): 0 segments → 134 ms / 5 → 176 ms / 20 → 272 ms /
-/// 30 → 2078 ms / 50 → 3322 ms / 80 → 5350 ms — a resize-storm-shaped
-/// snapshot (a window-edge drag, which emits a `Resize` message per
-/// grid-size change with no debounce) can accumulate dozens of entries here
-/// with no per-step coalescing available (see [`Self::write_resize_marker`]'s
-/// doc for why round-4 reverted the byte-threshold coalescing that used to
-/// bound this — it silently misattributed content). Replay cost jumps
-/// sharply once segment count crosses roughly 20-30, so this ceiling stays
-/// comfortably below that: `crates/term_core/src/bench.rs`'s
-/// `segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap`
-/// empirically confirms replay at exactly this count stays well under 1
-/// second and does not exhibit the same superlinear growth within the
-/// bounded range.
+/// D1''' (round-6 rework, review round-5 finding `abb36fa1ad4c89ea`):
+/// raised from 16 to 24 — round-4's own measurement (a 0.95 MiB snapshot
+/// at the shipping 10 000-line scrollback default: 20 segments → 272 ms /
+/// 30 → 2078 ms) puts 24 comfortably before the cliff between 20 and 30,
+/// the largest safe margin without new measurement data for the
+/// in-between range. This ceiling no longer needs to trade an ORDINARY
+/// switch's latency for resize-storm headroom the way it did pre-round-6:
+/// `TerminalCore::build_from_snapshot_inner`'s prefix/suffix split keeps
+/// the (typically large) trailing run of segments that already match the
+/// caller's target on the fast bypass path regardless of how many EARLIER
+/// segments this ring recorded, so an ordinary switch's cost no longer
+/// depends on this constant at all — raising it only affects the
+/// resize-STORM case (which the split does not speed up — see that
+/// function's doc), where AC-3's requirement is zero cross-line mixing,
+/// not latency. Stays well below `crates/mux_ipc::protocol::MAX_SEGMENTS`
+/// (the wire decoder's ceiling, aligned to a small multiple of this
+/// constant — review round-5 finding `bfebad60b3862d3e`).
 ///
 /// Enforced by [`Self::enforce_dim_marker_cap`], called after every
 /// [`Self::write_resize_marker`] append: when exceeded, the OLDEST entry is
-/// merged into its successor (the successor's offset is pulled back to
-/// cover the oldest entry's span, and the oldest entry is dropped) —
-/// unlike the reverted byte-threshold coalescing, this only ever touches
-/// the SINGLE oldest span each time the cap is exceeded, so every entry
-/// more recent than that keeps its EXACT recorded attribution; only the
-/// oldest span's content is reattributed (to whichever dims its successor
-/// already used), never a more recent one. This does not reintroduce
-/// review round-3 finding `ab54fae335086db3` (misattributing RECENT
-/// content by retroactively rewriting an already-passed marker's
-/// dimensions) — precision is lost only in the single oldest surviving
-/// span, which is exactly the trade-off `D3''`'s suggestion (b) accepts.
-pub const MAX_DIM_MARKERS: usize = 16;
+/// simply dropped (see that method's doc for why round-6 stopped pulling
+/// the successor's offset back to cover the dropped span) — every entry
+/// more recent than the dropped one keeps its EXACT recorded attribution;
+/// [`Self::read_segments`] loses precision only in the single oldest
+/// surviving span, never a more recent one.
+pub const MAX_DIM_MARKERS: usize = 24;
 
 impl ScrollbackRingBuffer {
     /// Create a new ring buffer with the specified capacity.
@@ -115,6 +123,7 @@ impl ScrollbackRingBuffer {
             len: 0,
             total_written: 0,
             dim_markers: VecDeque::new(),
+            dim_markers_evicted_by_cap: false,
         }
     }
 
@@ -199,20 +208,31 @@ impl ScrollbackRingBuffer {
 
     /// Bound `dim_markers` to at most [`MAX_DIM_MARKERS`] entries (task0005
     /// rework D3''), independent of how many bytes separate each recorded
-    /// resize. When the cap is exceeded, the OLDEST entry is merged into
-    /// its successor: the successor's `offset` is pulled back to the
-    /// dropped entry's offset (extending its span to also cover what the
-    /// dropped entry used to describe), and the dropped entry's own
-    /// dimensions are discarded. See [`MAX_DIM_MARKERS`]'s doc for why this
-    /// only ever loses precision in the single oldest surviving span.
+    /// resize.
+    ///
+    /// D1''' (round-6 rework, review round-5 finding `986a3881b2b97a16`):
+    /// when the cap is exceeded, the OLDEST entry is simply dropped — it no
+    /// longer pulls its successor's `offset` back to cover the dropped
+    /// span. The old "pull back" merge moved a boundary across bytes that
+    /// were ALREADY recorded under the successor's own dimensions, and
+    /// repeating it on every subsequent overflow chained the offset back
+    /// toward the pane's very first marker over a long resize storm — the
+    /// entire retained window ended up replayed at a single mid-storm
+    /// dimension pair (the coordinate drift this whole marker mechanism
+    /// exists to prevent, reintroduced by the fix meant to bound
+    /// `dim_markers`'s growth). [`Self::read_segments`] tolerates the
+    /// resulting gap: when no surviving marker's offset is at or before the
+    /// retained window's head, it falls back to the OLDEST SURVIVING
+    /// marker's dimensions for position 0 instead. Precision is lost only
+    /// in that single oldest span (between the retained window's start and
+    /// that marker's own recorded offset) — never a more recent one, and no
+    /// entry's own recorded attribution is ever rewritten.
     fn enforce_dim_marker_cap(&mut self) {
         while self.dim_markers.len() > MAX_DIM_MARKERS {
-            let Some(dropped) = self.dim_markers.pop_front() else {
+            if self.dim_markers.pop_front().is_none() {
                 break;
-            };
-            if let Some(new_oldest) = self.dim_markers.front_mut() {
-                new_oldest.0 = dropped.0;
             }
+            self.dim_markers_evicted_by_cap = true;
         }
     }
 
@@ -321,6 +341,25 @@ impl ScrollbackRingBuffer {
                 mid.push((pos, cols, rows));
             }
         }
+        // D1''' (round-6 rework): `enforce_dim_marker_cap` no longer pulls a
+        // surviving entry's offset back to cover a dropped one, so after a
+        // cap-triggered drop EVERY surviving marker's offset can be past
+        // `oldest_offset` (nothing above qualified as `head`). Falling back
+        // to the OLDEST surviving marker (the front of `mid`, since
+        // `dim_markers` — and therefore `mid` — is built in ascending
+        // offset order) for position 0 avoids leaving the retained window's
+        // earliest bytes with no segment at all, which a segment-aware
+        // replay would otherwise silently drop rather than merely losing
+        // precision for a single span. Gated on `dim_markers_evicted_by_cap`
+        // — WITHOUT a prior cap eviction, "no qualifying head" is the
+        // NORMAL, legitimate case of content that genuinely predates the
+        // first-ever recorded resize (`prune_dim_markers` alone always
+        // keeps a qualifying entry when one exists), and must stay
+        // unattributed rather than be misassigned to a later resize's dims.
+        if head.is_none() && self.dim_markers_evicted_by_cap && !mid.is_empty() {
+            let (_, cols, rows) = mid.remove(0);
+            head = Some((cols, rows));
+        }
 
         let mut segments = Vec::with_capacity(mid.len() + 1);
         if let Some((cols, rows)) = head {
@@ -362,6 +401,7 @@ impl ScrollbackRingBuffer {
         self.len = 0;
         self.total_written = 0;
         self.dim_markers.clear();
+        self.dim_markers_evicted_by_cap = false;
     }
 
     /// Current data length in bytes.
@@ -860,14 +900,17 @@ mod tests {
     /// regardless of how many steps occur.
     ///
     /// Confirmed to fail pre-fix: before `enforce_dim_marker_cap` existed,
-    /// this recorded exactly `step_count` (50) entries — the prior version
-    /// of this test asserted that UNBOUNDED growth as the then-accepted
+    /// this recorded exactly `step_count` entries — the prior version of
+    /// this test asserted that UNBOUNDED growth as the then-accepted
     /// trade-off (round-3 finding `981230284d7d3273`); task0005 changes
-    /// that trade-off, so this test now asserts the opposite.
+    /// that trade-off, so this test now asserts the opposite. `step_count`
+    /// is tied to `MAX_DIM_MARKERS` (round-6 rework raised it) rather than a
+    /// literal, so this stays a genuine over-the-cap scenario regardless of
+    /// where the cap sits.
     #[test]
     fn resize_storm_with_large_per_step_redraw_stays_bounded_by_max_dim_markers() {
         let mut rb = ScrollbackRingBuffer::new(4 * 1024 * 1024);
-        let step_count = 50u16;
+        let step_count = (MAX_DIM_MARKERS + 34) as u16;
         let redraw = vec![b'r'; 10 * 1024]; // > the old 8 KiB coalescing threshold
         for step in 0..step_count {
             rb.write_resize_marker(80 + step, 24);
