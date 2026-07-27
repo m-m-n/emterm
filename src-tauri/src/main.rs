@@ -67,6 +67,24 @@ fn main() {
     // argument position is inspected, so trailing arguments are ignored
     // (`emterm --version anything` still succeeds).
     if args.get(1).is_some_and(|a| a == "--version") {
+        // On Windows, release GUI builds link the `windows` subsystem (see
+        // the crate attribute above), so the process starts with no console
+        // attached and `println!` writes to a dead handle. Attach to the
+        // parent console (the shell that launched us, e.g. cmd.exe /
+        // PowerShell) before printing so `--version` is visible there. This
+        // is a no-op / harmless failure when there is no parent console
+        // (e.g. launched from Explorer) or on non-Windows builds.
+        #[cfg(windows)]
+        {
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn AttachConsole(dw_process_id: u32) -> i32;
+            }
+            const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+            unsafe {
+                AttachConsole(ATTACH_PARENT_PROCESS);
+            }
+        }
         println!("{}", env!("CARGO_PKG_VERSION"));
         std::process::exit(0);
     }
