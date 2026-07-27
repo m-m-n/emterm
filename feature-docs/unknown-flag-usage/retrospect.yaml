@@ -1,0 +1,15 @@
+feature: unknown-flag-usage
+collected_at: "2026-07-28T01:14:00+09:00"
+session_ids: [b9c5f333-d7e3-455b-87eb-b96b30bb58b3]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - "codex が未インストールのため create-spec の Codex 相談ループと review の codex クロスバリデーションが両方スキップされた。batch 実行環境のプロビジョニング項目に codex を含めるかは要検討。"
+  - "integration worktree / task worktree では gitignored の src-tauri/assets/fonts/ が空で、gui ビルドの build.rs が通らない。implementer も verify も main ツリーからコピーして回避した。worktree 作成後に scripts/fetch-fonts.sh 相当を走らせる手順が無いのがボトルネック。"
+  - "review findings 6 件がすべて medium で、R4 の自動修正候補ゲート（critical/high のみ）に 1 件も掛からなかった。うち 1 件（空 argv での panic）は本 diff が新規に入れた到達可能な panic 経路で、severity 判定と自動修正ゲートの境界が実態と噛み合っているかは要検討。"
+  - "planner が 1 タスク構成にしたためタスク並列の恩恵が無い一方、コンフリクトもゼロだった。小規模 feature での単一タスク判断は妥当だったと見てよさそう。"
