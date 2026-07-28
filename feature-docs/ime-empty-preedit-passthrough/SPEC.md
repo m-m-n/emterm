@@ -71,6 +71,19 @@ choosing a candidate does not also scroll or edit the shell line.
   `TextInputEvent::Enter` (whole focus lifetime); winit-x11 emits `Ime::Enabled`
   when the XIC is allowed; winit-win32 maps `Ime::Enabled` /
   `Ime::Disabled` to `WM_IME_STARTCOMPOSITION` / `WM_IME_ENDCOMPOSITION`.
+- **FR10:** `notify_focus(false)` MUST clear both `has_preedit` and
+  `ime_enabled` before delegating to the window's IME-allowed toggle.
+  `notify_focus(true)` MUST NOT modify either state. Rationale: `ime_enabled`
+  is otherwise cleared only by `Ime::Disabled`, and winit-win32's
+  `ImeRequest::Disable` arm returns without emitting `Ime::Disabled`
+  (`winit-win32/src/window.rs`), unlike winit-wayland which synthesizes it
+  (`winit-wayland/src/window/mod.rs`). Losing focus mid-composition on Windows
+  would otherwise latch the gate open and suppress every subsequent key.
+- **FR11:** The key-suppression decision MUST be reachable as a
+  platform-parameterized pure predicate over `(has_preedit, ime_enabled,
+  windows_gate)`, so that both platform branches are exercisable by unit tests
+  on any host. `dispatch_key_event` MUST obtain its answer from that predicate,
+  passing the compile-time target as `windows_gate`.
 
 ### Non-Functional Requirements
 
@@ -79,9 +92,11 @@ choosing a candidate does not also scroll or edit the shell line.
 - **NFR2 - Compatibility:** The crate MUST build for `x86_64-unknown-linux-gnu`
   and `x86_64-pc-windows-msvc`, and `cargo check --no-default-features` MUST
   still pass.
-- **NFR3 - Testability:** The platform-specific gate MUST be expressed so that
-  both branches are covered by `#[cfg]`-gated unit tests in the existing
-  `mod tests` of `winit_bridge.rs`.
+- **NFR3 - Testability:** Both platform branches of the gate MUST be covered by
+  unit tests in the existing `mod tests` of `winit_bridge.rs` that RUN on the
+  development host. Tests gated to a single target with `#[cfg]` do not satisfy
+  this requirement on their own, because the project's Windows workflow is a
+  build/check only and never executes test code.
 
 ## Implementation Approach
 
@@ -173,6 +188,21 @@ All added to `mod tests` in `src-tauri/src/ime/winit_bridge.rs`.
 - [ ] TS-8 (DeleteSurrounding is state-neutral): `Preedit("x")` →
       `DeleteSurrounding` → gate unchanged; `Preedit("")` →
       `DeleteSurrounding` → gate unchanged.
+- [ ] TS-10 (predicate truth table, runs on every host): the parameterized
+      predicate returns, for `windows_gate = true`, exactly `ime_enabled`
+      regardless of `has_preedit`; and for `windows_gate = false`, exactly
+      `has_preedit` regardless of `ime_enabled`. All four input combinations
+      asserted for each value of `windows_gate`.
+- [ ] TS-11 (Windows scenarios run on every host): the scenarios of TS-6 and
+      TS-7 are asserted through the parameterized predicate with
+      `windows_gate = true`, so they execute on a Linux development host rather
+      than only compiling for the Windows target.
+- [ ] TS-12 (focus loss clears the gate): `Enabled` → `Preedit("x")` →
+      `notify_focus(false)` → the predicate answers passthrough for BOTH values
+      of `windows_gate`.
+- [ ] TS-13 (focus gain does not open the gate): `notify_focus(true)` on a
+      freshly built bridge leaves both states false, so the predicate answers
+      passthrough for both values of `windows_gate`.
 
 ### Regression Tests
 
@@ -231,7 +261,19 @@ Each is recorded here so a human reviewer can challenge it.
   preedit-derived flag. This is a behavior change on a platform that cannot be
   exercised in this environment; it rests on the source-level mapping of
   `Ime::Enabled` / `Ime::Disabled` to `WM_IME_STARTCOMPOSITION` /
-  `WM_IME_ENDCOMPOSITION`. TS-manual-3 is the human gate.
+  `WM_IME_ENDCOMPOSITION`. TS-manual-3 is the human gate. Partially mitigated
+  by FR11: the Windows branch's LOGIC is now exercised on every host through
+  the parameterized predicate (TS-10, TS-11); what remains unverifiable here is
+  only whether the real Windows event stream matches the assumed shape.
+- **A7:** FR10 clears the gate on focus loss defensively rather than proving
+  that Windows fails to deliver `WM_IME_ENDCOMPOSITION` after
+  `ImmAssociateContextEx(NULL)`. What IS established from source is that winit
+  itself synthesizes no `Ime::Disabled` on the Windows disable path while
+  Wayland does. Clearing locally makes the bridge's own state independent of
+  that difference; the cost is that a composition surviving a focus round-trip
+  would lose its suppression until the next preedit or enable event, which is
+  the strictly safer failure direction (keys reach the terminal rather than
+  vanishing).
 - **A3:** No X11-specific disambiguation of the ambiguous empty preedit is added.
   Reason: winit-x11 does not emit `WindowEvent::KeyboardInput` while its internal
   composing state is set, so the momentary gate release is not observable.

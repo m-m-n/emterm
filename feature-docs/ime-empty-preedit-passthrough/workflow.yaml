@@ -27,14 +27,14 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: completed
+    status: pending
     completed_at_commit: 8ac44e5cfa8b1d2274dcd393314e672eeea6ea4e
     base_commit: 52df81501c9a5b7ab28cf33bedf36e6168a53e41
   - id: review
-    status: completed
+    status: pending
     completed_at_commit: f8c6f9913dd18c81a95224bf59530f54b2daf0fe
   - id: verify
-    status: completed
+    status: pending
     result: pass
     failed_items: []
     rework_synthesized_task: task0002
@@ -49,7 +49,7 @@ workflow:
       SC-5 は承認済みの Windows クロスチェックに --lib --tests を足した形で実行し、
       cfg(windows) テスト 6 本がコンパイル可能であることまで確認した。
   - id: retrospect
-    status: completed
+    status: pending
 
 tasks:
   task0001:
@@ -75,10 +75,21 @@ tasks:
     requirements: [FR2, FR8, NFR3]
     status: merged
     notes: "batch verify rework (verify_rework_count 0 -> 1) で合成されたタスク"
+  task0003:
+    title: "Host-testable gate predicate + focus-loss reset"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/ime/winit_bridge.rs
+    skills: [backend-impl]
+    domains: [input-handling, ui]
+    complexity: medium
+    requirements: [FR10, FR11, NFR1, NFR2, NFR3]
+    status: pending
+    notes: "対話再開で round1 未解決 finding 9f9664d463b1f618 / 5b461e782d6f18bc を閉じるタスク（2 件を 1 タスクに統合）"
     branch: em-workflow/ime-empty-preedit-passthrough/task0002
 
 review:
-  status: completed
+  status: pending
   rounds_completed: 1
   plan:
     floor: [comprehensive, security, spec]
@@ -155,27 +166,41 @@ requirements:
     excluded_reason: null
     tasks: [task0001]
     tests: [TS-9]
+  FR10:
+    title: "notify_focus(false) clears both gate states"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0003]
+    tests: [TS-12, TS-13]
+  FR11:
+    title: "Gate decision reachable as a platform-parameterized pure predicate"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0003]
+    tests: [TS-10, TS-11]
   NFR1:
     title: "Performance: dispatch stays a constant-time boolean check"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0003]
     tests: [SC-1]
   NFR2:
     title: "Compatibility: Linux + Windows builds and --no-default-features still pass"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0003]
     tests: [SC-4, SC-5]
   NFR3:
     title: "Testability: both gate branches covered by cfg-gated unit tests"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
-    tests: [TS-1, TS-6]
+    tasks: [task0001, task0002, task0003]
+    tests: [TS-10, TS-11]
 
 batch:
   review_rework_count: 0
