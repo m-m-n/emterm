@@ -159,13 +159,18 @@ fn run_gui(args: Vec<String>) {
     // `classify()` in `main()` checked arguments against above — rather
     // than repeating each flag name as a separate literal here (D2 /
     // NFR3). This keeps the flag-to-handler mapping in exactly one place,
-    // so it cannot drift from what the classifier accepts. The value-taking
-    // flags (all but `--settings`) read the immediately following argument
-    // verbatim as the payload path, unconditionally (D4). The normal
-    // terminal startup path below is taken when none of these flags are
-    // present.
+    // so it cannot drift from what the classifier accepts. Entries with no
+    // dispatch target (`--version`) are skipped before their presence is
+    // even checked, so such a flag never opens a window regardless of its
+    // position in `args`. The value-taking flags (all but `--settings`)
+    // read the immediately following argument verbatim as the payload path,
+    // unconditionally (D4). The normal terminal startup path below is taken
+    // when none of the dispatching flags are present.
     use emterm::arg_dispatch::{GuiTarget, RECOGNIZED_FLAGS};
     for flag in RECOGNIZED_FLAGS {
+        let Some(target) = flag.target else {
+            continue;
+        };
         let Some(pos) = args.iter().position(|a| a == flag.name) else {
             continue;
         };
@@ -174,7 +179,7 @@ fn run_gui(args: Vec<String>) {
         } else {
             None
         };
-        match flag.target {
+        match target {
             GuiTarget::Viewer => run_viewer(payload_path),
             GuiTarget::ImageViewer => run_image_viewer(payload_path),
             GuiTarget::DataViewer => run_data_viewer(payload_path),
