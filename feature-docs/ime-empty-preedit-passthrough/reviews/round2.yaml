@@ -1,0 +1,99 @@
+round: 2
+executed_at: "2026-07-29T07:45:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 52df81501c9a5b7ab28cf33bedf36e6168a53e41
+  head_commit: 55e7ccbc475b0d6d1edabc01836a75b1ec3d4ff3
+  changed_files:
+    - src-tauri/src/ime/winit_bridge.rs
+  note: >-
+    このラウンドの diff は feature 全体（round1 の findings とその修正、
+    および round1 が一度も見ていない task0002 / task0003）を含む。
+    task0002 は batch の verify rework 経路で合成されたため round1 のレビューを
+    通っておらず、このラウンドで初めてレビュー対象になった。
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  - stable_id: a01921c2196c98c6
+    severity: medium
+    category: spec
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 427
+    title: "Existing regression test is now excluded on Windows"
+    description: >-
+      SPEC の Regression Tests は「Existing TS-winit-1 through TS-winit-7 pass
+      unmodified」を要求しているが、round1 の修正で TS-winit-3 に
+      #[cfg(not(windows))] が付き Windows テストビルドから外れた。
+      要求されている「unmodified で通る既存回帰テスト」が維持されていない。
+    suggestion: >-
+      TS-winit-3 を unmodified に戻し、Windows 固有の commit 挙動は
+      TS-7 専用の別テストでカバーする。
+    sources: [codex:spec]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: >-
+      指摘の前提（SPEC 文面と実装の乖離）は正しいが、提案された解決方向は採らなかった。
+      TS-winit-3 を unmodified に戻すことは不可能で、その 2 つのアサートは
+      FR7（Enabled 無しでは Windows は Passthrough）と FR4（Commit は ime_enabled を
+      落とさない）の双方に矛盾する。乖離の実体は SPEC 文面の陳腐化なので、
+      SPEC.md の Regression Tests を「TS-winit-3 のみ非 Windows 限定。理由は
+      FR4/FR7 との矛盾で、等価な Windows シナリオは TS-7 がカバーする」と
+      明記する形に更新して解消した。
+  - stable_id: e131a8793241f611
+    severity: medium
+    category: spec
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 775
+    title: "TS-6 and TS-7 bypass the required dispatch API"
+    description: >-
+      SPEC の TS-6 / TS-7 は Windows シーケンスを dispatch_key_event 経由で
+      アサートすることを要求しているが、task0003 の変換でこれらは
+      should_suppress_key を直接呼ぶ形になった。TS-11（述語カバレッジ）は
+      満たすが TS-6 / TS-7 は満たさず、dispatch_key_event 側のコンパイル時
+      プラットフォーム配線ミスを検出できない。
+    suggestion: >-
+      述語版は TS-11 として残し、完全なシーケンスを dispatch_key_event 経由で
+      通す #[cfg(windows)] の TS-6 / TS-7 を追加する。
+    sources: [codex:spec]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: >-
+      task0004 で解消。オーケストレーターが独立に確認したところ、
+      dispatch_key_event の第 3 引数が cfg!(windows) からハードコードの false に
+      すり替わっても、述語テストは自前のリテラル selector を渡すため通り、
+      非 Windows の dispatch テストも期待値が変わらないため通る。
+      つまり Windows だけが静かにプリエディット依存ゲート（本 feature が直した
+      元のバグ）へ戻る経路が無防備だった。指摘は妥当。
+      提案どおり述語版（TS-11）を残したまま #[cfg(windows)] の dispatch 経由
+      テストを 2 本追加し、SPEC の TS-11 記述にも「述語版は TS-6/TS-7 を
+      補うものであって置き換えではない」理由を明記した。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: >-
+    R4 の auto-fix 候補ゲートは category != spec を要求するため、
+    このラウンドの findings（両方とも spec）は auto-fix 対象外。
+    対話モードでユーザーの選択を受けて task0004 と SPEC 更新で解消した。
+residual_critical_high: 0
+rework_required: false
+notes:
+  - >-
+    comprehensive レビュアーは winit 0.31.0-beta.2 の実ソースを自分で当たり直し、
+    モジュールドキュメントのプラットフォーム主張が全て一致することを確認した。
+    さらに ime_enabled ラッチの解放経路（Ime::Disabled と notify_focus(false)）が
+    window_host 側の IME スワロー分岐（profile_selector / search / mux dialog）と
+    組み合わせても到達不能にならないことまで検証している。
+  - >-
+    round1 の未解決 medium 3 件はいずれもこのラウンドまでに解消:
+    9f9664d463b1f618（notify_focus のゲート固着）と 5b461e782d6f18bc
+    （Windows ゲートに実行されるテストが無い）は task0003 で、
+    b41937460cd5c472（TS-1 の形）は task0002 で解消。
