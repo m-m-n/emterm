@@ -1,0 +1,98 @@
+round: 1
+executed_at: "2026-07-28T09:35:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 2a63a36f4f97afa2fe2155bce5ce1207bcd2dd76
+  head_commit: da4106e30f894c881ee37cd4ff8c9427b63b426f
+  changed_files:
+    - src-tauri/src/arg_dispatch.rs
+    - src-tauri/src/main.rs
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+findings:
+  - stable_id: 1586b5d0bba57f6d
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/arg_dispatch.rs
+    line: 172
+    title: "ヘルプが約束する --version の挙動と実装が位置依存でずれる"
+    description: >-
+      usage の Options に追加された行は "--version              Print version and
+      exit" と書かれているが、実際にバージョンを印字して exit するのは main.rs の
+      早期処理が見る第 1 引数位置のときだけ。それ以外の位置では classify が Proceed
+      を返し、run_gui は target=None のエントリを読み飛ばすため、何も印字せず処理が
+      続く。例: `emterm --settings --version` は設定ウィンドウを開き、
+      `emterm foo --version` はフル端末 GUI を起動する。本変更前は両者とも
+      unrecognized argument で exit 2 だったので、「エラーで気付ける」状態から
+      「黙って別の動作をする」状態へ変わっている。位置依存そのものは SPEC の
+      Assumption A1 で明示的に許容した決定だが、ヘルプ文言案 A3 は
+      "Print the version" であり、実装文言の "and exit" のほうが強い約束をしている。
+    suggestion: >-
+      (a) 挙動を約束に合わせる: Classification に Version バリアントを足し、classify
+      が --help 優先の走査中に --version を検出したら Version を返して main.rs 側で
+      印字・exit 0 する。または (b) 約束を挙動に合わせる: usage の文言を位置依存だと
+      分かる表現に直し、A1 を確認済みの決定として明示する。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "severity medium — auto-fix ゲート (critical/high) の対象外。人間の評価に委ねる"
+  - stable_id: ecba75be3ac70824
+    severity: medium
+    category: architecture
+    file: src-tauri/src/arg_dispatch.rs
+    line: 172
+    title: "usage_text() は RECOGNIZED_FLAGS と別管理のままで、本機能が直した drift が再発しうる"
+    description: >-
+      本機能の存在理由は「--version がテーブルに登録されておらず help にも載って
+      いなかった」という SSOT 不整合だが、修正は両方に 1 行ずつ手で足しただけで、
+      usage_text() の Options ブロックは依然 RECOGNIZED_FLAGS と独立した手書き文字列。
+      フラグ名が (1) RECOGNIZED_FLAGS (2) gui 版 usage_text (3) CLI-only 版
+      usage_text の 3 箇所に重複しており、コンパイル時にも既存テストでも整合が
+      担保されていない。追加された usage_text_lists_the_version_flag は --version
+      という具体名を 1 つ pin するだけで、不変条件を表現していない。
+    suggestion: >-
+      RECOGNIZED_FLAGS の各エントリ名が usage_text() に現れることを走査する不変条件
+      テストを 1 本足す（両ビルドでそのまま動く）。恒久的には RecognizedFlag に
+      help 説明文を持たせて Options ブロックを生成する案もある。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "severity medium — auto-fix ゲート (critical/high) の対象外。人間の評価に委ねる"
+  - stable_id: 510a2b1ce62f59ad
+    severity: medium
+    category: architecture
+    file: src-tauri/src/main.rs
+    line: 69
+    title: "--version の名前が main.rs のリテラルとテーブルに二重定義され、target: None が誰が処理するかを表現していない"
+    description: >-
+      --version がテーブルに載ったことで、フラグ名リテラルが main.rs の位置固定
+      比較と arg_dispatch.rs のテーブルエントリの 2 箇所に別々に存在するように
+      なった。実際の振る舞い（version を印字して exit 0）はテーブル側から辿れず、
+      エントリは target: None としか言わない。名前変更やエイリアス追加の際に片方
+      だけ直しても classify は通り help にも出るのに何も起きない、というズレが
+      生じうる。加えて target: None の意味が「main() が先に処理済み」と
+      「dispatch 先が無い」の両方に多重化されている。
+    suggestion: >-
+      フラグ名の実体を arg_dispatch 側の定数に一本化し、テーブルの name と main.rs
+      の早期 exit 判定の双方がそれを参照する。あわせて target: None の意味を doc
+      コメントで明記するか、「誰が処理するか」を型で表す。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "severity medium — auto-fix ゲート (critical/high) の対象外。人間の評価に委ねる"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
