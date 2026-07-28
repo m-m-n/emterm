@@ -1,0 +1,64 @@
+round: 1
+executed_at: "2026-07-28T14:05:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 5b6920abcde16a02b83925167a00dd618a4b9c10
+  head_commit: 3c2beaf6411b9e6ef25e9d2ff0d861a74d014b0e
+  changed_files:
+    - doc/AGENT-STATUS.md
+    - src-tauri/src/app.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/ui/status_bar.rs
+    - src-tauri/src/window_host.rs
+plan:
+  floor: [comprehensive, spec]
+  discretionary:
+    - perspective: architecture
+      reason: "共有 UI ウィジェットの公開シグネチャ変更とアプリ状態からのクエリメソッド削除を含むため、レイヤー境界と呼び出し側整合の専用パスを追加"
+  codex_cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: comprehensive, source: codex, status: skipped, skip_reason: "codex cross-validation did not fire (no high-complexity task, security not selected); codex-cli also unavailable"}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex cross-validation did not fire; codex-cli also unavailable"}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex cross-validation did not fire; codex-cli also unavailable"}
+findings:
+  - stable_id: 8ac64bce0e75c785
+    severity: medium
+    category: comprehensive
+    file: feature-docs/mux-agent-status-api/SPEC.md
+    line: 105
+    title: "撤回された FR8（ステータスバー集約サマリ）が元 feature-docs に有効な要件として残存"
+    description: >-
+      本 revert は doc/AGENT-STATUS.md からサマリの記述を削除したが（本 feature の FR9）、
+      機能を発注した側の feature-docs/mux-agent-status-api/ は無修正のまま残っている。
+      SPEC.md:105 の FR8（status-bar summary 要件本体）、SPEC.md:28/171/211/229 のデータフロー図と
+      対象ファイル一覧、SPEC.md:267 の受け入れ条件、REQUIREMENTS.md:154/222/309 の F08 と :436 の
+      達成チェック、VERIFICATION.md:83、tasks/task0006.md:22,51 の AC-3 に、撤回済みの挙動が
+      「実装すべき要件」「達成済み」として残る。feature-docs をエージェントの作業入力として
+      使う運用のため、後続エージェントがサマリ不在を「未実装の FR8」と判定して再導入する
+      リスクがある。なお AgentStatusModel::counts / Counts は本 revert 後に production 到達
+      不能となるが、pub 項目のため dead_code 警告は出ず、本 feature の NFR4 が
+      agent_status_model.rs を変更対象外としているため許容と判断された。
+    suggestion: >-
+      feature-docs/mux-agent-status-api/ の FR8 / F08 / VERIFICATION 該当行 / task0006 AC-3 に
+      「撤回済み（reverted）— feature-docs/status-bar-agent-summary-revert/ を参照」の注記を追記し、
+      REQUIREMENTS.md:436 の達成チェックを実態に合わせる。あるいは feature-docs を完了時点の
+      スナップショットとして扱う運用を明示し、doc/AGENT-STATUS.md 側に撤回済みである旨の
+      注記を 1 行置いてドリフトを打ち消す。
+    sources: [claude:comprehensive]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: >-
+      本 feature のスコープ外。指摘対象は changed_files に含まれない別 feature
+      (mux-agent-status-api) の feature-docs で、本 feature の SPEC は対象を
+      ステータスバー実装と doc/AGENT-STATUS.md に限定している（Assumption A1 / NFR4）。
+      severity: medium のため auto-fix の候補ゲート（critical/high）にも該当しない。
+      後続タスクとして人間の評価者に申し送る。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

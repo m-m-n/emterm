@@ -70,14 +70,20 @@ tasks:
     branch: em-workflow/status-bar-agent-summary-revert/task0002
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, spec]
     discretionary:
       - perspective: architecture
         reason: "共有 UI ウィジェットの公開シグネチャ変更とアプリ状態からのクエリメソッド削除を含むため、レイヤー境界と呼び出し側整合の専用パスを追加"
     codex_cross_validation: false
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    architecture: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
