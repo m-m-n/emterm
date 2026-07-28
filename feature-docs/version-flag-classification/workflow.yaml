@@ -40,9 +40,15 @@ workflow:
     status: completed
     completed_at_commit: da4106e30f894c881ee37cd4ff8c9427b63b426f
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: >-
+      gui / CLI-only の cargo check がともに exit 0。gui --lib の arg_dispatch 16 件
+      pass、cli_subcommands 26 件 pass（--version 系 5 件を無改変で含む）、CLI-only
+      --lib 800 件 pass。gui --lib 全体では tabs::tests 7 件が失敗するが、同一
+      サブセットが base_branch (main) でも再現するため VERIFICATION.md の
+      known-flaky 除外に該当し、本 feature の失敗として数えない。
   - id: retrospect
     status: pending
 
