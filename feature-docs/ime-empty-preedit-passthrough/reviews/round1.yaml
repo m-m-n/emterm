@@ -136,8 +136,11 @@ findings:
       要件なので #[cfg] の外に別テストとして切り出す。
     sources: [claude:spec]
     confidence: 60
-    resolution: unresolved
-    resolution_reason: "severity medium のため auto-fix 候補ゲートに該当せず。人間の評価に委ねる"
+    resolution: fixed
+    resolution_reason: >-
+      round 1 終了時点では severity medium のため auto-fix 候補ゲート（critical/high のみ）に
+      該当せず unresolved だった。その後 verify フェーズが同じ不備を SC-2 の失敗として検出し、
+      batch rework で合成された task0002（TS-1 の無条件化 + TS-5 の追加）で解消された。
 auto_fix:
   loops_run: 1
   applied_total: 1
