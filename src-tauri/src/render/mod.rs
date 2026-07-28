@@ -352,11 +352,7 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
         fallback: &app.font_fallback,
         cache: &app.emoji_texture_cache,
     };
-    // task0006 AC-3: the agent-status summary segment, built fresh each
-    // frame from `App::agent_status_counts` — pure over the model's
-    // per-state counts, no separate `App` write path needed.
-    let agent_summary = crate::ui::status_bar::agent_summary_segments(app.agent_status_counts());
-    crate::ui::status_bar::draw(ctx, &status_vm, Some(&emoji_resources), &agent_summary);
+    crate::ui::status_bar::draw(ctx, &status_vm, Some(&emoji_resources));
 
     let mut scroll_to = None;
     egui::CentralPanel::default()
