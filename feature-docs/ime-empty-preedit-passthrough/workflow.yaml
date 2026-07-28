@@ -27,7 +27,7 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: completed
+    status: pending
     completed_at_commit: 2a223c84b89a7dfa3b66c7b3c8cfdb4924ea6f3b
     base_commit: 52df81501c9a5b7ab28cf33bedf36e6168a53e41
   - id: review
@@ -35,8 +35,13 @@ workflow:
     completed_at_commit: f8c6f9913dd18c81a95224bf59530f54b2daf0fe
   - id: verify
     status: pending
-    result: null
-    failed_items: []
+    result: fail
+    failed_items:
+      - id: "SC-2/TS-5"
+        note: "TS-5（空 preedit → 非空 preedit → 空 preedit の X11 start/end 曖昧性シナリオ）に対応するテストが存在しない"
+      - id: "SC-2/TS-1"
+        note: "TS-1 の実装テストが先頭の Ime::Enabled と中間の Consumed アサートを欠き、FR2 のキュー順序アサートも含めて全体が非 Windows 限定になっている（round1 finding b41937460cd5c472 と同一）"
+    rework_synthesized_task: task0002
   - id: retrospect
     status: pending
 
@@ -53,6 +58,17 @@ tasks:
     status: merged
     notes: null
     branch: em-workflow/ime-empty-preedit-passthrough/task0001
+  task0002:
+    title: "Close the TS-1 / TS-5 test-scenario gaps"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/ime/winit_bridge.rs
+    skills: [backend-impl]
+    domains: [input-handling, ui]
+    complexity: low
+    requirements: [FR2, FR8, NFR3]
+    status: pending
+    notes: "batch verify rework (verify_rework_count 0 -> 1) で合成されたタスク"
 
 review:
   status: completed
@@ -81,7 +97,7 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0002]
     tests: [TS-1, TS-2, TS-3, TS-5]
   FR3:
     title: "Ime::Enabled sets ime_enabled only and queues nothing"
@@ -123,7 +139,7 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0002]
     tests: [TS-1, TS-2, TS-4, TS-5]
   FR9:
     title: "Document the verified winit behavior justifying the platform split"
@@ -151,9 +167,9 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0002]
     tests: [TS-1, TS-6]
 
 batch:
   review_rework_count: 0
-  verify_rework_count: 0
+  verify_rework_count: 1
