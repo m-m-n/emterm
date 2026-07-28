@@ -25,7 +25,7 @@ workflow:
     skipped_reason: "ユーザーに見えるビジュアル要素は既存のプリエディット オーバーレイのみで、その描画は変更しないため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
   - id: implement
     status: pending
     base_commit: c5f7d032d80df7e05068f29bf90c8b18df9d47e1
@@ -38,7 +38,18 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Two-level IME state with a platform-conditional key gate"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/ime/winit_bridge.rs
+    skills: [backend-impl]
+    domains: [input-handling, ui]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -50,85 +61,85 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-6]
   FR2:
     title: "Ime::Preedit sets has_preedit from text emptiness and always mirrors the event"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-5]
   FR3:
     title: "Ime::Enabled sets ime_enabled only and queues nothing"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4, TS-6]
   FR4:
     title: "Ime::Commit clears has_preedit but not ime_enabled"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3, TS-7]
   FR5:
     title: "Ime::Disabled clears both states and queues FocusOut"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-6, TS-7, TS-9]
   FR6:
     title: "Ime::DeleteSurrounding remains a state-neutral no-op"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-8]
   FR7:
     title: "Windows gates dispatch_key_event on ime_enabled"
     status: assumed
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-6, TS-7]
   FR8:
     title: "Non-Windows targets gate dispatch_key_event on has_preedit"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-4, TS-5]
   FR9:
     title: "Document the verified winit behavior justifying the platform split"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-9]
   NFR1:
     title: "Performance: dispatch stays a constant-time boolean check"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [SC-1]
   NFR2:
     title: "Compatibility: Linux + Windows builds and --no-default-features still pass"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [SC-4, SC-5]
   NFR3:
     title: "Testability: both gate branches covered by cfg-gated unit tests"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-6]
 
 batch:
   review_rework_count: 0
