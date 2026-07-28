@@ -1158,7 +1158,7 @@ emterm mux kill
 
 #### Mux Agent Status and Agent API
 
-Panes report the state of an AI agent running in them via an OSC 777 sequence; eMterm aggregates these into tab/window badges, a status-bar summary, and OS notifications, and exposes a read/send/wait API over the mux daemon socket so agents can coordinate with other panes.
+Panes report the state of an AI agent running in them via an OSC 777 sequence; eMterm aggregates these into tab/window badges and OS notifications, and exposes a read/send/wait API over the mux daemon socket so agents can coordinate with other panes.
 
 **Key Functionality:**
 - OSC sequence: `OSC 777;emterm;agent-status;v=1;state=<idle|working|blocked|done>[;name=<name>]` (set) and `...;agent-status;clear`; affects only the originating pane
@@ -1166,7 +1166,7 @@ Panes report the state of an AI agent running in them via an OSC 777 sequence; e
 - Daemon stores per-pane `state`, `name`, and a monotonically increasing `revision`; state is discarded on pane exit and never persisted
 - Agent-status OSC is stripped from scrollback/snapshot replay; states resync after reattach via replay-derived updates without firing a notification
 - Tab/window list badges aggregate per-pane state with priority: blocked > unseen done > working > seen done > idle
-- Status bar shows per-state pane counts, hidden when no pane has reported a state
+- The status bar carries no agent-status summary; badges are the only always-visible surface
 - OS notification on real transitions to blocked/done for non-visible panes; suppressed for same-state re-reports, name-only changes, and replay; rate-limited; gated by a dedicated agent-notification setting (default on) plus the global notification setting
 - Public opaque, non-reusable pane IDs; `EMTERM_PANE_ID` is injected into each mux pane's environment for `--pane current` resolution
 

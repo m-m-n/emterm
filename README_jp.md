@@ -47,7 +47,7 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
   - `emterm mux send-keys [-t ウィンドウ]`: 標準入力のデータをmuxウィンドウにキー入力として送信
   - `emterm mux script`: デーモン起動のみ（アタッチなし）、スクリプトによるワークスペース初期化に使用
   - `emterm mux kill`: IPC経由でデーモンと全PTYセッションをgracefulに終了
-  - エージェント状態: 各ペインがOSC 777または`emterm agent-status`でAIエージェントの状態（idle/working/blocked/done）を報告。タブ/ウィンドウバッジ、ステータスバーの集計表示、OS通知に反映
+  - エージェント状態: 各ペインがOSC 777または`emterm agent-status`でAIエージェントの状態（idle/working/blocked/done）を報告。タブ/ウィンドウバッジとOS通知に反映
   - エージェント向けAPI: `emterm mux read` / `emterm mux send` / `emterm mux wait` で他のペインの読み取り・書き込み・状態待機が可能
   - OSCタイトル伝播: デーモンがシェルのOSC 0/2シーケンスからウィンドウ名を更新（GUI未接続中も有効）
   - デタッチ中のシェル終了を正しくreap; 最後のセッションが空になるとデーモンが自動終了
