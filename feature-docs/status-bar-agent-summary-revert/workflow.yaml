@@ -63,7 +63,7 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR9, NFR4]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/status-bar-agent-summary-revert/task0002
 
