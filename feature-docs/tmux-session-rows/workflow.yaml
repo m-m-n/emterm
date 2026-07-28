@@ -46,9 +46,27 @@ workflow:
   - id: review
     status: pending
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: |
+      Build: rust GUI check OK (33.8s) / cli-only check OK (7.4s) / windows xwin check OK (34.2s)。
+      いずれも integration worktree で workflow.yaml の承認済みコマンド文字列をそのまま実行。
+      環境補正: integration worktree に gitignore 対象のバンドルフォントが無く build.rs の
+      font-presence check で落ちたため、main ツリーから src-tauri/assets/fonts/*.{ttf,otf} を
+      コピーした（gitignore 対象なのでコミットへの影響なし・ソース変更なし）。
+      Tests: cargo test --lib 既定並列度 = 2767 pass / 17 fail / 3 ignored。
+      --test-threads=1 で再実行 = 2778 pass / 6 fail / 3 ignored。失敗は全て tabs::tests::*。
+      回帰でないことを base コミット(c8c9219) の main ツリーで直接確認した:
+      base 自体が --test-threads=1 で 7 件失敗する (ts10 / ts11 / ts13 / ts7 / ts8 /
+      ts9_concurrent / welcome_without_windows_leaves_group_none)。feature 側の 6 件は
+      その部分集合。feature の diff は app.rs / tmux_sockets.rs / ui/profile_selector.rs のみで
+      tabs.rs に触れていない (git diff --name-only で確認)。VERIFICATION.md の
+      pre-existing-flakiness 許容条項に合致。
+      TS-1..TS-10: tmux_sockets / profile_selector / app の各テストは全て pass。
+      SC-3 (windows + cli ビルド): pass。
+      M-1 / M-2 (実機 GUI + 実 tmux が必要な手動シナリオ): 未実施、ユーザー確認に委ねる。
+      Review round 1: medium 10 件を deferred として記録 (critical/high ゼロ、非ブロッキング)。
   - id: retrospect
     status: pending
 
