@@ -27,8 +27,10 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 5b6920abcde16a02b83925167a00dd618a4b9c10
+    completed_at_commit: 75ac567517549ec3c349832050baaee4b2730821
+    notes: "2/2 merged, conflict retries 0"
   - id: review
     status: pending
   - id: verify
@@ -51,7 +53,7 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR3, NFR4]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/status-bar-agent-summary-revert/task0001
   task0002:
