@@ -1,0 +1,106 @@
+feature: ime-empty-preedit-passthrough
+collected_at: "2026-07-29T08:10:00+09:00"
+session_ids: [a5e588c2-ae82-490d-bff1-992196d8ad9c]
+signals:
+  review_critical_high:
+    - stable_id: c4f8d95b44f2d533
+      round: 1
+      category: comprehensive
+      file: src-tauri/src/ime/winit_bridge.rs
+      title: "既存テスト TS-winit-3 が Windows ターゲットで必ず失敗する"
+      resolution: fixed
+    - stable_id: 66514238e2dc12ab
+      round: 1
+      category: spec
+      file: src-tauri/src/ime/winit_bridge.rs
+      title: "既存 TS-winit-3 が Windows ビルドで失敗する（Regression Tests 違反）"
+      resolution: fixed
+  review_medium_resolved:
+    - stable_id: 9f9664d463b1f618
+      round: 1
+      category: comprehensive
+      title: "notify_focus(false) が ime_enabled をリセットせず、Windows でキー入力が恒久的に握り潰されうる"
+      resolution: fixed
+      resolved_by: task0003
+    - stable_id: 5b461e782d6f18bc
+      round: 1
+      category: comprehensive
+      title: "Windows 側ゲートに実行されるテストが存在しない"
+      resolution: fixed
+      resolved_by: task0003
+    - stable_id: b41937460cd5c472
+      round: 1
+      category: spec
+      title: "TS-1 (SKK regression, all targets) は Windows ホストで一切実行されない"
+      resolution: fixed
+      resolved_by: task0002
+    - stable_id: a01921c2196c98c6
+      round: 2
+      category: spec
+      title: "Existing regression test is now excluded on Windows"
+      resolution: fixed
+      resolved_by: "SPEC.md Regression Tests 文面更新"
+    - stable_id: e131a8793241f611
+      round: 2
+      category: spec
+      title: "TS-6 and TS-7 bypass the required dispatch API"
+      resolution: fixed
+      resolved_by: task0004
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures:
+    - id: "SC-2/TS-5"
+      round: 1
+      note: "TS-5（空 preedit → 非空 preedit → 空 preedit）に対応するテストが存在しなかった。task0002 で解消"
+    - id: "SC-2/TS-1"
+      round: 1
+      note: "TS-1 の実装テストが先頭の Ime::Enabled と中間の Consumed アサートを欠き、FR2 のキュー順序アサートごと非 Windows 限定になっていた。task0002 で解消"
+  discretionary_perspectives: []
+  declined_findings: []
+  unresolved_findings: []
+lessons_candidates:
+  - >-
+    プラットフォーム条件付きのゲートを導入すると、条件を持たない既存テストが
+    暗黙に片側プラットフォームの契約を書いている状態になる。task0001 の計画は
+    「既存テストを 1 本ずつ読み直して分類する」規律を明記していたが、
+    実装者は SPEC が名指ししていた 1 本だけを調整し TS-winit-3 を見落とした。
+    名指しの例を挙げるより「全テストの期待値を新ゲートの両分岐で評価せよ」と
+    網羅を要求する形のほうが安全かもしれない。
+  - >-
+    SPEC の Test Scenarios に列挙した TS-n と実装されたテスト関数の対応を
+    機械的に突き合わせる手段が無い。task0001 は AC ベースでテストを書いたため、
+    AC に対応が無い TS-5 が丸ごと落ちた。VERIFICATION.md に TS-n → テスト関数名の
+    対応表を持たせるか、AC と TS を 1 対 1 に揃える運用を検討する余地がある。
+  - >-
+    テスタビリティ改善リファクタが、意図せず別種のカバレッジを削ることがある。
+    task0003 は Windows ゲートのロジックをホストで実行可能にしたが、その過程で
+    dispatch_key_event 経由の Windows アサートを全て述語直呼びに置き換えてしまい、
+    「コンパイル時 selector の配線」を守るテストがゼロになった。
+    round2 の codex spec が検出。ロジックを守るテストと配線を守るテストは別物で、
+    前者を追加するときに後者を消していないかを確認する観点が要る。
+  - >-
+    Codex レビュアーの提案そのものは採れないが前提は正しい、というケースがあった
+    （a01921c2196c98c6: TS-winit-3 を unmodified に戻す提案は FR4/FR7 と矛盾して
+    実行不能だが、SPEC 文面が陳腐化しているという指摘自体は妥当）。
+    findings の suggestion を機械適用せず、前提と処方を分けて評価する価値がある。
+  - >-
+    batch の verify rework（cap 1）が期待どおり機能した。review の auto-fix 候補
+    ゲートが critical/high 限定かつ category != spec であるため、medium/spec として
+    報告されたテスト不備は review では拾われず verify の Success Criteria 評価で
+    初めて fail になった。この経路が無ければ TS-5 欠落は deferred のまま残っていた。
+  - >-
+    batch の verify rework は verify と implement のみを pending に戻し review を
+    再実行しないため、合成された rework タスク（task0002）の差分は batch 実行の
+    範囲内では一度もレビューされなかった。対話再開時の round2 で初めてレビュー
+    対象になった。batch で完結させる運用では、rework で入った変更が無レビューで
+    残ることを認識しておく必要がある。
+  - >-
+    実装者・レビュアーとも worktree に gitignore された前提物（bundled fonts /
+    viewer・settings の dist）が無いためビルドできず、worktree を作るたびに
+    main ツリーからのコピーが必要だった。integration worktree を作り直した際も
+    同じ手当てが要った。implement フェーズが worktree 作成時にこれらを
+    プロビジョニングする仕組みがあると立ち上がりコストが下がる。
+  - >-
+    verify の format_command に cargo fmt --check を採ったが、リポジトリに既存の
+    整形ドリフトが 3 ファイルあるため常に非ゼロ終了する。feature が触ったファイルに
+    限定して評価する手段が無いと format の合否がノイズになる。

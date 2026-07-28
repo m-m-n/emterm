@@ -1,8 +1,8 @@
 //! Phase 4-G-3: winit IME bridge.
 //!
 //! [`WinitImeBridge`] is the platform backend for X11 / Wayland /
-//! Windows. It hosts a small Ghostty-derived state machine
-//! (`im_composing` + `in_keyevent`) and translates winit
+//! Windows. It tracks two independent boolean states — `has_preedit`
+//! and `ime_enabled` — and translates winit
 //! `WindowEvent::Ime { Enabled, Preedit, Commit, Disabled }` into the
 //! platform-neutral [`ImeEvent`] queue that [`crate::app::App::pump_ime`]
 //! drains into the existing Phase 4-E routes
@@ -15,18 +15,41 @@
 //! 1. Enable / disable the IME via `Window::request_ime_update`
 //!    (`ImeRequest::Enable` / `Disable`) so winit attaches to the IM
 //!    server at startup and detaches on shutdown.
-//! 2. Mirror `Ime::*` into `ImeEvent::*` plus update the
-//!    `im_composing` flag so [`Self::dispatch_key_event`] can suppress
-//!    PTY writes that the IM server has already swallowed.
+//! 2. Mirror `Ime::*` into `ImeEvent::*` plus update `has_preedit` /
+//!    `ime_enabled` so [`Self::dispatch_key_event`] can suppress PTY
+//!    writes that the IM server has already swallowed.
 //! 3. Forward cursor cell changes as `ImeRequest::Update` cursor-area
 //!    requests, rate-limited to actual cell movement
 //!    (`notify_cursor_rect` dedup).
 //!
-//! The state machine is deliberately a strict subset of Ghostty's. We
-//! never need `in_keyevent` to gate a *next-tick* dedup because winit's
-//! event model already enforces "Ime events strictly precede the
-//! follow-up KeyboardInput" — winit suppresses `KeyEvent::text` while
-//! composition is active.
+//! ## Why two states, and why the key-suppression gate is platform-conditional
+//!
+//! `Ime::Enabled` / `Ime::Disabled` do not delimit the same thing on
+//! every platform, verified against the pinned `winit 0.31.0-beta.2`
+//! sources:
+//!
+//! - `winit-wayland/src/seat/text_input/mod.rs` emits `Ime::Enabled`
+//!   from `TextInputEvent::Enter` — once per focus-in, spanning
+//!   ordinary direct input for the whole time the window has focus.
+//!   The same file emits an empty `Ime::Preedit` only to clear a
+//!   previous preedit.
+//! - `winit-x11/src/ime/mod.rs` emits `Ime::Enabled` when the XIC is
+//!   created and allowed, likewise spanning direct input.
+//! - `winit-win32/src/event_loop.rs` maps `Ime::Enabled` /
+//!   `Ime::Disabled` to `WM_IME_STARTCOMPOSITION` /
+//!   `WM_IME_ENDCOMPOSITION`, so on Windows the pair delimits exactly
+//!   one composition; `winit-win32/src/ime.rs` treats a zero-length
+//!   `GCS_COMPSTR` as a legitimate empty preedit inside that live
+//!   composition.
+//!
+//! Gating key suppression on the lifecycle flag would therefore
+//! swallow all typing on Unix, and gating on preedit-emptiness alone
+//! would let Windows candidate-navigation keys leak through
+//! mid-composition. `has_preedit` (the last observed preedit was
+//! non-empty) is the correct gate on every target except Windows;
+//! `ime_enabled` (the lifecycle is open) is the correct gate on
+//! Windows. See SPEC.md "Rationale for the platform split" for the
+//! full source citations.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -110,11 +133,16 @@ pub struct WinitImeBridge {
     /// Platform window the bridge talks to (set_ime_allowed /
     /// set_ime_cursor_area).
     window: Box<dyn BridgeWindow>,
-    /// `true` while the IM server is mid-composition (`Ime::Enabled` /
-    /// `Ime::Preedit` non-empty observed, cleared by `Ime::Commit` /
-    /// `Ime::Disabled`). Drives the `Consumed` branch of
-    /// `dispatch_key_event`.
-    im_composing: bool,
+    /// `true` when the most recently observed `Ime::Preedit` carried
+    /// non-empty text. Cleared by an empty preedit, a commit, or a
+    /// disable event. Gates `dispatch_key_event` on every target
+    /// except Windows (see module docs, "Why two states").
+    has_preedit: bool,
+    /// `true` while the IME lifecycle is open: set by `Ime::Enabled`,
+    /// cleared by `Ime::Disabled`. Gates `dispatch_key_event` on
+    /// Windows, where the pair delimits exactly one composition (see
+    /// module docs, "Why two states").
+    ime_enabled: bool,
     /// Events produced by `on_winit_ime` waiting for the next
     /// `pump` drain.
     queue: VecDeque<ImeEvent>,
@@ -139,7 +167,8 @@ impl WinitImeBridge {
         window.set_ime_allowed(true);
         Self {
             window,
-            im_composing: false,
+            has_preedit: false,
+            ime_enabled: false,
             queue: VecDeque::new(),
             last_cursor_area: None,
         }
@@ -147,29 +176,26 @@ impl WinitImeBridge {
 
     /// Push a winit `WindowEvent::Ime` payload through the bridge.
     /// Translates each variant into the appropriate [`ImeEvent`] and
-    /// updates `im_composing`.
+    /// updates `has_preedit` / `ime_enabled`. Total over every variant;
+    /// never panics.
     pub fn on_winit_ime(&mut self, ime: &WinitIme) {
         match ime {
             WinitIme::Enabled => {
-                // The IM server attached. We don't immediately treat
-                // this as "composing" — Ghostty observed that some
-                // compositors fire Enabled even for plain ASCII rounds.
-                // Composition starts when the first Preedit arrives.
+                // The IME lifecycle opened. On every non-Windows
+                // target this spans the whole focus duration (see
+                // module docs), so it must not gate key suppression by
+                // itself — has_preedit is left untouched.
+                self.ime_enabled = true;
             }
             WinitIme::Preedit(text, _cursor) => {
-                if text.is_empty() {
-                    // Empty preedit clears the overlay but does not end
-                    // the composition (Wayland zwp_text_input_v3 sends
-                    // this for cursor-only updates). Mirror as an empty
-                    // Preedit so on_ime_preedit drops the overlay.
-                    self.queue.push_back(ImeEvent::Preedit(String::new()));
-                } else {
-                    self.im_composing = true;
-                    self.queue.push_back(ImeEvent::Preedit(text.clone()));
-                }
+                self.has_preedit = !text.is_empty();
+                // Always mirror the preedit, including empty, so the
+                // overlay clears (no change to the neutral event
+                // queue's shape).
+                self.queue.push_back(ImeEvent::Preedit(text.clone()));
             }
             WinitIme::Commit(text) => {
-                self.im_composing = false;
+                self.has_preedit = false;
                 if !text.is_empty() {
                     self.queue.push_back(ImeEvent::Commit(text.clone()));
                 }
@@ -177,9 +203,10 @@ impl WinitImeBridge {
             WinitIme::Disabled => {
                 // IM server detached (user toggled IME off, focus
                 // lost from compositor's POV, fcitx5/ibus crashed).
-                // Clear composition state and signal the App to drop
-                // any preedit overlay.
-                self.im_composing = false;
+                // Close the lifecycle, clear the preedit state, and
+                // signal the App to drop any preedit overlay.
+                self.has_preedit = false;
+                self.ime_enabled = false;
                 self.queue.push_back(ImeEvent::FocusOut);
             }
             WinitIme::DeleteSurrounding { .. } => {
@@ -189,21 +216,50 @@ impl WinitImeBridge {
                 // Enabled/Disabled) has no editor-side hook for this
                 // yet, so it is a documented no-op rather than a
                 // migration regression — wiring it up is out of scope
-                // for the winit version bump.
+                // for the winit version bump. Leaves has_preedit /
+                // ime_enabled unchanged.
             }
         }
     }
 }
 
+/// Pure key-suppression gate (FR11). Total over all eight
+/// `(has_preedit, ime_enabled, windows_gate)` combinations: passing `true`
+/// for `windows_gate` selects the Windows rule, and the answer then equals
+/// `ime_enabled` alone — `has_preedit` never influences it; passing `false`
+/// selects the rule for every other target, and the answer then equals
+/// `has_preedit` alone — `ime_enabled` never influences it.
+///
+/// [`WinitImeBridge::dispatch_key_event`] is the only production caller,
+/// passing `cfg!(windows)` as `windows_gate`. The selector exists as a
+/// runtime parameter (not a `#[cfg]` branch) precisely so unit tests can
+/// drive *both* platform rules from a single development host (NFR3) —
+/// pass a literal `true` or `false` regardless of the host's actual target.
+///
+/// Constant-time boolean read, no allocation, no locking (NFR1).
+fn should_suppress_key(has_preedit: bool, ime_enabled: bool, windows_gate: bool) -> bool {
+    if windows_gate {
+        ime_enabled
+    } else {
+        has_preedit
+    }
+}
+
 impl ImeBackend for WinitImeBridge {
     fn dispatch_key_event(&mut self, _raw: &RawKeyEvent) -> KeyDispatchResult {
-        // Ghostty rule: while composition is active the IM server owns
-        // every key — we must not emit the key bytes ourselves. winit
-        // already suppresses `KeyEvent::text` during composition, but
-        // we still need to block the named-key fallback path (Enter /
-        // arrows / etc. are sometimes routed through the IM server
-        // even though winit gives us the KeyEvent first).
-        if self.im_composing {
+        // While the IM server owns the key (per the platform's gate,
+        // see module docs "Why two states" and `should_suppress_key`)
+        // we must not emit the key bytes ourselves. winit already
+        // suppresses `KeyEvent::text` during composition, but we still
+        // need to block the named-key fallback path (Enter / arrows /
+        // etc. are sometimes routed through the IM server even though
+        // winit gives us the KeyEvent first).
+        //
+        // NFR1: constant-time boolean read, no allocation, no locking,
+        // delegated to `should_suppress_key` (FR11) so the gate logic
+        // itself — both platform branches — is exercisable by unit
+        // tests on any host.
+        if should_suppress_key(self.has_preedit, self.ime_enabled, cfg!(windows)) {
             KeyDispatchResult::Consumed
         } else {
             KeyDispatchResult::Passthrough
@@ -222,6 +278,27 @@ impl ImeBackend for WinitImeBridge {
     }
 
     fn notify_focus(&mut self, focused: bool) {
+        if !focused {
+            // FR10: `Ime::Disabled` is otherwise the only event that
+            // clears `ime_enabled` (see module docs, "Why two
+            // states"), but winit-win32's `ImeRequest::Disable` arm
+            // (`winit-win32/src/window.rs`) returns without emitting
+            // `Ime::Disabled`, unlike winit-wayland which synthesizes
+            // it from the same request
+            // (`winit-wayland/src/window/mod.rs`). A composition
+            // interrupted by focus loss on Windows could therefore
+            // latch the gate open and suppress every subsequent key,
+            // with no second escape route (the commit event
+            // deliberately does not clear `ime_enabled` either).
+            // Clearing both states locally here makes the bridge's
+            // own gate independent of that asymmetry; on Wayland/X11
+            // the synthesized `Ime::Disabled` still follows and finds
+            // both states already false (idempotent — no additional
+            // neutral event is queued from this path). Focus GAIN
+            // must not modify either state.
+            self.has_preedit = false;
+            self.ime_enabled = false;
+        }
         // FR8: defer to winit's set_ime_allowed so the platform IM
         // server attaches on focus-in and detaches on focus-out. If the
         // window already saw `Ime::Disabled` from a focus-loss path,
@@ -343,7 +420,11 @@ mod tests {
     }
 
     // ── TS-winit-3: Commit ends composition + next dispatch is Passthrough
+    // Non-Windows only: the Windows gate is `ime_enabled`, which neither
+    // `Preedit` nor `Commit` changes here, so both dispatch assertions
+    // below only describe non-Windows semantics.
     #[test]
+    #[cfg(not(windows))]
     fn commit_clears_composition_and_unblocks_dispatch() {
         let (mut b, _mock) = make_bridge();
         b.on_winit_ime(&WinitIme::Preedit("に".into(), None));
@@ -394,8 +475,9 @@ mod tests {
         let (mut b, _mock) = make_bridge();
         b.on_winit_ime(&WinitIme::Preedit("x".into(), None));
         b.on_winit_ime(&WinitIme::Commit("X".into()));
-        // im_composing is already false; a follow-up Disabled must
-        // still surface FocusOut exactly once and leave the flag false.
+        // has_preedit is already false; a follow-up Disabled must
+        // still surface FocusOut exactly once and leave both states
+        // false.
         b.on_winit_ime(&WinitIme::Disabled);
         let mut out = Vec::new();
         b.pump(&mut out);
@@ -477,7 +559,13 @@ mod tests {
         let mut out = Vec::new();
         b.pump(&mut out);
         assert_eq!(out, vec![ImeEvent::Preedit(String::new())]);
-        // Empty preedit must NOT toggle im_composing on.
+        // A bare empty preedit with no preceding Enable leaves both
+        // states false: has_preedit stays false (no non-empty preedit
+        // was ever observed) and ime_enabled stays false (no Enable
+        // event fired). dispatch_key_event is Passthrough on every
+        // target here, but for different reasons per platform —
+        // non-Windows checks has_preedit, Windows checks ime_enabled,
+        // and both happen to be false.
         assert_eq!(
             b.dispatch_key_event(&raw_press()),
             KeyDispatchResult::Passthrough
@@ -488,6 +576,348 @@ mod tests {
     fn name_is_winit() {
         let (b, _mock) = make_bridge();
         assert_eq!(b.name(), "winit");
+    }
+
+    // ── TS-1 (SKK regression, all targets): Enabled → Preedit("▽A") →
+    //    dispatch is Consumed on every target (Windows via the open
+    //    lifecycle, everywhere else via the non-empty preedit) →
+    //    Preedit("") → dispatch is Consumed on Windows (the lifecycle is
+    //    still open) and Passthrough elsewhere. Both preedits reach pump
+    //    in order regardless of platform (FR2, platform-independent).
+    #[test]
+    fn enabled_then_non_empty_then_empty_preedit_matches_ts1_on_every_target() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.on_winit_ime(&WinitIme::Preedit("▽A".into(), None));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Consumed,
+            "dispatch must be consumed while the non-empty preedit is current, on every target"
+        );
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        let expected_after_empty = if cfg!(windows) {
+            KeyDispatchResult::Consumed
+        } else {
+            KeyDispatchResult::Passthrough
+        };
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            expected_after_empty,
+            "Windows keeps suppressing inside the still-open lifecycle; every other target passes through"
+        );
+        let mut out = Vec::new();
+        b.pump(&mut out);
+        assert_eq!(
+            out,
+            vec![
+                ImeEvent::Preedit("▽A".into()),
+                ImeEvent::Preedit(String::new()),
+            ]
+        );
+    }
+
+    // ── TS-5 (X11 ambiguous start/end shape, non-Windows only):
+    //    SPEC.md assumption A3 — winit-x11 emits an empty Ime::Preedit
+    //    for both composition start and composition end. This sequence
+    //    exercises that ambiguous shape end to end: passthrough while no
+    //    preedit has been observed yet, consumed once the preedit is
+    //    non-empty, passthrough again once it goes back to empty.
+    #[cfg(not(windows))]
+    #[test]
+    fn x11_ambiguous_empty_preedit_start_and_end_toggles_dispatch() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Passthrough,
+            "leading empty preedit (X11 composition-start shape) must not suppress keys"
+        );
+        b.on_winit_ime(&WinitIme::Preedit("あ".into(), None));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Consumed,
+            "non-empty preedit must suppress keys"
+        );
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Passthrough,
+            "trailing empty preedit (X11 composition-end shape) must unblock dispatch again"
+        );
+    }
+
+    // ── AC-2: a subsequent non-empty preedit re-engages suppression on
+    //          non-Windows targets.
+    #[cfg(not(windows))]
+    #[test]
+    fn preedit_after_empty_reengages_dispatch_on_non_windows() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Preedit("x".into(), None));
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        b.on_winit_ime(&WinitIme::Preedit("y".into(), None));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Consumed
+        );
+    }
+
+    // ── AC-3: Enable alone never causes Consumed on non-Windows
+    //          targets (Wayland/X11 fire it for the whole focus
+    //          lifetime, spanning ordinary direct input).
+    #[cfg(not(windows))]
+    #[test]
+    fn enable_alone_never_consumes_on_non_windows() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Passthrough
+        );
+    }
+
+    // ── Edge case: a commit arriving directly after an empty preedit
+    //    keeps the queue ordered preedit, empty preedit, commit, and
+    //    still unblocks dispatch on non-Windows targets.
+    #[cfg(not(windows))]
+    #[test]
+    fn commit_after_empty_preedit_orders_queue_and_unblocks_dispatch_on_non_windows() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Preedit("x".into(), None));
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        b.on_winit_ime(&WinitIme::Commit("X".into()));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Passthrough
+        );
+        let mut out = Vec::new();
+        b.pump(&mut out);
+        assert_eq!(
+            out,
+            vec![
+                ImeEvent::Preedit("x".into()),
+                ImeEvent::Preedit(String::new()),
+                ImeEvent::Commit("X".into()),
+            ]
+        );
+    }
+
+    // ── AC-6 (non-Windows halves): DeleteSurrounding leaves the
+    //    dispatch answer exactly as it was, whether a preedit is
+    //    currently present or absent.
+    #[cfg(not(windows))]
+    #[test]
+    fn delete_surrounding_leaves_dispatch_unchanged_when_preedit_present_non_windows() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Preedit("x".into(), None));
+        b.on_winit_ime(&WinitIme::DeleteSurrounding {
+            before_bytes: 1,
+            after_bytes: 0,
+        });
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Consumed
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn delete_surrounding_leaves_dispatch_unchanged_when_preedit_absent_non_windows() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::DeleteSurrounding {
+            before_bytes: 1,
+            after_bytes: 0,
+        });
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Passthrough
+        );
+    }
+
+    // ── TS-10 / AC-1: predicate truth table. Total over all eight
+    //    (has_preedit, ime_enabled, windows_gate) combinations: for
+    //    windows_gate = true the answer is exactly ime_enabled
+    //    regardless of has_preedit, and for windows_gate = false the
+    //    answer is exactly has_preedit regardless of ime_enabled. Runs
+    //    on every host — this is what pins FR11's platform selector as
+    //    a runtime argument rather than a compile-time branch.
+    #[test]
+    fn should_suppress_key_truth_table_is_total_over_all_combinations() {
+        for has_preedit in [false, true] {
+            for ime_enabled in [false, true] {
+                assert_eq!(
+                    should_suppress_key(has_preedit, ime_enabled, true),
+                    ime_enabled,
+                    "windows_gate=true must answer exactly ime_enabled \
+                     (has_preedit={has_preedit}, ime_enabled={ime_enabled})"
+                );
+                assert_eq!(
+                    should_suppress_key(has_preedit, ime_enabled, false),
+                    has_preedit,
+                    "windows_gate=false must answer exactly has_preedit \
+                     (has_preedit={has_preedit}, ime_enabled={ime_enabled})"
+                );
+            }
+        }
+    }
+
+    // ── TS-6 / TS-11 (Windows empty active composition, asserted
+    //    through the predicate so it executes on every host, not only
+    //    when compiled for the Windows target): an empty preedit inside
+    //    a live composition still suppresses under the Windows gate,
+    //    because the gate is the lifecycle flag, not preedit emptiness.
+    //    Passthrough again once Disabled closes the lifecycle.
+    #[test]
+    fn windows_gate_empty_preedit_inside_live_composition_still_suppresses() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        assert!(
+            should_suppress_key(b.has_preedit, b.ime_enabled, true),
+            "Windows gate must still suppress: the lifecycle is open even though the preedit is empty"
+        );
+        b.on_winit_ime(&WinitIme::Disabled);
+        assert!(
+            !should_suppress_key(b.has_preedit, b.ime_enabled, true),
+            "Disabled closes the lifecycle, so the Windows gate must release"
+        );
+    }
+
+    // ── TS-7 / TS-11 (Windows commit does not end the lifecycle,
+    //    asserted through the predicate so it executes on every host):
+    //    a commit occurring mid-composition does not release
+    //    suppression before Disabled closes the lifecycle.
+    #[test]
+    fn windows_gate_commit_inside_live_composition_does_not_unblock() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.on_winit_ime(&WinitIme::Preedit("x".into(), None));
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        b.on_winit_ime(&WinitIme::Commit("X".into()));
+        assert!(
+            should_suppress_key(b.has_preedit, b.ime_enabled, true),
+            "a commit mid-composition must not release the Windows gate"
+        );
+        b.on_winit_ime(&WinitIme::Disabled);
+        assert!(
+            !should_suppress_key(b.has_preedit, b.ime_enabled, true),
+            "Disabled must release the Windows gate"
+        );
+    }
+
+    // ── AC-6 (Windows half, asserted through the predicate so it
+    //    executes on every host): DeleteSurrounding is state-neutral on
+    //    the Windows gate too, whether a composition is currently open
+    //    or not.
+    #[test]
+    fn windows_gate_delete_surrounding_leaves_state_unchanged_when_preedit_present() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.on_winit_ime(&WinitIme::Preedit("x".into(), None));
+        b.on_winit_ime(&WinitIme::DeleteSurrounding {
+            before_bytes: 1,
+            after_bytes: 0,
+        });
+        assert!(should_suppress_key(b.has_preedit, b.ime_enabled, true));
+    }
+
+    #[test]
+    fn windows_gate_delete_surrounding_leaves_state_unchanged_when_preedit_absent() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::DeleteSurrounding {
+            before_bytes: 1,
+            after_bytes: 0,
+        });
+        assert!(!should_suppress_key(b.has_preedit, b.ime_enabled, true));
+    }
+
+    // ── TS-12 / AC-4: losing focus mid-composition clears both gate
+    //    states, so the predicate answers passthrough for BOTH platform
+    //    selectors — not just the host's own target.
+    #[test]
+    fn focus_loss_clears_gate_for_both_platform_selectors() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.on_winit_ime(&WinitIme::Preedit("x".into(), None));
+        b.notify_focus(false);
+        assert!(
+            !should_suppress_key(b.has_preedit, b.ime_enabled, true),
+            "focus loss must release the Windows gate even mid-composition"
+        );
+        assert!(
+            !should_suppress_key(b.has_preedit, b.ime_enabled, false),
+            "focus loss must release the non-Windows gate too"
+        );
+    }
+
+    // ── TS-13 / AC-5: focus gain on a freshly built bridge does not
+    //    open the gate — both states stay false, so the predicate
+    //    answers passthrough for both platform selectors. The sequence
+    //    assertion in `notify_focus_propagates_to_set_ime_allowed` is
+    //    unchanged by this test.
+    #[test]
+    fn focus_gain_on_fresh_bridge_leaves_gate_closed_for_both_platform_selectors() {
+        let (mut b, _mock) = make_bridge();
+        b.notify_focus(true);
+        assert!(!should_suppress_key(b.has_preedit, b.ime_enabled, true));
+        assert!(!should_suppress_key(b.has_preedit, b.ime_enabled, false));
+    }
+
+    // ── task0004 AC-1 / TS-6 dispatch counterpart (Windows target only):
+    //    `windows_gate_empty_preedit_inside_live_composition_still_suppresses`
+    //    above proves the RULE — that the predicate suppresses when
+    //    `windows_gate = true` and the preedit is empty inside an open
+    //    lifecycle. This test proves the WIRING — that
+    //    `dispatch_key_event` itself reaches that answer through
+    //    `cfg!(windows)`, not just that the predicate can be made to
+    //    answer it when driven directly. A predicate-only pair would
+    //    still pass if `dispatch_key_event` hardcoded `windows_gate =
+    //    false`; only a test that calls `dispatch_key_event` under a
+    //    real `cfg(windows)` build can catch that.
+    #[test]
+    #[cfg(windows)]
+    fn windows_dispatch_empty_preedit_inside_live_composition_still_suppresses() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Consumed,
+            "dispatch_key_event must still suppress: the lifecycle is open even though the preedit is empty"
+        );
+        b.on_winit_ime(&WinitIme::Disabled);
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Passthrough,
+            "Disabled closes the lifecycle, so dispatch_key_event must release"
+        );
+    }
+
+    // ── task0004 AC-2 / TS-7 dispatch counterpart (Windows target only):
+    //    `windows_gate_commit_inside_live_composition_does_not_unblock`
+    //    above proves the RULE — that a commit mid-composition does not
+    //    release the predicate when `windows_gate = true`. This test
+    //    proves the WIRING — that `dispatch_key_event` reaches that same
+    //    answer through `cfg!(windows)` rather than a hardcoded or
+    //    miswired selector.
+    #[test]
+    #[cfg(windows)]
+    fn windows_dispatch_commit_inside_live_composition_does_not_unblock() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.on_winit_ime(&WinitIme::Preedit("x".into(), None));
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        b.on_winit_ime(&WinitIme::Commit("X".into()));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Consumed,
+            "a commit mid-composition must not release dispatch_key_event's suppression"
+        );
+        b.on_winit_ime(&WinitIme::Disabled);
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Passthrough,
+            "Disabled must release dispatch_key_event's suppression"
+        );
     }
 
     // ── TS-winit-int-1: Xvfb-backed integration test (#[ignore]).
