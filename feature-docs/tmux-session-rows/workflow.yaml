@@ -68,7 +68,7 @@ workflow:
       M-1 / M-2 (実機 GUI + 実 tmux が必要な手動シナリオ): 未実施、ユーザー確認に委ねる。
       Review round 1: medium 10 件を deferred として記録 (critical/high ゼロ、非ブロッキング)。
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
