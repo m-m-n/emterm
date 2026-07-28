@@ -31,7 +31,7 @@ workflow:
     skipped_reason: "CLI の stdout/stderr テキスト出力のみで、視覚的なデザイン決定を要さないため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: c8c9219314d7bf9cb832474df1941738c838b502
