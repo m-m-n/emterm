@@ -27,7 +27,8 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 2a223c84b89a7dfa3b66c7b3c8cfdb4924ea6f3b
     base_commit: 52df81501c9a5b7ab28cf33bedf36e6168a53e41
   - id: review
     status: pending
@@ -48,7 +49,7 @@ tasks:
     domains: [input-handling, ui]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/ime-empty-preedit-passthrough/task0001
 
