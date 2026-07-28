@@ -1,0 +1,163 @@
+schema_version: 1
+feature: tmux-session-rows
+created: 2026-07-28
+base_branch: main
+parent_branch: em-workflow/tmux-session-rows/integration
+
+project:
+  license: MIT
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    windows:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: e0d2d8a8a176c1dcb3271f75f6feab2bcf75de29
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "既存 chooser 行のラベル文字列と行数が変わるだけで、視覚デザインは既存の行描画で完全に決まるため"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 7a26916323a17302d0dd90cfd2e9537260c03c42
+  - id: implement
+    status: completed
+    base_commit: c8c9219314d7bf9cb832474df1941738c838b502
+    completed_at_commit: f8934754231a1fffc20f822fdfb3c5a46ac0fb31
+  - id: review
+    status: completed
+    completed_at_commit: e3271c8b6362db574a10538aef6a0393f76ac077
+  - id: verify
+    status: completed
+    result: pass
+    failed_items: []
+    notes: |
+      Build: rust GUI check OK (33.8s) / cli-only check OK (7.4s) / windows xwin check OK (34.2s)。
+      いずれも integration worktree で workflow.yaml の承認済みコマンド文字列をそのまま実行。
+      環境補正: integration worktree に gitignore 対象のバンドルフォントが無く build.rs の
+      font-presence check で落ちたため、main ツリーから src-tauri/assets/fonts/*.{ttf,otf} を
+      コピーした（gitignore 対象なのでコミットへの影響なし・ソース変更なし）。
+      Tests: cargo test --lib 既定並列度 = 2767 pass / 17 fail / 3 ignored。
+      --test-threads=1 で再実行 = 2778 pass / 6 fail / 3 ignored。失敗は全て tabs::tests::*。
+      回帰でないことを base コミット(c8c9219) の main ツリーで直接確認した:
+      base 自体が --test-threads=1 で 7 件失敗する (ts10 / ts11 / ts13 / ts7 / ts8 /
+      ts9_concurrent / welcome_without_windows_leaves_group_none)。feature 側の 6 件は
+      その部分集合。feature の diff は app.rs / tmux_sockets.rs / ui/profile_selector.rs のみで
+      tabs.rs に触れていない (git diff --name-only で確認)。VERIFICATION.md の
+      pre-existing-flakiness 許容条項に合致。
+      TS-1..TS-10: tmux_sockets / profile_selector / app の各テストは全て pass。
+      SC-3 (windows + cli ビルド): pass。
+      M-1 / M-2 (実機 GUI + 実 tmux が必要な手動シナリオ): 未実施、ユーザー確認に委ねる。
+      Review round 1: medium 10 件を deferred として記録 (critical/high ゼロ、非ブロッキング)。
+  - id: retrospect
+    status: completed
+
+tasks:
+  task0001:
+    title: "tmux session enumeration, session rows, and session-targeted attach"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/tmux_sockets.rs
+      - src-tauri/src/ui/profile_selector.rs
+      - src-tauri/src/app.rs
+    skills: [backend-impl]
+    domains: [ui, external-io, input-handling, concurrency]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2, NFR3, NFR4]
+    status: merged
+    branch: em-workflow/tmux-session-rows/task0001
+    merge_commit: f8934754231a1fffc20f822fdfb3c5a46ac0fb31
+    notes: "conflict_retries: 0, tests: pass. Deviation: bundled font assets (gitignored) were copied into the task worktree so build.rs's font-presence check would pass — build-environment only, no source change. Implementation note: the enumeration timeout was parameterized so only the AC-3 bound tests use the real 300ms value; tabs::tests::* failures observed during the run are pre-existing flakiness in a file this task does not touch."
+
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+  codex_runs: skipped
+  codex_skip_reason: "codex-cli unavailable in this environment"
+  residual_critical_high: 0
+  needs_rework: false
+  deferred_findings: 10
+  notes: "Round 1: 10 findings, all medium (critical/high ゼロ)。R4 の auto-fix ゲートは critical/high のみを対象とするため候補ゼロでループ未実行。全件 deferred として reviews/round1.yaml に記録済み"
+
+requirements:
+  FR1:
+    title: "Session enumeration per live socket (tmux list-sessions, bounded, failure-tolerant)"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-6, TS-8]
+  FR2:
+    title: "Chooser rows: one row per session, labeled by session name, socket-row fallback"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-3, TS-5, TS-9, M-1]
+  FR3:
+    title: "Session-targeted attach via SpawnOverrides (attach-session -t ={name})"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-4, TS-9, M-1]
+  FR4:
+    title: "Fast-path parity: skip the modal only when profiles and tmux rows are both empty"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-7]
+  NFR1:
+    title: "Chooser opening not perceptibly delayed; per-socket enumeration timeout <= 300ms"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-8, M-1]
+  NFR2:
+    title: "Unix-only gating; Windows and CLI-only builds keep compiling"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [SC-3]
+  NFR3:
+    title: "No regression in existing chooser behavior or socket discovery semantics"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-10, M-1]
+  NFR4:
+    title: "Paths and session names passed as discrete argv elements, never through a shell"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-4]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

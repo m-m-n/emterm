@@ -1,0 +1,289 @@
+round: 1
+executed_at: "2026-07-28T19:40:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: c8c9219314d7bf9cb832474df1941738c838b502
+  head_commit: d1c2fcf19b9fb2731d14b51d705e264558d16086
+  changed_files:
+    - src-tauri/src/app.rs
+    - src-tauri/src/tmux_sockets.rs
+    - src-tauri/src/ui/profile_selector.rs
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+findings:
+  - stable_id: "2300a7f1460a0e31"
+    severity: medium
+    category: spec
+    file: src-tauri/src/tmux_sockets.rs
+    line: 365
+    title: "子プロセス終了後の stdout 待ちが NFR1 の 300ms 上限を最大 500ms 超過しうる"
+    description: >-
+      SPEC NFR1 は「each socket's list-sessions call is bounded by a timeout of at
+      most 300 ms. The bound holds regardless of how the tmux server behaves.」と
+      無条件の上限を規定している。spawn_bounded の deadline ループ自体は 300ms
+      (ENUMERATE_TIMEOUT) で正しく打ち切られるが、try_wait が終了を検知した経路では
+      追加で rx.recv_timeout(500ms) を待つ。読み取りスレッドは stdout パイプの write 端が
+      全て閉じるまで read_to_end でブロックするため、tmux が終了しても write 端を継承した
+      子孫プロセスが残っているケースでは 1 ソケットあたり最大 800ms、chooser open が
+      その分同期的に固着する（enumerate は UI スレッドから同期呼び出し）。PATH 上の tmux が
+      ラッパースクリプトである等でパイプを継承する子孫が生じると再現し、SPEC が明示している
+      「regardless of how the tmux server behaves」の上限保証が成り立たない。
+    suggestion: >-
+      spawn_bounded の先頭で deadline を取り、終了検知後の受信を
+      rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) にして
+      残余待ちを全体 deadline の残りに収める。残り 0 なら空 stdout 扱い（＝そのソケットは
+      fallback 行）で、SPEC の劣化方針と一致する。ローカルの healthy tmux では子プロセス
+      終了時点で既に EOF に達しているため通常経路の挙動は変わらない。
+    sources: [claude:spec]
+    confidence: 85
+    resolution: deferred
+    resolution_reason: "medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。人間評価者向けに記録して次アクションに委ねる"
+  - stable_id: "968518fc76356881"
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/tmux_sockets.rs
+    line: 365
+    title: "spawn_bounded の成功パスが 300ms バウンドを最大 500ms 超過しうる"
+    description: >-
+      spawn_bounded は try_wait() が終了を観測した時点で rx.recv_timeout(500ms) を実行する。
+      この 500ms は timeout 引数（= ENUMERATE_TIMEOUT 300ms）と無関係な固定値なので、
+      1 ソケットあたりの実測最悪値は 300ms ではなく最大 800ms になる。モジュール doc と
+      SPEC NFR1/AC-3 は「1 ソケットあたり 300ms を超えない」と明言しており、実装がその契約を
+      満たしていない。発火条件は「子の子孫が stdout パイプの write end を継承したまま生き残る」
+      ケースで、そのとき read_to_end が EOF に到達せずリーダースレッドが send しないため
+      丸ごと 500ms 待つ。この待ちは chooser を開く winit メインスレッド上で発生するため、
+      描画も PTY 読み出しも止まる。あわせて TimedOut パスで返るときもリーダースレッドは
+      join されず、パイプが開いたままなら関数戻り後も残存する。
+    suggestion: >-
+      残り時間で bound する。deadline.saturating_duration_since(Instant::now()) を
+      小さな下限（例: 10ms）で clamp した値を recv_timeout に渡し、期限ぴったりに終了した子の
+      出力を取りこぼさないようにしつつ全体を timeout 内に収める。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: deferred
+    resolution_reason: "medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。stable_id 2300a7f1460a0e31（spec 観点）と同一サイトの同一問題"
+  - stable_id: "5bb86ee2370b3b80"
+    severity: medium
+    category: spec
+    file: src-tauri/src/tmux_sockets.rs
+    line: 314
+    title: "セッション名の末尾空白が削られ、SPEC の verbatim 保持に反する"
+    description: >-
+      SPEC FR1 は「Output is parsed as one session name per non-empty line」、TS-1 は
+      「preserving names verbatim; blank/trailing lines are ignored」、Edge Cases は
+      「Session name containing spaces or non-ASCII characters → label and argv carry it
+      verbatim」と規定している。仕様が無視してよいと言っているのは blank 行と trailing 行で
+      あって各行の末尾空白ではない。実装 parse_session_names は .map(str::trim_end) で
+      行末の空白まで削るため、末尾空白付きセッション名が別名に化ける。その結果 FR3 の
+      exact-match ターゲットが実在しない名前を指し、= 前置により prefix マッチにも救われず
+      アタッチが失敗する。空白のみの名前は filter で行ごと消え、行としても出てこない。
+      既存テストがこの逸脱を仕様ではなく実装として固定してしまっている。
+    suggestion: >-
+      行終端だけを取り除き、名前本体は verbatim に保つ。CR を落としたいなら trim_end ではなく
+      strip_suffix('\r') に限定し、空判定は trim() 後で行う。あわせて
+      parse_session_names_trims_trailing_whitespace_verbatim_otherwise を
+      「末尾空白が保たれる」ことを検証する形に直す。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。人間評価者向けに記録して次アクションに委ねる"
+  - stable_id: "e7b4c77631248d6a"
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 1613
+    title: "chooser を開くたびに UI スレッドで tmux サブプロセスを直列起動し、総待ち時間に上限がない"
+    description: >-
+      open_new_tab_chooser は TabEvent::New（+ ボタン）から winit メインスレッド上で同期
+      呼び出しされ、その中で discover()（候補ソケットごとに最大 200ms の connect probe）に
+      加えて enumerate_sockets がライブソケットごとに tmux list-sessions を直列 fork/exec し、
+      それぞれ最大 300ms 待つ。バウンドは「1 ソケットあたり」でしかかかっておらず、ライブ
+      ソケット S 個に対する総ブロック時間は S×(200+300+500)ms まで伸びる。SPEC A4 は
+      「通常 1 個だから直列でよい」としているが、tmux -L を複数使うユーザや $TMUX_TMPDIR に
+      他のソケットが同居する環境では成立せず、NFR1 を満たさない。従来はプロセス起動が一切
+      なかったので、新規に持ち込まれた UI スレッド上のブロッキング I/O にあたる。
+    suggestion: >-
+      いずれか。(a) enumerate_sockets に全体デッドラインを持たせ、経過分を各 list_sessions の
+      timeout から差し引いて総待ち時間を 300ms 程度に抑える（超過分のソケットは即 fallback）。
+      (b) ソケットごとの list_sessions をスレッドで並行実行し、全体を 1 回の 300ms で待つ。
+      (c) 列挙をワーカースレッドへ逃がし、chooser は先に開いて結果到着時に tmux 行を追加する。
+      (a) が最小変更。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。performance 観点の b89c26dfb18d34e5 と同根"
+  - stable_id: "b89c26dfb18d34e5"
+    severity: medium
+    category: performance
+    file: src-tauri/src/tmux_sockets.rs
+    line: 250
+    title: "UI スレッド上で tmux list-sessions を逐次 spawn し、最悪 N×300ms フリーズする"
+    description: >-
+      enumerate_sockets は live socket ごとに tmux list-sessions の子プロセスを 1 本ずつ
+      直列に起動し、それぞれ 300ms までブロックして待つ。この経路は
+      apply_tab_event(TabEvent::New) → App::open_new_tab_chooser → discover_tmux_entries
+      → enumerate() で、winit イベントループ＝UI スレッド上で同期実行される。停止した tmux
+      サーバが混ざると + を押した瞬間にアプリ全体が最悪 N×300ms 停止する（discover 側の
+      既存 N×200ms がさらに上乗せ）。健全系でも spawn_bounded の待機ループが
+      try_wait + sleep(5ms) なので 1 socket あたり最低 ~5ms を UI スレッド上で消費する。
+      本 diff 以前は chooser 展開が実質 0ms だったため、UI 応答性の明確な後退。
+    suggestion: >-
+      いずれか。(a) 直列を止めて fan-out する — ループ内で待たずに全 socket 分の子プロセスを
+      先に spawn し、その後で単一のデッドラインに対してまとめて回収する。(b) 列挙自体を
+      UI スレッドから外し、chooser を先に開いて完了時に tmux 行を差し込む。あわせて
+      spawn_bounded の 5ms 固定スリープループを残り時間を使った待ちに置き換えると、
+      正常系の固定コストも消せる。
+    sources: [claude:performance]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。comprehensive 観点の e7b4c77631248d6a と同根"
+  - stable_id: "0f716cc05c7b6b33"
+    severity: medium
+    category: security
+    file: src-tauri/src/tmux_sockets.rs
+    line: 208
+    title: "ソケットディレクトリの所有者/権限を検証せず tmux クライアントを自動起動する"
+    description: >-
+      enumerate() は discover() が返した全ソケットに対して tmux -S <socket_path>
+      list-sessions を実行する。呼び出し元は App::open_new_tab_chooser なので、ユーザーが
+      タブバーの + を押した時点で各ソケットに tmux クライアントプロセスが自動接続する。
+      ソケットパスの出所は resolve_socket_dir() で、$TMUX_TMPDIR 未設定時は /tmp/tmux-<uid>
+      にフォールバックする。discover_in() はこのディレクトリの所有者・パーミッションを
+      一切検証しない。tmux 本体はソケットディレクトリを自前で導出する経路で
+      st_uid != getuid() または mode & S_IRWXO != 0 のとき EACCES で拒否するが、
+      -S <path> で明示的にパスを渡された場合この検査は走らないため、本コードは tmux 自身の
+      防御を迂回する形になる。マルチユーザーホストで victim がまだ tmux を起動しておらず
+      /tmp/tmux-<victim-uid> が存在しないとき、別ユーザーが先にディレクトリを作って
+      listening socket を置ける。本 diff 以前は行をクリックする操作を経て接続していたが、
+      本 diff により chooser を開くだけで接続が起きるようになり、必要な操作が一段下がった。
+    suggestion: >-
+      ソケットディレクトリを信頼境界として扱い、tmux 自身と同じ規則で弾く。read_dir の前に
+      symlink_metadata(dir) を取り、(a) ディレクトリであること、(b) uid が自分と一致すること、
+      (c) mode & 0o077 == 0 であること、を満たさない場合は空 Vec を返す（この module の
+      「失敗は not present に縮退する」契約と整合する）。symlink_metadata を使うのは
+      ディレクトリ自体が攻撃者の張ったシンボリックリンクである場合も弾くため。所有者違い /
+      other 権限ありのディレクトリが空リストになるテストを追加する。
+    sources: [claude:security]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。人間評価者向けに記録して次アクションに委ねる"
+  - stable_id: "86f436534e91d78e"
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 1677
+    title: "App と tmux_sockets の結合部（label/argv マッピングと spawn override）にテストが一切ない"
+    description: >-
+      今回の変更で、tmux 行の spawn 契約を検証していた唯一のテスト
+      tmux_attach_overrides_builds_expected_executable_and_argv が、ヘルパー
+      tmux_attach_overrides ごと削除された。置き換えとして残っているのは
+      tmux_sockets::attach_args の純関数テストだけで、(1) discover_tmux_entries が
+      TmuxRow { label, argv } を組む箇所、(2) confirm_profile_selection の Choice::Tmux
+      アームが shell_path: Some("tmux") と entry.argv を渡す箇所、のどちらもテストに
+      触れられていない。既存の confirm_tmux_row_spawns_a_tab は tabs.len() == 1 しか見て
+      おらず、テスト用 TmuxRow の argv は手書きなので、label と argv を取り違える /
+      shell_path を落とす / 空 argv を渡す、といった回帰がグリーンのまま通る。
+      SPEC FR3 の中核契約がテストの守備範囲から抜け落ちている。
+    suggestion: >-
+      (a) confirm_profile_selection が実際に組んだ SpawnOverrides を検証できるようにする
+      （override 構築を独立関数へ切り出して直接アサートする等）。(b) discover_tmux_entries の
+      マッピングを TmuxEntry -> TmuxRow の純関数として切り出し、default ソケット +
+      セッション名から期待するラベルと argv が得られることを 1 本のテストで固定する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。人間評価者向けに記録して次アクションに委ねる"
+  - stable_id: "f64b16274a7a7825"
+    severity: medium
+    category: architecture
+    file: src-tauri/src/ui/profile_selector.rs
+    line: 188
+    title: "UI 状態の TmuxRow が spawn argv を運び、ドメイン型 TmuxEntry が discovery 直後に捨てられている"
+    description: >-
+      tmux_sockets::enumerate() は socket_name / socket_path / session を保持する
+      ドメイン型 TmuxEntry を返すが、app.rs::discover_tmux_entries がその場で
+      TmuxRow { label, argv } へ潰すため、以降どの層も元の情報を持たない。結果として
+      (1) UI 状態 ProfileSelectorState::tmux_entries が描画に使わない実行コマンド列 argv の
+      運搬役になり、App 層は「どの socket のどの session を起動しているか」を再構成できない
+      （失敗時にセッション名を含むログを出す、フォールバックへ落とす、といった処理が後から
+      書けない）。(2) ユーザー可視文字列を組む tmux_sockets::label() が Unix 限定の
+      discovery モジュール側に置かれ、同モジュール doc の "No UI knowledge" と矛盾する。
+      根本原因は TmuxEntry が cfg(all(feature = "gui", unix)) 配下にあり、クロスプラット
+      フォームな ui::profile_selector から型名を書けないこと。
+    suggestion: >-
+      TmuxEntry は Unix 固有コードを含まない純データ型なので cfg なしのモジュールへ移し、
+      Unix 限定の discovery / enumeration だけを tmux_sockets に残す。そのうえで
+      (a) App が Vec<TmuxEntry> を保持し ProfileSelectorState には描画用ラベル列だけを渡す、
+      または (b) セレクタが Vec<TmuxEntry> を保持し描画時に label(entry) を呼ぶ。いずれでも
+      確定時の argv は App が attach_args で再構成する。attach 先バイナリ名 "tmux" が
+      enumerate() 側と app.rs 側に二重に直書きされている点も 1 か所へ寄せられる。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。人間評価者向けに記録して次アクションに委ねる"
+  - stable_id: "c58a02e3da37e09b"
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/tmux_sockets.rs
+    line: 339
+    title: "タイムアウト付きコマンド実行が既存 helper と二重実装になっている"
+    description: >-
+      spawn_bounded + list_sessions は、このリポジトリに既にある
+      crate::status_bar::providers::worker::run_command_full / wait_with_timeout と
+      ほぼ同一の処理（spawn → try_wait ポーリング → 期限で kill+wait → stdout 収集 →
+      spawn error / 非ゼロ終了 / timeout の分類）を再実装している。両者はポーリング間隔が
+      異なり、しかも stdout の扱いが違う: 新実装はリーダースレッドでパイプを常時 drain するが、
+      既存 helper は子の終了後にインラインで読むためパイプが埋まると子がブロックする既知の
+      ハザードを抱えたままになる。今回「気付いて直したハザード」がコピー片側にしか反映されず、
+      以後どちらか一方を直しても他方に届かない構造ができた。
+    suggestion: >-
+      (a) 共有 helper を 1 つにする — worker 側の wait_with_timeout に本実装のリーダー
+      スレッド方式を取り込み、tmux_sockets はそれを呼ぶ（OsStr のままパス引数を渡せる口を
+      足す）。(b) 統合しない判断なら、spawn_bounded の doc に「なぜ run_command_full を
+      使わないのか」を明記し、既存 helper 側にもパイプ埋まり時の制約を注記して、次に触る人が
+      同じ検討を繰り返さないようにする。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。人間評価者向けに記録して次アクションに委ねる"
+  - stable_id: "a322e2e4486463af"
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/tmux_sockets.rs
+    line: 293
+    title: "列挙失敗のログが debug レベルのみで、リリースビルドでは診断不能"
+    description: >-
+      list_sessions の失敗経路（非ゼロ終了 / タイムアウト）は log::debug! でしか記録されず、
+      spawn 失敗に至っては何も記録されない。本プロジェクトの debugging-constraints.md と
+      CLAUDE.md にある通り、リリースビルドのログは warn 以上しか永続化されず DevTools も
+      使えないため、調査は emterm.log 一本である。この機能で最も起こりやすいユーザ報告は
+      「+ メニューにセッション名が出ず tmux: default のままになる」= まさに列挙失敗であり、
+      その状態がリリースビルドのログにまったく痕跡を残さない。ログスパムを避けたいという
+      意図は妥当だが、現状は「毎回出す」か「一切残さない」の二択で後者に振り切っている。
+    suggestion: >-
+      スパムを避けつつ痕跡は残す形にする。プロセス単位の Once / AtomicBool で「列挙失敗を
+      初めて観測したときだけ warn」にする、あるいは enumerate() の 1 回の呼び出しにつき
+      最大 1 行だけ warn を出す。spawn 失敗の経路も同じ集計に含める。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。人間評価者向けに記録して次アクションに委ねる"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: "R4 のカンディデートゲートは severity ∈ {critical, high}。本ラウンドの findings は全て medium のため候補ゼロで、auto-fix ループは 1 度も回っていない"
+residual_critical_high: 0
+rework_required: false

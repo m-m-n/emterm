@@ -66,13 +66,14 @@ pub struct ProfileSelectorState {
     /// default profile preselected); the WebView's MD3 select + Open
     /// button becomes a list row choice here.
     pub include_global: bool,
-    /// Live tmux sockets discovered when the new-tab chooser opened
-    /// (each entry is a socket name + absolute path). Appended as rows
-    /// after the profile rows (`Global -> profiles -> tmux sockets`);
-    /// empty outside chooser mode. Handed in by
+    /// Tmux rows discovered when the new-tab chooser opened (task0001).
+    /// Appended after the profile rows (`Global -> profiles -> tmux
+    /// entries`); empty outside chooser mode. Handed in by
     /// `App::open_new_tab_chooser` — this module never runs discovery
-    /// itself (IMPLEMENTATION.md: "UI never calls Discovery directly").
-    pub tmux_sockets: Vec<(String, std::path::PathBuf)>,
+    /// itself (IMPLEMENTATION.md: "UI never calls Discovery directly")
+    /// and holds no tmux knowledge beyond rendering the label it is
+    /// handed.
+    pub tmux_entries: Vec<TmuxRow>,
 }
 
 impl ProfileSelectorState {
@@ -83,7 +84,7 @@ impl ProfileSelectorState {
         self.selected = 0;
         self.scroll_request = true;
         self.include_global = false;
-        self.tmux_sockets.clear();
+        self.tmux_entries.clear();
     }
 
     /// Open in new-tab chooser mode with a leading "Global Settings"
@@ -96,10 +97,10 @@ impl ProfileSelectorState {
         self.selected = selected;
         self.scroll_request = true;
         self.include_global = true;
-        // The caller (`App::open_new_tab_chooser`) sets `tmux_sockets`
+        // The caller (`App::open_new_tab_chooser`) sets `tmux_entries`
         // right after this returns; start from empty so a stale list
         // from a previous chooser session never leaks in.
-        self.tmux_sockets.clear();
+        self.tmux_entries.clear();
     }
 
     /// Close the modal.
@@ -132,8 +133,8 @@ impl ProfileSelectorState {
     /// site that knows the synthetic-row offset: in new-tab chooser mode
     /// (`include_global`) row 0 is the "Global Settings" row, rows
     /// `1..=num_profiles` map to `profiles[i]`, and any row beyond that
-    /// maps to a tmux socket (`tmux_sockets[i]`) — the combined ordering
-    /// is `Global -> profiles -> tmux sockets`. Outside chooser mode
+    /// maps to a tmux entry (`tmux_entries[i]`) — the combined ordering
+    /// is `Global -> profiles -> tmux entries`. Outside chooser mode
     /// every row maps directly to `profiles[row]` (tmux rows never show
     /// there, so `num_profiles` is unused on that path). Both the
     /// renderer (which prepends the Global row and appends the tmux
@@ -169,10 +170,24 @@ pub enum Choice {
     Global,
     /// Profile at this index into `settings.profiles`.
     Profile(usize),
-    /// Tmux socket at this index into
-    /// [`ProfileSelectorState::tmux_sockets`] — spawn a tab attached to
-    /// that socket.
+    /// Tmux row at this index into
+    /// [`ProfileSelectorState::tmux_entries`] — spawn a tab attached to
+    /// that entry's session (or socket, for a fallback entry).
     Tmux(usize),
+}
+
+/// One tmux row for the new-tab chooser (task0001): the label text to
+/// show and the PTY spawn argv to use if the row is confirmed. Built by
+/// the Application layer from `tmux_sockets::enumerate()` via the
+/// shared label / attach-argument rules (`tmux_sockets::label` /
+/// `tmux_sockets::attach_args`) — this module holds no tmux knowledge
+/// beyond rendering the label it is handed, which keeps it reachable on
+/// every platform even though `tmux_sockets` itself is Unix-only (the
+/// non-Unix stub in `app.rs` simply returns an empty list of these).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TmuxRow {
+    pub label: String,
+    pub argv: Vec<String>,
 }
 
 /// One pointer interaction yielded by a selector frame.
@@ -257,19 +272,18 @@ pub fn draw(
                                     event = Some(ProfileSelectorEvent::Confirm(idx));
                                 }
                             }
-                            // Tmux socket rows (new-tab chooser mode only):
+                            // Tmux rows (new-tab chooser mode only):
                             // appended after the profile rows, matching
                             // `row_to_choice`'s `Global -> profiles -> tmux
-                            // sockets` ordering. Cloned out of `state` up
+                            // entries` ordering. Cloned out of `state` up
                             // front so the per-row `&mut state` borrow below
                             // (needed for the highlight/scroll bookkeeping)
                             // does not conflict with iterating the field.
-                            let tmux_sockets = state.tmux_sockets.clone();
+                            let tmux_entries = state.tmux_entries.clone();
                             let base = rows.len();
-                            for (i, (name, _path)) in tmux_sockets.iter().enumerate() {
-                                let label = format!("tmux:{name}");
+                            for (i, entry) in tmux_entries.iter().enumerate() {
                                 let tmux_row = ProfileRow {
-                                    name: &label,
+                                    name: &entry.label,
                                     shell_path: "",
                                     is_default: false,
                                 };
@@ -410,7 +424,7 @@ mod tests {
             selected: 3,
             scroll_request: false,
             include_global: true,
-            tmux_sockets: Vec::new(),
+            tmux_entries: Vec::new(),
         };
         s.open();
         assert!(s.visible);
@@ -485,24 +499,22 @@ mod tests {
         );
     }
 
-    // AC-3: combined ordering `Global -> N profiles -> M tmux sockets`.
+    fn tmux_row(label: &str) -> TmuxRow {
+        TmuxRow {
+            label: label.to_string(),
+            argv: Vec::new(),
+        }
+    }
+
+    // AC-6: combined ordering `Global -> N profiles -> M tmux entries`.
     #[test]
     fn row_to_choice_chooser_mode_appends_tmux_after_profiles() {
         let mut s = ProfileSelectorState::default();
         s.open_with_global(0);
-        s.tmux_sockets = vec![
-            (
-                "dev".to_string(),
-                std::path::PathBuf::from("/tmp/tmux-1000/dev"),
-            ),
-            (
-                "work".to_string(),
-                std::path::PathBuf::from("/tmp/tmux-1000/work"),
-            ),
-        ];
+        s.tmux_entries = vec![tmux_row("tmux: dev"), tmux_row("tmux: work")];
         let num_profiles = 2;
         // row 0 = Global, rows 1-2 = the 2 profiles, rows 3-4 = the 2
-        // tmux sockets.
+        // tmux entries.
         assert_eq!(s.row_to_choice(0, num_profiles), Choice::Global);
         assert_eq!(s.row_to_choice(1, num_profiles), Choice::Profile(0));
         assert_eq!(s.row_to_choice(2, num_profiles), Choice::Profile(1));
@@ -510,12 +522,12 @@ mod tests {
         assert_eq!(s.row_to_choice(4, num_profiles), Choice::Tmux(1));
     }
 
-    // AC-3: M = 0 reproduces today's (pre-tmux) chooser-mode behavior.
+    // AC-6: M = 0 reproduces today's (pre-tmux) chooser-mode behavior.
     #[test]
-    fn row_to_choice_zero_tmux_sockets_matches_pre_tmux_behavior() {
+    fn row_to_choice_zero_tmux_entries_matches_pre_tmux_behavior() {
         let mut s = ProfileSelectorState::default();
         s.open_with_global(0);
-        assert!(s.tmux_sockets.is_empty());
+        assert!(s.tmux_entries.is_empty());
         let num_profiles = 2;
         assert_eq!(s.row_to_choice(0, num_profiles), Choice::Global);
         assert_eq!(s.row_to_choice(1, num_profiles), Choice::Profile(0));
@@ -525,19 +537,19 @@ mod tests {
     // `open`/`open_with_global` must not leak a previous chooser
     // session's tmux list into a fresh session.
     #[test]
-    fn open_clears_stale_tmux_sockets() {
+    fn open_clears_stale_tmux_entries() {
         let mut s = ProfileSelectorState::default();
         s.open_with_global(0);
-        s.tmux_sockets = vec![("dev".to_string(), std::path::PathBuf::from("/tmp/x"))];
+        s.tmux_entries = vec![tmux_row("tmux: dev")];
         s.open();
-        assert!(s.tmux_sockets.is_empty());
+        assert!(s.tmux_entries.is_empty());
     }
 
     #[test]
-    fn open_with_global_clears_stale_tmux_sockets() {
+    fn open_with_global_clears_stale_tmux_entries() {
         let mut s = ProfileSelectorState::default();
-        s.tmux_sockets = vec![("dev".to_string(), std::path::PathBuf::from("/tmp/x"))];
+        s.tmux_entries = vec![tmux_row("tmux: dev")];
         s.open_with_global(0);
-        assert!(s.tmux_sockets.is_empty());
+        assert!(s.tmux_entries.is_empty());
     }
 }

@@ -1,0 +1,19 @@
+feature: tmux-session-rows
+collected_at: "2026-07-28T19:48:00+09:00"
+session_ids: [cad1221f-5609-4f00-b94c-29861475bd76]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - "src-tauri/assets/fonts/*.ttf, *.otf — main worktree からコピー（gitignore 対象、コミットなし）。build.rs の font-presence check を通すための環境補正であってソース変更ではない"
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - "新しい worktree では build.rs の font-presence check が必ず落ちる。implementer と verify フェーズの両方が同じ壁に当たり、それぞれ独立に main ツリーからのコピーで回避した。gitignore された必須ビルド資産を持つプロジェクトでは、worktree 作成直後に一度だけ資産を揃えるステップがあると二重の手戻りが消える"
+  - "codex CLI が不在の環境だったため、create-spec の Codex 相談ループと review の codex クロスバリデーションが両方スキップされた。complexity: high のタスクで cross-validation が効かないぶん、Claude 単独の findings しか得られていない点は評価時に留意が要る"
+  - "review round 1 の findings 10 件が全て medium で、R4 の auto-fix ゲート（critical/high のみ）に 1 件も掛からなかった。うち 2 件（stdout 待ちの 300ms 超過・セッション名末尾空白の verbatim 逸脱）は SPEC の明文要件に対する逸脱で、reviewer 自身が spec 観点で報告している。severity 基準とゲート基準の噛み合わせが弱い可能性がある — 仕様明文への逸脱は medium でも拾う経路があってよいか検討の余地"
+  - "同一の問題が観点をまたいで別ファイル・別行に anchor されると（chooser の UI スレッドブロッキングが comprehensive では app.rs:1613、performance では tmux_sockets.rs:250）、same_site 判定に掛からず重複として残る。集計上は 2 件に見えるが実体は 1 件"
+  - "tabs::tests::* の pre-existing 失敗は --test-threads=1 でも解消しなかった。プロジェクトメモリの記述（並列時のみ非決定的、単一スレッドで安定）は現状に追いついていない。verify では base コミットで直接実行して回帰でないことを確認したが、この確認コストは毎 feature 発生する"
