@@ -49,7 +49,7 @@ workflow:
       SC-5 は承認済みの Windows クロスチェックに --lib --tests を足した形で実行し、
       cfg(windows) テスト 6 本がコンパイル可能であることまで確認した。
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
