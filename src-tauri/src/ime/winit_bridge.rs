@@ -384,7 +384,11 @@ mod tests {
     }
 
     // ── TS-winit-3: Commit ends composition + next dispatch is Passthrough
+    // Non-Windows only: the Windows gate is `ime_enabled`, which neither
+    // `Preedit` nor `Commit` changes here, so both dispatch assertions
+    // below only describe non-Windows semantics.
     #[test]
+    #[cfg(not(windows))]
     fn commit_clears_composition_and_unblocks_dispatch() {
         let (mut b, _mock) = make_bridge();
         b.on_winit_ime(&WinitIme::Preedit("に".into(), None));
