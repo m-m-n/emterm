@@ -40,8 +40,9 @@ workflow:
     status: completed
     completed_at_commit: 7a26916323a17302d0dd90cfd2e9537260c03c42
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: c8c9219314d7bf9cb832474df1941738c838b502
+    completed_at_commit: f8934754231a1fffc20f822fdfb3c5a46ac0fb31
   - id: review
     status: pending
   - id: verify
@@ -63,9 +64,10 @@ tasks:
     domains: [ui, external-io, input-handling, concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2, NFR3, NFR4]
-    status: in_progress
-    notes: null
+    status: merged
     branch: em-workflow/tmux-session-rows/task0001
+    merge_commit: f8934754231a1fffc20f822fdfb3c5a46ac0fb31
+    notes: "conflict_retries: 0, tests: pass. Deviation: bundled font assets (gitignored) were copied into the task worktree so build.rs's font-presence check would pass — build-environment only, no source change. Implementation note: the enumeration timeout was parameterized so only the AC-3 bound tests use the real 300ms value; tabs::tests::* failures observed during the run are pre-existing flakiness in a file this task does not touch."
 
 review:
   status: pending
