@@ -1208,14 +1208,7 @@ impl WindowHost {
     /// row would be hidden behind the panel for one frame.
     fn refresh_status_bar_insets(&mut self, app: &App) {
         let vm = app.status_bar_view_model();
-        // task0006 AC-3: the agent-status summary can make App Line 1
-        // visible even with an empty template, so the inset math must
-        // agree with `render::draw_terminal`'s own `has_agent_summary`
-        // computation — otherwise the PTY grid would reserve zero rows for
-        // a status bar the render pass draws one row tall.
-        let has_agent_summary =
-            app.agent_status_counts() != crate::agent_status_model::Counts::default();
-        let height = crate::ui::status_bar::panel_height_logical(&vm, has_agent_summary);
+        let height = crate::ui::status_bar::panel_height_logical(&vm);
         // The status bar is fixed at the bottom; reserve its height there.
         let (top, bot) = (0.0, height);
         if (self.status_bar_top_inset_logical - top).abs() > f32::EPSILON
