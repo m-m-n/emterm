@@ -61,8 +61,12 @@ tasks:
     branch: em-workflow/version-flag-classification/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, security, architecture, spec]
+    discretionary: []
+    codex_cross_validation: true
 
 requirements:
   FR1:
