@@ -8,6 +8,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Full ANSI/VT100/VT220/xterm control sequence support
   - Multi-tab terminal with independent PTY sessions
   - New tab with global shell settings (`Ctrl+Shift+G`), bypassing the profile selector
+  - New-tab chooser lists live tmux sessions as rows (Linux/Unix); confirming a row opens a new tab attached to that session
   - `term_core` Rust crate for the parser, grid, and Unicode width
   - Unified ring buffer with full-buffer reflow on resize
   - SlimCell scrollback compression: 76% per-cell memory reduction (34B → 8B) via StyleTable/CharTable deduplication
@@ -46,6 +47,8 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - `emterm mux send-keys [-t window]`: pipe stdin data as key input to a mux window from CLI
   - `emterm mux script`: start daemon without attaching (for scripted workspace initialization)
   - `emterm mux kill`: gracefully terminate the daemon and all PTY sessions via IPC
+  - Agent status: panes report AI-agent state (idle/working/blocked/done) via OSC 777 or `emterm agent-status`; aggregated into tab/window badges, a status-bar summary, and OS notifications
+  - Agent-facing API: `emterm mux read` / `emterm mux send` / `emterm mux wait` let one pane read, write to, and wait on another pane's state
   - OSC title propagation: daemon updates window names from shell OSC 0/2 sequences even while GUI is detached
   - Pane exit while detached is reaped correctly; daemon auto-shutdown fires when the last session empties
   - Mux status bar: daemon-side command execution with template variables (`{cmd:name}`, `{hostname}`, `{cwd}`)
@@ -85,6 +88,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - File path Ctrl+click to open in editor (hover-only underline)
   - URL Ctrl+click to open in browser (hover-only underline)
   - Right-click context menu for terminal area, tabs, and tab bar
+  - OSC 8 hyperlinks: Ctrl+hover underlines a linked cell, Ctrl+click opens it, and (unlike the regex URL detector) hyperlinks stay clickable in the alternate screen
 
 - **Settings and Appearance**
   - Settings panel with collapsible icon-rail navigation and seven categories
@@ -101,6 +105,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - WSL distribution detection, import, and profile integration (Windows only)
   - Configurable cursor shape, scrollbar, opacity, line height, scrollback, shell, and more
   - All keyboard shortcuts configurable
+  - Modal dialogs (native and WebView) share one Material Design 3 based dialog system with consistent layout, keyboard, and coloring rules
 
 - **Notifications**
   - Activity dot indicator on inactive tabs when new output or process events occur
@@ -114,6 +119,14 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Unicode 17.0 and Emoji 17.0 character width support
   - Correct ambiguous-width (EAW=A) character rendering for TUI compatibility
   - Text presentation mode forced for non-emoji Extended_Pictographic characters
+
+- **CLI Argument Handling**
+  - `emterm --version` prints the version and exits; `emterm --help`/`-h` prints usage (both on the GUI and CLI-only build)
+  - Unrecognized top-level flags print a usage error to stderr and exit with code 2 instead of being silently ignored
+
+- **Claude Code Plugin**
+  - Installable Claude Code plugin (Linux) that reports Claude Code's lifecycle (idle/working/blocked) to eMterm's agent-status mechanism via a hook
+  - Exposes eMterm's display commands (`display-markdown`, `display-json`, `display-yaml`, `display-image`) and mux commands (`mux-read`, `mux-send`, `mux-wait`) as Claude Code skills
 
 ## Requirements
 
