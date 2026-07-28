@@ -50,7 +50,7 @@ workflow:
       サブセットが base_branch (main) でも再現するため VERIFICATION.md の
       known-flaky 除外に該当し、本 feature の失敗として数えない。
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
