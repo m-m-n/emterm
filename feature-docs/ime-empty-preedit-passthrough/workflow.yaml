@@ -51,7 +51,7 @@ workflow:
       tests/cli_subcommands.rs の 3 ファイルのみ。winit_bridge.rs は含まれない。
       初回 verify の SC-2 失敗（TS-5 欠落 / TS-1 の形）は task0002 で解消済み。
   - id: retrospect
-    status: in_progress
+    status: completed
 
 tasks:
   task0001:
