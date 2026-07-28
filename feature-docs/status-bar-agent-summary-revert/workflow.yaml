@@ -34,9 +34,26 @@ workflow:
   - id: review
     status: pending
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    completed_at_commit: 74e921bdc589bc6bbb7b2cd76b29ed19974f4a8d
+    notes: >-
+      Build check (default) と --no-default-features check がともに成功。
+      cargo test --lib -- --test-threads=1 は 2749 passed / 7 failed で、
+      失敗は全て tabs.rs の off-thread replay タイミングテスト。main 作業ツリー
+      (本 feature の変更を含まない) で同一コマンドを実行しても同じ 7 件が失敗する
+      ため既存の環境起因と確認済み。テスト総数の差 (main 2758 → 本 feature 2749、
+      9 件減) は削除対象の 8 サマリテスト + counts passthrough テストと一致。
+      status_bar スコープ 20 件・agent_status 関連 104 件は全て pass。
+      cargo fmt --check の差分は arg_dispatch.rs / tests/cli_subcommands.rs のみで、
+      main でも同一の 2 件が出る既存ドリフト (本 feature の 4 ファイルには差分なし)。
+      TS-1〜TS-8 pass、TS-9 (doc に status bar 記述なし) pass。
+      status_bar.rs は参照コミット 44113f4 と完全一致、削除対象識別子の残存 0 件。
+      MT-1〜MT-3 の目視確認はリリースビルドが必要なため未実施。
+      検証環境の補足: gitignore 済みの src-tauri/assets/fonts/ が worktree で空
+      だったため、main ツリーの同ファイル群と NotoColorEmoji.ttf を配置してから
+      実行した (git 管理外・コミット対象外)。
   - id: retrospect
     status: pending
 
