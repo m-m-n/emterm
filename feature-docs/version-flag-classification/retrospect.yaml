@@ -1,0 +1,28 @@
+feature: version-flag-classification
+collected_at: "2026-07-28T09:45:00+09:00"
+session_ids: [170cbc43-90c7-4caa-95a6-3bdb173c168c]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    実装者・オーケストレーターの双方が、新規 worktree に gitignored のフォント資産
+    (src-tauri/assets/fonts/*.ttf, *.otf) が無いために cargo check の build.rs で
+    panic する問題に個別に遭遇し、それぞれメインツリーからコピーして回避した。
+    worktree ベースのワークフローでは、gitignored なビルド前提資産が worktree に
+    引き継がれない点が繰り返しコストになる。
+  - >-
+    tabs::tests の 7 件は timing-sensitive な既知 flaky で、base_branch でも同一
+    サブセットが再現する。verify フェーズが「テストコマンド全体の exit code」で
+    pass/fail を決めると恒常的に fail になるため、VERIFICATION.md に known-flaky
+    除外を明記して個別判定した。プロジェクト側の恒久対処（#[ignore] 化など）が
+    無い限り、以後の feature でも同じ判定が必要になる。
+  - >-
+    レビューで medium 3 件（うち 2 件は architecture 観点の SSOT 二重管理指摘）が
+    出たが、auto-fix ゲートが critical/high 限定のため未解決のまま完了した。
+    「本 feature が直した drift と同種の再発を防ぐ不変条件テストが無い」という
+    指摘は、バグ修正 feature では特に拾う価値がある可能性がある。
