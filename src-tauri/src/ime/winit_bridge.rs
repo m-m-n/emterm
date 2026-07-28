@@ -542,18 +542,32 @@ mod tests {
         assert_eq!(b.name(), "winit");
     }
 
-    // ── AC-1: empty preedit after non-empty unblocks the next dispatch
-    //          on non-Windows targets, and both preedits reach pump in
-    //          order.
-    #[cfg(not(windows))]
+    // ── TS-1 (SKK regression, all targets): Enabled → Preedit("▽A") →
+    //    dispatch is Consumed on every target (Windows via the open
+    //    lifecycle, everywhere else via the non-empty preedit) →
+    //    Preedit("") → dispatch is Consumed on Windows (the lifecycle is
+    //    still open) and Passthrough elsewhere. Both preedits reach pump
+    //    in order regardless of platform (FR2, platform-independent).
     #[test]
-    fn empty_preedit_after_non_empty_unblocks_dispatch_on_non_windows() {
+    fn enabled_then_non_empty_then_empty_preedit_matches_ts1_on_every_target() {
         let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
         b.on_winit_ime(&WinitIme::Preedit("▽A".into(), None));
-        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
         assert_eq!(
             b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Consumed,
+            "dispatch must be consumed while the non-empty preedit is current, on every target"
+        );
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        let expected_after_empty = if cfg!(windows) {
+            KeyDispatchResult::Consumed
+        } else {
             KeyDispatchResult::Passthrough
+        };
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            expected_after_empty,
+            "Windows keeps suppressing inside the still-open lifecycle; every other target passes through"
         );
         let mut out = Vec::new();
         b.pump(&mut out);
@@ -563,6 +577,36 @@ mod tests {
                 ImeEvent::Preedit("▽A".into()),
                 ImeEvent::Preedit(String::new()),
             ]
+        );
+    }
+
+    // ── TS-5 (X11 ambiguous start/end shape, non-Windows only):
+    //    SPEC.md assumption A3 — winit-x11 emits an empty Ime::Preedit
+    //    for both composition start and composition end. This sequence
+    //    exercises that ambiguous shape end to end: passthrough while no
+    //    preedit has been observed yet, consumed once the preedit is
+    //    non-empty, passthrough again once it goes back to empty.
+    #[cfg(not(windows))]
+    #[test]
+    fn x11_ambiguous_empty_preedit_start_and_end_toggles_dispatch() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Passthrough,
+            "leading empty preedit (X11 composition-start shape) must not suppress keys"
+        );
+        b.on_winit_ime(&WinitIme::Preedit("あ".into(), None));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Consumed,
+            "non-empty preedit must suppress keys"
+        );
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Passthrough,
+            "trailing empty preedit (X11 composition-end shape) must unblock dispatch again"
         );
     }
 
