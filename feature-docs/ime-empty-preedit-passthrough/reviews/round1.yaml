@@ -1,0 +1,157 @@
+round: 1
+executed_at: "2026-07-29T01:05:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 52df81501c9a5b7ab28cf33bedf36e6168a53e41
+  head_commit: f8c6f9913dd18c81a95224bf59530f54b2daf0fe
+  changed_files:
+    - src-tauri/src/ime/winit_bridge.rs
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+findings:
+  - stable_id: c4f8d95b44f2d533
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 386
+    title: "既存テスト TS-winit-3 が Windows ターゲットで必ず失敗する"
+    description: >-
+      commit_clears_composition_and_unblocks_dispatch は #[cfg] ゲートが無いため
+      Windows ホストでもコンパイル・実行されるが、Ime::Enabled を流さずに
+      Preedit("に") だけを与えて dispatch_key_event == Consumed を期待している。
+      新しい Windows 側ゲートは ime_enabled であり、Ime::Enabled が来ていない以上
+      false のままなので Windows では Passthrough が返り最初の assert が落ちる。
+      2 番目の assert（Commit 後に Passthrough）も、先頭に Ime::Enabled を足しても
+      FR4/AC-5 のとおり Commit は ime_enabled を落とさないため Windows では
+      成立しない。テストのシナリオ自体が非 Windows 専用の意味論になっている。
+    suggestion: >-
+      TS-winit-3 に #[cfg(not(windows))] を付与し、なぜ非 Windows 専用なのかを
+      説明するコメントを添える。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (commit f8c6f99); 再レビューで comprehensive / spec の双方が解消を確認"
+  - stable_id: 66514238e2dc12ab
+    severity: high
+    category: spec
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 388
+    title: "既存 TS-winit-3 が Windows ビルドで失敗する（Regression Tests 違反）"
+    description: >-
+      SPEC「Test Scenarios / Regression Tests」は「Existing TS-winit-1 through
+      TS-winit-7 pass unmodified」を要求しているが、TS-winit-3 は新しい Windows
+      ゲート（FR7）下で決定的に失敗する。SPEC は同種の問題を
+      empty_preedit_is_surfaced_for_overlay_clear については明示的に扱っているが、
+      TS-winit-3 は見落とされている。当リポジトリの CI は cargo test を実行しない
+      ため、Windows ホストで手動実行するまで表面化しない。
+    suggestion: >-
+      dispatch の assert を非 Windows 限定にするか、テスト全体を
+      #[cfg(not(windows))] にして Windows 版の等価シナリオに委ねる。
+    sources: [claude:spec, codex:spec]
+    confidence: 100
+    resolution: fixed
+    resolution_reason: "loop 1 の comprehensive 側修正（同一サイト）で解消; 再レビューで claude:spec が解消を確認し codex:spec は 0 件"
+  - stable_id: 9f9664d463b1f618
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 265
+    title: "notify_focus(false) が ime_enabled をリセットせず、Windows でキー入力が恒久的に握り潰されうる"
+    description: >-
+      Windows のキー抑止ゲートは ime_enabled 単独になり、解除経路は Ime::Disabled
+      の 1 本だけになった（Ime::Commit はもう解除しない）。しかし notify_focus(false)
+      は set_ime_allowed(false) を呼ぶだけで両フラグに触れない。winit-win32 の
+      Window::request_ime_update は ImeRequest::Disable 分岐で ime_capabilities を
+      None にし ImeContext::set_ime_allowed(hwnd, false) を呼んだ後 return し、
+      Ime::Disabled を送出しない（winit-win32-0.31.0-beta.2/src/window.rs:1041-1044）。
+      対して Wayland は同じ Disable 要求から Ime::Disabled を合成する
+      （winit-wayland-0.31.0-beta.2/src/window/mod.rs:512）。合成中にフォーカスを
+      失うと WM_IME_ENDCOMPOSITION が届かない場合 ime_enabled が true のまま残り、
+      以後 dispatch_key_event が全キーに Consumed を返してキー入力が死ぬ。
+      変更前は Ime::Commit でも解除されたため窓は狭かった。
+      未確定: ImmAssociateContextEx による解離時に WM_IME_ENDCOMPOSITION が
+      必ず飛ぶかは Windows 実機でしか確認できない。
+    suggestion: >-
+      notify_focus(false) で has_preedit / ime_enabled をローカルに落とす。
+      Wayland/X11 では直後に Ime::Disabled 由来の FocusOut が来るが冪等。
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >-
+      severity medium のため R4 の auto-fix 候補ゲート（critical/high のみ）に
+      該当せず。オーケストレーターが winit-win32 window.rs:1041-1044 と
+      winit-wayland window/mod.rs:512 を直接読み、プラットフォーム非対称の前提が
+      事実であることを独立に確認済み。人間の評価に委ねる。
+  - stable_id: 5b461e782d6f18bc
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 242
+    title: "Windows 側ゲート（ime_enabled）に実行されるテストが存在しない"
+    description: >-
+      dispatch_key_event のゲート選択が cfg!(windows) でコンパイル時に固定されて
+      いるため、Linux ホストでは Windows 用の ime_enabled 分岐が実行時に一度も
+      評価されない。新規追加された Windows 側テスト 6 本も #[cfg(windows)] のため
+      Linux では選択されない。CLAUDE.md の Windows ワークフローは
+      cargo xwin build のみで、cargo build はテストコードをコンパイルしない。
+      結果として本変更の中核である「プラットフォームで異なるゲート」の Windows
+      半分は、どのワークフローでも実行される保証のないテストしか持たない。
+    suggestion: >-
+      ゲート判定を cfg に依存しない純関数へ切り出し、プラットフォームを引数化して
+      どのホストでも両分岐を実行できるようにする
+      （例: gate_consumes(has_preedit, ime_enabled, windows_gate)）。
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >-
+      severity medium のため auto-fix 候補ゲートに該当せず。verify フェーズで
+      Windows ターゲットの --tests 型検査を実施し、少なくとも
+      「コンパイルすら通らない」可能性は潰す。実行カバレッジの獲得は人間の判断に委ねる。
+  - stable_id: b41937460cd5c472
+    severity: medium
+    category: spec
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 545
+    title: "TS-1 (SKK regression, all targets) は Windows ホストで一切実行されない"
+    description: >-
+      SPEC の TS-1 は "(SKK regression, all targets)" と明記され、Enabled →
+      Preedit("▽A") → dispatch は Windows でも Unix でも Consumed →
+      Preedit("") → Unix では Passthrough、かつ両 preedit が pump に載ることを
+      要求している。実装された対応テスト
+      empty_preedit_after_non_empty_unblocks_dispatch_on_non_windows は
+      #[cfg(not(windows))] で Windows ビルドから消え、先頭の Ime::Enabled も
+      Preedit("▽A") 直後の Consumed 中間アサートも持たない。
+      初回ラウンドでは TS-5 に対応するテストの欠落もあわせて報告された。
+    suggestion: >-
+      AC-1 テストの先頭に Ime::Enabled を足し、Preedit("▽A") 直後の Consumed
+      アサートを入れる。pump 順序のアサートは FR2 のプラットフォーム非依存な
+      要件なので #[cfg] の外に別テストとして切り出す。
+    sources: [claude:spec]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: >-
+      round 1 終了時点では severity medium のため auto-fix 候補ゲート（critical/high のみ）に
+      該当せず unresolved だった。その後 verify フェーズが同じ不備を SC-2 の失敗として検出し、
+      batch rework で合成された task0002（TS-1 の無条件化 + TS-5 の追加）で解消された。
+auto_fix:
+  loops_run: 1
+  applied_total: 1
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+notes:
+  - >-
+    レビュー対象外だが verify フェーズに引き継ぐ既知の環境事実（オーケストレーターが
+    独立に検証）: (1) cargo test --lib の tabs::tests 7 件の失敗は main (c5f7d03)
+    でも同一に再現する既存の失敗で、本 feature とは無関係。(2) cargo fmt --check の
+    差分は arg_dispatch.rs / tmux_sockets.rs / tests/cli_subcommands.rs の 3 ファイルに
+    限られ、いずれも main 由来の既存ドリフト。winit_bridge.rs は含まれない。
+    (3) ime::winit_bridge のテストは 18 件全通過。
