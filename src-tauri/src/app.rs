@@ -2364,13 +2364,6 @@ impl App {
             .aggregate([&crate::agent_status_model::PaneKey::MuxPane(pane_id)])
     }
 
-    /// Per-state counts across every tracked pane/tab (task0006 AC-3: the
-    /// status-bar summary segment). Delegates to
-    /// [`crate::agent_status_model::AgentStatusModel::counts`].
-    pub fn agent_status_counts(&self) -> crate::agent_status_model::Counts {
-        self.agent_status.counts()
-    }
-
     /// The daemon-minted public ID for mux pane `pane_id`, if the GUI has
     /// learned it yet (task0006 AC-5). `None` until the daemon pushes at
     /// least one `AgentStatusUpdate` for the pane — see
@@ -7456,31 +7449,6 @@ mod tests {
         app.spawn_initial_tab();
         let tab = app.active_tab().unwrap();
         assert_eq!(app.agent_status_badge_for(tab), None);
-    }
-
-    /// `agent_status_counts` is a thin passthrough to
-    /// `AgentStatusModel::counts` (task0006 AC-3).
-    #[test]
-    fn agent_status_counts_passthrough() {
-        let mut app = App::new();
-        assert_eq!(
-            app.agent_status_counts(),
-            crate::agent_status_model::Counts::default()
-        );
-        app.agent_status.apply_daemon_update(
-            1,
-            Some(crate::agent_status::AgentState::Working),
-            None,
-            1,
-            false,
-        );
-        assert_eq!(
-            app.agent_status_counts(),
-            crate::agent_status_model::Counts {
-                working: 1,
-                ..Default::default()
-            }
-        );
     }
 
     // ── Phase 3/4: mux action dispatch (TS-12, TS-13, TS-14) ──────────

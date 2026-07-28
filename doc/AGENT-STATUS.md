@@ -1,10 +1,9 @@
 # Agent Status Reporting & Agent-Facing API
 
 Panes can report the state of the AI agent (or any process) running in them.
-eMterm aggregates those reports into tab/window badges and a status-bar
-summary, fires OS notifications on attention-needed transitions, and exposes
-a read / send / wait API over the mux socket so agents can coordinate with
-each other.
+eMterm aggregates those reports into tab/window badges, fires OS
+notifications on attention-needed transitions, and exposes a read / send /
+wait API over the mux socket so agents can coordinate with each other.
 
 ## State Model
 
@@ -173,8 +172,8 @@ pane. This is an inherent property of the reporting mechanism (an active OSC
 report), not a bug.
 
 The consequences of a forged report are limited to display and
-notifications: a forged state can mislead the badge, status-bar summary, or
-trigger a spurious notification. Reported agent state is never used as an
+notifications: a forged state can mislead the badge or trigger a spurious
+notification. Reported agent state is never used as an
 authorization input and never used to identify or select a pane for the API
 — pane identification uses the opaque public pane ID only, independent of
 any reported agent state.
