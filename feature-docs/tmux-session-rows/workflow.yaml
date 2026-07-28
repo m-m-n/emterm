@@ -70,8 +70,12 @@ tasks:
     notes: "conflict_retries: 0, tests: pass. Deviation: bundled font assets (gitignored) were copied into the task worktree so build.rs's font-presence check would pass — build-environment only, no source change. Implementation note: the enumeration timeout was parameterized so only the AC-3 bound tests use the real 300ms value; tabs::tests::* failures observed during the run are pre-existing flakiness in a file this task does not touch."
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    codex_cross_validation: true
 
 requirements:
   FR1:
