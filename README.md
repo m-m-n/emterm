@@ -47,7 +47,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - `emterm mux send-keys [-t window]`: pipe stdin data as key input to a mux window from CLI
   - `emterm mux script`: start daemon without attaching (for scripted workspace initialization)
   - `emterm mux kill`: gracefully terminate the daemon and all PTY sessions via IPC
-  - Agent status: panes report AI-agent state (idle/working/blocked/done) via OSC 777 or `emterm agent-status`; aggregated into tab/window badges, a status-bar summary, and OS notifications
+  - Agent status: panes report AI-agent state (idle/working/blocked/done) via OSC 777 or `emterm agent-status`; aggregated into tab/window badges and OS notifications
   - Agent-facing API: `emterm mux read` / `emterm mux send` / `emterm mux wait` let one pane read, write to, and wait on another pane's state
   - OSC title propagation: daemon updates window names from shell OSC 0/2 sequences even while GUI is detached
   - Pane exit while detached is reaped correctly; daemon auto-shutdown fires when the last session empties
