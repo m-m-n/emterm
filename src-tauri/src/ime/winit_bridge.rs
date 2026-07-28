@@ -862,6 +862,64 @@ mod tests {
         assert!(!should_suppress_key(b.has_preedit, b.ime_enabled, false));
     }
 
+    // ── task0004 AC-1 / TS-6 dispatch counterpart (Windows target only):
+    //    `windows_gate_empty_preedit_inside_live_composition_still_suppresses`
+    //    above proves the RULE — that the predicate suppresses when
+    //    `windows_gate = true` and the preedit is empty inside an open
+    //    lifecycle. This test proves the WIRING — that
+    //    `dispatch_key_event` itself reaches that answer through
+    //    `cfg!(windows)`, not just that the predicate can be made to
+    //    answer it when driven directly. A predicate-only pair would
+    //    still pass if `dispatch_key_event` hardcoded `windows_gate =
+    //    false`; only a test that calls `dispatch_key_event` under a
+    //    real `cfg(windows)` build can catch that.
+    #[test]
+    #[cfg(windows)]
+    fn windows_dispatch_empty_preedit_inside_live_composition_still_suppresses() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Consumed,
+            "dispatch_key_event must still suppress: the lifecycle is open even though the preedit is empty"
+        );
+        b.on_winit_ime(&WinitIme::Disabled);
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Passthrough,
+            "Disabled closes the lifecycle, so dispatch_key_event must release"
+        );
+    }
+
+    // ── task0004 AC-2 / TS-7 dispatch counterpart (Windows target only):
+    //    `windows_gate_commit_inside_live_composition_does_not_unblock`
+    //    above proves the RULE — that a commit mid-composition does not
+    //    release the predicate when `windows_gate = true`. This test
+    //    proves the WIRING — that `dispatch_key_event` reaches that same
+    //    answer through `cfg!(windows)` rather than a hardcoded or
+    //    miswired selector.
+    #[test]
+    #[cfg(windows)]
+    fn windows_dispatch_commit_inside_live_composition_does_not_unblock() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.on_winit_ime(&WinitIme::Preedit("x".into(), None));
+        b.on_winit_ime(&WinitIme::Preedit("".into(), None));
+        b.on_winit_ime(&WinitIme::Commit("X".into()));
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Consumed,
+            "a commit mid-composition must not release dispatch_key_event's suppression"
+        );
+        b.on_winit_ime(&WinitIme::Disabled);
+        assert_eq!(
+            b.dispatch_key_event(&raw_press()),
+            KeyDispatchResult::Passthrough,
+            "Disabled must release dispatch_key_event's suppression"
+        );
+    }
+
     // ── TS-winit-int-1: Xvfb-backed integration test (#[ignore]).
     //
     // The harness creates a real winit window with `Visible::Hidden`
