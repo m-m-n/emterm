@@ -31,7 +31,8 @@ workflow:
     completed_at_commit: 2a223c84b89a7dfa3b66c7b3c8cfdb4924ea6f3b
     base_commit: 52df81501c9a5b7ab28cf33bedf36e6168a53e41
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: f8c6f9913dd18c81a95224bf59530f54b2daf0fe
   - id: verify
     status: pending
     result: null
@@ -54,12 +55,18 @@ tasks:
     branch: em-workflow/ime-empty-preedit-passthrough/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, spec]
     discretionary: []
     codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
