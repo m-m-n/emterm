@@ -33,7 +33,8 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 1fb65916a7633c81bc4a1e41cac3efee87c922d2
     base_commit: 2a63a36f4f97afa2fe2155bce5ce1207bcd2dd76
   - id: review
     status: pending
@@ -55,7 +56,7 @@ tasks:
     domains: [input-handling, api-contract]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/version-flag-classification/task0001
 
