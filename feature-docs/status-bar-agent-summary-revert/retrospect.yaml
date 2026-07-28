@@ -1,0 +1,47 @@
+feature: status-bar-agent-summary-revert
+collected_at: "2026-07-28T14:13:00+09:00"
+session_ids: [f16c169e-d437-49eb-bda4-d9a83a45c4ab]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - src-tauri/assets/fonts/*
+      note: >-
+        予測ファイル外の逸脱だが product code ではない。gitignore 済みで worktree に
+        存在しなかったバンドルフォントを build.rs が要求し、check/test が一切走らない
+        状態だったため implementer が scripts/fetch-fonts.sh とシステム導入済みの
+        NotoColorEmoji.ttf で補填した。コミット対象外。
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: architecture
+      reason: >-
+        共有 UI ウィジェットの公開シグネチャ変更とアプリ状態からのクエリメソッド
+        削除を含むため、レイヤー境界と呼び出し側整合の専用パスを追加
+  declined_findings: []
+  deferred_findings:
+    - stable_id: 8ac64bce0e75c785
+      category: comprehensive
+      severity: medium
+      file: feature-docs/mux-agent-status-api/SPEC.md
+      resolution_reason: >-
+        本 feature のスコープ外（別 feature の feature-docs、changed_files 外、
+        severity: medium で auto-fix 候補ゲート非該当）
+lessons_candidates:
+  - >-
+    新規 worktree では gitignore 済みのバンドルアセット（src-tauri/assets/fonts/）が
+    空になり、build.rs が panic して cargo check / cargo test が一切走らない。
+    task0001 の implementer と verify フェーズの両方が同じ壁に当たり、それぞれ独立に
+    復旧した。worktree 作成時にこのアセットを配置するステップがあれば二重の手戻りを
+    避けられる。
+  - >-
+    「revert 系タスク」では、撤回対象の機能を発注した側の feature-docs が
+    有効な要件として残り続ける SSOT ドリフトが発生する。今回は comprehensive
+    レビューが検出したが、feature-docs をエージェントの入力に使う運用では
+    revert タスクの計画時点で「発注元 feature-docs への撤回注記」を検討する
+    余地がある。
+  - >-
+    tabs.rs の off-thread replay テスト 7 件はこの環境で恒常的に失敗する。
+    verify で main 作業ツリーのベースラインと突き合わせて既存と判定したが、
+    毎回この比較コストがかかる。テスト側の安定化か既知失敗リストの導入が候補。

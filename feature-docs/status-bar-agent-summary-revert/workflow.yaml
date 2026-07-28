@@ -55,7 +55,7 @@ workflow:
       だったため、main ツリーの同ファイル群と NotoColorEmoji.ttf を配置してから
       実行した (git 管理外・コミット対象外)。
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
