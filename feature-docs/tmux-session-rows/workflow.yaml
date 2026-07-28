@@ -63,8 +63,9 @@ tasks:
     domains: [ui, external-io, input-handling, concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2, NFR3, NFR4]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/tmux-session-rows/task0001
 
 review:
   status: pending
