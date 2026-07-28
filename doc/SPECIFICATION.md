@@ -131,25 +131,15 @@ Color emoji glyphs are rasterized via a vector-direct COLRv1 paint-graph path (`
 
 #### Unified Buffer
 
-Terminal display memory is managed by `UnifiedBuffer`, a ring buffer that combines scrollback history and the active viewport into a single contiguous structure.
+Terminal display memory splits the live viewport from scrollback history: the viewport is a fixed-size ring that rotates in place, and scrollback is a separate compressed deque (see [SlimCell Scrollback Compression](#slimcell-scrollback-compression)).
 
 **Key Functionality:**
-- Ring buffer with capacity = `scrollbackLines + rows`
-- Viewport: last `rows` entries in the ring
-- Scrollback: entries before the viewport
-- Full-buffer reflow on resize: joins wrapped physical lines into logical lines, re-splits at new column width
-- Cursor position tracking through reflow (logical line offset approach)
+- Viewport: `Vec<Cell>` of length `rows × cols`, rotated via a ring head so scrolling never copies cells
+- Scrollback: `VecDeque<Vec<SlimCell>>`, oldest at the front; a row is compressed exactly when it crosses the viewport→scrollback boundary
+- Same-width resize (row-count change only): touches only the rows that cross the viewport/scrollback boundary as a result of the height change; rows that stay on the same side are moved or left untouched
+- Cross-width resize (column-count change): full reflow — decompresses affected rows, joins wrapped physical lines into logical lines, re-splits at the new column width, and tracks cursor position through the join/split
 - Alternate screen buffer: no reflow on resize (lines resized in place)
-- O(1) line access via index arithmetic
-- O(1) scroll-up (ring head advances, no array shift)
-
-**Reflow Algorithm:**
-1. Drain all lines from ring buffer to a flat array
-2. Join consecutive wrapped physical lines into logical lines, tracking cursor position as logical offset
-3. Re-split logical lines at new column width
-4. Convert cursor logical offset back to physical (row, col)
-5. Trim empty lines from bottom of viewport
-6. Write reflowed lines back to ring buffer
+- O(1) line access via index arithmetic; O(1) scroll-up (ring head advances, no array shift)
 
 ---
 
@@ -572,6 +562,20 @@ A dedicated keybind opens a new tab using global shell settings directly, bypass
 
 ---
 
+#### tmux Session Rows in the New-Tab Chooser
+
+The new-tab chooser (opened by the tab bar's + button) lists one row per live tmux session, and confirming a row opens a new tab attached to exactly that session. Linux/Unix only.
+
+**Key Functionality:**
+- Rows are discovered by scanning live tmux sockets under `$TMUX_TMPDIR` (fallback `/tmp/tmux-{uid}/`) via a Unix-domain connect probe, then enumerating each socket's sessions with `tmux -S {socket_path} list-sessions -F #{session_name}` (bounded by a per-socket timeout of at most 300ms); stale sockets are filtered out and discovery re-runs each time the chooser opens
+- Row label: `tmux: {session_name}` for the default socket, or `tmux: {socket_name}: {session_name}` for a named socket (`tmux -L`)
+- Confirming a row spawns a new tab running `tmux -S {socket_path} attach-session -t ={session_name}` (the `=` prefix forces exact-name matching)
+- A socket whose sessions cannot be enumerated falls back to a single row labeled `tmux: {socket_name}`, attaching via `tmux -S {socket_path} attach`
+- Sessions already attached by another client are listed like any other session
+- With zero live tmux sockets, the chooser is unchanged (no tmux rows shown)
+
+---
+
 ### Category 4: Input and IME
 
 #### Key Input Performance
@@ -739,7 +743,7 @@ URLs detected in terminal output open in the system browser via `Ctrl+click`.
 - Underline appears only on hover (not always visible)
 - Each character's actual foreground color is used for the underline
 - `Ctrl+click` opens URL in default browser
-- OSC 8 hyperlink sequences are also supported (explicit hyperlink markup)
+- OSC 8 hyperlink sequences are also supported (explicit hyperlink markup): a cell with a non-zero hyperlink id underlines and switches to a hand cursor on Ctrl+hover, and — unlike the regex-based URL detector, which stays disabled in the alternate screen — OSC 8 hyperlinks remain clickable inside the alternate screen
 
 ---
 
@@ -922,6 +926,28 @@ Settings, Markdown viewer, and JSON/YAML data viewer windows launch maximized by
 - JSON/YAML data viewer launches maximized (restore size 960×640)
 - Image viewer is excluded from maximize-on-launch and keeps its image-fit sizing
 - All windows share a single application identifier (X11 `WM_CLASS` / Wayland `app_id` = `emterm`) so GNOME/Ubuntu groups the main terminal, settings, Markdown, JSON/YAML, and image windows under one dock icon
+
+---
+
+#### Dialog Design System
+
+All modal dialogs (native egui and child WebView) follow a shared Material Design 3 based design system, with the dialog tokens in `doc/UI-DESIGN-GUIDELINES.yaml` as the normative source of truth.
+
+**Key Functionality:**
+- Three dialog kinds — input, confirm, destructive-confirm — each with defined layout, keyboard, focus, and coloring rules
+- Native `Dialog` builder (`src-tauri/src/ui/dialog/`) and WebView `createDialogShell()` helper construct dialogs from the same shared tokens
+- Applies to all eight existing dialogs: rename window, move window, SFTP upload confirm, SFTP overwrite confirm, close-tab guard, profile selector, profile editor, SSH editor
+- A drift-detection test asserts the yaml tokens, Rust constants, and CSS variables stay in sync
+- Generic "OK" button labels are not used; destructive actions get error-container coloring
+
+**Keyboard Shortcuts:**
+| Key | Action |
+|-----|--------|
+| `Enter` (input dialogs) | Confirm, unless a text widget currently owns focus (guards IME composition) |
+| `Enter` (confirm dialogs) | Confirm |
+| `Enter` (destructive-confirm dialogs) | Cancel |
+| `Esc` (all dialogs) | Cancel |
+| `Tab` (all dialogs) | Cycle focus (inputs → primary → cancel) |
 
 ---
 
@@ -1130,6 +1156,34 @@ emterm mux kill
 
 ---
 
+#### Mux Agent Status and Agent API
+
+Panes report the state of an AI agent running in them via an OSC 777 sequence; eMterm aggregates these into tab/window badges, a status-bar summary, and OS notifications, and exposes a read/send/wait API over the mux daemon socket so agents can coordinate with other panes.
+
+**Key Functionality:**
+- OSC sequence: `OSC 777;emterm;agent-status;v=1;state=<idle|working|blocked|done>[;name=<name>]` (set) and `...;agent-status;clear`; affects only the originating pane
+- CLI: `emterm agent-status <idle|working|blocked|done> [--name <name>]` and `emterm agent-status clear`; available in both the GUI and CLI-only build
+- Daemon stores per-pane `state`, `name`, and a monotonically increasing `revision`; state is discarded on pane exit and never persisted
+- Agent-status OSC is stripped from scrollback/snapshot replay; states resync after reattach via replay-derived updates without firing a notification
+- Tab/window list badges aggregate per-pane state with priority: blocked > unseen done > working > seen done > idle
+- Status bar shows per-state pane counts, hidden when no pane has reported a state
+- OS notification on real transitions to blocked/done for non-visible panes; suppressed for same-state re-reports, name-only changes, and replay; rate-limited; gated by a dedicated agent-notification setting (default on) plus the global notification setting
+- Public opaque, non-reusable pane IDs; `EMTERM_PANE_ID` is injected into each mux pane's environment for `--pane current` resolution
+
+**Agent-Facing CLI Commands:**
+```bash
+emterm mux read --pane <id|current> [--lines N]
+  # Returns the pane's tail rendered rows as ANSI-stripped plain text
+
+emterm mux send --pane <id|current> (--text <text> | --stdin)
+  # Writes UTF-8 verbatim to the pane's PTY (no implicit Enter, no key interpretation)
+
+emterm mux wait --pane <id|current> --state <state[,state...]> [--timeout <sec>] [--after <revision>]
+  # Waits for a pane to reach one of the given states (level-triggered)
+```
+
+---
+
 #### Mux Output Throughput
 
 Batch processing optimizations for high-frequency PTY output in the mux pipeline.
@@ -1172,6 +1226,18 @@ On pane/window switch, the snapshot payload (up to ~2 MiB) is reparsed on a work
 - Rapid re-switching (FR5): only the most recent target's core is swapped in; intermediate results are discarded
 - Grid resize during a pending switch supersedes the in-flight parse (stale-sized core is never swapped in)
 - Worker failure falls back to synchronous main-thread reparse
+
+---
+
+#### Mux Snapshot Scrollback Restore
+
+For snapshots at or above the off-thread threshold (64 KiB), the initial fast swap leaves scrollback empty; a second background pass reparses the same payload with scrollback compression enabled and merges the result into the live core.
+
+**Key Functionality:**
+- A second worker thread reparses the snapshot payload with the bypass disabled and reports the result over a channel
+- The reparsed scrollback is merged into the live `TerminalCore`, trimming any trailing rows already present from live PTY output received during the second pass
+- A new switch on the same tab, a grid resize, or app shutdown cancels an in-flight restore; superseded results are discarded and never merged
+- Below the 64 KiB threshold, no second pass is scheduled — the synchronous replay path already populates scrollback directly
 
 ---
 
@@ -1393,6 +1459,62 @@ On Windows, the application icon is embedded in the `.exe` resource and applied 
 - Icon decode failure logs a warning and falls back to no icon
 - A watcher thread on `PtySession` detects shell exit via `Child::wait()` and drives the existing `PtyEvent::Exited` → tab-close chain (e.g. `exit`, Ctrl+D)
 - Exactly one exit event per session: X-button close and natural shell exit converge on the same path
+
+---
+
+#### Linux Backend Selection (Wayland Native)
+
+eMterm's Linux windowing backend defaults to winit's automatic selection, which prefers Wayland, instead of forcing X11 whenever both `WAYLAND_DISPLAY` and `DISPLAY` are set. X11 remains available as an explicit opt-in.
+
+**Key Functionality:**
+- No `EMTERM_BACKEND` (or an unrecognized value): winit auto-selects, preferring Wayland
+- `EMTERM_BACKEND=wayland`: forces Wayland
+- `EMTERM_BACKEND=x11`: forces X11 when `DISPLAY` is set
+- `WindowEvent::KeyboardInput` events with `is_synthetic == true` are not forwarded to PTY write or keybinding dispatch, on any backend — closing an Xwayland application no longer leaks a stray keypress into eMterm
+- File drag-and-drop uses winit's `DragEntered`/`DragMoved`/`DragDropped`/`DragLeft` events, feeding the same SFTP upload entry point (see [SFTP File Upload](#sftp-file-upload) for the current Wayland drag-and-drop limitation)
+
+---
+
+### Category 13: CLI Argument Handling
+
+#### Version and Help Flags
+
+`emterm --version` prints the crate version and exits 0; `emterm --help` / `-h` prints usage text and exits 0. Both are recognized as top-level flags on the GUI and CLI-only builds.
+
+**Key Functionality:**
+- `emterm --version` prints `CARGO_PKG_VERSION` plus a newline to stdout and exits 0; runs before logger initialization and before any GUI startup — no log file, config read, or window created
+- Only `args[1] == "--version"` triggers the print/exit; `--version` appearing elsewhere in the argument list (e.g. `emterm --settings --version`) is accepted but does not itself print the version
+- `emterm --help` / `-h` prints usage text to stdout and exits 0; takes precedence even if an unrecognized flag appears earlier in the same invocation
+- `--version` and `-h`/`--help` are listed in the Options section of `emterm --help` on both the GUI and CLI-only builds
+
+---
+
+#### Unknown-Flag Usage Error
+
+An unrecognized top-level `-`-leading argument is rejected with a usage message instead of being silently ignored or misinterpreted.
+
+**Key Functionality:**
+- The first unrecognized `-`-leading argument (left-to-right) produces `emterm: unrecognized argument '<arg>'` plus usage text on stderr, exits with code 2, and creates no window
+- The recognized top-level flag set is build-dependent: the GUI build recognizes `--viewer`, `--image-viewer`, `--data-viewer`, `--html-viewer` (each consumes a following value), `--settings`, `--version`, `-h`/`--help`; the CLI-only build recognizes only `--version` and `-h`/`--help`
+- A value consumed by a value-taking flag (e.g. the path after `--viewer`) is never itself checked as an unknown flag
+- Bare-word subcommand dispatch (`markdown`, `json`, `yaml`, `image`, `html`, `agent-status`, `mux`) happens before this classification and is unaffected
+
+---
+
+### Category 14: Claude Code Plugin Integration
+
+#### eMterm Claude Code Plugin
+
+eMterm ships a Claude Code plugin, installed via a marketplace manifest at the repository root, that reports Claude Code's lifecycle state to eMterm's agent-status mechanism and exposes eMterm's rich-display and mux-coordination CLI commands as Claude Code skills. Linux only.
+
+**Key Functionality:**
+- Installed via `/plugin marketplace add` + `/plugin install` against the eMterm repository
+- Lifecycle hook reports state through Claude Code's `terminalSequence` hook-output field (an eMterm agent-status OSC 777 sequence embedded in the hook's JSON stdout); requires Claude Code v2.1.141 or later
+- Hook wiring: `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure` set `working`; `Stop` sets `idle`; unmatched `PermissionRequest` and a `Notification` matcher restricted to `elicitation_dialog`/`agent_needs_input` set `blocked`
+- Four display skills — `display-markdown`, `display-json`, `display-yaml`, `display-image` — invoke the matching `emterm markdown|json|yaml|image` CLI subcommand on a given file (`display-image` accepts an optional `--protocol kitty|sixel` argument)
+- Three mux skills — `mux-read`, `mux-send`, `mux-wait` — invoke the matching `emterm mux read|send|wait` subcommand; `--pane current` resolution delegates to the eMterm CLI via `EMTERM_PANE_ID`
+- `mux-send`'s primary form for untrusted text is file redirection (`--stdin < '<file>'`) rather than inline text, keeping untrusted bytes off the command line
+- Requires the `emterm`/`emterm-cli` binary installed separately for the display/mux skills; the hook script itself has no runtime prerequisite beyond POSIX `sh`
 
 ---
 
