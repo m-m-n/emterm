@@ -37,7 +37,8 @@ workflow:
     skipped_reason: "既存 chooser 行のラベル文字列と行数が変わるだけで、視覚デザインは既存の行描画で完全に決まるため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: 7a26916323a17302d0dd90cfd2e9537260c03c42
   - id: implement
     status: pending
     base_commit: c8c9219314d7bf9cb832474df1941738c838b502
