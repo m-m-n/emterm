@@ -25,7 +25,7 @@ workflow:
     skipped_reason: "ユーザーに見えるビジュアル要素は既存のプリエディット オーバーレイのみで、その描画は変更しないため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: c5f7d032d80df7e05068f29bf90c8b18df9d47e1
