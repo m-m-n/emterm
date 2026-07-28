@@ -27,11 +27,11 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
-    completed_at_commit: 8ac44e5cfa8b1d2274dcd393314e672eeea6ea4e
+    status: completed
+    completed_at_commit: b7d7beacaf0a2aaf1773217dfa0914a431d81b33
     base_commit: 52df81501c9a5b7ab28cf33bedf36e6168a53e41
   - id: review
-    status: pending
+    status: in_progress
     completed_at_commit: f8c6f9913dd18c81a95224bf59530f54b2daf0fe
   - id: verify
     status: pending
@@ -84,14 +84,18 @@ tasks:
     domains: [input-handling, ui]
     complexity: medium
     requirements: [FR10, FR11, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/ime-empty-preedit-passthrough/task0003
     notes: "対話再開で round1 未解決 finding 9f9664d463b1f618 / 5b461e782d6f18bc を閉じるタスク（2 件を 1 タスクに統合）"
     branch: em-workflow/ime-empty-preedit-passthrough/task0002
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 1
+  plan_round2:
+    floor: [comprehensive, security, spec]
+    discretionary: []
+    codex_cross_validation: true
   plan:
     floor: [comprehensive, security, spec]
     discretionary: []
