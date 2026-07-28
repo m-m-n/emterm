@@ -15,6 +15,9 @@
 //! build accepts (D2 / NFR3): [`classify`] reads it to decide what is
 //! recognized, and `main.rs`'s `run_gui` dispatches by iterating it too, so
 //! the two can never drift out of the same set — there is only one list.
+//! Not every entry has a child window to open: [`RecognizedFlag::target`]
+//! (on the `gui` build) is `Option<GuiTarget>`, and `run_gui` skips entries
+//! whose target is `None` (e.g. `--version`) rather than dispatching them.
 
 /// Outcome of classifying the top-level argument list.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,47 +53,57 @@ pub enum GuiTarget {
 pub struct RecognizedFlag {
     pub name: &'static str,
     pub takes_value: bool,
-    /// Which child window this flag opens. Only meaningful on the `gui`
-    /// build, where `run_gui` reads it to dispatch.
+    /// Which child window this flag opens, or `None` if it has no dispatch
+    /// target (e.g. `--version`). Only meaningful on the `gui` build, where
+    /// `run_gui` reads it to dispatch and skips entries with no target.
     #[cfg(feature = "gui")]
-    pub target: GuiTarget,
+    pub target: Option<GuiTarget>,
 }
 
 /// The flags this build recognizes (FR3). GUI build: the five child-window
-/// flags. CLI-only build (`--no-default-features`): empty.
+/// flags plus `--version` (which has no dispatch target). CLI-only build
+/// (`--no-default-features`): just `--version`.
 #[cfg(feature = "gui")]
 pub const RECOGNIZED_FLAGS: &[RecognizedFlag] = &[
     RecognizedFlag {
         name: "--viewer",
         takes_value: true,
-        target: GuiTarget::Viewer,
+        target: Some(GuiTarget::Viewer),
     },
     RecognizedFlag {
         name: "--image-viewer",
         takes_value: true,
-        target: GuiTarget::ImageViewer,
+        target: Some(GuiTarget::ImageViewer),
     },
     RecognizedFlag {
         name: "--data-viewer",
         takes_value: true,
-        target: GuiTarget::DataViewer,
+        target: Some(GuiTarget::DataViewer),
     },
     RecognizedFlag {
         name: "--html-viewer",
         takes_value: true,
-        target: GuiTarget::HtmlViewer,
+        target: Some(GuiTarget::HtmlViewer),
     },
     RecognizedFlag {
         name: "--settings",
         takes_value: false,
-        target: GuiTarget::Settings,
+        target: Some(GuiTarget::Settings),
+    },
+    RecognizedFlag {
+        name: "--version",
+        takes_value: false,
+        target: None,
     },
 ];
 
-/// The flags this build recognizes (FR3). CLI-only build: empty — the
-/// child-window flags do not exist without the `gui` feature.
+/// The flags this build recognizes (FR3). CLI-only build: just `--version`
+/// — the child-window flags do not exist without the `gui` feature.
 #[cfg(not(feature = "gui"))]
-pub const RECOGNIZED_FLAGS: &[RecognizedFlag] = &[];
+pub const RECOGNIZED_FLAGS: &[RecognizedFlag] = &[RecognizedFlag {
+    name: "--version",
+    takes_value: false,
+}];
 
 const HELP_FLAGS: &[&str] = &["--help", "-h"];
 
@@ -156,6 +169,7 @@ pub fn usage_text() -> String {
      \x20 --data-viewer <path>   Open the JSON/YAML data viewer window\n\
      \x20 --html-viewer <path>   Open the HTML viewer window\n\
      \x20 --settings             Open the settings window\n\
+     \x20 --version              Print version and exit\n\
      \x20 -h, --help             Print this help\n\
      \n\
      Run `emterm <subcommand> --help` for details."
@@ -171,6 +185,7 @@ pub fn usage_text() -> String {
      \x20      emterm mux <args>...\n\
      \n\
      Options:\n\
+     \x20 --version              Print version and exit\n\
      \x20 -h, --help             Print this help\n\
      \n\
      Run `emterm <subcommand> --help` for details."
@@ -251,6 +266,42 @@ mod tests {
         assert!(usage_text().contains("Run `emterm <subcommand> --help` for details."));
     }
 
+    // version-flag-classification AC-4 / AC-5: the Options block lists
+    // `--version` on both builds (each build compiles only its own
+    // `usage_text()`, so this single test covers whichever is active).
+    #[test]
+    fn usage_text_lists_the_version_flag() {
+        assert!(usage_text().contains("--version"));
+    }
+
+    // version-flag-classification AC-3: `--version` does not consume the
+    // following argument — an unrecognized flag right after it is still
+    // reported. Runs on both builds: `--version` is in both tables and
+    // `--typo` is recognized by neither.
+    #[test]
+    fn version_flag_does_not_consume_the_following_argument() {
+        assert_eq!(
+            classify(&v(&["--version", "--typo"])),
+            Classification::Unknown("--typo".to_string())
+        );
+    }
+
+    // version-flag-classification AC-8: help still wins over `--version`
+    // appearing anywhere in the argument list.
+    #[test]
+    fn help_wins_over_version_flag() {
+        assert_eq!(
+            classify(&v(&["--version", "--help"])),
+            Classification::Help,
+            "version then help"
+        );
+        assert_eq!(
+            classify(&v(&["--help", "--version"])),
+            Classification::Help,
+            "help then version"
+        );
+    }
+
     #[cfg(feature = "gui")]
     mod gui {
         use super::*;
@@ -287,6 +338,41 @@ mod tests {
             );
         }
 
+        // version-flag-classification Test Notes "Edge case": a literal
+        // `--version` supplied as the *value* of a value-taking flag must
+        // still be consumed as that flag's value, never classified on its
+        // own account.
+        #[test]
+        fn version_as_a_flags_value_is_consumed_not_classified() {
+            assert_eq!(
+                classify(&v(&["--viewer", "--version"])),
+                Classification::Proceed
+            );
+        }
+
+        // version-flag-classification AC-1: `--version` proceeds alone,
+        // and after another recognized flag such as `--settings`.
+        #[test]
+        fn version_flag_proceeds_alone_and_after_another_recognized_flag() {
+            assert_eq!(classify(&v(&["--version"])), Classification::Proceed);
+            assert_eq!(
+                classify(&v(&["--settings", "--version"])),
+                Classification::Proceed
+            );
+        }
+
+        // version-flag-classification AC-7: `--version` declares no
+        // child-window dispatch target, so a future edit that gives it one
+        // fails this test.
+        #[test]
+        fn version_entry_declares_no_dispatch_target() {
+            let version = RECOGNIZED_FLAGS
+                .iter()
+                .find(|f| f.name == "--version")
+                .expect("--version entry present in RECOGNIZED_FLAGS");
+            assert_eq!(version.target, None);
+        }
+
         // AC-8: the recognized-flag table is the only definition
         // `run_gui` dispatches from (it iterates `RECOGNIZED_FLAGS`
         // directly rather than hardcoding a second flag list), so this
@@ -295,8 +381,12 @@ mod tests {
         // updating `run_gui`'s handlers (or vice versa) is now
         // structurally impossible; this test fails if the table's shape
         // itself changes unexpectedly.
+        //
+        // version-flag-classification AC-6: updated to the new expected
+        // contents (six entries, `--version` included) rather than loosened
+        // to a containment check.
         #[test]
-        fn recognized_flag_table_matches_the_five_gui_child_window_flags() {
+        fn recognized_flag_table_matches_the_six_gui_flags_including_version() {
             let names: Vec<&str> = RECOGNIZED_FLAGS.iter().map(|f| f.name).collect();
             assert_eq!(
                 names,
@@ -306,6 +396,7 @@ mod tests {
                     "--data-viewer",
                     "--html-viewer",
                     "--settings",
+                    "--version",
                 ]
             );
             let value_taking: Vec<&str> = RECOGNIZED_FLAGS
@@ -316,7 +407,7 @@ mod tests {
             assert_eq!(
                 value_taking,
                 vec!["--viewer", "--image-viewer", "--data-viewer", "--html-viewer"],
-                "only --settings should be valueless"
+                "only --settings and --version should be valueless"
             );
         }
     }
@@ -326,7 +417,7 @@ mod tests {
         use super::*;
 
         // AC-7 / TS-10: on the CLI-only build, `--settings` is not
-        // recognized (the recognized-flag table is empty per FR3).
+        // recognized (the recognized-flag table holds only `--version`).
         #[test]
         fn settings_flag_is_unrecognized_without_gui() {
             assert_eq!(
@@ -335,11 +426,26 @@ mod tests {
             );
         }
 
-        // AC-8 (CLI-only side): the table is empty, matching the fact
-        // that `run_gui` (and its flags) do not exist in this build.
+        // version-flag-classification AC-2: `--version` alone proceeds on
+        // the CLI-only build.
         #[test]
-        fn recognized_flag_table_is_empty_without_gui() {
-            assert!(RECOGNIZED_FLAGS.is_empty());
+        fn version_flag_proceeds_without_gui() {
+            assert_eq!(classify(&v(&["--version"])), Classification::Proceed);
+        }
+
+        // AC-8 (CLI-only side) / version-flag-classification AC-6: the
+        // table holds exactly `--version` now that this build's flag list
+        // is no longer empty, matching the fact that `run_gui` (and the
+        // GUI-only flags) do not exist in this build. Updated to the new
+        // expected contents rather than loosened to a containment check.
+        #[test]
+        fn recognized_flag_table_contains_only_version_without_gui() {
+            let names: Vec<&str> = RECOGNIZED_FLAGS.iter().map(|f| f.name).collect();
+            assert_eq!(names, vec!["--version"]);
+            assert!(
+                !RECOGNIZED_FLAGS[0].takes_value,
+                "--version should be valueless"
+            );
         }
     }
 }
