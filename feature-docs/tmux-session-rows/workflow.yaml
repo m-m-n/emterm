@@ -1,0 +1,111 @@
+schema_version: 1
+feature: tmux-session-rows
+created: 2026-07-28
+base_branch: main
+parent_branch: em-workflow/tmux-session-rows/integration
+
+project:
+  license: MIT
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    windows:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: e0d2d8a8a176c1dcb3271f75f6feab2bcf75de29
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "既存 chooser 行のラベル文字列と行数が変わるだけで、視覚デザインは既存の行描画で完全に決まるため"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: c8c9219314d7bf9cb832474df1941738c838b502
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "Session enumeration per live socket (tmux list-sessions, bounded, failure-tolerant)"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "Chooser rows: one row per session, labeled by session name, socket-row fallback"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "Session-targeted attach via SpawnOverrides (attach-session -t ={name})"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "Fast-path parity: skip the modal only when profiles and tmux rows are both empty"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Chooser opening not perceptibly delayed; per-socket enumeration timeout <= 300ms"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Unix-only gating; Windows and CLI-only builds keep compiling"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "No regression in existing chooser behavior or socket discovery semantics"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Paths and session names passed as discrete argv elements, never through a shell"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
