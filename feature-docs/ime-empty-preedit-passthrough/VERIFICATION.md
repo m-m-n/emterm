@@ -37,6 +37,10 @@ Additional target checks (NFR2):
 | TS-7 | Enable, non-empty preedit, empty preedit, commit, disable (Windows) | Key dispatch is consumed after the commit and passthrough after the disable | Unit (Windows target) |
 | TS-8 | Delete-surrounding after a non-empty preedit, and after an empty preedit | Key dispatch answer is unchanged in both situations | Unit |
 | TS-9 | The pre-existing test set of the winit bridge module | All pass unmodified | Unit |
+| TS-10 | Predicate truth table under each platform selector | Selector true → result equals lifecycle state alone; selector false → result equals preedit-present state alone; all four state combinations asserted per selector | Unit (runs on host) |
+| TS-11 | The TS-6 / TS-7 Windows scenarios driven through the predicate | Same expectations as TS-6 / TS-7, now executed on the development host | Unit (runs on host) |
+| TS-12 | Enable, non-empty preedit, then focus loss | Predicate answers "not suppressed" under both selector values | Unit (runs on host) |
+| TS-13 | Focus gain on a freshly built bridge | Both states stay false, so the predicate answers "not suppressed" under both selector values; the IME-allowed call sequence assertion still holds | Unit (runs on host) |
 
 ## Code Quality Verification
 
@@ -70,9 +74,11 @@ Additional target checks (NFR2):
 | FR7 | task0001 | TS-6, TS-7, TS-manual-3 |
 | FR8 | task0001 | TS-1, TS-2, TS-4, TS-5 |
 | FR9 | task0001 | TS-9 plus reading the changed file for the removed false claim |
-| NFR1 | task0001 | Read the suppression predicate: a boolean read with no allocation or locking |
-| NFR2 | task0001 | The `--no-default-features` check and the Windows cross-check |
-| NFR3 | task0001 | Both gate branches have asserting tests under their own target condition |
+| FR10 | task0003 | TS-12, TS-13 |
+| FR11 | task0003 | TS-10, TS-11 |
+| NFR1 | task0001, task0003 | Read the suppression predicate: a boolean computation with no allocation or locking |
+| NFR2 | task0001, task0003 | The `--no-default-features` check and the Windows cross-check |
+| NFR3 | task0001, task0003 | TS-10 and TS-11 execute both gate branches on the development host |
 
 ## E2E Testing
 
