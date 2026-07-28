@@ -51,8 +51,9 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR3, NFR4]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/status-bar-agent-summary-revert/task0001
   task0002:
     title: "Drop the status-bar summary from the agent-status document"
     plan: tasks/task0002.md
@@ -62,8 +63,9 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR9, NFR4]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/status-bar-agent-summary-revert/task0002
 
 review:
   status: pending
