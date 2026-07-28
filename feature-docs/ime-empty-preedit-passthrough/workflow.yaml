@@ -34,14 +34,20 @@ workflow:
     status: completed
     completed_at_commit: f8c6f9913dd18c81a95224bf59530f54b2daf0fe
   - id: verify
-    status: pending
-    result: fail
-    failed_items:
-      - id: "SC-2/TS-5"
-        note: "TS-5（空 preedit → 非空 preedit → 空 preedit の X11 start/end 曖昧性シナリオ）に対応するテストが存在しない"
-      - id: "SC-2/TS-1"
-        note: "TS-1 の実装テストが先頭の Ime::Enabled と中間の Consumed アサートを欠き、FR2 のキュー順序アサートも含めて全体が非 Windows 限定になっている（round1 finding b41937460cd5c472 と同一）"
+    status: completed
+    result: pass
+    failed_items: []
     rework_synthesized_task: task0002
+    notes: >-
+      round 1 の verify は SC-2（TS-5 のテスト欠落 / TS-1 の形の不一致）で fail し、
+      batch rework を 1 回消費して task0002 を合成・マージ後に再実行して pass。
+      既知の環境事実として次の 2 点は本 feature と無関係:
+      (1) cargo test --lib の tabs::tests 7 件の失敗は main (c5f7d03) でも同一に再現する既存の失敗。
+      ime::winit_bridge は 19 件全通過。
+      (2) cargo fmt --check の差分は arg_dispatch.rs / tmux_sockets.rs / tests/cli_subcommands.rs の
+      3 ファイルのみで、いずれも main 由来の既存ドリフト。winit_bridge.rs は含まれない。
+      SC-5 は承認済みの Windows クロスチェックに --lib --tests を足した形で実行し、
+      cfg(windows) テスト 6 本がコンパイル可能であることまで確認した。
   - id: retrospect
     status: pending
 
