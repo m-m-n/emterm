@@ -194,9 +194,15 @@ All added to `mod tests` in `src-tauri/src/ime/winit_bridge.rs`.
       `has_preedit` regardless of `ime_enabled`. All four input combinations
       asserted for each value of `windows_gate`.
 - [ ] TS-11 (Windows scenarios run on every host): the scenarios of TS-6 and
-      TS-7 are asserted through the parameterized predicate with
-      `windows_gate = true`, so they execute on a Linux development host rather
-      than only compiling for the Windows target.
+      TS-7 are ALSO asserted through the parameterized predicate with
+      `windows_gate = true`, so their logic executes on a Linux development host
+      instead of only compiling for the Windows target. TS-11 supplements TS-6
+      and TS-7; it does not replace them. TS-6 and TS-7 must keep asserting
+      through `dispatch_key_event` under `cfg(windows)`, because only that path
+      proves `dispatch_key_event` passes the compile-time target as the
+      selector — a predicate-only test would still pass if that argument were
+      hardcoded, silently reverting Windows to the preedit-derived gate this
+      feature replaced.
 - [ ] TS-12 (focus loss clears the gate): `Enabled` → `Preedit("x")` →
       `notify_focus(false)` → the predicate answers passthrough for BOTH values
       of `windows_gate`.
@@ -206,12 +212,20 @@ All added to `mod tests` in `src-tauri/src/ime/winit_bridge.rs`.
 
 ### Regression Tests
 
-- [ ] Existing TS-winit-1 through TS-winit-7 pass unmodified.
-- [ ] `empty_preedit_is_surfaced_for_overlay_clear` still passes; on Windows it
-      must be `#[cfg]`-adjusted or its dispatch assertion scoped to non-Windows,
-      because a bare `Preedit("")` with no preceding `Enabled` leaves
-      `ime_enabled` false and therefore still yields `Passthrough` — the assertion
-      holds, but the reason differs per platform and must be documented.
+- [ ] Existing TS-winit-1, TS-winit-2 and TS-winit-4 through TS-winit-7 pass
+      unmodified.
+- [ ] TS-winit-3 (`commit_clears_composition_and_unblocks_dispatch`) is scoped
+      to non-Windows targets. It cannot pass unmodified: it asserts `Consumed`
+      after a bare `Preedit` with no preceding `Enabled`, which FR7 makes
+      `Passthrough` on Windows, and its second assertion (`Passthrough` after
+      `Commit`) contradicts FR4, under which `Commit` does not close the
+      lifecycle. Both assertions describe non-Windows semantics exclusively, so
+      the whole test is gated rather than rewritten. The equivalent Windows
+      sequence is covered by TS-7.
+- [ ] `empty_preedit_is_surfaced_for_overlay_clear` still passes; its dispatch
+      assertion holds on every target, but for a different reason per platform —
+      a bare `Preedit("")` with no preceding `Enabled` leaves BOTH states false.
+      That difference must be documented at the test.
 
 ### E2E Tests
 
