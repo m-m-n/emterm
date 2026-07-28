@@ -35,22 +35,23 @@ workflow:
     completed_at_commit: 55e7ccbc475b0d6d1edabc01836a75b1ec3d4ff3
     completed_at_commit: f8c6f9913dd18c81a95224bf59530f54b2daf0fe
   - id: verify
-    status: pending
+    status: completed
     result: pass
     failed_items: []
     rework_synthesized_task: task0002
     notes: >-
-      round 1 の verify は SC-2（TS-5 のテスト欠落 / TS-1 の形の不一致）で fail し、
-      batch rework を 1 回消費して task0002 を合成・マージ後に再実行して pass。
-      既知の環境事実として次の 2 点は本 feature と無関係:
-      (1) cargo test --lib の tabs::tests 7 件の失敗は main (c5f7d03) でも同一に再現する既存の失敗。
-      ime::winit_bridge は 19 件全通過。
-      (2) cargo fmt --check の差分は arg_dispatch.rs / tmux_sockets.rs / tests/cli_subcommands.rs の
-      3 ファイルのみで、いずれも main 由来の既存ドリフト。winit_bridge.rs は含まれない。
-      SC-5 は承認済みの Windows クロスチェックに --lib --tests を足した形で実行し、
-      cfg(windows) テスト 6 本がコンパイル可能であることまで確認した。
+      2 回目の verify（対話再開後、task0003 / task0004 マージ後）。全て pass。
+      build / test / CLI-only / Windows(--lib --tests) / format をすべて実行。
+      ime::winit_bridge は 26 passed / 1 ignored（Xvfb 依存の host-deferred 1 本）。
+      TS-1〜TS-13 のうちホストで実行されるものは全て通り、Windows 専用の
+      TS-6 / TS-7（dispatch 経由）は xwin check --lib --tests で型検査済み。
+      既知の環境事実（本 feature と無関係、いずれも main c5f7d03 で再現確認済み）:
+      (1) cargo test --lib の tabs::tests 7 件の失敗。
+      (2) cargo fmt --check の差分は arg_dispatch.rs / tmux_sockets.rs /
+      tests/cli_subcommands.rs の 3 ファイルのみ。winit_bridge.rs は含まれない。
+      初回 verify の SC-2 失敗（TS-5 欠落 / TS-1 の形）は task0002 で解消済み。
   - id: retrospect
-    status: pending
+    status: in_progress
 
 tasks:
   task0001:
