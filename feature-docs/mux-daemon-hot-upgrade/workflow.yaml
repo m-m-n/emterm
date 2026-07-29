@@ -39,15 +39,20 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: completed
+    status: pending
     base_commit: 9c9db29321b43c7433f161e243e19ccc35162c74
     completed_at_commit: 935fc00e9ada11532f51cc331cf8415e9d4d91dd
   - id: review
     status: completed
   - id: verify
-    status: in_progress
-    result: null
-    failed_items: []
+    status: pending
+    result: fail
+    failed_items:
+      - id: VF-1
+        note: "cargo test --lib が並列実行時に間欠的に SIGABRT（IO Safety violation: owned file descriptor already closed）でプロセスごと落ちる。feature ブランチで 12 回中 2 回、ベースコミット 9c9db29 では 6 回中 0 回。abort は毎回 mux::inherited_pty::tests の異常系テスト（閉じた fd / 通常ファイルの fd 番号を渡すもの）の実行中に発生する。原因は本 feature が追加したテストの分離不全で、プロダクションコードの fd バグではない。"
+      - id: VF-2
+        note: "tabs::tests の off-thread replay タイムアウトが 15-17 件。ベースコミットでも 6 回全てで同数（15-17 件）再現するため既存の非決定性であり、本 feature に起因しない。本 feature では対応しない。"
+
   - id: retrospect
     status: pending
 
@@ -188,6 +193,18 @@ tasks:
     status: merged
     branch: em-workflow/mux-daemon-hot-upgrade/task0010
     notes: "synthesized from review round 1 (stdin handle recreated per reconnect)"
+
+  task0011:
+    title: "rework: fix parallel-test fd isolation in inherited_pty negative-path tests"
+    plan: tasks/task0011.md
+    files:
+      - src-tauri/src/mux/inherited_pty.rs
+    skills: [backend-impl]
+    domains: [concurrency, external-io]
+    complexity: medium
+    requirements: [NFR4]
+    status: pending
+    notes: "synthesized from verify failure VF-1"
 
 review:
   status: completed
@@ -384,4 +401,4 @@ requirements:
 
 batch:
   review_rework_count: 1
-  verify_rework_count: 0
+  verify_rework_count: 1
