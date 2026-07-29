@@ -62,8 +62,9 @@ tasks:
     domains: [api-contract, input-handling]
     complexity: medium
     requirements: [FR1, FR2, FR4, FR14, NFR6]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-daemon-hot-upgrade/task0001
   task0002:
     title: "Inherited PTY master adapter"
     plan: tasks/task0002.md
@@ -74,8 +75,9 @@ tasks:
     domains: [external-io, concurrency]
     complexity: high
     requirements: [FR10, NFR4]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-daemon-hot-upgrade/task0002
   task0003:
     title: "Session state snapshot and restore"
     plan: tasks/task0003.md
@@ -91,8 +93,9 @@ tasks:
     domains: [data-persistence, external-io, concurrency]
     complexity: high
     requirements: [FR4, FR5, FR6, FR9, FR10, FR18, FR19, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-daemon-hot-upgrade/task0003
   task0004:
     title: "Daemon upgrade branch, handoff startup and fallback"
     plan: tasks/task0004.md
@@ -103,8 +106,9 @@ tasks:
     domains: [concurrency, external-io, api-contract]
     complexity: high
     requirements: [FR2, FR3, FR7, FR8, FR11, FR13, FR17, NFR1, NFR2, NFR5]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-daemon-hot-upgrade/task0004
   task0005:
     title: "CLI upgrade command, schema probe and the process replacement"
     plan: tasks/task0005.md
@@ -115,8 +119,9 @@ tasks:
     domains: [external-io, api-contract, concurrency]
     complexity: high
     requirements: [FR7, FR13, FR14, FR15, FR16, NFR4]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-daemon-hot-upgrade/task0005
   task0006:
     title: "Client reconnect after an upgrade announcement"
     plan: tasks/task0006.md
@@ -126,8 +131,9 @@ tasks:
     domains: [external-io, concurrency]
     complexity: medium
     requirements: [FR12, NFR3]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-daemon-hot-upgrade/task0006
   task0007:
     title: "Process-id based child reaping for restored panes"
     plan: tasks/task0007.md
