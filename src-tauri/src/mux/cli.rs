@@ -296,28 +296,55 @@ pub fn execute_daemon() -> Result<(), Box<dyn std::error::Error>> {
 /// D1 / "Performing the replacement"). Called only from [`execute_daemon`]
 /// after the async runtime has been fully shut down. `exec` only returns on
 /// failure — the process image is otherwise gone and this function does not
-/// return.
+/// return in the success case.
 ///
-/// On failure, logs at error level and gives up rather than exiting
-/// silently (IMPLEMENTATION.md "Error policy"). Full in-process re-entry
-/// over the handoff document that was just written depends on the
-/// handoff-mode startup path (task0004, not yet merged at the time this was
-/// written) and is not yet wired here — see the task report.
+/// On failure, logs at error level and re-enters service in this same
+/// process rather than exiting silently (IMPLEMENTATION.md "Error policy",
+/// D1; SPEC.md A14), via [`daemon::run_daemon_in_handoff_mode`] (task0004's
+/// entry point, callable for a document this process just wrote itself —
+/// task0004's design, "Replacement failure recovery"). If THAT re-entered
+/// run also requests an upgrade (e.g. the operator retries immediately),
+/// the loop below tries the exec again with the new request rather than
+/// stopping at one attempt.
+///
+/// DEVIATION (task0004): this function's body — the retry loop calling
+/// `run_daemon_in_handoff_mode` — was added by task0004 on top of
+/// task0005's already-merged `exec` attempt (this function's doc comment,
+/// written by task0005, explicitly flagged the gap: "Full in-process
+/// re-entry ... is not yet wired here"). `cli.rs` is outside task0004's
+/// file scope; this is the minimal edit needed to close that flagged gap
+/// now that both tasks are present.
 #[cfg(unix)]
-fn perform_upgrade_replacement(req: daemon::UpgradeRequest) {
+fn perform_upgrade_replacement(mut req: daemon::UpgradeRequest) {
     use std::os::unix::process::CommandExt;
 
-    let err = std::process::Command::new(&req.target)
-        .args(&req.args)
-        .env(&req.env_addition.0, &req.env_addition.1)
-        .exec();
+    loop {
+        let err = std::process::Command::new(&req.target)
+            .args(&req.args)
+            .env(&req.env_addition.0, &req.env_addition.1)
+            .exec();
 
-    log::error!(
-        "Failed to exec upgrade target {:?}: {err} (handoff document at {:?} was not \
-         consumed)",
-        req.target,
-        req.handoff_document_path
-    );
+        log::error!(
+            "Failed to exec upgrade target {:?}: {err} (handoff document at {:?} was not \
+             consumed); re-entering service in this process",
+            req.target,
+            req.handoff_document_path
+        );
+
+        match daemon::run_daemon_in_handoff_mode(&req.handoff_document_path) {
+            Ok(daemon::DaemonRunOutcome::Terminated) => return,
+            Ok(daemon::DaemonRunOutcome::UpgradeRequested(next_req)) => {
+                req = next_req;
+                // loop: attempt the exec again against the new request
+            }
+            Err(e) => {
+                log::error!(
+                    "mux daemon re-entry after failed exec also failed: {e} (giving up)"
+                );
+                return;
+            }
+        }
+    }
 }
 
 /// Initialize bridge logger, writing to mux-bridge.log (same directory as daemon log).
