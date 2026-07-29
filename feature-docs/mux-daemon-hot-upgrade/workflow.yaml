@@ -39,9 +39,9 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 9c9db29321b43c7433f161e243e19ccc35162c74
-    completed_at_commit: 935fc00e9ada11532f51cc331cf8415e9d4d91dd
+    completed_at_commit: 204e94ae6b546c116b245aa27ce5c8a9fbf22e9a
   - id: review
     status: completed
   - id: verify
@@ -203,9 +203,9 @@ tasks:
     domains: [concurrency, external-io]
     complexity: medium
     requirements: [NFR4]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-daemon-hot-upgrade/task0011
-    notes: "synthesized from verify failure VF-1"
+    notes: "synthesized from verify failure VF-1; deviation: also modified src-tauri/src/mux/daemon.rs — the abort\'s primary cause was a process-wide HANDOFF_ENV_VAR race between two daemon.rs tests causing double-adoption of one listener fd, root-caused via strace -f. The inherited_pty.rs hazard named in the plan was real but secondary."
 
 review:
   status: completed
