@@ -185,7 +185,7 @@ tasks:
     domains: [external-io, concurrency]
     complexity: medium
     requirements: [FR12, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-daemon-hot-upgrade/task0010
     notes: "synthesized from review round 1 (stdin handle recreated per reconnect)"
 
