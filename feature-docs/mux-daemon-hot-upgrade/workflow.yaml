@@ -37,7 +37,7 @@ workflow:
     skipped_reason: "GUI の変更が無く、CLI 出力と log のみのため視覚デザイン判断が不要"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
   - id: implement
     status: pending
     base_commit: 9c9db29321b43c7433f161e243e19ccc35162c74
@@ -50,7 +50,108 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Handoff wire types and schema version in mux_ipc"
+    plan: tasks/task0001.md
+    files:
+      - crates/mux_ipc/src/handoff.rs
+      - crates/mux_ipc/src/protocol.rs
+      - crates/mux_ipc/src/lib.rs
+    skills: [backend-impl]
+    domains: [api-contract, input-handling]
+    complexity: medium
+    requirements: [FR1, FR2, FR4, FR14, NFR6]
+    status: pending
+    notes: null
+  task0002:
+    title: "Inherited PTY master adapter"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/mux/inherited_pty.rs
+      - src-tauri/src/mux/mod.rs
+    skills: [backend-impl]
+    domains: [external-io, concurrency]
+    complexity: high
+    requirements: [FR10, NFR4]
+    status: pending
+    notes: null
+  task0003:
+    title: "Session state snapshot and restore"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/mux/upgrade.rs
+      - src-tauri/src/mux/mod.rs
+      - src-tauri/src/mux/session/manager.rs
+      - src-tauri/src/mux/session/session.rs
+      - src-tauri/src/mux/session/window.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/scrollback_buffer.rs
+    skills: [backend-impl]
+    domains: [data-persistence, external-io, concurrency]
+    complexity: high
+    requirements: [FR4, FR5, FR6, FR9, FR10, FR18, FR19, NFR1, NFR2]
+    status: pending
+    notes: null
+  task0004:
+    title: "Daemon upgrade branch, handoff startup and fallback"
+    plan: tasks/task0004.md
+    files:
+      - src-tauri/src/mux/daemon.rs
+      - src-tauri/src/mux/ipc/connection.rs
+    skills: [backend-impl]
+    domains: [concurrency, external-io, api-contract]
+    complexity: high
+    requirements: [FR2, FR3, FR7, FR8, FR11, FR13, FR17, NFR1, NFR2, NFR5]
+    status: pending
+    notes: null
+  task0005:
+    title: "CLI upgrade command, schema probe and the process replacement"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/src/mux/cli.rs
+      - src-tauri/src/mux/daemon.rs
+    skills: [backend-impl]
+    domains: [external-io, api-contract, concurrency]
+    complexity: high
+    requirements: [FR7, FR13, FR14, FR15, FR16, NFR4]
+    status: pending
+    notes: null
+  task0006:
+    title: "Client reconnect after an upgrade announcement"
+    plan: tasks/task0006.md
+    files:
+      - src-tauri/src/mux/bridge.rs
+    skills: [backend-impl]
+    domains: [external-io, concurrency]
+    complexity: medium
+    requirements: [FR12, NFR3]
+    status: pending
+    notes: null
+  task0007:
+    title: "Process-id based child reaping for restored panes"
+    plan: tasks/task0007.md
+    files:
+      - src-tauri/src/mux/session/child_reaper.rs
+      - src-tauri/src/mux/session/pane.rs
+    skills: [backend-impl]
+    domains: [concurrency, external-io]
+    complexity: medium
+    requirements: [FR18, NFR2]
+    status: pending
+    notes: null
+  task0008:
+    title: "End-to-end hot-upgrade integration test"
+    plan: tasks/task0008.md
+    files:
+      - src-tauri/tests/mux_hot_upgrade.rs
+      - test/README.md
+    skills: [infra-impl]
+    domains: [config-infra, external-io, concurrency]
+    complexity: medium
+    requirements: [FR7, FR9, FR10, FR11, NFR2]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -62,176 +163,176 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
   FR2:
     title: "Add MessageType::Upgrading broadcast to connected clients before execve"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0004]
+    tests: [TS-1, TS-10]
   FR3:
     title: "Handle Upgrade in the daemon: accept-loop upgrade branch skipping graceful_shutdown and socket unlink"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0004]
+    tests: [TS-10, TS-19]
   FR4:
     title: "Serialize the session tree, scrollback, ID counters and incarnation into a versioned handoff document"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0003]
+    tests: [TS-3, TS-8]
   FR5:
     title: "Clear FD_CLOEXEC on the listen socket FD and all PTY master FDs, recording FD numbers"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-7]
   FR6:
     title: "Write the handoff document to a 0600 file and pass its path to the new process"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-9]
   FR7:
     title: "Perform execve only after full tokio runtime shutdown, from the main thread"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0004, task0005, task0008]
+    tests: [TS-13, TS-17]
   FR8:
     title: "Detect handoff startup, skip socket bind, adopt the inherited listen socket FD"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0004]
+    tests: [TS-12]
   FR9:
     title: "Restore SessionManager including private ID counters and the incarnation token"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003, task0008]
+    tests: [TS-8, TS-17]
   FR10:
     title: "Re-adopt inherited PTY master FDs as MasterPty and re-establish writers, readers and scrollback"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002, task0003, task0008]
+    tests: [TS-6, TS-17]
   FR11:
     title: "Log handoff startup distinguishably from normal startup with pane and FD counts"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0004, task0008]
+    tests: [TS-12, TS-18]
   FR12:
     title: "Client reconnect loop and re-attach after receiving Upgrading"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0006]
+    tests: [TS-15]
   FR13:
     title: "On execve failure, unlink state, log, return an error to the client and continue running"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0004, task0005]
+    tests: [TS-11, TS-20]
   FR14:
     title: "Handoff schema version independent of PROTOCOL_VERSION, with a pre-execve compatibility probe"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0004, task0005]
+    tests: [TS-4, TS-20]
   FR15:
     title: "Add the emterm mux upgrade subcommand (unsupported report on Windows)"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0005]
+    tests: [TS-13]
   FR16:
     title: "recover_from_legacy_daemon attempts Upgrade first, falls back to shutdown-then-respawn"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0005]
+    tests: [TS-14]
   FR17:
     title: "Keep the listen socket open so mid-upgrade connections queue in the kernel backlog"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0004]
+    tests: [TS-10]
   FR18:
     title: "Serialize child PIDs and reap post-upgrade children through a PID-based path"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003, task0007]
+    tests: [TS-16]
   FR19:
     title: "Unlink the handoff state file after restore and on every abort path"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-9]
   NFR1:
     title: "Security: 0600 handoff file in the 0700 socket directory, promptly unlinked"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003, task0004]
+    tests: [TS-9, TS-22]
   NFR2:
     title: "Reliability: no pane shell is killed on any upgrade or abort path"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003, task0004, task0007, task0008]
+    tests: [TS-10, TS-17]
   NFR3:
     title: "Performance: handoff completes within seconds and clients reconnect inside the retry window"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0006]
+    tests: [TS-15]
   NFR4:
     title: "Platform: Unix-only upgrade path; Windows and --no-default-features builds unaffected"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002, task0005]
+    tests: [TS-6, TS-21]
   NFR5:
     title: "Observability: handoff startup and abort reasons logged at warn or above"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0004]
+    tests: [TS-12, TS-18]
   NFR6:
     title: "Compatibility: new message types do not break older peers; PROTOCOL_VERSION unchanged"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2, TS-5]
 
 batch:
   review_rework_count: 0
