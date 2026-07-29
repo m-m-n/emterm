@@ -37,7 +37,7 @@ workflow:
     skipped_reason: "GUI の変更が無く、CLI 出力と log のみのため視覚デザイン判断が不要"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: 9c9db29321b43c7433f161e243e19ccc35162c74
