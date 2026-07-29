@@ -559,6 +559,49 @@ impl ScrollbackRingBuffer {
     fn dim_markers_len(&self) -> usize {
         self.dim_markers.len()
     }
+
+    /// Capture this ring's full retained content for a handoff snapshot
+    /// (task0003 AC-4). Round-trips with [`Self::load_snapshot`]: loading
+    /// the returned snapshot reproduces [`Self::read_all`]'s bytes exactly.
+    ///
+    /// `dim_markers` history is deliberately NOT part of the captured
+    /// snapshot — IMPLEMENTATION.md's Shared Components table pins the
+    /// handoff document's per-pane fields, and scrollback is carried as
+    /// plain bytes there, not structural segments (task0003 D8: terminal
+    /// state is rebuilt by replaying restored scrollback, not by restoring
+    /// byte-exact parser/segment state).
+    pub fn capture(&self) -> ScrollbackSnapshot {
+        ScrollbackSnapshot {
+            capacity: self.capacity,
+            data: self.read_all(),
+        }
+    }
+
+    /// Reconstruct a ring from a captured snapshot (task0003 AC-4): writes
+    /// `snapshot.data` into a fresh ring of `snapshot.capacity`, reproducing
+    /// [`Self::read_all`]'s bytes byte-for-byte. Safe without truncation
+    /// because `snapshot.data` is always the result of a prior
+    /// [`Self::read_all`] call, which never exceeds its ring's capacity —
+    /// as long as `snapshot.capacity` matches the capacity `data` was
+    /// captured from (the normal case: [`Self::capture`] always pairs the
+    /// two), the write below never wraps past what `data` already
+    /// contains.
+    pub fn load_snapshot(snapshot: &ScrollbackSnapshot) -> Self {
+        let mut rb = Self::new(snapshot.capacity);
+        rb.write(&snapshot.data);
+        rb
+    }
+}
+
+/// Captured whole-buffer scrollback state for a handoff snapshot (task0003
+/// AC-4): the ring's full retained content, oldest-to-newest (identical to
+/// what [`ScrollbackRingBuffer::read_all`] returns), plus the capacity
+/// needed to reconstruct an equivalent ring. Round-trips with
+/// [`ScrollbackRingBuffer::load_snapshot`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollbackSnapshot {
+    pub capacity: usize,
+    pub data: Vec<u8>,
 }
 
 #[cfg(test)]
@@ -1264,5 +1307,57 @@ mod tests {
              down to a bounded tail, got {}",
             rb.dim_markers_len()
         );
+    }
+
+    // ── task0003 AC-4: whole-buffer capture / load round-trip for the
+    // handoff snapshot ─────────────────────────────────────────────────
+
+    /// AC-4: a simple, non-wrapped ring round-trips its content bytes
+    /// exactly through capture -> load_snapshot.
+    #[test]
+    fn capture_then_load_snapshot_round_trips_bytes_for_a_simple_ring() {
+        let mut rb = ScrollbackRingBuffer::new(1024);
+        rb.write(b"hello world");
+        let snap = rb.capture();
+        let restored = ScrollbackRingBuffer::load_snapshot(&snap);
+        assert_eq!(restored.read_all(), rb.read_all());
+        assert_eq!(restored.capacity(), rb.capacity());
+    }
+
+    /// AC-4: a ring that has wrapped around still round-trips exactly the
+    /// bytes `read_all()` reports (not the raw internal layout).
+    #[test]
+    fn capture_then_load_snapshot_round_trips_bytes_after_wraparound() {
+        let mut rb = ScrollbackRingBuffer::new(8);
+        rb.write(b"ABCDEF");
+        rb.write(b"GHI"); // wraps
+        let snap = rb.capture();
+        let restored = ScrollbackRingBuffer::load_snapshot(&snap);
+        assert_eq!(restored.read_all(), b"BCDEFGHI");
+        assert_eq!(restored.read_all(), rb.read_all());
+    }
+
+    /// AC-4: an empty ring round-trips to another empty ring with the same
+    /// capacity.
+    #[test]
+    fn capture_then_load_snapshot_round_trips_an_empty_ring() {
+        let rb = ScrollbackRingBuffer::new(2048);
+        let snap = rb.capture();
+        let restored = ScrollbackRingBuffer::load_snapshot(&snap);
+        assert!(restored.is_empty());
+        assert_eq!(restored.capacity(), 2048);
+    }
+
+    /// AC-4: arbitrary bytes, including NUL bytes and invalid UTF-8,
+    /// round-trip exactly (the buffer is opaque bytes, never interpreted
+    /// as text).
+    #[test]
+    fn capture_then_load_snapshot_round_trips_bytes_containing_invalid_utf8_and_nuls() {
+        let mut rb = ScrollbackRingBuffer::new(1024);
+        let data: Vec<u8> = vec![0x00, 0xFF, 0x80, 0x00, b'x', 0xC0, 0xC1];
+        rb.write(&data);
+        let snap = rb.capture();
+        let restored = ScrollbackRingBuffer::load_snapshot(&snap);
+        assert_eq!(restored.read_all(), data);
     }
 }
