@@ -1340,6 +1340,130 @@ impl MuxPane {
         }
     }
 
+    /// Raw fd number of this pane's PTY master (task0003 AC-2 snapshot
+    /// accessor): the daemon clears its `FD_CLOEXEC` flag and records this
+    /// number so the descriptor survives `execve`. `None` once the master
+    /// has been dropped ([`Self::mark_exited`]) or for a pane with no
+    /// master at all (test-only construction).
+    #[cfg(unix)]
+    pub fn master_raw_fd(&self) -> Option<std::os::unix::io::RawFd> {
+        self.master.as_ref().and_then(|m| m.as_raw_fd())
+    }
+
+    /// This pane's shell child process id (task0003 AC-2 / IMPLEMENTATION.md
+    /// D6 snapshot accessor), regardless of whether the child is an owned
+    /// handle ([`PaneChild::Owned`], a freshly spawned pane) or a bare
+    /// process id ([`PaneChild::ProcessId`], a pane itself previously
+    /// restored from an earlier handoff). `None` once the child has been
+    /// reaped ([`Self::mark_exited`]) or for a pane with no child reference
+    /// at all (test-only construction).
+    pub fn child_pid(&self) -> Option<u32> {
+        match &self.child {
+            Some(PaneChild::Owned(child)) => child.process_id(),
+            #[cfg(unix)]
+            Some(PaneChild::ProcessId(pid)) => Some(*pid),
+            None => None,
+        }
+    }
+
+    /// Construct a live pane around an adopted master, for restore from a
+    /// handoff document (task0003 AC-1/AC-3/AC-4/AC-5). Builds on
+    /// [`Self::new_with_process_id`] / [`Self::new`] for every field their
+    /// construction already gets right (dimension clamping, child
+    /// reference, the wire-up new panes get) and then overwrites `cwd` /
+    /// `title` / agent-status / scrollback with the restored values instead
+    /// of the empty ones those constructors start with. The shadow parser's
+    /// view is rebuilt by REPLAYING the restored scrollback
+    /// (IMPLEMENTATION.md D8) rather than expecting serialised parser
+    /// state — mirroring the panic-recovery convention `pty_reader_loop`
+    /// already uses for live output.
+    #[cfg(unix)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_restored(
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        output_target: SharedOutputTarget,
+        writer: Box<dyn Write + Send>,
+        master: Box<dyn MasterPty + Send>,
+        scrollback: ScrollbackRingBuffer,
+        cwd: Option<String>,
+        title: Option<String>,
+        agent_status: AgentStatus,
+        restored_child_pid: Option<u32>,
+    ) -> Self {
+        let pane = match restored_child_pid {
+            Some(pid) => Self::new_with_process_id(id, cols, rows, output_target, writer, master, pid),
+            None => Self::new(id, cols, rows, output_target, writer, master, None),
+        };
+
+        *pane.cwd.lock().unwrap() = cwd;
+        *pane.title.lock().unwrap() = title;
+        *pane.agent_status.lock().unwrap() = agent_status;
+
+        let replay_bytes = scrollback.read_all();
+        *pane.scrollback.lock().unwrap() = scrollback;
+        if !replay_bytes.is_empty() {
+            let mut parser = lock_shadow_parser(&pane.shadow_parser);
+            let (parser_rows, parser_cols) = parser.screen().size();
+            let processed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                parser.process(&replay_bytes);
+            }));
+            if processed.is_err() {
+                *parser = new_shadow_parser(parser_rows, parser_cols);
+                log::error!(
+                    "pane {}: shadow parser panicked while replaying {} bytes of \
+                     restored scrollback; parser reset",
+                    id,
+                    replay_bytes.len()
+                );
+            }
+        }
+
+        pane
+    }
+
+    /// Construct an already-exited pane directly from restored parts
+    /// (task0003 AC-6/AC-7): no descriptor is adopted — either the
+    /// document recorded no live descriptor (AC-6), or restore could not
+    /// adopt the one it recorded (AC-7) — and no child reference is
+    /// retained, since an exited pane has nothing left to reap.
+    pub fn from_restored_exited(
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        output_target: SharedOutputTarget,
+        scrollback: ScrollbackRingBuffer,
+        cwd: Option<String>,
+        title: Option<String>,
+        agent_status: AgentStatus,
+    ) -> Self {
+        Self {
+            id,
+            cols,
+            rows,
+            output_target,
+            writer: None,
+            master: None,
+            child: None,
+            exited: true,
+            shadow_parser: Arc::new(StdMutex::new(new_shadow_parser(rows, cols))),
+            cwd: Arc::new(StdMutex::new(cwd)),
+            title: Arc::new(StdMutex::new(title)),
+            title_sender: Arc::new(StdMutex::new(None)),
+            notification_sender: Arc::new(StdMutex::new(None)),
+            agent_status: Arc::new(StdMutex::new(agent_status)),
+            agent_status_report_sender: Arc::new(StdMutex::new(None)),
+            agent_waiters: Arc::new(StdMutex::new(Vec::new())),
+            raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
+                HIDDEN_PASSTHROUGH_CAPACITY_MUX,
+            ))),
+            passthrough_scanner: Arc::new(StdMutex::new(PassthroughScanner::new())),
+            scrollback: Arc::new(StdMutex::new(scrollback)),
+            dims: Arc::new(PaneDims::new(cols, rows)),
+        }
+    }
+
     /// Create a pane without a PTY master, for testing only.
     #[cfg(test)]
     pub fn new_test(id: PaneId, cols: u16, rows: u16, output_target: SharedOutputTarget) -> Self {
@@ -3179,5 +3303,246 @@ mod tests {
             *target.lock().unwrap(),
             PaneOutputTarget::Connected(_)
         ));
+    }
+
+    // ── task0003: snapshot accessors + restore constructors ───────────────
+
+    /// A child double reporting a fixed, non-`None` process id — used to
+    /// exercise [`MuxPane::child_pid`] (the `PaneChild::Owned` arm) without
+    /// a real spawned process.
+    #[derive(Debug)]
+    struct FixedPidChild(u32);
+
+    impl portable_pty::ChildKiller for FixedPidChild {
+        fn kill(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+            unimplemented!("not exercised by these tests")
+        }
+    }
+
+    impl portable_pty::Child for FixedPidChild {
+        fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            Ok(None)
+        }
+        fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            Ok(portable_pty::ExitStatus::with_exit_code(0))
+        }
+        fn process_id(&self) -> Option<u32> {
+            Some(self.0)
+        }
+        #[cfg(windows)]
+        fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
+            None
+        }
+    }
+
+    fn open_test_pty_pair() -> portable_pty::PtyPair {
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        pty_system.openpty(size).unwrap()
+    }
+
+    /// AC-2 (snapshot groundwork): `master_raw_fd` reports the SAME fd
+    /// number the underlying PTY master actually has.
+    #[cfg(unix)]
+    #[test]
+    fn master_raw_fd_reports_the_ptys_actual_descriptor_number() {
+        let pair = open_test_pty_pair();
+        let expected_fd = pair.master.as_raw_fd().expect("PTY master must have an fd");
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let pane = MuxPane::new(1, 80, 24, target, writer, pair.master, None);
+        assert_eq!(pane.master_raw_fd(), Some(expected_fd));
+    }
+
+    /// AC-2 (snapshot groundwork): `master_raw_fd` / `child_pid` both
+    /// become `None` once the pane has exited (master dropped, child
+    /// reaped) — an exited pane contributes no descriptor to snapshot.
+    #[cfg(unix)]
+    #[test]
+    fn master_raw_fd_and_child_pid_are_none_after_mark_exited() {
+        let pair = open_test_pty_pair();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let mut pane = MuxPane::new(
+            1,
+            80,
+            24,
+            target,
+            writer,
+            pair.master,
+            Some(Box::new(FixedPidChild(4242))),
+        );
+        assert_eq!(pane.child_pid(), Some(4242));
+        pane.mark_exited();
+        assert_eq!(pane.master_raw_fd(), None);
+        assert_eq!(pane.child_pid(), None);
+    }
+
+    /// AC-2 (snapshot groundwork): `child_pid` reports the owned child
+    /// double's process id verbatim (the `PaneChild::Owned` arm).
+    #[cfg(unix)]
+    #[test]
+    fn child_pid_reports_the_owned_childs_process_id() {
+        let pair = open_test_pty_pair();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let pane = MuxPane::new(
+            1,
+            80,
+            24,
+            target,
+            writer,
+            pair.master,
+            Some(Box::new(FixedPidChild(777))),
+        );
+        assert_eq!(pane.child_pid(), Some(777));
+    }
+
+    /// AC-2 (snapshot groundwork): `child_pid` reports a restored pane's
+    /// bare process id verbatim (the `PaneChild::ProcessId` arm — task0007
+    /// IMPLEMENTATION.md D6).
+    #[cfg(unix)]
+    #[test]
+    fn child_pid_reports_a_restored_panes_process_id() {
+        let pair = open_test_pty_pair();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let pane = MuxPane::new_with_process_id(1, 80, 24, target, writer, pair.master, 5150);
+        assert_eq!(pane.child_pid(), Some(5150));
+    }
+
+    /// AC-1/AC-4: `from_restored` sets cols/rows/cwd/title/agent-status and
+    /// scrollback verbatim, and carries the given restored pid through the
+    /// `PaneChild::ProcessId` path (task0007's reaping wiring).
+    #[cfg(unix)]
+    #[test]
+    fn from_restored_sets_attributes_and_scrollback_verbatim() {
+        let pair = open_test_pty_pair();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let mut scrollback = ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY);
+        scrollback.write(b"restored scrollback bytes");
+        let mut agent_status = AgentStatus::default();
+        agent_status.state = Some(AgentState::Working);
+        agent_status.name = Some("claude".to_string());
+        agent_status.revision = 3;
+
+        let pane = MuxPane::from_restored(
+            9,
+            80,
+            24,
+            target,
+            writer,
+            pair.master,
+            scrollback,
+            Some("/home/user/project".to_string()),
+            Some("zsh".to_string()),
+            agent_status,
+            Some(4242),
+        );
+
+        assert_eq!(pane.id, 9);
+        assert_eq!((pane.cols, pane.rows), (80, 24));
+        assert!(!pane.exited);
+        assert_eq!(pane.child_pid(), Some(4242), "restored pid flows through PaneChild::ProcessId");
+        assert_eq!(
+            *pane.cwd.lock().unwrap(),
+            Some("/home/user/project".to_string())
+        );
+        assert_eq!(*pane.title.lock().unwrap(), Some("zsh".to_string()));
+        {
+            let status = pane.agent_status.lock().unwrap();
+            assert_eq!(status.state, Some(AgentState::Working));
+            assert_eq!(status.name.as_deref(), Some("claude"));
+            assert_eq!(status.revision, 3);
+        }
+        assert_eq!(
+            pane.scrollback.lock().unwrap().read_all(),
+            b"restored scrollback bytes"
+        );
+    }
+
+    /// AC-5: a restored live pane can be written to and read from through
+    /// its adopted master, demonstrated against a real PTY pair. The PTY's
+    /// line discipline echoes input written to the master back to the
+    /// master's own reader side, so a reader cloned from the master BEFORE
+    /// it is handed to `from_restored` observes the written bytes.
+    #[cfg(unix)]
+    #[test]
+    fn from_restored_pane_can_write_and_read_through_its_adopted_master() {
+        use std::io::Read as _;
+        let pair = open_test_pty_pair();
+        let writer = pair.master.take_writer().unwrap();
+        let mut master_reader = pair
+            .master
+            .try_clone_reader()
+            .expect("master must support a reader clone");
+        let target = make_output_target();
+        let pane = MuxPane::from_restored(
+            1,
+            80,
+            24,
+            target,
+            writer,
+            pair.master,
+            ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY),
+            None,
+            None,
+            AgentStatus::default(),
+            None,
+        );
+
+        pane.write_input(b"restored-write\n").unwrap();
+
+        let mut buf = [0u8; 64];
+        let n = master_reader.read(&mut buf).expect("master read must succeed");
+        assert!(
+            buf[..n]
+                .windows(b"restored-write".len())
+                .any(|w| w == b"restored-write"),
+            "bytes written through the adopted master's writer must be readable \
+             back through the adopted master (echoed by the PTY line discipline)"
+        );
+    }
+
+    /// AC-6: `from_restored_exited` builds an already-exited pane that
+    /// adopts no descriptor, while still restoring its non-descriptor
+    /// attributes (cwd/title/agent-status/scrollback) verbatim.
+    #[test]
+    fn from_restored_exited_adopts_no_descriptor_and_is_marked_exited() {
+        let target = make_output_target();
+        let mut scrollback = ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY);
+        scrollback.write(b"pre-exit scrollback");
+        let pane = MuxPane::from_restored_exited(
+            5,
+            80,
+            24,
+            target,
+            scrollback,
+            Some("/tmp".to_string()),
+            Some("bash".to_string()),
+            AgentStatus::default(),
+        );
+
+        assert!(pane.exited);
+        assert_eq!(pane.child_pid(), None);
+        #[cfg(unix)]
+        assert_eq!(pane.master_raw_fd(), None);
+        assert_eq!(*pane.cwd.lock().unwrap(), Some("/tmp".to_string()));
+        assert_eq!(*pane.title.lock().unwrap(), Some("bash".to_string()));
+        assert_eq!(
+            pane.scrollback.lock().unwrap().read_all(),
+            b"pre-exit scrollback"
+        );
+        // Writing to an exited pane must fail (no writer).
+        assert!(pane.write_input(b"x").is_err());
     }
 }
