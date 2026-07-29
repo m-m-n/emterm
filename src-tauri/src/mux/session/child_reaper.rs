@@ -124,6 +124,195 @@ pub(super) fn spawn_reaper(pane_id: u32, child: Box<dyn portable_pty::Child + Se
     }
 }
 
+// ── Process-id based reaping (task plan task0007, IMPLEMENTATION.md D6) ────
+//
+// A pane restored from a handoff has no `portable_pty::Child` handle — the
+// PTY library's handle cannot be rebuilt after the process image is
+// replaced — but the daemon remains the parent of every pane child, so the
+// platform's child-status collection still works by process id. This
+// section applies the identical grace-then-terminate policy
+// `reap_child_blocking` applies for an owned handle, reusing the SAME
+// timing constants (AC-6) so the two paths behave identically from the
+// outside. Unix only (task plan Design: "Guard the process-id path to
+// Unix"); the handle-based path above stays available on all platforms.
+
+/// Non-blocking poll of `pid`'s exit status via `waitpid(..., WNOHANG)`.
+///
+/// Returns `Ok(true)` when the process has exited (this call collected it)
+/// OR was already collected before this call ever ran (`ECHILD` — AC-3: the
+/// already-collected case must be detected here and treated as "done", not
+/// as an error). Returns `Ok(false)` when the process is still running. Any
+/// other `waitpid` failure is returned as an error for the caller to log and
+/// escalate.
+#[cfg(unix)]
+fn try_wait_pid(pid: u32) -> std::io::Result<bool> {
+    let mut status: libc::c_int = 0;
+    // SAFETY: `WNOHANG` makes this call non-blocking; `&mut status` is a
+    // valid local out-parameter for the duration of the call.
+    let ret = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+    if ret > 0 {
+        Ok(true)
+    } else if ret == 0 {
+        Ok(false)
+    } else {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ECHILD) {
+            // Already collected (or never our child) — AC-3: not an error.
+            Ok(true)
+        } else {
+            Err(err)
+        }
+    }
+}
+
+/// Send a single signal to `pid`.
+#[cfg(unix)]
+fn send_signal(pid: u32, signal: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: signaling an already-validated process id.
+    let ret = unsafe { libc::kill(pid as libc::pid_t, signal) };
+    if ret == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Terminate `pid`, applying the same "graceful signal, then escalate"
+/// policy the handle-based path gets for free from `portable_pty`'s own
+/// `Child::kill()` (which sends `SIGHUP`, waits briefly, then escalates to
+/// `SIGKILL`): send `SIGTERM` — a signal a process may catch and ignore
+/// (AC-2 covers exactly this case) — poll briefly for exit, and escalate to
+/// `SIGKILL` (which cannot be caught or ignored) if the process is still
+/// alive after that short window. This guarantees the caller's subsequent
+/// blocking reap never hangs forever on a stubborn child.
+///
+/// Errors from the initial signal (e.g. `ESRCH`: the process is already
+/// gone) are returned to the caller, which — mirroring
+/// `reap_child_blocking`'s handling of a `ChildKiller::kill()` error —
+/// ignores them and proceeds to the final blocking reap regardless (SPEC
+/// error table: "child already gone" -> ignore).
+#[cfg(unix)]
+fn kill_pid(pid: u32, poll_interval: Duration) -> std::io::Result<()> {
+    send_signal(pid, libc::SIGTERM)?;
+
+    for _ in 0..5 {
+        if matches!(try_wait_pid(pid), Ok(true)) {
+            return Ok(());
+        }
+        std::thread::sleep(poll_interval);
+    }
+
+    send_signal(pid, libc::SIGKILL)
+}
+
+/// Final blocking reap of `pid` after kill escalation.
+#[cfg(unix)]
+fn wait_pid_blocking(pid: u32) -> std::io::Result<()> {
+    let mut status: libc::c_int = 0;
+    // SAFETY: blocking `waitpid` on a pid this process is the parent of.
+    let ret = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, 0) };
+    if ret == -1 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ECHILD) {
+            // Already collected — nothing left to wait for.
+            return Ok(());
+        }
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// Blocking reap procedure for a pane child referenced by raw process id
+/// (task plan Design). Mirrors [`reap_child_blocking`] exactly: polls for
+/// exit at `poll_interval` until either the process exits or `grace_period`
+/// elapses, then — only if still alive — terminates and performs a final
+/// blocking reap. Never panics.
+///
+/// `pane_id` is log context only.
+///
+/// Postconditions (mirroring [`reap_child_blocking`]):
+/// - A process that exits during the grace period is collected by that
+///   observation; no kill is ever sent for it (AC-1).
+/// - A process still alive when the grace period elapses (or whose exit
+///   status could not be determined) is killed, then blocking-reaped
+///   (AC-2).
+/// - A process id that has already been collected is detected via `ECHILD`
+///   and the procedure returns promptly, without treating that as an error
+///   (AC-3).
+#[cfg(unix)]
+pub(super) fn reap_pid_blocking(
+    pane_id: u32,
+    pid: u32,
+    grace_period: Duration,
+    poll_interval: Duration,
+) {
+    let deadline = Instant::now() + grace_period;
+    loop {
+        match try_wait_pid(pid) {
+            Ok(true) => {
+                // Exited (or already collected) — nothing left to do.
+                return;
+            }
+            Ok(false) => {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(poll_interval);
+            }
+            Err(e) => {
+                log::warn!(
+                    "child_reaper: pane {} failed to poll pid {} exit status; \
+                     escalating to kill: {}",
+                    pane_id,
+                    pid,
+                    e
+                );
+                break;
+            }
+        }
+    }
+
+    // Escalate: the process either wedged past the grace period or its exit
+    // status could not be determined. A kill error (process already gone)
+    // is ignored, mirroring the handle-based path's `let _ = child.kill();`.
+    let _ = kill_pid(pid, poll_interval);
+
+    if let Err(e) = wait_pid_blocking(pid) {
+        log::warn!(
+            "child_reaper: pane {} blocking reap of pid {} failed after kill escalation: {}",
+            pane_id,
+            pid,
+            e
+        );
+    }
+}
+
+/// Background-handoff entry point for the process-id path (mirrors
+/// [`spawn_reaper`] exactly): spawns one detached OS thread (named for
+/// diagnosability) that runs [`reap_pid_blocking`] with the default timing
+/// constants (AC-6: the same [`DEFAULT_GRACE_PERIOD`] /
+/// [`DEFAULT_POLL_INTERVAL`] the handle-based path uses) and returns
+/// immediately.
+///
+/// The spawned thread is never joined; if the daemon exits before it
+/// finishes, the still-running process re-parents to init, which reaps it —
+/// no leak survives daemon exit (mirrors [`spawn_reaper`]'s own doc).
+#[cfg(unix)]
+pub(super) fn spawn_reaper_pid(pane_id: u32, pid: u32) {
+    let result = std::thread::Builder::new()
+        .name(format!("pane-reap-{pane_id}"))
+        .spawn(move || {
+            reap_pid_blocking(pane_id, pid, DEFAULT_GRACE_PERIOD, DEFAULT_POLL_INTERVAL);
+        });
+    if let Err(e) = result {
+        log::warn!(
+            "child_reaper: failed to spawn pid-reap thread for pane {}: {}",
+            pane_id,
+            e
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +618,106 @@ mod tests {
             1,
             "AC-6: a kill error must not abort the procedure — the blocking reap still runs"
         );
+    }
+
+    // ── Process-id based paths (task plan task0007) ───────────────────────
+
+    /// AC-1: a process that exits on its own is collected within the grace
+    /// period, without ever sending a signal.
+    #[cfg(unix)]
+    #[test]
+    fn process_id_prompt_exit_is_collected_within_grace_period() {
+        let child = spawn_std_child("true", &[]);
+        let pid = child.id();
+
+        let started = Instant::now();
+        reap_pid_blocking(
+            101,
+            pid,
+            Duration::from_millis(500),
+            Duration::from_millis(10),
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(450),
+            "prompt exit should not wait out the grace period"
+        );
+        assert_pid_reaped(pid);
+        // Do not call `child.wait()` — this process id was already reaped
+        // by `reap_pid_blocking` above via raw `waitpid`; the `Child` value
+        // is simply dropped without waiting, mirroring the real-child tests
+        // above.
+        drop(child);
+    }
+
+    /// AC-2: a process that ignores the graceful signal (`SIGTERM`) is
+    /// still terminated (escalated to `SIGKILL`) and collected once the
+    /// grace period elapses.
+    #[cfg(unix)]
+    #[test]
+    fn process_id_child_ignoring_sigterm_is_killed_and_reaped_within_deadline() {
+        let child = spawn_std_child("sh", &["-c", "trap '' TERM; sleep 30"]);
+        let pid = child.id();
+
+        let grace_period = Duration::from_millis(50);
+        let started = Instant::now();
+        reap_pid_blocking(102, pid, grace_period, Duration::from_millis(10));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "kill escalation must return promptly, not wait for the child's own sleep, \
+             even when it ignores SIGTERM"
+        );
+        assert_pid_reaped(pid);
+        drop(child);
+    }
+
+    /// AC-3: a process id that has already been fully collected is detected
+    /// promptly (via `ECHILD`) and does not wait out a (deliberately long)
+    /// grace period, and is not treated as an error.
+    #[cfg(unix)]
+    #[test]
+    fn process_id_already_collected_returns_promptly_without_error() {
+        let child = spawn_std_child("true", &[]);
+        let pid = child.id();
+
+        // Reap it fully once through our own path, so the kernel has no
+        // more status left to deliver for this pid.
+        reap_pid_blocking(
+            103,
+            pid,
+            Duration::from_millis(500),
+            Duration::from_millis(10),
+        );
+        assert_pid_reaped(pid);
+        drop(child);
+
+        // AC-3: calling again for the SAME (now fully collected) pid must
+        // return promptly, even though the grace period configured here is
+        // deliberately long — proving the ECHILD path is taken immediately
+        // rather than waiting out the grace period.
+        let started = Instant::now();
+        reap_pid_blocking(103, pid, Duration::from_secs(5), Duration::from_millis(10));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "an already-collected pid must not wait out the grace period"
+        );
+    }
+
+    /// AC-6: `spawn_reaper_pid` — the process-id path's public entry point,
+    /// exactly mirroring `spawn_reaper` — takes no timing parameters of its
+    /// own, so it can only ever reap through `DEFAULT_GRACE_PERIOD` /
+    /// `DEFAULT_POLL_INTERVAL`, the SAME constants the handle-based path
+    /// uses. Exercises the real end-to-end entry point (background thread
+    /// spawn + reap) rather than the lower-level `reap_pid_blocking` the
+    /// other tests above call directly.
+    #[cfg(unix)]
+    #[test]
+    fn spawn_reaper_pid_reaps_a_prompt_exiting_process_using_default_timing() {
+        let child = spawn_std_child("true", &[]);
+        let pid = child.id();
+
+        spawn_reaper_pid(999, pid);
+
+        assert_pid_reaped(pid);
+        drop(child);
     }
 }
