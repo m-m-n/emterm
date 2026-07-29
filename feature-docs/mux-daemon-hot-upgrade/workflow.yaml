@@ -204,7 +204,7 @@ tasks:
     requirements: [NFR4]
     status: merged
     branch: em-workflow/mux-daemon-hot-upgrade/task0011
-    notes: "synthesized from verify failure VF-1; deviation: also modified src-tauri/src/mux/daemon.rs — the abort\'s primary cause was a process-wide HANDOFF_ENV_VAR race between two daemon.rs tests causing double-adoption of one listener fd, root-caused via strace -f. The inherited_pty.rs hazard named in the plan was real but secondary."
+    notes: "synthesized from verify failure VF-1; deviation: also modified src-tauri/src/mux/daemon.rs — the abort's primary cause was a process-wide HANDOFF_ENV_VAR race between two daemon.rs tests causing double-adoption of one listener fd, root-caused via strace -f. The inherited_pty.rs hazard named in the plan was real but secondary."
 
 review:
   status: completed
