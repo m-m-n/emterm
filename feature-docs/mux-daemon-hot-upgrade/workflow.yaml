@@ -62,7 +62,7 @@ tasks:
     domains: [api-contract, input-handling]
     complexity: medium
     requirements: [FR1, FR2, FR4, FR14, NFR6]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-daemon-hot-upgrade/task0001
   task0002:
