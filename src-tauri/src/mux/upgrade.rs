@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Write as _};
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -149,6 +149,113 @@ fn clear_cloexec(fd: RawFd) -> std::io::Result<()> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// Set `FD_CLOEXEC` on `fd` — the restore-side symmetric counterpart of
+/// [`clear_cloexec`] (Design "Descriptor lifetime": snapshot clears the flag
+/// so a descriptor survives `execve`; restore must set it back once adopted
+/// so it never reaches a LATER pane's child process). `fd` must be a
+/// descriptor the caller owns or otherwise controls for the duration of this
+/// call.
+fn set_cloexec(fd: RawFd) -> std::io::Result<()> {
+    // SAFETY: see `clear_cloexec` above.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let rc = unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+    if rc < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Confirm that `fd` refers to a live, listening `AF_UNIX` socket, WITHOUT
+/// taking ownership of it (Design "Adoption validation" — as defensive as
+/// adopting a pane master already is via [`InheritedMasterPty::new`]'s
+/// `isatty` check). Checked, in order: `fstat` succeeds and reports a socket
+/// (`S_IFSOCK`); `SO_ACCEPTCONN` is set (the socket is in the listening
+/// state, not merely any open socket); `getsockname` reports the `AF_UNIX`
+/// family. Any failure means "do not adopt this descriptor" — the caller
+/// falls back to a fresh bind (AC-6).
+fn validate_listen_fd(fd: RawFd) -> std::io::Result<()> {
+    // SAFETY: `st` is a zero-initialized POD `fstat` fills in; `fd` is a
+    // caller-supplied descriptor number, valid or not (`fstat`'s return
+    // code reports the invalid case).
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut st) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if st.st_mode & libc::S_IFMT != libc::S_IFSOCK {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("fd {fd} is not a socket"),
+        ));
+    }
+
+    let mut accept_conn: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    // SAFETY: `accept_conn`/`len` are valid, correctly-sized out-parameters;
+    // `fd` was just confirmed to be an open socket above.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ACCEPTCONN,
+            &mut accept_conn as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if accept_conn == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("fd {fd} is a socket but is not in the listening state"),
+        ));
+    }
+
+    let mut addr: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    let mut addr_len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    // SAFETY: `addr`/`addr_len` are valid, correctly-sized out-parameters;
+    // `fd` was just confirmed to be an open, listening socket above.
+    let rc = unsafe {
+        libc::getsockname(
+            fd,
+            &mut addr as *mut _ as *mut libc::sockaddr,
+            &mut addr_len,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if addr.ss_family as libc::c_int != libc::AF_UNIX {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("fd {fd} is a listening socket but not AF_UNIX"),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate `fd` ([`validate_listen_fd`]) and, only on success, take
+/// ownership of it as a std [`std::os::unix::net::UnixListener`] with
+/// `FD_CLOEXEC` restored (Design "Adoption validation" / "Descriptor
+/// lifetime"). On failure, `fd` is left completely untouched — no ownership
+/// is taken, so the caller can safely fall back to a fresh bind without
+/// risking a wild close of an unrelated descriptor (AC-6).
+pub fn adopt_listener(fd: RawFd) -> std::io::Result<std::os::unix::net::UnixListener> {
+    validate_listen_fd(fd)?;
+    // SAFETY: validated immediately above to be a live, listening `AF_UNIX`
+    // socket; ownership is taken exactly once here.
+    let listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+    // Ownership WAS taken (`from_raw_fd` above); `listener`'s own Drop closes
+    // `fd` exactly once if `?` returns `Err` here — no separate manual close
+    // needed.
+    set_cloexec(fd)?;
+    Ok(listener)
 }
 
 /// Open the handoff file fresh: owner-only permission, refusing to follow an
@@ -449,6 +556,10 @@ fn restore_pane(
     let master: Box<dyn MasterPty + Send> = match adopt_master(fd) {
         Ok(m) => m,
         Err(e) => {
+            // AC-11 / medium performance finding: no explicit close needed
+            // here — `adopt_master`'s own contract guarantees `fd` is
+            // already closed on every `Err` path, so closing it again here
+            // would double-close.
             log::warn!(
                 "upgrade restore: pane {} master descriptor {} could not be adopted \
                  ({}); restoring as exited",
@@ -528,9 +639,35 @@ fn build_exited_pane(doc: &HandoffPane, scrollback: ScrollbackRingBuffer, agent_
     )
 }
 
-/// Adopt `fd` as a `MasterPty` through task0002's inherited master adapter.
+/// Adopt `fd` as a `MasterPty` through task0002's inherited master adapter,
+/// restoring `FD_CLOEXEC` on success (Design "Descriptor lifetime": snapshot
+/// cleared it so `fd` would survive `execve`; a pane spawned AFTER this
+/// hot-upgrade must never inherit it, AC-4).
+///
+/// Contract (AC-11 / medium performance finding: a fd that fails adoption
+/// must never leak): on any `Err`, `fd` is guaranteed already closed —
+/// callers must not close it again.
+/// - [`InheritedMasterPty::new`] failing means it never took ownership (its
+///   own documented contract), so this function closes `fd` itself before
+///   returning.
+/// - `set_cloexec` failing AFTER a successful adopt means `fd` IS owned (by
+///   the local `master`); returning `Err` here lets `master` drop at the end
+///   of this function's scope, which closes `fd` exactly once through
+///   [`InheritedMasterPty`]'s own `Drop` impl — no second explicit close.
 fn adopt_master(fd: RawFd) -> anyhow::Result<Box<dyn MasterPty + Send>> {
-    let master = InheritedMasterPty::new(fd)?;
+    let master = match InheritedMasterPty::new(fd) {
+        Ok(m) => m,
+        Err(e) => {
+            // SAFETY: `fd` is still owned by the caller at this point
+            // (construction failed without taking ownership); nothing else
+            // references it.
+            unsafe {
+                libc::close(fd);
+            }
+            return Err(e);
+        }
+    };
+    set_cloexec(master.raw_fd())?;
     Ok(Box::new(master))
 }
 
@@ -619,6 +756,24 @@ mod tests {
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
         assert!(flags >= 0, "fcntl(F_GETFD) failed");
         flags & libc::FD_CLOEXEC != 0
+    }
+
+    /// `(st_dev, st_ino)` for `fd`, or `None` if `fd` is not currently open.
+    /// Used (rather than a plain "is this fd number valid" check) so a test
+    /// asserting a descriptor was closed stays correct even when `cargo
+    /// test`'s parallel threads — sharing one process-wide fd table — hand
+    /// that freed NUMBER to an unrelated descriptor from a concurrently
+    /// running test before the assertion runs (mirrors
+    /// `inherited_pty.rs::tests::stat_rdev`'s identical rationale, adapted to
+    /// regular files via device+inode identity instead of a device's rdev).
+    fn stat_dev_ino(fd: RawFd) -> Option<(u64, u64)> {
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        let rc = unsafe { libc::fstat(fd, &mut st) };
+        if rc == 0 {
+            Some((st.st_dev, st.st_ino))
+        } else {
+            None
+        }
     }
 
     fn minimal_document() -> HandoffDocument {
@@ -962,6 +1117,188 @@ mod tests {
         let pane2 = window.panes.get(&2).unwrap();
         assert!(pane2.exited, "AC-6: a pane recorded exited restores as exited");
         assert_eq!(*pane2.cwd.lock().unwrap(), Some("/tmp".to_string()));
+    }
+
+    // ── AC-4: restore sets close-on-exec back on every adopted descriptor,
+    // and a pane spawned AFTERWARDS does not inherit it ────────────────────
+
+    #[test]
+    fn restore_sets_cloexec_back_on_the_adopted_pane_master() {
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let master_fd = pair.master.as_raw_fd().unwrap();
+        // Simulate what snapshot does pre-exec: clear CLOEXEC on a
+        // (duplicated, to avoid a double-close race with `pair.master`'s own
+        // Drop) descriptor recording this pane as live.
+        let dup_fd = unsafe { libc::dup(master_fd) };
+        assert!(dup_fd >= 0, "dup(2) failed");
+        clear_cloexec(dup_fd).expect("simulate snapshot's clear_cloexec");
+        assert!(
+            !has_cloexec(dup_fd),
+            "sanity: CLOEXEC must be cleared before adoption, mirroring a real handoff"
+        );
+
+        let master = adopt_master(dup_fd).expect("a live descriptor must adopt");
+
+        assert!(
+            has_cloexec(master.as_raw_fd().unwrap()),
+            "AC-4: restore must set CLOEXEC back on the adopted descriptor"
+        );
+    }
+
+    /// AC-4 (continued): a pane child spawned AFTER a restored pane's master
+    /// is adopted must not inherit that master's descriptor — proven with a
+    /// REAL spawned child inspecting its own fd table, per the Test Notes
+    /// ("AC-4 needs a real spawned child to inspect what it inherited").
+    #[test]
+    fn a_pane_child_spawned_after_restore_does_not_inherit_the_adopted_master() {
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let master_fd = pair.master.as_raw_fd().unwrap();
+        let dup_fd = unsafe { libc::dup(master_fd) };
+        assert!(dup_fd >= 0, "dup(2) failed");
+        clear_cloexec(dup_fd).expect("simulate snapshot's clear_cloexec");
+
+        let master = adopt_master(dup_fd).expect("a live descriptor must adopt");
+        let adopted_fd = master.as_raw_fd().unwrap();
+
+        // A fresh child process, spawned in THIS process after adoption —
+        // standing in for a brand-new pane's shell spawned after the
+        // hot-upgrade. `std::process::Command`'s fork+exec inherits every
+        // open descriptor that lacks FD_CLOEXEC; if the adopted master were
+        // still missing that flag, `/proc/self/fd/<adopted_fd>` would exist
+        // in the CHILD too.
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "if [ -e /proc/self/fd/{adopted_fd} ]; then echo INHERITED; else echo NOT_INHERITED; fi"
+            ))
+            .output()
+            .expect("spawn a real child process");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("NOT_INHERITED"),
+            "AC-4: a pane child spawned after restore must not inherit the adopted master \
+             (child fd table output: {stdout:?})"
+        );
+
+        drop(master);
+    }
+
+    // ── AC-11 / medium performance finding: a descriptor that fails
+    // adoption is closed, not leaked ────────────────────────────────────────
+
+    #[test]
+    fn adopt_master_closes_the_descriptor_when_construction_fails() {
+        // An ordinary (non-terminal) file: `InheritedMasterPty::new`'s own
+        // `isatty` check fails, so `adopt_master` must close it itself
+        // (Contract: "on any Err, fd is guaranteed already closed").
+        let file = tempfile::tempfile().expect("must create a temp file");
+        let fd = file.as_raw_fd();
+        // Duplicate so we can assert on the ORIGINAL descriptor number
+        // independently of `file`'s own (later) Drop.
+        let dup_fd = unsafe { libc::dup(fd) };
+        assert!(dup_fd >= 0, "dup(2) failed");
+        // Identity of the file `dup_fd` currently refers to, captured before
+        // adoption closes it. Compared by (dev, ino) rather than fd validity
+        // alone (matching `inherited_pty.rs`'s established convention): if
+        // `cargo test`'s parallel threads — sharing one process-wide fd
+        // table — hand this freed NUMBER to an unrelated descriptor from a
+        // concurrently running test before the assertion below runs, that
+        // descriptor can only ever refer to a DIFFERENT file, which still
+        // proves `dup_fd` was closed.
+        let original_identity = stat_dev_ino(dup_fd).expect("sanity: fd must be open before adoption");
+
+        let result = adopt_master(dup_fd);
+        assert!(result.is_err(), "a non-terminal fd must fail adoption");
+
+        match stat_dev_ino(dup_fd) {
+            None => {}
+            Some(identity) => assert_ne!(
+                identity,
+                original_identity,
+                "AC-11: a descriptor that fails adoption must be closed, not leaked"
+            ),
+        }
+    }
+
+    // ── AC-6: listener adoption validates before taking ownership ─────────
+
+    #[test]
+    fn adopt_listener_succeeds_over_a_real_listening_unix_socket_and_sets_cloexec() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("adopt-listener.sock");
+        let std_listener =
+            std::os::unix::net::UnixListener::bind(&sock_path).expect("bind real listener");
+        let fd = std_listener.as_raw_fd();
+        // Duplicate so `adopt_listener` can take ownership of ITS OWN
+        // descriptor independently of `std_listener`'s own Drop (which would
+        // otherwise double-close the same fd number once this test ends).
+        let dup_fd = unsafe { libc::dup(fd) };
+        assert!(dup_fd >= 0, "dup(2) failed");
+        clear_cloexec(dup_fd).expect("simulate snapshot's clear_cloexec on the listen descriptor");
+
+        let adopted = adopt_listener(dup_fd).expect("a real listening AF_UNIX socket must adopt");
+
+        assert_eq!(adopted.as_raw_fd(), dup_fd);
+        assert!(
+            has_cloexec(dup_fd),
+            "AC-4: adopt_listener must set CLOEXEC back on the adopted listener"
+        );
+    }
+
+    #[test]
+    fn adopt_listener_rejects_a_non_socket_descriptor_without_taking_ownership() {
+        let file = tempfile::tempfile().expect("must create a temp file");
+        let fd = file.as_raw_fd();
+
+        let result = adopt_listener(fd);
+
+        assert!(result.is_err(), "a regular file must not adopt as a listener");
+        // AC-6: the descriptor is still open and unchanged afterward — no
+        // ownership was taken, so `file`'s own (still-live) handle proves
+        // this by continuing to work normally.
+        assert!(
+            std::fs::metadata(format!("/proc/self/fd/{fd}")).is_ok(),
+            "AC-6: a failed adoption must leave the descriptor open and unchanged"
+        );
+        drop(file);
+    }
+
+    #[test]
+    fn adopt_listener_rejects_a_connected_non_listening_socket_without_taking_ownership() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("not-listening.sock");
+        let listener =
+            std::os::unix::net::UnixListener::bind(&sock_path).expect("bind real listener");
+        let client =
+            std::os::unix::net::UnixStream::connect(&sock_path).expect("connect a client socket");
+        let fd = client.as_raw_fd();
+
+        let result = adopt_listener(fd);
+
+        assert!(
+            result.is_err(),
+            "AC-6: a connected (non-listening) socket must not adopt as a listener"
+        );
+        assert!(
+            std::fs::metadata(format!("/proc/self/fd/{fd}")).is_ok(),
+            "AC-6: a failed adoption must leave the descriptor open and unchanged"
+        );
+        drop(client);
+        drop(listener);
     }
 
     // ── AC-8: handoff file 0600, removed in all three outcomes ────────────
