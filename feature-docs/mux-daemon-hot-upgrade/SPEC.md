@@ -110,8 +110,14 @@ incompatible new binary never costs me my panes.
   (`src-tauri/src/mux/bridge.rs:181`) enters a bounded reconnect loop and
   re-attaches to the same session instead of exiting. A disconnect **without**
   a preceding `Upgrading` keeps today's behavior (exit).
-- **FR13:** On `execve` failure, unlink the handoff state file, log the error,
-  return an error to the requesting client, and continue normal operation.
+- **FR13:** Every failure detected while the async runtime is still alive
+  (schema probe, snapshot, state-file write, `FD_CLOEXEC` clear) aborts the
+  upgrade, is logged, and is reported to the requesting client, after which
+  the daemon keeps serving normally. If `execve` itself fails — necessarily
+  after runtime shutdown, when no client connection remains — the process
+  logs the failure at `error` and re-enters service in the same process by
+  restoring from the handoff document it just wrote, so panes stay attached
+  and reconnecting clients find a working daemon.
 - **FR14:** Define a handoff schema version in `crates/mux_ipc`, versioned
   independently of `PROTOCOL_VERSION`. Before `execve`, probe the new binary
   for its supported handoff schema version(s) and abort the upgrade when
@@ -339,7 +345,7 @@ src-tauri/tests/
 | Handoff schema incompatible | Abort before `execve`; log at `warn`; error to client; daemon continues |
 | State file write failure | Abort before `execve`; same as above |
 | `FD_CLOEXEC` clear failure | Abort before `execve`; same as above |
-| `execve` failure | Unlink state file; log at `error`; error to client; daemon continues |
+| `execve` failure | Log at `error`; restore from the handoff document in-process; unlink state file; daemon continues serving |
 | Restore failure in the new daemon | Log at `error`; unlink state file; panes that cannot be restored are marked `exited` |
 | Client reconnect exhausted | Client exits with today's behavior after the retry window |
 
@@ -390,6 +396,11 @@ is a decision taken from codebase evidence rather than a confirmed answer.
   scrollback rather than serialized byte-for-byte.
 - **A13:** `PROTOCOL_VERSION` is not bumped, since no existing bincode struct
   changes and new message types are discarded gracefully by old peers.
+- **A14:** `execve` failure is recovered by restoring the just-written handoff
+  document **in the same process** rather than by returning an error over the
+  requesting client's connection, because that connection is necessarily gone
+  once the runtime has been shut down. All earlier abort causes are reported
+  to the client directly, while the runtime is still alive.
 
 ## References
 
