@@ -43,7 +43,7 @@ workflow:
     base_commit: 9c9db29321b43c7433f161e243e19ccc35162c74
     completed_at_commit: 935fc00e9ada11532f51cc331cf8415e9d4d91dd
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -190,7 +190,7 @@ tasks:
     notes: "synthesized from review round 1 (stdin handle recreated per reconnect)"
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
