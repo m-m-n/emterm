@@ -39,9 +39,9 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: pending
+    status: completed
     base_commit: 9c9db29321b43c7433f161e243e19ccc35162c74
-    completed_at_commit: 39d3c1c40d2f310ad4f673e5e12d6c9929636fb0
+    completed_at_commit: 935fc00e9ada11532f51cc331cf8415e9d4d91dd
   - id: review
     status: pending
   - id: verify
@@ -173,9 +173,9 @@ tasks:
     domains: [concurrency, external-io, api-contract, data-persistence, input-handling]
     complexity: high
     requirements: [FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, FR11, FR13, FR14, FR17, FR18, FR19, NFR1, NFR2, NFR4, NFR5]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-daemon-hot-upgrade/task0009
-    notes: "synthesized from review round 1 residual critical/high"
+    notes: "synthesized from review round 1 residual critical/high; deviation: also modified src-tauri/src/mux/ipc/connection.rs (Upgrade was unhandled on GUI-type connections and the ack slot had to be threaded through)"
   task0010:
     title: "rework: keep stdin across bridge reconnects"
     plan: tasks/task0010.md
