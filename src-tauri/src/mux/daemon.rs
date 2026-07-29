@@ -6,14 +6,14 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 #[cfg(unix)]
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 
 use super::ipc::connection::handle_connection;
 use super::ipc::handlers::{handle_destroy_pane, reevaluate_agent_waiters};
 use super::ipc::protocol::{
-    AgentStatusUpdateMsg, ClientType, HelloMsg, MAX_FRAME_LENGTH, MessageType, MuxMessage,
-    NotifyMsg, PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, RenameWindowMsg, WelcomeMsg,
-    parse_rejected_server_version,
+    AgentStatusUpdateMsg, ClientType, ErrorMsg, HelloMsg, MAX_FRAME_LENGTH, MessageType,
+    MuxMessage, NotifyMsg, PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, RenameWindowMsg,
+    WelcomeMsg, parse_rejected_server_version,
 };
 use super::session::manager::SessionManager;
 use super::session::pane::{
@@ -84,6 +84,20 @@ pub struct UpgradeSignal {
 /// every spawned connection task exactly like the other daemon-level
 /// senders (`title_tx`, `notification_tx`, ...).
 pub type UpgradeSignalSender = mpsc::Sender<UpgradeSignal>;
+
+/// Sender half of the per-upgrade "Upgrading write observed" acknowledgement
+/// (Design "Announcement delivery" — queueing the broadcast on `notify_tx`
+/// is not delivery). A connection task sends on this exactly once, right
+/// after it has successfully written an `Upgrading` frame to its own socket.
+pub type UpgradeAckSender = mpsc::Sender<()>;
+
+/// Shared slot `prepare_upgrade` installs a fresh [`UpgradeAckSender`] into
+/// immediately before broadcasting `Upgrading`, and clears once it is done
+/// waiting for acknowledgements (bounded, AC-7). `None` outside an upgrade
+/// attempt, so every other broadcast message (`SwitchWindow`,
+/// `RenameWindow`, ...) never touches it — `ipc::connection`'s GUI message
+/// loop only checks it right after writing an `Upgrading` frame.
+pub type SharedUpgradeAckSlot = Arc<StdMutex<Option<UpgradeAckSender>>>;
 
 /// Get the socket path for the mux daemon.
 ///
@@ -454,6 +468,56 @@ pub(in crate::mux) fn send_upgrade<S: std::io::Write>(stream: &mut S) -> std::io
     stream.flush()
 }
 
+/// What the daemon said in reply to a just-sent [`MessageType::Upgrade`]
+/// request, read from the SAME connection (task0009 rework, AC-10: finding
+/// 07f6dbc60e84d54f -- `mux upgrade` used to drop the connection immediately
+/// after sending the request and never observed the daemon's own `Error`
+/// reply, so a REFUSED upgrade was reported as success).
+#[derive(Debug)]
+pub(in crate::mux) enum UpgradeResponse {
+    /// The daemon reported the reason it refused (FR13).
+    Rejected(String),
+    /// No explicit rejection was observed: the connection closed (accepted
+    /// connections are dropped once preparation succeeds, IMPLEMENTATION.md
+    /// D2) or the read timed out (bounded by the caller's own read timeout,
+    /// e.g. [`connect_daemon`]'s 5s) without yielding a full frame. Either
+    /// way, this is NOT itself proof of success -- the caller still polls
+    /// for reachability afterward (AC-10: "reports success only after
+    /// observing evidence that the replacement actually happened").
+    ProceededOrUnknown,
+}
+
+/// Read exactly one response to a just-sent `Upgrade` request from `stream`
+/// (task0005/task0009). Never panics on a malformed/absent reply -- any
+/// framing problem, a `WouldBlock`/timeout, or a clean disconnect all
+/// resolve to [`UpgradeResponse::ProceededOrUnknown`] rather than erroring,
+/// since D2 means an accepted-and-proceeding connection is simply dropped
+/// with no further reply.
+pub(in crate::mux) fn read_upgrade_response<S: std::io::Read>(stream: &mut S) -> UpgradeResponse {
+    let mut len_buf = [0u8; 4];
+    if stream.read_exact(&mut len_buf).is_err() {
+        return UpgradeResponse::ProceededOrUnknown;
+    }
+    let frame_len = u32::from_be_bytes(len_buf) as usize;
+    if frame_len == 0 || frame_len > MAX_FRAME_LENGTH {
+        return UpgradeResponse::ProceededOrUnknown;
+    }
+    let mut frame_buf = vec![0u8; frame_len];
+    if stream.read_exact(&mut frame_buf).is_err() {
+        return UpgradeResponse::ProceededOrUnknown;
+    }
+    let Some(frame) = MuxMessage::from_frame_body(&frame_buf) else {
+        return UpgradeResponse::ProceededOrUnknown;
+    };
+    if frame.msg_type != MessageType::Error {
+        return UpgradeResponse::ProceededOrUnknown;
+    }
+    match frame.decode_payload::<ErrorMsg>() {
+        Some(err) => UpgradeResponse::Rejected(err.message),
+        None => UpgradeResponse::ProceededOrUnknown,
+    }
+}
+
 /// Poll interval / bound for [`wait_for_daemon_reachable_at_current_version`]
 /// (task0005): an in-place upgrade (execve onto an already-listening socket)
 /// is expected to complete far faster than the cold-start respawn
@@ -769,31 +833,17 @@ pub enum DaemonRunOutcome {
 }
 
 // ============================================================================
-// mux-daemon-hot-upgrade task0004: upgrade preparation and handoff-mode
-// startup.
+// mux-daemon-hot-upgrade task0009 (rework): upgrade preparation and
+// handoff-mode startup, wired to the REAL implementation.
 //
-// The probe (task0005's contract) and the session-tree snapshot/restore
-// (task0003's contract) are genuine cross-task dependencies. task0005 has
-// landed (its probe subcommand, `emterm mux probe-handoff`, is the real
-// answer side); task0003 has not, so the snapshot/restore call sites below
-// remain PLACEHOLDERS, safety-gated so they never claim a success that
-// would silently drop a live pane's shell (NFR2): `snapshot_session_state`
-// refuses whenever the session tree has any live (non-exited) pane --
-// `session::pane::MuxPane`'s master descriptor is private (task0002/0003's
-// files to open up, not task0004's), so a live pane's descriptor cannot yet
-// be prepared for inheritance here. It only succeeds for the (currently
-// narrow) case of an empty or all-exited session tree, in which case it
-// writes a REAL `mux_ipc::handoff::HandoffDocument` (task0001's contract,
-// merged) with an empty session list -- a case task0001's own tests already
-// cover as valid ("a document containing zero sessions round-trips
-// successfully"). `restore_session_tree` stays an honest failure
-// unconditionally: even the trivial empty-session case cannot be restored
-// with a byte-exact incarnation token / ID counters (D5) because
-// `SessionManager` does not yet expose a constructor for them (task0003's
-// contract) -- but since the only document `snapshot_session_state` can
-// ever produce today is session-empty, `start_from_handoff`'s
-// restore-failure fallback (adopt the listener, empty fresh
-// `SessionManager`, log at error level) never actually loses anything.
+// Round 1 shipped this section with `snapshot`/`restore` PLACEHOLDERS: the
+// real session-tree snapshot/restore (`crate::mux::upgrade`) existed but was
+// never called from here, so every upgrade with a live pane was refused and
+// every handoff start discarded the session tree. This section now calls
+// `crate::mux::upgrade::{snapshot, restore, adopt_listener,
+// read_and_remove_handoff_file, handoff_file_path}` directly — `upgrade.rs`
+// is the single owner of the handoff file's path/creation/read/removal and
+// of descriptor adoption; nothing here duplicates that.
 // ============================================================================
 
 /// Ask `candidate` (the binary about to replace this process) which handoff
@@ -847,87 +897,61 @@ pub struct HandoffCounts {
     pub descriptor_count: u32,
 }
 
-/// Count every non-exited pane across every session/window in `manager`.
+/// Derive [`HandoffCounts`] from a (produced or decoded) handoff document:
+/// the total pane count across every session/window, and the descriptor
+/// count (the listen descriptor, always present, plus every live pane's
+/// master descriptor).
 #[cfg(unix)]
-fn count_live_panes(manager: &SessionManager) -> usize {
-    manager
-        .sessions_iter()
-        .flat_map(|s| s.panes_iter())
-        .filter(|(_wid, pane)| !pane.exited)
-        .count()
-}
-
-/// Prepare the handoff document and write it to `handoff_path` (task0003's
-/// contract, IMPLEMENTATION.md Shared Components "Upgrade snapshot /
-/// restore"). Precondition: the caller holds the session-manager lock.
-///
-/// See the module-level doc comment above for why this refuses whenever any
-/// pane is live: task0003's real snapshot (session tree walk, per-pane
-/// close-on-exec clearing, scrollback capture) does not exist yet, and
-/// silently proceeding would drop a live pane's shell at `execve` -- exactly
-/// the failure this whole feature exists to prevent (NFR2). When there is
-/// nothing live to lose, this writes a real, valid, empty-session
-/// `HandoffDocument` (task0001's contract).
-#[cfg(unix)]
-fn snapshot_session_state(
-    manager: &mut SessionManager,
-    listen_fd: RawFd,
-    handoff_path: &Path,
-) -> Result<HandoffCounts, String> {
-    let live_panes = count_live_panes(manager);
-    if live_panes > 0 {
-        return Err(format!(
-            "cannot snapshot {live_panes} live pane(s) yet: session-tree snapshot \
-             is pending task0003 (upgrade.rs); refusing rather than silently \
-             dropping a live pane's shell"
-        ));
+fn handoff_counts_of(document: &mux_ipc::handoff::HandoffDocument) -> HandoffCounts {
+    let mut pane_count: u32 = 0;
+    let mut live_descriptors: u32 = 0;
+    for session in &document.sessions {
+        for window in &session.windows {
+            for pane in &window.panes {
+                pane_count += 1;
+                if pane.master_fd.is_some() {
+                    live_descriptors += 1;
+                }
+            }
+        }
     }
-
-    let doc = mux_ipc::handoff::HandoffDocument {
-        schema_version: mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
-        incarnation: manager.incarnation().to_string(),
-        listen_fd: listen_fd as i32,
-        // PLACEHOLDER (deviation, task0004): `SessionManager` does not yet
-        // expose its private ID counters (task0003's contract); zero is
-        // harmless here because the only document this function ever
-        // produces has an empty `sessions` list, so nothing downstream
-        // reads these values yet.
-        next_session_id: 0,
-        next_pane_id: 0,
-        sessions: Vec::new(),
-    };
-    let bytes = mux_ipc::handoff::encode_handoff_document(&doc);
-    write_handoff_bytes(handoff_path, &bytes)
-        .map_err(|e| format!("failed to write handoff file {handoff_path:?}: {e}"))?;
-
-    Ok(HandoffCounts {
-        pane_count: 0,
-        descriptor_count: 1,
-    })
+    HandoffCounts {
+        pane_count,
+        descriptor_count: live_descriptors + 1, // +1: the listen descriptor
+    }
 }
 
-/// Restore the session tree from a decoded handoff document (task0003's
-/// contract, symmetric counterpart of [`snapshot_session_state`]).
-/// Unconditionally a placeholder failure: see the module-level doc comment
-/// for why even the trivial empty-session case cannot yet be restored with
-/// a byte-exact incarnation token (D5). Handled gracefully by
-/// [`start_from_handoff`] (design: "the daemon continues as best it can
-/// rather than exiting silently").
+/// Adapter matching [`prepare_upgrade`]'s substitutable `snapshot` parameter
+/// shape to the real `crate::mux::upgrade::snapshot` contract (task0003).
 #[cfg(unix)]
-fn restore_session_tree(
-    _doc: &mux_ipc::handoff::HandoffDocument,
-) -> Result<(SessionManager, HandoffCounts), String> {
-    Err("session restore is not yet available (pending task0003 upgrade.rs)".to_string())
+fn real_snapshot(
+    manager: &SessionManager,
+    listen_fd: RawFd,
+    socket_path: &Path,
+) -> Result<mux_ipc::handoff::HandoffDocument, String> {
+    crate::mux::upgrade::snapshot(manager, listen_fd, socket_path).map_err(|e| e.to_string())
 }
+
+/// Bound on how long [`prepare_upgrade`] waits for connected GUI clients to
+/// acknowledge that their copy of the `Upgrading` announcement was actually
+/// written to their socket (Design "Announcement delivery": queueing on
+/// `notify_tx` alone is not delivery). Generous relative to an in-process
+/// broadcast wakeup + one socket write, bounded so one slow/stuck client
+/// never blocks an upgrade indefinitely.
+#[cfg(unix)]
+const UPGRADE_ANNOUNCE_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Perform upgrade preparation (design steps 1-3): probe compatibility,
-/// snapshot session state to a new handoff file under `handoff_dir`, and
-/// (only on success) broadcast the `Upgrading` announcement before
-/// returning the run outcome (AC-5: announcement precedes the outcome).
+/// snapshot the live session tree to the handoff file next to `socket_path`
+/// (owned end-to-end by `crate::mux::upgrade`), wait -- bounded -- for
+/// connected GUI clients to acknowledge the `Upgrading` announcement was
+/// written to their sockets, then return the run outcome (AC-5/AC-7:
+/// announcement observably delivered before the outcome is returned).
 ///
 /// Parameterized over the probe and snapshot operations (Test Notes: "a
-/// substitutable probe") so every branch (AC-1 through AC-6) is testable
-/// without a real candidate binary or real session-tree internals. Never
+/// substitutable probe") so every branch is testable without a real
+/// candidate binary or real session-tree internals; production always
+/// passes [`probe_candidate_handoff_range`] / [`real_snapshot`]. Never
 /// removes the socket file and never calls [`graceful_shutdown`] or marks
 /// any pane exited (AC-1, AC-2) -- both stay exclusively on the normal
 /// shutdown path in [`run_daemon`], never invoked from here.
@@ -938,10 +962,15 @@ async fn prepare_upgrade(
     listen_fd: RawFd,
     candidate: &Path,
     args: Vec<String>,
-    handoff_dir: &Path,
+    socket_path: &Path,
     current_schema_version: u32,
+    upgrade_ack_slot: &SharedUpgradeAckSlot,
     probe: impl Fn(&Path) -> Result<std::ops::RangeInclusive<u32>, String>,
-    snapshot: impl FnOnce(&mut SessionManager, RawFd, &Path) -> Result<HandoffCounts, String>,
+    snapshot: impl FnOnce(
+        &SessionManager,
+        RawFd,
+        &Path,
+    ) -> Result<mux_ipc::handoff::HandoffDocument, String>,
 ) -> Result<UpgradeRequest, String> {
     let range = probe(candidate)?;
     if !range.contains(&current_schema_version) {
@@ -953,32 +982,34 @@ async fn prepare_upgrade(
         ));
     }
 
-    let handoff_document_path =
-        handoff_dir.join(format!("mux-handoff-{}.state", std::process::id()));
-
-    let snapshot_result = {
-        let mut mgr = session_manager.lock().await;
-        snapshot(&mut mgr, listen_fd, &handoff_document_path)
+    let document = {
+        let mgr = session_manager.lock().await;
+        snapshot(&mgr, listen_fd, socket_path)?
     };
-    let counts = match snapshot_result {
-        Ok(counts) => counts,
-        Err(e) => {
-            // No partial file must remain (AC-4).
-            let _ = std::fs::remove_file(&handoff_document_path);
-            return Err(e);
-        }
-    };
+    let counts = handoff_counts_of(&document);
     log::warn!(
         "mux upgrade: snapshot prepared ({} pane(s), {} descriptor(s))",
         counts.pane_count,
         counts.descriptor_count
     );
 
-    // Broadcast BEFORE returning the outcome (AC-5).
+    // AC-7: establish the ack synchronization point BEFORE broadcasting, so
+    // no connection can process the message before this function starts
+    // waiting for its acknowledgement.
     let notify_tx = {
         let mgr = session_manager.lock().await;
         mgr.notify_tx().clone()
     };
+    // The CLI connection that issued THIS request is itself subscribed to
+    // `notify_tx` (subscription happens unconditionally before the CLI/GUI
+    // branch in `ipc::connection::handle_connection`) but is blocked
+    // awaiting this very function's reply, so it never drains/acks its own
+    // subscription -- exactly one guaranteed non-acking subscriber always
+    // exists. Expect an ack from everyone else.
+    let expected_acks = notify_tx.receiver_count().saturating_sub(1);
+    let (ack_tx, mut ack_rx) = mpsc::channel::<()>(expected_acks.max(1));
+    *upgrade_ack_slot.lock().unwrap() = Some(ack_tx);
+
     let msg = MuxMessage {
         msg_type: MessageType::Upgrading,
         pane_id: 0,
@@ -991,6 +1022,36 @@ async fn prepare_upgrade(
         );
     }
 
+    let mut acked = 0usize;
+    let deadline = tokio::time::Instant::now() + UPGRADE_ANNOUNCE_ACK_TIMEOUT;
+    while acked < expected_acks {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            log::warn!(
+                "mux upgrade: timed out waiting for {} of {} Upgrading acknowledgement(s); \
+                 proceeding anyway",
+                expected_acks - acked,
+                expected_acks
+            );
+            break;
+        }
+        match tokio::time::timeout(remaining, ack_rx.recv()).await {
+            Ok(Some(())) => acked += 1,
+            Ok(None) => break,
+            Err(_) => {
+                log::warn!(
+                    "mux upgrade: timed out waiting for {} of {} Upgrading acknowledgement(s); \
+                     proceeding anyway",
+                    expected_acks - acked,
+                    expected_acks
+                );
+                break;
+            }
+        }
+    }
+    *upgrade_ack_slot.lock().unwrap() = None;
+
+    let handoff_document_path = crate::mux::upgrade::handoff_file_path(socket_path);
     Ok(UpgradeRequest {
         target: candidate.to_path_buf(),
         args,
@@ -1002,66 +1063,45 @@ async fn prepare_upgrade(
     })
 }
 
+/// Handoff-mode startup (AC-7, AC-8, AC-9): read, decode and remove the
+/// handoff file (`crate::mux::upgrade::read_and_remove_handoff_file`, single
+/// owner of that file's whole lifetime), validate and adopt its recorded
+/// listen descriptor (`crate::mux::upgrade::adopt_listener`, AC-6: refuses
+/// and takes no ownership if the descriptor is not a live listening
+/// `AF_UNIX` socket), and restore the session tree
+/// (`crate::mux::upgrade::restore`, AC-5: incarnation/counters/tree restored
+/// verbatim; individual pane adoption failures degrade that pane to exited
+/// rather than failing the whole restore). Only a failed read/decode or a
+/// failed listener adoption fails this function outright (the caller falls
+/// back to a fresh bind in that case).
 #[cfg(unix)]
-fn write_handoff_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true).mode(0o600);
-    let mut f = opts.open(path)?;
-    f.write_all(bytes)
-}
-
-/// Handoff-mode startup (AC-7, AC-8, AC-9): read and decode the handoff
-/// document at `handoff_path`, adopt its recorded listen descriptor as this
-/// process's listener (skipping bind entirely), remove the file, and call
-/// `restore` to rebuild the session tree. A restore failure is logged at
-/// error level but does not fail this function -- the daemon continues with
-/// an empty session tree rather than exiting silently (design). Only a
-/// failure to read/decode the file or adopt the recorded descriptor fails
-/// this function outright (the caller falls back to a fresh bind in that
-/// case).
-#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 fn start_from_handoff(
     handoff_path: &Path,
-    restore: impl FnOnce(
-        &mux_ipc::handoff::HandoffDocument,
-    ) -> Result<(SessionManager, HandoffCounts), String>,
-) -> Result<(UnixListener, Option<SessionManager>, HandoffCounts), String> {
-    let read_result = std::fs::read(handoff_path)
-        .map_err(|e| format!("failed to read handoff file {handoff_path:?}: {e}"))
-        .and_then(|bytes| {
-            mux_ipc::handoff::decode_handoff_document(&bytes)
-                .map_err(|e| format!("failed to decode handoff file {handoff_path:?}: {e}"))
-        });
+    title_tx: &TitleChangeSender,
+    notification_tx: &NotificationSender,
+    agent_status_tx: &AgentStatusReportSender,
+    pane_exit_sender: &SharedPaneExitSender,
+) -> Result<(UnixListener, SessionManager, HandoffCounts), String> {
+    let doc = crate::mux::upgrade::read_and_remove_handoff_file(handoff_path)
+        .map_err(|e| e.to_string())?;
 
-    // AC-7/AC-8: the handoff file must never survive this operation,
-    // regardless of how it concludes below.
-    let _ = std::fs::remove_file(handoff_path);
-
-    let doc = read_result?;
-
-    // SAFETY: `doc.listen_fd` was recorded by the matching snapshot step
-    // with close-on-exec already cleared across the exec boundary; we take
-    // ownership of it exactly once here.
-    let std_listener =
-        unsafe { std::os::unix::net::UnixListener::from_raw_fd(doc.listen_fd as RawFd) };
+    let std_listener = crate::mux::upgrade::adopt_listener(doc.listen_fd as RawFd)
+        .map_err(|e| format!("failed to adopt inherited listener: {e}"))?;
     std_listener
         .set_nonblocking(true)
         .map_err(|e| format!("failed to prepare adopted listener as non-blocking: {e}"))?;
     let listener = UnixListener::from_std(std_listener)
         .map_err(|e| format!("failed to adopt inherited listener into the async runtime: {e}"))?;
 
-    let (manager, counts) = match restore(&doc) {
-        Ok((mgr, counts)) => (Some(mgr), counts),
-        Err(e) => {
-            log::error!(
-                "mux daemon handoff start: session restore failed: {} (continuing with an empty session tree)",
-                e
-            );
-            (None, HandoffCounts::default())
-        }
-    };
+    let counts = handoff_counts_of(&doc);
+    let manager = crate::mux::upgrade::restore(
+        &doc,
+        title_tx,
+        notification_tx,
+        agent_status_tx,
+        pane_exit_sender,
+    );
 
     Ok((listener, manager, counts))
 }
@@ -1084,13 +1124,28 @@ fn bind_fresh_listener(sock_path: &Path) -> anyhow::Result<UnixListener> {
 /// of [`run_daemon`] so it is unit-testable without spinning up the full
 /// accept loop. The env var is cleared unconditionally before returning,
 /// regardless of which branch ran, so a pane child spawned afterwards never
-/// inherits it (AC-9).
+/// inherits it (AC-9). `title_tx` / `notification_tx` / `agent_status_tx` /
+/// `pane_exit_sender` are the daemon's own lifetime channels a restored
+/// pane's reader thread is re-wired to (`crate::mux::upgrade::restore`) --
+/// [`run_daemon`] therefore creates them BEFORE calling this function.
 #[cfg(unix)]
-fn startup(sock_path: &Path) -> anyhow::Result<(UnixListener, SessionManager, Option<HandoffCounts>)> {
+fn startup(
+    sock_path: &Path,
+    title_tx: &TitleChangeSender,
+    notification_tx: &NotificationSender,
+    agent_status_tx: &AgentStatusReportSender,
+    pane_exit_sender: &SharedPaneExitSender,
+) -> anyhow::Result<(UnixListener, SessionManager, Option<HandoffCounts>)> {
     match std::env::var(HANDOFF_ENV_VAR) {
         Ok(path_str) if !path_str.is_empty() => {
             let handoff_path = PathBuf::from(&path_str);
-            let result = start_from_handoff(&handoff_path, restore_session_tree);
+            let result = start_from_handoff(
+                &handoff_path,
+                title_tx,
+                notification_tx,
+                agent_status_tx,
+                pane_exit_sender,
+            );
             // SAFETY: env mutation is process-wide; cleared unconditionally
             // here, before the caller can spawn any pane child (AC-9).
             unsafe {
@@ -1103,11 +1158,7 @@ fn startup(sock_path: &Path) -> anyhow::Result<(UnixListener, SessionManager, Op
                         counts.pane_count,
                         counts.descriptor_count
                     );
-                    Ok((
-                        listener,
-                        manager.unwrap_or_else(SessionManager::new),
-                        Some(counts),
-                    ))
+                    Ok((listener, manager, Some(counts)))
                 }
                 Err(e) => {
                     log::error!(
@@ -1175,25 +1226,22 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
         }
     }
 
-    let (listener, restored_manager, _handoff_counts) = startup(&sock_path)?;
-    let session_manager = Arc::new(Mutex::new(restored_manager));
-
+    // Daemon-level channels are created BEFORE `startup()` (task0009 rework:
+    // a handoff-mode start's `restore` re-wires each restored live pane's
+    // reader thread through these SAME senders, exactly like a freshly
+    // spawned pane's -- so they must already exist when `startup()` runs).
+    //
     // Daemon-level title channel: lives as long as the daemon so every pane
     // (GUI-created or CLI-created) can propagate OSC title changes to the
     // session manager even when no GUI client is attached.
     let (title_tx, title_rx): (TitleChangeSender, mpsc::Receiver<(u32, String)>) =
         mpsc::channel(TITLE_CHANNEL_CAPACITY);
-    tokio::spawn(run_title_update_task(session_manager.clone(), title_rx));
 
     // Daemon-level notification channel: pane reader threads forward OSC 9
     // desktop notifications detected on Detached output here; the task
     // broadcasts them to connected GUI clients via notify_tx (FR2, NFR3).
     let (notification_tx, notification_rx): (NotificationSender, mpsc::Receiver<(u32, String)>) =
         mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
-    tokio::spawn(run_notification_task(
-        session_manager.clone(),
-        notification_rx,
-    ));
 
     // Daemon-level agent-status channel (SPEC FR3): pane reader threads
     // forward raw agent-status OSC payload strings here REGARDLESS of
@@ -1203,10 +1251,6 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
         AgentStatusReportSender,
         mpsc::Receiver<(u32, String)>,
     ) = mpsc::channel(AGENT_STATUS_CHANNEL_CAPACITY);
-    tokio::spawn(run_agent_status_task(
-        session_manager.clone(),
-        agent_status_rx,
-    ));
 
     // Shutdown signal: sent by handle_destroy_pane/handle_destroy_window when all sessions empty
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
@@ -1218,12 +1262,31 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     // swapped on detach, so a detached pane can still notify on EOF (M1).
     let (pane_exit_tx, pane_exit_rx): (PaneExitSender, mpsc::Receiver<PaneId>) =
         mpsc::channel(PANE_EXIT_CHANNEL_CAPACITY);
+    let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(Some(pane_exit_tx)));
+
+    let (listener, restored_manager, _handoff_counts) = startup(
+        &sock_path,
+        &title_tx,
+        &notification_tx,
+        &agent_status_tx,
+        &pane_exit_sender,
+    )?;
+    let session_manager = Arc::new(Mutex::new(restored_manager));
+
+    tokio::spawn(run_title_update_task(session_manager.clone(), title_rx));
+    tokio::spawn(run_notification_task(
+        session_manager.clone(),
+        notification_rx,
+    ));
+    tokio::spawn(run_agent_status_task(
+        session_manager.clone(),
+        agent_status_rx,
+    ));
     tokio::spawn(run_pane_exit_task(
         session_manager.clone(),
         shutdown_tx.clone(),
         pane_exit_rx,
     ));
-    let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(Some(pane_exit_tx)));
 
     // Upgrade-signal channel: `ipc::connection::handle_cli_client` signals
     // here on `MessageType::Upgrade` (task0004's design, "Request
@@ -1233,6 +1296,10 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     // observes `None` while the loop below runs.
     let (upgrade_tx, mut upgrade_rx): (UpgradeSignalSender, mpsc::Receiver<UpgradeSignal>) =
         mpsc::channel(UPGRADE_SIGNAL_CHANNEL_CAPACITY);
+
+    // AC-7: slot `prepare_upgrade` installs a fresh ack sender into right
+    // before broadcasting `Upgrading`; `None` the rest of the time.
+    let upgrade_ack_slot: SharedUpgradeAckSlot = Arc::new(StdMutex::new(None));
 
     #[cfg(unix)]
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
@@ -1253,7 +1320,7 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
             result = listener.accept() => {
                 match result {
                     Ok((stream, _addr)) => {
-                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), agent_status_tx.clone(), pane_exit_sender.clone(), upgrade_tx.clone()));
+                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), agent_status_tx.clone(), pane_exit_sender.clone(), upgrade_tx.clone(), upgrade_ack_slot.clone()));
                     }
                     Err(e) => {
                         log::error!("Accept error: {}", e);
@@ -1271,19 +1338,16 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
                         continue;
                     }
                 };
-                let handoff_dir = sock_path
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| PathBuf::from("/tmp"));
                 match prepare_upgrade(
                     &session_manager,
                     listener.as_raw_fd(),
                     &candidate,
                     vec!["mux".to_string(), "--daemon".to_string()],
-                    &handoff_dir,
+                    &sock_path,
                     mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
+                    &upgrade_ack_slot,
                     probe_candidate_handoff_range,
-                    snapshot_session_state,
+                    real_snapshot,
                 )
                 .await
                 {
@@ -1326,6 +1390,39 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
             outcome.target,
             outcome.handoff_document_path
         );
+
+        // Design "Descriptor lifetime" (critical rework findings
+        // dd7a4526fea67d1d / 5106b22111395091): every descriptor recorded
+        // in the handoff document must still be open at the moment this
+        // function returns. This whole async fn's locals are about to be
+        // dropped when it returns below -- ordinary Rust `Drop` semantics
+        // would otherwise close every one of them right here, which is
+        // exactly the bug this task exists to fix. Deliberately transfer
+        // ownership out of anything that would run that `Drop`:
+        //
+        // - the listener: extract its raw fd and leak it (a bare `RawFd` is
+        //   a plain integer with no `Drop` impl) rather than let `listener`
+        //   (a `tokio::net::UnixListener`) drop at the end of this function.
+        if let Ok(std_listener) = listener.into_std() {
+            let _ = std_listener.into_raw_fd();
+        }
+        // - every pane's master descriptor, and everything else the session
+        //   tree owns: `SessionManager` (and `MuxPane`'s master field) have
+        //   no public API to extract descriptors individually (session/pane
+        //   internals are outside this task's file scope), so leak the
+        //   whole tree instead by permanently inflating its `Arc` refcount
+        //   by one. This guarantees the LAST clone's drop (one of the
+        //   background tasks spawned above) can never bring the count to
+        //   zero, so `SessionManager`'s own drop (which would otherwise
+        //   close every pane's master via `portable_pty`'s Drop impl) never
+        //   runs. Safe here specifically because this process is moments
+        //   away from either being replaced (`execve`) -- at which point no
+        //   Rust destructor runs for anything, leaked or not -- or, on a
+        //   failed replacement, re-entering service over the SAME document
+        //   (`run_daemon_in_handoff_mode`), which builds a brand new
+        //   `SessionManager` from scratch and never looks at this one again.
+        std::mem::forget(session_manager.clone());
+
         return Ok(DaemonRunOutcome::UpgradeRequested(outcome));
     }
 
@@ -1418,6 +1515,11 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
         }
     });
 
+    // Parity with the Unix run loop's parameter list (NFR4): never actually
+    // populated on this platform (no accept-loop upgrade branch exists
+    // here), but `handle_connection` is shared across both platforms.
+    let upgrade_ack_slot: SharedUpgradeAckSlot = Arc::new(StdMutex::new(None));
+
     // First iteration claims exclusive pipe ownership to prevent hijacking
     let mut is_first_instance = true;
     loop {
@@ -1431,7 +1533,7 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
             result = server.connect() => {
                 match result {
                     Ok(()) => {
-                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), agent_status_tx.clone(), pane_exit_sender.clone(), upgrade_tx.clone()));
+                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), agent_status_tx.clone(), pane_exit_sender.clone(), upgrade_tx.clone(), upgrade_ack_slot.clone()));
                     }
                     Err(e) => {
                         log::error!("Pipe accept error: {}", e);
@@ -2929,13 +3031,14 @@ mod tests {
         assert_eq!(payload.revision, 2);
     }
 
-    // ---- mux-daemon-hot-upgrade task0004: upgrade preparation (AC-1..AC-6) ----
+    // ---- mux-daemon-hot-upgrade task0009 (rework): upgrade preparation,
+    // now wired to the REAL snapshot (AC-1..AC-7) ----
     //
     // `prepare_upgrade` is parameterized over the probe and snapshot
-    // operations (Test Notes: "a substitutable probe", extended here to the
-    // snapshot step so AC-4's failure path is testable without task0003's
-    // real internals). Every test below builds its own fakes; none depend
-    // on a real candidate binary or real session-tree internals.
+    // operations (Test Notes: "a substitutable probe") so every branch is
+    // testable without a real candidate binary; production always passes
+    // `probe_candidate_handoff_range` / `real_snapshot` (exercised directly
+    // by the dedicated tests further below).
 
     #[cfg(unix)]
     fn ok_probe(_candidate: &Path) -> Result<std::ops::RangeInclusive<u32>, String> {
@@ -2949,35 +3052,47 @@ mod tests {
 
     #[cfg(unix)]
     fn ok_snapshot(
-        _manager: &mut SessionManager,
+        manager: &SessionManager,
         _listen_fd: RawFd,
-        _handoff_path: &Path,
-    ) -> Result<HandoffCounts, String> {
-        Ok(HandoffCounts {
-            pane_count: 1,
-            descriptor_count: 2,
+        _socket_path: &Path,
+    ) -> Result<mux_ipc::handoff::HandoffDocument, String> {
+        Ok(mux_ipc::handoff::HandoffDocument {
+            schema_version: mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
+            incarnation: manager.incarnation().to_string(),
+            listen_fd: 0,
+            next_session_id: manager.next_session_id_counter(),
+            next_pane_id: manager.next_pane_id_counter(),
+            sessions: Vec::new(),
         })
     }
 
     #[cfg(unix)]
     fn failing_snapshot(
-        _manager: &mut SessionManager,
+        _manager: &SessionManager,
         _listen_fd: RawFd,
-        _handoff_path: &Path,
-    ) -> Result<HandoffCounts, String> {
+        _socket_path: &Path,
+    ) -> Result<mux_ipc::handoff::HandoffDocument, String> {
         Err("disk full".to_string())
+    }
+
+    #[cfg(unix)]
+    fn no_ack_slot() -> SharedUpgradeAckSlot {
+        Arc::new(StdMutex::new(None))
     }
 
     /// AC-1: an upgrade request runs the upgrade branch, not the shutdown
     /// branch -- observed here as "no pane is marked exited" and (by
     /// construction: `prepare_upgrade`'s source never references
     /// `graceful_shutdown` or `MuxPane::mark_exited`) "the pane-killing
-    /// shutdown helper is not invoked".
+    /// shutdown helper is not invoked". Uses `setup_single_pane_manager`'s
+    /// live (non-exited) pane -- exactly the case round 1's placeholder
+    /// unconditionally refused.
     #[cfg(unix)]
     #[tokio::test]
     async fn prepare_upgrade_does_not_mark_any_pane_exited() {
         let (mgr, sid, wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
         let dir = tempfile::tempdir().unwrap();
+        let ack_slot = no_ack_slot();
 
         let result = prepare_upgrade(
             &mgr,
@@ -2986,11 +3101,15 @@ mod tests {
             vec!["mux".to_string(), "--daemon".to_string()],
             dir.path(),
             1,
+            &ack_slot,
             ok_probe,
             ok_snapshot,
         )
         .await;
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "AC-1: an upgrade with a live pane must proceed, not be refused: {result:?}"
+        );
 
         let m = mgr.lock().await;
         let pane = m
@@ -3001,11 +3120,87 @@ mod tests {
         assert!(!pane.exited, "AC-1: upgrade preparation must not exit panes");
     }
 
+    /// AC-1: with a REAL PTY-backed live pane (not the output-target-only
+    /// `make_title_test_pane` fixture), `prepare_upgrade` wired to the real
+    /// `crate::mux::upgrade::snapshot` produces a handoff document recording
+    /// that pane's real master descriptor, id and the manager's incarnation
+    /// token -- proving this is genuinely connected, not a placeholder.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prepare_upgrade_with_a_real_live_pane_records_its_descriptor_and_incarnation() {
+        use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
+        use std::sync::{Arc as StdArc, Mutex as StdMutex2};
+
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let writer = pair.master.take_writer().unwrap();
+
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (pane_id, incarnation) = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            let pane_id = m.alloc_pane_id();
+            let (tx, _rx) = mpsc::channel(1);
+            let target: SharedOutputTarget =
+                StdArc::new(StdMutex2::new(PaneOutputTarget::Connected(tx)));
+            let pane = MuxPane::new(pane_id, 80, 24, target, writer, pair.master, None);
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+            (pane_id, m.incarnation().to_string())
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        // `real_snapshot` derives the handoff path via
+        // `crate::mux::upgrade::handoff_file_path`, which replaces the
+        // LAST component of its argument -- so this must be a socket-FILE
+        // path (like production's `sock_path`), not a bare directory.
+        let sock_path = dir.path().join("mux-default.sock");
+        let ack_slot = no_ack_slot();
+
+        let outcome = prepare_upgrade(
+            &mgr,
+            0,
+            Path::new("/bin/true"),
+            vec!["mux".to_string(), "--daemon".to_string()],
+            &sock_path,
+            mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
+            &ack_slot,
+            ok_probe,
+            real_snapshot,
+        )
+        .await
+        .expect("AC-1: an upgrade with a live pane must proceed, not be refused");
+
+        let doc =
+            crate::mux::upgrade::read_and_remove_handoff_file(&outcome.handoff_document_path)
+                .expect("the real snapshot must have written a decodable handoff document");
+        assert_eq!(doc.incarnation, incarnation, "AC-1: incarnation token recorded");
+        assert_eq!(doc.sessions.len(), 1);
+        let recorded_pane = &doc.sessions[0].windows[0].panes[0];
+        assert_eq!(recorded_pane.id, pane_id);
+        assert!(
+            recorded_pane.master_fd.is_some(),
+            "AC-1: the live pane's real master descriptor must be recorded"
+        );
+    }
+
     /// AC-2: the upgrade branch does not remove the socket file.
     /// `prepare_upgrade` never receives or references a socket path at all
-    /// (only `listen_fd`, a bare integer, and `handoff_dir`); this test
-    /// pins that a file representing the socket, sitting right next to the
-    /// handoff directory, survives untouched.
+    /// (only `listen_fd`, a bare integer, and `socket_path` for the handoff
+    /// file's own naming); this test pins that a file representing the
+    /// socket, sitting right next to the handoff directory, survives
+    /// untouched.
     #[cfg(unix)]
     #[tokio::test]
     async fn prepare_upgrade_does_not_remove_socket_file() {
@@ -3013,6 +3208,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("mux-default.sock");
         std::fs::write(&sock_path, b"pretend socket").unwrap();
+        let ack_slot = no_ack_slot();
 
         let result = prepare_upgrade(
             &mgr,
@@ -3021,6 +3217,7 @@ mod tests {
             vec!["mux".to_string(), "--daemon".to_string()],
             dir.path(),
             1,
+            &ack_slot,
             ok_probe,
             ok_snapshot,
         )
@@ -3041,6 +3238,7 @@ mod tests {
     async fn prepare_upgrade_aborts_on_incompatible_schema_range() {
         let (mgr, ..) = setup_single_pane_manager().await;
         let dir = tempfile::tempdir().unwrap();
+        let ack_slot = no_ack_slot();
 
         let result = prepare_upgrade(
             &mgr,
@@ -3049,6 +3247,7 @@ mod tests {
             vec!["mux".to_string(), "--daemon".to_string()],
             dir.path(),
             1,
+            &ack_slot,
             incompatible_probe,
             ok_snapshot,
         )
@@ -3070,6 +3269,7 @@ mod tests {
     async fn prepare_upgrade_aborts_on_snapshot_failure_and_leaves_no_handoff_file() {
         let (mgr, ..) = setup_single_pane_manager().await;
         let dir = tempfile::tempdir().unwrap();
+        let ack_slot = no_ack_slot();
 
         let result = prepare_upgrade(
             &mgr,
@@ -3078,6 +3278,7 @@ mod tests {
             vec!["mux".to_string(), "--daemon".to_string()],
             dir.path(),
             1,
+            &ack_slot,
             ok_probe,
             failing_snapshot,
         )
@@ -3093,17 +3294,18 @@ mod tests {
         );
     }
 
-    /// AC-5: on successful preparation, the `Upgrading` announcement is
-    /// broadcast before the outcome is returned to the caller -- a
-    /// subscriber created beforehand already has the message queued by the
-    /// time `prepare_upgrade` resolves, provable with a non-blocking
-    /// `try_recv` (no timeout/await needed).
+    /// AC-5 (queueing half): on successful preparation, the `Upgrading`
+    /// announcement is broadcast before the outcome is returned to the
+    /// caller -- a subscriber created beforehand already has the message
+    /// queued by the time `prepare_upgrade` resolves. Full observed-delivery
+    /// (AC-7) is proven separately below against a REAL connected client.
     #[cfg(unix)]
     #[tokio::test]
     async fn prepare_upgrade_broadcasts_upgrading_before_returning_outcome() {
         let (mgr, ..) = setup_single_pane_manager().await;
         let dir = tempfile::tempdir().unwrap();
         let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+        let ack_slot = no_ack_slot();
 
         let result = prepare_upgrade(
             &mgr,
@@ -3112,6 +3314,7 @@ mod tests {
             vec!["mux".to_string(), "--daemon".to_string()],
             dir.path(),
             1,
+            &ack_slot,
             ok_probe,
             ok_snapshot,
         )
@@ -3124,9 +3327,101 @@ mod tests {
         assert_eq!(msg.msg_type, MessageType::Upgrading);
     }
 
+    /// AC-7: the `Upgrading` announcement is OBSERVABLY delivered to a REAL
+    /// connected GUI client's own socket before `prepare_upgrade` returns --
+    /// proven by reading it back from the client side (Test Notes: "a
+    /// stand-in client that reads from its socket, not a subscriber that
+    /// polls the queue"), through the production connection-handling code
+    /// (`ipc::connection::handle_connection`), not a hand-rolled stand-in.
+    ///
+    /// A second, never-drained subscription stands in for the CLI connection
+    /// that issues a real `Upgrade` request (its own subscription, taken
+    /// unconditionally before the CLI/GUI branch in `handle_connection`,
+    /// never acks -- see `prepare_upgrade`'s doc comment): this makes
+    /// `expected_acks` resolve to exactly 1 (the real GUI client), so the
+    /// wait genuinely gates on that one real delivery rather than being
+    /// skipped, and the read below is deterministic, not a timing race.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prepare_upgrade_delivers_upgrading_to_a_real_connected_client_before_returning() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let dir = tempfile::tempdir().unwrap();
+        // See the sibling AC-1 test above: `real_snapshot` needs a
+        // socket-FILE path, not a bare directory.
+        let sock_path = dir.path().join("mux-default.sock");
+        let ack_slot = no_ack_slot();
+
+        let _cli_phantom_subscription = { mgr.lock().await.notify_tx().subscribe() };
+
+        let (server_stream, mut client_stream) = tokio::net::UnixStream::pair().unwrap();
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let conn_task = tokio::spawn(crate::mux::ipc::connection::handle_connection(
+            server_stream,
+            mgr.clone(),
+            shutdown_tx,
+            title_tx,
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            ack_slot.clone(),
+        ));
+
+        write_frame_async(
+            &mut client_stream,
+            &MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ),
+        )
+        .await;
+        let welcome = read_frame_async(&mut client_stream).await;
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+
+        let result = prepare_upgrade(
+            &mgr,
+            0,
+            Path::new("/bin/true"),
+            vec!["mux".to_string(), "--daemon".to_string()],
+            &sock_path,
+            mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
+            &ack_slot,
+            ok_probe,
+            real_snapshot,
+        )
+        .await;
+        assert!(result.is_ok(), "preparation should succeed: {result:?}");
+
+        // AC-7: read directly off the client's own socket AFTER
+        // `prepare_upgrade` already returned. A short timeout here is only a
+        // safety net against a genuine hang -- the frame must already be
+        // sitting in the socket buffer by construction (the ack wait above
+        // blocked on exactly this write completing).
+        let frame = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            read_frame_async(&mut client_stream),
+        )
+        .await
+        .expect("the Upgrading frame must already be readable off the client socket");
+        assert_eq!(frame.msg_type, MessageType::Upgrading);
+
+        conn_task.abort();
+    }
+
     /// AC-6: the returned run outcome carries the target binary path,
     /// argument vector, environment addition (naming [`HANDOFF_ENV_VAR`]),
-    /// and handoff file path.
+    /// and handoff file path (derived from `crate::mux::upgrade::handoff_file_path`,
+    /// the single owner of that naming).
     #[cfg(unix)]
     #[tokio::test]
     async fn prepare_upgrade_outcome_carries_target_args_env_and_handoff_path() {
@@ -3134,6 +3429,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let candidate = Path::new("/bin/true");
         let args = vec!["mux".to_string(), "--daemon".to_string()];
+        let ack_slot = no_ack_slot();
 
         let outcome = prepare_upgrade(
             &mgr,
@@ -3142,6 +3438,7 @@ mod tests {
             args.clone(),
             dir.path(),
             1,
+            &ack_slot,
             ok_probe,
             ok_snapshot,
         )
@@ -3155,52 +3452,16 @@ mod tests {
             PathBuf::from(&outcome.env_addition.1),
             outcome.handoff_document_path
         );
-        assert!(outcome.handoff_document_path.starts_with(dir.path()));
+        assert_eq!(
+            outcome.handoff_document_path,
+            crate::mux::upgrade::handoff_file_path(dir.path()),
+            "AC-9 (single ownership): the handoff path must come from \
+             crate::mux::upgrade's single naming authority"
+        );
     }
 
-    // ---- upgrade-preparation safety gate: snapshot_session_state (real,
-    // not faked) ----
-
-    /// The real `snapshot_session_state` refuses to proceed when the
-    /// session tree has a live pane: it cannot yet clear close-on-exec on
-    /// that pane's master descriptor (task0002/0003's own files), so
-    /// silently proceeding would kill that pane's shell at `execve` (NFR2).
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn snapshot_session_state_refuses_when_a_live_pane_exists() {
-        let (mgr, ..) = setup_single_pane_manager().await;
-        let dir = tempfile::tempdir().unwrap();
-        let handoff_path = dir.path().join("handoff.state");
-        let mut m = mgr.lock().await;
-
-        let result = snapshot_session_state(&mut m, 0, &handoff_path);
-        assert!(result.is_err(), "must refuse with a live pane present");
-        assert!(!handoff_path.exists());
-    }
-
-    /// With no live panes (an empty session manager), the real
-    /// `snapshot_session_state` succeeds and writes a real, decodable
-    /// `HandoffDocument` with an empty session list.
-    #[cfg(unix)]
-    #[test]
-    fn snapshot_session_state_succeeds_for_empty_manager() {
-        let mut mgr = SessionManager::new();
-        let dir = tempfile::tempdir().unwrap();
-        let handoff_path = dir.path().join("handoff.state");
-
-        let counts = snapshot_session_state(&mut mgr, 7, &handoff_path)
-            .expect("an empty session tree has nothing live to lose");
-        assert_eq!(counts.pane_count, 0);
-
-        let bytes = std::fs::read(&handoff_path).unwrap();
-        let doc = mux_ipc::handoff::decode_handoff_document(&bytes)
-            .expect("must decode as a real HandoffDocument");
-        assert_eq!(doc.listen_fd, 7);
-        assert!(doc.sessions.is_empty());
-        assert_eq!(doc.schema_version, mux_ipc::handoff::HANDOFF_SCHEMA_VERSION);
-    }
-
-    // ---- mux-daemon-hot-upgrade task0004: handoff-mode startup (AC-7..AC-9) ----
+    // ---- mux-daemon-hot-upgrade task0009 (rework): handoff-mode startup,
+    // now wired to the REAL restore (AC-5, AC-7..AC-9) ----
 
     /// Bind a real Unix listener at `path` and hand back its raw fd, taking
     /// ownership (mirrors what a real snapshot step would do after clearing
@@ -3211,9 +3472,6 @@ mod tests {
         let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
         listener.into_raw_fd()
     }
-
-    #[cfg(unix)]
-    use std::os::unix::io::IntoRawFd;
 
     /// Build a minimal but real `HandoffDocument` recording `listen_fd` and
     /// an empty session list, and write it (bincode-encoded) to `path`.
@@ -3231,37 +3489,52 @@ mod tests {
         std::fs::write(path, bytes).unwrap();
     }
 
-    /// AC-7 (partial -- see the module doc comment on `restore_session_tree`
-    /// for what remains a placeholder pending task0003): with a valid
-    /// handoff document recorded over a real listener, handoff start skips
-    /// bind entirely, adopts the SAME listener (proven by accepting a real
-    /// connection through the returned handle), removes the handoff file,
-    /// and surfaces the counts the (fake, substitutable) restore step
-    /// reports.
+    /// A `TitleChangeSender` / `NotificationSender` / `AgentStatusReportSender`
+    /// / `SharedPaneExitSender` quadruple, matching what `run_daemon` creates
+    /// before calling `startup` (task0009 rework: restore needs them to
+    /// re-wire a restored pane's reader thread).
+    #[cfg(unix)]
+    fn test_daemon_channels() -> (
+        TitleChangeSender,
+        NotificationSender,
+        AgentStatusReportSender,
+        SharedPaneExitSender,
+    ) {
+        let (title_tx, _title_rx) = mpsc::channel(16);
+        let (notification_tx, _notification_rx) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        (title_tx, notification_tx, agent_status_tx, pane_exit_sender)
+    }
+
+    /// AC-5/AC-7/AC-8: with a valid handoff document recorded over a real
+    /// listener, handoff start skips bind entirely, adopts the SAME listener
+    /// (proven by accepting a real connection through the returned handle),
+    /// removes the handoff file, and restores a real `SessionManager` (via
+    /// `crate::mux::upgrade::restore`) whose incarnation matches the
+    /// document's.
     #[cfg(unix)]
     #[tokio::test]
-    async fn start_from_handoff_adopts_listener_and_surfaces_restore_counts() {
+    async fn start_from_handoff_adopts_listener_and_restores_the_real_session_manager() {
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("adopted.sock");
         let handoff_path = dir.path().join("handoff.state");
         let fd = bind_listener_raw_fd(&sock_path);
         write_test_handoff_document(&handoff_path, fd);
+        let (title_tx, notification_tx, agent_status_tx, pane_exit_sender) =
+            test_daemon_channels();
 
-        let restore = |_doc: &mux_ipc::handoff::HandoffDocument| {
-            Ok((
-                SessionManager::new(),
-                HandoffCounts {
-                    pane_count: 3,
-                    descriptor_count: 3,
-                },
-            ))
-        };
-
-        let (listener, manager, counts) =
-            start_from_handoff(&handoff_path, restore).expect("handoff start should succeed");
-        assert!(manager.is_some());
-        assert_eq!(counts.pane_count, 3);
-        assert_eq!(counts.descriptor_count, 3);
+        let (listener, manager, counts) = start_from_handoff(
+            &handoff_path,
+            &title_tx,
+            &notification_tx,
+            &agent_status_tx,
+            &pane_exit_sender,
+        )
+        .expect("handoff start should succeed");
+        assert_eq!(manager.incarnation(), "deadbeef");
+        assert_eq!(counts.pane_count, 0);
+        assert_eq!(counts.descriptor_count, 1, "the listener always counts as one descriptor");
         assert!(
             !handoff_path.exists(),
             "AC-7/AC-8: the handoff file must be removed"
@@ -3281,40 +3554,52 @@ mod tests {
         assert!(accepted.is_ok());
     }
 
-    /// Restore failure is handled gracefully (design: "the daemon continues
-    /// as best it can"): the listener is still adopted and the handoff file
-    /// still removed, but the manager comes back `None` (caller falls back
-    /// to a fresh `SessionManager`) with zeroed counts.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn start_from_handoff_restore_failure_still_adopts_listener_and_removes_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let sock_path = dir.path().join("adopted2.sock");
-        let handoff_path = dir.path().join("handoff2.state");
-        let fd = bind_listener_raw_fd(&sock_path);
-        write_test_handoff_document(&handoff_path, fd);
-
-        let restore = |_doc: &mux_ipc::handoff::HandoffDocument| Err("pending task0003".to_string());
-
-        let (_listener, manager, counts) =
-            start_from_handoff(&handoff_path, restore).expect("listener adoption should succeed");
-        assert!(manager.is_none());
-        assert_eq!(counts, HandoffCounts::default());
-        assert!(!handoff_path.exists());
-    }
-
     /// A missing/unreadable handoff file fails `start_from_handoff` outright
     /// (there is no listener to adopt), so the caller can fall back to a
     /// fresh bind.
     #[cfg(unix)]
-    #[test]
-    fn start_from_handoff_missing_file_fails() {
+    #[tokio::test]
+    async fn start_from_handoff_missing_file_fails() {
         let dir = tempfile::tempdir().unwrap();
         let handoff_path = dir.path().join("does-not-exist.state");
-        let result = start_from_handoff(&handoff_path, |_doc| {
-            panic!("restore must not be called when the file cannot even be read")
-        });
+        let (title_tx, notification_tx, agent_status_tx, pane_exit_sender) =
+            test_daemon_channels();
+
+        let result = start_from_handoff(
+            &handoff_path,
+            &title_tx,
+            &notification_tx,
+            &agent_status_tx,
+            &pane_exit_sender,
+        );
         assert!(result.is_err());
+    }
+
+    /// AC-6: adopting a recorded listen descriptor that is not a live
+    /// listening Unix socket fails start_from_handoff outright (the caller
+    /// falls back to a fresh bind) rather than adopting a wild descriptor.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn start_from_handoff_rejects_a_non_listening_recorded_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        let handoff_path = dir.path().join("handoff-bogus-listener.state");
+        // An ordinary regular file's fd is not a socket at all.
+        let file = tempfile::tempfile().unwrap();
+        write_test_handoff_document(&handoff_path, file.as_raw_fd());
+        let (title_tx, notification_tx, agent_status_tx, pane_exit_sender) =
+            test_daemon_channels();
+
+        let result = start_from_handoff(
+            &handoff_path,
+            &title_tx,
+            &notification_tx,
+            &agent_status_tx,
+            &pane_exit_sender,
+        );
+        assert!(
+            result.is_err(),
+            "AC-6: a non-socket recorded listen descriptor must not adopt"
+        );
     }
 
     /// AC-8: with the handoff environment variable absent, `startup`
@@ -3333,7 +3618,15 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("fresh.sock");
-        let result = startup(&sock_path);
+        let (title_tx, notification_tx, agent_status_tx, pane_exit_sender) =
+            test_daemon_channels();
+        let result = startup(
+            &sock_path,
+            &title_tx,
+            &notification_tx,
+            &agent_status_tx,
+            &pane_exit_sender,
+        );
 
         unsafe {
             match prev {
@@ -3368,6 +3661,8 @@ mod tests {
         let handoff_path = dir.path().join("handoff3.state");
         let fd = bind_listener_raw_fd(&sock_path);
         write_test_handoff_document(&handoff_path, fd);
+        let (title_tx, notification_tx, agent_status_tx, pane_exit_sender) =
+            test_daemon_channels();
 
         let prev = std::env::var_os(HANDOFF_ENV_VAR);
         // SAFETY: env mutation is process-wide; saved/restored around this
@@ -3376,7 +3671,13 @@ mod tests {
             std::env::set_var(HANDOFF_ENV_VAR, &handoff_path);
         }
 
-        let result = startup(&sock_path);
+        let result = startup(
+            &sock_path,
+            &title_tx,
+            &notification_tx,
+            &agent_status_tx,
+            &pane_exit_sender,
+        );
 
         // AC-9: cleared regardless of what the caller does next -- checked
         // BEFORE restoring `prev`, so a leftover value would fail this
@@ -3406,5 +3707,36 @@ mod tests {
             .expect("accept must complete promptly")
             .expect("accept task must not panic");
         assert!(accepted.is_ok());
+    }
+
+    // ---- small async frame helpers for AC-7's real-connection test ----
+
+    #[cfg(unix)]
+    async fn write_frame_async<S: tokio::io::AsyncWrite + Unpin>(stream: &mut S, msg: &MuxMessage) {
+        use tokio::io::AsyncWriteExt;
+        let body = msg.to_frame_body();
+        stream
+            .write_all(&(body.len() as u32).to_be_bytes())
+            .await
+            .expect("write frame length");
+        stream.write_all(&body).await.expect("write frame body");
+        stream.flush().await.expect("flush");
+    }
+
+    #[cfg(unix)]
+    async fn read_frame_async<S: tokio::io::AsyncRead + Unpin>(stream: &mut S) -> MuxMessage {
+        use tokio::io::AsyncReadExt;
+        let mut len_buf = [0u8; 4];
+        stream
+            .read_exact(&mut len_buf)
+            .await
+            .expect("read frame length");
+        let frame_len = u32::from_be_bytes(len_buf) as usize;
+        let mut frame_buf = vec![0u8; frame_len];
+        stream
+            .read_exact(&mut frame_buf)
+            .await
+            .expect("read frame body");
+        MuxMessage::from_frame_body(&frame_buf).expect("valid frame")
     }
 }
