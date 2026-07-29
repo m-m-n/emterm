@@ -472,6 +472,27 @@ pub enum MessageType {
     /// Structured error response shared by `ReadPane` / `SendText` /
     /// `WaitAgentState`.
     AgentApiError = 0x24,
+    /// Request an in-place daemon upgrade (client -> daemon), empty payload
+    /// (mux-daemon-hot-upgrade task0001's contract: mirrors `Shutdown`'s
+    /// wire shape -- type byte, pane id zero, empty payload).
+    ///
+    /// DEVIATION (task0004): task0001 owns adding these two message types
+    /// to this file (`crates/mux_ipc/src/handoff.rs` + this enum). It has
+    /// not landed in this worktree yet, and task0004's daemon-side handling
+    /// (`mux::daemon` / `mux::ipc::connection`) cannot compile or be tested
+    /// without the wire vocabulary existing, so task0004 adds it here
+    /// faithfully to task0001.md's exact contract ("both mirror the
+    /// existing shutdown message's wire shape"). Expect a merge conflict
+    /// with task0001's own addition; resolve via parent-side adoption
+    /// (adopt task0001's version of this file) and re-verify these two
+    /// discriminants still exist with the same wire byte values task0004's
+    /// tests pin below.
+    Upgrade = 0x25,
+    /// Announce an imminent in-place upgrade (daemon -> client), empty
+    /// payload, broadcast to every connected client before the process is
+    /// replaced. See the `Upgrade` doc comment for the task0001/task0004
+    /// deviation note.
+    Upgrading = 0x26,
 }
 
 impl MessageType {
@@ -512,6 +533,8 @@ impl MessageType {
             0x22 => Some(Self::WaitAgentState),
             0x23 => Some(Self::WaitAgentStateResult),
             0x24 => Some(Self::AgentApiError),
+            0x25 => Some(Self::Upgrade),
+            0x26 => Some(Self::Upgrading),
             _ => None,
         }
     }
@@ -1050,8 +1073,57 @@ mod tests {
             MessageType::from_u8(0x1D),
             Some(MessageType::AgentStatusUpdate)
         );
-        assert!(MessageType::from_u8(0x25).is_none());
+        // 0x25/0x26 (previously unused) now hold the mux-daemon-hot-upgrade
+        // task0001 message types (added here as a task0004 deviation -- see
+        // the `Upgrade` doc comment). The unused-space boundary moves to
+        // 0x27.
+        assert_eq!(MessageType::from_u8(0x25), Some(MessageType::Upgrade));
+        assert_eq!(MessageType::from_u8(0x26), Some(MessageType::Upgrading));
+        assert!(MessageType::from_u8(0x27).is_none());
         assert!(MessageType::from_u8(0xff).is_none());
+    }
+
+    /// AC-3 (task0001): the two new type byte values collide with no
+    /// existing or retired value. 0x11 is retired (`SplitPane`, removed);
+    /// every other value in `0x01..=0x24` is an existing live discriminant.
+    #[test]
+    fn test_upgrade_message_types_do_not_collide() {
+        assert_eq!(MessageType::Upgrade as u8, 0x25);
+        assert_eq!(MessageType::Upgrading as u8, 0x26);
+        for i in 0x01..=0x24u8 {
+            if i == 0x11 {
+                continue;
+            }
+            assert_ne!(MessageType::Upgrade as u8, i);
+            assert_ne!(MessageType::Upgrading as u8, i);
+        }
+    }
+
+    /// AC-1 (task0001): both new message types round-trip through the
+    /// frame encode/decode helpers, preserving type, pane id, and empty
+    /// payload (mirroring `Shutdown`'s wire shape).
+    #[test]
+    fn test_upgrade_and_upgrading_round_trip_empty_payload() {
+        for msg_type in [MessageType::Upgrade, MessageType::Upgrading] {
+            let msg = MuxMessage {
+                msg_type,
+                pane_id: 0,
+                payload: Vec::new(),
+            };
+            let body = msg.to_frame_body();
+            let parsed = MuxMessage::from_frame_body(&body).expect("valid frame");
+            assert_eq!(parsed.msg_type, msg_type);
+            assert_eq!(parsed.pane_id, 0);
+            assert!(parsed.payload.is_empty());
+        }
+    }
+
+    /// AC-2 (task0001): a frame carrying an unrecognized type byte adjacent
+    /// to the new ones is reported as "not a known message" (`from_u8`
+    /// returns `None`), not an error that would tear a connection down.
+    #[test]
+    fn test_byte_adjacent_to_upgrade_types_is_unknown() {
+        assert!(MessageType::from_u8(0x27).is_none());
     }
 
     #[test]
@@ -1848,7 +1920,12 @@ mod tests {
             Some(MessageType::WaitAgentStateResult)
         );
         assert_eq!(MessageType::from_u8(0x24), Some(MessageType::AgentApiError));
-        assert!(MessageType::from_u8(0x25).is_none());
+        // 0x25/0x26 are no longer unmapped -- they hold the
+        // mux-daemon-hot-upgrade `Upgrade`/`Upgrading` types (see
+        // `test_upgrade_message_types_do_not_collide` /
+        // `test_upgrade_and_upgrading_round_trip_empty_payload`). The
+        // unmapped boundary this test originally pinned moves to 0x27.
+        assert!(MessageType::from_u8(0x27).is_none());
     }
 
     /// AC-1 / AC-3: APC round trip for every new discriminant, mirroring
