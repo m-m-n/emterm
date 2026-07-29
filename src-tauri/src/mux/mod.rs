@@ -45,4 +45,10 @@ pub mod tmux_conf;
 // `feature = "gui"`.
 #[cfg(feature = "gui")]
 pub mod tmux_import;
+// task0003 (mux daemon hot-upgrade): snapshot / restore of the live session
+// tree to and from the handoff document, and the handoff file's lifetime.
+// Unix only, matching `inherited_pty` — descriptor inheritance across
+// `execve` has no Windows equivalent.
+#[cfg(unix)]
+pub mod upgrade;
 pub mod window_group;

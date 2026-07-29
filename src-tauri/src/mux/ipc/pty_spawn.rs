@@ -568,7 +568,15 @@ fn extract_main_buffer_bytes(data: &[u8], alt_at_start: bool) -> (Cow<'_, [u8]>,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn pty_reader_loop(
+/// Widened from module-private to `pub(in crate::mux)` (task0003, mux daemon
+/// hot-upgrade): the restore path (`mux::upgrade`) re-establishes a restored
+/// live pane's reader thread through this SAME function — not a
+/// reimplementation — so a restored pane's scrollback filtering, agent-status
+/// forwarding, and title/cwd detection stay byte-for-byte identical to a
+/// freshly spawned pane's (IMPLEMENTATION.md "Upgrade snapshot / restore"
+/// postcondition: "writer and reader thread re-established"). No behavior
+/// change for existing callers.
+pub(in crate::mux) fn pty_reader_loop(
     pane_id: u32,
     mut reader: Box<dyn Read + Send>,
     output_target: SharedOutputTarget,
