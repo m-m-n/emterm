@@ -192,6 +192,15 @@ impl Drop for RawModeGuardWindows {
 /// (AC-3), and a fresh connection that later drops without a NEW
 /// announcement also ends the bridge as before (AC-7) — see
 /// `forward_loop`'s per-call `announced` flag.
+///
+/// The stdin handle (and its parser) are created ONCE here, before the
+/// reconnect loop, and lent to every `forward_loop` call by mutable
+/// reference (task0010 AC-1/AC-2/AC-3): a reconnect never spins up a
+/// second `tokio::io::stdin()`, so a read left in flight when a connection
+/// drops is not abandoned — it is still being awaited by the SAME handle
+/// once the next connection's `forward_loop` call resumes reading from it,
+/// and any bytes it yields are delivered to the daemon after the reconnect
+/// instead of being discarded with a throwaway handle.
 #[cfg(unix)]
 async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Connecting to daemon at {:?}", sock_path);
@@ -209,9 +218,22 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
     let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
     let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
 
+    // Owned here, for the lifetime of the whole bridge run, so a reconnect
+    // never creates a second stdin handle or a second parser (task0010
+    // AC-1).
+    let mut stdin = tokio::io::stdin();
+    let mut stdin_parser = StdinApcParser::new();
+
     loop {
-        let ended =
-            forward_loop(&mut sock_reader, &mut sock_writer, &transport, &last_attach).await;
+        let ended = forward_loop(
+            &mut sock_reader,
+            &mut sock_writer,
+            &transport,
+            &last_attach,
+            &mut stdin,
+            &mut stdin_parser,
+        )
+        .await;
         match ended {
             ConnectionEnded::Normal => break,
             ConnectionEnded::Announced => {
@@ -261,7 +283,21 @@ async fn bridge_main_loop_windows() -> Result<(), Box<dyn std::error::Error>> {
     let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
     let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
 
-    let _ended = forward_loop(&mut sock_reader, &mut sock_writer, &transport, &last_attach).await;
+    // Windows never reconnects (see the doc comment above), but the stdin
+    // handle and parser are still created here rather than inside
+    // `forward_loop`, keeping the single call site consistent with Unix.
+    let mut stdin = tokio::io::stdin();
+    let mut stdin_parser = StdinApcParser::new();
+
+    let _ended = forward_loop(
+        &mut sock_reader,
+        &mut sock_writer,
+        &transport,
+        &last_attach,
+        &mut stdin,
+        &mut stdin_parser,
+    )
+    .await;
 
     finish_bridge_exit(&transport)
 }
@@ -400,18 +436,34 @@ fn conclude_connection(announced: bool) -> ConnectionEnded {
 /// announcement concludes `Normal` even though an earlier connection
 /// concluded `Announced` (AC-7).
 ///
+/// `stdin` and `parser` are owned by the CALLER and lent by mutable
+/// reference (task0010 AC-1): every call across a bridge's reconnects
+/// reads from the same stdin handle and feeds the same parser, instead of
+/// each call creating its own. Reading from `tokio::io::stdin()` is not
+/// cancellation-safe — a read left in flight when this function returns
+/// (because the daemon side ended first) keeps running in the background
+/// and would silently discard whatever it eventually reads if the handle
+/// were dropped; by keeping the same handle alive across calls, that read
+/// is instead picked back up the next time the caller invokes
+/// `forward_loop`, so bytes typed while a connection is dropping still
+/// reach the daemon after the reconnect (AC-2) and no second handle is
+/// ever created to strand a read against (AC-3).
+///
 /// Does not perform the synthetic-Detached-then-exit sequence; callers
 /// decide that (Unix: only after giving up on reconnecting; Windows:
 /// always) via `finish_bridge_exit`.
-async fn forward_loop<R, W>(
+async fn forward_loop<R, W, I>(
     sock_reader: &mut R,
     sock_writer: &mut W,
     transport: &Arc<AtomicU8>,
     last_attach: &Arc<Mutex<Option<Vec<u8>>>>,
+    stdin: &mut I,
+    parser: &mut StdinApcParser,
 ) -> ConnectionEnded
 where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
+    I: tokio::io::AsyncRead + Unpin,
 {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -426,8 +478,6 @@ where
     let last_attach_for_stdin = Arc::clone(last_attach);
 
     let stdin_to_daemon = async {
-        let mut stdin = tokio::io::stdin();
-        let mut parser = StdinApcParser::new();
         let mut buf = [0u8; 8192];
         loop {
             let n = match stdin.read(&mut buf).await {
@@ -1763,5 +1813,107 @@ mod tests {
             "attempts must be separated by a backoff delay, took only {:?}",
             elapsed
         );
+    }
+
+    // ---- task0010: the stdin handle (and its parser) persist across
+    // `forward_loop` calls instead of being recreated per reconnect ----
+
+    /// AC-1 / AC-2 / AC-3: `forward_loop` takes the stdin handle and its
+    /// parser as caller-owned `&mut` parameters instead of constructing its
+    /// own, so the SAME instances can be threaded through every connection
+    /// of a bridge run (exactly how `bridge_main_loop` uses them across a
+    /// reconnect). This test drives two `forward_loop` calls with the same
+    /// handle/parser and proves the direct consequence: a byte that
+    /// arrives on stdin only AFTER the first connection has already ended
+    /// is still delivered to the daemon once the second connection's call
+    /// starts reading (AC-2). Before this fix, each call constructed its
+    /// own `tokio::io::stdin()`; that handle would already have been
+    /// dropped by the time this byte arrived, discarding it silently while
+    /// leaving the abandoned blocking read (AC-3) occupying a pool thread
+    /// until the user's next keystroke. Because only one handle is ever
+    /// constructed for the whole run (AC-1), no such second handle exists
+    /// to strand a read against.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn forward_loop_persistent_stdin_handle_delivers_bytes_queued_across_reconnect() {
+        use tokio::io::AsyncReadExt as _;
+        use tokio::io::AsyncWriteExt as _;
+
+        // One stdin handle + one parser for the whole simulated bridge
+        // run — created ONCE, exactly as `bridge_main_loop` does, and
+        // passed into BOTH `forward_loop` calls below.
+        let (mut stdin, mut stdin_probe) = tokio::io::duplex(4096);
+        let mut parser = StdinApcParser::new();
+        let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
+        let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+
+        // Connection #1's "daemon" side is closed immediately, before
+        // stdin has produced anything, so `daemon_to_stdout` ends the call
+        // right away — mirroring the daemon dropping the connection while
+        // a keystroke is still in flight on stdin.
+        let (conn1, conn1_daemon_side) = tokio::io::duplex(64);
+        drop(conn1_daemon_side);
+        let (mut r1, mut w1) = tokio::io::split(conn1);
+
+        let ended1 = forward_loop(
+            &mut r1,
+            &mut w1,
+            &transport,
+            &last_attach,
+            &mut stdin,
+            &mut parser,
+        )
+        .await;
+        assert_eq!(ended1, ConnectionEnded::Normal);
+
+        // The keystroke arrives only now, strictly after connection #1 has
+        // already ended — the window in which a freshly-recreated handle
+        // would already have been dropped.
+        let msg = MuxMessage::pty_input(1, vec![0x41]);
+        let apc = msg.to_apc();
+        stdin_probe
+            .write_all(apc.as_bytes())
+            .await
+            .expect("write pending keystroke");
+        stdin_probe.flush().await.expect("flush pending keystroke");
+
+        // Connection #2 stands in for the reconnect: a fresh "daemon"
+        // duplex, but `stdin` and `parser` are the SAME instances again —
+        // never recreated.
+        let (conn2, mut conn2_daemon_side) = tokio::io::duplex(4096);
+        let (mut r2, mut w2) = tokio::io::split(conn2);
+
+        let daemon_task = tokio::spawn(async move {
+            let mut len_buf = [0u8; 4];
+            conn2_daemon_side
+                .read_exact(&mut len_buf)
+                .await
+                .expect("read forwarded frame length");
+            let frame_len = u32::from_be_bytes(len_buf) as usize;
+            let mut frame_buf = vec![0u8; frame_len];
+            conn2_daemon_side
+                .read_exact(&mut frame_buf)
+                .await
+                .expect("read forwarded frame body");
+            MuxMessage::from_frame_body(&frame_buf).expect("valid forwarded frame")
+            // `conn2_daemon_side` drops here, ending the duplex so `r2`
+            // observes EOF and the `forward_loop` call below returns.
+        });
+
+        let ended2 = forward_loop(
+            &mut r2,
+            &mut w2,
+            &transport,
+            &last_attach,
+            &mut stdin,
+            &mut parser,
+        )
+        .await;
+        assert_eq!(ended2, ConnectionEnded::Normal);
+
+        let forwarded = daemon_task.await.expect("daemon task panicked");
+        assert_eq!(forwarded.msg_type, MessageType::PtyInput);
+        assert_eq!(forwarded.pane_id, 1);
+        assert_eq!(forwarded.payload, vec![0x41]);
     }
 }
