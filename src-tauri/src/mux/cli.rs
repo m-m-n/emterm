@@ -23,6 +23,14 @@ use super::ipc::protocol::*;
 #[cfg(feature = "gui")]
 use super::tmux_import::import_tmux_conf_if_needed;
 
+/// Usage summary printed for an unknown `mux` subcommand (AC-1, task0005:
+/// `upgrade` / `probe-handoff` registered here alongside the dispatch
+/// table).
+const MUX_USAGE: &str =
+    "Available: ls / kill [session] / attach [session] / new-window / script / \
+     switch-window <index> / send-keys / read / send / wait / upgrade / \
+     probe-handoff / clear-logs / (no subcommand = start session)";
+
 /// Dispatch `emterm mux …` subcommands. `args` is the slice that follows
 /// the literal `mux` token (so `args[0]` is the next positional, e.g.
 /// `attach` / `--daemon` / `ls`). Returns the desired process exit code.
@@ -195,13 +203,15 @@ pub fn run(args: &[String]) -> i32 {
             };
             return execute_mux_wait(pane, state, timeout, after);
         }
+        Some("upgrade") => {
+            return execute_upgrade();
+        }
+        Some("probe-handoff") => {
+            return execute_probe_handoff();
+        }
         Some(other) => {
             eprintln!("Error: unknown `mux` subcommand: {other}");
-            eprintln!(
-                "Available: ls / kill [session] / attach [session] / new-window / script / \
-                 switch-window <index> / send-keys / read / send / wait / clear-logs / \
-                 (no subcommand = start session)"
-            );
+            eprintln!("{MUX_USAGE}");
             return 2;
         }
         None => execute_mux(),
@@ -245,14 +255,69 @@ fn init_mux_logger(component: &'static str) {
 }
 
 /// Execute the `emterm mux --daemon` command (runs the daemon).
+///
+/// Inspects the daemon's run outcome (task0005, IMPLEMENTATION.md D1 /
+/// "Performing the replacement"): normal termination keeps today's
+/// behaviour; an upgrade request performs the process replacement, but only
+/// after the async runtime has been fully shut down — replacing the process
+/// image while its worker threads are alive is undefined behaviour.
 pub fn execute_daemon() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logger for daemon process (Tauri's logger is not available here).
     // Daemon stderr is redirected to mux-daemon.log by the spawning process.
     init_mux_logger("[DAEMON]");
 
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(daemon::run_daemon())?;
-    Ok(())
+    let outcome = rt.block_on(daemon::run_daemon())?;
+
+    // D1: `drop` blocks this thread until every worker thread has exited,
+    // which must happen before any process replacement below.
+    drop(rt);
+
+    match outcome {
+        daemon::DaemonRunOutcome::Terminated => Ok(()),
+        daemon::DaemonRunOutcome::UpgradeRequested(req) => {
+            #[cfg(unix)]
+            {
+                perform_upgrade_replacement(req);
+            }
+            #[cfg(not(unix))]
+            {
+                // Unreachable in practice: `run_daemon` never constructs
+                // this variant on a non-Unix build (upgrade is a Unix-only
+                // feature, IMPLEMENTATION.md Conventions).
+                let _ = req;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Replace this process's image with the upgrade target (IMPLEMENTATION.md
+/// D1 / "Performing the replacement"). Called only from [`execute_daemon`]
+/// after the async runtime has been fully shut down. `exec` only returns on
+/// failure — the process image is otherwise gone and this function does not
+/// return.
+///
+/// On failure, logs at error level and gives up rather than exiting
+/// silently (IMPLEMENTATION.md "Error policy"). Full in-process re-entry
+/// over the handoff document that was just written depends on the
+/// handoff-mode startup path (task0004, not yet merged at the time this was
+/// written) and is not yet wired here — see the task report.
+#[cfg(unix)]
+fn perform_upgrade_replacement(req: daemon::UpgradeRequest) {
+    use std::os::unix::process::CommandExt;
+
+    let err = std::process::Command::new(&req.target)
+        .args(&req.args)
+        .env(&req.env_addition.0, &req.env_addition.1)
+        .exec();
+
+    log::error!(
+        "Failed to exec upgrade target {:?}: {err} (handoff document at {:?} was not \
+         consumed)",
+        req.target,
+        req.handoff_document_path
+    );
 }
 
 /// Initialize bridge logger, writing to mux-bridge.log (same directory as daemon log).
@@ -1271,6 +1336,140 @@ pub fn execute_kill(_session: Option<&str>) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+// ============================================================================
+// `emterm mux upgrade` (task0005): ask a running daemon to replace itself in
+// place with the currently-installed binary.
+// ============================================================================
+
+/// Execute `emterm mux upgrade` against the daemon at `sock_path` (task0005
+/// AC-1..AC-4). Numbered flow mirrors the task plan's Design section:
+///
+/// 1. Fail clearly (without creating a socket or spawning a daemon) when no
+///    daemon is reachable (AC-4).
+/// 2. Connect and handshake, tolerating a daemon one protocol version behind
+///    — the same tolerance [`daemon::recover_from_legacy_daemon`] uses — so
+///    a mismatched daemon can still be asked to upgrade.
+/// 3. Send the `Upgrade` request.
+/// 4. Poll (bounded) until a daemon speaking the current protocol version is
+///    reachable again; report success or timeout (AC-2/AC-3).
+///
+/// Split out of [`execute_upgrade`] so tests can point it at an isolated
+/// stand-in daemon's socket instead of the real per-user
+/// `daemon::socket_path()` (mirrors [`resolve_attach_socket_with`]'s
+/// existing test-injection shape).
+#[cfg(unix)]
+fn execute_upgrade_at(sock_path: &std::path::Path) -> i32 {
+    if !daemon::is_daemon_running(sock_path) {
+        eprintln!("No mux daemon running (nothing to upgrade)");
+        return 1;
+    }
+
+    let mut stream = match daemon::connect_daemon(sock_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: could not connect to the mux daemon: {e}");
+            return 1;
+        }
+    };
+
+    match daemon::handshake_with_version(&mut stream, PROTOCOL_VERSION) {
+        Ok(WelcomeMsg::Accepted { .. }) => {}
+        Ok(WelcomeMsg::Rejected { .. }) => {
+            drop(stream);
+            let mut retry = match daemon::connect_daemon(sock_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error: could not connect to the mux daemon: {e}");
+                    return 1;
+                }
+            };
+            match daemon::handshake_with_version(&mut retry, PREVIOUS_PROTOCOL_VERSION) {
+                Ok(WelcomeMsg::Accepted { .. }) => {
+                    stream = retry;
+                }
+                Ok(WelcomeMsg::Rejected { reason }) => {
+                    eprintln!("Error: mux daemon rejected the handshake: {reason}");
+                    return 1;
+                }
+                Err(e) => {
+                    eprintln!("Error: failed to negotiate with the mux daemon: {e}");
+                    return 1;
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: failed to communicate with the mux daemon: {e}");
+            return 1;
+        }
+    }
+
+    if let Err(e) = daemon::send_upgrade(&mut stream) {
+        eprintln!("Error: failed to send the upgrade request: {e}");
+        return 1;
+    }
+    drop(stream);
+
+    if daemon::wait_for_daemon_reachable_at_current_version(sock_path) {
+        println!("Mux daemon upgraded in place");
+        0
+    } else {
+        eprintln!(
+            "Timed out waiting for the mux daemon to become reachable after the upgrade \
+             request"
+        );
+        1
+    }
+}
+
+/// Execute the `emterm mux upgrade` command.
+#[cfg(unix)]
+pub fn execute_upgrade() -> i32 {
+    execute_upgrade_at(&daemon::socket_path())
+}
+
+/// Execute the `emterm mux upgrade` command (unsupported platform):
+/// in-place upgrade is a Unix-only feature (execve-based process
+/// replacement, IMPLEMENTATION.md Conventions) — report unsupported and
+/// leave today's behaviour untouched (AC-8), rather than a partial
+/// Windows-side implementation.
+#[cfg(not(unix))]
+pub fn execute_upgrade() -> i32 {
+    eprintln!("In-place upgrade is not supported on this platform");
+    1
+}
+
+// ============================================================================
+// `emterm mux probe-handoff` (task0005): print the inclusive range of
+// handoff schema versions this binary can restore. Answer side of
+// IMPLEMENTATION.md D3 — the asking side (a running daemon invoking this as
+// a subprocess against a candidate binary) lives in task0004.
+// ============================================================================
+
+/// Handoff schema versions this binary can restore (task0005 owns the
+/// probe's answer side; mux-daemon-hot-upgrade IMPLEMENTATION.md Shared
+/// Components "Handoff probe subcommand"). Mirrors the single-current-value
+/// range mux_ipc's handoff-schema-version constant will define once task0001
+/// merges (not yet merged at the time this was written — local literals
+/// here are a deviation pending reconciliation, see the task report).
+const HANDOFF_SCHEMA_VERSION_MIN: u32 = 1;
+const HANDOFF_SCHEMA_VERSION_MAX: u32 = 1;
+
+/// The line [`execute_probe_handoff`] prints: two whitespace-separated
+/// unsigned integers, `<min> <max>`, the inclusive range of handoff schema
+/// versions this binary can restore. Factored out for testability (AC-5).
+fn handoff_schema_range_line() -> String {
+    format!("{HANDOFF_SCHEMA_VERSION_MIN} {HANDOFF_SCHEMA_VERSION_MAX}")
+}
+
+/// Execute `emterm mux probe-handoff` (task0005 AC-5). Never touches the
+/// daemon socket or any daemon state — a pure, static self-description used
+/// by a running daemon (task0004) to decide whether a candidate binary is
+/// safe to hand off to (IMPLEMENTATION.md D3).
+pub fn execute_probe_handoff() -> i32 {
+    println!("{}", handoff_schema_range_line());
+    0
+}
+
 /// Format a byte count as a human-readable size.
 fn format_size(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB", "PB"];
@@ -1589,6 +1788,21 @@ mod tests {
         MuxMessage::from_frame_body(&frame_buf).expect("valid frame")
     }
 
+    /// Like [`read_frame`], but returns `None` instead of panicking on EOF
+    /// (task0005): `daemon::is_daemon_running`'s reachability probe opens
+    /// and immediately drops a bare connection before the real handshake
+    /// connection follows, so a one-shot stand-in daemon must be able to
+    /// skip past it rather than treat it as the real Hello.
+    #[cfg(unix)]
+    fn try_read_frame<S: std::io::Read>(stream: &mut S) -> Option<MuxMessage> {
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).ok()?;
+        let frame_len = u32::from_be_bytes(len_buf) as usize;
+        let mut frame_buf = vec![0u8; frame_len];
+        stream.read_exact(&mut frame_buf).ok()?;
+        MuxMessage::from_frame_body(&frame_buf)
+    }
+
     #[cfg(unix)]
     fn write_welcome<S: std::io::Write>(stream: &mut S, welcome: &WelcomeMsg) {
         let msg = MuxMessage::control(MessageType::Welcome, 0, welcome);
@@ -1602,8 +1816,11 @@ mod tests {
 
     /// Spawn a thread that behaves like a single-instance legacy (v1) mux
     /// daemon on `sock_path`: rejects a mismatched Hello, accepts a
-    /// [`FAKE_LEGACY_VERSION`] Hello, waits for `Shutdown`, then removes the
-    /// socket file and exits.
+    /// [`FAKE_LEGACY_VERSION`] Hello, then per-frame: an `Upgrade` request is
+    /// silently ignored (task0005 Recovery path — a daemon predating that
+    /// feature discards it via the unknown-type path, D7) and the loop keeps
+    /// accepting; `Shutdown` removes the socket file and exits, exactly as
+    /// before this feature.
     #[cfg(unix)]
     fn spawn_fake_legacy_daemon(sock_path: std::path::PathBuf) -> std::thread::JoinHandle<()> {
         use std::os::unix::net::UnixListener;
@@ -1635,13 +1852,17 @@ mod tests {
                 };
                 write_welcome(&mut stream, &accept);
 
-                let shutdown_frame = read_frame(&mut stream);
-                assert_eq!(shutdown_frame.msg_type, MessageType::Shutdown);
-
-                // Simulate process exit: release the socket like the real
-                // daemon's shutdown path does.
-                let _ = std::fs::remove_file(&sock_path);
-                break;
+                let frame = read_frame(&mut stream);
+                match frame.msg_type {
+                    MessageType::Upgrade => continue,
+                    MessageType::Shutdown => {
+                        // Simulate process exit: release the socket like the
+                        // real daemon's shutdown path does.
+                        let _ = std::fs::remove_file(&sock_path);
+                        break;
+                    }
+                    other => panic!("unexpected frame after legacy Accepted: {other:?}"),
+                }
             }
         })
     }
@@ -1801,6 +2022,294 @@ mod tests {
                  Use 'emterm mux' to start a new session."
             ),
             Ok(_) => panic!("expected Err for a nonexistent socket"),
+        }
+    }
+
+    // ---- `emterm mux upgrade` / `probe-handoff` / usage table (task0005) ----
+
+    /// AC-1: `upgrade` is registered in both the dispatch table and the
+    /// usage text; an unknown subcommand still reports usage exactly as
+    /// before (non-zero exit, no daemon interaction).
+    #[test]
+    fn usage_text_lists_upgrade_and_probe_handoff_subcommands() {
+        assert!(MUX_USAGE.contains("upgrade"));
+        assert!(MUX_USAGE.contains("probe-handoff"));
+    }
+
+    #[test]
+    fn run_reports_usage_for_unknown_subcommand() {
+        assert_eq!(run(&["bogus".to_string()]), 2);
+    }
+
+    // ---- `emterm mux probe-handoff` (AC-5) ----
+
+    /// AC-5: prints a parsable schema version range and exits successfully.
+    /// Never references a socket path at all, so "without connecting to a
+    /// socket" holds by construction.
+    #[test]
+    fn probe_handoff_prints_parsable_range_and_succeeds() {
+        let line = handoff_schema_range_line();
+        let parts: Vec<u32> = line
+            .split_whitespace()
+            .map(|s| s.parse().expect("schema range values must be integers"))
+            .collect();
+        assert_eq!(parts.len(), 2, "expected exactly `<min> <max>`, got {line:?}");
+        assert!(parts[0] <= parts[1], "min must not exceed max: {line:?}");
+        assert_eq!(execute_probe_handoff(), 0);
+    }
+
+    // ---- `emterm mux upgrade` (AC-2/AC-3/AC-4) ----
+
+    /// Accept connections on `listener` until one delivers a real frame
+    /// (task0005): skips over bare connect-then-drop probes (e.g.
+    /// `daemon::is_daemon_running`) that close before writing anything,
+    /// which [`try_read_frame`] reports as `None`. Returns `None` only if
+    /// the listener itself stops accepting.
+    #[cfg(unix)]
+    fn accept_until_real_frame(
+        listener: &std::os::unix::net::UnixListener,
+    ) -> Option<(std::os::unix::net::UnixStream, MuxMessage)> {
+        loop {
+            let (mut stream, _) = listener.accept().ok()?;
+            if let Some(frame) = try_read_frame(&mut stream) {
+                return Some((stream, frame));
+            }
+            // Spurious probe connection (already closed) — accept the next.
+        }
+    }
+
+    /// Stand-in daemon for [`execute_upgrade_at`] tests: handshakes at
+    /// [`PROTOCOL_VERSION`] and asserts it then receives an `Upgrade`
+    /// request. When `becomes_reachable_after_upgrade` is set, accepts one
+    /// further real connection and answers as a current-version daemon
+    /// (simulating the in-place replacement, AC-2); otherwise never accepts
+    /// a further real connection, so the caller's poll must time out
+    /// (AC-3). Tolerates the leading `daemon::is_daemon_running`
+    /// reachability probe via [`accept_until_real_frame`].
+    #[cfg(unix)]
+    fn spawn_fake_daemon_for_upgrade(
+        sock_path: std::path::PathBuf,
+        becomes_reachable_after_upgrade: bool,
+    ) -> std::thread::JoinHandle<()> {
+        use std::os::unix::net::UnixListener;
+
+        let listener = UnixListener::bind(&sock_path).expect("bind fake daemon socket (upgrade)");
+        std::thread::spawn(move || {
+            let Some((mut stream, hello_frame)) = accept_until_real_frame(&listener) else {
+                return;
+            };
+            assert_eq!(hello_frame.msg_type, MessageType::Hello);
+            let hello: HelloMsg = hello_frame.decode_payload().expect("Hello payload");
+            assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
+            write_welcome(
+                &mut stream,
+                &WelcomeMsg::Accepted {
+                    server_version: PROTOCOL_VERSION,
+                    sessions: Vec::new(),
+                },
+            );
+
+            let upgrade_frame = read_frame(&mut stream);
+            assert_eq!(upgrade_frame.msg_type, MessageType::Upgrade);
+            drop(stream);
+
+            if becomes_reachable_after_upgrade {
+                let Some((mut stream2, hello2_frame)) = accept_until_real_frame(&listener) else {
+                    return;
+                };
+                let hello2: HelloMsg = hello2_frame.decode_payload().expect("Hello payload");
+                assert_eq!(hello2.protocol_version, PROTOCOL_VERSION);
+                write_welcome(
+                    &mut stream2,
+                    &WelcomeMsg::Accepted {
+                        server_version: PROTOCOL_VERSION,
+                        sessions: Vec::new(),
+                    },
+                );
+                let _ = std::fs::remove_file(&sock_path);
+            }
+            // else (AC-3): never accept a further real connection — the
+            // listener is dropped when this thread returns, so subsequent
+            // poll connects fail.
+        })
+    }
+
+    /// AC-2: against a stand-in that accepts the handshake, `upgrade` sends
+    /// the request and reports success once the stand-in becomes reachable
+    /// at the current protocol version.
+    #[cfg(unix)]
+    #[test]
+    fn execute_upgrade_reports_success_once_daemon_reachable_again() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("upgrade-success.sock");
+        let fake = spawn_fake_daemon_for_upgrade(sock_path.clone(), true);
+
+        let code = execute_upgrade_at(&sock_path);
+
+        fake.join().expect("fake daemon thread panicked");
+        assert_eq!(code, 0, "expected success once the daemon is reachable again");
+    }
+
+    /// AC-3: against a stand-in that never becomes reachable again, `upgrade`
+    /// reports a timeout with a non-success exit status and returns (does
+    /// not hang indefinitely).
+    #[cfg(unix)]
+    #[test]
+    fn execute_upgrade_reports_timeout_when_daemon_never_returns() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("upgrade-timeout.sock");
+        let fake = spawn_fake_daemon_for_upgrade(sock_path.clone(), false);
+
+        let code = execute_upgrade_at(&sock_path);
+
+        fake.join().expect("fake daemon thread panicked");
+        assert_ne!(code, 0, "expected a non-success exit on timeout");
+    }
+
+    /// AC-4: with no daemon running, `upgrade` reports that clearly without
+    /// creating a socket or spawning a daemon.
+    #[test]
+    fn execute_upgrade_reports_no_daemon_without_side_effects() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("no-daemon.sock");
+
+        #[cfg(unix)]
+        let code = execute_upgrade_at(&sock_path);
+        #[cfg(not(unix))]
+        let code = execute_upgrade();
+
+        assert_ne!(code, 0, "expected a non-success exit with no daemon running");
+        assert!(
+            !sock_path.exists(),
+            "must not create a socket when no daemon is running"
+        );
+    }
+
+    // ---- Recovery path upgrade-first attempt (AC-6/AC-7) ----
+
+    /// Stand-in legacy daemon for the recovery-path tests: rejects a
+    /// [`PROTOCOL_VERSION`] Hello (so the initial compatibility probe
+    /// mismatches, exactly like [`spawn_fake_legacy_daemon`]), accepts a
+    /// [`FAKE_LEGACY_VERSION`] Hello, and then branches on the next frame:
+    /// `Upgrade` either flips this stand-in into answering as a
+    /// current-version daemon from then on (`upgrades_in_place = true`,
+    /// AC-7) or is silently ignored so the daemon keeps answering as legacy
+    /// (`upgrades_in_place = false`, AC-6); `Shutdown` removes the socket and
+    /// exits, exactly like today's fallback expects.
+    #[cfg(unix)]
+    fn spawn_fake_legacy_daemon_with_upgrade(
+        sock_path: std::path::PathBuf,
+        upgrades_in_place: bool,
+    ) -> std::thread::JoinHandle<()> {
+        use std::os::unix::net::UnixListener;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let listener = UnixListener::bind(&sock_path).expect("bind fake legacy daemon socket");
+        let upgraded = Arc::new(AtomicBool::new(false));
+
+        std::thread::spawn(move || {
+            loop {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let hello_frame = read_frame(&mut stream);
+                assert_eq!(hello_frame.msg_type, MessageType::Hello);
+                let hello: HelloMsg = hello_frame.decode_payload().expect("Hello payload");
+
+                let is_upgraded = upgraded.load(Ordering::SeqCst);
+                let is_current = is_upgraded && hello.protocol_version == PROTOCOL_VERSION;
+                let is_legacy = !is_upgraded && hello.protocol_version == FAKE_LEGACY_VERSION;
+
+                if !is_current && !is_legacy {
+                    let reject = WelcomeMsg::Rejected {
+                        reason: format!(
+                            "Protocol version mismatch: client={}, server={}",
+                            hello.protocol_version,
+                            if is_upgraded {
+                                PROTOCOL_VERSION
+                            } else {
+                                FAKE_LEGACY_VERSION
+                            }
+                        ),
+                    };
+                    write_welcome(&mut stream, &reject);
+                    continue;
+                }
+
+                let accept = WelcomeMsg::Accepted {
+                    server_version: if is_current {
+                        PROTOCOL_VERSION
+                    } else {
+                        FAKE_LEGACY_VERSION
+                    },
+                    sessions: Vec::<SessionInfo>::new(),
+                };
+                write_welcome(&mut stream, &accept);
+
+                if is_current {
+                    // One successful post-upgrade connection is enough to
+                    // prove reachability; clean up and stop (AC-7).
+                    let _ = std::fs::remove_file(&sock_path);
+                    break;
+                }
+
+                let frame = read_frame(&mut stream);
+                match frame.msg_type {
+                    MessageType::Upgrade => {
+                        if upgrades_in_place {
+                            upgraded.store(true, Ordering::SeqCst);
+                        }
+                        // else (AC-6): ignore — drop this connection and
+                        // keep accepting as a legacy daemon.
+                    }
+                    MessageType::Shutdown => {
+                        let _ = std::fs::remove_file(&sock_path);
+                        break;
+                    }
+                    other => panic!("unexpected frame after legacy Accepted: {other:?}"),
+                }
+            }
+        })
+    }
+
+    /// AC-6: against a stand-in that ignores the upgrade request, the
+    /// recovery helper falls back to shutdown-then-respawn (`Recovered`)
+    /// only after the upgrade attempt.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_falls_back_after_ignored_upgrade() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("recovery-ignored-upgrade.sock");
+        let legacy = spawn_fake_legacy_daemon_with_upgrade(sock_path.clone(), false);
+
+        let result = daemon::recover_from_legacy_daemon(&sock_path);
+
+        legacy.join().expect("fake legacy daemon thread panicked");
+
+        match result {
+            Ok(daemon::LegacyRecovery::Recovered) => {}
+            other => panic!("expected Recovered (fallback after timeout), got {other:?}"),
+        }
+    }
+
+    /// AC-7: against a stand-in that becomes reachable at the current
+    /// protocol version after the upgrade request, the recovery helper does
+    /// not fall back to shutdown — it reports `Compatible`.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_treats_in_place_upgrade_as_compatible() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("recovery-in-place-upgrade.sock");
+        let legacy = spawn_fake_legacy_daemon_with_upgrade(sock_path.clone(), true);
+
+        let result = daemon::recover_from_legacy_daemon(&sock_path);
+
+        legacy.join().expect("fake legacy daemon thread panicked");
+
+        match result {
+            Ok(daemon::LegacyRecovery::Compatible) => {}
+            other => panic!("expected Compatible (no fallback), got {other:?}"),
         }
     }
 }

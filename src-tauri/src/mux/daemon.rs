@@ -5,8 +5,6 @@
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-#[cfg(unix)]
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 
 use super::ipc::connection::handle_connection;
 use super::ipc::handlers::{handle_destroy_pane, reevaluate_agent_waiters};
@@ -23,7 +21,6 @@ use super::session::pane::{
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 
 /// Daemon-level title channel capacity.
 const TITLE_CHANNEL_CAPACITY: usize = 64;
@@ -42,84 +39,8 @@ const AGENT_STATUS_CHANNEL_CAPACITY: usize = 64;
 /// pane so the channel never sustains high throughput.
 const PANE_EXIT_CHANNEL_CAPACITY: usize = 64;
 
-/// Upgrade-request channel capacity: bounded to 1. Only one upgrade
-/// preparation is ever in flight -- the accept loop leaves its `select!` to
-/// run it synchronously before resuming -- so a second concurrent request
-/// simply waits for room rather than needing an unbounded queue.
-const UPGRADE_REQUEST_CHANNEL_CAPACITY: usize = 1;
-
 #[cfg(unix)]
 use tokio::net::UnixListener;
-
-// ============================================================================
-// mux-daemon-hot-upgrade task0004: upgrade signalling, run outcome, and the
-// handoff environment contract.
-// ============================================================================
-
-/// A client's request (via `MessageType::Upgrade`, handled in
-/// `ipc::connection::handle_cli_client`) to perform an in-place upgrade.
-/// Sent to the accept loop, which alone leaves its `select!` to perform the
-/// (fallible) preparation steps -- signalled through this dedicated channel
-/// rather than the existing `shutdown_tx` watch channel, so the two paths
-/// can never be confused (task0004's design, "Request handling").
-///
-/// `reply` carries the outcome of *preparation* back to the SPECIFIC
-/// requesting connection: `Ok(())` once the upgrade announcement has been
-/// broadcast and the daemon is about to return its "upgrade requested" run
-/// outcome (the connection is then simply dropped once the process is
-/// replaced -- IMPLEMENTATION.md D2 -- so no further reply follows), or
-/// `Err(reason)` when preparation aborted and the daemon continues serving
-/// unchanged (AC-3, AC-4).
-pub struct UpgradeRequest {
-    pub reply: oneshot::Sender<Result<(), String>>,
-}
-
-/// Per-connection sender half of the upgrade-request channel, cloned into
-/// every spawned connection task exactly like the other daemon-level
-/// senders (`title_tx`, `notification_tx`, ...).
-pub type UpgradeRequestSender = mpsc::Sender<UpgradeRequest>;
-
-/// Everything the synchronous caller (task0005's daemon entry point) needs
-/// to replace this process once `run_daemon`'s async runtime has fully shut
-/// down (IMPLEMENTATION.md D1, Shared Components "Daemon run outcome").
-#[derive(Debug, Clone)]
-pub struct UpgradeOutcome {
-    /// The candidate binary to `execve` into (today: this process's own
-    /// on-disk path, which a package upgrade may have replaced in place).
-    pub target: PathBuf,
-    /// Argument vector for the replacement process (mirrors how this daemon
-    /// was itself launched: `mux --daemon`).
-    pub args: Vec<String>,
-    /// `(name, value)` environment variable addition the replacement
-    /// process must additionally carry so it recognizes handoff startup
-    /// ([`HANDOFF_ENV_VAR`]).
-    pub env_addition: (String, String),
-    /// Absolute path of the handoff state file just written.
-    pub handoff_path: PathBuf,
-}
-
-/// What `run_daemon`'s async entry point returns once its event loop exits:
-/// either an ordinary shutdown (today's behaviour, unchanged) or a prepared
-/// upgrade the caller must perform after tearing the runtime down
-/// (IMPLEMENTATION.md Shared Components, "Daemon run outcome").
-#[derive(Debug)]
-pub enum DaemonRunOutcome {
-    /// Normal shutdown: sockets and PTYs already cleaned up.
-    Terminated,
-    /// Upgrade preparation succeeded; the caller must fully shut this
-    /// runtime down and then perform the replacement described by the
-    /// outcome (IMPLEMENTATION.md D1).
-    UpgradeRequested(UpgradeOutcome),
-}
-
-/// Environment variable naming the handoff state file's absolute path
-/// (IMPLEMENTATION.md Shared Components, "Handoff environment contract" --
-/// task0004-owned). Its presence at daemon start selects handoff startup:
-/// the normal socket bind is skipped and the recorded listener is adopted
-/// instead (AC-7). Its absence selects normal startup (AC-8). Cleared with
-/// `std::env::remove_var` before any pane child is spawned, so a restored
-/// pane's shell never inherits it (AC-9).
-pub const HANDOFF_ENV_VAR: &str = "EMTERM_MUX_HANDOFF_FILE";
 
 /// Get the socket path for the mux daemon.
 ///
@@ -385,8 +306,14 @@ pub(in crate::mux) enum LegacyRecovery {
 /// for a [`handshake_with_version`] call. Unix: the `AF_UNIX` socket at
 /// `sock_path`. Windows: the daemon's Named Pipe (`sock_path` is unused
 /// there, matching [`is_daemon_running`]'s existing `_path` convention).
+///
+/// `pub(in crate::mux)` (task0005): widened so `mux::cli::execute_upgrade`
+/// can drive the same connect/handshake sequence for the standalone
+/// `upgrade` subcommand, without duplicating it.
 #[cfg(unix)]
-fn connect_daemon(sock_path: &Path) -> std::io::Result<std::os::unix::net::UnixStream> {
+pub(in crate::mux) fn connect_daemon(
+    sock_path: &Path,
+) -> std::io::Result<std::os::unix::net::UnixStream> {
     let stream = std::os::unix::net::UnixStream::connect(sock_path)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -394,7 +321,7 @@ fn connect_daemon(sock_path: &Path) -> std::io::Result<std::os::unix::net::UnixS
 }
 
 #[cfg(windows)]
-fn connect_daemon(_sock_path: &Path) -> std::io::Result<std::fs::File> {
+pub(in crate::mux) fn connect_daemon(_sock_path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -407,7 +334,10 @@ fn connect_daemon(_sock_path: &Path) -> std::io::Result<std::fs::File> {
 /// Never panics on a malformed reply — any framing/decode problem surfaces
 /// as an `io::Error` so callers can produce a short user-facing message
 /// instead of an opaque bincode error (AC-3).
-fn handshake_with_version<S: std::io::Read + std::io::Write>(
+///
+/// `pub(in crate::mux)` (task0005): widened alongside [`connect_daemon`] for
+/// `mux::cli::execute_upgrade`.
+pub(in crate::mux) fn handshake_with_version<S: std::io::Read + std::io::Write>(
     stream: &mut S,
     protocol_version: u32,
 ) -> std::io::Result<WelcomeMsg> {
@@ -457,6 +387,58 @@ fn send_shutdown<S: std::io::Write>(stream: &mut S) -> std::io::Result<()> {
     stream.write_all(&(body.len() as u32).to_be_bytes())?;
     stream.write_all(&body)?;
     stream.flush()
+}
+
+/// Send a bare `Upgrade` control message (task0005 Design "upgrade
+/// subcommand" / "Recovery path"): requests that the daemon replace itself
+/// in place with the currently-installed binary. Mirrors `Shutdown`'s wire
+/// shape exactly (type byte, zero pane id, empty payload) — a daemon built
+/// before this feature does not recognise [`MessageType::Upgrade`] and
+/// discards the frame through the existing unknown-type path (D7), which is
+/// why the AC-3/AC-6 timeout route is the expected outcome against those.
+///
+/// `pub(in crate::mux)`: shared by [`recover_from_legacy_daemon`]'s
+/// upgrade-first attempt and `mux::cli::execute_upgrade`.
+pub(in crate::mux) fn send_upgrade<S: std::io::Write>(stream: &mut S) -> std::io::Result<()> {
+    let msg = MuxMessage {
+        msg_type: MessageType::Upgrade,
+        pane_id: 0,
+        payload: Vec::new(),
+    };
+    let body = msg.to_frame_body();
+    stream.write_all(&(body.len() as u32).to_be_bytes())?;
+    stream.write_all(&body)?;
+    stream.flush()
+}
+
+/// Poll interval / bound for [`wait_for_daemon_reachable_at_current_version`]
+/// (task0005): an in-place upgrade (execve onto an already-listening socket)
+/// is expected to complete far faster than the cold-start respawn
+/// [`wait_for_daemon_exit`] bounds at 5s, so a shorter ~2s bound is used —
+/// generous for the actual replacement, short enough to keep the AC-3/AC-6
+/// timeout tests fast.
+const UPGRADE_REACHABLE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const UPGRADE_REACHABLE_POLL_MAX_ATTEMPTS: u32 = 40;
+
+/// Poll `sock_path` (bounded, see [`UPGRADE_REACHABLE_POLL_MAX_ATTEMPTS`])
+/// until a daemon there completes a Hello handshake at [`PROTOCOL_VERSION`],
+/// as expected after sending an [`MessageType::Upgrade`] request (task0005
+/// AC-2/AC-3, Recovery path AC-6/AC-7). Returns `true` once reachable,
+/// `false` on timeout — never hangs indefinitely.
+///
+/// `pub(in crate::mux)`: shared by [`recover_from_legacy_daemon`] and
+/// `mux::cli::execute_upgrade`.
+pub(in crate::mux) fn wait_for_daemon_reachable_at_current_version(sock_path: &Path) -> bool {
+    for _ in 0..UPGRADE_REACHABLE_POLL_MAX_ATTEMPTS {
+        if let Ok(mut stream) = connect_daemon(sock_path)
+            && let Ok(WelcomeMsg::Accepted { .. }) =
+                handshake_with_version(&mut stream, PROTOCOL_VERSION)
+        {
+            return true;
+        }
+        std::thread::sleep(UPGRADE_REACHABLE_POLL_INTERVAL);
+    }
+    false
 }
 
 /// Poll until the daemon at `sock_path` is no longer reachable (bounded to
@@ -523,20 +505,84 @@ pub(in crate::mux) fn recover_from_legacy_daemon(
             })?;
             match handshake_with_version(&mut legacy, PREVIOUS_PROTOCOL_VERSION) {
                 Ok(WelcomeMsg::Accepted { .. }) => {
-                    send_shutdown(&mut legacy).map_err(|e| {
+                    // task0005 Recovery path: a plain shutdown kills every
+                    // pane, so ask the legacy daemon to upgrade itself in
+                    // place first. Only fall back to shutdown-then-respawn
+                    // if it never becomes reachable at the current protocol
+                    // version (AC-6/AC-7). A daemon built before this
+                    // feature silently discards the Upgrade frame (D7), so
+                    // that timeout is the expected route for those, not an
+                    // error.
+                    let upgraded = match send_upgrade(&mut legacy) {
+                        Ok(()) => {
+                            drop(legacy);
+                            wait_for_daemon_reachable_at_current_version(sock_path)
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to send an upgrade request to the protocol \
+                                 version {reported} daemon: {e}; falling back to \
+                                 shutdown"
+                            );
+                            drop(legacy);
+                            false
+                        }
+                    };
+
+                    if upgraded {
+                        log::info!(
+                            "Legacy daemon (protocol version {reported}) upgraded in \
+                             place; a compatible daemon is now reachable",
+                        );
+                        return Ok(LegacyRecovery::Compatible);
+                    }
+                    log::warn!(
+                        "Legacy daemon (protocol version {reported}) did not become \
+                         reachable at the current protocol version after an upgrade \
+                         request; falling back to shutdown"
+                    );
+
+                    // Fallback: existing shutdown-then-respawn path. The
+                    // upgrade attempt above already dropped the connection
+                    // (or never sent), so reconnect for the Shutdown.
+                    let mut legacy_for_shutdown = connect_daemon(sock_path).map_err(|e| {
                         format!(
                             "Detected an incompatible mux daemon (protocol version \
-                             {reported}) but failed to send its shutdown request: {e}"
+                             {reported}) but it became unreachable while falling back \
+                             to shutdown: {e}"
                         )
                     })?;
-                    drop(legacy);
-                    wait_for_daemon_exit(sock_path)?;
-                    log::info!(
-                        "Recovered mux socket from a protocol version {} daemon; a \
-                         compatible daemon can now start",
-                        reported
-                    );
-                    Ok(LegacyRecovery::Recovered)
+                    match handshake_with_version(&mut legacy_for_shutdown, PREVIOUS_PROTOCOL_VERSION)
+                    {
+                        Ok(WelcomeMsg::Accepted { .. }) => {
+                            send_shutdown(&mut legacy_for_shutdown).map_err(|e| {
+                                format!(
+                                    "Detected an incompatible mux daemon (protocol version \
+                                     {reported}) but failed to send its shutdown request: {e}"
+                                )
+                            })?;
+                            drop(legacy_for_shutdown);
+                            wait_for_daemon_exit(sock_path)?;
+                            log::info!(
+                                "Recovered mux socket from a protocol version {} daemon; a \
+                                 compatible daemon can now start",
+                                reported
+                            );
+                            Ok(LegacyRecovery::Recovered)
+                        }
+                        Ok(WelcomeMsg::Rejected {
+                            reason: retry_reason,
+                        }) => Err(format!(
+                            "The running mux daemon (protocol version {reported}) could not \
+                             be recovered automatically: {retry_reason}. Stop it manually \
+                             (e.g. `pkill -f 'emterm mux --daemon'`) and retry."
+                        )),
+                        Err(e) => Err(format!(
+                            "Detected an incompatible mux daemon (protocol version \
+                             {reported}) but failed to negotiate a compatible shutdown \
+                             after the upgrade attempt: {e}"
+                        )),
+                    }
                 }
                 Ok(WelcomeMsg::Rejected {
                     reason: retry_reason,
@@ -639,355 +685,50 @@ pub fn shutdown_daemon_any_version(sock_path: &Path) -> Result<ShutdownOutcome, 
     }
 }
 
-// ============================================================================
-// mux-daemon-hot-upgrade task0004: upgrade preparation and handoff-mode
-// startup.
-//
-// The probe (task0005's contract) and the session-tree snapshot/restore
-// (task0003's contract) are genuine cross-task dependencies neither of
-// which has landed in this worktree yet. Both call sites below are
-// PLACEHOLDERS, deliberately scoped so the branching logic THIS task owns
-// (accept-loop upgrade branch, handoff-mode startup, run outcome, handoff
-// environment contract) is real, compiles, and is fully tested via
-// dependency injection -- exactly the "substitutable probe" pattern the
-// task plan's Test Notes call for, extended to the snapshot/restore seam so
-// AC-4 (snapshot failure) and the restore-failure path are testable too.
-// Until task0003 lands, every real upgrade attempt legitimately aborts at
-// the snapshot stage (the honest current capability, not a fake success);
-// see each function's doc comment for the exact hand-off point.
-// ============================================================================
-
-/// Inclusive `(min, max)` range of handoff schema versions a candidate
-/// binary reports it can restore (IMPLEMENTATION.md D3).
-#[cfg(unix)]
-type SchemaRange = (u32, u32);
-
-/// This build's own handoff schema version.
+/// Everything the synchronous caller (`mux::cli::execute_daemon`) needs to
+/// replace this process's image in place (IMPLEMENTATION.md D1, Shared
+/// Components "Daemon run outcome").
 ///
-/// PLACEHOLDER (deviation, task0004): the real constant belongs to
-/// `crates/mux_ipc`'s handoff schema version (task0001's contract,
-/// `crates/mux_ipc/src/handoff.rs`), which does not exist yet in this
-/// worktree. Kept local so the accept loop's compatibility check has
-/// something concrete to compare against; replacing this with the real
-/// constant is a one-line change once task0001 lands.
-#[cfg(unix)]
-const CURRENT_HANDOFF_SCHEMA_VERSION: u32 = 1;
-
-/// Ask `candidate` (the binary about to replace this process) which handoff
-/// schema versions it can restore, by running its handoff-probe subcommand
-/// (task0005's contract, IMPLEMENTATION.md "Handoff probe subcommand"). Any
-/// spawn failure, non-zero exit, or unparsable output means "incompatible"
-/// (IMPLEMENTATION.md D3) -- there is no partial-trust fallback.
-///
-/// PLACEHOLDER invocation shape (deviation, task0004): `mux --handoff-probe`
-/// is this task's own choice of how to ask, made because task0005 (which
-/// owns the actual subcommand) has not landed in this worktree. task0005
-/// must implement a subcommand answering this exact invocation with a
-/// `"<min>-<max>"` line on stdout and exit 0, or this call site must be
-/// updated to match whatever it actually implements.
-#[cfg(unix)]
-fn probe_candidate_handoff_range(candidate: &Path) -> Result<SchemaRange, String> {
-    let output = std::process::Command::new(candidate)
-        .args(["mux", "--handoff-probe"])
-        .output()
-        .map_err(|e| format!("failed to run handoff probe on {candidate:?}: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "handoff probe on {candidate:?} exited with {:?}",
-            output.status.code()
-        ));
-    }
-    parse_schema_range(String::from_utf8_lossy(&output.stdout).trim())
+/// task0004 owns wiring the accept-loop branch that actually constructs
+/// [`DaemonRunOutcome::UpgradeRequested`] (after receiving `Upgrade` and
+/// snapshotting the session tree, task0003); task0005 owns consuming it in
+/// `execute_daemon` and is defined here ahead of that merge so no task
+/// leaves a placeholder for the other (D9). `run_daemon` returns
+/// `Terminated` unconditionally today.
+#[derive(Debug, Clone)]
+pub struct UpgradeRequest {
+    /// Absolute path of the target binary to replace this process with.
+    pub target: PathBuf,
+    /// Argument vector for the replacement (mirrors this process's own,
+    /// per IMPLEMENTATION.md D1).
+    pub args: Vec<String>,
+    /// Single environment variable addition carrying the handoff document
+    /// path (Shared Components "Handoff environment contract", task0004).
+    pub env_addition: (String, String),
+    /// Absolute path of the handoff document just written, so the caller
+    /// can re-enter service over it if the replacement itself fails.
+    pub handoff_document_path: PathBuf,
 }
 
-/// Parse a `"<min>-<max>"` schema-range line (the handoff probe's expected
-/// output shape).
-#[cfg(unix)]
-fn parse_schema_range(text: &str) -> Result<SchemaRange, String> {
-    let (min_s, max_s) = text
-        .split_once('-')
-        .ok_or_else(|| format!("unparsable handoff probe output: {text:?}"))?;
-    let min: u32 = min_s
-        .trim()
-        .parse()
-        .map_err(|_| format!("unparsable handoff probe output: {text:?}"))?;
-    let max: u32 = max_s
-        .trim()
-        .parse()
-        .map_err(|_| format!("unparsable handoff probe output: {text:?}"))?;
-    Ok((min, max))
-}
-
-/// Counts reported by a completed snapshot or restore, used for the
-/// handoff-start log line (FR11).
-#[cfg(unix)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct HandoffCounts {
-    pub pane_count: u32,
-    pub descriptor_count: u32,
-}
-
-/// Prepare the handoff document and write it to `handoff_path` (task0003's
-/// contract, IMPLEMENTATION.md Shared Components "Upgrade snapshot /
-/// restore"). Precondition: the caller holds the session-manager lock.
-///
-/// PLACEHOLDER (deviation, task0004): task0003 owns the real
-/// `src-tauri/src/mux/upgrade.rs` snapshot implementation (session tree
-/// walk, per-pane close-on-exec clearing, scrollback capture). That module
-/// does not exist yet in this worktree, and `session::pane::MuxPane`
-/// deliberately keeps its master descriptor private (task0002/0003's own
-/// files to open up -- not task0004's to touch). Until task0003 lands and
-/// this call site is re-pointed at its real function, every upgrade attempt
-/// legitimately aborts here via the documented failure path (AC-4) -- this
-/// is the honest current capability, not a fake success.
-#[cfg(unix)]
-fn snapshot_session_state(
-    _manager: &mut SessionManager,
-    _listen_fd: RawFd,
-    _handoff_path: &Path,
-) -> Result<HandoffCounts, String> {
-    Err("session snapshot is not yet available (pending task0003 upgrade.rs)".to_string())
-}
-
-/// Restore the session tree from a handoff file (task0003's contract,
-/// symmetric counterpart of [`snapshot_session_state`]). PLACEHOLDER for the
-/// same reason: task0003's restore does not exist yet. Failing here is
-/// honest and handled gracefully by [`start_from_handoff`] (design: "the
-/// daemon continues as best it can rather than exiting silently").
-#[cfg(unix)]
-fn restore_session_tree(_handoff_path: &Path) -> Result<(SessionManager, HandoffCounts), String> {
-    Err("session restore is not yet available (pending task0003 upgrade.rs)".to_string())
-}
-
-/// Perform upgrade preparation (design steps 1-3): probe compatibility,
-/// snapshot session state to a new handoff file under `handoff_dir`, and
-/// (only on success) broadcast the `Upgrading` announcement before
-/// returning the run outcome (AC-5: announcement precedes the outcome).
-///
-/// Parameterized over the probe and snapshot operations (Test Notes: "a
-/// substitutable probe") so every branch (AC-1 through AC-6) is testable
-/// without a real candidate binary or real session-tree internals. Never
-/// removes the socket file and never calls [`graceful_shutdown`] or marks
-/// any pane exited (AC-1, AC-2) -- both stay exclusively on the normal
-/// shutdown path in [`run_daemon`], never invoked from here.
-#[cfg(unix)]
-#[allow(clippy::too_many_arguments)]
-async fn prepare_upgrade(
-    session_manager: &Arc<Mutex<SessionManager>>,
-    listen_fd: RawFd,
-    candidate: &Path,
-    args: Vec<String>,
-    handoff_dir: &Path,
-    current_schema_version: u32,
-    probe: impl Fn(&Path) -> Result<SchemaRange, String>,
-    snapshot: impl FnOnce(&mut SessionManager, RawFd, &Path) -> Result<HandoffCounts, String>,
-) -> Result<UpgradeOutcome, String> {
-    let (min, max) = probe(candidate)?;
-    if current_schema_version < min || current_schema_version > max {
-        return Err(format!(
-            "candidate binary {candidate:?} supports handoff schema {min}-{max}, this daemon needs {current_schema_version}"
-        ));
-    }
-
-    let handoff_path = handoff_dir.join(format!("mux-handoff-{}.state", std::process::id()));
-
-    let snapshot_result = {
-        let mut mgr = session_manager.lock().await;
-        snapshot(&mut mgr, listen_fd, &handoff_path)
-    };
-    let counts = match snapshot_result {
-        Ok(counts) => counts,
-        Err(e) => {
-            // No partial file must remain (AC-4).
-            let _ = std::fs::remove_file(&handoff_path);
-            return Err(e);
-        }
-    };
-    log::warn!(
-        "mux upgrade: snapshot prepared ({} pane(s), {} descriptor(s))",
-        counts.pane_count,
-        counts.descriptor_count
-    );
-
-    // Broadcast BEFORE returning the outcome (AC-5).
-    let notify_tx = {
-        let mgr = session_manager.lock().await;
-        mgr.notify_tx().clone()
-    };
-    let msg = MuxMessage {
-        msg_type: MessageType::Upgrading,
-        pane_id: 0,
-        payload: Vec::new(),
-    };
-    if let Err(e) = notify_tx.send(msg) {
-        log::debug!(
-            "prepare_upgrade: no active subscribers for Upgrading broadcast: {}",
-            e
-        );
-    }
-
-    Ok(UpgradeOutcome {
-        target: candidate.to_path_buf(),
-        args,
-        env_addition: (
-            HANDOFF_ENV_VAR.to_string(),
-            handoff_path.to_string_lossy().to_string(),
-        ),
-        handoff_path,
-    })
-}
-
-/// PLACEHOLDER minimal handoff-file format (deviation, task0004): carries
-/// only the raw listen descriptor number, so THIS task's own logic (env-var
-/// detection, skip-bind, listener adoption, file removal, distinguishable
-/// logging) is real and testable end to end. This is NOT the real handoff
-/// document (`crates/mux_ipc` handoff, task0001's contract) and carries no
-/// session tree -- rebuilding panes remains [`restore_session_tree`]'s job.
-#[cfg(unix)]
-struct HandoffFilePlaceholder {
-    listen_fd: RawFd,
-}
-
-#[cfg(unix)]
-fn write_handoff_placeholder(path: &Path, doc: &HandoffFilePlaceholder) -> std::io::Result<()> {
-    use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true).mode(0o600);
-    let mut f = opts.open(path)?;
-    writeln!(f, "{}", doc.listen_fd)
-}
-
-#[cfg(unix)]
-fn read_handoff_placeholder(path: &Path) -> std::io::Result<HandoffFilePlaceholder> {
-    let text = std::fs::read_to_string(path)?;
-    let listen_fd: RawFd = text.trim().parse().map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("unparsable handoff file contents: {e}"),
-        )
-    })?;
-    Ok(HandoffFilePlaceholder { listen_fd })
-}
-
-/// Handoff-mode startup (AC-7, AC-8, AC-9): read the handoff file at
-/// `handoff_path`, adopt its recorded listen descriptor as this process's
-/// listener (skipping bind entirely), remove the file, and call `restore`
-/// to rebuild the session tree. A restore failure is logged at error level
-/// but does not fail this function -- the daemon continues with an empty
-/// session tree rather than exiting silently (design). Only a failure to
-/// read the file or adopt the recorded descriptor fails this function
-/// outright (the caller falls back to a fresh bind in that case).
-///
-/// PLACEHOLDER handoff-file FORMAT (deviation, task0004): this reads
-/// [`HandoffFilePlaceholder`], NOT the real handoff document
-/// (`crates/mux_ipc` handoff, task0001's contract) -- that module does not
-/// exist yet. Only the listener-adoption mechanic here is real; rebuilding
-/// the pane tree is `restore`'s job (itself a placeholder pending
-/// task0003).
-#[cfg(unix)]
-fn start_from_handoff(
-    handoff_path: &Path,
-    restore: impl FnOnce(&Path) -> Result<(SessionManager, HandoffCounts), String>,
-) -> Result<(UnixListener, Option<SessionManager>, HandoffCounts), String> {
-    let read_result = read_handoff_placeholder(handoff_path);
-
-    // AC-7/AC-8: the handoff file must never survive this operation,
-    // regardless of how it concludes below.
-    let _ = std::fs::remove_file(handoff_path);
-
-    let doc =
-        read_result.map_err(|e| format!("failed to read handoff file {handoff_path:?}: {e}"))?;
-
-    // SAFETY: `doc.listen_fd` was recorded by the matching snapshot step
-    // with close-on-exec already cleared across the exec boundary; we take
-    // ownership of it exactly once here.
-    let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(doc.listen_fd) };
-    std_listener
-        .set_nonblocking(true)
-        .map_err(|e| format!("failed to prepare adopted listener as non-blocking: {e}"))?;
-    let listener = UnixListener::from_std(std_listener)
-        .map_err(|e| format!("failed to adopt inherited listener into the async runtime: {e}"))?;
-
-    let (manager, counts) = match restore(handoff_path) {
-        Ok((mgr, counts)) => (Some(mgr), counts),
-        Err(e) => {
-            log::error!(
-                "mux daemon handoff start: session restore failed: {} (continuing with an empty session tree)",
-                e
-            );
-            (None, HandoffCounts::default())
-        }
-    };
-
-    Ok((listener, manager, counts))
-}
-
-/// Clean up any stale socket and bind a fresh listener at `sock_path`,
-/// restricting its permissions to owner-only. Factored out of [`startup`]
-/// so both the normal-startup and handoff-start-failure-fallback paths
-/// share one implementation.
-#[cfg(unix)]
-fn bind_fresh_listener(sock_path: &Path) -> anyhow::Result<UnixListener> {
-    cleanup_stale_socket(sock_path)?;
-    let listener = UnixListener::bind(sock_path)?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(sock_path, std::fs::Permissions::from_mode(0o700))?;
-    Ok(listener)
-}
-
-/// Decide and perform daemon startup: handoff-mode (the handoff environment
-/// variable is present, AC-7) or normal bind (absent, AC-8). Extracted out
-/// of [`run_daemon`] so it is unit-testable without spinning up the full
-/// accept loop. The env var is cleared unconditionally before returning,
-/// regardless of which branch ran, so a pane child spawned afterwards never
-/// inherits it (AC-9).
-#[cfg(unix)]
-fn startup(sock_path: &Path) -> anyhow::Result<(UnixListener, SessionManager, Option<HandoffCounts>)> {
-    match std::env::var(HANDOFF_ENV_VAR) {
-        Ok(path_str) if !path_str.is_empty() => {
-            let handoff_path = PathBuf::from(&path_str);
-            let result = start_from_handoff(&handoff_path, restore_session_tree);
-            // SAFETY: env mutation is process-wide; cleared unconditionally
-            // here, before the caller can spawn any pane child (AC-9).
-            unsafe {
-                std::env::remove_var(HANDOFF_ENV_VAR);
-            }
-            match result {
-                Ok((listener, manager, counts)) => {
-                    log::warn!(
-                        "mux daemon HANDOFF START: {} pane(s), {} descriptor(s) adopted",
-                        counts.pane_count,
-                        counts.descriptor_count
-                    );
-                    Ok((
-                        listener,
-                        manager.unwrap_or_else(SessionManager::new),
-                        Some(counts),
-                    ))
-                }
-                Err(e) => {
-                    log::error!(
-                        "mux daemon handoff start failed: {e} - falling back to a fresh bind"
-                    );
-                    Ok((bind_fresh_listener(sock_path)?, SessionManager::new(), None))
-                }
-            }
-        }
-        _ => {
-            let listener = bind_fresh_listener(sock_path)?;
-            log::info!("Mux daemon listening on {:?}", sock_path);
-            Ok((listener, SessionManager::new(), None))
-        }
-    }
+/// Outcome of the async daemon entry point ([`run_daemon`]), consumed by the
+/// synchronous caller (`mux::cli::execute_daemon`) only after the async
+/// runtime has been fully shut down (IMPLEMENTATION.md D1: replacing the
+/// process image while runtime worker threads are alive is undefined
+/// behaviour).
+#[derive(Debug)]
+pub enum DaemonRunOutcome {
+    /// The daemon exited normally — today's behaviour, unchanged.
+    Terminated,
+    /// An `Upgrade` request was accepted and a handoff document has been
+    /// written; the caller must perform the process replacement described
+    /// by the carried [`UpgradeRequest`].
+    UpgradeRequested(UpgradeRequest),
 }
 
 /// Run the mux daemon.
 ///
 /// This is the main entry point for `emterm mux --daemon`.
-/// It blocks until all sessions end, SIGTERM is received, or an upgrade is
-/// requested and prepared (in which case the caller must perform the
-/// replacement -- IMPLEMENTATION.md D1).
+/// It blocks until all sessions end or SIGTERM is received.
 #[cfg(unix)]
 pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     let sock_path = socket_path();
@@ -1002,8 +743,19 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
         }
     }
 
-    let (listener, restored_manager, _handoff_counts) = startup(&sock_path)?;
-    let session_manager = Arc::new(Mutex::new(restored_manager));
+    // Clean up stale socket
+    cleanup_stale_socket(&sock_path)?;
+
+    // Bind listener and restrict socket permissions to owner only
+    let listener = UnixListener::bind(&sock_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&sock_path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    log::info!("Mux daemon listening on {:?}", sock_path);
+
+    let session_manager = Arc::new(Mutex::new(SessionManager::new()));
 
     // Daemon-level title channel: lives as long as the daemon so every pane
     // (GUI-created or CLI-created) can propagate OSC title changes to the
@@ -1052,15 +804,6 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     ));
     let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(Some(pane_exit_tx)));
 
-    // Upgrade-request channel: `ipc::connection::handle_cli_client` signals
-    // here on `MessageType::Upgrade` (task0004's design, "Request
-    // handling") rather than `shutdown_tx`, so the two paths cannot be
-    // confused. The original sender stays owned by this function (never
-    // moved away, only cloned per connection), so `upgrade_rx.recv()` never
-    // observes `None` while the loop below runs.
-    let (upgrade_tx, mut upgrade_rx): (UpgradeRequestSender, mpsc::Receiver<UpgradeRequest>) =
-        mpsc::channel(UPGRADE_REQUEST_CHANNEL_CAPACITY);
-
     #[cfg(unix)]
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     #[cfg(unix)]
@@ -1068,63 +811,17 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     #[cfg(unix)]
     let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
 
-    // Set once the upgrade branch below completes preparation successfully;
-    // breaks the loop and skips graceful_shutdown / socket removal entirely
-    // (AC-1, AC-2, IMPLEMENTATION.md D4: the listen socket stays open and on
-    // disk so mid-upgrade connections queue in the kernel backlog).
-    let mut pending_upgrade: Option<UpgradeOutcome> = None;
-
     loop {
         #[cfg(unix)]
         tokio::select! {
             result = listener.accept() => {
                 match result {
                     Ok((stream, _addr)) => {
-                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), agent_status_tx.clone(), pane_exit_sender.clone(), upgrade_tx.clone()));
+                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), agent_status_tx.clone(), pane_exit_sender.clone()));
                     }
                     Err(e) => {
                         log::error!("Accept error: {}", e);
                     }
-                }
-            }
-            Some(request) = upgrade_rx.recv() => {
-                let UpgradeRequest { reply } = request;
-                let candidate = match crate::self_exec::self_exe_path() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let msg = format!("cannot resolve upgrade candidate binary: {e}");
-                        log::warn!("mux upgrade aborted: {}", msg);
-                        let _ = reply.send(Err(msg));
-                        continue;
-                    }
-                };
-                let handoff_dir = sock_path
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| PathBuf::from("/tmp"));
-                match prepare_upgrade(
-                    &session_manager,
-                    listener.as_raw_fd(),
-                    &candidate,
-                    vec!["mux".to_string(), "--daemon".to_string()],
-                    &handoff_dir,
-                    CURRENT_HANDOFF_SCHEMA_VERSION,
-                    probe_candidate_handoff_range,
-                    snapshot_session_state,
-                )
-                .await
-                {
-                    Ok(outcome) => {
-                        let _ = reply.send(Ok(()));
-                        pending_upgrade = Some(outcome);
-                    }
-                    Err(reason) => {
-                        log::warn!("mux upgrade aborted: {}", reason);
-                        let _ = reply.send(Err(reason));
-                    }
-                }
-                if pending_upgrade.is_some() {
-                    break;
                 }
             }
             _ = sigterm.recv() => {
@@ -1145,15 +842,6 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
                 }
             }
         }
-    }
-
-    if let Some(outcome) = pending_upgrade {
-        log::warn!(
-            "mux daemon exiting to perform upgrade: target={:?} handoff={:?}",
-            outcome.target,
-            outcome.handoff_path
-        );
-        return Ok(DaemonRunOutcome::UpgradeRequested(outcome));
     }
 
     // Graceful shutdown: close all PTYs so shell processes terminate
@@ -1231,20 +919,6 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     ));
     let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(Some(pane_exit_tx)));
 
-    // Upgrade-request channel (parity with the Unix run loop's type, NFR4):
-    // in-place hot-upgrade is Unix-only, so every request here is simply
-    // answered "unsupported" -- no accept-loop upgrade branch exists on
-    // this platform.
-    let (upgrade_tx, mut upgrade_rx): (UpgradeRequestSender, mpsc::Receiver<UpgradeRequest>) =
-        mpsc::channel(UPGRADE_REQUEST_CHANNEL_CAPACITY);
-    tokio::spawn(async move {
-        while let Some(request) = upgrade_rx.recv().await {
-            let _ = request.reply.send(Err(
-                "mux hot-upgrade is not supported on this platform".to_string(),
-            ));
-        }
-    });
-
     // First iteration claims exclusive pipe ownership to prevent hijacking
     let mut is_first_instance = true;
     loop {
@@ -1258,7 +932,7 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
             result = server.connect() => {
                 match result {
                     Ok(()) => {
-                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), agent_status_tx.clone(), pane_exit_sender.clone(), upgrade_tx.clone()));
+                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), agent_status_tx.clone(), pane_exit_sender.clone()));
                     }
                     Err(e) => {
                         log::error!("Pipe accept error: {}", e);
@@ -1714,9 +1388,12 @@ mod tests {
     /// Spawn a thread that behaves like a single-instance legacy (v1) mux
     /// daemon on `sock_path`: rejects any Hello whose `protocol_version`
     /// isn't [`FAKE_LEGACY_VERSION`] with the exact reason text the real
-    /// daemon produces, accepts a matching Hello, waits for `Shutdown`, then
-    /// removes the socket file and exits — mirroring the real daemon's
-    /// Shutdown -> `graceful_shutdown` -> `remove_file` sequence.
+    /// daemon produces, accepts a matching Hello, then per-frame: an
+    /// `Upgrade` request is silently ignored (task0005 Recovery path — a
+    /// daemon predating that feature discards it via the unknown-type path,
+    /// D7) and the loop keeps accepting; `Shutdown` removes the socket file
+    /// and exits — mirroring the real daemon's Shutdown ->
+    /// `graceful_shutdown` -> `remove_file` sequence.
     #[cfg(unix)]
     fn spawn_fake_legacy_daemon(sock_path: std::path::PathBuf) -> std::thread::JoinHandle<()> {
         use std::os::unix::net::UnixListener;
@@ -1751,13 +1428,17 @@ mod tests {
                 };
                 write_welcome(&mut stream, &accept);
 
-                let shutdown_frame = read_frame(&mut stream);
-                assert_eq!(shutdown_frame.msg_type, MessageType::Shutdown);
-
-                // Simulate process exit: release the socket like the real
-                // daemon's shutdown path does.
-                let _ = std::fs::remove_file(&sock_path);
-                break;
+                let frame = read_frame(&mut stream);
+                match frame.msg_type {
+                    MessageType::Upgrade => continue,
+                    MessageType::Shutdown => {
+                        // Simulate process exit: release the socket like the
+                        // real daemon's shutdown path does.
+                        let _ = std::fs::remove_file(&sock_path);
+                        break;
+                    }
+                    other => panic!("unexpected frame after legacy Accepted: {other:?}"),
+                }
             }
         })
     }
@@ -2747,429 +2428,5 @@ mod tests {
         assert!(payload.replay_derived);
         assert_eq!(payload.state, None, "cleared pane must sync as state=None");
         assert_eq!(payload.revision, 2);
-    }
-
-    // ---- mux-daemon-hot-upgrade task0004: upgrade preparation (AC-1..AC-6) ----
-    //
-    // `prepare_upgrade` is parameterized over the probe and snapshot
-    // operations (Test Notes: "a substitutable probe", extended here to the
-    // snapshot step so AC-4's failure path is testable without task0003's
-    // real internals). Every test below builds its own fakes; none depend
-    // on a real candidate binary or real session-tree internals.
-
-    #[cfg(unix)]
-    fn ok_probe(_candidate: &Path) -> Result<SchemaRange, String> {
-        Ok((1, 1))
-    }
-
-    #[cfg(unix)]
-    fn incompatible_probe(_candidate: &Path) -> Result<SchemaRange, String> {
-        Ok((99, 100))
-    }
-
-    #[cfg(unix)]
-    fn ok_snapshot(
-        _manager: &mut SessionManager,
-        _listen_fd: RawFd,
-        _handoff_path: &Path,
-    ) -> Result<HandoffCounts, String> {
-        Ok(HandoffCounts {
-            pane_count: 1,
-            descriptor_count: 2,
-        })
-    }
-
-    #[cfg(unix)]
-    fn failing_snapshot(
-        _manager: &mut SessionManager,
-        _listen_fd: RawFd,
-        _handoff_path: &Path,
-    ) -> Result<HandoffCounts, String> {
-        Err("disk full".to_string())
-    }
-
-    /// AC-1: an upgrade request runs the upgrade branch, not the shutdown
-    /// branch -- observed here as "no pane is marked exited" and (by
-    /// construction: `prepare_upgrade`'s source never references
-    /// `graceful_shutdown` or `MuxPane::mark_exited`) "the pane-killing
-    /// shutdown helper is not invoked".
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn prepare_upgrade_does_not_mark_any_pane_exited() {
-        let (mgr, sid, wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
-        let dir = tempfile::tempdir().unwrap();
-
-        let result = prepare_upgrade(
-            &mgr,
-            0,
-            Path::new("/bin/true"),
-            vec!["mux".to_string(), "--daemon".to_string()],
-            dir.path(),
-            1,
-            ok_probe,
-            ok_snapshot,
-        )
-        .await;
-        assert!(result.is_ok());
-
-        let m = mgr.lock().await;
-        let pane = m
-            .get_session(sid)
-            .and_then(|s| s.windows.get(&wid))
-            .and_then(|w| w.panes.get(&pane_id))
-            .unwrap();
-        assert!(!pane.exited, "AC-1: upgrade preparation must not exit panes");
-    }
-
-    /// AC-2: the upgrade branch does not remove the socket file.
-    /// `prepare_upgrade` never receives or references a socket path at all
-    /// (only `listen_fd`, a bare integer, and `handoff_dir`); this test
-    /// pins that a file representing the socket, sitting right next to the
-    /// handoff directory, survives untouched.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn prepare_upgrade_does_not_remove_socket_file() {
-        let (mgr, ..) = setup_single_pane_manager().await;
-        let dir = tempfile::tempdir().unwrap();
-        let sock_path = dir.path().join("mux-default.sock");
-        std::fs::write(&sock_path, b"pretend socket").unwrap();
-
-        let result = prepare_upgrade(
-            &mgr,
-            0,
-            Path::new("/bin/true"),
-            vec!["mux".to_string(), "--daemon".to_string()],
-            dir.path(),
-            1,
-            ok_probe,
-            ok_snapshot,
-        )
-        .await;
-        assert!(result.is_ok());
-        assert!(
-            sock_path.exists(),
-            "AC-2: the socket file must never be removed on the upgrade path"
-        );
-    }
-
-    /// AC-3: an incompatible schema range aborts the upgrade, leaves no
-    /// handoff file, and (since `prepare_upgrade` simply returns `Err`
-    /// rather than panicking or exiting) the accept loop that called it is
-    /// free to continue its `select!` unchanged.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn prepare_upgrade_aborts_on_incompatible_schema_range() {
-        let (mgr, ..) = setup_single_pane_manager().await;
-        let dir = tempfile::tempdir().unwrap();
-
-        let result = prepare_upgrade(
-            &mgr,
-            0,
-            Path::new("/bin/true"),
-            vec!["mux".to_string(), "--daemon".to_string()],
-            dir.path(),
-            1,
-            incompatible_probe,
-            ok_snapshot,
-        )
-        .await;
-        assert!(result.is_err());
-        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
-        assert!(
-            entries.is_empty(),
-            "AC-3: no handoff file may remain after an incompatible-schema abort"
-        );
-    }
-
-    /// AC-4: a snapshot failure aborts the upgrade, reports the reason
-    /// (via the `Err` the requesting connection forwards to the client --
-    /// see `ipc::connection::upgrade_reply_to_message`'s test coverage for
-    /// that half), and leaves no handoff file.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn prepare_upgrade_aborts_on_snapshot_failure_and_leaves_no_handoff_file() {
-        let (mgr, ..) = setup_single_pane_manager().await;
-        let dir = tempfile::tempdir().unwrap();
-
-        let result = prepare_upgrade(
-            &mgr,
-            0,
-            Path::new("/bin/true"),
-            vec!["mux".to_string(), "--daemon".to_string()],
-            dir.path(),
-            1,
-            ok_probe,
-            failing_snapshot,
-        )
-        .await;
-        match result {
-            Err(reason) => assert!(reason.contains("disk full")),
-            Ok(_) => panic!("expected snapshot failure to abort the upgrade"),
-        }
-        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
-        assert!(
-            entries.is_empty(),
-            "AC-4: no handoff file may remain after a snapshot-failure abort"
-        );
-    }
-
-    /// AC-5: on successful preparation, the `Upgrading` announcement is
-    /// broadcast before the outcome is returned to the caller -- a
-    /// subscriber created beforehand already has the message queued by the
-    /// time `prepare_upgrade` resolves, provable with a non-blocking
-    /// `try_recv` (no timeout/await needed).
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn prepare_upgrade_broadcasts_upgrading_before_returning_outcome() {
-        let (mgr, ..) = setup_single_pane_manager().await;
-        let dir = tempfile::tempdir().unwrap();
-        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
-
-        let result = prepare_upgrade(
-            &mgr,
-            0,
-            Path::new("/bin/true"),
-            vec!["mux".to_string(), "--daemon".to_string()],
-            dir.path(),
-            1,
-            ok_probe,
-            ok_snapshot,
-        )
-        .await;
-        assert!(result.is_ok());
-
-        let msg = notify_rx
-            .try_recv()
-            .expect("Upgrading broadcast must already be queued once prepare_upgrade returns");
-        assert_eq!(msg.msg_type, MessageType::Upgrading);
-    }
-
-    /// AC-6: the returned run outcome carries the target binary path,
-    /// argument vector, environment addition (naming [`HANDOFF_ENV_VAR`]),
-    /// and handoff file path.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn prepare_upgrade_outcome_carries_target_args_env_and_handoff_path() {
-        let (mgr, ..) = setup_single_pane_manager().await;
-        let dir = tempfile::tempdir().unwrap();
-        let candidate = Path::new("/bin/true");
-        let args = vec!["mux".to_string(), "--daemon".to_string()];
-
-        let outcome = prepare_upgrade(
-            &mgr,
-            0,
-            candidate,
-            args.clone(),
-            dir.path(),
-            1,
-            ok_probe,
-            ok_snapshot,
-        )
-        .await
-        .expect("preparation should succeed");
-
-        assert_eq!(outcome.target, candidate);
-        assert_eq!(outcome.args, args);
-        assert_eq!(outcome.env_addition.0, HANDOFF_ENV_VAR);
-        assert_eq!(
-            PathBuf::from(&outcome.env_addition.1),
-            outcome.handoff_path
-        );
-        assert!(outcome.handoff_path.starts_with(dir.path()));
-    }
-
-    // ---- mux-daemon-hot-upgrade task0004: handoff-mode startup (AC-7..AC-9) ----
-
-    /// Bind a real Unix listener at `path` and hand back its raw fd, taking
-    /// ownership (mirrors what a real snapshot step would do after clearing
-    /// close-on-exec: the descriptor crosses into `start_from_handoff`
-    /// exactly once).
-    #[cfg(unix)]
-    fn bind_listener_raw_fd(path: &Path) -> RawFd {
-        let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
-        listener.into_raw_fd()
-    }
-
-    #[cfg(unix)]
-    use std::os::unix::io::IntoRawFd;
-
-    /// AC-7 (partial -- see the module doc comment on `restore_session_tree`
-    /// for what remains a placeholder pending task0003): with a valid
-    /// handoff file recorded over a real listener, handoff start skips bind
-    /// entirely, adopts the SAME listener (proven by accepting a real
-    /// connection through the returned handle), removes the handoff file,
-    /// and surfaces the counts the (fake, substitutable) restore step
-    /// reports.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn start_from_handoff_adopts_listener_and_surfaces_restore_counts() {
-        let dir = tempfile::tempdir().unwrap();
-        let sock_path = dir.path().join("adopted.sock");
-        let handoff_path = dir.path().join("handoff.state");
-        let fd = bind_listener_raw_fd(&sock_path);
-        write_handoff_placeholder(&handoff_path, &HandoffFilePlaceholder { listen_fd: fd })
-            .unwrap();
-
-        let restore = |_p: &Path| {
-            Ok((
-                SessionManager::new(),
-                HandoffCounts {
-                    pane_count: 3,
-                    descriptor_count: 3,
-                },
-            ))
-        };
-
-        let (listener, manager, counts) =
-            start_from_handoff(&handoff_path, restore).expect("handoff start should succeed");
-        assert!(manager.is_some());
-        assert_eq!(counts.pane_count, 3);
-        assert_eq!(counts.descriptor_count, 3);
-        assert!(
-            !handoff_path.exists(),
-            "AC-7/AC-8: the handoff file must be removed"
-        );
-
-        // Prove real adoption: a client connecting to the ORIGINAL socket
-        // path is accepted through the returned (adopted, not freshly
-        // bound) listener handle.
-        let accept = tokio::spawn(async move { listener.accept().await });
-        let _client = tokio::net::UnixStream::connect(&sock_path)
-            .await
-            .expect("adopted listener must still accept connections at the original path");
-        let accepted = tokio::time::timeout(std::time::Duration::from_secs(2), accept)
-            .await
-            .expect("accept must complete promptly")
-            .expect("accept task must not panic");
-        assert!(accepted.is_ok());
-    }
-
-    /// Restore failure is handled gracefully (design: "the daemon continues
-    /// as best it can"): the listener is still adopted and the handoff file
-    /// still removed, but the manager comes back `None` (caller falls back
-    /// to a fresh `SessionManager`) with zeroed counts.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn start_from_handoff_restore_failure_still_adopts_listener_and_removes_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let sock_path = dir.path().join("adopted2.sock");
-        let handoff_path = dir.path().join("handoff2.state");
-        let fd = bind_listener_raw_fd(&sock_path);
-        write_handoff_placeholder(&handoff_path, &HandoffFilePlaceholder { listen_fd: fd })
-            .unwrap();
-
-        let restore = |_p: &Path| Err("pending task0003".to_string());
-
-        let (_listener, manager, counts) =
-            start_from_handoff(&handoff_path, restore).expect("listener adoption should succeed");
-        assert!(manager.is_none());
-        assert_eq!(counts, HandoffCounts::default());
-        assert!(!handoff_path.exists());
-    }
-
-    /// A missing/unreadable handoff file fails `start_from_handoff` outright
-    /// (there is no listener to adopt), so the caller can fall back to a
-    /// fresh bind.
-    #[cfg(unix)]
-    #[test]
-    fn start_from_handoff_missing_file_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let handoff_path = dir.path().join("does-not-exist.state");
-        let result = start_from_handoff(&handoff_path, |_p| {
-            panic!("restore must not be called when the file cannot even be read")
-        });
-        assert!(result.is_err());
-    }
-
-    /// AC-8: with the handoff environment variable absent, `startup`
-    /// behaves exactly as today -- binds the socket, reports no handoff
-    /// counts.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn startup_without_handoff_env_var_binds_fresh() {
-        // SAFETY: env mutation is process-wide; saved/restored around this
-        // test (matches the existing project convention, e.g.
-        // `render::font::user_dir`'s tests).
-        let prev = std::env::var_os(HANDOFF_ENV_VAR);
-        unsafe {
-            std::env::remove_var(HANDOFF_ENV_VAR);
-        }
-
-        let dir = tempfile::tempdir().unwrap();
-        let sock_path = dir.path().join("fresh.sock");
-        let result = startup(&sock_path);
-
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var(HANDOFF_ENV_VAR, v),
-                None => std::env::remove_var(HANDOFF_ENV_VAR),
-            }
-        }
-
-        let (_listener, _manager, counts) = result.expect("normal startup must succeed");
-        assert!(counts.is_none(), "AC-8: no handoff logging on normal start");
-        assert!(sock_path.exists());
-    }
-
-    /// AC-7/AC-9: with the handoff environment variable set to a valid
-    /// document, `startup` skips bind, adopts the recorded listener,
-    /// reports handoff counts, and -- critically -- clears the environment
-    /// variable before returning, so a pane child spawned afterward by the
-    /// caller never inherits it.
-    ///
-    /// "Skips bind" is proven positively, not just by absence of an error:
-    /// `sock_path` already has a real listener bound at it (the fixture
-    /// setup below) before `startup` runs, so a `UnixListener::bind` at the
-    /// same path would fail with "address in use". `startup` succeeding
-    /// AND the returned listener still accepting connections at that same
-    /// path together show it adopted the existing listener rather than
-    /// attempting (and silently swallowing a failure on) a fresh bind.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn startup_with_handoff_env_var_adopts_listener_and_clears_env_var() {
-        let dir = tempfile::tempdir().unwrap();
-        let sock_path = dir.path().join("handoff-adopted.sock");
-        let handoff_path = dir.path().join("handoff3.state");
-        let fd = bind_listener_raw_fd(&sock_path);
-        write_handoff_placeholder(&handoff_path, &HandoffFilePlaceholder { listen_fd: fd })
-            .unwrap();
-
-        let prev = std::env::var_os(HANDOFF_ENV_VAR);
-        // SAFETY: env mutation is process-wide; saved/restored around this
-        // test (matches the existing project convention).
-        unsafe {
-            std::env::set_var(HANDOFF_ENV_VAR, &handoff_path);
-        }
-
-        let result = startup(&sock_path);
-
-        // AC-9: cleared regardless of what the caller does next -- checked
-        // BEFORE restoring `prev`, so a leftover value would fail this
-        // assertion rather than being silently masked by the restore below.
-        let cleared = std::env::var(HANDOFF_ENV_VAR).is_err();
-
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var(HANDOFF_ENV_VAR, v),
-                None => std::env::remove_var(HANDOFF_ENV_VAR),
-            }
-        }
-
-        let (listener, _manager, counts) = result.expect("handoff startup must succeed");
-        assert!(counts.is_some(), "AC-7: handoff start must report counts");
-        assert!(!handoff_path.exists());
-        assert!(cleared, "AC-9: handoff env var must be cleared");
-
-        // Positive proof of adoption (see doc comment): the returned
-        // listener still accepts a connection at the ORIGINAL bind path.
-        let accept = tokio::spawn(async move { listener.accept().await });
-        let _client = tokio::net::UnixStream::connect(&sock_path)
-            .await
-            .expect("adopted listener must still accept connections at the original path");
-        let accepted = tokio::time::timeout(std::time::Duration::from_secs(2), accept)
-            .await
-            .expect("accept must complete promptly")
-            .expect("accept task must not panic");
-        assert!(accepted.is_ok());
     }
 }
