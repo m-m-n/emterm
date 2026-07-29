@@ -778,6 +778,25 @@ pub fn resume_pane_with_permit(
     }
 }
 
+/// A pane's child-process reference (task plan task0007, IMPLEMENTATION.md
+/// D6): either an owned PTY-library child handle (a freshly spawned pane,
+/// task0001 SPEC FR2) or a bare process id (a pane restored from a handoff,
+/// whose owned handle could not be rebuilt after the process image was
+/// replaced). [`MuxPane::mark_exited`] routes to the matching
+/// [`child_reaper`] entry point for whichever variant is present, so a
+/// restored pane and a freshly spawned pane are indistinguishable to the
+/// rest of the daemon.
+pub enum PaneChild {
+    /// A freshly spawned pane's owned child handle.
+    Owned(Box<dyn portable_pty::Child + Send + Sync>),
+    /// A process id belonging to a pane restored from a handoff. Unix only:
+    /// the reaping path this variant routes to
+    /// ([`child_reaper::spawn_reaper_pid`]) is Unix-only (task plan Design —
+    /// "Guard the process-id path to Unix").
+    #[cfg(unix)]
+    ProcessId(u32),
+}
+
 /// A single terminal pane with its PTY and communication channels.
 pub struct MuxPane {
     pub id: PaneId,
@@ -789,13 +808,14 @@ pub struct MuxPane {
     writer: Option<Arc<StdMutex<Box<dyn Write + Send>>>>,
     /// Master PTY handle, retained after reader/writer extraction for resize support.
     master: Option<Box<dyn MasterPty + Send>>,
-    /// Shell child-process handle from spawn (task0001 SPEC FR2), retained
-    /// for the pane's lifetime and taken + handed to
-    /// [`child_reaper::spawn_reaper`] on [`Self::mark_exited`]. `None` for
-    /// panes constructed without spawning a command (`new_test` /
-    /// `new_test_with_writer`, and this module's own tests that open a real
-    /// PTY but never call `spawn_command`).
-    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
+    /// A pane's child-process reference (task0001 SPEC FR2; task plan
+    /// task0007, IMPLEMENTATION.md D6), retained for the pane's lifetime and
+    /// taken + handed to the matching [`child_reaper`] entry point on
+    /// [`Self::mark_exited`]. `None` for panes constructed without a
+    /// spawned/restored child (`new_test` / `new_test_with_writer`, and this
+    /// module's own tests that open a real PTY but never call
+    /// `spawn_command`).
+    child: Option<PaneChild>,
     /// Whether this pane's PTY has exited.
     pub exited: bool,
     /// Shadow VT100 parser for screen state tracking (used for reattach restoration).
@@ -1052,7 +1072,7 @@ impl MuxPane {
             output_target,
             writer: Some(Arc::new(StdMutex::new(writer))),
             master: Some(master),
-            child,
+            child: child.map(PaneChild::Owned),
             exited: false,
             shadow_parser: Arc::new(StdMutex::new(new_shadow_parser(rows, cols))),
             cwd: Arc::new(StdMutex::new(None)),
@@ -1069,6 +1089,31 @@ impl MuxPane {
             scrollback: Arc::new(StdMutex::new(scrollback)),
             dims: Arc::new(PaneDims::new(cols, rows)),
         }
+    }
+
+    /// Create a new pane whose child is referenced by a raw process id
+    /// rather than an owned handle (task plan task0007, IMPLEMENTATION.md
+    /// D6): a pane restored from a handoff, whose PTY-library child handle
+    /// did not survive the process replacement. Unix only, mirroring
+    /// [`PaneChild::ProcessId`]'s own gating.
+    ///
+    /// Identical to [`Self::new`] in every other respect (dimension
+    /// clamping, initial scrollback marker, and every other field) — only
+    /// the child reference differs, so a restored pane and a freshly
+    /// spawned pane are indistinguishable to the rest of the daemon.
+    #[cfg(unix)]
+    pub fn new_with_process_id(
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        output_target: SharedOutputTarget,
+        writer: Box<dyn Write + Send>,
+        master: Box<dyn MasterPty + Send>,
+        pid: u32,
+    ) -> Self {
+        let mut pane = Self::new(id, cols, rows, output_target, writer, master, None);
+        pane.child = Some(PaneChild::ProcessId(pid));
+        pane
     }
 
     /// Write input data to the PTY.
@@ -1261,15 +1306,20 @@ impl MuxPane {
         status.revision
     }
 
-    /// Mark PTY as exited (task0001 SPEC FR3/FR4, task plan D2).
+    /// Mark PTY as exited (task0001 SPEC FR3/FR4, task plan D2; task plan
+    /// task0007, IMPLEMENTATION.md D6).
     ///
     /// Clears the writer/master (dropping the master delivers the hangup to
-    /// the shell) and — when a child handle is present — takes it out of
-    /// the pane and hands it off to [`child_reaper::spawn_reaper`] for a
-    /// bounded, off-thread reap. Taking the handle here is the multi-call
-    /// gate: a second `mark_exited` (concurrent teardown paths racing, e.g.
-    /// destroy-pane racing graceful-shutdown, or the PTY-EOF reap racing an
-    /// explicit destroy) finds no handle and starts no second reap.
+    /// the shell) and — when a child reference is present — takes it out of
+    /// the pane and hands it off to the matching [`child_reaper`] entry
+    /// point for a bounded, off-thread reap: an owned handle goes through
+    /// [`child_reaper::spawn_reaper`] (unchanged, task0001), a process id
+    /// (a pane restored from a handoff) goes through
+    /// [`child_reaper::spawn_reaper_pid`] (task0007). Taking the reference
+    /// here is the multi-call gate: a second `mark_exited` (concurrent
+    /// teardown paths racing, e.g. destroy-pane racing graceful-shutdown, or
+    /// the PTY-EOF reap racing an explicit destroy) finds no reference and
+    /// starts no second reap.
     ///
     /// Returns immediately: performs no waiting of any kind, so callers
     /// holding the `SessionManager` lock are never blocked on the child's
@@ -1278,8 +1328,15 @@ impl MuxPane {
         self.exited = true;
         self.writer = None;
         self.master = None;
-        if let Some(child) = self.child.take() {
-            child_reaper::spawn_reaper(self.id, child);
+        match self.child.take() {
+            Some(PaneChild::Owned(child)) => {
+                child_reaper::spawn_reaper(self.id, child);
+            }
+            #[cfg(unix)]
+            Some(PaneChild::ProcessId(pid)) => {
+                child_reaper::spawn_reaper_pid(self.id, pid);
+            }
+            None => {}
         }
     }
 
@@ -2113,6 +2170,84 @@ mod tests {
              responsiveness — its runtime must be independent of the \
              child's exit behavior (NFR1)"
         );
+    }
+
+    // ── Process-id based child (task plan task0007, IMPLEMENTATION.md D6) ──
+
+    /// Poll `/proc/<pid>` until the pid is gone entirely — the outcome once
+    /// the background reaper `mark_exited` hands the process id off to has
+    /// actually collected it. Mirrors `child_reaper`'s own
+    /// `assert_pid_reaped` test helper (kept local here since that one is
+    /// private to its own module).
+    #[cfg(unix)]
+    fn assert_pid_eventually_reaped(pid: u32) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "pid {pid} should have been reaped via the process-id path, \
+                     but /proc/{pid} still exists"
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// AC-4: a pane holding a process id, when marked exited, is reaped
+    /// through the process-id path (confirmed by the OS-level `/proc` check
+    /// below, not just the pane's own bookkeeping) and ends in the same
+    /// observable state as a pane holding an owned handle — compare
+    /// `test_mark_exited_clears_writer_and_master` and
+    /// `mark_exited_removes_child_handle_and_second_call_is_a_noop`: `exited`
+    /// set, writer/master released, and the child reference cleared so a
+    /// second `mark_exited` is a no-op.
+    #[cfg(unix)]
+    #[test]
+    fn mark_exited_on_pane_with_process_id_reaps_via_pid_path_and_matches_observable_state() {
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+
+        let child = std::process::Command::new("true")
+            .spawn()
+            .expect("failed to spawn test child process");
+        let pid = child.id();
+
+        let mut pane = MuxPane::new_with_process_id(1, 80, 24, target, writer, pair.master, pid);
+        assert!(pane.has_child());
+        assert!(!pane.exited);
+
+        pane.mark_exited();
+
+        assert!(pane.exited);
+        assert!(
+            !pane.has_child(),
+            "the process id reference must be cleared so a second mark_exited is a no-op"
+        );
+        assert!(
+            pane.write_input(b"hello").is_err(),
+            "writer must be released, matching the owned-handle path's observable state"
+        );
+
+        // A second call must find nothing and not panic (mirrors
+        // `mark_exited_removes_child_handle_and_second_call_is_a_noop`).
+        pane.mark_exited();
+        assert!(!pane.has_child());
+
+        assert_pid_eventually_reaped(pid);
+        // Do not call `child.wait()` — the pid was already reaped via the
+        // process-id path above.
+        drop(child);
     }
 
     #[test]

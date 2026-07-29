@@ -472,16 +472,18 @@ pub enum MessageType {
     /// Structured error response shared by `ReadPane` / `SendText` /
     /// `WaitAgentState`.
     AgentApiError = 0x24,
-    /// Client → daemon: request an in-place upgrade (execve handoff).
-    /// Wire shape mirrors `Shutdown`: type byte, pane id zero, empty
-    /// payload.
+    /// Client → daemon: request an in-place upgrade of the running daemon
+    /// via `execve` (SPEC FR1, mux-daemon-hot-upgrade task0001). Mirrors
+    /// `Shutdown`'s wire shape exactly: type byte, pane id zero, empty
+    /// payload. An older peer that does not recognise this discriminant
+    /// discards the frame through the existing unknown-type path in
+    /// [`MuxMessage::from_frame_body`] rather than erroring.
     Upgrade = 0x25,
-    /// Daemon → client: announce that an in-place upgrade is imminent.
-    /// Wire shape mirrors `Shutdown`: type byte, pane id zero, empty
-    /// payload. Carries no other signal; its arrival is the entire
-    /// message. A peer that does not recognize this type discards the
-    /// frame through the existing unknown-frame path and keeps its
-    /// connection alive.
+    /// Daemon → client: broadcast to every connected client immediately
+    /// before `execve` replaces the process (SPEC FR2), so a client can
+    /// distinguish an upgrade-induced disconnect from an ordinary shutdown.
+    /// Same empty-payload, pane-id-zero wire shape as `Upgrade` /
+    /// `Shutdown`.
     Upgrading = 0x26,
 }
 
@@ -1057,13 +1059,16 @@ mod tests {
         assert_eq!(MessageType::from_u8(0x1C), Some(MessageType::Notify));
         // 0x1D..=0x24 (previously unused) now hold the task0002 agent-status
         // / agent-API additions; see `test_agent_api_message_type_round_trip`
-        // for full per-discriminant coverage. The unused-space boundary this
-        // assertion pins moves to 0x25.
+        // for full per-discriminant coverage. 0x25..=0x26 (previously
+        // unused) now hold the mux-daemon-hot-upgrade task0001 `Upgrade` /
+        // `Upgrading` additions; see
+        // `test_upgrade_message_type_round_trip`. The unused-space boundary
+        // this assertion pins moves to 0x27.
         assert_eq!(
             MessageType::from_u8(0x1D),
             Some(MessageType::AgentStatusUpdate)
         );
-        assert!(MessageType::from_u8(0x25).is_none());
+        assert!(MessageType::from_u8(0x27).is_none());
         assert!(MessageType::from_u8(0xff).is_none());
     }
 
@@ -1830,8 +1835,11 @@ mod tests {
 
     // ---- agent-status / agent-API message additions (task0002) ----
 
-    /// AC-3: `from_u8` maps every new discriminant, and the space right
-    /// after the extended range is still unmapped.
+    /// AC-3: `from_u8` maps every new discriminant. The space right after
+    /// this extended range is occupied by the mux-daemon-hot-upgrade
+    /// task0001 `Upgrade` / `Upgrading` additions (see
+    /// `test_upgrade_message_type_round_trip`), so the still-unmapped
+    /// boundary this test pins moves to 0x27.
     #[test]
     fn test_agent_api_message_type_round_trip() {
         for i in 0x1Du8..=0x24u8 {
@@ -1861,7 +1869,7 @@ mod tests {
             Some(MessageType::WaitAgentStateResult)
         );
         assert_eq!(MessageType::from_u8(0x24), Some(MessageType::AgentApiError));
-        assert!(MessageType::from_u8(0x25).is_none());
+        assert!(MessageType::from_u8(0x27).is_none());
     }
 
     /// AC-1 / AC-3: APC round trip for every new discriminant, mirroring
@@ -2165,6 +2173,97 @@ mod tests {
     fn test_public_pane_id_parse_rejects_non_numeric_pane_number() {
         let err = PublicPaneId::parse("ab12cd34-abc").unwrap_err();
         assert_eq!(err, PublicPaneIdError::InvalidPaneNumber);
+    }
+
+    // ---- mux daemon hot-upgrade: Upgrade / Upgrading message types (task0001) ----
+
+    /// AC-1 / AC-3: `from_u8` maps both new discriminants to their own
+    /// distinct variants, and the byte immediately after them is still
+    /// unmapped.
+    #[test]
+    fn test_upgrade_message_type_round_trip() {
+        for i in 0x25u8..=0x26u8 {
+            let mt = MessageType::from_u8(i).unwrap();
+            assert_eq!(mt as u8, i);
+        }
+        assert_eq!(MessageType::from_u8(0x25), Some(MessageType::Upgrade));
+        assert_eq!(MessageType::from_u8(0x26), Some(MessageType::Upgrading));
+        assert!(MessageType::from_u8(0x27).is_none());
+    }
+
+    /// AC-3: neither new discriminant collides with any existing value the
+    /// enumeration already maps, nor with the retired `0x11` (removed
+    /// `SplitPane`).
+    #[test]
+    fn test_upgrade_message_type_bytes_do_not_collide_with_existing_or_retired() {
+        for i in 0x01u8..=0x24u8 {
+            if i == 0x11 {
+                assert!(MessageType::from_u8(i).is_none());
+                continue;
+            }
+            assert!(MessageType::from_u8(i).is_some());
+            assert_ne!(i, MessageType::Upgrade as u8);
+            assert_ne!(i, MessageType::Upgrading as u8);
+        }
+        assert_ne!(MessageType::Upgrade as u8, MessageType::Upgrading as u8);
+    }
+
+    /// AC-1: `Upgrade` and `Upgrading` round-trip through the frame body
+    /// encode/decode helpers, preserving type, pane id, and the empty
+    /// payload mandated by their wire shape (mirrors `Shutdown`: type byte,
+    /// pane id zero, empty payload).
+    #[test]
+    fn test_upgrade_and_upgrading_round_trip_through_frame_body() {
+        for mt in [MessageType::Upgrade, MessageType::Upgrading] {
+            let msg = MuxMessage {
+                msg_type: mt,
+                pane_id: 0,
+                payload: Vec::new(),
+            };
+            let body = msg.to_frame_body();
+            let decoded = MuxMessage::from_frame_body(&body).unwrap();
+            assert_eq!(decoded.msg_type, mt);
+            assert_eq!(decoded.pane_id, 0);
+            assert!(decoded.payload.is_empty());
+        }
+    }
+
+    /// AC-1: same round trip through the APC envelope, mirroring
+    /// `test_apc_round_trip_all_message_types` for the pre-existing range.
+    #[test]
+    fn test_apc_round_trip_upgrade_message_types() {
+        for mt in [MessageType::Upgrade, MessageType::Upgrading] {
+            let msg = MuxMessage {
+                msg_type: mt,
+                pane_id: 0,
+                payload: Vec::new(),
+            };
+            let apc = msg.to_apc();
+            let payload = &apc[2..apc.len() - 2];
+            let decoded = MuxMessage::from_apc(payload).unwrap();
+            assert_eq!(decoded.msg_type, mt);
+            assert_eq!(decoded.pane_id, 0);
+            assert!(decoded.payload.is_empty());
+        }
+    }
+
+    /// AC-2: a frame carrying a type byte the decoder does not recognise is
+    /// reported as "not a known message" (`from_frame_body` returns `None`),
+    /// not as an error that would tear the connection down — checked for
+    /// the byte immediately adjacent to the new `Upgrading` discriminant.
+    #[test]
+    fn test_from_frame_body_returns_none_for_byte_adjacent_to_new_upgrade_types() {
+        assert!(MessageType::from_u8(0x27).is_none());
+        let mut body = vec![0x27u8];
+        body.extend_from_slice(&0u32.to_le_bytes());
+        assert!(MuxMessage::from_frame_body(&body).is_none());
+    }
+
+    /// AC-6: adding `Upgrade` / `Upgrading` does not bump `PROTOCOL_VERSION`
+    /// — no existing bincode structure changed (NFR6 / IMPLEMENTATION.md D7).
+    #[test]
+    fn test_protocol_version_unchanged_by_upgrade_message_types() {
+        assert_eq!(PROTOCOL_VERSION, 3);
     }
 
     // ---- PROTOCOL_VERSION bump (task0002) ----
