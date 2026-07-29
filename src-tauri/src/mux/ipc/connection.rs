@@ -24,6 +24,7 @@ use super::handlers::{
 use super::protocol::*;
 use super::reattach::detach_session_panes;
 use super::statusbar::{StatusBarEngine, execute_command};
+use crate::mux::daemon::{UpgradeSignal, UpgradeSignalSender};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatusReportSender, ChunkKind, NotificationSender, PtyOutputChunk, SharedPaneExitSender,
@@ -32,6 +33,12 @@ use crate::mux::session::pane::{
 
 /// Handshake timeout: client must send Hello within this duration.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Bound on how long a CLI client's `Upgrade` request waits for the accept
+/// loop to finish preparation (probe + snapshot) before giving up and
+/// reporting a timeout. Generous because the probe shells out to a
+/// candidate binary and the snapshot may capture nontrivial scrollback.
+const UPGRADE_PREPARE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Maximum number of PTY output chunks to drain per select! iteration.
 /// Balances batch efficiency (fewer syscalls) against input responsiveness
@@ -49,6 +56,7 @@ pub async fn handle_connection<S>(
     daemon_notification_tx: NotificationSender,
     daemon_agent_status_tx: AgentStatusReportSender,
     daemon_pane_exit_sender: SharedPaneExitSender,
+    upgrade_tx: UpgradeSignalSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -130,6 +138,7 @@ pub async fn handle_connection<S>(
             &daemon_notification_tx,
             &daemon_agent_status_tx,
             &daemon_pane_exit_sender,
+            &upgrade_tx,
         )
         .await;
         return;
@@ -552,6 +561,7 @@ async fn handle_cli_client<S>(
     daemon_notification_tx: &NotificationSender,
     daemon_agent_status_tx: &AgentStatusReportSender,
     daemon_pane_exit_sender: &SharedPaneExitSender,
+    upgrade_tx: &UpgradeSignalSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -694,6 +704,43 @@ async fn handle_cli_client<S>(
             log::info!("CLI client requested daemon shutdown");
             let _ = shutdown_tx.send(true);
         }
+        MessageType::Upgrade => {
+            log::info!("CLI client requested mux daemon upgrade");
+            let (reply_tx, reply_rx) = oneshot::channel();
+            if upgrade_tx
+                .send(UpgradeSignal { reply: reply_tx })
+                .await
+                .is_err()
+            {
+                log::warn!("Upgrade request dropped: accept loop unavailable");
+                let err = ErrorMsg {
+                    message: "mux daemon cannot process upgrade requests right now".to_string(),
+                };
+                let resp = MuxMessage::control(MessageType::Error, 0, &err);
+                let _ = framed.send(resp).await;
+            } else {
+                match tokio::time::timeout(UPGRADE_PREPARE_TIMEOUT, reply_rx).await {
+                    Ok(recv_result) => {
+                        if let Some(msg) = upgrade_reply_to_message(recv_result) {
+                            let _ = framed.send(msg).await;
+                        } else {
+                            log::info!(
+                                "Upgrade preparation succeeded; daemon is replacing itself"
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        log::warn!("Upgrade preparation timed out");
+                        let err = ErrorMsg {
+                            message: "mux daemon did not respond to the upgrade request in time"
+                                .to_string(),
+                        };
+                        let resp = MuxMessage::control(MessageType::Error, 0, &err);
+                        let _ = framed.send(resp).await;
+                    }
+                }
+            }
+        }
         _ => {
             log::warn!(
                 "CLI client sent unsupported message type: {:?}",
@@ -708,6 +755,29 @@ async fn handle_cli_client<S>(
     }
 
     log::info!("CLI client control message processed, disconnecting");
+}
+
+/// Convert the accept loop's reply to a `MessageType::Upgrade` request into
+/// the message (if any) this connection should send back to the client.
+/// `None` means "no explicit reply" (successful preparation -- the
+/// connection is simply dropped once the process is replaced,
+/// IMPLEMENTATION.md D2). `Some` carries an `Error` control message: either
+/// the abort reason reported by the accept loop (AC-4), or a generic
+/// message when the reply channel closed without an answer (the accept
+/// loop dropped it, e.g. mid-shutdown).
+///
+/// Extracted as a pure function so the CLI-client wiring's translation
+/// logic is unit-testable without a live connection or a real accept loop.
+fn upgrade_reply_to_message(
+    result: Result<Result<(), String>, oneshot::error::RecvError>,
+) -> Option<MuxMessage> {
+    let reason = match result {
+        Ok(Ok(())) => return None,
+        Ok(Err(reason)) => reason,
+        Err(_) => "mux daemon closed the upgrade request unexpectedly".to_string(),
+    };
+    let err = ErrorMsg { message: reason };
+    Some(MuxMessage::control(MessageType::Error, 0, &err))
 }
 
 /// Log CLI-initiated window creation for debugging.
@@ -1202,5 +1272,48 @@ mod tests {
             merged[1].data.is_empty(),
             "exit signal preserved separately"
         );
+    }
+
+    // ---- mux-daemon-hot-upgrade task0004: MessageType::Upgrade CLI reply
+    // translation ----
+    //
+    // `upgrade_reply_to_message` is the pure core of `handle_cli_client`'s
+    // `MessageType::Upgrade` arm: given the accept loop's reply, decide what
+    // (if anything) goes back to the client. Extracted so these branches are
+    // unit-testable without a live connection or a real accept loop.
+
+    /// Successful preparation produces no explicit reply (the connection is
+    /// simply dropped once the process is replaced, IMPLEMENTATION.md D2).
+    #[test]
+    fn upgrade_reply_to_message_success_is_none() {
+        assert!(upgrade_reply_to_message(Ok(Ok(()))).is_none());
+    }
+
+    /// AC-4: an abort reason reported by the accept loop becomes an `Error`
+    /// control message carrying that exact reason.
+    #[test]
+    fn upgrade_reply_to_message_abort_reason_becomes_error_message() {
+        let msg = upgrade_reply_to_message(Ok(Err("disk full".to_string())))
+            .expect("an abort reason must produce a reply message");
+        assert_eq!(msg.msg_type, MessageType::Error);
+        let payload: ErrorMsg = msg.decode_payload().unwrap();
+        assert_eq!(payload.message, "disk full");
+    }
+
+    /// A closed reply channel (accept loop dropped it without answering,
+    /// e.g. mid-shutdown) still produces a client-facing `Error` message
+    /// rather than silently dropping the connection with no explanation.
+    #[tokio::test]
+    async fn upgrade_reply_to_message_channel_closed_becomes_generic_error() {
+        let (reply_tx, reply_rx) = oneshot::channel::<Result<(), String>>();
+        drop(reply_tx);
+        let recv_result = reply_rx.await;
+        assert!(recv_result.is_err(), "dropped sender must yield RecvError");
+
+        let msg = upgrade_reply_to_message(recv_result)
+            .expect("a closed reply channel must still produce a reply message");
+        assert_eq!(msg.msg_type, MessageType::Error);
+        let payload: ErrorMsg = msg.decode_payload().unwrap();
+        assert!(!payload.message.is_empty());
     }
 }
