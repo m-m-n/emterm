@@ -48,7 +48,29 @@ CARGO_TARGET_DIR=src-tauri/target cargo test \
 ```
 
 `src-tauri/tests/` holds integration tests (`cli_subcommands.rs`,
-`mux_throughput.rs`). Fixtures live under `src-tauri/tests/fixtures/`.
+`mux_throughput.rs`, `mux_hot_upgrade.rs`). Fixtures live under
+`src-tauri/tests/fixtures/`.
+
+#### `mux_hot_upgrade.rs` (mux daemon hot-upgrade)
+
+End-to-end test for the mux daemon's in-place `execve` upgrade
+(feature-docs/mux-daemon-hot-upgrade): spawns a real daemon in an isolated
+`XDG_RUNTIME_DIR`, drives a real shell through it, triggers an upgrade over
+the raw mux wire protocol, and asserts the shell's PID survives unchanged
+and files it created remain observable, that a zero-pane upgrade succeeds,
+that a successful upgrade logs a distinguishable handoff-start entry with
+the adopted pane count, and that an upgrade rejected by the handoff-schema
+probe leaves the original daemon serving with its pane still live. Unix
+only (`#![cfg(unix)]`); every wait is bounded with a named timeout.
+
+```bash
+CARGO_TARGET_DIR=src-tauri/target cargo test \
+  --manifest-path src-tauri/Cargo.toml --test mux_hot_upgrade -- --test-threads=1
+```
+
+`--test-threads=1` is required: scenarios spawn real daemon processes and
+real PTYs, so serializing them avoids resource contention between
+scenarios.
 
 ### Benchmarks (Rust, opt-in)
 
