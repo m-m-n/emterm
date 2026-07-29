@@ -24,7 +24,7 @@ use super::handlers::{
 use super::protocol::*;
 use super::reattach::detach_session_panes;
 use super::statusbar::{StatusBarEngine, execute_command};
-use crate::mux::daemon::{UpgradeRequest, UpgradeRequestSender};
+use crate::mux::daemon::{UpgradeSignal, UpgradeSignalSender};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatusReportSender, ChunkKind, NotificationSender, PtyOutputChunk, SharedPaneExitSender,
@@ -56,7 +56,7 @@ pub async fn handle_connection<S>(
     daemon_notification_tx: NotificationSender,
     daemon_agent_status_tx: AgentStatusReportSender,
     daemon_pane_exit_sender: SharedPaneExitSender,
-    upgrade_tx: UpgradeRequestSender,
+    upgrade_tx: UpgradeSignalSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -561,7 +561,7 @@ async fn handle_cli_client<S>(
     daemon_notification_tx: &NotificationSender,
     daemon_agent_status_tx: &AgentStatusReportSender,
     daemon_pane_exit_sender: &SharedPaneExitSender,
-    upgrade_tx: &UpgradeRequestSender,
+    upgrade_tx: &UpgradeSignalSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -708,7 +708,7 @@ async fn handle_cli_client<S>(
             log::info!("CLI client requested mux daemon upgrade");
             let (reply_tx, reply_rx) = oneshot::channel();
             if upgrade_tx
-                .send(UpgradeRequest { reply: reply_tx })
+                .send(UpgradeSignal { reply: reply_tx })
                 .await
                 .is_err()
             {
