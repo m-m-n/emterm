@@ -1,0 +1,442 @@
+round: 2
+executed_at: '2026-07-30T00:10:00+09:00'
+scope:
+  review_mode: diff
+  base_commit: 9c9db29321b43c7433f161e243e19ccc35162c74
+  head_commit: 382558dc6ddac96d06a676a3109254555d669944
+  changed_files:
+  - crates/mux_ipc/src/handoff.rs
+  - crates/mux_ipc/src/lib.rs
+  - crates/mux_ipc/src/protocol.rs
+  - src-tauri/src/mux/bridge.rs
+  - src-tauri/src/mux/cli.rs
+  - src-tauri/src/mux/daemon.rs
+  - src-tauri/src/mux/inherited_pty.rs
+  - src-tauri/src/mux/ipc/connection.rs
+  - src-tauri/src/mux/ipc/pty_spawn.rs
+  - src-tauri/src/mux/mod.rs
+  - src-tauri/src/mux/scrollback_buffer.rs
+  - src-tauri/src/mux/session/child_reaper.rs
+  - src-tauri/src/mux/session/manager.rs
+  - src-tauri/src/mux/session/pane.rs
+  - src-tauri/src/mux/session/session.rs
+  - src-tauri/src/mux/session/window.rs
+  - src-tauri/src/mux/upgrade.rs
+  - src-tauri/tests/mux_hot_upgrade.rs
+  - test/README.md
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+- perspective: comprehensive
+  source: claude
+  status: completed
+- perspective: security
+  source: claude
+  status: completed
+- perspective: performance
+  source: claude
+  status: completed
+- perspective: architecture
+  source: claude
+  status: completed
+- perspective: spec
+  source: claude
+  status: completed
+- perspective: security
+  source: codex
+  status: skipped
+  skip_reason: codex-cli unavailable
+- perspective: performance
+  source: codex
+  status: skipped
+  skip_reason: codex-cli unavailable
+- perspective: architecture
+  source: codex
+  status: skipped
+  skip_reason: codex-cli unavailable
+- perspective: spec
+  source: codex
+  status: skipped
+  skip_reason: codex-cli unavailable
+round1_resolution_check:
+  note: round 1 の findings は 1 件も再報告されなかった。performance は upgrade.rs:449 の fd リークについて adopt_master の全 Err
+    パスで close されることを確認済みと明示的に報告。round 1 の 13 件の critical/high はすべて解消と判定する。
+  resolved_stable_ids:
+  - dd7a4526fea67d1d
+  - 32bb6e465ac0fbb4
+  - 22d7538b3f93c765
+  - f1c8baa66eb26e3a
+  - 3ff058f6b9269473
+  - 745a8bd7941f58f6
+  - f6781590da4a0080
+  - 18ef5ad2ab3a87fa
+  - 3241387b60c6ae2d
+  - 5106b22111395091
+  - 9c34166ee2d99474
+  - 07f6dbc60e84d54f
+  - 3f3ebe4fc71ca82d
+  - 920adb46dd369c57
+  - a6b416592781193a
+  - d06a926c4c713fdd
+findings:
+- stable_id: ae0752614e14b418
+  severity: high
+  category: architecture
+  file: src-tauri/src/mux/daemon.rs
+  line: 1424
+  line_end: 1426
+  title: リーク前提の所有権回避 + in-process 再入で、同じ PTY master に二重の所有者/reader が生まれる
+  description: upgrade 経路は listener の raw fd と session ツリー全体を mem::forget で意図的にリークさせるが、旧 pane の reader
+    は tokio タスクではなく素の OS スレッドなので rt.shutdown_timeout では止まらない。exec 失敗で run_daemon_in_handoff_mode へ再入すると同じ
+    master fd を再 adopt して二本目の reader を立てるため、pane 出力が非決定的に分割・欠落する。ETXTBSY / ENOMEM で普通に起こりうる経路。
+  suggestion: SessionManager/MuxPane に明示的な所有権移譲 API を追加して mem::forget をやめるか、in-process 再入をやめて supervisor
+    側の再起動に委ねる。旧 reader が生きたまま同じ fd を再 adopt する組み合わせは避ける。
+  sources:
+  - claude:architecture
+  confidence: 75
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: cac68e89adcc4375
+  severity: medium
+  category: architecture
+  file: src-tauri/src/mux/ipc/connection.rs
+  line: 27
+  line_end: 27
+  title: Upgrading ack 契約が daemon.rs と connection.rs に分割され、依存方向も反転している
+  description: ipc::connection → mux::daemon の依存辺が新設され daemon ↔ ipc::connection の循環が成立する。より問題なのは ack プロトコルの契約が
+    2 ファイルに割れていて強制する型が無い点。expected_acks の -1 は connection.rs の subscribe 位置という内部挙動への仮定に依存しており、そちらを変えると
+    daemon.rs 無変更のまま ack 会計が静かにずれてコンパイラもテストも検知しない。
+  suggestion: ack の同期点を 1 箇所にまとめる。slot 設置・期待数算出・ack 受信・解除を専用型のメソッドに閉じ、-1 は receiver_count からの推測ではなく要求元が自己申告する形にする。
+  sources:
+  - claude:architecture
+  confidence: 60
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: 6c779c0de9b87c24
+  severity: medium
+  category: architecture
+  file: src-tauri/src/mux/cli.rs
+  line: 335
+  line_end: 361
+  title: プロセス置換ポリシーの所有者が不在で、runtime シャットダウン猶予が 2 箇所の exec のうち片方にしか適用されていない
+  description: execute_daemon は D1 の不変条件を rt.shutdown_timeout として実装しているが、perform_upgrade_replacement のリトライループで
+    2 回目以降に呼ぶ run_daemon_in_handoff_mode は内部で Runtime::new して暗黙 drop（猶予ゼロ）する。初回 exec だけ猶予付きという非対称になっている。upgrade
+    ライフサイクルの状態機械が cli.rs / daemon.rs / upgrade.rs の 3 箇所に散っていて単一の所有者が居ないのが根因。
+  suggestion: 「runtime を落としてから exec する」手順を 1 関数に閉じ、execute_daemon とリトライループの双方がそれだけを呼ぶ形にする。run_daemon_in_handoff_mode
+    も裸の drop ではなく shutdown_timeout を通す。
+  sources:
+  - claude:architecture
+  confidence: 60
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: f0070ee00ce9ebba
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/mux/daemon.rs
+  line: 1167
+  line_end: 1167
+  title: handoff 起動失敗時の「fresh bind へフォールバック」は必ず EADDRINUSE で失敗し、daemon ごと落ちて全 pane が死ぬ
+  description: 継承した listen descriptor は FD_CLOEXEC を落としてあるためプロセス内でまだ open かつ bind されたまま残る。cleanup_stale_socket
+    は is_daemon_running（connect できるか）で判定するが継承 listener は backlog を持つので connect が成功し、ソケットファイルは削除されない。結果
+    bind が EADDRINUSE で失敗して ? が伝播し daemon が終了、graceful_shutdown も通らないため全 pane の master が閉じて全シェルが SIGHUP
+    で死ぬ。到達条件は TOCTOU・handoff ファイル破損・listen fd validate 失敗など現実的。
+  suggestion: フォールバック前に継承 listener を必ず始末する。decode に成功していれば adopt 失敗時も listen_fd を close してから bind し直す。decode
+    自体に失敗した場合はフォールバックせず明示的なエラーで終了する。
+  sources:
+  - claude:comprehensive
+  confidence: 65
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: 717488daf157d5af
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/mux/upgrade.rs
+  line: 335
+  line_end: 392
+  title: snapshot 中断時に FD_CLOEXEC を戻さないため、以後に spawn される pane の子シェルへ listen socket と全 pane の PTY master
+    が漏れる
+  description: snapshot は listen descriptor と全生存 pane の master の FD_CLOEXEC をクリアしてから handoff ファイルを書くが、途中失敗でロールバックしない。abort
+    後 daemon はそのまま serve を継続するため、以後 spawn する pane の子シェルが listen socket と既存全 pane の PTY master を継承する。pane
+    B のシェルから pane A の端末に読み書きできる。write 失敗は最も遅い段階なのでクリア対象が全 fd に及ぶ。
+  suggestion: クリアした fd を記録し Err を返す前に全て set_cloexec で戻す。あるいは順序を変え、document 書き込みまで完了させてから最終ステップでまとめて clear_cloexec
+    する。
+  sources:
+  - claude:comprehensive
+  confidence: 80
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: 68e88fda477200fd
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/mux/cli.rs
+  line: 348
+  line_end: 348
+  title: exec 失敗後の in-process 再入で、旧 reader スレッドが生き残ったまま同一 PTY master に対して二重の reader が走る
+  description: mem::forget で旧 SessionManager がリークし、各 pane の reader は std::thread::spawn した OS スレッドで master
+    の dup fd を保持したままランタイム停止でも止まらない。再入した run_daemon が同じ master を再 adopt して新しい reader を立てるため、シェル出力が旧（誰も見ていないリーク済みツリー）と新へ非決定的に分割される。SPEC
+    A14 が明示的に想定している復旧経路なので机上の話ではない。
+  suggestion: 再入前に旧 reader スレッドを確実に終了させる。停止フラグを立てて dup fd を close し read を抜けさせて join するか、mem::forget をやめて
+    master fd だけ個別に leak し SessionManager は正規に drop させる。
+  sources:
+  - claude:comprehensive
+  confidence: 80
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: b7534341e2d5a0d6
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/upgrade.rs
+  line: 265
+  line_end: 271
+  title: handoff ファイルが残留すると create_new(true) により以後すべての upgrade が恒久的に失敗する
+  description: create_handoff_file は O_EXCL なので mux-handoff.bin が既存だと常に AlreadyExists になる。ファイルは successor
+    の read_and_remove_handoff_file でしか消えないため、prepare_upgrade 成功後・exec 前の SIGKILL や successor のクラッシュで残る。以後の
+    upgrade は毎回 WriteFile で失敗し続け、しかも失敗前に全 pane の FD_CLOEXEC がクリアされる。手動で消すまで復旧しない。
+  suggestion: 通常起動パスで残骸を掃除する。加えて create_handoff_file は既存ファイルを検出したら一度 remove してから create_new を再試行する（O_NOFOLLOW
+    + 0600 は維持）。
+  sources:
+  - claude:comprehensive
+  confidence: 65
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: b0bb4d9ca76e36bc
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/daemon.rs
+  line: 987
+  line_end: 987
+  title: scrollback snapshot から execve までの間に流れた PTY 出力は旧 reader に消費され、restore 後の pane から完全に失われる
+  description: snapshot 後 ack 待ち（最大 2 秒）→ shutdown_timeout(500ms) → exec と進む間、pane の reader スレッドは PTY
+    を読み続けて snapshot 済みの古い scrollback に書き込む。successor は document のバイト列しか持たないため、この窓の出力は scrollback にも shadow
+    parser にも残らず、カーネルの PTY バッファからも消費済みなので新 reader も拾えない。出力の多い pane では数百 KB 規模の欠落になる。
+  suggestion: snapshot 以降に読まれたバイトを退避して exec 直前に追記するか、snapshot 直前に reader を止めてカーネル PTY バッファに残す。少なくとも既知の制約として明示し、ack
+    待ちと shutdown grace を最小化する。
+  sources:
+  - claude:comprehensive
+  confidence: 65
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: a551f4599b49a99a
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/mux/ipc/connection.rs
+  line: 978
+  line_end: 981
+  title: GUI 接続から upgrade を要求すると、その接続自身は Upgrading を受け取れず bridge が再接続せずに mux を抜ける
+  description: route_message の Upgrade アームは handle_upgrade_request を await する。GUI 接続のメッセージループは単一の select!
+    なので、await 中は notify_rx.recv() のアーム（Upgrading を自分のソケットへ書く唯一の場所）がポーリングされない。要求元の GUI だけは Upgrading を書けず、prepare_upgrade
+    も expected_acks から差し引く前提なので待たない。結果その bridge は Normal と判定して再接続せず exit する。この分岐は今回新設されたがテストは純粋関数しか覆っていない。
+  suggestion: GUI からの Upgrade は返信待ちでメッセージループを塞がない形にする。upgrade_tx.send だけ行って reply を別の select! アームで待つか、サポートしないなら
+    arm を削除して Error を返す。
+  sources:
+  - claude:comprehensive
+  confidence: 65
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: 9406b2e387e76b03
+  severity: medium
+  category: performance
+  file: src-tauri/src/mux/daemon.rs
+  line: 1009
+  line_end: 1048
+  title: Upgrading-ack の期待数が過大に見積もられ、停止時間が常に 2 秒延びるケースがある
+  description: expected_acks = receiver_count - 1 は「ack しない購読者はちょうど 1 つ」という前提だが、handle_connection は CLI/GUI
+    分岐の前で無条件に subscribe する一方 handle_cli_client は broadcast 受信ループを回さないので永久に ack しない。要求元以外の CLI 接続が 1 本でもあれば必ず超過し
+    2 秒を丸ごと消費する。emterm mux wait は分単位で接続を保持するため、AI エージェント連携という主目的の文脈でこそ常駐しやすい。
+  suggestion: receiver_count を代理値に使うのをやめ、実際に ack しうる購読者だけを数える。GUI 接続が broadcast ループに入る/抜けるでカウントするか、CLI
+    分岐先頭で notify_rx を drop する。expected_acks == 0 なら待機を完全にスキップする。
+  sources:
+  - claude:performance
+  confidence: 60
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: 0d19df819367f8f3
+  severity: medium
+  category: performance
+  file: src-tauri/src/mux/daemon.rs
+  line: 856
+  line_end: 866
+  title: async コンテキスト内で同期的な子プロセス起動と同期ファイル書き込みを行い、tokio ワーカースレッドを占有する
+  description: probe_candidate_handoff_range は std::process::Command の output() で子プロセス終了まで同期ブロックする。候補は
+    GUI feature 付きの本体で wgpu/webkit2gtk を動的リンクするため起動〜終了で数十〜数百 ms かかる。また snapshot は session_manager のガードを保持したまま同期ディスク
+    I/O を実行する。accept ループが止まるのは設計どおりだがワーカースレッドごと止めるのは意図ではなく、PTY 出力転送のレイテンシを悪化させる。
+  suggestion: プローブを tokio::process::Command の await に置き換える。snapshot はガードを跨ぐため block_in_place で囲んで他ワーカーへタスクを退避できるようにする。
+  sources:
+  - claude:performance
+  confidence: 60
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: 648ad3b1eb1bcd32
+  severity: medium
+  category: performance
+  file: src-tauri/src/mux/daemon.rs
+  line: 1086
+  line_end: 1097
+  title: handoff 起動が失敗して fresh bind にフォールバックすると、継承した全ディスクリプタが恒久的にリークする
+  description: start_from_handoff が失敗すると startup の Err アームは bind_fresh_listener + SessionManager::new
+    にフォールバックするが、継承済み descriptor を 1 つも閉じない。decode 済みの doc は全 pane の master_fd を保持しているのにそれらを閉じないため、PTY
+    master が開いたままで slave に SIGHUP が飛ばず、旧セッションのシェルが孤児として動き続ける。upgrade を繰り返すと fd がプロセス上限に向かって単調増加する。
+  suggestion: start_from_handoff がエラーを返す直前に doc.sessions を走査して各 master_fd を close し、adopt_listener が所有権を取らなかった場合は
+    listen_fd も閉じる。
+  sources:
+  - claude:performance
+  confidence: 75
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: ec40242216d4360a
+  severity: medium
+  category: performance
+  file: src-tauri/src/mux/daemon.rs
+  line: 1424
+  line_end: 1424
+  title: exec 失敗後の再入経路で、意図的リークしたセッションツリーとペインごとの reader スレッドが恒久的に残る
+  description: mem::forget(session_manager.clone()) はセッションツリー全体（pane あたり 2 MiB のスクロールバックリング、shadow parser、term_core
+    グリッド）を二度と drop されなくする。execve 成功なら無害だが、exec 失敗パスでは同じプロセスで運転を継続するため daemon の残り寿命ぶんメモリを占有する。reader スレッドも停止手段がなく、リトライループが回るたびに積み上がる。
+  suggestion: リーク範囲を execve を跨ぐ必要のある descriptor だけに絞る。master fd を into_raw_fd で取り出して手放し、MuxPane の残りは通常どおり
+    drop させる。reader スレッドの停止手段も用意する。
+  sources:
+  - claude:performance
+  confidence: 75
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: 2e3aff0a502ee59f
+  severity: high
+  category: security
+  file: src-tauri/src/mux/upgrade.rs
+  line: 330
+  line_end: 391
+  title: snapshot 失敗時に FD_CLOEXEC を戻さず、listen ソケットと全 pane master が裸のまま daemon が動き続ける
+  description: クリア済みの FD_CLOEXEC を戻す経路が無く、prepare_upgrade は Err を返すだけで daemon は動き続ける。create_handoff_file
+    が create_new なので残骸が 1 つでもあれば以後の upgrade は必ず EEXIST で失敗し、しかも stale ファイルを消す経路が production に存在しない。同 uid
+    のプロセス（pane 内の AI エージェントやビルドスクリプト）が mux-handoff.bin を先に作るだけで意図的に発火させられる。影響は fd テーブルを掃除しない fork+exec
+    に及び、ステータスバーのコマンド実行（statusbar::execute_command、ユーザー設定の任意実行ファイルをタイマー実行）がまさにそれ。PTY master を握った子は他 pane
+    のシェルに入力注入でき出力も読める。listen ソケットを握った子は accept でクライアント接続を横取りでき daemon なりすましになる。pane のシェル自体は portable_pty
+    の close_random_fds に偶然救われているだけで意図した防御ではない。
+  suggestion: clear した fd を Vec に積みながら進め、いずれかが失敗したら全 fd に set_cloexec を掛け直してから Err を返す。あわせて daemon 起動時と
+    prepare_upgrade 入口で stale な handoff ファイルを掃除して EEXIST 経路自体を塞ぎ、SnapshotError の doc の harmless という記述を実装に合わせて修正する。
+  sources:
+  - claude:security
+  confidence: 75
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: ea109e6511f8b417
+  severity: medium
+  category: security
+  file: src-tauri/src/mux/upgrade.rs
+  line: 294
+  line_end: 317
+  title: 全 pane の生スクロールバックを書いた handoff ファイルが恒久的にディスクに残りうる
+  description: snapshot は各 pane のスクロールバックを生バイトのまま handoff ファイルへ書く。ターミナルのスクロールバックにはトークンやパスワードがそのまま含まれうるが、mux
+    でこれがディスクに落ちるのは本機能が初めて。削除経路は handoff 起動時と write 失敗時だけで、remove_handoff_file は production から一度も呼ばれない。書き込み後・successor
+    が消費する前に daemon が落ちると残り続ける。XDG_RUNTIME_DIR が無いホストでは socket ディレクトリが永続ディスク上になるため tmpfs の自動消去も効かない。
+  suggestion: daemon 起動時と prepare_upgrade 失敗時の両方で remove_handoff_file を呼ぶ。載せるスクロールバックを再描画に必要な最小行数へ切り詰める方針も検討する。
+  sources:
+  - claude:security
+  confidence: 60
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: 8b8004baef205fac
+  severity: high
+  category: spec
+  file: src-tauri/src/mux/daemon.rs
+  line: 1332
+  line_end: 1340
+  title: アップグレード候補が current_exe() 由来のため、パッケージ更新後は常に abort する（US1/US2 が成立しない）
+  description: 候補バイナリは self_exec::self_exe_path() で解決するが実装は std::env::current_exe() そのもので、同ファイルの doc が「dpkg
+    の rename(2) でバイナリが差し替わると走っているプロセスは古い unlinked inode を握ったまま current_exe() が /usr/bin/emterm (deleted)
+    を返し、子の spawn は ENOENT で失敗する」と明記している。したがってバイナリ差し替え直後（この機能が存在する唯一の状況）に mux upgrade を実行すると probe が ENOENT
+    で失敗し、snapshot 前に必ず abort する。FR16 の recovery 経路でも upgrade 試行が必ず失敗して従来の shutdown-then-respawn にフォールバックするため、SPEC
+    Objectives も破れる。既存テストは正常系がバイナリを差し替えず、schema 不一致テストは abort することしか assert しないので検出できない。
+  suggestion: 候補バイナリのパス解決を差し替え後も新しい inode を指す実パスにする。daemon 起動時に current_exe() を一度だけ解決してベースラインパスを保存して使うか、(deleted)
+    接尾辞を除去して再 stat する。有効な新バイナリを rename で被せてから upgrade が成功することを検証する統合テストを追加する。
+  sources:
+  - claude:spec
+  confidence: 70
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: ded20560e36df9fd
+  severity: high
+  category: spec
+  file: src-tauri/src/mux/upgrade.rs
+  line: 335
+  line_end: 349
+  title: snapshot abort 時に FD_CLOEXEC が復元されず、US3 の no-op 保証に反する
+  description: SPEC US3 は failed upgrade が no-op であることを、Error Handling 表は abort 後に daemon が従来どおり動き続けることを求めている。しかし
+    pane の clear_cloexec 失敗や write_handoff_file 失敗（create_new なので残骸があれば必ず EEXIST）で abort すると、既にクリアした FD_CLOEXEC
+    はどこでも戻されない。復元側は adopt_master / adopt_listener が set_cloexec してこの対称性を要求として認識しているのに abort 側だけ欠けている。
+  suggestion: クリアした fd を記録し Err を返す前に全て set_cloexec で巻き戻す。早期 return を Drop で巻き戻すガード構造体に通す。あわせて snapshot
+    開始時に既存 handoff ファイルを掃除して EEXIST で恒久的に upgrade 不能にならないようにする。
+  sources:
+  - claude:spec
+  confidence: 85
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: 473f5a325e3103ec
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/cli.rs
+  line: 348
+  line_end: 355
+  title: execve 失敗後の同一プロセス復帰で、pane ごとに reader スレッドが二重化して出力が分割される
+  description: SPEC FR13 と A14 は exec 失敗時に同一プロセスで restore して working daemon になることを求めるが、mem::forget でリークした旧ツリーの
+    reader スレッド（素の OS スレッドで shutdown_timeout では止まらない）が生き続けたまま restore が同じ master に新しい reader を立てる。以後その
+    PTY の出力は旧 reader（出力先は破棄済み）と新 reader にランダムに配られ、scrollback とクライアント出力から約半分が無言で欠落する。シェルは生きているので NFR2 は満たすが
+    FR13 の working daemon は満たさない。
+  suggestion: 復帰前に旧 reader を確実に終了させるか、run_daemon_in_handoff_mode を「新規 reader を spawn せずリークした旧 SessionManager
+    を再利用する」経路に変える。exec 失敗を注入して出力が欠落しないことを確認するテストを添える。
+  sources:
+  - claude:spec
+  confidence: 85
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: 604639d951486585
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/daemon.rs
+  line: 1089
+  line_end: 1095
+  title: listener 採用に失敗すると、デコード済みの handoff ドキュメントごとセッションツリーを破棄する
+  description: SPEC Error Handling 表は restore 失敗時に「復元できない pane を exited にする」ことを、NFR2 は「全ての失敗経路が旧 daemon
+    継続かシェルの新 daemon への接続のどちらかを残す」ことを求めている。しかし start_from_handoff は adopt_listener / set_nonblocking /
+    from_std のいずれかが失敗すると ? で即 Err を返し、呼び出し元は fresh bind + SessionManager::new にフォールバックするため decode 済みの
+    doc が丸ごと捨てられる。旧 daemon は execve で既に消えているので、ユーザから見て全 pane が消滅する。
+  suggestion: listener 採用失敗と session tree の restore を分離する。listener が採用できない場合は bind_fresh_listener で新しい
+    listener を作りつつ restore は実行して pane ツリーを復元する。
+  sources:
+  - claude:spec
+  confidence: 85
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+- stable_id: a728a4036c9899cc
+  severity: medium
+  category: spec
+  file: src-tauri/src/mux/cli.rs
+  line: 1462
+  line_end: 1470
+  title: mux upgrade の応答待ちが 5 秒で切れるため、準備に時間がかかった末に拒否された upgrade を成功と報告しうる
+  description: connect_daemon はソケットに 5 秒の read timeout を設定するが、daemon 側の準備は UPGRADE_PREPARE_TIMEOUT = 30s
+    まで許容され、probe の子プロセス起動と全 pane 分の scrollback 書き出しは容易に 5 秒を超える。超えると read_upgrade_response は WouldBlock
+    を ProceededOrUnknown として扱い reachability ポーリングへ進む。その後 daemon が abort すると同じ旧 daemon が accept を再開するため即座に
+    true になり、何も起きていないのに成功報告になる。task0009 の AC-10 が塞いだはずの欠陥がタイムアウト境界の食い違いで再現している。
+  suggestion: Upgrade 送信直後にクライアントの read timeout を daemon 側の準備上限に合わせる。加えて reachability 判定を「置換が実際に起きた証拠」（daemon
+    の PID や起動時刻の変化）に厳格化する。
+  sources:
+  - claude:spec
+  confidence: 70
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached'
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-progress
+  not_run_reason: round 1 と同じ理由。critical/high 候補の処方は descriptor のライフタイム設計変更（mem::forget の置き換え、reader スレッドの停止手段の新設、フォールバック経路の再設計）であり、いずれも複数ファイルにまたがるため単一ファイル限定の
+    review-editor では適用できない。batch の rework 上限は round 1 で消費済みのため全件 deferred。
+residual_critical_high: 7
+rework_required: false
