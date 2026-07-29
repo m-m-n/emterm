@@ -26,6 +26,12 @@ pub mod bridge;
 pub mod cli;
 pub mod daemon;
 pub mod dialog;
+// task0002 (mux daemon hot-upgrade): raw-descriptor → `MasterPty` adapter
+// for descriptors inherited across a process replacement. Unix only —
+// process replacement (`execve`) and the descriptor semantics it depends on
+// (raw fds, `dup`, `fcntl`) have no Windows equivalent.
+#[cfg(unix)]
+pub mod inherited_pty;
 pub mod ipc;
 pub mod prefix;
 pub mod scrollback_buffer;
