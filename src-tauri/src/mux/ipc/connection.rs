@@ -24,7 +24,7 @@ use super::handlers::{
 use super::protocol::*;
 use super::reattach::detach_session_panes;
 use super::statusbar::{StatusBarEngine, execute_command};
-use crate::mux::daemon::{UpgradeSignal, UpgradeSignalSender};
+use crate::mux::daemon::{SharedUpgradeAckSlot, UpgradeSignal, UpgradeSignalSender};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatusReportSender, ChunkKind, NotificationSender, PtyOutputChunk, SharedPaneExitSender,
@@ -57,6 +57,7 @@ pub async fn handle_connection<S>(
     daemon_agent_status_tx: AgentStatusReportSender,
     daemon_pane_exit_sender: SharedPaneExitSender,
     upgrade_tx: UpgradeSignalSender,
+    upgrade_ack_slot: SharedUpgradeAckSlot,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -302,6 +303,7 @@ pub async fn handle_connection<S>(
                             &pane_exit_sender,
                             &mut kick_rx,
                             &visible_state,
+                            &upgrade_tx,
                         ).await {
                             if should_break {
                                 break;
@@ -483,8 +485,23 @@ pub async fn handle_connection<S>(
                             } else if framed.send(msg).await.is_err() {
                                 break;
                             }
-                        } else if framed.send(msg).await.is_err() {
-                            break;
+                        } else {
+                            // AC-7 (Design "Announcement delivery"): once an
+                            // `Upgrading` frame is actually written to THIS
+                            // socket, acknowledge it so `prepare_upgrade` can
+                            // observe delivery (not merely queueing) before
+                            // the runtime is torn down. Every other message
+                            // type never touches the slot.
+                            let is_upgrading = msg.msg_type == MessageType::Upgrading;
+                            if framed.send(msg).await.is_err() {
+                                break;
+                            }
+                            if is_upgrading {
+                                let ack_tx = upgrade_ack_slot.lock().unwrap().clone();
+                                if let Some(ack_tx) = ack_tx {
+                                    let _ = ack_tx.try_send(());
+                                }
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
@@ -706,40 +723,7 @@ async fn handle_cli_client<S>(
         }
         MessageType::Upgrade => {
             log::info!("CLI client requested mux daemon upgrade");
-            let (reply_tx, reply_rx) = oneshot::channel();
-            if upgrade_tx
-                .send(UpgradeSignal { reply: reply_tx })
-                .await
-                .is_err()
-            {
-                log::warn!("Upgrade request dropped: accept loop unavailable");
-                let err = ErrorMsg {
-                    message: "mux daemon cannot process upgrade requests right now".to_string(),
-                };
-                let resp = MuxMessage::control(MessageType::Error, 0, &err);
-                let _ = framed.send(resp).await;
-            } else {
-                match tokio::time::timeout(UPGRADE_PREPARE_TIMEOUT, reply_rx).await {
-                    Ok(recv_result) => {
-                        if let Some(msg) = upgrade_reply_to_message(recv_result) {
-                            let _ = framed.send(msg).await;
-                        } else {
-                            log::info!(
-                                "Upgrade preparation succeeded; daemon is replacing itself"
-                            );
-                        }
-                    }
-                    Err(_) => {
-                        log::warn!("Upgrade preparation timed out");
-                        let err = ErrorMsg {
-                            message: "mux daemon did not respond to the upgrade request in time"
-                                .to_string(),
-                        };
-                        let resp = MuxMessage::control(MessageType::Error, 0, &err);
-                        let _ = framed.send(resp).await;
-                    }
-                }
-            }
+            handle_upgrade_request(framed, upgrade_tx).await;
         }
         _ => {
             log::warn!(
@@ -780,6 +764,56 @@ fn upgrade_reply_to_message(
     Some(MuxMessage::control(MessageType::Error, 0, &err))
 }
 
+/// Handle a `MessageType::Upgrade` request on `framed`: signal the accept
+/// loop, wait (bounded) for its reply, and send back whatever
+/// [`upgrade_reply_to_message`] says (an `Error` frame on abort/timeout, or
+/// nothing at all on success — the connection is simply dropped once the
+/// process is replaced, IMPLEMENTATION.md D2).
+///
+/// Shared by BOTH connection kinds that may request an upgrade: a CLI
+/// connection (`handle_cli_client`, the real `emterm mux upgrade`
+/// subcommand's path) and a persistent GUI connection's message loop
+/// (`route_message`) — FR1's wire message is not scoped to one client type,
+/// and duplicating this logic per call site is exactly the kind of drift
+/// this task exists to close (task0009 rework).
+async fn handle_upgrade_request<S>(framed: &mut Framed<S, MuxCodec>, upgrade_tx: &UpgradeSignalSender)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if upgrade_tx
+        .send(UpgradeSignal { reply: reply_tx })
+        .await
+        .is_err()
+    {
+        log::warn!("Upgrade request dropped: accept loop unavailable");
+        let err = ErrorMsg {
+            message: "mux daemon cannot process upgrade requests right now".to_string(),
+        };
+        let resp = MuxMessage::control(MessageType::Error, 0, &err);
+        let _ = framed.send(resp).await;
+        return;
+    }
+
+    match tokio::time::timeout(UPGRADE_PREPARE_TIMEOUT, reply_rx).await {
+        Ok(recv_result) => {
+            if let Some(msg) = upgrade_reply_to_message(recv_result) {
+                let _ = framed.send(msg).await;
+            } else {
+                log::info!("Upgrade preparation succeeded; daemon is replacing itself");
+            }
+        }
+        Err(_) => {
+            log::warn!("Upgrade preparation timed out");
+            let err = ErrorMsg {
+                message: "mux daemon did not respond to the upgrade request in time".to_string(),
+            };
+            let resp = MuxMessage::control(MessageType::Error, 0, &err);
+            let _ = framed.send(resp).await;
+        }
+    }
+}
+
 /// Log CLI-initiated window creation for debugging.
 async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, session_id: u32) {
     let mgr = session_manager.lock().await;
@@ -814,6 +848,7 @@ async fn route_message<S>(
     pane_exit_sender: &SharedPaneExitSender,
     kick_rx: &mut Option<oneshot::Receiver<()>>,
     visible_state: &Arc<AtomicBool>,
+    upgrade_tx: &UpgradeSignalSender,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -934,6 +969,14 @@ where
                     }
                 }
             }
+        }
+        MessageType::Upgrade => {
+            // FR1/FR3 (task0009 rework): a persistent GUI connection may
+            // request an upgrade too, not only the short-lived `emterm mux
+            // upgrade` CLI connection — same handling as the CLI path,
+            // factored into `handle_upgrade_request` so the two never drift.
+            log::info!("GUI client requested mux daemon upgrade");
+            handle_upgrade_request(framed, upgrade_tx).await;
         }
         _ => {
             log::debug!(

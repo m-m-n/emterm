@@ -254,6 +254,15 @@ fn init_mux_logger(component: &'static str) {
         .init();
 }
 
+/// Bound on [`execute_daemon`]'s runtime shutdown (task0009 rework, Design
+/// "Announcement delivery"): `prepare_upgrade` already waits for connected
+/// GUI clients to acknowledge the `Upgrading` write before `run_daemon`
+/// returns, so this is a defense-in-depth bound for any OTHER still-running
+/// task (an unrelated connection mid-write, a background broadcast task) —
+/// generous enough for a socket write to complete, short enough to keep the
+/// replacement prompt.
+const DAEMON_RUNTIME_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Execute the `emterm mux --daemon` command (runs the daemon).
 ///
 /// Inspects the daemon's run outcome (task0005, IMPLEMENTATION.md D1 /
@@ -269,9 +278,14 @@ pub fn execute_daemon() -> Result<(), Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
     let outcome = rt.block_on(daemon::run_daemon())?;
 
-    // D1: `drop` blocks this thread until every worker thread has exited,
-    // which must happen before any process replacement below.
-    drop(rt);
+    // D1: blocks this thread until every worker thread has exited (or the
+    // grace period elapses), which must happen before any process
+    // replacement below. `shutdown_timeout` (rather than a bare `drop`,
+    // which tears the runtime down with a zero-duration bound) gives any
+    // still-running connection task a bounded chance to finish flushing a
+    // write already in flight, instead of forcibly cutting it off the
+    // instant this function proceeds.
+    rt.shutdown_timeout(DAEMON_RUNTIME_SHUTDOWN_GRACE);
 
     match outcome {
         daemon::DaemonRunOutcome::Terminated => Ok(()),
@@ -1434,6 +1448,24 @@ fn execute_upgrade_at(sock_path: &std::path::Path) -> i32 {
         eprintln!("Error: failed to send the upgrade request: {e}");
         return 1;
     }
+
+    // AC-10 (task0009 rework, finding 07f6dbc60e84d54f): read the daemon's
+    // own reply BEFORE treating this as accepted. An `Error` frame (FR13)
+    // means the daemon refused; report the reason and exit non-zero rather
+    // than falling through to the reachability poll, which would otherwise
+    // trivially "succeed" against the SAME still-running daemon that just
+    // refused (nothing happened, but the command would have reported
+    // success). Anything else -- a clean disconnect (the daemon dropped this
+    // connection per IMPLEMENTATION.md D2) or a read timeout while
+    // preparation is still in flight -- proceeds to the poll below, which is
+    // the actual evidence of a completed replacement.
+    match daemon::read_upgrade_response(&mut stream) {
+        daemon::UpgradeResponse::Rejected(reason) => {
+            eprintln!("Error: mux daemon refused the upgrade: {reason}");
+            return 1;
+        }
+        daemon::UpgradeResponse::ProceededOrUnknown => {}
+    }
     drop(stream);
 
     if daemon::wait_for_daemon_reachable_at_current_version(sock_path) {
@@ -1472,20 +1504,19 @@ pub fn execute_upgrade() -> i32 {
 // a subprocess against a candidate binary) lives in task0004.
 // ============================================================================
 
-/// Handoff schema versions this binary can restore (task0005 owns the
-/// probe's answer side; mux-daemon-hot-upgrade IMPLEMENTATION.md Shared
-/// Components "Handoff probe subcommand"). Mirrors the single-current-value
-/// range mux_ipc's handoff-schema-version constant will define once task0001
-/// merges (not yet merged at the time this was written — local literals
-/// here are a deviation pending reconciliation, see the task report).
-const HANDOFF_SCHEMA_VERSION_MIN: u32 = 1;
-const HANDOFF_SCHEMA_VERSION_MAX: u32 = 1;
-
 /// The line [`execute_probe_handoff`] prints: two whitespace-separated
 /// unsigned integers, `<min> <max>`, the inclusive range of handoff schema
 /// versions this binary can restore. Factored out for testability (AC-5).
+///
+/// task0009 rework (AC-9, finding 32bb6e465ac0fbb4 / a50509ac760abb59 /
+/// d6b2bb34403b44f9): derived from `mux_ipc::handoff::
+/// SUPPORTED_HANDOFF_SCHEMA_VERSIONS`, the single source of truth
+/// `crate::mux::upgrade::read_and_remove_handoff_file` actually decodes
+/// against — this used to be a local literal that could silently drift from
+/// it.
 fn handoff_schema_range_line() -> String {
-    format!("{HANDOFF_SCHEMA_VERSION_MIN} {HANDOFF_SCHEMA_VERSION_MAX}")
+    let range = mux_ipc::handoff::SUPPORTED_HANDOFF_SCHEMA_VERSIONS;
+    format!("{} {}", range.start(), range.end())
 }
 
 /// Execute `emterm mux probe-handoff` (task0005 AC-5). Never touches the
@@ -1841,6 +1872,20 @@ mod tests {
         stream.flush().expect("flush");
     }
 
+    /// Write an `Error` control frame (task0009 rework, AC-10 test fixture):
+    /// mirrors [`write_welcome`]'s framing exactly, for a stand-in daemon
+    /// simulating a refused `Upgrade` request (FR13).
+    #[cfg(unix)]
+    fn write_error<S: std::io::Write>(stream: &mut S, err: &ErrorMsg) {
+        let msg = MuxMessage::control(MessageType::Error, 0, err);
+        let body = msg.to_frame_body();
+        stream
+            .write_all(&(body.len() as u32).to_be_bytes())
+            .expect("write frame length");
+        stream.write_all(&body).expect("write frame body");
+        stream.flush().expect("flush");
+    }
+
     /// Spawn a thread that behaves like a single-instance legacy (v1) mux
     /// daemon on `sock_path`: rejects a mismatched Hello, accepts a
     /// [`FAKE_LEGACY_VERSION`] Hello, then per-frame: an `Upgrade` request is
@@ -2085,6 +2130,22 @@ mod tests {
         assert_eq!(execute_probe_handoff(), 0);
     }
 
+    /// AC-9 (task0009 rework, finding 32bb6e465ac0fbb4 / a50509ac760abb59 /
+    /// d6b2bb34403b44f9): the probe's output must be derived from —
+    /// therefore always equal to — `mux_ipc::handoff::
+    /// SUPPORTED_HANDOFF_SCHEMA_VERSIONS`, the same range
+    /// `crate::mux::upgrade::read_and_remove_handoff_file` checks a decoded
+    /// document against. A local literal here could silently drift from it;
+    /// this test fails the moment the two diverge.
+    #[test]
+    fn probe_handoff_range_matches_the_canonical_supported_schema_versions() {
+        let range = mux_ipc::handoff::SUPPORTED_HANDOFF_SCHEMA_VERSIONS;
+        assert_eq!(
+            handoff_schema_range_line(),
+            format!("{} {}", range.start(), range.end())
+        );
+    }
+
     // ---- `emterm mux upgrade` (AC-2/AC-3/AC-4) ----
 
     /// Accept connections on `listener` until one delivers a real frame
@@ -2191,6 +2252,67 @@ mod tests {
 
         fake.join().expect("fake daemon thread panicked");
         assert_ne!(code, 0, "expected a non-success exit on timeout");
+    }
+
+    /// Stand-in daemon that REFUSES the upgrade (FR13): handshakes normally,
+    /// then answers the `Upgrade` request with an `Error` frame carrying
+    /// `reason`, exactly like the real daemon's accept-loop abort path.
+    #[cfg(unix)]
+    fn spawn_fake_daemon_that_rejects_upgrade(
+        sock_path: std::path::PathBuf,
+        reason: &'static str,
+    ) -> std::thread::JoinHandle<()> {
+        use std::os::unix::net::UnixListener;
+
+        let listener = UnixListener::bind(&sock_path).expect("bind fake daemon socket (upgrade)");
+        std::thread::spawn(move || {
+            let Some((mut stream, hello_frame)) = accept_until_real_frame(&listener) else {
+                return;
+            };
+            assert_eq!(hello_frame.msg_type, MessageType::Hello);
+            write_welcome(
+                &mut stream,
+                &WelcomeMsg::Accepted {
+                    server_version: PROTOCOL_VERSION,
+                    sessions: Vec::new(),
+                },
+            );
+
+            let upgrade_frame = read_frame(&mut stream);
+            assert_eq!(upgrade_frame.msg_type, MessageType::Upgrade);
+            write_error(
+                &mut stream,
+                &ErrorMsg {
+                    message: reason.to_string(),
+                },
+            );
+            // The daemon keeps serving unchanged after an aborted upgrade —
+            // this connection just ends here, matching the real daemon's
+            // per-connection handling (the CLI process exits right after
+            // reading the Error, so nothing further needs to be served).
+        })
+    }
+
+    /// AC-10 (task0009 rework, finding 07f6dbc60e84d54f): when the daemon
+    /// refuses the upgrade with an `Error` reply, `mux upgrade` reports that
+    /// refusal (including the daemon's own reason) and exits non-zero,
+    /// rather than falling through to the reachability poll and reporting
+    /// success against the SAME still-running (unchanged) daemon.
+    #[cfg(unix)]
+    #[test]
+    fn execute_upgrade_reports_rejection_with_daemons_reason_and_non_zero_exit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("upgrade-rejected.sock");
+        let fake =
+            spawn_fake_daemon_that_rejects_upgrade(sock_path.clone(), "candidate incompatible");
+
+        let code = execute_upgrade_at(&sock_path);
+
+        fake.join().expect("fake daemon thread panicked");
+        assert_ne!(
+            code, 0,
+            "AC-10: a daemon-refused upgrade must exit non-zero, not report success"
+        );
     }
 
     /// AC-4: with no daemon running, `upgrade` reports that clearly without
