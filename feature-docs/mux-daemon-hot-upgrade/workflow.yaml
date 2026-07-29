@@ -53,7 +53,7 @@ workflow:
       - id: VF-1
         note: "解消済み。task0011 で修正し、cargo test --lib を 18 回実行して SIGABRT はゼロ（修正前は 12 回中 2 回）。真因は inherited_pty.rs ではなく daemon.rs の 2 テスト間の HANDOFF_ENV_VAR レースで、同一 listener fd の二重 adopt を招いていた。"
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
