@@ -11,5 +11,10 @@
 //! `SendTextResult`, `WaitAgentState`/`WaitAgentStateResult`,
 //! `AgentApiError`) and the public pane ID helpers (`PublicPaneId`); see
 //! `protocol` for the full type list.
+//!
+//! `handoff` adds the versioned handoff document type and the `Upgrade` /
+//! `Upgrading` control messages used by the mux daemon hot-upgrade feature
+//! (`protocol::MessageType::Upgrade` / `Upgrading`; `handoff::HandoffDocument`).
 
+pub mod handoff;
 pub mod protocol;
