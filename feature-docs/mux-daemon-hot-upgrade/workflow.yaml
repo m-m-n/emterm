@@ -131,7 +131,7 @@ tasks:
     domains: [external-io, concurrency]
     complexity: medium
     requirements: [FR12, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-daemon-hot-upgrade/task0006
   task0007:
@@ -144,7 +144,7 @@ tasks:
     domains: [concurrency, external-io]
     complexity: medium
     requirements: [FR18, NFR2]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-daemon-hot-upgrade/task0007
   task0008:
