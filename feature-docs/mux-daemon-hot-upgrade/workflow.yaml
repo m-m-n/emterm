@@ -157,8 +157,9 @@ tasks:
     domains: [config-infra, external-io, concurrency]
     complexity: medium
     requirements: [FR7, FR9, FR10, FR11, NFR2]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-daemon-hot-upgrade/task0008
 
 review:
   status: pending
