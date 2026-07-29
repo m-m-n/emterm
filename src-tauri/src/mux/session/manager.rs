@@ -202,6 +202,46 @@ impl SessionManager {
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }
+
+    /// The session id [`Self::create_session`] will allocate next (task0003
+    /// AC-1/AC-3): a read-only snapshot accessor for the handoff document's
+    /// session-id counter.
+    pub fn next_session_id_counter(&self) -> SessionId {
+        self.next_session_id
+    }
+
+    /// The pane id [`Self::alloc_pane_id`] will allocate next (task0003
+    /// AC-1/AC-3): a read-only snapshot accessor for the handoff document's
+    /// pane-id counter.
+    pub fn next_pane_id_counter(&self) -> u32 {
+        self.next_pane_id
+    }
+
+    /// Construct an empty manager for restore (task0003 AC-3), with the
+    /// given identifier counters and incarnation token set VERBATIM from the
+    /// handoff document rather than freshly generated
+    /// (IMPLEMENTATION.md D5: a fresh token would invalidate every restored
+    /// pane's baked-in environment value). Callers populate the session tree
+    /// afterward via [`Self::insert_session`].
+    pub fn for_restore(next_session_id: SessionId, next_pane_id: u32, incarnation: String) -> Self {
+        let (notify_tx, _) = tokio::sync::broadcast::channel(16);
+        Self {
+            sessions: HashMap::new(),
+            next_session_id,
+            next_pane_id,
+            notify_tx,
+            incarnation,
+        }
+    }
+
+    /// Insert an already-constructed session, keyed by its own id (task0003
+    /// restore path). Unlike [`Self::create_session`], this does not
+    /// allocate a new id or advance `next_session_id` — the caller is
+    /// expected to have already restored `next_session_id` (via
+    /// [`Self::for_restore`]) to a value past every inserted session's id.
+    pub fn insert_session(&mut self, session: MuxSession) {
+        self.sessions.insert(session.id, session);
+    }
 }
 
 impl Default for SessionManager {
@@ -558,5 +598,58 @@ mod tests {
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
         assert_eq!(id3, 3);
+    }
+
+    // ── task0003 AC-1/AC-3: restore-oriented reconstruction ──────────────
+
+    /// AC-3: `for_restore` sets both id counters and the incarnation token
+    /// verbatim (not freshly generated), and starts with no sessions.
+    #[test]
+    fn for_restore_sets_counters_and_incarnation_verbatim() {
+        let mgr = SessionManager::for_restore(7, 42, "deadbeef".to_string());
+        assert_eq!(mgr.next_session_id_counter(), 7);
+        assert_eq!(mgr.next_pane_id_counter(), 42);
+        assert_eq!(mgr.incarnation(), "deadbeef");
+        assert!(mgr.is_empty());
+    }
+
+    /// AC-3: the next pane id allocated after restore continues the
+    /// original sequence rather than restarting from 1.
+    #[test]
+    fn for_restore_next_pane_id_continues_the_original_sequence() {
+        let mut mgr = SessionManager::for_restore(1, 100, "abc".to_string());
+        assert_eq!(mgr.alloc_pane_id(), 100);
+        assert_eq!(mgr.alloc_pane_id(), 101);
+    }
+
+    /// AC-1: `insert_session` keeps the session's own id and does not
+    /// mutate `next_session_id` (the restore path is expected to have
+    /// already set it correctly via `for_restore`).
+    #[test]
+    fn insert_session_keeps_the_sessions_own_id_without_mutating_counters() {
+        let mut mgr = SessionManager::for_restore(5, 1, "xyz".to_string());
+        let session = MuxSession::new(3, "restored".to_string());
+        mgr.insert_session(session);
+        assert_eq!(mgr.session_count(), 1);
+        assert_eq!(mgr.get_session(3).unwrap().name, "restored");
+        assert_eq!(
+            mgr.next_session_id_counter(),
+            5,
+            "insert_session must not mutate the counter"
+        );
+    }
+
+    /// AC-1: the snapshot accessors report exactly what a plain `new()` +
+    /// allocations would have advanced the counters to — pinning that
+    /// `for_restore` and the plain constructor agree on what "the counter"
+    /// means.
+    #[test]
+    fn snapshot_accessors_match_manager_created_via_new_after_allocations() {
+        let mut mgr = SessionManager::new();
+        mgr.create_session("a".to_string());
+        mgr.create_session("b".to_string());
+        mgr.alloc_pane_id();
+        assert_eq!(mgr.next_session_id_counter(), 3);
+        assert_eq!(mgr.next_pane_id_counter(), 2);
     }
 }
