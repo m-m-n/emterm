@@ -144,8 +144,9 @@ tasks:
     domains: [concurrency, external-io]
     complexity: medium
     requirements: [FR18, NFR2]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-daemon-hot-upgrade/task0007
   task0008:
     title: "End-to-end hot-upgrade integration test"
     plan: tasks/task0008.md
