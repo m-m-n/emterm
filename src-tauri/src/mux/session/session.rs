@@ -142,6 +142,38 @@ impl MuxSession {
         self.window_order.insert(clamped, id);
         true
     }
+
+    /// The window id [`Self::alloc_window_id`] will allocate next (task0003
+    /// AC-1/AC-3): a read-only snapshot accessor for the handoff document's
+    /// per-session window-id counter.
+    pub fn next_window_id_counter(&self) -> WindowId {
+        self.next_window_id
+    }
+
+    /// Construct a session directly from restored parts (task0003 AC-1/
+    /// AC-3): the window tree, ordering, active selection and the
+    /// window-id counter are all set VERBATIM from the handoff document,
+    /// rather than rebuilt incrementally through [`Self::add_window`] /
+    /// [`Self::alloc_window_id`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_restored(
+        id: SessionId,
+        name: String,
+        windows: BTreeMap<WindowId, MuxWindow>,
+        window_order: Vec<WindowId>,
+        active_window_id: Option<WindowId>,
+        next_window_id: WindowId,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            windows,
+            window_order,
+            active_window_id,
+            active_client_kick: None,
+            next_window_id,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -342,5 +374,43 @@ mod tests {
         assert_eq!(keys_before, keys_after);
         // window_order is reordered
         assert_eq!(s.window_order, vec![3, 1, 2]);
+    }
+
+    // ── task0003 AC-1/AC-3: restore-oriented reconstruction ──────────────
+
+    /// AC-1: `from_restored` sets every field verbatim, including the
+    /// window-id counter, rather than rebuilding via `add_window`.
+    #[test]
+    fn from_restored_sets_all_fields_verbatim() {
+        let mut windows = BTreeMap::new();
+        windows.insert(10, make_window(10, "a"));
+        windows.insert(20, make_window(20, "b"));
+        let s = MuxSession::from_restored(1, "restored".to_string(), windows, vec![20, 10], Some(20), 99);
+        assert_eq!(s.id, 1);
+        assert_eq!(s.name, "restored");
+        assert_eq!(s.window_order, vec![20, 10]);
+        assert_eq!(s.active_window_id, Some(20));
+        assert_eq!(s.next_window_id_counter(), 99);
+        assert!(s.windows.contains_key(&10));
+        assert!(s.windows.contains_key(&20));
+    }
+
+    /// AC-3: the next window id allocated after restore continues the
+    /// original sequence rather than restarting from 1.
+    #[test]
+    fn from_restored_next_window_id_continues_the_original_sequence() {
+        let mut s = MuxSession::from_restored(1, "s".to_string(), BTreeMap::new(), vec![], None, 50);
+        assert_eq!(s.alloc_window_id(), 50);
+        assert_eq!(s.alloc_window_id(), 51);
+    }
+
+    /// AC-1: the snapshot accessor reports exactly what a plain `new()` +
+    /// allocations would have advanced the counter to.
+    #[test]
+    fn next_window_id_counter_matches_plain_constructor_after_allocations() {
+        let mut s = MuxSession::new(1, "s".to_string());
+        s.alloc_window_id();
+        s.alloc_window_id();
+        assert_eq!(s.next_window_id_counter(), 3);
     }
 }
