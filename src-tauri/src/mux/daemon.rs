@@ -2748,4 +2748,428 @@ mod tests {
         assert_eq!(payload.state, None, "cleared pane must sync as state=None");
         assert_eq!(payload.revision, 2);
     }
+
+    // ---- mux-daemon-hot-upgrade task0004: upgrade preparation (AC-1..AC-6) ----
+    //
+    // `prepare_upgrade` is parameterized over the probe and snapshot
+    // operations (Test Notes: "a substitutable probe", extended here to the
+    // snapshot step so AC-4's failure path is testable without task0003's
+    // real internals). Every test below builds its own fakes; none depend
+    // on a real candidate binary or real session-tree internals.
+
+    #[cfg(unix)]
+    fn ok_probe(_candidate: &Path) -> Result<SchemaRange, String> {
+        Ok((1, 1))
+    }
+
+    #[cfg(unix)]
+    fn incompatible_probe(_candidate: &Path) -> Result<SchemaRange, String> {
+        Ok((99, 100))
+    }
+
+    #[cfg(unix)]
+    fn ok_snapshot(
+        _manager: &mut SessionManager,
+        _listen_fd: RawFd,
+        _handoff_path: &Path,
+    ) -> Result<HandoffCounts, String> {
+        Ok(HandoffCounts {
+            pane_count: 1,
+            descriptor_count: 2,
+        })
+    }
+
+    #[cfg(unix)]
+    fn failing_snapshot(
+        _manager: &mut SessionManager,
+        _listen_fd: RawFd,
+        _handoff_path: &Path,
+    ) -> Result<HandoffCounts, String> {
+        Err("disk full".to_string())
+    }
+
+    /// AC-1: an upgrade request runs the upgrade branch, not the shutdown
+    /// branch -- observed here as "no pane is marked exited" and (by
+    /// construction: `prepare_upgrade`'s source never references
+    /// `graceful_shutdown` or `MuxPane::mark_exited`) "the pane-killing
+    /// shutdown helper is not invoked".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prepare_upgrade_does_not_mark_any_pane_exited() {
+        let (mgr, sid, wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = prepare_upgrade(
+            &mgr,
+            0,
+            Path::new("/bin/true"),
+            vec!["mux".to_string(), "--daemon".to_string()],
+            dir.path(),
+            1,
+            ok_probe,
+            ok_snapshot,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        let m = mgr.lock().await;
+        let pane = m
+            .get_session(sid)
+            .and_then(|s| s.windows.get(&wid))
+            .and_then(|w| w.panes.get(&pane_id))
+            .unwrap();
+        assert!(!pane.exited, "AC-1: upgrade preparation must not exit panes");
+    }
+
+    /// AC-2: the upgrade branch does not remove the socket file.
+    /// `prepare_upgrade` never receives or references a socket path at all
+    /// (only `listen_fd`, a bare integer, and `handoff_dir`); this test
+    /// pins that a file representing the socket, sitting right next to the
+    /// handoff directory, survives untouched.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prepare_upgrade_does_not_remove_socket_file() {
+        let (mgr, ..) = setup_single_pane_manager().await;
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("mux-default.sock");
+        std::fs::write(&sock_path, b"pretend socket").unwrap();
+
+        let result = prepare_upgrade(
+            &mgr,
+            0,
+            Path::new("/bin/true"),
+            vec!["mux".to_string(), "--daemon".to_string()],
+            dir.path(),
+            1,
+            ok_probe,
+            ok_snapshot,
+        )
+        .await;
+        assert!(result.is_ok());
+        assert!(
+            sock_path.exists(),
+            "AC-2: the socket file must never be removed on the upgrade path"
+        );
+    }
+
+    /// AC-3: an incompatible schema range aborts the upgrade, leaves no
+    /// handoff file, and (since `prepare_upgrade` simply returns `Err`
+    /// rather than panicking or exiting) the accept loop that called it is
+    /// free to continue its `select!` unchanged.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prepare_upgrade_aborts_on_incompatible_schema_range() {
+        let (mgr, ..) = setup_single_pane_manager().await;
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = prepare_upgrade(
+            &mgr,
+            0,
+            Path::new("/bin/true"),
+            vec!["mux".to_string(), "--daemon".to_string()],
+            dir.path(),
+            1,
+            incompatible_probe,
+            ok_snapshot,
+        )
+        .await;
+        assert!(result.is_err());
+        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert!(
+            entries.is_empty(),
+            "AC-3: no handoff file may remain after an incompatible-schema abort"
+        );
+    }
+
+    /// AC-4: a snapshot failure aborts the upgrade, reports the reason
+    /// (via the `Err` the requesting connection forwards to the client --
+    /// see `ipc::connection::upgrade_reply_to_message`'s test coverage for
+    /// that half), and leaves no handoff file.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prepare_upgrade_aborts_on_snapshot_failure_and_leaves_no_handoff_file() {
+        let (mgr, ..) = setup_single_pane_manager().await;
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = prepare_upgrade(
+            &mgr,
+            0,
+            Path::new("/bin/true"),
+            vec!["mux".to_string(), "--daemon".to_string()],
+            dir.path(),
+            1,
+            ok_probe,
+            failing_snapshot,
+        )
+        .await;
+        match result {
+            Err(reason) => assert!(reason.contains("disk full")),
+            Ok(_) => panic!("expected snapshot failure to abort the upgrade"),
+        }
+        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert!(
+            entries.is_empty(),
+            "AC-4: no handoff file may remain after a snapshot-failure abort"
+        );
+    }
+
+    /// AC-5: on successful preparation, the `Upgrading` announcement is
+    /// broadcast before the outcome is returned to the caller -- a
+    /// subscriber created beforehand already has the message queued by the
+    /// time `prepare_upgrade` resolves, provable with a non-blocking
+    /// `try_recv` (no timeout/await needed).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prepare_upgrade_broadcasts_upgrading_before_returning_outcome() {
+        let (mgr, ..) = setup_single_pane_manager().await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        let result = prepare_upgrade(
+            &mgr,
+            0,
+            Path::new("/bin/true"),
+            vec!["mux".to_string(), "--daemon".to_string()],
+            dir.path(),
+            1,
+            ok_probe,
+            ok_snapshot,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        let msg = notify_rx
+            .try_recv()
+            .expect("Upgrading broadcast must already be queued once prepare_upgrade returns");
+        assert_eq!(msg.msg_type, MessageType::Upgrading);
+    }
+
+    /// AC-6: the returned run outcome carries the target binary path,
+    /// argument vector, environment addition (naming [`HANDOFF_ENV_VAR`]),
+    /// and handoff file path.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prepare_upgrade_outcome_carries_target_args_env_and_handoff_path() {
+        let (mgr, ..) = setup_single_pane_manager().await;
+        let dir = tempfile::tempdir().unwrap();
+        let candidate = Path::new("/bin/true");
+        let args = vec!["mux".to_string(), "--daemon".to_string()];
+
+        let outcome = prepare_upgrade(
+            &mgr,
+            0,
+            candidate,
+            args.clone(),
+            dir.path(),
+            1,
+            ok_probe,
+            ok_snapshot,
+        )
+        .await
+        .expect("preparation should succeed");
+
+        assert_eq!(outcome.target, candidate);
+        assert_eq!(outcome.args, args);
+        assert_eq!(outcome.env_addition.0, HANDOFF_ENV_VAR);
+        assert_eq!(
+            PathBuf::from(&outcome.env_addition.1),
+            outcome.handoff_path
+        );
+        assert!(outcome.handoff_path.starts_with(dir.path()));
+    }
+
+    // ---- mux-daemon-hot-upgrade task0004: handoff-mode startup (AC-7..AC-9) ----
+
+    /// Bind a real Unix listener at `path` and hand back its raw fd, taking
+    /// ownership (mirrors what a real snapshot step would do after clearing
+    /// close-on-exec: the descriptor crosses into `start_from_handoff`
+    /// exactly once).
+    #[cfg(unix)]
+    fn bind_listener_raw_fd(path: &Path) -> RawFd {
+        let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
+        listener.into_raw_fd()
+    }
+
+    #[cfg(unix)]
+    use std::os::unix::io::IntoRawFd;
+
+    /// AC-7 (partial -- see the module doc comment on `restore_session_tree`
+    /// for what remains a placeholder pending task0003): with a valid
+    /// handoff file recorded over a real listener, handoff start skips bind
+    /// entirely, adopts the SAME listener (proven by accepting a real
+    /// connection through the returned handle), removes the handoff file,
+    /// and surfaces the counts the (fake, substitutable) restore step
+    /// reports.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn start_from_handoff_adopts_listener_and_surfaces_restore_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("adopted.sock");
+        let handoff_path = dir.path().join("handoff.state");
+        let fd = bind_listener_raw_fd(&sock_path);
+        write_handoff_placeholder(&handoff_path, &HandoffFilePlaceholder { listen_fd: fd })
+            .unwrap();
+
+        let restore = |_p: &Path| {
+            Ok((
+                SessionManager::new(),
+                HandoffCounts {
+                    pane_count: 3,
+                    descriptor_count: 3,
+                },
+            ))
+        };
+
+        let (listener, manager, counts) =
+            start_from_handoff(&handoff_path, restore).expect("handoff start should succeed");
+        assert!(manager.is_some());
+        assert_eq!(counts.pane_count, 3);
+        assert_eq!(counts.descriptor_count, 3);
+        assert!(
+            !handoff_path.exists(),
+            "AC-7/AC-8: the handoff file must be removed"
+        );
+
+        // Prove real adoption: a client connecting to the ORIGINAL socket
+        // path is accepted through the returned (adopted, not freshly
+        // bound) listener handle.
+        let accept = tokio::spawn(async move { listener.accept().await });
+        let _client = tokio::net::UnixStream::connect(&sock_path)
+            .await
+            .expect("adopted listener must still accept connections at the original path");
+        let accepted = tokio::time::timeout(std::time::Duration::from_secs(2), accept)
+            .await
+            .expect("accept must complete promptly")
+            .expect("accept task must not panic");
+        assert!(accepted.is_ok());
+    }
+
+    /// Restore failure is handled gracefully (design: "the daemon continues
+    /// as best it can"): the listener is still adopted and the handoff file
+    /// still removed, but the manager comes back `None` (caller falls back
+    /// to a fresh `SessionManager`) with zeroed counts.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn start_from_handoff_restore_failure_still_adopts_listener_and_removes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("adopted2.sock");
+        let handoff_path = dir.path().join("handoff2.state");
+        let fd = bind_listener_raw_fd(&sock_path);
+        write_handoff_placeholder(&handoff_path, &HandoffFilePlaceholder { listen_fd: fd })
+            .unwrap();
+
+        let restore = |_p: &Path| Err("pending task0003".to_string());
+
+        let (_listener, manager, counts) =
+            start_from_handoff(&handoff_path, restore).expect("listener adoption should succeed");
+        assert!(manager.is_none());
+        assert_eq!(counts, HandoffCounts::default());
+        assert!(!handoff_path.exists());
+    }
+
+    /// A missing/unreadable handoff file fails `start_from_handoff` outright
+    /// (there is no listener to adopt), so the caller can fall back to a
+    /// fresh bind.
+    #[cfg(unix)]
+    #[test]
+    fn start_from_handoff_missing_file_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let handoff_path = dir.path().join("does-not-exist.state");
+        let result = start_from_handoff(&handoff_path, |_p| {
+            panic!("restore must not be called when the file cannot even be read")
+        });
+        assert!(result.is_err());
+    }
+
+    /// AC-8: with the handoff environment variable absent, `startup`
+    /// behaves exactly as today -- binds the socket, reports no handoff
+    /// counts.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_without_handoff_env_var_binds_fresh() {
+        // SAFETY: env mutation is process-wide; saved/restored around this
+        // test (matches the existing project convention, e.g.
+        // `render::font::user_dir`'s tests).
+        let prev = std::env::var_os(HANDOFF_ENV_VAR);
+        unsafe {
+            std::env::remove_var(HANDOFF_ENV_VAR);
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("fresh.sock");
+        let result = startup(&sock_path);
+
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(HANDOFF_ENV_VAR, v),
+                None => std::env::remove_var(HANDOFF_ENV_VAR),
+            }
+        }
+
+        let (_listener, _manager, counts) = result.expect("normal startup must succeed");
+        assert!(counts.is_none(), "AC-8: no handoff logging on normal start");
+        assert!(sock_path.exists());
+    }
+
+    /// AC-7/AC-9: with the handoff environment variable set to a valid
+    /// document, `startup` skips bind, adopts the recorded listener,
+    /// reports handoff counts, and -- critically -- clears the environment
+    /// variable before returning, so a pane child spawned afterward by the
+    /// caller never inherits it.
+    ///
+    /// "Skips bind" is proven positively, not just by absence of an error:
+    /// `sock_path` already has a real listener bound at it (the fixture
+    /// setup below) before `startup` runs, so a `UnixListener::bind` at the
+    /// same path would fail with "address in use". `startup` succeeding
+    /// AND the returned listener still accepting connections at that same
+    /// path together show it adopted the existing listener rather than
+    /// attempting (and silently swallowing a failure on) a fresh bind.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_with_handoff_env_var_adopts_listener_and_clears_env_var() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("handoff-adopted.sock");
+        let handoff_path = dir.path().join("handoff3.state");
+        let fd = bind_listener_raw_fd(&sock_path);
+        write_handoff_placeholder(&handoff_path, &HandoffFilePlaceholder { listen_fd: fd })
+            .unwrap();
+
+        let prev = std::env::var_os(HANDOFF_ENV_VAR);
+        // SAFETY: env mutation is process-wide; saved/restored around this
+        // test (matches the existing project convention).
+        unsafe {
+            std::env::set_var(HANDOFF_ENV_VAR, &handoff_path);
+        }
+
+        let result = startup(&sock_path);
+
+        // AC-9: cleared regardless of what the caller does next -- checked
+        // BEFORE restoring `prev`, so a leftover value would fail this
+        // assertion rather than being silently masked by the restore below.
+        let cleared = std::env::var(HANDOFF_ENV_VAR).is_err();
+
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(HANDOFF_ENV_VAR, v),
+                None => std::env::remove_var(HANDOFF_ENV_VAR),
+            }
+        }
+
+        let (listener, _manager, counts) = result.expect("handoff startup must succeed");
+        assert!(counts.is_some(), "AC-7: handoff start must report counts");
+        assert!(!handoff_path.exists());
+        assert!(cleared, "AC-9: handoff env var must be cleared");
+
+        // Positive proof of adoption (see doc comment): the returned
+        // listener still accepts a connection at the ORIGINAL bind path.
+        let accept = tokio::spawn(async move { listener.accept().await });
+        let _client = tokio::net::UnixStream::connect(&sock_path)
+            .await
+            .expect("adopted listener must still accept connections at the original path");
+        let accepted = tokio::time::timeout(std::time::Duration::from_secs(2), accept)
+            .await
+            .expect("accept must complete promptly")
+            .expect("accept task must not panic");
+        assert!(accepted.is_ok());
+    }
 }

@@ -1273,4 +1273,47 @@ mod tests {
             "exit signal preserved separately"
         );
     }
+
+    // ---- mux-daemon-hot-upgrade task0004: MessageType::Upgrade CLI reply
+    // translation ----
+    //
+    // `upgrade_reply_to_message` is the pure core of `handle_cli_client`'s
+    // `MessageType::Upgrade` arm: given the accept loop's reply, decide what
+    // (if anything) goes back to the client. Extracted so these branches are
+    // unit-testable without a live connection or a real accept loop.
+
+    /// Successful preparation produces no explicit reply (the connection is
+    /// simply dropped once the process is replaced, IMPLEMENTATION.md D2).
+    #[test]
+    fn upgrade_reply_to_message_success_is_none() {
+        assert!(upgrade_reply_to_message(Ok(Ok(()))).is_none());
+    }
+
+    /// AC-4: an abort reason reported by the accept loop becomes an `Error`
+    /// control message carrying that exact reason.
+    #[test]
+    fn upgrade_reply_to_message_abort_reason_becomes_error_message() {
+        let msg = upgrade_reply_to_message(Ok(Err("disk full".to_string())))
+            .expect("an abort reason must produce a reply message");
+        assert_eq!(msg.msg_type, MessageType::Error);
+        let payload: ErrorMsg = msg.decode_payload().unwrap();
+        assert_eq!(payload.message, "disk full");
+    }
+
+    /// A closed reply channel (accept loop dropped it without answering,
+    /// e.g. mid-shutdown) still produces a client-facing `Error` message
+    /// rather than silently dropping the connection with no explanation.
+    #[tokio::test]
+    async fn upgrade_reply_to_message_channel_closed_becomes_generic_error() {
+        let (reply_tx, reply_rx) = oneshot::channel::<Result<(), String>>();
+        drop(reply_tx);
+        let recv_result = reply_rx.await;
+        assert!(recv_result.is_err(), "dropped sender must yield RecvError");
+
+        let msg = upgrade_reply_to_message(recv_result)
+            .expect("a closed reply channel must still produce a reply message");
+        assert_eq!(msg.msg_type, MessageType::Error);
+        let payload: ErrorMsg = msg.decode_payload().unwrap();
+        assert!(!payload.message.is_empty());
+    }
 }
