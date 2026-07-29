@@ -3602,12 +3602,37 @@ mod tests {
         );
     }
 
+    /// Serializes the two tests below that mutate the process-wide
+    /// [`HANDOFF_ENV_VAR`] (task0011 rework). `cargo test`'s default
+    /// parallel execution runs every `#[test]` fn on its own thread with no
+    /// isolation between them, and an environment variable is shared by
+    /// every thread in the process — so without this lock, one test's
+    /// `set_var` can land between another, CONCURRENTLY running test's own
+    /// `var_os`/`remove_var` and its `startup()` call. That other test then
+    /// reads back the WRONG (this test's) handoff path and adopts THIS
+    /// test's listen descriptor too: two independent `UnixListener`s now
+    /// believe they own the same descriptor number, and whichever drops
+    /// first closes it out from under the other — aborting the whole
+    /// process ("IO Safety violation: owned file descriptor already
+    /// closed") once the survivor's own drop later finds its descriptor
+    /// already gone. Reproduced and root-caused via `strace -f`, correlating
+    /// the fatal `fcntl(fd, F_GETFD) = -1 EBADF` against two threads
+    /// racing to open the identical (shared, not merely
+    /// coincidentally-alike) handoff document path.
+    static HANDOFF_ENV_VAR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// AC-8: with the handoff environment variable absent, `startup`
     /// behaves exactly as today -- binds the socket, reports no handoff
     /// counts.
     #[cfg(unix)]
     #[tokio::test]
     async fn startup_without_handoff_env_var_binds_fresh() {
+        // Held for the whole test (see `HANDOFF_ENV_VAR_TEST_LOCK`) so this
+        // test's env var window never overlaps
+        // `startup_with_handoff_env_var_adopts_listener_and_clears_env_var`'s.
+        let _env_guard = HANDOFF_ENV_VAR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // SAFETY: env mutation is process-wide; saved/restored around this
         // test (matches the existing project convention, e.g.
         // `render::font::user_dir`'s tests).
@@ -3656,6 +3681,13 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn startup_with_handoff_env_var_adopts_listener_and_clears_env_var() {
+        // Held for the whole test (see `HANDOFF_ENV_VAR_TEST_LOCK`) so this
+        // test's env var window never overlaps
+        // `startup_without_handoff_env_var_binds_fresh`'s.
+        let _env_guard = HANDOFF_ENV_VAR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("handoff-adopted.sock");
         let handoff_path = dir.path().join("handoff3.state");
