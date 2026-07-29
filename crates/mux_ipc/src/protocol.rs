@@ -472,6 +472,17 @@ pub enum MessageType {
     /// Structured error response shared by `ReadPane` / `SendText` /
     /// `WaitAgentState`.
     AgentApiError = 0x24,
+    /// Client → daemon: request an in-place upgrade (execve handoff).
+    /// Wire shape mirrors `Shutdown`: type byte, pane id zero, empty
+    /// payload.
+    Upgrade = 0x25,
+    /// Daemon → client: announce that an in-place upgrade is imminent.
+    /// Wire shape mirrors `Shutdown`: type byte, pane id zero, empty
+    /// payload. Carries no other signal; its arrival is the entire
+    /// message. A peer that does not recognize this type discards the
+    /// frame through the existing unknown-frame path and keeps its
+    /// connection alive.
+    Upgrading = 0x26,
 }
 
 impl MessageType {
@@ -512,6 +523,8 @@ impl MessageType {
             0x22 => Some(Self::WaitAgentState),
             0x23 => Some(Self::WaitAgentStateResult),
             0x24 => Some(Self::AgentApiError),
+            0x25 => Some(Self::Upgrade),
+            0x26 => Some(Self::Upgrading),
             _ => None,
         }
     }
