@@ -306,8 +306,14 @@ pub(in crate::mux) enum LegacyRecovery {
 /// for a [`handshake_with_version`] call. Unix: the `AF_UNIX` socket at
 /// `sock_path`. Windows: the daemon's Named Pipe (`sock_path` is unused
 /// there, matching [`is_daemon_running`]'s existing `_path` convention).
+///
+/// `pub(in crate::mux)` (task0005): widened so `mux::cli::execute_upgrade`
+/// can drive the same connect/handshake sequence for the standalone
+/// `upgrade` subcommand, without duplicating it.
 #[cfg(unix)]
-fn connect_daemon(sock_path: &Path) -> std::io::Result<std::os::unix::net::UnixStream> {
+pub(in crate::mux) fn connect_daemon(
+    sock_path: &Path,
+) -> std::io::Result<std::os::unix::net::UnixStream> {
     let stream = std::os::unix::net::UnixStream::connect(sock_path)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -315,7 +321,7 @@ fn connect_daemon(sock_path: &Path) -> std::io::Result<std::os::unix::net::UnixS
 }
 
 #[cfg(windows)]
-fn connect_daemon(_sock_path: &Path) -> std::io::Result<std::fs::File> {
+pub(in crate::mux) fn connect_daemon(_sock_path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -328,7 +334,10 @@ fn connect_daemon(_sock_path: &Path) -> std::io::Result<std::fs::File> {
 /// Never panics on a malformed reply — any framing/decode problem surfaces
 /// as an `io::Error` so callers can produce a short user-facing message
 /// instead of an opaque bincode error (AC-3).
-fn handshake_with_version<S: std::io::Read + std::io::Write>(
+///
+/// `pub(in crate::mux)` (task0005): widened alongside [`connect_daemon`] for
+/// `mux::cli::execute_upgrade`.
+pub(in crate::mux) fn handshake_with_version<S: std::io::Read + std::io::Write>(
     stream: &mut S,
     protocol_version: u32,
 ) -> std::io::Result<WelcomeMsg> {
@@ -378,6 +387,58 @@ fn send_shutdown<S: std::io::Write>(stream: &mut S) -> std::io::Result<()> {
     stream.write_all(&(body.len() as u32).to_be_bytes())?;
     stream.write_all(&body)?;
     stream.flush()
+}
+
+/// Send a bare `Upgrade` control message (task0005 Design "upgrade
+/// subcommand" / "Recovery path"): requests that the daemon replace itself
+/// in place with the currently-installed binary. Mirrors `Shutdown`'s wire
+/// shape exactly (type byte, zero pane id, empty payload) — a daemon built
+/// before this feature does not recognise [`MessageType::Upgrade`] and
+/// discards the frame through the existing unknown-type path (D7), which is
+/// why the AC-3/AC-6 timeout route is the expected outcome against those.
+///
+/// `pub(in crate::mux)`: shared by [`recover_from_legacy_daemon`]'s
+/// upgrade-first attempt and `mux::cli::execute_upgrade`.
+pub(in crate::mux) fn send_upgrade<S: std::io::Write>(stream: &mut S) -> std::io::Result<()> {
+    let msg = MuxMessage {
+        msg_type: MessageType::Upgrade,
+        pane_id: 0,
+        payload: Vec::new(),
+    };
+    let body = msg.to_frame_body();
+    stream.write_all(&(body.len() as u32).to_be_bytes())?;
+    stream.write_all(&body)?;
+    stream.flush()
+}
+
+/// Poll interval / bound for [`wait_for_daemon_reachable_at_current_version`]
+/// (task0005): an in-place upgrade (execve onto an already-listening socket)
+/// is expected to complete far faster than the cold-start respawn
+/// [`wait_for_daemon_exit`] bounds at 5s, so a shorter ~2s bound is used —
+/// generous for the actual replacement, short enough to keep the AC-3/AC-6
+/// timeout tests fast.
+const UPGRADE_REACHABLE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const UPGRADE_REACHABLE_POLL_MAX_ATTEMPTS: u32 = 40;
+
+/// Poll `sock_path` (bounded, see [`UPGRADE_REACHABLE_POLL_MAX_ATTEMPTS`])
+/// until a daemon there completes a Hello handshake at [`PROTOCOL_VERSION`],
+/// as expected after sending an [`MessageType::Upgrade`] request (task0005
+/// AC-2/AC-3, Recovery path AC-6/AC-7). Returns `true` once reachable,
+/// `false` on timeout — never hangs indefinitely.
+///
+/// `pub(in crate::mux)`: shared by [`recover_from_legacy_daemon`] and
+/// `mux::cli::execute_upgrade`.
+pub(in crate::mux) fn wait_for_daemon_reachable_at_current_version(sock_path: &Path) -> bool {
+    for _ in 0..UPGRADE_REACHABLE_POLL_MAX_ATTEMPTS {
+        if let Ok(mut stream) = connect_daemon(sock_path)
+            && let Ok(WelcomeMsg::Accepted { .. }) =
+                handshake_with_version(&mut stream, PROTOCOL_VERSION)
+        {
+            return true;
+        }
+        std::thread::sleep(UPGRADE_REACHABLE_POLL_INTERVAL);
+    }
+    false
 }
 
 /// Poll until the daemon at `sock_path` is no longer reachable (bounded to
@@ -444,20 +505,84 @@ pub(in crate::mux) fn recover_from_legacy_daemon(
             })?;
             match handshake_with_version(&mut legacy, PREVIOUS_PROTOCOL_VERSION) {
                 Ok(WelcomeMsg::Accepted { .. }) => {
-                    send_shutdown(&mut legacy).map_err(|e| {
+                    // task0005 Recovery path: a plain shutdown kills every
+                    // pane, so ask the legacy daemon to upgrade itself in
+                    // place first. Only fall back to shutdown-then-respawn
+                    // if it never becomes reachable at the current protocol
+                    // version (AC-6/AC-7). A daemon built before this
+                    // feature silently discards the Upgrade frame (D7), so
+                    // that timeout is the expected route for those, not an
+                    // error.
+                    let upgraded = match send_upgrade(&mut legacy) {
+                        Ok(()) => {
+                            drop(legacy);
+                            wait_for_daemon_reachable_at_current_version(sock_path)
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to send an upgrade request to the protocol \
+                                 version {reported} daemon: {e}; falling back to \
+                                 shutdown"
+                            );
+                            drop(legacy);
+                            false
+                        }
+                    };
+
+                    if upgraded {
+                        log::info!(
+                            "Legacy daemon (protocol version {reported}) upgraded in \
+                             place; a compatible daemon is now reachable",
+                        );
+                        return Ok(LegacyRecovery::Compatible);
+                    }
+                    log::warn!(
+                        "Legacy daemon (protocol version {reported}) did not become \
+                         reachable at the current protocol version after an upgrade \
+                         request; falling back to shutdown"
+                    );
+
+                    // Fallback: existing shutdown-then-respawn path. The
+                    // upgrade attempt above already dropped the connection
+                    // (or never sent), so reconnect for the Shutdown.
+                    let mut legacy_for_shutdown = connect_daemon(sock_path).map_err(|e| {
                         format!(
                             "Detected an incompatible mux daemon (protocol version \
-                             {reported}) but failed to send its shutdown request: {e}"
+                             {reported}) but it became unreachable while falling back \
+                             to shutdown: {e}"
                         )
                     })?;
-                    drop(legacy);
-                    wait_for_daemon_exit(sock_path)?;
-                    log::info!(
-                        "Recovered mux socket from a protocol version {} daemon; a \
-                         compatible daemon can now start",
-                        reported
-                    );
-                    Ok(LegacyRecovery::Recovered)
+                    match handshake_with_version(&mut legacy_for_shutdown, PREVIOUS_PROTOCOL_VERSION)
+                    {
+                        Ok(WelcomeMsg::Accepted { .. }) => {
+                            send_shutdown(&mut legacy_for_shutdown).map_err(|e| {
+                                format!(
+                                    "Detected an incompatible mux daemon (protocol version \
+                                     {reported}) but failed to send its shutdown request: {e}"
+                                )
+                            })?;
+                            drop(legacy_for_shutdown);
+                            wait_for_daemon_exit(sock_path)?;
+                            log::info!(
+                                "Recovered mux socket from a protocol version {} daemon; a \
+                                 compatible daemon can now start",
+                                reported
+                            );
+                            Ok(LegacyRecovery::Recovered)
+                        }
+                        Ok(WelcomeMsg::Rejected {
+                            reason: retry_reason,
+                        }) => Err(format!(
+                            "The running mux daemon (protocol version {reported}) could not \
+                             be recovered automatically: {retry_reason}. Stop it manually \
+                             (e.g. `pkill -f 'emterm mux --daemon'`) and retry."
+                        )),
+                        Err(e) => Err(format!(
+                            "Detected an incompatible mux daemon (protocol version \
+                             {reported}) but failed to negotiate a compatible shutdown \
+                             after the upgrade attempt: {e}"
+                        )),
+                    }
                 }
                 Ok(WelcomeMsg::Rejected {
                     reason: retry_reason,
@@ -560,12 +685,52 @@ pub fn shutdown_daemon_any_version(sock_path: &Path) -> Result<ShutdownOutcome, 
     }
 }
 
+/// Everything the synchronous caller (`mux::cli::execute_daemon`) needs to
+/// replace this process's image in place (IMPLEMENTATION.md D1, Shared
+/// Components "Daemon run outcome").
+///
+/// task0004 owns wiring the accept-loop branch that actually constructs
+/// [`DaemonRunOutcome::UpgradeRequested`] (after receiving `Upgrade` and
+/// snapshotting the session tree, task0003); task0005 owns consuming it in
+/// `execute_daemon` and is defined here ahead of that merge so no task
+/// leaves a placeholder for the other (D9). `run_daemon` returns
+/// `Terminated` unconditionally today.
+#[derive(Debug, Clone)]
+pub struct UpgradeRequest {
+    /// Absolute path of the target binary to replace this process with.
+    pub target: PathBuf,
+    /// Argument vector for the replacement (mirrors this process's own,
+    /// per IMPLEMENTATION.md D1).
+    pub args: Vec<String>,
+    /// Single environment variable addition carrying the handoff document
+    /// path (Shared Components "Handoff environment contract", task0004).
+    pub env_addition: (String, String),
+    /// Absolute path of the handoff document just written, so the caller
+    /// can re-enter service over it if the replacement itself fails.
+    pub handoff_document_path: PathBuf,
+}
+
+/// Outcome of the async daemon entry point ([`run_daemon`]), consumed by the
+/// synchronous caller (`mux::cli::execute_daemon`) only after the async
+/// runtime has been fully shut down (IMPLEMENTATION.md D1: replacing the
+/// process image while runtime worker threads are alive is undefined
+/// behaviour).
+#[derive(Debug)]
+pub enum DaemonRunOutcome {
+    /// The daemon exited normally — today's behaviour, unchanged.
+    Terminated,
+    /// An `Upgrade` request was accepted and a handoff document has been
+    /// written; the caller must perform the process replacement described
+    /// by the carried [`UpgradeRequest`].
+    UpgradeRequested(UpgradeRequest),
+}
+
 /// Run the mux daemon.
 ///
 /// This is the main entry point for `emterm mux --daemon`.
 /// It blocks until all sessions end or SIGTERM is received.
 #[cfg(unix)]
-pub async fn run_daemon() -> anyhow::Result<()> {
+pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     let sock_path = socket_path();
 
     // Ensure parent directory exists with restricted permissions
@@ -686,7 +851,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     let _ = std::fs::remove_file(&sock_path);
     log::info!("Daemon shutdown complete");
 
-    Ok(())
+    Ok(DaemonRunOutcome::Terminated)
 }
 
 /// Run the mux daemon on Windows using Named Pipes.
@@ -694,7 +859,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
 /// Listens on `\\.\pipe\emterm-mux-default`, accepts client connections,
 /// and manages PTY sessions. Auto-exits when all sessions end or Ctrl+C.
 #[cfg(windows)]
-pub async fn run_daemon() -> anyhow::Result<()> {
+pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     let pipe_name_str = pipe_name();
@@ -793,12 +958,12 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     let _ = std::fs::remove_file(&sock_path);
     log::info!("Daemon shutdown complete");
 
-    Ok(())
+    Ok(DaemonRunOutcome::Terminated)
 }
 
 /// Run the mux daemon (unsupported platform).
 #[cfg(all(not(unix), not(windows)))]
-pub async fn run_daemon() -> anyhow::Result<()> {
+pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     anyhow::bail!("Mux daemon is not supported on this platform.");
 }
 
@@ -1223,9 +1388,12 @@ mod tests {
     /// Spawn a thread that behaves like a single-instance legacy (v1) mux
     /// daemon on `sock_path`: rejects any Hello whose `protocol_version`
     /// isn't [`FAKE_LEGACY_VERSION`] with the exact reason text the real
-    /// daemon produces, accepts a matching Hello, waits for `Shutdown`, then
-    /// removes the socket file and exits — mirroring the real daemon's
-    /// Shutdown -> `graceful_shutdown` -> `remove_file` sequence.
+    /// daemon produces, accepts a matching Hello, then per-frame: an
+    /// `Upgrade` request is silently ignored (task0005 Recovery path — a
+    /// daemon predating that feature discards it via the unknown-type path,
+    /// D7) and the loop keeps accepting; `Shutdown` removes the socket file
+    /// and exits — mirroring the real daemon's Shutdown ->
+    /// `graceful_shutdown` -> `remove_file` sequence.
     #[cfg(unix)]
     fn spawn_fake_legacy_daemon(sock_path: std::path::PathBuf) -> std::thread::JoinHandle<()> {
         use std::os::unix::net::UnixListener;
@@ -1260,13 +1428,17 @@ mod tests {
                 };
                 write_welcome(&mut stream, &accept);
 
-                let shutdown_frame = read_frame(&mut stream);
-                assert_eq!(shutdown_frame.msg_type, MessageType::Shutdown);
-
-                // Simulate process exit: release the socket like the real
-                // daemon's shutdown path does.
-                let _ = std::fs::remove_file(&sock_path);
-                break;
+                let frame = read_frame(&mut stream);
+                match frame.msg_type {
+                    MessageType::Upgrade => continue,
+                    MessageType::Shutdown => {
+                        // Simulate process exit: release the socket like the
+                        // real daemon's shutdown path does.
+                        let _ = std::fs::remove_file(&sock_path);
+                        break;
+                    }
+                    other => panic!("unexpected frame after legacy Accepted: {other:?}"),
+                }
             }
         })
     }

@@ -472,6 +472,17 @@ pub enum MessageType {
     /// Structured error response shared by `ReadPane` / `SendText` /
     /// `WaitAgentState`.
     AgentApiError = 0x24,
+    /// Client → daemon: request an in-place upgrade (`emterm mux upgrade`,
+    /// task0005). Mirrors `Shutdown`'s wire shape exactly (type byte, zero
+    /// pane id, empty payload) so a daemon built before this feature
+    /// discards the frame through the unknown-type path below instead of
+    /// erroring (IMPLEMENTATION.md D7, mux-daemon-hot-upgrade Shared
+    /// Components "Upgrade / Upgrading message types" — task0001 owns this
+    /// shared component; added here ahead of that task's merge because
+    /// task0005 needs it to exist to send the request at all, per
+    /// task0005's own file-scope constraints. Expect this to be reconciled
+    /// with task0001's canonical definition at merge time).
+    Upgrade = 0x25,
 }
 
 impl MessageType {
@@ -512,6 +523,7 @@ impl MessageType {
             0x22 => Some(Self::WaitAgentState),
             0x23 => Some(Self::WaitAgentStateResult),
             0x24 => Some(Self::AgentApiError),
+            0x25 => Some(Self::Upgrade),
             _ => None,
         }
     }
