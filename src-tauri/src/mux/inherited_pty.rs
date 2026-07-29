@@ -282,6 +282,27 @@ mod tests {
         flags & libc::FD_CLOEXEC != 0
     }
 
+    /// A raw descriptor number that no real `open`-family call can ever
+    /// return, standing in for "an already-closed descriptor" in
+    /// `construction_fails_over_a_closed_descriptor` below (task0011).
+    ///
+    /// An earlier revision built that case by `dup`-ing a real PTY master
+    /// and closing the duplicate immediately before asserting rejection.
+    /// That left a race: the freed NUMBER lives in a process-wide table
+    /// shared by every test thread, so a concurrently running test's own
+    /// PTY open could legitimately claim that same number before this
+    /// test's `InheritedMasterPty::new` ran its `isatty` check. Construction
+    /// would then wrongly succeed against a descriptor this test doesn't
+    /// own, and the adapter's `Drop` would close someone else's live PTY
+    /// out from under them — surfacing later as an aborting "IO Safety
+    /// violation" when that other test's real owner tried to close it.
+    ///
+    /// `-1` needs no such caution: POSIX reserves negative descriptor
+    /// numbers as the `open`/`dup`/`socket` error return, so no real
+    /// descriptor is ever assigned this number — there is no window in
+    /// which to race.
+    const CLOSED_FD: RawFd = -1;
+
     /// AC-1: given a descriptor obtained by opening a PTY pair, the adapter
     /// can be constructed and reports that same descriptor number.
     #[test]
@@ -418,18 +439,13 @@ mod tests {
         // was taken) — dropping `file` here is what actually closes it.
     }
 
-    /// AC-6: construction over an already-closed descriptor fails instead
-    /// of yielding an adapter.
+    /// AC-6 (task0002) / AC-2 (task0011): construction over an
+    /// already-closed descriptor fails instead of yielding an adapter, and
+    /// does so without racing the process-wide descriptor table shared by
+    /// every test thread — see `CLOSED_FD`.
     #[test]
     fn construction_fails_over_a_closed_descriptor() {
-        let (_pair, dup_fd) = open_master_dup();
-        // SAFETY: `dup_fd` is a descriptor this test exclusively owns (a
-        // fresh `dup` above); no other code holds it.
-        unsafe {
-            libc::close(dup_fd);
-        }
-
-        let result = InheritedMasterPty::new(dup_fd);
+        let result = InheritedMasterPty::new(CLOSED_FD);
 
         assert!(
             result.is_err(),
