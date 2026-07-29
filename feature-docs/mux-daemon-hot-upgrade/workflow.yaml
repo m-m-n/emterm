@@ -106,8 +106,8 @@ tasks:
     domains: [concurrency, external-io, api-contract]
     complexity: high
     requirements: [FR2, FR3, FR7, FR8, FR11, FR13, FR17, NFR1, NFR2, NFR5]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "INTEGRATION GAP: daemon.rs snapshot_session_state/restore_session_tree are placeholders, not wired to the real mux::upgrade::snapshot()/restore() that task0003 landed concurrently. Upgrade refuses whenever any pane is live, so the feature is not yet functional end to end. Needs rework."
     branch: em-workflow/mux-daemon-hot-upgrade/task0004
   task0005:
     title: "CLI upgrade command, schema probe and the process replacement"
