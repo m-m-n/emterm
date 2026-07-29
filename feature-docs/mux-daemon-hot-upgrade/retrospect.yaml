@@ -1,0 +1,101 @@
+feature: mux-daemon-hot-upgrade
+collected_at: "2026-07-30T00:35:00+09:00"
+session_ids: [f0aa2b5a-e345-41d4-b7a2-4b05eff1e903]
+
+signals:
+  review_critical_high:
+    # --- round 1 (all resolved by the task0009/task0010 rework) ---
+    - {stable_id: dd7a4526fea67d1d, category: architecture, file: src-tauri/src/mux/daemon.rs, title: "mux::upgrade が誰からも呼ばれず daemon が placeholder を使い続けている", resolution: resolved_in_round2}
+    - {stable_id: 745a8bd7941f58f6, category: spec, file: src-tauri/src/mux/daemon.rs, title: "snapshot/restore 未接続で FR4/FR9/FR10/FR18 が動作しない", resolution: resolved_in_round2}
+    - {stable_id: 3241387b60c6ae2d, category: comprehensive, file: src-tauri/src/mux/daemon.rs, title: "mux::upgrade が daemon に配線されておらず hot-upgrade が機能しない", resolution: resolved_in_round2}
+    - {stable_id: 5106b22111395091, category: comprehensive, file: src-tauri/src/mux/daemon.rs, title: "listen_fd は execve 前に close されるため descriptor 継承が原理的に成立しない", resolution: resolved_in_round2}
+    - {stable_id: 32bb6e465ac0fbb4, category: architecture, file: src-tauri/src/mux/cli.rs, title: "probe-handoff が SSOT を無視してローカル定数で答えている", resolution: resolved_in_round2}
+    - {stable_id: 22d7538b3f93c765, category: architecture, file: src-tauri/src/mux/daemon.rs, title: "handoff ファイルの規約が daemon.rs と upgrade.rs に二重実装", resolution: resolved_in_round2}
+    - {stable_id: f1c8baa66eb26e3a, category: security, file: src-tauri/src/mux/upgrade.rs, title: "CLOEXEC が restore 側で戻されず pane 間分離が壊れる", resolution: resolved_in_round2}
+    - {stable_id: 3ff058f6b9269473, category: security, file: src-tauri/src/mux/daemon.rs, title: "listen_fd を無検証で from_raw_fd している", resolution: resolved_in_round2}
+    - {stable_id: f6781590da4a0080, category: spec, file: src-tauri/src/mux/daemon.rs, title: "FR5: listen socket FD の FD_CLOEXEC を解除していない", resolution: resolved_in_round2}
+    - {stable_id: 18ef5ad2ab3a87fa, category: spec, file: src-tauri/src/mux/daemon.rs, title: "継承 FD 番号を生存確認せず adopt している", resolution: resolved_in_round2}
+    - {stable_id: 9c34166ee2d99474, category: comprehensive, file: src-tauri/src/mux/daemon.rs, title: "無検証の from_raw_fd で無関係な descriptor を乗っ取り close する", resolution: resolved_in_round2}
+    - {stable_id: 07f6dbc60e84d54f, category: comprehensive, file: src-tauri/src/mux/cli.rs, title: "mux upgrade が中断された upgrade を成功として報告する", resolution: resolved_in_round2}
+    - {stable_id: 3f3ebe4fc71ca82d, category: comprehensive, file: src-tauri/src/mux/daemon.rs, title: "Upgrading broadcast がクライアントに届く前にランタイムが drop される", resolution: resolved_in_round2}
+    # --- round 2 (deferred: batch rework cap reached) ---
+    - {stable_id: 0dc98af41cd7b3ae, category: spec, file: src-tauri/src/mux/daemon.rs, title: "候補が current_exe() 由来のためパッケージ更新後は常に abort する（US1/US2 が成立しない）", resolution: deferred}
+    - {stable_id: 5f77c86bbb1e9e33, category: comprehensive, file: src-tauri/src/mux/daemon.rs, title: "handoff 起動失敗時の fresh bind フォールバックが必ず EADDRINUSE で失敗し全 pane が死ぬ", resolution: deferred}
+    - {stable_id: cb7b02c2eb2e88fa, category: comprehensive, file: src-tauri/src/mux/upgrade.rs, title: "snapshot 中断時に FD_CLOEXEC を戻さず子シェルへ listen socket と全 master が漏れる", resolution: deferred}
+    - {stable_id: 5e5ba1b2ac10cc6a, category: security, file: src-tauri/src/mux/upgrade.rs, title: "snapshot 失敗時の CLOEXEC 未復元でステータスバー実行の子プロセスに漏れる", resolution: deferred}
+    - {stable_id: e40e7d0fc4b3ba55, category: spec, file: src-tauri/src/mux/upgrade.rs, title: "snapshot abort 時の CLOEXEC 未復元が US3 の no-op 保証に反する", resolution: deferred}
+    - {stable_id: b0a4a6d0a3e9a5f5, category: architecture, file: src-tauri/src/mux/daemon.rs, title: "リーク前提の所有権回避 + in-process 再入で同一 PTY master に二重 reader が生まれる", resolution: deferred}
+    - {stable_id: 08a2ff4c1cc6f0f4, category: comprehensive, file: src-tauri/src/mux/cli.rs, title: "exec 失敗後の in-process 再入で reader が二重化し pane 出力が分割される", resolution: deferred}
+
+  conflict_reworks:
+    - {task: task0004, retries: 1}
+    - {task: task0005, retries: 1}
+    - {task: task0006, retries: 1}
+    - {task: task0003, retries: 1}
+
+  file_prediction_misses:
+    - {task: task0003, files: [src-tauri/src/mux/ipc/pty_spawn.rs]}
+    - {task: task0004, files: [crates/mux_ipc/src/protocol.rs, src-tauri/src/mux/cli.rs]}
+    - {task: task0005, files: [crates/mux_ipc/src/protocol.rs]}
+    - {task: task0006, files: [crates/mux_ipc/src/protocol.rs]}
+    - {task: task0009, files: [src-tauri/src/mux/ipc/connection.rs]}
+    - {task: task0011, files: [src-tauri/src/mux/daemon.rs]}
+
+  verification_failures:
+    - {id: VF-1, resolution: fixed_by_task0011, note: "cargo test --lib が並列時に間欠 SIGABRT。修正後 18 回連続で再現なし"}
+    - {id: VF-2, resolution: not_attributable, note: "tabs::tests と tmux_sockets::tests の既存フレーク。ベースコミットで同数再現"}
+
+  discretionary_perspectives: []
+
+  declined_findings: []
+
+lessons_candidates:
+  - id: L1
+    note: |
+      並列実装で「両側が同時に着地する結線」が誰の担当でもなくなった。task0003 が
+      mux::upgrade の snapshot/restore を実装し、task0004 が daemon 側の呼び出し口を
+      作ったが、両者が同時期にマージされたため配線が残らず、round 1 の critical に
+      なった。plan-writing の「Integration wiring must have an owner」ルールは
+      placeholder を置く場合を想定しているが、今回は「両タスクとも自分の側は完成させた
+      が接続は誰も持っていない」形で、既存ルールの網にかからなかった。
+      rework では upgrade 経路（daemon.rs / upgrade.rs / cli.rs）を 1 タスクに
+      まとめることで解消した。相互に噛み合う変更は分割しない方が速い、という判断材料。
+  - id: L2
+    note: |
+      worktree 間で refs/stash が共有されることを実装者が知らず、task0005 の
+      git stash が task0004 の未コミット作業を巻き込んだ。両者とも自力で復旧したが、
+      オーケストレーター側で dangling commit を ref に固定して gc から守る必要があった。
+      rework 投入時にプロンプトへ「git stash を使わない」と明示したところ再発しなかった。
+      implementer のプロンプトか worktree-task-workflow スキルに恒久的に入れる候補。
+  - id: L3
+    note: |
+      verify の失敗原因を「abort 直前に完了していたテスト」の時間的近接から
+      inherited_pty.rs と診断して task0011 の plan に書いたが、これは 12 回サンプルの
+      相関に過ぎず誤りだった。真因は daemon.rs の 2 テスト間の HANDOFF_ENV_VAR レース
+      （同一 listener fd の二重 adopt）で、実装者が strace -f の 2 回の独立再現で
+      特定した。プロセス全体に及ぶ fd レースは、テストの完了順から局所化できない。
+      オーケストレーターが plan に書く診断は仮説として明示し、実装者が反証できる
+      余地を残すべき（今回は Out of Scope に inherited_pty 以外を書いていたため、
+      実装者は逸脱として申告する必要があった）。
+  - id: L4
+    note: |
+      round 1 の critical/high 13 件に対し auto-fix を 1 件も実行しなかった。処方が
+      いずれも複数ファイルにまたがり、単一ファイル限定の review-editor 契約では
+      構造的に適用できないため。review-phase.md の R4 分類は shape（diff/prose）を
+      見るが、「処方が単一ファイルで完結するか」は見ていない。この判定軸を
+      classification に足すと、適用不能な候補を dispatch する前に落とせる。
+  - id: L5
+    note: |
+      codex CLI が不在だったため codex_cross_validation が全観点でスキップされたが、
+      review-rules.yaml の判定では complexity: high により true のままだった。
+      round 1・2 とも Claude 単独で critical を検出できたので実害は無かったが、
+      cross-validation ありの前提で confidence を算出している（claude+codex=95 /
+      claude-only=60）ため、codex 不在時は confidence の意味が変わる点は記録しておく。
+  - id: L6
+    note: |
+      pane の scrollback を含む handoff ファイルがディスクに落ちる設計を SPEC の
+      Assumptions（A1）で選んだが、round 2 の security が「削除経路が production に
+      無いため恒久的に残りうる」「同 uid のプロセスが先にファイルを作るだけで
+      upgrade を恒久的に殺せる」と指摘した。batch の create-spec で Codex 相談も
+      できない状況で単独決定した設計判断が、後段のレビューで穴を指摘された例。
+      Assumptions として記録していたことでレビュアーが要件として扱えた。
