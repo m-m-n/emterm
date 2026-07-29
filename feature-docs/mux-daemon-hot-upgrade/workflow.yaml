@@ -1,0 +1,238 @@
+schema_version: 1
+feature: mux-daemon-hot-upgrade
+created: 2026-07-29
+base_branch: main
+parent_branch: em-workflow/mux-daemon-hot-upgrade/integration
+
+project:
+  license: MIT
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    mux_ipc:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/mux_ipc/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/mux_ipc/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli_only:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 951c81fcc57501c1eb95a8e6eb0f1b609768258a
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "GUI の変更が無く、CLI 出力と log のみのため視覚デザイン判断が不要"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: 9c9db29321b43c7433f161e243e19ccc35162c74
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "Add MessageType::Upgrade to mux_ipc (empty payload, unknown-frame safe)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "Add MessageType::Upgrading broadcast to connected clients before execve"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "Handle Upgrade in the daemon: accept-loop upgrade branch skipping graceful_shutdown and socket unlink"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "Serialize the session tree, scrollback, ID counters and incarnation into a versioned handoff document"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: "Clear FD_CLOEXEC on the listen socket FD and all PTY master FDs, recording FD numbers"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: "Write the handoff document to a 0600 file and pass its path to the new process"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: "Perform execve only after full tokio runtime shutdown, from the main thread"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: "Detect handoff startup, skip socket bind, adopt the inherited listen socket FD"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR9:
+    title: "Restore SessionManager including private ID counters and the incarnation token"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR10:
+    title: "Re-adopt inherited PTY master FDs as MasterPty and re-establish writers, readers and scrollback"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR11:
+    title: "Log handoff startup distinguishably from normal startup with pane and FD counts"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR12:
+    title: "Client reconnect loop and re-attach after receiving Upgrading"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR13:
+    title: "On execve failure, unlink state, log, return an error to the client and continue running"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR14:
+    title: "Handoff schema version independent of PROTOCOL_VERSION, with a pre-execve compatibility probe"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR15:
+    title: "Add the emterm mux upgrade subcommand (unsupported report on Windows)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR16:
+    title: "recover_from_legacy_daemon attempts Upgrade first, falls back to shutdown-then-respawn"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR17:
+    title: "Keep the listen socket open so mid-upgrade connections queue in the kernel backlog"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR18:
+    title: "Serialize child PIDs and reap post-upgrade children through a PID-based path"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR19:
+    title: "Unlink the handoff state file after restore and on every abort path"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Security: 0600 handoff file in the 0700 socket directory, promptly unlinked"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Reliability: no pane shell is killed on any upgrade or abort path"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Performance: handoff completes within seconds and clients reconnect inside the retry window"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Platform: Unix-only upgrade path; Windows and --no-default-features builds unaffected"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: "Observability: handoff startup and abort reasons logged at warn or above"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: "Compatibility: new message types do not break older peers; PROTOCOL_VERSION unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
