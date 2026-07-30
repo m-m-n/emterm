@@ -240,18 +240,31 @@ mod benches {
 
     /// AC-1 (task0001, D7): reproduces the measured "resize-marker-dense
     /// scrollback tail" shape from SPEC.md's References — a ~2 MiB payload
-    /// with ~31 replay segments where a large HEAD (already at the target
-    /// dims) is followed by a dense cluster of resize markers (dims
-    /// oscillating below the target, never reaching or exceeding it) whose
-    /// own content is tiny, then a small qualifying tail back at the
-    /// target. Pre-D7, all three of the split's gates failed simultaneously
-    /// for this shape (`k` and the raw prefix byte length both exceed their
-    /// bounds, and the small tail does not dominate the raw head+cluster
-    /// prefix), forcing the full non-bypass drain — measured 782.8-977.6 ms
-    /// for a payload this size. D7 recognizes that only the small MIDDLE
-    /// (the cluster itself) needs non-bypass fidelity, so this now costs
-    /// close to the bypass-engaged baseline (tens of ms), not the ~800-1000
-    /// ms non-bypass one.
+    /// with `k = 25` (head + cluster) replay segments, where a large HEAD
+    /// (already at the target dims) is followed by a dense cluster of
+    /// resize markers (dims oscillating below the target, never reaching or
+    /// exceeding it) whose own content is tiny, then a small qualifying
+    /// tail back at the target. Pre-D7, all three of the split's gates
+    /// failed simultaneously for this shape (`k` and the raw prefix byte
+    /// length both exceed their bounds, and the small tail does not
+    /// dominate the raw head+cluster prefix), forcing the full non-bypass
+    /// drain — measured 782.8-977.6 ms for a payload this size. D7
+    /// recognizes that only the small MIDDLE (the cluster itself) needs
+    /// non-bypass fidelity, so this now costs close to the bypass-engaged
+    /// baseline (tens of ms), not the ~800-1000 ms non-bypass one.
+    ///
+    /// task0004 (review round-1 rework, finding `b11143cfa2abef3b`): the
+    /// SPEC-cited trace has 31 total segments / `k = 27` (a 26-segment
+    /// cluster); this fixture stays at a 24-segment cluster (`k = 25`)
+    /// deliberately, NOT as an unaligned shortcut — `BYPASS_PREFIX_MAX_SEGMENTS`
+    /// (24) is a hard cap on the MIDDLE's own segment count for the split
+    /// to engage at all (`middle_segment_count <= BYPASS_PREFIX_MAX_SEGMENTS`
+    /// in `build_from_snapshot_inner`), so a 26-segment cluster would fail
+    /// that gate and defeat the exact mechanism this bench measures. The
+    /// cluster is sized at the LARGEST value that still lets the split
+    /// engage, which is the correct maximal reproduction available; `k`
+    /// (25) still exceeds the pre-D7 whole-prefix segment-count bound (24)
+    /// the original bug's gate rejected, same as the SPEC's `k = 27`.
     ///
     /// Confirmed to fail pre-fix (D7): reverting to `stable_target_suffix_start`
     /// alone (no `h` / `leading_target_run_len`) measures this shape within
@@ -388,7 +401,15 @@ mod benches {
         // the pre-D7 gate paid for this shape. A generous multiplicative +
         // absolute floor absorbs scheduler / measurement noise on a single
         // sample.
-        let bound = t_free.mul_f64(5.0) + std::time::Duration::from_millis(50);
+        //
+        // task0004 (review round-1 rework, finding `b11143cfa2abef3b`):
+        // tightened from `5.0x + 50ms` to match this file's own precedent
+        // (`ordinary_switch_bench_950kib_matches_segment_free_cost`'s
+        // `3.0x + 20ms`, below) — the original bound's effective ceiling
+        // (~434 ms against this task's own ~76.9 ms segment-free baseline)
+        // was an order of magnitude above "tens of ms" and only ~2x below
+        // the 782.8-977.6 ms pre-fix regression it exists to catch.
+        let bound = t_free.mul_f64(3.0) + std::time::Duration::from_millis(20);
         assert!(
             t_marker_cluster < bound,
             "marker-cluster-tail shape {:?} is not close to segment-free \

@@ -859,7 +859,8 @@ impl TerminalCore {
         // the drain always runs to completion and returns `Some` — the
         // unwrap cannot fail.
         static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        self.replay_segments(bytes, segments, &NEVER)
+        let (final_cols, final_rows) = (self.cols, self.rows);
+        self.replay_segments(bytes, segments, &NEVER, final_cols, final_rows)
             .expect("non-cancellable drain always completes")
     }
 
@@ -871,14 +872,30 @@ impl TerminalCore {
     /// aborts the whole replay and returns `None` (a superseded off-thread
     /// `build_from_snapshot` worker bails out at the next chunk boundary
     /// instead of finishing the parse).
+    ///
+    /// `final_cols`/`final_rows` is the size `self` is resized back to (if
+    /// anything changed it) once every segment has replayed — the caller's
+    /// requested / current pane size. task0004 (D8, review round-1 rework,
+    /// finding `b21749c5f2bd1006`) made this an explicit parameter rather
+    /// than `self.cols`/`self.rows` captured at entry: `build_from_snapshot_inner`'s
+    /// MIDDLE sub-replay now calls this with `self` starting at the HEAD's
+    /// own (possibly non-target) dimensions, but must still end at the
+    /// TRUE caller target in one hop — capturing `self.cols`/`self.rows` at
+    /// entry would resize back to the HEAD's dimensions instead, an extra
+    /// (and potentially non-equivalent) resize hop the reference path never
+    /// takes. `reset_and_replay_segments` passes its own `self.cols`/
+    /// `self.rows` at entry, preserving this method's original behavior for
+    /// every other caller.
     fn replay_segments(
         &mut self,
         bytes: &[u8],
         segments: &[ReplaySegment],
         cancel: &std::sync::atomic::AtomicBool,
+        final_cols: u16,
+        final_rows: u16,
     ) -> Option<Vec<u8>> {
-        let target_cols = self.cols;
-        let target_rows = self.rows;
+        let target_cols = final_cols;
+        let target_rows = final_rows;
         let mut actions = Vec::new();
         if segments.is_empty() {
             actions.extend(self.process_pty_data_fully_cancellable(bytes, cancel)?);
@@ -1144,22 +1161,67 @@ impl TerminalCore {
         // `k`/`split_at` above find where the split's SUFFIX may safely
         // start, but the region BEFORE that point ("prefix", historically
         // treated as one expensive, non-bypass whole) can itself contain a
-        // large LEADING run of segments that are already AT the target —
+        // large LEADING run of segments that are already uniform in size —
         // swept in only because SOME later segment (still before the
         // stable tail) diverges from it. A pane whose recorded scrollback
         // has a dense cluster of resize markers near its tail (dims
-        // wobbling away from and back to the target, e.g. during status-bar
-        // settling) produces exactly this shape: `k` and `split_at` land far
-        // past the cluster's own small footprint because they are computed
-        // from the LAST divergence, dragging a huge, already-safe HEAD along
-        // with the genuinely resize-needing MIDDLE. `h` finds that leading
-        // safe run so the two can be told apart; seeing `h` in the byte
-        // length is why `middle_len < split_at` in that shape even though
-        // `middle_segment_count` stays close to `k`.
-        let h = if bypass && k > 0 {
-            leading_target_run_len(cols, rows, &segments[..k])
+        // wobbling away from and back to a settled size, e.g. during
+        // status-bar settling) produces exactly this shape: `k` and
+        // `split_at` land far past the cluster's own small footprint
+        // because they are computed from the LAST divergence, dragging a
+        // huge, already-safe HEAD along with the genuinely resize-needing
+        // MIDDLE. `h` finds that leading safe run so the two can be told
+        // apart; seeing `h` in the byte length is why `middle_len <
+        // split_at` in that shape even though `middle_segment_count` stays
+        // close to `k`.
+        //
+        // D8 (task0004, review round-1 rework, finding `b21749c5f2bd1006`):
+        // the HEAD's own leading run need not be AT THE CALLER'S TARGET
+        // dims — `leading_uniform_run_len` admits any uniform (target_cols,
+        // R) run, reporting the run's own row count `R` alongside its
+        // length. This is what makes a marker cluster that oscillates
+        // ABOVE the settled target (the SPEC's actual measured direction —
+        // `visible_row_count` 0→1 SHRINKS the grid, so the pre-settling
+        // HEAD sits at the LARGER size) foldable: `R` becomes the safety
+        // ceiling `middle_is_row_bounded` checks against below, in place of
+        // `target_rows`. When the HEAD genuinely opens at the target
+        // (`R == rows`, every pre-D8 shape), this is byte-identical to the
+        // original `leading_target_run_len`.
+        //
+        // `R >= rows` is required IN ADDITION to `middle_is_row_bounded`:
+        // once MIDDLE finishes, `replay_segments` resizes straight back to
+        // the caller's `rows` in one hop (see that method's doc) — a
+        // transition `middle_is_row_bounded` never itself examines, since
+        // it is implicit, not one of `segments[h..k]`'s own entries. That
+        // final hop is only ever a `<=R` move (safe, by the same argument)
+        // when `rows <= R`; without this check a single ordinary-sized
+        // leading segment (e.g. the daemon's spawn-size marker, which
+        // trivially satisfies "a uniform run of length 1") would be folded
+        // as a HEAD whose `R` is BELOW the target, silently discarding real
+        // content the final grow-to-target then has no way to recover.
+        //
+        // D9 (task0004, review round-1 rework, finding `6a02ed7e1b606588`):
+        // if the resulting HEAD cannot be safely folded (a column change, a
+        // row count in MIDDLE exceeding the HEAD's own `R`, or `R < rows`),
+        // degrade `h` all the way to `0` — the pre-D7 computation — rather
+        // than gating `bypass_split` on a separate `head_fold_safe` flag.
+        // Only ABANDONING the fold (not the whole split) means a shape that
+        // engaged the split before D7 (e.g. a small target HEAD, a small
+        // column-change MIDDLE, and a large target TAIL) still engages it
+        // here: with `h == 0`, `middle_len == split_at` and
+        // `middle_segment_count == k`, matching the pre-D7 gates exactly.
+        let (h, head_rows) = if bypass && k > 0 {
+            let (candidate_h, candidate_rows) = leading_uniform_run_len(cols, &segments[..k]);
+            let candidate_safe = candidate_h > 0
+                && candidate_rows >= rows
+                && middle_is_row_bounded(cols, candidate_rows, &segments[candidate_h..k]);
+            if candidate_safe {
+                (candidate_h, candidate_rows)
+            } else {
+                (0, rows)
+            }
         } else {
-            0
+            (0, rows)
         };
         let head_len = if h > 0 {
             segments
@@ -1171,14 +1233,8 @@ impl TerminalCore {
         };
         let middle_len = split_at - head_len;
         let middle_segment_count = k - h;
-        // Safety gate for folding the HEAD into bypass ahead of the MIDDLE
-        // (see `middle_is_row_bounded`'s doc for the full argument): trivially
-        // satisfied when there is no head at all (`h == 0`, nothing to
-        // protect — this is the pre-D7 shape, unaffected below).
-        let head_fold_safe = h == 0 || middle_is_row_bounded(cols, rows, &segments[h..k]);
         let bypass_split = bypass
             && k > 0
-            && head_fold_safe
             && middle_segment_count <= BYPASS_PREFIX_MAX_SEGMENTS
             && suffix_len >= BYPASS_SUFFIX_MIN_BYTES
             && middle_len <= BYPASS_PREFIX_MAX_BYTES
@@ -1221,14 +1277,34 @@ impl TerminalCore {
 
             let mut actions = Vec::new();
             if head_len > 0 {
+                // D8: the HEAD may open at `head_rows` rather than the
+                // caller's `rows` (see the `h`/`head_rows` computation
+                // above). `core` was just constructed + reset — completely
+                // empty, no bytes replayed yet — so this resize is the
+                // SAME operation the reference path performs for its own
+                // first segment on an equally fresh core (see
+                // `replay_segments`'s leading-gap handling): it cannot
+                // diverge from the reference regardless of grow/shrink
+                // direction, because there is no real content on either
+                // side to lose. A shrink here deposits blank rows into
+                // `scrollback_slim` for real (`resize`'s reflow is not
+                // bypass-aware); fold them into the SAME virtual
+                // bookkeeping the bypass path uses so `enable_snapshot_bypass`'s
+                // "empty deque" precondition holds regardless of direction
+                // (a no-op when the resize was a grow, which never adds to
+                // `scrollback_slim`).
+                if head_rows != rows {
+                    core.resize(cols, head_rows);
+                    core.restore_bypass_invariant_after_reflow();
+                }
                 // HEAD: every segment in `segments[..h]` already carries
-                // `(cols, rows)` by construction of `h`, so — exactly like
-                // the SUFFIX below — no resize can occur here; feed the
-                // bytes directly under bypass (cheap: no SlimCell
-                // compression for content that was never going to move
-                // dimensions). `scrollback_slim` is empty on entry (fresh
-                // core, just reset), satisfying `enable_snapshot_bypass`'s
-                // precondition.
+                // `(cols, head_rows)` by construction of `h`, so — exactly
+                // like the SUFFIX below — no further resize can occur
+                // here; feed the bytes directly under bypass (cheap: no
+                // SlimCell compression for content that was never going to
+                // move dimensions). `scrollback_slim` is empty on entry
+                // (either untouched, or just folded above), satisfying
+                // `enable_snapshot_bypass`'s precondition.
                 core.enable_snapshot_bypass();
                 actions.extend(
                     match core.process_pty_data_fully_cancellable(head_bytes, cancel) {
@@ -1239,27 +1315,26 @@ impl TerminalCore {
                         }
                     },
                 );
-                // Turn bypass OFF for the MIDDLE directly (NOT via
-                // `disable_snapshot_bypass`, which would zero
-                // `virtual_scrollback_len` and lose the HEAD's contribution
-                // to it) — `scrollback_slim` is still empty (the head never
-                // touched it), so there is nothing to fold at this
-                // transition; the fold happens once, below, after the
-                // MIDDLE finishes.
-                debug_assert!(
-                    core.scrollback_slim.is_empty(),
-                    "D7 invariant violated: the HEAD must never populate \
-                     real scrollback (it never resizes, by construction of \
-                     `h`)"
-                );
-                core.scrollback_bypass = false;
+                // Suspend bypass for the MIDDLE (not `disable_snapshot_bypass`,
+                // which would zero `virtual_scrollback_len` and lose the
+                // HEAD's contribution to it) — `scrollback_slim` is still
+                // empty (the head's own byte replay never touched it), so
+                // there is nothing to fold at this transition; the fold
+                // happens once, below, after the MIDDLE finishes.
+                core.suspend_snapshot_bypass();
             }
             // MIDDLE: bypass is NOT enabled here (whether or not a HEAD ran
             // above), so this is a plain, full-fidelity replay — identical
             // to what the pre-D7 whole "prefix" replay did for
             // `segments[..k]`, just possibly starting partway through it.
+            // D8: pass the TRUE caller target explicitly — `core` starts
+            // this call at `head_rows`, not `rows`, whenever a HEAD ran
+            // above, and `replay_segments`'s own "resize back to the
+            // caller's target" step must land on `rows`, not `head_rows`,
+            // in a SINGLE hop (see `replay_segments`'s doc for why this
+            // must not be inferred from `core`'s dimensions at entry).
             let mut actions_middle =
-                match core.replay_segments(middle_bytes, &middle_segments, cancel) {
+                match core.replay_segments(middle_bytes, &middle_segments, cancel, cols, rows) {
                     Some(a) => a,
                     None => return None,
                 };
@@ -1276,7 +1351,7 @@ impl TerminalCore {
             // by construction of `k`, so no resize can occur here — feeding
             // the bytes directly (no segments) is equivalent to replaying
             // them via `replay_segments` and cheaper to compute.
-            actions.extend(match core.replay_segments(suffix_bytes, &[], cancel) {
+            actions.extend(match core.replay_segments(suffix_bytes, &[], cancel, cols, rows) {
                 Some(a) => a,
                 None => {
                     // Cancelled mid-drain: leave the core consistent before
@@ -1291,7 +1366,7 @@ impl TerminalCore {
             if bypass_engaged {
                 core.enable_snapshot_bypass();
             }
-            match core.replay_segments(payload, segments, cancel) {
+            match core.replay_segments(payload, segments, cancel, cols, rows) {
                 Some(a) => a,
                 None => {
                     // Cancelled mid-drain: leave the core consistent (clear the
@@ -1387,6 +1462,37 @@ impl TerminalCore {
         self.virtual_scrollback_len = 0;
         self.scrollback_bypass = false;
         self.capture_bypass_b_marks = false;
+    }
+
+    /// Suspend the snapshot-replay bypass for the MIDDLE segment of a
+    /// HEAD/MIDDLE/SUFFIX split (D7, task0001; D8, task0004) — the bypass
+    /// state machine's third transition, named alongside
+    /// [`Self::enable_snapshot_bypass`] / [`Self::disable_snapshot_bypass`]
+    /// (task0004, review round-1 rework, finding `0e3a7dee5f50d788`).
+    ///
+    /// Unlike [`Self::disable_snapshot_bypass`], this does NOT zero
+    /// `virtual_scrollback_len` or clear `capture_bypass_b_marks` — the
+    /// HEAD's contribution to both must survive so `get_scrollback_length()`
+    /// stays continuous once the MIDDLE begins folding its own real
+    /// scrollback into the same bookkeeping via
+    /// `restore_bypass_invariant_after_reflow`, and so a B mark emitted
+    /// during the MIDDLE is captured exactly like one emitted during the
+    /// HEAD or SUFFIX (see `capture_bypass_b_marks`'s doc).
+    ///
+    /// Precondition (asserted, debug only): `scrollback_slim` is empty —
+    /// the HEAD's own byte replay never populates it for real (any resize
+    /// needed to REACH the HEAD's dimensions on the fresh core happens
+    /// BEFORE bypass is enabled, and is folded via
+    /// `restore_bypass_invariant_after_reflow` at that point — see the
+    /// `h`/`head_rows` computation in `build_from_snapshot_inner`).
+    pub(crate) fn suspend_snapshot_bypass(&mut self) {
+        debug_assert!(
+            self.scrollback_slim.is_empty(),
+            "suspend_snapshot_bypass invariant violated: the HEAD must \
+             never populate real scrollback (leaked {} rows)",
+            self.scrollback_slim.len()
+        );
+        self.scrollback_bypass = false;
     }
 
     /// Consume `other` and prepend its scrollback rows onto `self`,
@@ -1898,39 +2004,63 @@ fn stable_target_suffix_start(
 }
 
 /// D7 (task0001, NFR1-safe rescue for a resize-marker-dense tail): the size
-/// of the LEADING run of `segments` that already carries `(target_cols,
-/// target_rows)` — the front-end complement of
-/// [`stable_target_suffix_start`] (which finds the analogous TRAILING run).
+/// of the LEADING run of `segments` that already carries a UNIFORM `(cols,
+/// rows)` — the front-end complement of [`stable_target_suffix_start`]
+/// (which finds the analogous TRAILING run, always uniform at the CALLER's
+/// target). Returns `(h, run_rows)`: `h` segments long, all at
+/// `(target_cols, run_rows)`.
+///
+/// D8 (task0004, review round-1 rework, finding `b21749c5f2bd1006`): unlike
+/// [`stable_target_suffix_start`], the run this looks for does NOT have to
+/// be at the CALLER's `target_rows` — only at `target_cols` (a column
+/// change anywhere is always unsafe to fold, so a HEAD whose own columns
+/// differ from the caller's target can never help; see
+/// `middle_is_row_bounded`'s doc). `run_rows` is whatever row count the run
+/// itself settles on, taken from `segments[0]`. This is what makes a HEAD
+/// that predates a resize storm — and so sits at the storm's LARGER,
+/// pre-settling size, not the storm's smaller settled target — foldable:
+/// `run_rows` becomes `middle_is_row_bounded`'s safety ceiling instead of
+/// the caller's `target_rows`. When the HEAD happens to already be at the
+/// caller's target (`run_rows == target_rows`, every pre-D8 shape), this
+/// reduces to the original `leading_target_run_len` byte-for-byte.
 ///
 /// `build_from_snapshot_inner` calls this only on `segments[..k]` (the
 /// region `stable_target_suffix_start` calls "prefix"): a large, already-
-/// safe HEAD at the very front of that region would otherwise be swept into
-/// an expensive non-bypass whole-drain replay merely because SOME segment
-/// further along (still before the stable tail at `k`) diverges from the
-/// target — the exact shape a resize-marker cluster near (but not quite at)
-/// the tail produces. Returns `0` (no head) when `segments` is empty or its
-/// first entry already diverges — correctly reducing to "nothing to
-/// rescue" for every pre-D7 shape (the `..._marker` fixtures, the ordinary-
-/// switch shape, and the large-content-heavy-prefix shape all start with a
-/// segment that differs from the target, by construction).
+/// uniform HEAD at the very front of that region would otherwise be swept
+/// into an expensive non-bypass whole-drain replay merely because SOME
+/// segment further along (still before the stable tail at `k`) diverges
+/// from it — the exact shape a resize-marker cluster near (but not quite
+/// at) the tail produces. Returns `(0, target_cols's caller-supplied
+/// target_rows)`-shaped `(0, _)` when `segments` is empty or its first
+/// entry's columns differ from `target_cols` — correctly reducing to
+/// "nothing to rescue" for every shape with no uniform leading run at all.
 ///
 /// `clamp_resize_dims` is applied per segment for the same reason
 /// [`stable_target_suffix_start`] applies it: agreement with what
 /// `TerminalCore::replay_segments` will actually decide.
-fn leading_target_run_len(target_cols: u16, target_rows: u16, segments: &[ReplaySegment]) -> usize {
-    let target = (target_cols, target_rows);
+fn leading_uniform_run_len(target_cols: u16, segments: &[ReplaySegment]) -> (usize, u16) {
+    let Some(first) = segments.first() else {
+        return (0, 0);
+    };
+    let (first_cols, first_rows) = clamp_resize_dims(first.cols, first.rows);
+    if first_cols != target_cols {
+        return (0, 0);
+    }
+    let run = (first_cols, first_rows);
     let mut h = 0;
-    while h < segments.len() && clamp_resize_dims(segments[h].cols, segments[h].rows) == target {
+    while h < segments.len() && clamp_resize_dims(segments[h].cols, segments[h].rows) == run {
         h += 1;
     }
-    h
+    (h, first_rows)
 }
 
-/// D7 safety gate: is it correct to replay [`leading_target_run_len`]'s HEAD
-/// under bypass ahead of `middle` (the genuinely resize-needing region
-/// between the head and the stable tail)?
+/// D7 safety gate: is it correct to replay [`leading_uniform_run_len`]'s
+/// HEAD under bypass ahead of `middle` (the genuinely resize-needing
+/// region between the head and the stable tail)? `head_rows` is the HEAD's
+/// own row count — [`leading_uniform_run_len`]'s `run_rows` — NOT
+/// necessarily the caller's `target_rows` (D8, task0004).
 ///
-/// The HEAD leaves the core at `(target_cols, target_rows)` with
+/// The HEAD leaves the core at `(target_cols, head_rows)` with
 /// `scrollback_slim` EMPTY — bypass discards its real row content, keeping
 /// only a virtual count (see `TerminalCore::scrollback_bypass`). A
 /// subsequent resize can only produce a WRONG result (relative to a full,
@@ -1946,18 +2076,18 @@ fn leading_target_run_len(target_cols: u16, target_rows: u16, segments: &[Replay
 ///   REAL scrollback since it started: `resize_same_width`'s grow branch
 ///   pulls the most recently evicted rows back via
 ///   `scrollback_slim.pop_back()`. Since `middle` starts at EXACTLY
-///   `target_rows` (inherited from the head) and this gate requires every
-///   segment's (clamped) row count to stay `<= target_rows`, any grow
+///   `head_rows` (inherited from the head) and this gate requires every
+///   segment's (clamped) row count to stay `<= head_rows`, any grow
 ///   within `middle` is, by induction, recovering rows a PRIOR shrink
 ///   WITHIN THE SAME `middle` region already pushed there — it can never
 ///   reach past `middle`'s own start for the head's (discarded) rows.
 ///
 /// Returns `false` (unsafe to fold the head in) the moment either condition
 /// is violated by any segment in `middle`.
-fn middle_is_row_bounded(target_cols: u16, target_rows: u16, middle: &[ReplaySegment]) -> bool {
+fn middle_is_row_bounded(target_cols: u16, head_rows: u16, middle: &[ReplaySegment]) -> bool {
     middle.iter().all(|s| {
         let (c, r) = clamp_resize_dims(s.cols, s.rows);
-        c == target_cols && r <= target_rows
+        c == target_cols && r <= head_rows
     })
 }
 
@@ -2001,7 +2131,7 @@ const BYPASS_SUFFIX_MIN_BYTES: usize = 4096;
 /// suffix qualifies.
 ///
 /// D7 amendment (task0001): this bound is now checked against `middle_len`
-/// (the byte span of `segments[h..k]`, per [`leading_target_run_len`]), not
+/// (the byte span of `segments[h..k]`, per [`leading_uniform_run_len`]), not
 /// the raw `split_at`/`k`-derived prefix span — when there is no rescuable
 /// HEAD (`h == 0`, every pre-D7 shape), `middle_len == split_at` and this is
 /// byte-identical to the original check.
@@ -2024,7 +2154,7 @@ const BYPASS_PREFIX_MAX_BYTES: usize = 64 * 1024;
 /// through the byte-only gate.
 ///
 /// D7 amendment (task0001): checked against `middle_segment_count`
-/// (`k - h`, per [`leading_target_run_len`]), not the raw `k` — when there
+/// (`k - h`, per [`leading_uniform_run_len`]), not the raw `k` — when there
 /// is no rescuable HEAD (`h == 0`), `middle_segment_count == k` and this is
 /// byte-identical to the original check.
 const BYPASS_PREFIX_MAX_SEGMENTS: usize = 24;
@@ -4067,6 +4197,283 @@ mod tests {
         assert_eq!(
             bypass_replay.evicted_total, reference.evicted_total,
             "AC-4: the split must preserve evicted_total byte-identically"
+        );
+    }
+
+    /// AC-1 (task0004, D8, review round-1 rework finding `b21749c5f2bd1006`):
+    /// the mirror of `head_plus_marker_cluster_engages_the_split_and_matches_reference`
+    /// above, but in the direction the SPEC's own root cause actually
+    /// takes: the settled target is the SMALLER (status-bar-visible) size,
+    /// so the pre-settling HEAD — and roughly half the resize-marker
+    /// cluster — sits at rows ABOVE the target, not below it. A large HEAD
+    /// already at a size N > target_rows (predating the storm), followed
+    /// by a dense cluster oscillating between N and the (smaller) target,
+    /// whose own content is tiny, followed by a small qualifying tail back
+    /// at the target. Confirms:
+    ///
+    /// - AC-1: the split engages (`scrollback_populated == false`) even
+    ///   though the RAW "prefix" (head + cluster) exceeds every pre-D7
+    ///   threshold, exactly as the below-target companion test proves for
+    ///   the other direction — `leading_uniform_run_len`'s HEAD need not
+    ///   open at `target_rows` itself, only at SOME uniform size the
+    ///   cluster stays within.
+    /// - AC-4-equivalence: the resulting viewport + cursor and
+    ///   `evicted_total` match the fully synchronous reference.
+    ///
+    /// Confirmed to fail pre-fix (task0004 D8): reverting to
+    /// `leading_target_run_len` (HEAD must open AT `target_rows`) makes `h`
+    /// land at `0` for this shape (the HEAD opens at `N`, not
+    /// `target_rows`), so `middle_segment_count` and the raw prefix byte
+    /// length are exactly the head+cluster totals again — both exceed
+    /// their bounds, the tail does not dominate them, `bypass_split` is
+    /// `false`, and `scrollback_populated` comes back `true`.
+    #[test]
+    fn head_plus_marker_cluster_above_target_engages_the_split_and_matches_reference() {
+        let cols: u16 = 80;
+        let target_rows: u16 = 24;
+        let head_rows: u16 = 30;
+        let cluster_rows_below: u16 = 24;
+
+        // HEAD: a single large segment already at `head_rows` (N), the size
+        // the pane held BEFORE the resize storm — well over
+        // `BYPASS_PREFIX_MAX_BYTES` (64 KiB) on its own so the OLD
+        // whole-prefix byte gate would already reject this shape.
+        let head_filler = b"head history line padded out a bit for size\r\n";
+        let mut payload: Vec<u8> = Vec::new();
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: head_rows,
+        }];
+        while payload.len() <= 96 * 1024 {
+            payload.extend_from_slice(head_filler);
+        }
+        let head_len = payload.len();
+        assert!(
+            head_len > 64 * 1024,
+            "test prerequisite: HEAD alone must exceed BYPASS_PREFIX_MAX_BYTES"
+        );
+
+        // MIDDLE: a dense cluster of exactly BYPASS_PREFIX_MAX_SEGMENTS
+        // resize markers, dims oscillating between the target (BELOW
+        // head_rows) and head_rows itself — never exceeding head_rows, the
+        // D8 safety condition — ending on `head_rows` (NOT the target) so
+        // the "settling" drop happens right at the k boundary, not inside
+        // the cluster.
+        let cluster_segment_count = BYPASS_PREFIX_MAX_SEGMENTS;
+        let cluster_filler = b"x\r\n";
+        for i in 0..cluster_segment_count {
+            segments.push(ReplaySegment {
+                offset: payload.len() as u32,
+                cols,
+                rows: if i % 2 == 0 {
+                    cluster_rows_below
+                } else {
+                    head_rows
+                },
+            });
+            payload.extend_from_slice(cluster_filler);
+        }
+        assert_eq!(
+            cluster_segment_count % 2,
+            0,
+            "test prerequisite: an even cluster length ends on the odd \
+             index (head_rows), not the target"
+        );
+        let middle_len = payload.len() - head_len;
+        assert!(
+            middle_len <= 64 * 1024,
+            "test prerequisite: the cluster's OWN content must clear \
+             BYPASS_PREFIX_MAX_BYTES for D8 to have anything to rescue"
+        );
+
+        // TAIL: small, just over BYPASS_SUFFIX_MIN_BYTES, back at the
+        // (smaller) target — dominates the MIDDLE (D8's gate) but NOT the
+        // raw head+cluster prefix (the OLD gate's dominance check).
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: target_rows,
+        });
+        let tail_filler = b"tail history line padded out a bit for size\r\n";
+        while payload.len() - head_len - middle_len < 4096 + 512 {
+            payload.extend_from_slice(tail_filler);
+        }
+        let suffix_len = payload.len() - head_len - middle_len;
+        assert!(
+            suffix_len >= middle_len,
+            "test prerequisite: suffix must dominate the MIDDLE (D8's gate)"
+        );
+        assert!(
+            suffix_len < head_len + middle_len,
+            "test prerequisite: suffix must NOT dominate the raw head+cluster \
+             prefix (the OLD gate's dominance check must still fail here)"
+        );
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let scrollback_lines = 10_000u32;
+        let bypass_replay = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            scrollback_lines,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("bypass-path build not cancelled");
+        let reference = TerminalCore::build_scrollback_only_from_snapshot(
+            cols,
+            target_rows,
+            scrollback_lines,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("reference build not cancelled");
+
+        // AC-1: the split must engage despite the raw head+cluster prefix
+        // failing every pre-D7 threshold, in the ABOVE-target direction.
+        assert!(
+            !bypass_replay.scrollback_populated,
+            "AC-1: the split must engage (scrollback_populated == false) for \
+             a resize-marker-dense tail oscillating ABOVE the settled target \
+             behind an already-larger HEAD — got scrollback_populated == \
+             true (D8 did not rescue the above-target direction)"
+        );
+        assert!(
+            reference.scrollback_populated,
+            "test prerequisite: the fully synchronous reference always \
+             populates scrollback"
+        );
+
+        // AC-4-equivalence: viewport + cursor equivalence with the fully
+        // synchronous reference, and matching evicted_total.
+        assert_eq!(
+            grid_fingerprint(&bypass_replay.core),
+            grid_fingerprint(&reference.core),
+            "the head/middle/tail split's viewport + cursor must match the \
+             fully synchronous reference for the above-target marker-cluster \
+             shape"
+        );
+        assert_eq!(
+            bypass_replay.evicted_total, reference.evicted_total,
+            "the split must preserve evicted_total byte-identically"
+        );
+    }
+
+    /// AC-2 (task0004, review round-1 rework finding `6a02ed7e1b606588`):
+    /// reproduces the finding's own example — a small target HEAD, a small
+    /// column-change MIDDLE, and a large target TAIL — a shape that engaged
+    /// the split BEFORE D7 was introduced. Confirms `head_fold_safe == false`
+    /// (a column change is always unsafe to fold, regardless of row bounds)
+    /// degrades `h` to `0` rather than abandoning the split entirely: with
+    /// `h == 0`, `middle_len == split_at` and `middle_segment_count == k`,
+    /// so the pre-D7 gates (byte length, segment count, suffix dominance)
+    /// are evaluated on exactly the shape they always were, and the split
+    /// still engages.
+    ///
+    /// Confirmed to fail pre-fix (task0004 D9): with `head_fold_safe` ANDed
+    /// directly into `bypass_split` (the pre-task0004 code), `h == 1`
+    /// (the small target HEAD) makes `middle_is_row_bounded` reject the
+    /// column-changing MIDDLE, `head_fold_safe` is `false`,
+    /// `bypass_split` is `false` (the WHOLE split, not just the fold, is
+    /// abandoned), and `scrollback_populated` comes back `true` — the full
+    /// non-bypass drain this fix exists to avoid for a shape that used to
+    /// be fast.
+    #[test]
+    fn column_change_middle_degrades_head_fold_but_still_engages_the_split() {
+        let cols: u16 = 80;
+        let other_cols: u16 = 100;
+        let target_rows: u16 = 24;
+
+        // HEAD: small, already at the target.
+        let head_filler = b"head\r\n";
+        let mut payload: Vec<u8> = Vec::new();
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: target_rows,
+        }];
+        while payload.len() < 2048 {
+            payload.extend_from_slice(head_filler);
+        }
+        let head_len = payload.len();
+
+        // MIDDLE: a single COLUMN-CHANGING segment (same row count, but
+        // different columns) — always unsafe to fold behind a bypassed
+        // HEAD regardless of any row-count reasoning (see
+        // `middle_is_row_bounded`'s doc).
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols: other_cols,
+            rows: target_rows,
+        });
+        let middle_filler = b"mid\r\n";
+        while payload.len() - head_len < 2048 {
+            payload.extend_from_slice(middle_filler);
+        }
+        let middle_len = payload.len() - head_len;
+        let prefix_len = head_len + middle_len;
+        assert!(
+            prefix_len <= 64 * 1024,
+            "test prerequisite: the combined head+middle prefix must clear \
+             BYPASS_PREFIX_MAX_BYTES for the pre-D7 gates to accept it"
+        );
+
+        // TAIL: back at the target, dominating the combined prefix.
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: target_rows,
+        });
+        let tail_filler = b"tail history line padded out a bit for size\r\n";
+        while payload.len() - prefix_len < 8192 {
+            payload.extend_from_slice(tail_filler);
+        }
+        let suffix_len = payload.len() - prefix_len;
+        assert!(
+            suffix_len >= prefix_len,
+            "test prerequisite: the tail must dominate the combined prefix"
+        );
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let replay = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            10_000,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("not cancelled");
+        let reference = TerminalCore::build_scrollback_only_from_snapshot(
+            cols,
+            target_rows,
+            10_000,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("reference build not cancelled");
+
+        // AC-2: the split must still engage — the column change degrades
+        // the HEAD fold, not the whole split.
+        assert!(
+            !replay.scrollback_populated,
+            "AC-2: a column-change MIDDLE behind a small target HEAD, with a \
+             dominating target TAIL, must still engage the split \
+             (scrollback_populated == false) — an unsafe HEAD fold must \
+             degrade `h` to 0, not abandon the split entirely"
+        );
+        assert_eq!(
+            grid_fingerprint(&replay.core),
+            grid_fingerprint(&reference.core),
+            "the degraded (h == 0) split must match the fully synchronous \
+             reference for the column-change-in-the-middle shape"
+        );
+        assert_eq!(
+            replay.evicted_total, reference.evicted_total,
+            "the split must preserve evicted_total byte-identically"
         );
     }
 
