@@ -25,7 +25,8 @@ workflow:
     skipped_reason: "バグ修正のみで UI 変更なし"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: a72a64824d329a762030c27dfc0e9e4f4c330f1c
   - id: implement
     status: pending
     base_commit: bd9b2ac503984e522269db1c17f44f7707156e72
