@@ -981,10 +981,16 @@ impl Tab {
                     old.cancel.store(true, Ordering::Relaxed);
                     // Defensive: `pending_redispatch` is only ever populated
                     // by `dispatch_offthread_replay`'s same-pane coalesce
-                    // branch, so this should always match — but never carry
+                    // branch, so the pane should always match — but never carry
                     // a different pane's live queue onto this one if some
-                    // future change ever violates that invariant.
-                    if old.target_pane == target_pane {
+                    // future change ever violates that invariant. Additionally,
+                    // only a resize-driven re-dispatch (same payload, a clone
+                    // of the still-in-flight snapshot) should inherit the
+                    // queue: a second `Snapshot`/`SnapshotRestore` for the
+                    // same pane carries a DIFFERENT payload that already
+                    // contains the live output queued here, so carrying the
+                    // old queue forward would apply it twice.
+                    if old.target_pane == target_pane && old.payload == payload {
                         (old.live_queue, old.queued_bytes)
                     } else {
                         (Vec::new(), 0)
@@ -3449,8 +3455,17 @@ impl Tab {
         if let Some(pending) = self.pending_switch.as_ref() {
             if pending.cols != cols || pending.rows != rows {
                 let target = pending.target_pane;
-                let payload = pending.payload.clone();
-                let segments = pending.segments.clone();
+                // The latest request for this pane may already have been
+                // coalesced into `pending_redispatch` (a same-pane snapshot
+                // arriving after this switch was dispatched), in which case
+                // `pending.payload` is superseded — prefer the redispatch
+                // payload when it targets the same pane.
+                let (payload, segments) = match self.pending_redispatch.as_ref() {
+                    Some((pane, payload, segments)) if *pane == target => {
+                        (payload.clone(), segments.clone())
+                    }
+                    _ => (pending.payload.clone(), pending.segments.clone()),
+                };
                 self.dispatch_offthread_replay(target, payload, segments);
             }
         }
