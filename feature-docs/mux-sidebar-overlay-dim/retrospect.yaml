@@ -1,0 +1,24 @@
+feature: mux-sidebar-overlay-dim
+collected_at: "2026-07-30T11:17:00+09:00"
+session_ids: [dc57a1d2-ae01-4588-9851-e38c6423bc02]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files: [src-tauri/src/app.rs]
+  verification_failures:
+    - id: VF-1
+      note: "cargo test --lib が既存フレーク（tabs::tests の off-thread replay タイムアウト）で非ゼロ終了。base commit で同一 7 件を再現し本 feature 起因でないことを確定"
+    - id: VF-2
+      note: "TS-14 / TS-15 は実機必要の手動項目のため未実施"
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "diff がフレームスキップゲート・待機デッドライン・毎フレーム描画パスに触れ、アイドル時の再描画抑止 (NFR1) が要件のため"
+  declined_findings: []
+lessons_candidates:
+  - "task0001 の files 予測が外れた形は「設定デフォルトの反転が、他ファイルの既存テストの暗黙依存を壊す」パターン。デフォルト値を変えるタスクの files には、その値を暗黙に前提にしているテストの所在も含めて予測する余地がある（今回は src-tauri/src/app.rs の 2 テスト）。"
+  - "統合 worktree / タスク worktree には gitignored のビルド前提（src-tauri/assets/fonts の同梱フォント、node_modules）が入らない。両 implementer が独立に fetch/copy で解決し、verify でも同じ作業が再発した。worktree 作成直後にこれらを用意する手当てがあると 3 回分の重複が消える。"
+  - "review が返した 4 件の実質的な指摘（ホバー述語の stale 化 = FR3/FR5 違反、dim フェードのレートリミット無しスピン、bright 述語の 4 重化、doc/SPECIFICATION.md の旧デフォルト残存）は全て medium だったため、R4 の自動修正ゲート（critical/high）にも batch の auto-rework 条件（residual critical/high > 0）にもかからず unresolved で完了した。機能的な誤りを含む medium が無人実行でそのまま通る経路がある。"
+  - "verify の既存フレーク帰属を、base commit のソースを同じ target dir に一時 checkout して単一スレッドで測る形で確定できた（差分ビルドが効くので安価）。同種のフレークを持つプロジェクトでの再利用可能な手順。"
+  - "3 観点（comprehensive / architecture / spec）が独立に doc/SPECIFICATION.md の旧デフォルト残存を指摘した。changed_files 外のため sanitize 規則で confidence 50 に抑えられるが、複数観点の一致は本来強い信号。永続設定のデフォルトを変えるタスクでは、リポジトリ正規仕様書の該当記述を files に含めることを計画側で促せる。"
