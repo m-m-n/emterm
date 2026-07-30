@@ -53,7 +53,10 @@ timing does not degrade responsiveness.
   observed between a resize-during-switch case (21.0 ms) and a
   resize-free case (9.5 ms) is closed).
 - [ ] Consecutive switches to the same pane do not trigger duplicate
-  snapshot decode/fetch.
+  snapshot replay/rebuild. (Scope decision, review round 1 / task0006:
+  decode and daemon fetch may still happen twice for two frames arriving
+  close together — only the off-thread replay build is deduplicated. See
+  FR8.)
 
 ## Technical Requirements
 
@@ -77,8 +80,11 @@ timing does not degrade responsiveness.
   `MessageType::Resize` to all panes).
 - **FR7:** A grid resize that races with an in-flight pane switch does not
   cause the bypass split to be defeated by target-dims mismatch.
-- **FR8:** Consecutive switches to the same pane do not fetch/decode the
-  snapshot twice.
+- **FR8:** Consecutive switches to the same pane do not replay/rebuild the
+  snapshot twice (scope decision, review round 1 / task0006: decode and
+  daemon fetch are NOT deduplicated by this feature — only the off-thread
+  replay build is; see `ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again`
+  and `t6_ac6_...` in `src-tauri/src/tabs.rs`).
 
 ### Non-Functional Requirements
 
