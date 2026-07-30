@@ -34,9 +34,26 @@ workflow:
   - id: review
     status: pending
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: >-
+      Build (cargo check) green. Test suite (cargo test --lib
+      --test-threads=1, required because tabs.rs off-thread-worker tests
+      are non-deterministic under parallel execution per project memory)
+      passed 2927/2934; the 7 remaining failures
+      (ts10_resize_cancels_pending_restore_without_respawn,
+      ts11_restore_worker_panic_returns_failed_and_clears_state,
+      ts13_offthread_swap_installs_pending_scrollback_restore,
+      ts7_offthread_swap_then_restored_scrollback_matches_reference,
+      ts8_new_offthread_switch_supersedes_in_flight_restore,
+      ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates,
+      welcome_without_windows_leaves_group_none) were confirmed
+      pre-existing and unrelated to this feature: reproduced identically
+      (same panic messages/locations) on unmodified main. All of this
+      feature's own tests (task0001-task0006, including t6_ac3/t6_ac5/
+      t6_ac8 and ac2_unraced_switch_engages_bypass) pass under
+      --test-threads=1. VERIFICATION.md TS-1..TS-8 / SC-1..SC-5 satisfied.
   - id: retrospect
     status: pending
 
