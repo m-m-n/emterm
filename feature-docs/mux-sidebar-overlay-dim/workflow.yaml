@@ -51,9 +51,14 @@ workflow:
   - id: review
     status: completed
   - id: verify
-    status: in_progress
-    result: null
-    failed_items: []
+    status: completed
+    result: pass
+    failed_items:
+      - id: VF-1
+        note: "未解消だが本 feature に起因しない既存フレーク。cargo test --lib は tabs::tests の off-thread replay worker タイムアウト等で非ゼロ終了する（並列 15 件 / --test-threads=1 で 7 件）。ベースコミット 3e8d8e5 のソースを同じ target dir に戻して単一スレッドで測ると、落ちる 7 件が本 feature 適用後と完全一致した。tabs.rs は本 feature の changed_files に含まれない。feature 起因のテストは全て green で、単一スレッド実行の pass 数は base 2872 → 本 feature 2906（+34 件が新規追加分、全 pass）。"
+      - id: VF-2
+        note: "TS-14 / TS-15（低不透明度でのターミナル文字判読性、ホバー・切替・3 秒フェードの目視確認）は実機表示が必要な手動項目のため未実施。自動化不能項目として VERIFICATION.md の Manual Testing 節に残す。"
+
   - id: retrospect
     status: pending
 
