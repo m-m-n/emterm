@@ -1,0 +1,127 @@
+round: 1
+executed_at: "2026-07-30T14:35:21+09:00"
+scope:
+  review_mode: diff
+  base_commit: 6fe74b914c87bf204a885519daec723da867eb3a
+  head_commit: 3677c37b76849c7a62bdbb41333d0fe90e5dc84e
+  changed_files:
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/ui/mux_sidebar.rs
+    - src-tauri/src/window_host.rs
+    - test-docs/mux-sidebar-remove-pane-id-copy/task0001.tests.yaml
+plan:
+  floor: [comprehensive, architecture, spec]
+  discretionary: []
+  codex_cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: comprehensive, source: codex, status: skipped, skip_reason: "codex cross-validation did not fire (no high-complexity task, security not selected); codex-cli also unavailable"}
+findings:
+  - stable_id: 8811e6e8fe238b24
+    severity: medium
+    category: comprehensive
+    file: test-docs/mux-sidebar-remove-pane-id-copy/task0001.tests.yaml
+    line: 28
+    title: "AC-2 の red_confirmed が実際のテスト本体と一致せず、除去のリグレッションガードになっていない"
+    description: >-
+      AC-2 に紐づくテストは public_pane_id を持たないエントリしか使わないため、
+      変更前のコードでも同じクリック位置は switch_to_window を返しており red に
+      なり得ない（削除された no_copy_icon_hit_target_when_public_pane_id_is_unknown
+      が同じ座標を固定していた）。tests.yaml の red_reason は「known public pane id を
+      持つエントリで」と別の本体を記述しており、記録と成果物がドリフトしている。
+      結果として red_confirmed: true が実態を上回り、コピーアイコンが再導入されても
+      このテストは緑のまま通る。
+    suggestion: >-
+      (a) tests.yaml の AC-2 を red_confirmed: false に直し、削除済みテストの
+      behavioral 等価物であり pre-change でも緑だったと正直に記録する。
+      (b) テスト側を実効的なガードにする — 行の左端から右端まで複数の x 位置で
+      クリックして全て switch_to_window == Some(idx) を返すことを確認し、行内に
+      入れ子の hit target が一切無いことを behavioral に固定する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium: R4 の auto-fix 候補ゲート（critical/high のみ）に該当しないため今ラウンドでは未対応"
+  - stable_id: 8239fed39f2bc6b2
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/ui/mux_sidebar.rs
+    line: 1689
+    title: "自ソースを grep する構造テストが、関数並べ替えで自分の assert 文字列を読み込んで誤検知落ちする"
+    description: >-
+      ac1_draw_rows_registers_no_interaction_region_besides_the_row_itself は
+      include_str! で自ファイルを読み、fn draw_rows( から次の "\nfn " までを本体と
+      みなす。終端が見つからない場合 EOF までスライスするため、draw_rows が最後の
+      トップレベル fn になる並べ替えで tests モジュール全体を含み、自分の assert
+      リテラル "ui.interact(" を検出して誤検知落ちする。加えて
+      !contains("paint_copy_icon(") はクレート内に当該関数が存在しないため死んだ
+      アサーションであり、!contains("ui.interact(") は将来の正当な行内インタラクション
+      追加を機械的に禁止する実装形の固定になっている。
+    suggestion: >-
+      構造 grep を behavioral テストに置き換える（行内の複数 x 位置でクリックして
+      全て window switch を返すことを確認すれば入れ子 hit target の不在を振る舞いで
+      固定できる）。grep を残すならスライス終端を明示して EOF フォールバックを消し、
+      意味を持たない paint_copy_icon( のアサーションを削除する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium: R4 の auto-fix 候補ゲート（critical/high のみ）に該当しないため今ラウンドでは未対応"
+  - stable_id: c2016c137ce1ba39
+    severity: medium
+    category: comprehensive
+    file: doc/AGENT-STATUS.md
+    line: 112
+    title: "ユーザー向け SSOT ドキュメントが削除済みの GUI アフォーダンスを現行仕様として記述したまま"
+    description: >-
+      doc/AGENT-STATUS.md の Pane addressing 節に "The GUI provides a
+      copy-to-clipboard affordance for a pane's public ID." が残っており、
+      実装との契約ドリフトになっている。task0001 の AC-9 は修改した 3 ファイル内の
+      記述のみを対象にしており、SPEC/REQUIREMENTS/IMPLEMENTATION も doc/ 配下の
+      更新に言及していないため、計画上どのタスクにも拾われない。
+      EMTERM_PANE_ID を使う利用者やエージェントは存在しない GUI 操作を探すことになる。
+      他の残存箇所（feature-docs/mux-agent-status-api/DESIGN.md, tasks/task0006.md）は
+      完了済み feature の作業記録なので更新不要。
+      元の報告 category は architecture だが、review-phase.md R3 の規則により
+      changed_files 外のファイルとして comprehensive へ正規化し confidence を 50 に
+      キャップした。
+    suggestion: >-
+      doc/AGENT-STATUS.md の Pane addressing 節から該当 1 行（と直前の空行）を削除する。
+      あるいは pane ID の入手経路を現状に合わせて書き換える（pane 内では環境変数
+      EMTERM_PANE_ID、外からは --pane current で解決する）。SPEC 側にも
+      doc/AGENT-STATUS.md を追随対象として 1 行追記しておくと同種のドリフトが
+      次の削除タスクで再発しない。
+    sources: [claude:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium かつ changed_files 外のため R4 の auto-fix 候補ゲートに該当しない。今 feature のスコープ外（SPEC の対象ファイルに doc/ を含めていない）"
+  - stable_id: bef5441c2a8c9b7c
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 2377
+    title: "App::mux_public_pane_id が本番呼び出し元を失い、doc は削除済みの task0006 AC-5 を指したまま"
+    description: >-
+      render/mod.rs の呼び出しが消えたことで App::mux_public_pane_id の呼び出し元は
+      app.rs 内のテスト 4 箇所だけになり、本番コードから到達不能な public アクセサが
+      残った。さらに doc コメントが今回削除したコピー行の AC（task0006 AC-5）を
+      参照しており、削除済み機能を現行仕様として説明する記述になっている。
+      内部フィールド mux_public_pane_ids 自体は agent_notification_rate_limit_key が
+      使い続けているため生きており、対象はアクセサとその doc のみ。
+      SPEC の NFR4 / task0001 の AC-8 は app.rs を意図的に不変としているため、
+      判断が必要な残件として記録する。
+    suggestion: >-
+      (a) mux_public_pane_id とそれを対象にした 4 つのテストを削除する
+      （mux_public_pane_ids マップは通知レート制限で使われ続けるので残す）。
+      (b) 将来の利用に備えて残すなら doc から task0006 AC-5 参照を外し、
+      現在は本番の呼び出し元が無い旨と保持理由を明記する。
+    sources: [claude:comprehensive]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium かつ changed_files 外のため R4 の auto-fix 候補ゲートに該当しない。SPEC NFR4 / AC-8 が app.rs を明示的に不変としており、変更には仕様側の判断が必要"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
