@@ -89,8 +89,14 @@ tasks:
     branch: em-workflow/mux-tab-switch-replay-latency/task0003
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, performance, architecture, spec]
+    discretionary:
+      - perspective: security
+        reason: "diff が wire snapshot payload の segment/dims 解析と off-thread ワーカー間の共有状態を扱うため"
+    codex_cross_validation: true
 
 requirements:
   FR1:
