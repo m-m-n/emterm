@@ -1,0 +1,274 @@
+round: 1
+executed_at: "2026-07-31T06:10:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 386bad0f2dcbbf6f13b14a9b6140e79c9c9b5d47
+  head_commit: dca507d0fc78286ce73c7a8d0520e118215ef422
+  changed_files:
+    - crates/term_core/src/bench.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/tabs.rs
+    - src-tauri/src/window_host.rs
+    - test-docs/mux-tab-switch-replay-latency/task0001.tests.yaml
+    - test-docs/mux-tab-switch-replay-latency/task0002.tests.yaml
+    - test-docs/mux-tab-switch-replay-latency/task0003.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary:
+    - perspective: security
+      reason: "diff が wire snapshot payload の segment/dims 解析と off-thread ワーカー間の共有状態を扱うため"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: comprehensive, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+findings:
+  - stable_id: 6e4bad59cedf28cb
+    severity: high
+    category: architecture
+    file: src-tauri/src/tabs.rs
+    line: 3449
+    title: "「最新の replay 要求」の所有者が pending_switch と pending_redispatch に二重化し、Tab::resize が古い方を読む"
+    description: >-
+      dispatch_offthread_replay が同一 pane の場合に pending_redispatch へ退避するようになったが、
+      Tab::resize の再ディスパッチ分岐だけが pending_switch.payload を読むため、より新しい
+      snapshot が pending_redispatch に既にある場合、古い payload を再ディスパッチして新しい
+      snapshot の内容を失う。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: fixed
+    resolution_reason: "loop 1 で自動修正、loop 2 の architecture 再レビューで保持を確認"
+  - stable_id: c6c0db1d76c70411
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/tabs.rs
+    line: 979
+    title: "coalesce 解決時に旧 live_queue を「別ペイロード」の replay に引き継ぎ、ライブ出力が二重適用される"
+    description: >-
+      poll_pending_switch が pending_switch の live_queue を無条件に新ワーカーへ引き継ぐため、
+      同一 pane への 2 通目の Snapshot による coalesce では、既にその payload が含むライブ出力が
+      画面に二重適用される。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: >-
+      loop 1 で old.payload == payload ガードを追加して自動修正。ただしこの修正が新しい
+      タイミングウィンドウでの別バグ（下記 7ed0ba7335376c20）を露呈させた。
+  - stable_id: b21749c5f2bd1006
+    severity: high
+    category: spec
+    file: crates/term_core/src/terminal_core.rs
+    line: 1957
+    title: "FR1: D7 rescue gate が実測形状の振動方向（rows > target）を拒否する"
+    description: >-
+      middle_is_row_bounded は r <= target_rows のみ許容する片方向ゲート。SPEC の実測 storm は
+      visible_row_count 0/1 振動で、target が「表示あり」側(行数が少ない側)のとき、クラスタの
+      約半分は rows > target になり head_fold_safe が false になって全ドレインへ後退する。
+      新規テスト/bench はいずれも below-target 方向しか再現しておらず、FR1 は実測形状に対して
+      未検証（かつ恐らく未達）。
+    sources: [claude:spec]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: "auto-fix 対象外（category: spec）。rework task0004 へ"
+  - stable_id: 12cac263b7dab24b
+    severity: high
+    category: spec
+    file: src-tauri/src/window_host.rs
+    line: 2803
+    title: "FR6: ResizeSettler がレンダー回数でデバウンスするため最初の遷移がそのまま broadcast される"
+    description: >-
+      observe はレンダーごとに呼ばれる call site (refresh_status_bar_insets) からしか観測を得られず、
+      かつ「適用済み値と異なる候補のみ」観測する。2 値振動の一方が適用済み値と一致すると settler には
+      常に同じ候補しか流れず、2 回目の観測で forward。forward は observations_left を恒久的に
+      None にするため、以降の全遷移が即時 passthrough になり、FR6 が防ごうとしている resize marker
+      蓄積がそのまま再発する。
+    sources: [claude:spec]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: "auto-fix 対象外（category: spec）。rework task0005 へ"
+  - stable_id: 64baa639d71792f9
+    severity: high
+    category: spec
+    file: src-tauri/src/tabs.rs
+    line: 3455
+    title: "FR7: resize 競合時、旧 target のセグメント dims のまま新 target へ replay し bypass が依然defeatされる"
+    description: >-
+      task0003 の coalesce は worker spawn の重複を減らすのみで、segment dims と replay-time
+      target の不一致という根本機序 (SPEC Root Cause 3) には手を付けていない。resize 後の
+      再ディスパッチも、segments は decode 時（pre-resize）の dims のまま新 target に対して
+      replay されるため、stable_target_suffix_start が一致する tail run を見つけられず bypass が
+      defeat されたままになる。loop 1 の 2 つの auto-fix（tabs.rs:979 / tabs.rs:3463）は
+      「どの payload を replay するか」を変えただけで、この dims-vs-target の関係には影響しない。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "auto-fix 対象外（category: spec）。rework task0006 へ"
+  - stable_id: fabff23130d04812
+    severity: medium
+    category: spec
+    file: src-tauri/src/tabs.rs
+    line: 1471
+    title: "FR8: 同一 pane の重複 snapshot は decode/fetch レベルでは依然 2 回行われる"
+    description: >-
+      coalesce は replay worker の spawn のみを 1 回に畳んでおり、decode_snapshot_payload_typed
+      と daemon への RequestPaneSnapshot は依然として重複フレームごとに実行される。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "medium につき auto-fix 候補外（severity gate）。rework task0006 へ"
+  - stable_id: b11143cfa2abef3b
+    severity: medium
+    category: spec
+    file: crates/term_core/src/bench.rs
+    line: 391
+    title: "FR2: 新規 bench の上限が緩く、tens-of-ms ceiling を担保しない"
+    description: >-
+      t_free * 5.0 + 50ms という上限は実測 baseline(76.9ms)に対し約434msまで通過を許し、
+      SPEC が要求する tens-of-ms オーダーを担保しない。既存 bench の 3.0x+20ms 基準より緩い。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "medium につき auto-fix 候補外（severity gate）。rework task0004 へ"
+  - stable_id: 02546e5e10deb500
+    severity: medium
+    category: architecture
+    file: src-tauri/src/window_host.rs
+    line: 1248
+    title: "ResizeSettler の静定検出が render ループに依存し、自前の wake 源を持たない"
+    description: >-
+      observe が None を返したとき pending_resize も request_redraw も立たないため、
+      アイドル時（ControlFlow::Wait）に次の観測フレームが来ず、確定サイズの適用が
+      無関係なイベントまで遅延しうる。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium につき auto-fix 候補外（severity gate）。rework task0005 へ"
+  - stable_id: 0e3a7dee5f50d788
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/terminal_core.rs
+    line: 1255
+    title: "bypass 状態機械の第 3 遷移（suspend）が名前付き API を持たずフィールド直書きで表現されている"
+    description: >-
+      D7 の HEAD→MIDDLE 遷移が core.scrollback_bypass = false; という直接代入で表現されており、
+      enable/disable_snapshot_bypass と並ぶ名前付き遷移になっていない。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium につき auto-fix 候補外（severity gate）。rework task0004 へ"
+  - stable_id: 34a708465d04f983
+    severity: medium
+    category: performance
+    file: src-tauri/src/tabs.rs
+    line: 3463
+    title: "リサイズストーム中、coalesce 済みでも捨てられるだけの snapshot payload 全体を毎イベント複製する"
+    description: >-
+      同一 pane への再ディスパッチが既に pending_redispatch に coalesce 済みでも、
+      Tab::resize は毎 resize イベントで payload/segments を clone してから coalesce 分岐に
+      入るため、複製がそのまま捨てられる。
+    sources: [claude:performance]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium につき auto-fix 候補外（severity gate）。rework task0006 へ"
+  - stable_id: 5b1878c41d3e02d6
+    severity: medium
+    category: performance
+    file: src-tauri/src/tabs.rs
+    line: 993
+    title: "coalesce 解決時に最大数 MiB の payload を毎回フルバイト比較している（loop 1 の auto-fix が新規導入）"
+    description: >-
+      old.payload == payload の比較は resize 由来の同一 payload では毎回全長を走査する。
+      coalesce 時点で O(1) に確定できる情報を poll 時に O(n) 比較へ回している。
+    sources: [claude:performance]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium につき auto-fix 候補外（severity gate）。rework task0006 へ。task0006 の設計次第でこの比較自体が不要になる可能性がある"
+  - stable_id: 7ed0ba7335376c20
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/tabs.rs
+    line: 993
+    title: "同一ペインの新スナップショット到着後に届いたライブ出力が poll 時に丸ごと破棄される（loop 1 の auto-fix が生んだ新規リグレッション）"
+    description: >-
+      loop 1 の C1 修正（old.payload == payload ガード）導入後、pending_switch は
+      poll_pending_switch が実行されるまで古い payload を保持し続けるため、その間に
+      到着したライブ出力（新しい方の snapshot には含まれない可能性がある）が
+      poll 時に queue ごと破棄される。orchestrator が terminal_core.rs / tabs.rs を
+      直接確認し、coalesce 導入前にはこの「coalesce 後も pending_switch が古いまま
+      残り続ける」時間窓自体が存在しなかったことを確認済み（新規デグレードと判断）。
+      architecture 観点の再レビューはこれを「pre-existing supersede 挙動と同じ」と
+      評価しリグレッションではないとしたが、orchestrator の追加調査により、coalesce
+      導入前は新 snapshot 到着時に pending_switch が即座に差し替わっていたため
+      この延長された queue 窓自体が存在しなかったことを確認した。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "auto-fix ループでの追加の機械的パッチはリスクが高いと判断し中断。rework task0006 で TDD により再設計"
+  - stable_id: ebc9de26bb15fcb1
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/tabs.rs
+    line: 1674
+    title: "live-queue オーバーフロー時の同期フォールバックが「別 payload + 旧キュー」を適用して二重適用する"
+    description: >-
+      上記 7ed0ba7335376c20 と同根の兄弟サイト。pending_redispatch の payload で
+      reset_frame_for_replay した直後に、無条件で pending.live_queue を適用しており、
+      新 payload が既に含む内容が二重に出る可能性がある。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "rework task0006 へ（7ed0ba7335376c20 と同一の設計修正で解消見込み）"
+  - stable_id: 02546e5e10deb500-c
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host.rs
+    line: 1252
+    title: "ResizeSettler の静穏検出が呼び出し側フィルタで無効化され、計測された 0↔1 振動を吸収できない"
+    description: >-
+      observe は「現在 APPLIED な inset と異なる候補」しか渡されないため、2 値振動の一方が
+      APPLIED 値と一致する限り settler には常に同じ候補しか流れず、ストーム途中で forward
+      してしまう。architecture/performance 観点の同一サイトの medium 指摘（02546e5e10deb500）
+      より一段深刻な機序として、FR6/AC-1/AC-5 未達と直結すると評価。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "rework task0005 へ（spec の 12cac263b7dab24b と同一機序）"
+  - stable_id: 6a02ed7e1b606588
+    severity: high
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 1178
+    title: "head_fold_safe を bypass_split のハードゲートにしたため、D7 以前は分割できた形状が全ドレインに退行する"
+    description: >-
+      head_fold_safe が false のとき split 自体を断念しており、D7 以前なら engage できていた
+      形状（HEAD が target・MIDDLE に列変更・大きな target tail）まで巻き添えで全ドレインに
+      戻る。安全でない場合は h を 0 に縮退させるべきで、split 自体を断念すべきではない。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "rework task0004 へ（spec の b21749c5f2bd1006 と根は同じ head_fold_safe ゲート）"
+auto_fix:
+  loops_run: 1
+  applied_total: 2
+  termination: "escalated-to-rework"
+  termination_note: >-
+    Loop 1 applied 2 non-spec high fixes (6e4bad59cedf28cb, c6c0db1d76c70411) and both
+    were confirmed structurally intact by the architecture re-review. However the same
+    re-review round surfaced 3 NEW/escalated non-spec high findings in the same
+    concurrency-sensitive area (tabs.rs pending_switch/pending_redispatch state machine,
+    window_host.rs ResizeSettler event-loop integration, term_core.rs D7 safety gate) —
+    none with a low-risk singleton-diff fix, all requiring design-level changes with
+    test-first verification. Combined with 3 pre-existing spec-category high findings
+    that are structurally excluded from auto-fix, the orchestrator judged further
+    mechanical review-editor dispatches (no build/test capability, single-shot edits)
+    to be an inappropriate tool for this residual surface, and routed everything to
+    implementation rework instead of continuing to loop 2/3.
+residual_critical_high: 6
+rework_required: true

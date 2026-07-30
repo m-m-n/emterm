@@ -28,9 +28,8 @@ workflow:
     status: completed
     completed_at_commit: 3e41fddf02663ba2c7f34f382382da55e7019824
   - id: implement
-    status: completed
+    status: pending
     base_commit: 386bad0f2dcbbf6f13b14a9b6140e79c9c9b5d47
-    completed_at_commit: fe492e8ce888bca8f5222f741661de7cd3b160f7
   - id: review
     status: pending
   - id: verify
@@ -87,29 +86,74 @@ tasks:
       non-bypass by design. Flag for the review phase's spec-compliance
       check against SPEC.md FR7's wording.
     branch: em-workflow/mux-tab-switch-replay-latency/task0003
+  task0004:
+    title: "term_core bypass split gate: fix D7 rescue direction, restore pre-D7 fallback, tighten bench ceiling"
+    plan: tasks/task0004.md
+    files:
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/bench.rs
+    skills: [backend-impl]
+    domains: [concurrency]
+    complexity: high
+    requirements: [FR1, FR2]
+    status: pending
+    notes: "review round 1 rework task (batch mode auto-rework, cap 1)"
+    branch: em-workflow/mux-tab-switch-replay-latency/task0004
+  task0005:
+    title: "ResizeSettler: fix render-driven debounce blind spots and missing self-wake"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/src/window_host.rs
+    skills: [backend-impl]
+    domains: [ui, concurrency]
+    complexity: high
+    requirements: [FR6]
+    status: pending
+    notes: "review round 1 rework task (batch mode auto-rework, cap 1)"
+    branch: em-workflow/mux-tab-switch-replay-latency/task0005
+  task0006:
+    title: "tabs.rs pending-switch/redispatch: fix target-dims mismatch (FR7), decode dedup (FR8), and live-output loss/duplication"
+    plan: tasks/task0006.md
+    files:
+      - src-tauri/src/tabs.rs
+    skills: [backend-impl]
+    domains: [concurrency]
+    complexity: high
+    requirements: [FR7, FR8]
+    status: pending
+    notes: "review round 1 rework task (batch mode auto-rework, cap 1)"
+    branch: em-workflow/mux-tab-switch-replay-latency/task0006
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
   plan:
     floor: [comprehensive, performance, architecture, spec]
     discretionary:
       - perspective: security
         reason: "diff が wire snapshot payload の segment/dims 解析と off-thread ワーカー間の共有状態を扱うため"
     codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+    security: completed
+  residual_critical_high: 6
+  needs_rework: true
 
 requirements:
   FR1:
     title: "resize marker 蓄積形状での高速 replay"
     status: ok
     tbd_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0004]
     tests: [TS-1]
   FR2:
     title: "回帰用 bench/テスト追加"
     status: ok
     tbd_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0004]
     tests: [TS-1]
   FR3:
     title: "通常切替の非劣化"
@@ -133,19 +177,19 @@ requirements:
     title: "起動時 reshape 連打の抑制"
     status: ok
     tbd_reason: null
-    tasks: [task0002]
+    tasks: [task0002, task0005]
     tests: [TS-5]
   FR7:
     title: "切替中 resize competition への耐性"
     status: ok
     tbd_reason: null
-    tasks: [task0003]
+    tasks: [task0003, task0006]
     tests: [TS-6]
   FR8:
     title: "snapshot 二重取得の防止"
     status: ok
     tbd_reason: null
-    tasks: [task0003]
+    tasks: [task0003, task0006]
     tests: [TS-7]
   NFR1:
     title: "既存の二重コスト防止制約の維持"
@@ -155,5 +199,5 @@ requirements:
     tests: [TS-8]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework_count: 0
