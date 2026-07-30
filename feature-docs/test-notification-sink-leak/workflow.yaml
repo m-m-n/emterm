@@ -25,7 +25,7 @@ workflow:
     skipped_reason: "テストコードのみの変更で、ユーザーに見える UI 面は変わらないため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
   - id: implement
     status: pending
     base_commit: 93afa650bfc9ee83b9ae5c17dd18e10c786a3ea9
@@ -38,7 +38,18 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Point the leaking unit test at the capturing notification sink"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/app.rs
+    skills: []
+    domains: [external-io]
+    complexity: low
+    requirements: [FR1, NFR1, NFR2]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -50,22 +61,22 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-3]
   NFR1:
     title: "Test isolation: the unit test suite performs no D-Bus / OS notification I/O"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2, TS-4]
   NFR2:
     title: "No production change outside the app.rs test module"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
 
 batch:
   review_rework_count: 0
