@@ -67,8 +67,8 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR1, NFR3]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "予定外に src-tauri/src/app.rs の既存テスト2件へ with_overlay_mode(false) を明示追加（デフォルト反転で暗黙依存が壊れたため）。task0002 と同ファイル重複"
     branch: em-workflow/mux-sidebar-overlay-dim/task0001
   task0002:
     title: "オーバーレイの自動 dim（ホバー / 切り替え / 3 秒）と再描画スケジューリング"
