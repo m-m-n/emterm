@@ -27,8 +27,9 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 8934191f9385d76a911d527dc009de3dcc32c4ee
+    completed_at_commit: 32ebda3698d1ad5341cbf5f9330b569ac39295fd
   - id: review
     status: pending
   - id: verify
@@ -48,8 +49,8 @@ tasks:
     domains: [external-io]
     complexity: low
     requirements: [FR1, NFR1, NFR2]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "merge_commit 32ebda3698d1ad5341cbf5f9330b569ac39295fd, conflict_retries 0, tests pass. Deviation: copied the gitignored src-tauri/assets/fonts/ build assets from the main tree into the task worktree so build.rs could run (git worktree does not share ignored files); no source file outside expected_files changed. Regression scan (IMPLEMENTATION.md D2) confirmed no other leaking test."
     branch: em-workflow/test-notification-sink-leak/task0001
 
 review:
