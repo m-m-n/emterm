@@ -75,8 +75,16 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR7, FR8]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: >-
+      Implementer deviation on FR7: engaging bypass across a genuine
+      post-resize target mismatch was found unsafe (violates term_core's
+      documented row-growth/rewrap-during-bypass invariant). Implemented
+      instead as coalescing same-pane redispatches so an intermediate,
+      already-superseded target is never wastefully rebuilt — the final
+      replay for a genuinely mismatched target still falls back to
+      non-bypass by design. Flag for the review phase's spec-compliance
+      check against SPEC.md FR7's wording.
     branch: em-workflow/mux-tab-switch-replay-latency/task0003
 
 review:
