@@ -199,7 +199,10 @@ pub struct MuxSettings {
     /// Initial expansion state of the tab group (`mux.tab_always_expand`).
     pub tab_always_expand: bool,
     /// Window sidebar placement mode (`mux.window_sidebar_overlay`).
-    /// `false` (default) = persistent left panel, `true` = right overlay.
+    /// `true` (default) = floating right overlay, `false` = persistent
+    /// left panel. Absent or explicit-null keys resolve to the overlay
+    /// default (task0001 D3); an explicit `false` always selects the
+    /// persistent panel.
     pub window_sidebar_overlay: bool,
     /// Effective per-action follow-up chords (`mux.keybinds`), starting
     /// from the tmux defaults and overlaid with valid user entries.
@@ -223,7 +226,7 @@ impl Default for MuxSettings {
         }
         Self {
             tab_always_expand: false,
-            window_sidebar_overlay: false,
+            window_sidebar_overlay: true,
             keybinds,
             statusbar: MuxStatusbarSettings::default(),
         }
@@ -2178,25 +2181,38 @@ mod tests {
         assert!(s.mux.tab_always_expand);
     }
 
-    // ── window_sidebar_overlay (task0001 AC-1..AC-4) ─────────────────────
+    // ── window_sidebar_overlay (task0001 AC-1/AC-2/AC-3/AC-4) ────────────
 
     #[test]
-    fn loader_mux_window_sidebar_overlay_missing_defaults_false() {
-        // AC-1: a settings JSON without the field resolves to `false`.
+    fn loader_mux_window_sidebar_overlay_missing_defaults_overlay() {
+        // AC-1: a settings JSON without the field resolves to the overlay
+        // display mode (`true`).
         let s = load_json(r#"{"mux": {"prefix": "Ctrl+A"}}"#);
-        assert!(!s.mux.window_sidebar_overlay);
+        assert!(s.mux.window_sidebar_overlay);
     }
 
     #[test]
-    fn loader_mux_window_sidebar_overlay_null_resolves_false() {
-        // AC-2: a settings JSON with the field `null` resolves to `false`.
+    fn loader_mux_window_sidebar_overlay_null_resolves_overlay() {
+        // AC-2: a settings JSON with the field `null` resolves to the
+        // overlay display mode (the loader treats null as "not
+        // specified", matching the missing-key case).
         let s = load_json(r#"{"mux": {"window_sidebar_overlay": null}}"#);
+        assert!(s.mux.window_sidebar_overlay);
+    }
+
+    #[test]
+    fn loader_mux_window_sidebar_overlay_explicit_false_is_persistent() {
+        // AC-3: an explicit `false` resolves to the persistent display
+        // mode in the runtime settings the GUI reads, overriding the
+        // overlay default (compatibility guarantee: a saved persistent
+        // choice is never changed under the user).
+        let s = load_json(r#"{"mux": {"window_sidebar_overlay": false}}"#);
         assert!(!s.mux.window_sidebar_overlay);
     }
 
     #[test]
     fn loader_mux_window_sidebar_overlay_true() {
-        // AC-3: `true` resolves to `true` in the runtime settings the GUI
+        // AC-4: `true` resolves to `true` in the runtime settings the GUI
         // reads.
         let s = load_json(r#"{"mux": {"window_sidebar_overlay": true}}"#);
         assert!(s.mux.window_sidebar_overlay);
