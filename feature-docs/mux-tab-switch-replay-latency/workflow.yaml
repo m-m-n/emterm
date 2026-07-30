@@ -28,8 +28,9 @@ workflow:
     status: completed
     completed_at_commit: 3e41fddf02663ba2c7f34f382382da55e7019824
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 386bad0f2dcbbf6f13b14a9b6140e79c9c9b5d47
+    completed_at_commit: 42c7b2f8cc385443c8d4edcfd67c8057c75d8a9d
   - id: review
     status: pending
   - id: verify
@@ -190,7 +191,7 @@ requirements:
     tasks: [task0003, task0006]
     tests: [TS-6]
   FR8:
-    title: "snapshot 二重取得の防止"
+    title: "snapshot 二重取得の防止（replay build レベルのみ。decode/fetch レベルはスコープ外 — review round 1 / task0006 で判明・SPEC.md/VERIFICATION.md に反映済み）"
     status: ok
     tbd_reason: null
     tasks: [task0003, task0006]

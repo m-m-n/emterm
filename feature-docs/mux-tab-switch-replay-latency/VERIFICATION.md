@@ -28,7 +28,7 @@
 | TS-4 | Existing `snapshot_replay_bench_2mib_seq` bench | Stays green (unmodified assertion) | Unit/Bench |
 | TS-5 | Startup/reattach `visible_row_count` 0→1 (and oscillating) transition | `Tab::resize`'s group-wide `Resize` broadcast does not fire once per transient transition; fires at most once for the final settled size; every pane ends up at the correct final size | Unit |
 | TS-6 | Grid resize races an in-flight pane switch | Final replay for the new target is not defeated into a full non-bypass drain by target-dims mismatch (tens-of-ms class, not the ~21 ms raced-today class, when the shape would otherwise support bypass at the new target) | Unit |
-| TS-7 | Two `Snapshot`/`SnapshotRestore` frames for the same pane arrive in immediate succession | Only one decode+replay actually completes; the discarded one's work does not run | Unit |
+| TS-7 | Two `Snapshot`/`SnapshotRestore` frames for the same pane arrive in immediate succession | Only one off-thread replay build actually completes; the discarded one's rebuild does not run (decode/daemon-fetch level dedup is out of scope — scope decision, review round 1 / task0006) | Unit |
 | TS-8 | NFR1 regression guard: a genuinely large, content-heavy prefix paired with a small qualifying suffix | Split still does not engage for it, or the 2nd-pass worker is not invoked twice for that prefix (no double non-bypass cost) | Unit/Bench |
 
 ## Code Quality Verification
@@ -53,15 +53,15 @@
 
 | Requirement | Tasks | Verification |
 |-------------|-------|--------------|
-| FR1 | task0001 | TS-1 |
-| FR2 | task0001 | TS-1 |
+| FR1 | task0001, task0004 | TS-1 |
+| FR2 | task0001, task0004 | TS-1 |
 | FR3 | task0001 | TS-2 |
 | FR4 | task0001 | TS-3 |
 | FR5 | task0001 | TS-4 |
-| FR6 | task0002 | TS-5 |
-| FR7 | task0003 | TS-6 |
-| FR8 | task0003 | TS-7 |
-| NFR1 | task0001 | TS-8 |
+| FR6 | task0002, task0005 | TS-5 |
+| FR7 | task0003, task0006 | TS-6 |
+| FR8 | task0003, task0006 | TS-7 |
+| NFR1 | task0001, task0004 | TS-8 |
 
 ## E2E Testing
 
