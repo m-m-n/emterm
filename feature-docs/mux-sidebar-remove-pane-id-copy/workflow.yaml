@@ -33,9 +33,22 @@ workflow:
   - id: review
     status: pending
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: >-
+      TS-1〜TS-6 / TS-7: cargo test --lib -- --test-threads=1 は 2873 passed /
+      7 failed。failure 7 件はすべて tabs.rs の既存 failure で、同一ソースの
+      main 作業ツリー（ベース）でも同じ 7 件が落ちることを独立に確認した
+      （ベース側 2872 passed → feature 側 2873 passed で純増 1 テスト、回帰ゼロ）。
+      TS-8: cargo check exit 0、警告は既存の viewer/settings dist 未生成 2 件のみ。
+      TS-9: App::mux_public_pane_id（app.rs:2381）と WindowHost::set_clipboard
+      （window_host.rs:1377）の存置を確認。
+      TS-10: cargo check --no-default-features exit 0。
+      修改 3 ファイル内に残る copy 系識別子は AC-1 回帰ガードテストの
+      アサーション文字列 2 箇所のみ（review round1 の 8239fed39f2bc6b2 が
+      dead assertion として指摘済み）。
+      MV-1 / MV-2 は GUI 実機での目視確認項目のため自動 verify の対象外。
   - id: retrospect
     status: pending
 
