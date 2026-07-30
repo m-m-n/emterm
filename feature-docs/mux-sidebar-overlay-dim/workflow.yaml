@@ -60,7 +60,7 @@ workflow:
         note: "TS-14 / TS-15（低不透明度でのターミナル文字判読性、ホバー・切替・3 秒フェードの目視確認）は実機表示が必要な手動項目のため未実施。自動化不能項目として VERIFICATION.md の Manual Testing 節に残す。"
 
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
