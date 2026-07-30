@@ -1,0 +1,242 @@
+round: 1
+executed_at: "2026-07-30T11:05:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 3e8d8e56588f1498898a46f47d7b0daa5e9abd54
+  head_commit: 5b498b5e8ae97841be6504206411f118205528ee
+  changed_files:
+    - crates/app_settings/src/settings.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/src/ui/mux_sidebar.rs
+    - src-tauri/src/window_host.rs
+    - test-docs/mux-sidebar-overlay-dim/task0001.tests.yaml
+    - test-docs/mux-sidebar-overlay-dim/task0002.tests.yaml
+plan:
+  floor: [comprehensive, architecture, spec]
+  discretionary:
+    - perspective: performance
+      reason: "diff がフレームスキップゲート・待機デッドライン・毎フレーム描画パスに触れ、アイドル時の再描画抑止 (NFR1) が要件のため"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+findings:
+  - stable_id: f0358c03e05ef028
+    severity: medium
+    category: spec
+    file: src-tauri/src/window_host.rs
+    line: 3677
+    title: "ホバー判定が PointerMoved でしか再評価されず、カード矩形が動いたときに追従しない"
+    description: >-
+      ホバーフラグ (App::set_mux_sidebar_hovered) を更新するのは WindowEvent::PointerMoved と
+      PointerLeft のアームだけで、カード矩形が変化したときの再評価が無い。SPEC の Edge Cases
+      「Window resize while dim — the recomputed card rect is used for the hover test on the next
+      frame」および Optimization Strategies「Recompute hover only when the pointer moves or the
+      card rect changes」の後者トリガーが実装されていない。カード矩形は window_size / top_chrome /
+      status_bar_bot_inset の関数なので、ポインタ移動を伴わないリサイズ・最大化・タイル配置、
+      タブバー表示切替、mux ステータス行の出入りで矩形が動く。ポインタ静止時に (a) 矩形がポインタから
+      離れても hovered が true のまま残り、resolve_mux_sidebar_opacity が 1.0 を返し
+      next_mux_sidebar_dim_deadline / mux_sidebar_dim_due が「何もしない」を返すため、カード外なのに
+      明るいまま固着して dim へ遷移しない (FR5 / US3 違反)、(b) 逆に矩形がポインタを覆っても false の
+      ままで dim のまま (FR3 違反)。キーボードでオーバーレイを開いた瞬間にポインタが既にカード上で
+      静止しているケースも dim で描かれる。いずれも次のポインタ移動までフラグが訂正されない。
+    suggestion: >-
+      カード矩形が変わり得るフレームでホバーを再導出する。推奨は WindowHost::render 内で
+      App::resolve_mux_sidebar_opacity を呼ぶ直前に、そのフレームの surface_size /
+      top_chrome_inset(app.show_tab_bar) / status_bar_bot_inset_logical と host.cursor_pos
+      (host.pointer_in_window が false なら無条件 false) から ui::mux_sidebar::point_in_sidebar を
+      再評価して app.set_mux_sidebar_hovered(..) を呼ぶ形。こうすると PointerMoved アームでの更新は
+      冗長になり、SPEC の「the recomputed card rect is used for the hover test on the next frame」が
+      フレーム単位で構造的に成立する。最小修正なら SurfaceResized・タブバー表示切替・
+      refresh_status_bar_insets のインセット変化・オーバーレイ可視性変化の各経路で同じ 5 引数
+      ヒットテストを再実行する（取りこぼしやすいので前者を推奨）。
+    sources: [claude:spec]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: "medium のため R4 自動修正ゲート (critical/high) の対象外。人間評価者への申し送り"
+  - stable_id: 83c35bf2a726ba08
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/window_host.rs
+    line: 3677
+    title: "Hover flag is only recomputed on pointer events, so it goes stale (and stays stale, unwoken) after any card-geometry change"
+    description: >-
+      spec 観点の f0358c03e05ef028 と同一の物理的欠陥を包括観点から独立に検出したもの。
+      mux_sidebar_overlay_hovered は PointerMoved の hover feed (window_host.rs:3677-3698) と
+      PointerLeft (window_host.rs:3645) からのみ書かれる。カード rect は window size / show_tab_bar /
+      ステータスバー下端インセットの関数で、ポインタ静止のまま変化しうる (WM/キーボードでの最大化・
+      タイル、AppAction::ToggleFullscreen、ToggleTabBar、ステータスバーの OSC 行の出入り、
+      window_sidebar_overlay のライブ再読込)。変化後のフラグは旧ジオメトリを表す。stuck-bright 側は
+      タイマーで自己修復しない: mux_sidebar_dim_due は hovered 中 false (app.rs:2691-2693)、
+      resolve_mux_sidebar_dim_deadline は hovered 中 None (app.rs:145-147) を返すため
+      control_flow_for が WaitUntil を張らず about_to_wait も redraw を要求しない。結果としてカードは
+      不透明度 1.0 のまま無限に留まり、ユーザーがマウスを動かすまで訂正されない (一フレームの遅延では
+      なく、任意フレーム数持続する)。
+    suggestion: >-
+      ポインタイベント時点でラッチするのではなく、権威ある毎フレームのジオメトリから述語を再導出する。
+      WindowHost::render は window_host.rs:1522 の resolve_mux_sidebar_opacity 呼び出し直前で
+      refresh_status_bar_insets / apply_pending_resize を通しており必要な入力 (host.cursor_pos,
+      host.pointer_in_window, host.pixels_per_point, host.status_bar_bot_inset_logical) を既に持つ。
+      ヒットテストを WindowHost のヘルパに切り出して render から呼び、
+      app.set_mux_sidebar_hovered(host.pointer_in_window && point_in_sidebar(...)) を渡す形にする。
+      構造テスト pointer_moved_hover_feed_shares_the_same_sidebar_hit_region_helper は render を
+      走査する形へ移す。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium のため R4 自動修正ゲート (critical/high) の対象外。f0358c03e05ef028 と同根"
+  - stable_id: 7245ebf0066acf5d
+    severity: medium
+    category: architecture
+    file: src-tauri/src/window_host.rs
+    line: 3679
+    title: "point_in_sidebar の引数組み立てが同一ファイル内 3 箇所目に増殖"
+    description: >-
+      新しい hover feed (window_host.rs:3679-3697) は、press guard (3856-3873) と wheel guard
+      (4066-4090) が既に持つのと同じ 5 引数の組み立て — visibility→Placement 写像、
+      surface_size().to_logical() 変換、top_chrome_inset(show_tab_bar)、
+      status_bar_bot_inset_logical — をコピーして 3 箇所目にした。共有されているのは
+      point_in_sidebar の幾何判定だけで、入力の導出は共有されていない。chrome インセットを 1 つ
+      増やす／下端インセットのソースを変える変更が 1 ファイル内 3 箇所の shotgun surgery になる。
+      構造テストは「helper を呼んでいるか」を source-scan で pin しているだけなので、引数導出だけが
+      片方で乖離しても CI は緑のまま通る。実際 hover コピーは Persistent → None と意図的に別写像に
+      なっており、「意図的な差分」と「コピー漏れによるバグ」が見分けられない。
+    suggestion: >-
+      impl PocApp（または WindowHost）にヘルパを 1 つ立て、placement 写像と inset 組み立てをそこへ
+      閉じる。例: fn sidebar_hit(&self, host: &WindowHost, pos: egui::Pos2, overlay_only: bool) -> bool
+      が visibility→Placement（overlay_only のときは Overlay 以外を None に落とす）と logical サイズ・
+      top/bottom inset を組み立てて point_in_sidebar を呼ぶ。press / wheel / hover の 3 箇所を
+      ヘルパ呼び出し 1 行に置き換え、source-scan テストもヘルパ呼び出しを pin する形へ寄せる。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium のため R4 自動修正ゲート (critical/high) の対象外"
+  - stable_id: f7706ddd4874ef05
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 2641
+    title: "The bright predicate is re-implemented at four sites; the App wrapper and the pure resolver must agree or fade_started is armed against the wrong branch"
+    description: >-
+      hovered || last_switch.is_some_and(|t| now < t + OVERLAY_BRIGHT_HOLD) が独立に 4 箇所で
+      書かれている: resolve_mux_sidebar_dim_opacity (app.rs:110)、
+      App::resolve_mux_sidebar_opacity (app.rs:2641-2644)、resolve_mux_sidebar_dim_deadline
+      (app.rs:145-183 の 2 つの早期 return)、App::mux_sidebar_dim_due (app.rs:2691-2696)。
+      前 2 つが load-bearing: ラッパーは bright を mux_sidebar_fade_started の clear/get_or_insert の
+      ためだけに計算し、直後に純粋リゾルバが同じ式を再計算して返す不透明度を決める。フェード全体の
+      正しさがこの 2 評価の常時一致に依存しており、型もテストもそれを強制していない。片側だけを触る
+      変更（hold 境界の < を <= に、bright トリガーの追加、hold の可変化）で静かに乖離する: ラッパーが
+      bright、リゾルバが dim と読むと fade_started が毎フレーム clear されフェードが始まらず 1.0 から
+      0.35 へスナップする。逆の乖離では bright フレームで fade_started が armed され次のフェードの
+      原点が誤る。スケジューリング側の 2 コピーも、リゾルバが animating と報告する状態に対して redraw を
+      要求しない状態へ乖離しうる (WaitUntil が唯一の起床源のため中間フェードで恒久停止)。
+    suggestion: >-
+      述語を 1 つに切り出して 4 箇所すべてから呼ぶ。例: fn mux_sidebar_bright(hovered: bool,
+      last_switch: Option<Instant>, now: Instant) -> bool を 2 つの純粋リゾルバの隣に置き、
+      resolve_mux_sidebar_dim_opacity / resolve_mux_sidebar_dim_deadline /
+      App::resolve_mux_sidebar_opacity / App::mux_sidebar_dim_due から使う。あるいは
+      App::resolve_mux_sidebar_opacity が bright を自前判定するのを止め、純粋リゾルバを先に呼んで
+      その返す状態から fade_started を arm/clear する（bright フラグを不透明度と一緒に返す）形にすれば、
+      1 tick あたり条件評価は 1 回だけになり構造的に乖離しえない。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium のため R4 自動修正ゲート (critical/high) の対象外"
+  - stable_id: 8992ab3a27c35a42
+    severity: medium
+    category: architecture
+    file: src-tauri/src/app.rs
+    line: 110
+    title: "dim 状態機械の bright 判定が 4 箇所に重複し、単一の所有者がいない"
+    description: >-
+      包括観点の f7706ddd4874ef05 と同根を、状態所有の観点から独立に検出したもの。bright 判定が
+      app.rs:110 / 144-151 / 2641-2645 / 2683-2697 の 4 コピーに分かれ、塗る値・フェード原点の arm・
+      イベントループの起床がそれぞれ別コピーを見ている。本タスクの NFR2 が定数について単一定義サイトを
+      要求しているのに、その定数を使う述語のほうが多重化している。加えて状態そのものが 10,050 行の
+      App に裸のプリミティブ 4 フィールド (app.rs:432 / 440 / 446 / 457) として増設され、「bright でない
+      ときだけ fade_started が armed」という不変条件の所有者が app.rs と window_host.rs にまたがって
+      存在しない。
+    suggestion: >-
+      最低限、bright 述語を 1 関数に切り出して 4 箇所から呼ぶ (mux_sidebar_dim_due の
+      hovered / hold_active の 2 段分岐もこれ 1 本に畳める)。望ましくは 4 フィールドを
+      MuxSidebarDimState { hovered, hover_prev_render, last_switch, fade_started } として切り出し、
+      update(now) -> (f32, bool) / deadline(now) / due(now) / record_switch(now) をそこに置いて App は
+      薄い委譲だけにする。bright 述語と arm 規則が 1 型に閉じ、window_host 側から見える表面も 1 つになる。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium のため R4 自動修正ゲート (critical/high) の対象外。f7706ddd4874ef05 と同根"
+  - stable_id: 6995e35455c47f87
+    severity: medium
+    category: performance
+    file: src-tauri/src/window_host.rs
+    line: 4292
+    title: "dim フェード中の request_redraw にレートリミットが無く、200ms 間フル速度でスピンする"
+    description: >-
+      about_to_wait は App::mux_sidebar_dim_due が真の間、無条件に host.window().request_redraw() を
+      呼ぶ。mux_sidebar_dim_due (app.rs:2682) はフェード中 elapsed < OVERLAY_DIM_FADE (200ms) の間
+      true を返し続けるため、request_redraw → RedrawRequested → about_to_wait → request_redraw の
+      サイクルがブレーキ無しで回る。これは同じ関数内の toast 用コメント (window_host.rs:4269-4276) が
+      明記している失敗モードそのもので、toast 側は toast_redraw_due + last_toast_redraw +
+      TOAST_POLL_MS(16ms) で対処済み。dim フェードには対応する last_*_redraw フィールドが無い。
+      さらに next_mux_sidebar_dim_deadline (app.rs:2664) はフェード中に started + OVERLAY_DIM_FADE の
+      単発 deadline しか返さないので WaitUntil タイマーも律速しない。スピン中のフレームは安価では
+      なく、mux_sidebar_animating が overlay_work に入るため should_skip_frame が必ず否定され、毎フレーム
+      egui パス全体 + wgpu present が走る。加えて render::draw_terminal (render/mod.rs:311-328) は毎フレーム
+      Vec<SidebarEntry> (エントリごとに String name / public_pane_id) を確保する。task0001 のデフォルト
+      反転と task0002 の初期 open により mux アタッチ中はカードが常時表示されるので、「window 切替 →
+      3 秒 hold → 200ms フル速度スピン」が主要操作ごと、加えてポインタがカード境界を出るたびに発生する。
+      本プロジェクトは ControlFlow::Wait 化で idle CPU 10-15% を削った経緯があり、その方針に逆行する。
+    suggestion: >-
+      toast のパターンを踏襲する。(a) WindowHost に last_mux_sidebar_dim_redraw: Option<Instant> を
+      持たせ、toast_redraw_due と同形の純関数 (例 mux_sidebar_dim_redraw_due(dim_due, last_redraw, now))
+      でポーリング周期 (TOAST_POLL_MS 相当の 16ms、または新設の OVERLAY_DIM_POLL_MS) を下回る再要求を
+      抑止し、要求時に last_mux_sidebar_dim_redraw を更新する。(b) 併せて
+      App::next_mux_sidebar_dim_deadline のフェード中の戻り値を単発ではなく next_toast_deadline と同じ
+      bounded poll (now + poll_interval、フェード終了時刻でクランプ) にして、WaitUntil 側も周期で駆動する。
+      既存の next_wait_deadline / should_skip_frame テストと同様、純関数として切り出せば単体テスト可能。
+    sources: [claude:performance]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium のため R4 自動修正ゲート (critical/high) の対象外"
+  - stable_id: 220705add7e24ac2
+    severity: medium
+    category: comprehensive
+    file: doc/SPECIFICATION.md
+    line: 1079
+    title: "doc/SPECIFICATION.md still documents the old window_sidebar_overlay default (false = persistent)"
+    description: >-
+      comprehensive / architecture / spec の 3 観点が独立に同一箇所を指摘し、same_site で統合した
+      (architecture / spec 発の 2 件は changed_files 外のため sanitize 規則で category を
+      comprehensive へ強制、confidence は 50 に上限)。task0001 が永続デフォルトを 2 つの Rust SSOT
+      (crates/app_settings/src/settings.rs:639,699 と src-tauri/src/settings.rs:206,229) で overlay に
+      反転し、task0002 が実行時 open フラグを true にしたのに、リポジトリ正規仕様書は
+      doc/SPECIFICATION.md:1079 が「Persistent mode (default)」、:1081 が
+      「mux.window_sidebar_overlay (default false = persistent, true = overlay)」のまま残り実装と
+      直接矛盾する。feature-docs 外で旧デフォルトを述べている箇所はここだけで、読み手が最初に参照する
+      文書。加えて新しい auto-dim 挙動 (起動時 open、3 秒後に 0.35 へ 200ms フェード) の記載が無いため、
+      観測可能な起動時の見た目が未文書のまま。src-tauri/src/mux/prefix.rs:157-160 の doc comment も
+      「persistent モードでは strict no-op」という前提が既定側から反転した点を反映していない。
+    suggestion: >-
+      doc/SPECIFICATION.md:1079-1081 を overlay 既定に更新し、明示 false は persistent を選び続ける
+      互換保証を 1 行併記する。overlay の行に「起動時から open」と auto-dim (カード全体 0.35 /
+      200ms フェード / ホバーまたは切替後 3000ms は不透明) を追記する。あわせて prefix.rs:157-160 の
+      ToggleWindowSidebar doc comment も既定 overlay + 起動時 open に合わせると、doc / Rust SSOT /
+      prefix action の 3 層で記述が一致する。
+    sources: [claude:comprehensive, claude:architecture, claude:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium かつ changed_files 外のため R4 自動修正ゲートの対象外。人間評価者への申し送り"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
