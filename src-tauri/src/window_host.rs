@@ -4304,6 +4304,12 @@ impl ApplicationHandler for PocApp {
             origin_x_px.round() as i32,
             origin_y_px.round() as i32,
         );
+        // task0001 (windows-skk-ime-hang) FR1: flush any IME requests
+        // recorded this turn (construction-time enable, notify_focus,
+        // notify_cursor_rect_if_changed above) here — outside any
+        // wndproc/event-dispatch frame — instead of calling the OS IME
+        // APIs synchronously from inside `window_event`.
+        self.app.flush_ime();
         if self.app.tabs.is_empty() || host.pending_close() {
             // Same teardown handshake as the CloseRequested path: drop
             // the wgpu / window resources before EventLoop unwinds so
