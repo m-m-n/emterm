@@ -34,9 +34,17 @@ workflow:
     status: completed
     completed_at_commit: 8849c49bf58a94c9e0cb768e0ddbbf83fa9827ec
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 242ab7854a6de62b1de78c9f810d43777ab5d202
+    result: pass
     failed_items: []
+    # TS-1 pass (target test green). TS-2 evaluated as "no regression vs. base":
+    # the suite exits non-zero with 7 failures in tabs::tests, but running the
+    # SAME approved command on the main working tree at base 93afa65 (code
+    # unchanged) reproduces the identical set and counts (2907 passed / 7
+    # failed), so none is attributable to this feature. TS-3/TS-4/TS-5 pass by
+    # inspection. Format check reports 71 drift sites — identical count on the
+    # main tree, none inside the lines this feature touched.
   - id: retrospect
     status: pending
 
