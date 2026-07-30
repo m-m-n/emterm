@@ -1,0 +1,35 @@
+feature: mux-sidebar-remove-pane-id-copy
+collected_at: "2026-07-30T14:44:31+09:00"
+session_ids: [2427e059-9a3b-40eb-a197-e51a4d82141b]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - note: >-
+      integration worktree / task worktree では src-tauri/assets/fonts/ が空になる
+      （gitignore 対象で worktree 間共有されない）。build.rs がそこで panic するため
+      任意の build/test コマンドが走らない。implementer は scripts/fetch-fonts.sh で
+      ネットワーク取得したが、verify ではメイン作業ツリーからのローカル cp で足りた。
+      worktree ベースのワークフローを持つプロジェクトでは「gitignore されたビルド前提
+      アセットの worktree への持ち込み」を手順として持つと、実装・検証の両方で
+      1 ステップ減る。
+  - note: >-
+      medium finding が 4 件出たが R4 の auto-fix 候補ゲート（critical/high のみ）に
+      該当せず、すべて unresolved で記録された。うち 2 件（doc/AGENT-STATUS.md の
+      契約ドリフト、app.rs の孤児アクセサ + 削除済み AC 参照）は changed_files 外の
+      ファイルを指しており、「削除タスクは削除対象を参照する周辺ドキュメント／
+      アクセサも棚卸し対象に含める」を planner 側の規則にできる余地がある。
+  - note: >-
+      tests.yaml の red_confirmed 記録とコミットされたテスト本体がドリフトした
+      （AC-2）。TDD の red を「削除前のコードで実際に落ちること」で担保する場合、
+      red を観測した本体とコミットする本体が同一であることの確認が要る。
+  - note: >-
+      tabs.rs の 7 テストは --test-threads=1 でも安定して落ちる既存 failure だった
+      （プロジェクトメモリの「並列で非決定的に落ちる／--test-threads=1 で安定」は
+      現状に合っていない）。verify 側でベース側の独立測定をしたことで回帰でないと
+      確定できたので、ベースライン測定は implementer 任せにせず verify でも
+      取り直す価値がある。

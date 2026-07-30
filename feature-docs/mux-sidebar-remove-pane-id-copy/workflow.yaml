@@ -50,7 +50,7 @@ workflow:
       dead assertion として指摘済み）。
       MV-1 / MV-2 は GUI 実機での目視確認項目のため自動 verify の対象外。
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
