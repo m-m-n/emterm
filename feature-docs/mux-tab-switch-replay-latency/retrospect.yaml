@@ -1,0 +1,81 @@
+feature: mux-tab-switch-replay-latency
+collected_at: "2026-07-31T08:05:00+09:00"
+session_ids: [d44a0d47-c542-4dfc-b0a9-8ceab54f4741]
+signals:
+  review_critical_high:
+    - stable_id: 6e4bad59cedf28cb
+      category: architecture
+      file: src-tauri/src/tabs.rs
+      title: "「最新の replay 要求」の所有者が pending_switch と pending_redispatch に二重化し、Tab::resize が古い方を読む"
+      resolution: fixed
+    - stable_id: c6c0db1d76c70411
+      category: comprehensive
+      file: src-tauri/src/tabs.rs
+      title: "coalesce 解決時に旧 live_queue を「別ペイロード」の replay に引き継ぎ、ライブ出力が二重適用される"
+      resolution: fixed
+    - stable_id: b21749c5f2bd1006
+      category: spec
+      file: crates/term_core/src/terminal_core.rs
+      title: "FR1: D7 rescue gate が実測形状の振動方向（rows > target）を拒否する"
+      resolution: unresolved (rework task0004 へ)
+    - stable_id: 12cac263b7dab24b
+      category: spec
+      file: src-tauri/src/window_host.rs
+      title: "FR6: ResizeSettler がレンダー回数でデバウンスするため最初の遷移がそのまま broadcast される"
+      resolution: unresolved (rework task0005 へ)
+    - stable_id: 64baa639d71792f9
+      category: spec
+      file: src-tauri/src/tabs.rs
+      title: "FR7: resize 競合時、旧 target のセグメント dims のまま新 target へ replay し bypass が依然defeatされる"
+      resolution: unresolved (rework task0006 へ)
+    - stable_id: 7ed0ba7335376c20
+      category: comprehensive
+      file: src-tauri/src/tabs.rs
+      title: "同一ペインの新スナップショット到着後に届いたライブ出力が poll 時に丸ごと破棄される（loop 1 の auto-fix が生んだ新規リグレッション）"
+      resolution: unresolved (rework task0006 で TDD により再設計)
+    - stable_id: 02546e5e10deb500-c
+      category: comprehensive
+      file: src-tauri/src/window_host.rs
+      title: "ResizeSettler の静穏検出が呼び出し側フィルタで無効化され、計測された 0↔1 振動を吸収できない"
+      resolution: unresolved (rework task0005 へ)
+    - stable_id: 6a02ed7e1b606588
+      category: comprehensive
+      file: crates/term_core/src/terminal_core.rs
+      title: "head_fold_safe を bypass_split のハードゲートにしたため、D7 以前は分割できた形状が全ドレインに退行する"
+      resolution: unresolved (rework task0004 へ)
+    - stable_id: 5c6ae6b507b6f638
+      category: comprehensive
+      file: crates/term_core/src/terminal_core.rs
+      title: "D8 head fold with an empty MIDDLE (h == k) returns a core at the HEAD's dims, not the SPEC-required target dims"
+      resolution: fixed (round2, same-round auto-fix; not re-reviewed by a fresh pass — rework cap consumed)
+    - stable_id: b6a60c440da70e79
+      category: spec
+      file: crates/term_core/src/terminal_core.rs
+      title: "FR1/FR2: SPEC の実測形状（k=27, 26セグメントのマーカークラスタ）は新ゲートでも split が engage せず未達"
+      resolution: deferred (batch mode: rework cap reached)
+    - stable_id: 81507f39e384b34e
+      category: performance
+      file: src-tauri/src/window_host.rs
+      title: "ResizeSettler の self-wake がレートリミット無しで静定待ちの間レンダーループを全速スピンさせる"
+      resolution: deferred (batch mode: rework cap reached)
+    - stable_id: a82206113b8160fd
+      category: architecture
+      file: src-tauri/src/window_host.rs
+      title: "ResizeSettler のゲートに描画用 inset の適用を相乗りさせ、grid サイズ不変の status-bar 高さ変化で inset が恒久的に取り残される"
+      resolution: deferred (batch mode: rework cap reached)
+    - stable_id: aba5ebbdf9a9addb
+      category: comprehensive
+      file: src-tauri/src/window_host.rs
+      title: "Status-bar insets are now applied only when the derived grid size changes（a82206113b8160fd と同一機序）"
+      resolution: deferred (batch mode: rework cap reached; same underlying issue as a82206113b8160fd)
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: security
+      reason: "diff が wire snapshot payload の segment/dims 解析と off-thread ワーカー間の共有状態を扱うため（round 2 でも継続）"
+  declined_findings: []
+lessons_candidates:
+  - "review round 1 の自動修正ループが c6c0db1d76c70411 を直したことで新規リグレッション 7ed0ba7335376c20 を誘発した。機械的パッチの副作用チェックは同一ファイル内の隣接パスにも及ぼす必要がある。"
+  - "batch モードの review_rework_count cap=1 により、round 2 で見つかった FR1/FR2 の未達（b6a60c440da70e79、SPEC 起票の実測形状そのもの）が deferred のまま completed 扱いになった。人間評価者への完了報告での強調が必須。"
+  - "verify フェーズでシングルスレッド実行でも 7 件のテストが失敗したが、main ブランチでも同一パニックで再現したため feature 起因ではないと判断した。tabs.rs の off-thread worker 系テストのタイムアウトはこのホスト環境で恒常的に不安定（プロジェクトメモリの --test-threads=1 注記だけでは解消しない残存不安定性）。"

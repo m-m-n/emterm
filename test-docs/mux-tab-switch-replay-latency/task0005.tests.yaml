@@ -1,0 +1,154 @@
+task_id: task0005
+
+# Baseline captured before touching any file (step 4a), running
+# project_commands.test verbatim. All 19 are pre-existing, unrelated
+# flakiness in tabs.rs's off-thread replay worker ("did not complete in
+# time" timeouts) and one status_bar::runtime timer-wake test — nothing in
+# window_host.rs / ResizeSettler. Re-running the identical command 3 more
+# times (twice parallel, once with --test-threads=1) after implementing
+# the fix showed a DIFFERENT, overlapping-but-not-identical subset of this
+# same tabs.rs/status_bar::runtime pool failing each time (7-21 failures
+# depending on run), confirming this is pre-existing, load-sensitive
+# non-determinism in that subsystem (also documented in the project's own
+# MEMORY.md: "tabs.rs replay テストは並列で非決定的に落ちる"), not
+# something caused by this task's diff (which touches only
+# window_host.rs's ResizeSettler / refresh_status_bar_insets — a
+# completely separate code path with no shared state). Every
+# window_host::tests::resize_settler_* test passed in all 4 runs.
+baseline_failures:
+  - status_bar::runtime::tests::runtime_time_provider_timer_fires_wake
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac1_resize_storm_during_pending_switch_collapses_to_one_redispatch
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+# Final run (post-implementation) failures, one representative capture.
+# Every failure below is drawn from the same pre-existing flaky pool as
+# baseline_failures (confirmed by repeated re-runs — see note above); none
+# are new to window_host.rs or ResizeSettler. Two names
+# (ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates,
+# ts9_no_residual_rows_after_offthread_swap_to_shorter_pane) did not
+# happen to appear in the single 4a baseline snapshot but are the exact
+# same "off-thread replay worker did not complete in time" timeout at
+# tabs.rs:3270 as every other entry, and reproduced (with yet another
+# different membership) on a subsequent re-run of the identical unmodified
+# command — i.e. they are baseline-class flakiness that this diff cannot
+# have caused (window_host.rs shares no state or timing path with the
+# off-thread replay worker).
+final_failures:
+  - status_bar::runtime::tests::runtime_time_provider_timer_fires_wake
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac1_resize_storm_during_pending_switch_collapses_to_one_redispatch
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::resize_settler_forwards_at_most_once_for_a_render_driven_storm_matching_applied
+    red_confirmed: true
+    red_reason: >-
+      Written against the new `ResizeSettler::observe(candidate, now)` /
+      struct-literal-seeded `last_forwarded` API before it existed;
+      `cargo test --lib --no-run` failed with E0061 ("this method takes 1
+      argument but 2 arguments were supplied") and E0560 (no field
+      `window_opened_at` / `stable_since` / `last_forwarded` on
+      `ResizeSettler`) — the pre-fix `ResizeSettler` had neither wall-clock
+      tracking nor an applied-value concept, so this test could not
+      compile, let alone pass, against the old design.
+  AC-2:
+    tests:
+      - window_host::tests::resize_settler_forwards_at_most_once_for_a_render_driven_storm_matching_applied
+      - window_host::tests::resize_settler_settling_back_on_the_applied_value_is_a_no_op_but_closes_the_window
+      - window_host::tests::resize_settler_backstop_forwards_after_max_duration_even_if_never_settled
+    red_confirmed: true
+    red_reason: >-
+      Same compile-time red as AC-1 (new `observe`/`awaiting_decision`
+      API/fields did not exist yet); once compiling, these three together
+      prove the settled/backstop size always eventually reaches the
+      caller — including the no-stale-pane case where the final value
+      differs from applied (main AC-1 test), the no-op case where it
+      matches applied but the window still closes cleanly (settling-back
+      test), and the pathological non-settling stream (backstop test).
+  AC-3:
+    tests:
+      - window_host::tests::resize_settler_forwards_immediately_once_closed
+    red_confirmed: true
+    red_reason: >-
+      Adapted from task0002's original test to the new `observe(candidate,
+      now)` signature; failed to compile (E0061, extra `t` argument) before
+      the signature change landed.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Out of scope for this task's `expected_files` (the one-time
+      mux-attach seed lives in `Tab::apply_mux_message` /
+      `tabs.rs::welcome_seeds_window_list_and_active_index`, untouched by
+      this diff). Confirmed unaffected by: (1) `git diff --stat` showing
+      only `src-tauri/src/window_host.rs` changed; (2)
+      `welcome_seeds_window_list_and_active_index` passing in every full
+      `cargo test --lib` run performed for this task (it never appears in
+      any failure list); (3) `refresh_status_bar_insets`'s doc comment and
+      code confirm the seed path does not go through `ResizeSettler` at
+      all — the seed write happens inside `Tab::apply_mux_message`, a
+      different call chain entirely.
+  AC-5:
+    tests:
+      - window_host::tests::resize_settler_self_drives_to_settlement_without_any_external_wake
+    red_confirmed: true
+    red_reason: >-
+      Written against `ResizeSettler::awaiting_decision`, which did not
+      exist pre-fix; `cargo test --lib --no-run` failed with E0599 ("no
+      method named `awaiting_decision` found"). Pre-fix, `observe`
+      returning `None` had no way for the caller to distinguish "still
+      debouncing, please request another redraw" from "steady state,
+      nothing pending" — the self-wake gap this AC targets.
+  AC-6:
+    tests:
+      - window_host::tests::resize_settler_absorbs_chaotic_multi_value_churn
+      - window_host::tests::resize_settler_forwards_immediately_once_closed
+      - window_host::tests::resize_settler_reset_reopens_a_closed_window
+      - window_host::tests::resize_settler_backstop_forwards_after_max_duration_even_if_never_settled
+      - window_host::tests::resize_settler_closed_mode_does_not_reforward_the_same_value_every_render
+    red_confirmed: true
+    red_reason: >-
+      All four adapted task0002 tests (chaotic churn / forwards-once-closed
+      / reset-reopens / backstop) failed to compile against the old
+      `observe(candidate)` single-argument signature (E0061) before the
+      `now: Instant` parameter was added; the new
+      `resize_settler_closed_mode_does_not_reforward_the_same_value_every_render`
+      test is new coverage for the 02546e5e10deb500-c fix (steady-state
+      dedup) and failed the same way (E0061) since it also uses the new
+      signature. Each test's documented INTENT (storm absorption /
+      immediate post-settle forwarding / reopening on reattach / bounded
+      backstop) is unchanged from task0002's originals — only the debounce
+      mechanism (wall-clock instead of call-count) and the explicit
+      steady-state no-op case are new.
