@@ -38,7 +38,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - `emterm mux` starts a native multiplexer daemon; GUI receives raw PTY bytes (no double-parse overhead)
   - Detach (`prefix+d`) / reattach (`emterm mux attach`) with full screen state restoration
   - Multiple windows per session; instant window switching (all windows stream simultaneously)
-  - Vertical tab sidebar (native egui) lists mux windows by number/name with an active mark; persistent right-edge panel by default, or a keybind-toggled (`Ctrl+Z Ctrl+W`) right-edge overlay; the top tab bar shows a single consolidated `mux: <window name>` tab while attached
+  - Vertical tab sidebar (native egui) lists mux windows by number/name with an active mark; right-edge overlay by default (fades to 35% opacity when idle, brightens on hover or right after a window switch), keybind-toggled (`Ctrl+Z Ctrl+W`), or a persistent right-edge panel (always opaque, opt-in via settings); the top tab bar shows a single consolidated `mux: <window name>` tab while attached
   - Per-pane scroll position and scrollback history preserved on window switch (no detach→reattach required)
   - Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename), `prefix+m` (move/reorder with `[N]` position badge)
   - tmux.conf import: prefix key, keybindings, mouse
@@ -53,6 +53,9 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Pane exit while detached is reaped correctly; daemon auto-shutdown fires when the last session empties
   - Mux status bar: daemon-side command execution with template variables (`{cmd:name}`, `{hostname}`, `{cwd}`)
   - Correct main-buffer snapshot restore: daemon screen dump omitted for main-buffer panes; client replays scrollback bytes directly (eliminates progress-bar corruption after `apt install` and similar commands)
+  - Resize-interleaved output replays correctly on window/tab switch: the daemon records pane-resize markers in scrollback so each replayed segment is reconstructed at the terminal dimensions it was produced at
+  - Clean reattach: device-query response sequences (DA1/DSR/XTWINOPS/DECRPM) recorded in scrollback are stripped before replay, so detach → attach never types stray query text into the shell prompt
+  - `emterm mux upgrade` replaces the running daemon in place via `execve` (Unix only): every pane's shell keeps running through the update; `emterm mux attach` and `emterm mux` auto-recover a stale (protocol-mismatched) daemon via hot upgrade before falling back to a full respawn
   - Windows support: Named Pipe IPC with daemon process detachment (survives terminal closure)
   - Included in the CLI-only build: `emterm mux --daemon` runs on headless SSH hosts without GUI dependencies
 

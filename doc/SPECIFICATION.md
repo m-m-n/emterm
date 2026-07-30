@@ -105,8 +105,9 @@ Full-featured VT100/VT220/xterm ANSI escape sequence parser implemented as a pur
 The terminal viewport is rendered via a wgpu GPU surface driven by the winit event loop.
 
 **Key Functionality:**
-- Dirty-row tracking: only re-renders rows that changed since last frame
-- winit event loop drives render frames
+- Honest dirty-row tracking: a frame with zero dirty rows is skipped entirely (no draw call); a per-row `CellInstance` cache and a persistent, on-demand-grown GPU instance buffer avoid full-grid reshaping and per-frame buffer allocation on frames that do have dirty rows
+- Wait-driven winit event loop (`ControlFlow::Wait`) with explicit wakeups on PTY output, user input, IME events, and the cursor blink timer, instead of an always-rearmed fixed-interval poll
+- Block cursor is drawn as an egui overlay pass (cell-rect fill plus an inverted glyph) rather than baked into grid instances, so cursor movement and blink do not mark unrelated rows dirty
 - swash + zeno + fontdb for font rasterization and glyph atlas management
 - Supports: bold, italic, underline styles, strikethrough, cursor shapes (block/underline/bar)
 - Wide character support (CJK, emoji)
@@ -858,6 +859,13 @@ A separate font family setting for the application UI (settings panel and other 
 - Extended_Pictographic characters with `Emoji_Presentation=No` and no variation selector are forced to render in text presentation (monochrome)
 - Prevents unintended color emoji rendering for symbols like `✳ ☀ © ® ™`
 
+**Combining and Zero-Width Character Composition:**
+- A standalone-arriving zero-width character (variation selector or combining mark) retroactively merges into the most recently written cell instead of overwriting the cell at the cursor
+- Keycap clusters (e.g. `5️⃣` = digit + VS16 + U+20E3) compose into a single width-2 cell; the same digit without VS16 composes into a width-1 cell
+- Combining accents that arrive as a separate write (e.g. `e` followed by U+0301) merge into the preceding character instead of corrupting it
+- A zero-width character with no preceding base cell (e.g. start of line) is dropped rather than written
+- VS16 is stripped from the codepoint sequence before emoji font shaping so keycap ligatures match, while font/presentation selection still uses the full cluster
+
 **Unicode and Emoji version support:**
 - Unicode 17.0 and Emoji 17.0 character width tables
 
@@ -1063,6 +1071,7 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 - Per-pane ring buffer accumulates output while detached
 - Daemon-side shadow grid (vt100 crate) for screen state restoration on reattach
 - Bridge timeout: 5s waiting for Welcome response
+- Exited pane shell processes are reaped off the daemon's async runtime with a bounded grace period and kill escalation, so no zombie/defunct process accumulates
 - `emterm mux kill` sends a `Shutdown` IPC message for graceful shutdown
 
 ---
@@ -1076,9 +1085,10 @@ The mux window list is rendered as a vertical tab sidebar (native egui) instead 
 - Click a sidebar entry to switch the active mux window (same effect as the previous top-tab click switch)
 - Sidebar is shown only while the mux-attached top tab is active; local (non-mux) tabs are unaffected
 - Sidebar width is a dynamically computed fixed value (roughly 20-25% of the app width, no drag resize); the list scrolls when entries exceed the available height
-- Persistent mode (default): fixed panel on the right edge of the terminal area; window switching and its own presence cause no PTY resize beyond the one triggered by switching between a mux-attached tab and a local tab (all tabs share one terminal grid)
-- Overlay mode: right-edge overlay toggled by the `toggle-window-sidebar` mux prefix action (default `Ctrl+Z Ctrl+W`), rebindable via `settings.mux.keybinds`; toggling causes no PTY resize
-- Placement setting `mux.window_sidebar_overlay` (default `false` = persistent, `true` = overlay); switching the setting triggers exactly one PTY resize
+- Persistent mode: fixed panel on the right edge of the terminal area, always fully opaque; window switching and its own presence cause no PTY resize beyond the one triggered by switching between a mux-attached tab and a local tab (all tabs share one terminal grid)
+- Overlay mode (default): right-edge overlay open on startup, toggled by the `toggle-window-sidebar` mux prefix action (default `Ctrl+Z Ctrl+W`), rebindable via `settings.mux.keybinds`; toggling causes no PTY resize
+- Overlay auto-dim: the overlay card (fill, row text, badges, icons, and shadow together) renders at full opacity while the pointer hovers it or within 3 seconds of a mux window switch (keyboard or row click), and fades to 35% opacity over 200ms once neither condition holds; no repaint is requested once settled at either opacity
+- Placement setting `mux.window_sidebar_overlay` (default `true` = overlay, `false` = persistent); switching the setting triggers exactly one PTY resize
 
 ---
 
@@ -1278,6 +1288,31 @@ On mux pane snapshot restore, the daemon vt100 `contents_formatted()` screen dum
 
 ---
 
+#### Mux Segment-Bounded Scrollback Replay
+
+Fixes line-content mixing that could appear after a mux window/tab switch when a pane was resized while output was in flight. The daemon-side scrollback ring buffer records a dimension marker at each pane resize; replay resizes the reconstruction core at each marker instead of replaying every recorded byte into one fixed-size core.
+
+**Key Functionality:**
+- The scrollback ring buffer tracks a bounded queue of dimension markers (byte offset + rows/cols) alongside the raw byte ring, recording every pane resize
+- Snapshot assembly exposes the recorded byte ranges as segments, each carrying the dimensions its bytes were produced at
+- Client replay resizes the reconstruction core to each segment's dimensions before replaying that segment's bytes, keeping the coordinate system consistent with how the bytes were produced
+- Marker count and cumulative replay cost are capped so a resize storm cannot make replay latency or snapshot size unbounded
+- Bounded trade-off: once more resizes occur between switches than the marker cap holds, the oldest excess markers are evicted and their span replays at the caller's target dimensions instead of its own, which can still mix a small number of rows in that specific scenario
+
+---
+
+#### Mux Snapshot Device-Query Stripping
+
+Response-producing CSI device queries (DA1/DA2, DSR, XTWINOPS size reports, DECRPM) baked into scrollback are stripped from snapshot bytes at daemon-side assembly time, so the GUI's PTY-output parser does not synthesize stale replies to historic queries on reattach.
+
+**Key Functionality:**
+- The daemon-side scrollback filter removes complete CSI sequences that would produce a device response in `term_core`: DA1 (`CSI c` / `CSI ? c`), DA2 (`CSI > c`), DSR/CPR (`CSI 5n` / `CSI 6n`), XTWINOPS size reports (`CSI 14t` / `16t` / `18t`), and DECRPM (`CSI ? ... $p`)
+- Non-query CSI sequences (title-stack, DECSTR, DECSCL, tertiary DA, unknown-mode DSR, etc.) are preserved byte-for-byte
+- An incomplete CSI sequence at the end of the buffer is preserved unchanged
+- Eliminates stray device-query text (e.g. `65;1;4;22c`) appearing in the shell prompt after detach → attach
+
+---
+
 #### Mux Detached Pane Exit Reap
 
 Pane cleanup (reap) is performed whenever the PTY dies, regardless of attach state.
@@ -1289,6 +1324,22 @@ Pane cleanup (reap) is performed whenever the PTY dies, regardless of attach sta
 - Restores the "all sessions empty → daemon auto-shutdown" invariant for the detach case
 - The existing `Connected` empty-chunk path (`PtyExited` to client) is preserved for client UI teardown
 - Wired on both Unix-socket and Windows-named-pipe daemon run loops
+
+---
+
+#### Mux Daemon Hot Upgrade
+
+`emterm mux upgrade` replaces the running daemon process in place via `execve()` instead of shutting it down and respawning, so every pane's shell keeps running through an eMterm binary update.
+
+**Key Functionality:**
+- `emterm mux upgrade` connects to the running daemon, requests an upgrade, and reports the outcome once the upgraded daemon is reachable again
+- PTY master file descriptors and the listen socket survive `execve` (`FD_CLOEXEC` cleared beforehand), so pane shells never see a hangup and keep their PIDs
+- Session/window/pane state (titles, cwd, scrollback, agent status, ID allocation counters, incarnation token) is handed off through a versioned, `0600`-mode state file, unlinked after restore
+- Before `execve`, the old daemon probes the new binary's handoff-schema version and aborts the upgrade — old daemon keeps running — on any schema incompatibility, state-write failure, or FD-preparation failure
+- If `execve` itself fails, the process restores from the handoff document it just wrote and keeps serving in place
+- Attached clients receive an `Upgrading` notice and reconnect automatically to the same session
+- `emterm mux attach` and plain `emterm mux` both recover from a protocol-mismatched (legacy) running daemon by attempting a hot upgrade first, falling back to shutdown-then-respawn only when the running daemon does not support it
+- Unix-only; `emterm mux upgrade` reports hot-upgrade as unsupported on Windows
 
 ---
 
