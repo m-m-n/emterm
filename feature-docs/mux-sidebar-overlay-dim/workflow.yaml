@@ -67,8 +67,9 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR1, NFR3]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-sidebar-overlay-dim/task0001
   task0002:
     title: "オーバーレイの自動 dim（ホバー / 切り替え / 3 秒）と再描画スケジューリング"
     plan: tasks/task0002.md
@@ -81,8 +82,9 @@ tasks:
     domains: [ui]
     complexity: high
     requirements: [FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, NFR1, NFR2, NFR3, NFR4]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-sidebar-overlay-dim/task0002
 
 review:
   status: pending
