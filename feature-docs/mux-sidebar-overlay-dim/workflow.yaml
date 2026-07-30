@@ -43,7 +43,7 @@ workflow:
     skipped_reason: "既存オーバーレイカードの不透明度倍率とフェード時間のみの変更で、新規画面・新規コンポーネントの外観判断が無く既存 MD3 ヘルパの範囲に収まるため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
   - id: implement
     status: pending
     base_commit: null
@@ -56,7 +56,33 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "mux window リストの表示方式デフォルトをオーバーレイにする"
+    plan: tasks/task0001.md
+    files:
+      - crates/app_settings/src/settings.rs
+      - src-tauri/src/settings.rs
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR1, NFR3]
+    status: pending
+    notes: null
+  task0002:
+    title: "オーバーレイの自動 dim（ホバー / 切り替え / 3 秒）と再描画スケジューリング"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/app.rs
+      - src-tauri/src/ui/mux_sidebar.rs
+      - src-tauri/src/render/mod.rs
+      - src-tauri/src/window_host.rs
+    skills: [frontend-impl, design-impl]
+    domains: [ui]
+    complexity: high
+    requirements: [FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -68,99 +94,99 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2]
   FR2:
     title: "オーバーレイの開閉ランタイムフラグの初期値を open にする"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-3]
   FR3:
     title: "カード矩形をホバー中は高不透明度で描画する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-4, TS-9]
   FR4:
     title: "mux window 切り替え（キー操作・行クリック）で切り替え時刻を記録し高不透明度にする"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-5, TS-6]
   FR5:
     title: "非ホバーかつ切り替えから 3 秒経過で低不透明度にする（切り替え履歴が無い場合も低不透明度）"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-6]
   FR6:
     title: "不透明度をカード全体（背景・文字・バッジ・アイコン・影）に適用する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-8]
   FR7:
     title: "低不透明度への遷移は 200ms フェード、高不透明度への復帰は即座に行う"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-7]
   FR8:
     title: "フレームスキップゲート・待機デッドライン・ホバー変化の再描画契機を整備する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-9]
   FR9:
     title: "トグル操作（prefix + Ctrl+W）の挙動と既定バインドを変更しない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-12]
   FR10:
     title: "常時表示（persistent）モードの見た目と挙動を変更しない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-8]
   NFR1:
     title: "Performance: 静定後は本機能に起因する再描画・待機デッドラインを発生させない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-10]
   NFR2:
     title: "Maintainability: 不透明度と時間を名前付き定数 1 箇所に定義し、生の色コンストラクタを増やさない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-11]
   NFR3:
     title: "Compatibility: Linux/Windows 同一挙動、既存設定と既存テスト（12px 角丸・0.92 alpha）を維持"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002]
+    tests: [TS-2, TS-8, TS-13]
   NFR4:
     title: "Usability: 低不透明度で背後のターミナル文字が判読でき、かつ一覧の存在が分かる"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-14]
 
 batch:
   review_rework_count: 0
