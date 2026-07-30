@@ -28,10 +28,11 @@ workflow:
     status: completed
     completed_at_commit: a72a64824d329a762030c27dfc0e9e4f4c330f1c
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 3bc3bc3021aab6b8fe860ecc343431e7aca55315
     base_commit: 050e72ae6ef4693a2c4d00add353feeb57906a61
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -58,8 +59,14 @@ tasks:
     branch: em-workflow/windows-skk-ime-hang/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, security, architecture, spec]
+    discretionary:
+      - perspective: performance
+        reason: "flush が about_to_wait（ホットループ）に毎ターン追加されるため"
+    codex_cross_validation: true
 
 requirements:
   FR1:
