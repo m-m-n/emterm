@@ -7628,8 +7628,11 @@ mod tests {
 
     #[test]
     fn ac3_toggle_is_strict_noop_when_overlay_mode_disabled() {
-        // Persistent mode is the default — `with_overlay_mode` not called.
+        // Persistent mode: explicitly forced (task0001 flipped the
+        // settings default to overlay, so this can no longer rely on the
+        // ambient default).
         let mut app = app_with_mux_windows(2);
+        with_overlay_mode(&mut app, false);
         assert!(!app.settings.mux.window_sidebar_overlay);
 
         let idx_before = active_idx(&app);
@@ -7957,7 +7960,10 @@ mod tests {
 
     #[test]
     fn sidebar_persistent_when_mux_attached_and_overlay_mode_off() {
-        let app = app_with_mux_windows(2);
+        // Explicitly forced off (task0001 flipped the settings default to
+        // overlay, so this can no longer rely on the ambient default).
+        let mut app = app_with_mux_windows(2);
+        with_overlay_mode(&mut app, false);
         assert!(!app.settings.mux.window_sidebar_overlay);
         assert_eq!(
             app.mux_sidebar_visibility(),
