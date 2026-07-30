@@ -130,8 +130,8 @@ tasks:
     branch: em-workflow/mux-tab-switch-replay-latency/task0006
 
 review:
-  status: in_progress
-  rounds_completed: 1
+  status: completed
+  rounds_completed: 2
   plan:
     floor: [comprehensive, performance, architecture, spec]
     discretionary:
@@ -139,13 +139,28 @@ review:
         reason: "diff が wire snapshot payload の segment/dims 解析と off-thread ワーカー間の共有状態を扱うため（round 2 でも継続）"
     codex_cross_validation: true
   perspectives:
-    comprehensive: pending
-    performance: pending
-    architecture: pending
-    spec: pending
-    security: pending
-  residual_critical_high: 6
-  needs_rework: true
+    comprehensive: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+    security: completed
+  residual_critical_high: 4
+  needs_rework: false
+  batch_deferred_note: >-
+    review round 2 found 1 critical (auto-fixed same-round) + 3 high +
+    3 medium residual findings. batch.review_rework_count was already at
+    cap (1) before round 2 began, so all residual findings (regardless of
+    severity, per batch-mode.md's decision table) are resolution:deferred
+    with reason "batch mode: rework cap reached" — see
+    reviews/round2.yaml. The step is marked completed per the batch-mode
+    cap-reached branch, NOT because residual_critical_high is 0. The final
+    completion report MUST surface these deferred findings prominently
+    for human evaluation, especially the still-open FR1/FR2 gap
+    (b6a60c440da70e79: the SPEC-cited real bug shape, k=27/26-segment
+    cluster, still does not engage the bypass split — BYPASS_PREFIX_MAX_SEGMENTS
+    was never revisited) and the two high-severity window_host.rs findings
+    (self-wake busy-spin 81507f39e384b34e, inset staleness
+    a82206113b8160fd/aba5ebbdf9a9addb).
 
 requirements:
   FR1:

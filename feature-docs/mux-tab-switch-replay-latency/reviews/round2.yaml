@@ -1,0 +1,209 @@
+round: 2
+executed_at: "2026-07-31T07:46:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 386bad0f2dcbbf6f13b14a9b6140e79c9c9b5d47
+  head_commit: ae5bf0371c7ef3bb10bb223a56d74f8b1ebbb459
+  changed_files:
+    - crates/term_core/src/bench.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/tabs.rs
+    - src-tauri/src/window_host.rs
+    - test-docs/mux-tab-switch-replay-latency/task0001.tests.yaml
+    - test-docs/mux-tab-switch-replay-latency/task0002.tests.yaml
+    - test-docs/mux-tab-switch-replay-latency/task0003.tests.yaml
+    - test-docs/mux-tab-switch-replay-latency/task0004.tests.yaml
+    - test-docs/mux-tab-switch-replay-latency/task0005.tests.yaml
+    - test-docs/mux-tab-switch-replay-latency/task0006.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary:
+    - perspective: security
+      reason: "diff が wire snapshot payload の segment/dims 解析と off-thread ワーカー間の共有状態を扱うため（round 2 でも継続）"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: comprehensive, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+findings:
+  - stable_id: 5c6ae6b507b6f638
+    severity: critical
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 1213
+    title: "D8 head fold with an empty MIDDLE (h == k) returns a core at the HEAD's dims, not the caller's target"
+    description: >-
+      task0004's D8 lets the HEAD run be at any uniform (cols, R) with R >= rows.
+      When the whole pre-suffix region is that one uniform run, h == k, so the
+      MIDDLE is empty and replay_segments's empty-segments early return skips
+      the final "resize back to target" step — the built core stays at
+      head_rows. Empirically confirmed by the reviewer against this worktree's
+      crate: requested (80,24), got (80,30), scrollback_populated=false vs the
+      reference build's (80,24)/true. apply_offthread_swap installs this
+      wrong-sized core as the live core; nothing corrects it in the unraced
+      case.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: fixed
+    resolution_reason: >-
+      Auto-fixed same-round (added `&& candidate_h < k` to the candidate_safe
+      condition, degrading to the pre-D7 path exactly as the finding's own
+      suggestion (a) specifies). Compilation verified
+      (crates/term_core check green). Not re-reviewed by a fresh reviewer
+      pass within this round (batch mode: rework cap already consumed, no
+      further loop dispatched) — flagged in the completion report for
+      verify-phase / human confirmation.
+  - stable_id: b6a60c440da70e79
+    severity: high
+    category: spec
+    file: crates/term_core/src/terminal_core.rs
+    line: 1238
+    title: "FR1/FR2: SPEC の実測形状（k=27, 26セグメントのマーカークラスタ）は新ゲートでも split が engage せず未達"
+    description: >-
+      task0004 is the D7/D8 gate re-key from k/split_at to
+      middle_segment_count/middle_len, but BYPASS_PREFIX_MAX_SEGMENTS stays at
+      24. In the SPEC's real measured shape, leading_uniform_run_len only
+      folds a HEAD of length 1 (adjacent scrollback-marker dims always
+      differ), leaving middle_segment_count = 26 > 24, so bypass_split is
+      still false for the actual bug shape — the pane still takes the
+      ~800-1000 ms full non-bypass drain. task0004's own new bench
+      deliberately narrowed its fixture to a 24-segment cluster (documented
+      in its own doc comment) instead of reproducing the SPEC-cited 26.
+    sources: [claude:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: f8cf849037aa426e
+    severity: medium
+    category: spec
+    file: src-tauri/src/tabs.rs
+    line: 7738
+    title: "FR8/US3 の scope narrowing が SPEC の Test Scenarios に未反映"
+    description: >-
+      SPEC.md's Test Scenarios > Integration Tests still says "snapshot is
+      fetched/decoded once," contradicting the now-narrowed FR8/US3 wording
+      and the actual test (t6_ac6_..., which asserts decode runs twice by
+      design).
+    sources: [claude:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "medium; batch mode: rework cap reached (documentation-only fix, left for human/next round)"
+  - stable_id: 81507f39e384b34e
+    severity: high
+    category: performance
+    file: src-tauri/src/window_host.rs
+    line: 1261
+    title: "ResizeSettler の self-wake がレートリミット無しで静定待ちの間レンダーループを全速スピンさせる"
+    description: >-
+      task0005's fix for round-1's "no self-wake" finding calls
+      request_redraw() unconditionally whenever awaiting_decision() is true,
+      re-entering RedrawRequested immediately with no brake — the exact
+      anti-pattern this file already documents and rate-limits for toast
+      redraws (toast_redraw_due). Spins for up to RESIZE_SETTLE_MAX_DURATION
+      (1s) during app startup and every mux attach/reattach/tab-switch that
+      reopens the settling window, competing with the off-thread snapshot
+      replay worker for CPU at exactly the moment this feature targets.
+    sources: [claude:performance]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: a82206113b8160fd
+    severity: high
+    category: architecture
+    file: src-tauri/src/window_host.rs
+    line: 1256
+    title: "ResizeSettler のゲートに描画用 inset の適用を相乗りさせ、grid サイズ不変の status-bar 高さ変化で inset が恒久的に stale になる"
+    description: >-
+      refresh_status_bar_insets now assigns status_bar_top/bot_inset_logical
+      only when resize_settler.observe(candidate) returns Some, where
+      candidate is the derived (cols, rows) — not the inset itself. When the
+      cell height exceeds ROW_HEIGHT (22.0) (larger font sizes) or rows is
+      row-clamped, a status-bar height change can leave (cols, rows)
+      unchanged, so observe returns None and the inset is never applied —
+      permanently, not for one frame. Also affects mux-sidebar pointer
+      routing which reads the same inset field.
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: aba5ebbdf9a9addb
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host.rs
+    line: 1257
+    title: "Status-bar insets are now applied only when the derived grid size changes, so a height change that keeps the row count leaves the inset stale"
+    description: >-
+      Same site/mechanism as a82206113b8160fd (architecture perspective),
+      reported independently by the comprehensive perspective with the same
+      root-cause diagnosis: the inset-assignment guard was changed from an
+      EPSILON diff on the inset itself to "settler forwarded a size change,"
+      which are not equivalent predicates.
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached (same underlying issue as a82206113b8160fd)"
+  - stable_id: 81e2f2344edfd5fa
+    severity: medium
+    category: architecture
+    file: src-tauri/src/window_host.rs
+    line: 1250
+    title: "per-tab の mux attach ライフサイクルを WindowHost のウィンドウ全域 bool でモデル化しており、通常のタブ切り替えが新規 attach と誤検出される"
+    description: >-
+      mux_was_attached tracks the ACTIVE tab's attach state as one
+      window-global bool; switching between a local tab and a mux tab (not
+      just a genuine reattach) triggers the false->true transition and
+      re-opens the settling window, delaying inset/PTY-resize application and
+      spinning the self-wake loop (81507f39e384b34e) on ordinary tab
+      switches.
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium; batch mode: rework cap reached"
+  - stable_id: 419a26dd30b113b8
+    severity: medium
+    category: architecture
+    file: src-tauri/src/tabs.rs
+    line: 1067
+    title: "dispatch_offthread_replay の分岐が隠れたグローバル状態で選択され、spawn 失敗時に live_queue が失われる"
+    description: >-
+      poll_pending_switch's redispatch branch relies on an unenforced
+      precondition (a comment, not a type) that self.pending_switch is None
+      when it calls dispatch_offthread_replay, then patches the resulting
+      PendingSwitch's live_queue/queued_bytes in from outside. On the
+      spawn-failure fallback path, dispatch_offthread_replay sets
+      pending_switch = None and reparses synchronously, so the queued live
+      output the caller intended to pass along has nowhere to land and is
+      silently dropped — a narrower but real instance of the same finding
+      family round 1 investigated.
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium; batch mode: rework cap reached"
+auto_fix:
+  loops_run: 1
+  applied_total: 1
+  termination: "critical-fixed-rest-deferred-cap-reached"
+  termination_note: >-
+    One auto-fix applied for the critical D8 empty-MIDDLE bug (5c6ae6b507b6f638)
+    — a clean, minimal, single-condition change directly matching the
+    reviewer's own precisely-diagnosed and empirically-verified suggestion.
+    The remaining 3 high findings (spec b6a60c440da70e79 category=spec,
+    excluded from auto-fix by design; performance 81507f39e384b34e and
+    architecture/comprehensive a82206113b8160fd/aba5ebbdf9a9addb, both
+    requiring broader event-loop/state-machine design changes ill-suited to
+    a test-free single-shot editor dispatch) were judged too complex/risky
+    for further mechanical patching, consistent with round 1's precedent.
+    Since batch.review_rework_count was already at its cap (1) before this
+    round began, none of the residual findings — regardless of severity —
+    could be routed to a fourth implement task in this run; all are marked
+    deferred per batch-mode.md's decision table and surfaced prominently in
+    the completion report for human evaluation.
+residual_critical_high: 4
+rework_required: false
