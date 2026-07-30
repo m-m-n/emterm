@@ -1213,6 +1213,12 @@ impl TerminalCore {
         let (h, head_rows) = if bypass && k > 0 {
             let (candidate_h, candidate_rows) = leading_uniform_run_len(cols, &segments[..k]);
             let candidate_safe = candidate_h > 0
+                // `h == k` would leave an EMPTY MIDDLE, and `replay_segments`
+                // early-returns for empty `segments` WITHOUT its "resize back
+                // to the caller's target" step — the core would stay at
+                // `head_rows` forever. Only fold when a real MIDDLE remains
+                // to carry that final hop.
+                && candidate_h < k
                 && candidate_rows >= rows
                 && middle_is_row_bounded(cols, candidate_rows, &segments[candidate_h..k]);
             if candidate_safe {
