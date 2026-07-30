@@ -1,0 +1,139 @@
+round: 1
+executed_at: "2026-07-30T23:57:44+09:00"
+scope:
+  review_mode: diff
+  base_commit: 050e72ae6ef4693a2c4d00add353feeb57906a61
+  head_commit: 86f2223603ad2a353700e3861aee3ca90d077c3c
+  changed_files:
+    - src-tauri/src/app.rs
+    - src-tauri/src/ime/backend.rs
+    - src-tauri/src/ime/winit_bridge.rs
+    - src-tauri/src/window_host.rs
+    - test-docs/windows-skk-ime-hang/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+    - perspective: performance
+      reason: "flush が about_to_wait（ホットループ）に毎ターン追加されるため"
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "codex-cli unavailable"}
+findings:
+  - stable_id: 7cde52f09172af57
+    severity: medium
+    category: architecture
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 422
+    title: "遅延フラッシュ不変条件の唯一の例外 (Drop) が、その doc-comment 自身が想定する使い方でイベントディスパッチ内から走る"
+    description: >-
+      遅延フラッシュの不変条件（BridgeWindow 副作用は flush と Drop のみ）の
+      うち Drop は「teardown はイベントディスパッチの一部ではない」を根拠に
+      直接呼び出しを許しているが、バックエンド差し替えの唯一の経路
+      App::set_ime_backend は can_create_surfaces（winit イベント
+      ディスパッチ内）から呼ばれる。現状 drop されるのは NullBackend
+      （Drop 無し）なので実害はないが、Drop コメント自身が挙げる
+      「settings 変更で NullBackend に切替」の将来経路が実装されると、
+      wndproc 内から ImmAssociateContextEx への同期呼び出しが復活する。
+      不変条件がコメントと一回限りの grep でしか守られていない。
+    suggestion: >-
+      (a) ImeBackend に detach()（デフォルト no-op）を追加して teardown も
+      drain 経路に載せ、window_host は about_to_wait 内で detach → 差し替え
+      の順に呼ぶ（Drop は二重呼び出しガード付きの best-effort に格下げ）。
+      または (b) App::set_ime_backend の doc に「about_to_wait からのみ
+      呼ぶこと」を明記し winit_bridge の Deferred flush 節と相互参照させ、
+      Drop コメントの "replaced mid-session" 記述を安全な呼び出し位置と
+      矛盾しない表現に直す。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: 87571f53ecd89037
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 272
+    title: "FR4 の Disabled アノマリー警告が Wayland/X11 の通常フォーカスアウトで誤発火し、ラッチで本物の異常を握り潰す"
+    description: >-
+      notify_focus(false) は ime_enabled をローカルで落とし、直後の flush が
+      ImeRequest::Disable を発行する。winit-wayland / winit-x11 は同
+      リクエストから Ime::Disabled を合成して返すため、Linux では
+      「ime_enabled == false の状態で Disabled が来る」のが毎回の正常
+      フォーカスアウト経路になる。新設の異常判定はこの正常系にマッチし、
+      (a) release ログに恒常的にミスリードな warn が 1 本残り、
+      (b) ラッチが誤検知で立って以後の本物の unpaired Disabled を記録
+      できなくなる — FR4 の診断価値が Linux で無効化される。テストも
+      notify_focus(false) → Disabled の並びをカバーしていない。
+    suggestion: >-
+      自分で落としたクローズと IM サーバー由来のクローズを区別する。
+      notify_focus(false) で expect_synthetic_disable フラグを立て、
+      Disabled 到着時にフラグがあれば消費するだけで warn しない
+      （フラグ無しで !ime_enabled なら真の異常として warn + latch）。
+      notify_focus(false) → Disabled で warn が立たないことを検証する
+      単体テストを追加する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: ea5924fba87660a0
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 351
+    title: "IME disable→enable をまたいで cursor-area の dedup が無効化されず、再フォーカス後に候補ウィンドウがプレースホルダ位置 (0,0) に残る"
+    description: >-
+      last_cursor_area と App 側 ime_last_cursor_cell は disable/enable を
+      またいでもリセットされない。一方 Enable リクエストは cursor_area を
+      (0,0)/(1,1) プレースホルダで再シードするため、「フォーカスアウト →
+      フォーカスイン、カーソルセル不動」の後は二段 dedup が両方ヒットして
+      Update が飛ばず、候補ウィンドウがウィンドウ左上に出たままになる。
+      diff 以前から存在する挙動だが、本 diff が dedup 不変条件を再定義・
+      明文化しているためその穴として指摘。新しい flush 順序（allow →
+      cursor 固定）では同一ターンの Disable + rect 更新が必ず NotEnabled で
+      捨てられ、それでも last_cursor_area は更新済みになる。
+    suggestion: >-
+      allow-state の記録・フラッシュ時に cursor 側キャッシュを無効化する
+      （pending_allow 遷移時に last_cursor_area = None、App 側
+      ime_last_cursor_cell も notify_ime_focus 等でクリア）。flush で
+      allow=false → allow=true の後、同一 rect の notify_cursor_rect が
+      再度 set_ime_cursor_area を呼ぶことを検証する単体テストを足す。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: 7511e37b412c45bf
+    severity: medium
+    category: comprehensive
+    file: test-docs/windows-skk-ime-hang/task0001.tests.yaml
+    line: 20
+    title: "baseline_failures が実装後 3 ランを含む和集合で、no-regression 判定が構造的に自明化している"
+    description: >-
+      baseline_failures が「実装前 1 ラン + 実装後 3 ラン」の UNION のため
+      final_failures ⊆ baseline_failures が構成上ほぼ自動成立し、
+      tabs::tests への回帰を既存 flaky と区別できない。MEMORY に
+      --test-threads=1 で決定的に取れる手段が記録されているので和集合で
+      吸収する必要はなかった。変更対象が tabs に触れていないため実害の
+      確率は低いが、後続レビューがこのファイルを根拠に「回帰なし」と
+      読むと誤誘導される。
+    suggestion: >-
+      --test-threads=1 で実装前後を各 1 回取り直して baseline_failures を
+      実装前ランのみの決定的リストに置き換えるか、和集合を残す場合は
+      baseline_source フィールド等でその旨を明示し union を参考情報として
+      別キーに退避する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: null
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
