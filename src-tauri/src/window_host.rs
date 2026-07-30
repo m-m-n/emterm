@@ -1216,17 +1216,25 @@ impl WindowHost {
     /// Called at the head of each `render()` (before
     /// [`apply_pending_resize`]) so the PTY row count and the grid
     /// origin stay in sync with the currently-rendered status-bar
-    /// panel. When the inset changes, route the candidate grid size
-    /// through [`ResizeSettler`] rather than applying it immediately
-    /// (FR6, mux-tab-switch-replay-latency task0002) — a startup/reattach
+    /// panel. Routes every computed candidate grid size through
+    /// [`ResizeSettler`] rather than applying it immediately (FR6,
+    /// mux-tab-switch-replay-latency task0002) — a startup/reattach
     /// settling storm otherwise flags a pending resize (and, once
     /// applied, broadcasts a group-wide `Resize`) once per transient
-    /// transition instead of once for the settled size. Applying the
-    /// inset only when the settler forwards a candidate keeps this
-    /// function re-invoked (with the same, still-unapplied candidate)
-    /// on every subsequent render until the settler decides — which is
-    /// exactly the repeat observation the settler needs to detect
-    /// quiescence.
+    /// transition instead of once for the settled size.
+    ///
+    /// task0005: the candidate is fed to the settler UNCONDITIONALLY on
+    /// every render, even when it matches the currently-applied inset —
+    /// filtering that upstream used to starve the settler of whichever
+    /// side of a 2-state oscillation happened to match the still-applied
+    /// value, biasing quiescence detection (finding 02546e5e10deb500-c).
+    /// `ResizeSettler` itself now decides whether a candidate is a no-op
+    /// repeat. While the settler is still debouncing
+    /// ([`ResizeSettler::awaiting_decision`]), this requests another
+    /// redraw so a fully idle window does not strand a pending settle
+    /// indefinitely, waiting on an unrelated ime/pty/search/blink/bell/
+    /// toast event to wake the loop (findings 02546e5e10deb500 /
+    /// 5b1878c41d3e02d6-perf-P2).
     fn refresh_status_bar_insets(&mut self, app: &App) {
         let vm = app.status_bar_view_model();
         let height = crate::ui::status_bar::panel_height_logical(&vm);
@@ -1245,15 +1253,13 @@ impl WindowHost {
         }
         self.mux_was_attached = mux_attached;
 
-        if (self.status_bar_top_inset_logical - top).abs() > f32::EPSILON
-            || (self.status_bar_bot_inset_logical - bot).abs() > f32::EPSILON
-        {
-            let candidate = self.grid_size_for_bot_inset(app, bot);
-            if self.resize_settler.observe(candidate).is_some() {
-                self.status_bar_top_inset_logical = top;
-                self.status_bar_bot_inset_logical = bot;
-                self.pending_resize = true;
-            }
+        let candidate = self.grid_size_for_bot_inset(app, bot);
+        if self.resize_settler.observe(candidate, Instant::now()).is_some() {
+            self.status_bar_top_inset_logical = top;
+            self.status_bar_bot_inset_logical = bot;
+            self.pending_resize = true;
+        } else if self.resize_settler.awaiting_decision() {
+            self.window().request_redraw();
         }
     }
 
@@ -2718,28 +2724,38 @@ fn record_rebuilt_rows(
     counter.record_rebuilt(rows, now)
 }
 
-/// Number of consecutive matching [`ResizeSettler::observe`] calls
-/// required to consider a candidate settled (FR6, mux-tab-switch-replay-
-/// latency task0002, D3). `2` is the minimum that can distinguish "still
-/// changing" from "stopped changing" at all: a candidate that keeps
-/// changing every observation never repeats twice in a row, however many
-/// distinct values it visits first, while a candidate that has genuinely
-/// stopped changing repeats on its very next observation — so this does
-/// not add any extra delay beyond the one observation needed to confirm
-/// stability.
-const RESIZE_SETTLE_QUIET_OBSERVATIONS: u32 = 2;
+/// Wall-clock quiescence window [`ResizeSettler`] requires a candidate to
+/// hold before considering it settled (mux-tab-switch-replay-latency
+/// task0005, findings 12cac263b7dab24b / 02546e5e10deb500-c). task0002
+/// originally debounced on a fixed count of consecutive `observe` calls
+/// (`RESIZE_SETTLE_QUIET_OBSERVATIONS`), but `observe` is only invoked
+/// from [`WindowHost::refresh_status_bar_insets`] at the head of
+/// `render()` — render cadence and actual `visible_row_count` transition
+/// cadence are independent, so a transient candidate held for as few as 2
+/// renders (an eyeblink of wall-clock time during an active storm) was
+/// indistinguishable from a genuinely settled one and got forwarded
+/// mid-storm. Measuring wall-clock stability instead makes the decision
+/// independent of how many renders occur while a candidate holds: `64 ms`
+/// is roughly four frames at a typical 60 Hz cadence, comfortably above
+/// the ~2-frame window the round-1 review measured the old bug forwarding
+/// within, while still being imperceptible as a one-off startup/reattach
+/// delay.
+const RESIZE_SETTLE_QUIET_DURATION: Duration = Duration::from_millis(64);
 
-/// Hard backstop on how many observations [`ResizeSettler`] will absorb
-/// before forwarding the latest candidate regardless of whether it has
-/// stabilized (FR6, mux-tab-switch-replay-latency task0002, D3). SPEC.md's
-/// measured startup/reattach storm bounced `visible_row_count` between two
-/// states 24 times before settling; `64` is a generous margin above that so
-/// the whole measured storm is absorbed by quiescence detection alone,
-/// while still guaranteeing (AC-2) that a pathological, never-quite-
-/// settling stream cannot withhold a resize forever — every daemon-side
-/// pane must eventually learn the (possibly still-transient) latest size
-/// rather than be stuck at a stale one.
-const RESIZE_SETTLE_MAX_OBSERVATIONS: u32 = 64;
+/// Hard backstop on how long [`ResizeSettler`]'s settling window may stay
+/// open before forwarding the latest candidate regardless of whether it
+/// has stabilized (task0005, same findings as
+/// [`RESIZE_SETTLE_QUIET_DURATION`] — supersedes task0002's
+/// `RESIZE_SETTLE_MAX_OBSERVATIONS`, a call-count backstop that coupled
+/// the backstop to render frequency: a never-settling stream fed at a
+/// high render rate could exhaust a fixed observation budget in far less
+/// real time than intended). `1` second is a generous ceiling above
+/// SPEC.md's measured 24-transition storm so quiescence detection alone
+/// absorbs any realistic storm, while still guaranteeing (AC-2) that a
+/// pathological, never-quite-settling stream cannot withhold a resize
+/// forever — every daemon-side pane must eventually learn the (possibly
+/// still-transient) latest size rather than be stuck at a stale one.
+const RESIZE_SETTLE_MAX_DURATION: Duration = Duration::from_secs(1);
 
 /// Bounds how often a status-bar-height-driven grid-size candidate reaches
 /// [`Tab::resize`](crate::tabs::Tab::resize)'s group-wide `Resize`
@@ -2748,79 +2764,134 @@ const RESIZE_SETTLE_MAX_OBSERVATIONS: u32 = 64;
 /// task0002 — unrelated to this file's other, pre-existing "task0002"
 /// references, which belong to an earlier, different feature).
 ///
-/// D3 (single-task settling mechanism, IMPLEMENTATION.md D3): a
-/// consecutive-observation debounce, not a wall-clock timer.
-/// [`WindowHost::refresh_status_bar_insets`] feeds every candidate that
-/// still disagrees with the currently-APPLIED inset here (see call site);
-/// because that inset is only updated once this settler forwards a value,
-/// the same still-open candidate keeps being re-observed on every
-/// subsequent render until it is either forwarded or superseded by a new
-/// candidate. A value that keeps oscillating therefore never accumulates
-/// [`RESIZE_SETTLE_QUIET_OBSERVATIONS`] matching observations in a row and
-/// is never forwarded mid-storm (AC-1); only the value the storm actually
-/// settles on gets that chance, once it stops changing — forwarded exactly
-/// once (AC-2). [`RESIZE_SETTLE_MAX_OBSERVATIONS`] is the backstop for a
-/// stream that never settles at all. Once a window closes (forwards), every
-/// subsequent distinct candidate is forwarded immediately — identical to
-/// the pre-fix, undebounced behavior — so an ordinary, isolated resize well
-/// after startup is not perceptibly delayed (AC-3).
+/// task0005 rework (findings 12cac263b7dab24b / 02546e5e10deb500-c /
+/// 02546e5e10deb500 / 5b1878c41d3e02d6-perf-P2): two defects in the
+/// original design compounded to defeat FR6 entirely for the SPEC's
+/// measured 2-state storm, plus a third that stranded a pending decision:
+///
+/// 1. **Render-count debounce.** `observe` used to settle after
+///    `RESIZE_SETTLE_QUIET_OBSERVATIONS` consecutive CALLS agreeing — but
+///    calls happen once per `render()`, not once per actual
+///    `visible_row_count` change, so a transient candidate held for only
+///    2 renders looked identical to a genuinely settled one. Fixed by
+///    measuring wall-clock stability ([`RESIZE_SETTLE_QUIET_DURATION`])
+///    instead — independent of how many renders occur while a candidate
+///    holds.
+/// 2. **Caller-side filtering bias.** `refresh_status_bar_insets` used to
+///    call `observe` only when the computed inset differed from the
+///    currently-applied one, so whichever side of a 2-state oscillation
+///    matched the still-applied value was never observed at all —
+///    biasing the settler toward the other state and defeating
+///    quiescence detection for exactly the storm shape SPEC.md measures.
+///    Fixed by feeding every computed candidate on every render
+///    unconditionally; `observe` now tracks the most recently forwarded
+///    (or already-applied) size itself ([`Self::last_forwarded`]) and
+///    no-ops when a candidate merely repeats it, so the caller no longer
+///    needs to filter anything upstream.
+/// 3. **No self-wake.** When `observe` returned `None` (still
+///    debouncing), nothing scheduled the next render — a fully idle
+///    window (no ime/pty/search/blink/bell/toast activity) right after a
+///    status-bar height change could strand the pending candidate
+///    indefinitely. Fixed by [`Self::awaiting_decision`]:
+///    `refresh_status_bar_insets` requests a redraw whenever it is
+///    `true`, so the settler drives its own next observation until it
+///    decides, bounded by [`RESIZE_SETTLE_QUIET_DURATION`] /
+///    [`RESIZE_SETTLE_MAX_DURATION`].
+///
+/// Once the window closes (forwards), every subsequent distinct candidate
+/// is forwarded immediately — identical to the pre-fix, undebounced
+/// behavior — so an ordinary, isolated resize well after startup is not
+/// perceptibly delayed (AC-3).
 ///
 /// [`Self::reset`] reopens a closed window; `WindowHost` calls it when the
 /// active tab's `mux_session_name` transitions from absent to present (a
-/// fresh mux attach/reattach).
+/// fresh mux attach/reattach). `last_forwarded` is intentionally NOT
+/// cleared by `reset` — it still reflects the last size actually applied,
+/// and a fresh storm is judged against that, not against nothing.
 #[derive(Debug)]
 struct ResizeSettler {
-    /// `Some(n)` while the settling window is open, counting down
-    /// [`RESIZE_SETTLE_MAX_OBSERVATIONS`] as the backstop; `None` once
-    /// closed (normal, immediate-forwarding mode).
-    observations_left: Option<u32>,
-    /// The candidate currently accumulating repeat observations while the
+    /// `Some(instant)` while the settling window is open, holding the
+    /// wall-clock instant it opened (for [`RESIZE_SETTLE_MAX_DURATION`]'s
+    /// backstop); `None` once closed (normal, immediate-forwarding mode).
+    window_opened_at: Option<Instant>,
+    /// The candidate currently accumulating wall-clock stability while the
     /// window is open.
     candidate: Option<(u16, u16)>,
-    /// How many consecutive observations have matched `candidate`.
-    repeats: u32,
+    /// The wall-clock instant `candidate` was last seen to CHANGE — i.e.
+    /// the instant since which it has held. Reset whenever a new,
+    /// distinct candidate arrives.
+    stable_since: Option<Instant>,
+    /// The most recently forwarded (or otherwise already-applied) grid
+    /// size — compared against every observed candidate, even while the
+    /// window is open, so a render that merely repeats the value already
+    /// applied is never re-forwarded (02546e5e10deb500-c).
+    last_forwarded: Option<(u16, u16)>,
 }
 
 impl ResizeSettler {
     fn new() -> Self {
         Self {
-            observations_left: Some(RESIZE_SETTLE_MAX_OBSERVATIONS),
+            window_opened_at: Some(Instant::now()),
             candidate: None,
-            repeats: 0,
+            stable_since: None,
+            last_forwarded: None,
         }
     }
 
     /// Reopen the settling window (a fresh mux attach/reattach).
     fn reset(&mut self) {
-        self.observations_left = Some(RESIZE_SETTLE_MAX_OBSERVATIONS);
+        self.window_opened_at = Some(Instant::now());
         self.candidate = None;
-        self.repeats = 0;
+        self.stable_since = None;
     }
 
-    /// Feed one candidate grid size that differs from the currently
-    /// applied size. Returns `Some(size)` exactly when `size` should now
-    /// reach `Tab::resize`; `None` while still absorbing transient churn.
-    fn observe(&mut self, candidate: (u16, u16)) -> Option<(u16, u16)> {
-        let remaining = match self.observations_left {
-            None => return Some(candidate), // window closed: immediate passthrough
-            Some(n) => n,
+    /// Feed one candidate grid size, computed unconditionally on every
+    /// render regardless of whether it differs from the currently-applied
+    /// size (task0005 finding 02546e5e10deb500-c — the caller must NOT
+    /// filter upstream; `observe` decides everything itself). Returns
+    /// `Some(size)` exactly when `size` should now reach `Tab::resize`;
+    /// `None` while still absorbing transient churn, or when `size` is a
+    /// no-op repeat of what is already applied.
+    fn observe(&mut self, candidate: (u16, u16), now: Instant) -> Option<(u16, u16)> {
+        let Some(opened_at) = self.window_opened_at else {
+            // Closed: forward only genuine changes, so a steady-state
+            // repeat of the already-applied size never re-triggers
+            // Tab::resize's broadcast every render.
+            if self.last_forwarded == Some(candidate) {
+                return None;
+            }
+            self.last_forwarded = Some(candidate);
+            return Some(candidate);
         };
 
-        if self.candidate == Some(candidate) {
-            self.repeats += 1;
-        } else {
-            self.candidate = Some(candidate);
-            self.repeats = 1;
+        match self.candidate {
+            Some(c) if c == candidate => {}
+            _ => {
+                self.candidate = Some(candidate);
+                self.stable_since = Some(now);
+            }
         }
+        let stable_since = self.stable_since.unwrap_or(now);
+        let settled = now.duration_since(stable_since) >= RESIZE_SETTLE_QUIET_DURATION;
+        let capped = now.duration_since(opened_at) >= RESIZE_SETTLE_MAX_DURATION;
+        if !(settled || capped) {
+            return None;
+        }
+        self.window_opened_at = None; // close the window
+        if self.last_forwarded == Some(candidate) {
+            return None;
+        }
+        self.last_forwarded = Some(candidate);
+        Some(candidate)
+    }
 
-        let settled = self.repeats >= RESIZE_SETTLE_QUIET_OBSERVATIONS;
-        let capped = remaining <= 1;
-        if settled || capped {
-            self.observations_left = None;
-            return Some(candidate);
-        }
-        self.observations_left = Some(remaining - 1);
-        None
+    /// Whether the settling window is currently open — i.e. whether
+    /// [`WindowHost::refresh_status_bar_insets`] must request another
+    /// redraw so this settler keeps getting observations even if nothing
+    /// else would wake the render loop (task0005 findings
+    /// 02546e5e10deb500 / 5b1878c41d3e02d6-perf-P2).
+    fn awaiting_decision(&self) -> bool {
+        self.window_opened_at.is_some()
     }
 }
 
@@ -4833,68 +4904,141 @@ mod tests {
         }
     }
 
-    // ── ResizeSettler (mux-tab-switch-replay-latency task0002, FR6) ────
+    // ── ResizeSettler (mux-tab-switch-replay-latency task0002, FR6;
+    // wall-clock quiescence redesign task0005) ─────────────────────────
 
-    /// AC-1 / AC-2 / AC-5: reproduces the measured startup/reattach
-    /// `visible_row_count` 0 → 1 (and back) oscillation as a raw sequence
-    /// of candidate grid sizes — SPEC.md References records 24
-    /// transitions before settling. `a`/`b` stand in for the two
-    /// `visible_row_count` states' resulting grid sizes; the settler
-    /// itself is agnostic to what a candidate represents. Confirmed to
-    /// fail pre-fix: before `ResizeSettler` existed,
-    /// `refresh_status_bar_insets` forwarded every detected inset change
-    /// immediately, so all 24 transient transitions below would have
-    /// reached `Tab::resize`'s group-wide broadcast — and, downstream,
-    /// `ScrollbackRingBuffer::attribute_write` a new resize marker per
-    /// transition (AC-5's marker-cluster shape task0001 has to tolerate).
+    /// AC-1 (task0005 findings 12cac263b7dab24b / 02546e5e10deb500-c):
+    /// reproduces the REAL render-driven call shape — `refresh_status_bar_
+    /// insets` calls `observe` at the head of EVERY render, so the same
+    /// candidate repeats across several consecutive calls before the
+    /// underlying `visible_row_count` actually transitions again (A,A,A,
+    /// B,B,B,A,A,A,... — not a fresh distinct value on every single call,
+    /// which is the one regime the pre-task0005 call-count debounce
+    /// happened to handle correctly). `a` is additionally seeded as
+    /// [`ResizeSettler::last_forwarded`] — the value already applied
+    /// before the storm began — reproducing 02546e5e10deb500-c's bias
+    /// concern: the caller must feed `observe` unconditionally (both `a`
+    /// and `b`), not just whichever side differs from applied. Each hold
+    /// lasts 3 renders (~12 ms of simulated wall-clock time at a 4 ms
+    /// render interval), comfortably less than
+    /// [`RESIZE_SETTLE_QUIET_DURATION`] (64 ms), so no transient hold
+    /// should ever be mistaken for settled.
     #[test]
-    fn resize_settler_forwards_at_most_once_for_an_oscillating_storm() {
-        let mut settler = ResizeSettler::new();
-        let a = (120, 40); // stand-in for visible_row_count == 0
+    fn resize_settler_forwards_at_most_once_for_a_render_driven_storm_matching_applied() {
+        let a = (120, 40); // stand-in for visible_row_count == 0; == applied
         let b = (120, 39); // stand-in for visible_row_count == 1
+        let mut settler = ResizeSettler {
+            window_opened_at: Some(Instant::now()),
+            candidate: None,
+            stable_since: None,
+            last_forwarded: Some(a),
+        };
+
+        let base = Instant::now();
+        let render_interval = Duration::from_millis(4);
+        let mut stream = Vec::new();
+        for t in 0..24u32 {
+            let state = if t % 2 == 0 { a } else { b };
+            for _ in 0..3 {
+                stream.push(state);
+            }
+        }
 
         let mut forwarded = Vec::new();
-        for i in 0..24u32 {
-            let candidate = if i % 2 == 0 { a } else { b };
-            if let Some(size) = settler.observe(candidate) {
+        for (i, candidate) in stream.iter().enumerate() {
+            let now = base + render_interval * i as u32;
+            if let Some(size) = settler.observe(*candidate, now) {
                 forwarded.push(size);
             }
         }
         assert!(
             forwarded.is_empty(),
-            "AC-1: no transient transition during the storm should reach \
-             Tab::resize; got {forwarded:?}"
+            "AC-1: no transient transition during the render-driven storm \
+             should reach Tab::resize, even though one oscillating state \
+             matches the already-applied value; got {forwarded:?}"
         );
 
-        // The storm stops changing and settles on `b` (the last value
-        // observed above) — the very next observation confirms stability.
+        // The storm stops changing and settles on `b`: keep feeding `b`
+        // until enough simulated wall-clock time has passed to cross
+        // RESIZE_SETTLE_QUIET_DURATION — bounded by RESIZE_SETTLE_MAX_
+        // DURATION as a test-safety net against an infinite loop bug.
+        let mut t = base + render_interval * stream.len() as u32;
+        let settle_start = t;
+        let result = loop {
+            let result = settler.observe(b, t);
+            if result.is_some() {
+                break result;
+            }
+            assert!(
+                t.duration_since(settle_start) < RESIZE_SETTLE_MAX_DURATION,
+                "settle on `b` never completed within the backstop"
+            );
+            t += render_interval;
+        };
         assert_eq!(
-            settler.observe(b),
+            result,
             Some(b),
             "AC-2: the settled size must still reach Tab::resize once \
              settling is confirmed, so no daemon-side pane is left at a \
              stale size"
         );
+    }
 
-        // AC-1 (full claim): across the whole storm + settle, exactly one
-        // size ever reached the caller — AC-5's scrollback consequence
-        // (at most one legitimate resize marker) follows directly, since
-        // `Tab::resize`'s broadcast only ever fires for a forwarded size.
-        forwarded.push(b);
-        assert_eq!(forwarded.len(), 1);
+    /// task0005 finding 02546e5e10deb500-c: when a storm settles back on
+    /// the value already applied, forwarding it would be a wasted no-op
+    /// resize — `observe` must return `None` (nothing new for
+    /// `Tab::resize`) while still closing the settling window, so a later
+    /// GENUINE change forwards immediately per AC-3 rather than waiting
+    /// through another debounce.
+    #[test]
+    fn resize_settler_settling_back_on_the_applied_value_is_a_no_op_but_closes_the_window() {
+        let applied = (120, 40);
+        let mut settler = ResizeSettler {
+            window_opened_at: Some(Instant::now()),
+            candidate: None,
+            stable_since: None,
+            last_forwarded: Some(applied),
+        };
+        let base = Instant::now();
+        let mut t = base;
+        let result = loop {
+            let result = settler.observe(applied, t);
+            if !settler.awaiting_decision() {
+                break result;
+            }
+            assert!(
+                t.duration_since(base) < RESIZE_SETTLE_MAX_DURATION,
+                "settling on the already-applied value never closed the window"
+            );
+            t += RESIZE_SETTLE_QUIET_DURATION / 4;
+        };
+        assert_eq!(
+            result, None,
+            "settling back on the already-applied value must not forward"
+        );
+
+        // The window is now closed; a genuinely new candidate must still
+        // forward immediately (AC-3), proving the no-op above did not
+        // leave the settler stuck.
+        let changed = (100, 30);
+        assert_eq!(settler.observe(changed, t), Some(changed));
     }
 
     /// AC-1 (robustness beyond simple 2-state alternation): chaotic churn
     /// across three distinct sizes never settles until it stops changing
-    /// entirely, regardless of the period.
+    /// entirely, regardless of the period. Each call advances simulated
+    /// time by 1 ms, so the whole 30-call churn (30 ms) stays well under
+    /// both `RESIZE_SETTLE_QUIET_DURATION` and `RESIZE_SETTLE_MAX_DURATION`.
     #[test]
     fn resize_settler_absorbs_chaotic_multi_value_churn() {
         let mut settler = ResizeSettler::new();
         let states = [(100, 30), (101, 30), (100, 31)];
+        let base = Instant::now();
         let mut forwarded = Vec::new();
         for i in 0..30u32 {
             let candidate = states[(i % 3) as usize];
-            if let Some(size) = settler.observe(candidate) {
+            let now = base + Duration::from_millis(i as u64);
+            if let Some(size) = settler.observe(candidate, now) {
                 forwarded.push(size);
             }
         }
@@ -4912,43 +5056,75 @@ mod tests {
     #[test]
     fn resize_settler_forwards_immediately_once_closed() {
         let mut settler = ResizeSettler::new();
-        // Close the window with a clean, non-oscillating settle.
+        let mut t = Instant::now();
+        // Close the window with a clean, non-oscillating settle: hold the
+        // same candidate past RESIZE_SETTLE_QUIET_DURATION.
         let settled = (120, 40);
-        assert_eq!(settler.observe(settled), None);
-        assert_eq!(settler.observe(settled), Some(settled));
+        assert_eq!(settler.observe(settled, t), None);
+        t += RESIZE_SETTLE_QUIET_DURATION;
+        assert_eq!(settler.observe(settled, t), Some(settled));
 
         // An ordinary later resize (a single, isolated new candidate) must
         // forward on its very next observation, with no further debounce.
         let resized = (100, 30);
         assert_eq!(
-            settler.observe(resized),
+            settler.observe(resized, t),
             Some(resized),
             "AC-3: once closed, a genuine new candidate must not be \
              delayed by the settling debounce"
         );
     }
 
+    /// task0005 finding 02546e5e10deb500-c: once closed, a render that
+    /// merely repeats the size already applied must never re-forward it —
+    /// this is what lets `refresh_status_bar_insets` feed `observe`
+    /// unconditionally on every render without retriggering
+    /// `Tab::resize`'s broadcast every single frame in steady state.
+    #[test]
+    fn resize_settler_closed_mode_does_not_reforward_the_same_value_every_render() {
+        let mut settler = ResizeSettler::new();
+        let mut t = Instant::now();
+        let settled = (120, 40);
+        settler.observe(settled, t);
+        t += RESIZE_SETTLE_QUIET_DURATION;
+        assert_eq!(settler.observe(settled, t), Some(settled));
+
+        for _ in 0..10 {
+            t += Duration::from_millis(16);
+            assert_eq!(settler.observe(settled, t), None);
+        }
+    }
+
     /// AC-2 (pathological backstop case): a candidate that changes on
-    /// literally every observation (never repeating) must still be
-    /// forwarded once `RESIZE_SETTLE_MAX_OBSERVATIONS` observations have
-    /// been absorbed — no daemon-side pane is left at a stale size
+    /// literally every observation (never repeating, so it never becomes
+    /// wall-clock stable) must still be forwarded once
+    /// `RESIZE_SETTLE_MAX_DURATION` of simulated time has elapsed since the
+    /// window opened — no daemon-side pane is left at a stale size
     /// forever, even if a storm never quiesces.
     #[test]
-    fn resize_settler_backstop_forwards_after_max_observations_even_if_never_settled() {
+    fn resize_settler_backstop_forwards_after_max_duration_even_if_never_settled() {
         let mut settler = ResizeSettler::new();
-        let mut forwarded = None;
-        for i in 0..RESIZE_SETTLE_MAX_OBSERVATIONS {
+        let base = Instant::now();
+        let step = Duration::from_millis(5);
+        let mut i = 0u32;
+        let forwarded = loop {
             let candidate = (100 + i as u16, 40); // strictly distinct every time
-            forwarded = settler.observe(candidate);
-            if forwarded.is_some() {
-                break;
+            let now = base + step * i;
+            let result = settler.observe(candidate, now);
+            if result.is_some() {
+                break result;
             }
-        }
+            i += 1;
+            assert!(
+                now.duration_since(base) < RESIZE_SETTLE_MAX_DURATION * 2,
+                "the backstop must force a forward within roughly \
+                 RESIZE_SETTLE_MAX_DURATION even for a never-settling stream"
+            );
+        };
         assert!(
             forwarded.is_some(),
             "the backstop must force a forward within \
-             RESIZE_SETTLE_MAX_OBSERVATIONS observations even for a \
-             never-settling stream"
+             RESIZE_SETTLE_MAX_DURATION even for a never-settling stream"
         );
     }
 
@@ -4960,14 +5136,58 @@ mod tests {
     #[test]
     fn resize_settler_reset_reopens_a_closed_window() {
         let mut settler = ResizeSettler::new();
+        let mut t = Instant::now();
         let settled = (120, 40);
-        settler.observe(settled);
-        assert_eq!(settler.observe(settled), Some(settled)); // closes the window
+        settler.observe(settled, t);
+        t += RESIZE_SETTLE_QUIET_DURATION;
+        assert_eq!(settler.observe(settled, t), Some(settled)); // closes the window
 
         settler.reset();
 
-        assert_eq!(settler.observe((10, 10)), None);
-        assert_eq!(settler.observe((20, 20)), None);
+        t += Duration::from_millis(1);
+        assert_eq!(settler.observe((10, 10), t), None);
+        t += Duration::from_millis(1);
+        assert_eq!(settler.observe((20, 20), t), None);
+    }
+
+    /// AC-5 (task0005 findings 02546e5e10deb500 / 5b1878c41d3e02d6-perf-P2):
+    /// simulates a fully idle window where the ONLY thing driving further
+    /// observations is `ResizeSettler::awaiting_decision` — mirroring
+    /// `WindowHost::refresh_status_bar_insets`'s `request_redraw` call —
+    /// with no ime/pty/search/blink/bell/toast activity ever feeding this
+    /// loop. A pending candidate must still resolve within a bounded
+    /// amount of self-driven, simulated wall-clock time.
+    #[test]
+    fn resize_settler_self_drives_to_settlement_without_any_external_wake() {
+        let mut settler = ResizeSettler::new();
+        let candidate = (100, 30);
+        let base = Instant::now();
+        let step = Duration::from_millis(1);
+        let mut t = base;
+        let result = loop {
+            let result = settler.observe(candidate, t);
+            if result.is_some() {
+                break result;
+            }
+            assert!(
+                settler.awaiting_decision(),
+                "AC-5: while a candidate is still pending, the settler \
+                 must report `awaiting_decision() == true` so the call \
+                 site knows to request another redraw itself"
+            );
+            assert!(
+                t.duration_since(base) < RESIZE_SETTLE_MAX_DURATION * 2,
+                "AC-5: settling must complete within a bounded amount of \
+                 simulated wall-clock time even with no external event \
+                 ever driving a redraw"
+            );
+            t += step;
+        };
+        assert_eq!(result, Some(candidate));
+        assert!(
+            !settler.awaiting_decision(),
+            "once settled, no further self-driven redraw should be requested"
+        );
     }
 
     // ── task0002 AC-5: should_skip_frame pure decision ───────────────
