@@ -63,7 +63,7 @@ tasks:
     domains: [ui, concurrency]
     complexity: medium
     requirements: [FR6]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-tab-switch-replay-latency/task0002
   task0003:
