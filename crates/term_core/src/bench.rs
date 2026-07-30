@@ -238,6 +238,168 @@ mod benches {
         );
     }
 
+    /// AC-1 (task0001, D7): reproduces the measured "resize-marker-dense
+    /// scrollback tail" shape from SPEC.md's References — a ~2 MiB payload
+    /// with ~31 replay segments where a large HEAD (already at the target
+    /// dims) is followed by a dense cluster of resize markers (dims
+    /// oscillating below the target, never reaching or exceeding it) whose
+    /// own content is tiny, then a small qualifying tail back at the
+    /// target. Pre-D7, all three of the split's gates failed simultaneously
+    /// for this shape (`k` and the raw prefix byte length both exceed their
+    /// bounds, and the small tail does not dominate the raw head+cluster
+    /// prefix), forcing the full non-bypass drain — measured 782.8-977.6 ms
+    /// for a payload this size. D7 recognizes that only the small MIDDLE
+    /// (the cluster itself) needs non-bypass fidelity, so this now costs
+    /// close to the bypass-engaged baseline (tens of ms), not the ~800-1000
+    /// ms non-bypass one.
+    ///
+    /// Confirmed to fail pre-fix (D7): reverting to `stable_target_suffix_start`
+    /// alone (no `h` / `leading_target_run_len`) measures this shape within
+    /// the ~800-1000 ms non-bypass order — see
+    /// `head_plus_marker_cluster_engages_the_split_and_matches_reference`
+    /// in `terminal_core.rs` for the deterministic (non-timing)
+    /// `scrollback_populated` regression guard this bench complements.
+    ///
+    /// Gated `#[ignore]` (release-mode timing bench). Invoke with:
+    ///
+    /// ```sh
+    /// CARGO_TARGET_DIR=src-tauri/target cargo test --release \
+    ///   --manifest-path crates/term_core/Cargo.toml --lib \
+    ///   marker_cluster_tail_bench_2mib \
+    ///   -- --nocapture --include-ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn marker_cluster_tail_bench_2mib_matches_bypass_engaged_cost() {
+        use crate::terminal_core::{ReplaySegment, TerminalCore};
+        use std::sync::atomic::AtomicBool;
+        use std::time::Instant;
+
+        const SHIPPING_SCROLLBACK_LINES: u32 = 10_000;
+        let cols: u16 = 100;
+        let target_rows: u16 = 30;
+        let cluster_rows_a: u16 = 24;
+        let cluster_rows_b: u16 = 26;
+
+        // HEAD: the bulk of the pane's real history, already at the
+        // target — ~2 MiB, matching the measured shape's dominant byte
+        // share.
+        let head_filler = b"pane history line padded out a bit for size\r\n";
+        let mut payload: Vec<u8> = Vec::with_capacity(2 * 1024 * 1024 + 16 * 1024);
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: target_rows,
+        }];
+        while payload.len() < 2 * 1024 * 1024 {
+            payload.extend_from_slice(head_filler);
+        }
+        let head_len = payload.len();
+
+        // MIDDLE: a dense cluster of exactly BYPASS_PREFIX_MAX_SEGMENTS (24)
+        // resize markers — head + cluster = 25 segments, one past the OLD
+        // gate's segment-count bound (matching the measured shape's `k`
+        // exceeding it), while the cluster's OWN count sits exactly at the
+        // NEW gate's bound. Dims oscillate between two values below the
+        // target, tiny content between them.
+        let cluster_filler = b"x\r\n";
+        for i in 0..24usize {
+            segments.push(ReplaySegment {
+                offset: payload.len() as u32,
+                cols,
+                rows: if i % 2 == 0 {
+                    cluster_rows_a
+                } else {
+                    cluster_rows_b
+                },
+            });
+            payload.extend_from_slice(cluster_filler);
+        }
+        let middle_len = payload.len() - head_len;
+
+        // TAIL: ~7395 bytes back at the target, matching the measured
+        // shape's small qualifying suffix.
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: target_rows,
+        });
+        let tail_start = payload.len();
+        while payload.len() - tail_start < 7395 {
+            payload.extend_from_slice(head_filler);
+        }
+        let tail_len = payload.len() - tail_start;
+
+        eprintln!(
+            "[bench] marker-cluster-tail shape: total={}B head={}B middle={}B tail={}B segments={}",
+            payload.len(),
+            head_len,
+            middle_len,
+            tail_len,
+            segments.len(),
+        );
+
+        // Segment-free baseline, same total size, for comparison.
+        let mut free_payload = Vec::with_capacity(payload.len());
+        while free_payload.len() < payload.len() {
+            free_payload.extend_from_slice(head_filler);
+        }
+        free_payload.truncate(payload.len());
+
+        let measure = |p: &[u8], segs: &[ReplaySegment]| -> std::time::Duration {
+            {
+                let cancel = AtomicBool::new(false);
+                let _ = TerminalCore::build_from_snapshot(
+                    cols,
+                    target_rows,
+                    SHIPPING_SCROLLBACK_LINES,
+                    p,
+                    segs,
+                    &cancel,
+                );
+            }
+            let cancel = AtomicBool::new(false);
+            let start = Instant::now();
+            let replay = TerminalCore::build_from_snapshot(
+                cols,
+                target_rows,
+                SHIPPING_SCROLLBACK_LINES,
+                p,
+                segs,
+                &cancel,
+            );
+            let elapsed = start.elapsed();
+            std::hint::black_box(replay);
+            elapsed
+        };
+
+        let t_free = measure(&free_payload, &[]);
+        let t_marker_cluster = measure(&payload, &segments);
+
+        eprintln!(
+            "[bench] marker-cluster tail (2 MiB, {cols}x{target_rows}, \
+             sb={SHIPPING_SCROLLBACK_LINES}): segment-free → {:?} | \
+             marker-cluster-tail (head+cluster+tail) → {:?}",
+            t_free, t_marker_cluster,
+        );
+
+        // AC-1: tens-of-ms order, matching the bypass-engaged baseline for
+        // a payload this size — NOT the ~800-1000 ms non-bypass baseline
+        // the pre-D7 gate paid for this shape. A generous multiplicative +
+        // absolute floor absorbs scheduler / measurement noise on a single
+        // sample.
+        let bound = t_free.mul_f64(5.0) + std::time::Duration::from_millis(50);
+        assert!(
+            t_marker_cluster < bound,
+            "marker-cluster-tail shape {:?} is not close to segment-free \
+             {:?} (bound {:?}) — D7's head/middle/tail split is not \
+             engaging for this shape",
+            t_marker_cluster,
+            t_free,
+            bound,
+        );
+    }
+
     /// Hypothesis-confirming bench: re-run the same 2 MiB `seq 1 N` payload
     /// with three grid/scrollback configurations to attribute the parse cost.
     ///
