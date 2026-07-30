@@ -50,7 +50,7 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, NFR1]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-tab-switch-replay-latency/task0001
   task0002:
