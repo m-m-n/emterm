@@ -372,6 +372,19 @@ pub struct Tab {
     /// is pending (the common case, and always so for sub-threshold
     /// snapshots which stay on the synchronous path).
     pending_switch: Option<PendingSwitch>,
+    /// FR7/FR8 (task0003): a same-pane re-dispatch request captured by
+    /// `dispatch_offthread_replay` while `pending_switch` already targets
+    /// the SAME pane (a grid resize landing during an in-flight switch, or
+    /// a second `Snapshot`/`SnapshotRestore` for the pane arriving before
+    /// the first has swapped). Coalesces any number of such re-dispatches
+    /// into exactly one actual worker spawn: `poll_pending_switch` installs
+    /// a fresh worker for whichever `(target_pane, payload, segments)` is
+    /// LATEST here the next time it runs (the same pump tick the
+    /// re-dispatch happened in), so the in-flight (already-cancelled)
+    /// worker's own eventual outcome — success or disconnect — is never
+    /// observed; only the latest request's replay ever completes. `None`
+    /// in the common case (no same-pane race in flight).
+    pending_redispatch: Option<(u32, Vec<u8>, Vec<ReplaySegment>)>,
     /// In-flight 2nd-pass scrollback restore worker for this tab. Spawned
     /// at the end of `apply_offthread_swap` (i.e. after the 1st-pass
     /// bypass-on swap finished), polled non-blockingly each pump via
@@ -412,6 +425,14 @@ pub struct Tab {
     /// the production build carries no counter.
     #[cfg(test)]
     coalesce_parse_passes: u32,
+    /// Test-only: number of times `dispatch_offthread_replay` actually
+    /// spawned an off-thread replay worker (task0003 FR7/FR8) — i.e. how
+    /// many times the "install a fresh worker" path ran, NOT how many times
+    /// `dispatch_offthread_replay` was called (a same-pane coalesce returns
+    /// early without spawning). Distinguishes "deduplicated before doing
+    /// the work" from "did the work twice but the result looks the same".
+    #[cfg(test)]
+    offthread_spawn_count: u32,
 }
 
 impl Tab {
@@ -563,6 +584,7 @@ impl Tab {
             pending_agent_status_updates: Vec::new(),
             pending_closed_agent_status_panes: Vec::new(),
             pending_switch: None,
+            pending_redispatch: None,
             pending_scrollback_restore: None,
             pending_bypass_b_mark_texts: std::collections::HashMap::new(),
             resolved_b_mark_texts: std::collections::HashMap::new(),
@@ -572,6 +594,8 @@ impl Tab {
             ),
             #[cfg(test)]
             coalesce_parse_passes: 0,
+            #[cfg(test)]
+            offthread_spawn_count: 0,
         }
     }
 
@@ -799,9 +823,23 @@ impl Tab {
     ///
     /// The displayed core is deliberately NOT reset here — the outgoing pane
     /// stays on screen until `App::pump_all` swaps the worker-built core in.
-    /// Replaces (supersedes) any prior in-flight switch on this tab; the
-    /// prior worker's result is dropped when its `done` sender is dropped
-    /// with the old `PendingSwitch`.
+    /// Replaces (supersedes) any prior in-flight switch on this tab targeting
+    /// a DIFFERENT pane; the prior worker's result is dropped when its
+    /// `done` sender is dropped with the old `PendingSwitch`.
+    ///
+    /// FR7/FR8 (task0003): when `pending_switch` already targets the SAME
+    /// `target_pane` — a grid resize landing during an in-flight switch
+    /// (`Tab::resize`'s re-dispatch branch calls back in here), or a second
+    /// `Snapshot`/`SnapshotRestore` for the pane arriving before the first
+    /// has swapped — this does NOT spawn a second worker right away. It
+    /// cancels the in-flight one (as always) and stashes the request in
+    /// `pending_redispatch` instead; `poll_pending_switch` installs a fresh
+    /// worker for whichever request is LATEST there the next time it runs
+    /// (the same pump tick). This collapses any number of same-pane
+    /// re-dispatches — a resize storm, or repeated duplicate snapshot
+    /// fetches — into exactly one actual build, so an intermediate,
+    /// already-superseded target's replay (bypass-defeating or not) is
+    /// never paid for, and only the final request's replay ever completes.
     fn dispatch_offthread_replay(
         &mut self,
         target_pane: u32,
@@ -811,10 +849,22 @@ impl Tab {
         // Supersede any in-flight worker: signal it to bail at the next chunk
         // boundary so workers do not pile up under a rapid switch / resize
         // storm. The old `PendingSwitch` (and its receiver) is dropped when
-        // `self.pending_switch` is overwritten below.
-        if let Some(old) = self.pending_switch.as_ref() {
+        // `self.pending_switch` is overwritten below (or, for the same-pane
+        // coalesce case, when `poll_pending_switch` later takes it).
+        let same_pane_in_flight = if let Some(old) = self.pending_switch.as_ref() {
             old.cancel.store(true, Ordering::Relaxed);
+            old.target_pane == target_pane
+        } else {
+            false
+        };
+        if same_pane_in_flight {
+            self.pending_redispatch = Some((target_pane, payload, segments));
+            return;
         }
+        // A dispatch for a different pane (or no in-flight switch at all)
+        // supersedes any coalesced same-pane request outright — it belonged
+        // to a switch this tab is no longer completing.
+        self.pending_redispatch = None;
         // FR5 / NFR4: a new off-thread switch makes any in-flight 2nd-pass
         // scrollback restore stale (the live core is about to be reset to a
         // different snapshot, so the rebuilt scrollback would be against an
@@ -866,6 +916,10 @@ impl Tab {
             });
         match spawn_result {
             Ok(_) => {
+                #[cfg(test)]
+                {
+                    self.offthread_spawn_count += 1;
+                }
                 self.pending_switch = Some(PendingSwitch {
                     target_pane,
                     cols,
@@ -913,7 +967,52 @@ impl Tab {
     /// - the fallback (worker panic) also returns `Swapped`: the latest
     ///   target is reparsed synchronously here (FR7), so from the caller's
     ///   perspective the swap completed this pump.
+    ///
+    /// FR7/FR8 (task0003): before touching the in-flight worker's channel at
+    /// all, install a fresh worker for any coalesced `pending_redispatch`
+    /// (a same-pane resize-storm or duplicate-snapshot re-dispatch stashed
+    /// by `dispatch_offthread_replay`) — the in-flight worker this
+    /// supersedes is dropped without ever being observed, whether it would
+    /// have completed or disconnected.
     pub(crate) fn poll_pending_switch(&mut self) -> SwapOutcome {
+        if let Some((target_pane, payload, segments)) = self.pending_redispatch.take() {
+            let (queued, queued_bytes) = match self.pending_switch.take() {
+                Some(old) => {
+                    old.cancel.store(true, Ordering::Relaxed);
+                    // Defensive: `pending_redispatch` is only ever populated
+                    // by `dispatch_offthread_replay`'s same-pane coalesce
+                    // branch, so this should always match — but never carry
+                    // a different pane's live queue onto this one if some
+                    // future change ever violates that invariant.
+                    if old.target_pane == target_pane {
+                        (old.live_queue, old.queued_bytes)
+                    } else {
+                        (Vec::new(), 0)
+                    }
+                }
+                None => (Vec::new(), 0),
+            };
+            // `self.pending_switch` is `None` here, so this dispatch always
+            // takes the "install a fresh worker" path below, never the
+            // same-pane coalesce branch (which would otherwise loop back
+            // into `pending_redispatch` forever).
+            self.dispatch_offthread_replay(target_pane, payload, segments);
+            return match self.pending_switch.as_mut() {
+                Some(p) => {
+                    p.live_queue = queued;
+                    p.queued_bytes = queued_bytes;
+                    SwapOutcome::Pending
+                }
+                // Rare: the worker thread failed to spawn and
+                // `dispatch_offthread_replay`'s own fallback already
+                // reparsed synchronously and applied it — the switch is
+                // already visually complete this pump. The queued live
+                // output predating this re-dispatch has no home to land in
+                // (mirrors the pre-existing gap in `Tab::resize`'s
+                // redispatch branch on the same rare spawn-failure path).
+                None => SwapOutcome::Swapped,
+            };
+        }
         let Some(pending) = self.pending_switch.as_ref() else {
             return SwapOutcome::Idle;
         };
@@ -1412,6 +1511,10 @@ impl Tab {
                     if let Some(old) = self.pending_switch.take() {
                         old.cancel.store(true, Ordering::Relaxed);
                     }
+                    // FR7/FR8 (task0003): a coalesced same-pane re-dispatch
+                    // (if any) is now moot too — this sync application is
+                    // itself the newest, now-applied switch.
+                    self.pending_redispatch = None;
                     if let Some(old) = self.pending_scrollback_restore.take() {
                         old.cancel.store(true, Ordering::Relaxed);
                         log::warn!(
@@ -1555,7 +1658,18 @@ impl Tab {
                                 OFFTHREAD_LIVE_QUEUE_CAP_BYTES,
                                 self.title
                             );
-                            self.reset_frame_for_replay(&pending.payload, &pending.segments);
+                            // FR7/FR8 (task0003): a coalesced same-pane
+                            // re-dispatch (if any) is the LATEST known
+                            // content for this pane — reparse that instead
+                            // of the (possibly superseded) payload the
+                            // abandoned worker was building, so this
+                            // synchronous fallback never regresses to
+                            // stale content.
+                            let (payload, segments) = match self.pending_redispatch.take() {
+                                Some((_, payload, segments)) => (payload, segments),
+                                None => (pending.payload, pending.segments),
+                            };
+                            self.reset_frame_for_replay(&payload, &segments);
                             self.apply_queued_live_output(pending.live_queue);
                             // The swap-equivalent happened synchronously now;
                             // repaint the newly-visible pane.
@@ -2061,6 +2175,11 @@ impl Tab {
                 if let Some(old) = self.pending_switch.take() {
                     old.cancel.store(true, Ordering::Relaxed);
                 }
+                // FR7/FR8 (task0003): a coalesced same-pane re-dispatch (if
+                // any) belonged to the pane being cleared above too — drop
+                // it rather than let a later `poll_pending_switch` dispatch
+                // a stale request for a pane this tab no longer shows.
+                self.pending_redispatch = None;
                 if let Some(old) = self.pending_scrollback_restore.take() {
                     old.cancel.store(true, Ordering::Relaxed);
                     log::warn!(
@@ -3243,6 +3362,23 @@ impl Tab {
         self.coalesce_parse_passes
     }
 
+    /// Test-only: how many times `dispatch_offthread_replay` actually
+    /// spawned an off-thread replay worker since this tab was built
+    /// (task0003 FR7/FR8). A same-pane re-dispatch that coalesces into
+    /// `pending_redispatch` instead of spawning does NOT increment this.
+    #[cfg(test)]
+    pub(crate) fn test_offthread_spawn_count(&self) -> u32 {
+        self.offthread_spawn_count
+    }
+
+    /// Test-only: whether a same-pane re-dispatch is currently coalesced,
+    /// waiting for the next `poll_pending_switch` to install a fresh
+    /// worker for it (task0003 FR7/FR8).
+    #[cfg(test)]
+    pub(crate) fn test_has_pending_redispatch(&self) -> bool {
+        self.pending_redispatch.is_some()
+    }
+
     /// Test-only: the whole displayed grid (all rows) as one string, for
     /// asserting that outer-transport base64 never leaks onto the screen.
     #[cfg(test)]
@@ -3296,25 +3432,26 @@ impl Tab {
         // FR5: a grid resize during a pending off-thread replay supersedes
         // the in-flight parse — a core built at the old `(cols, rows)` would
         // be the wrong size to swap in. Re-dispatch the *same* snapshot bytes
-        // at the new grid (no daemon round-trip), preserving the target pane
-        // and the already-queued live output so ordering is not lost. A
-        // resize that did not actually change the grid is left alone (the
-        // in-flight core is still correctly sized).
+        // at the new grid (no daemon round-trip), preserving the target
+        // pane. A resize that did not actually change the grid is left alone
+        // (the in-flight core is still correctly sized).
+        //
+        // FR7/FR8 (task0003): `dispatch_offthread_replay` reads the
+        // *current* core size (just resized above) and — since this
+        // re-dispatch targets the SAME pane the in-flight switch already
+        // does — coalesces it into `pending_redispatch` rather than
+        // spawning a second worker immediately. `poll_pending_switch`
+        // installs the fresh worker (carrying the already-queued live
+        // output over to it) the next time it runs, so any number of
+        // resize events landing before that poll collapse into exactly one
+        // actual build at whatever grid is current by then, instead of one
+        // build per resize event.
         if let Some(pending) = self.pending_switch.as_ref() {
             if pending.cols != cols || pending.rows != rows {
                 let target = pending.target_pane;
                 let payload = pending.payload.clone();
                 let segments = pending.segments.clone();
-                let queued = pending.live_queue.clone();
-                let queued_bytes = pending.queued_bytes;
-                // `dispatch_offthread_replay` reads the *current* core size
-                // (just resized above), cancels the old worker, and starts a
-                // fresh one, overwriting `self.pending_switch`.
                 self.dispatch_offthread_replay(target, payload, segments);
-                if let Some(p) = self.pending_switch.as_mut() {
-                    p.live_queue = queued;
-                    p.queued_bytes = queued_bytes;
-                }
             }
         }
 
@@ -5459,6 +5596,16 @@ mod tests {
     /// TS-12 / FR5: a grid resize during a pending switch supersedes the
     /// in-flight parse and re-dispatches at the new grid, preserving the
     /// target and the already-queued live output.
+    ///
+    /// task0003 FR7/FR8: the re-dispatch now coalesces into
+    /// `pending_redispatch` instead of immediately installing a fresh
+    /// worker (see `dispatch_offthread_replay`) — the in-flight worker
+    /// (still building at the OLD grid) is left untouched until the next
+    /// `poll_pending_switch`, which is what actually installs the fresh
+    /// one at the new grid. The target and queued live output are still
+    /// preserved end to end; only the POINT at which that becomes
+    /// observable moved from immediately-after-`resize` to
+    /// immediately-after-the-next-`poll_pending_switch`.
     #[test]
     fn ts12_resize_supersedes_and_redispatches_at_new_grid() {
         let mut tab = test_tab();
@@ -5467,11 +5614,23 @@ mod tests {
         tab.apply_mux_message(pty_output(10, b"queued".to_vec()));
         assert!(tab.test_has_pending_switch());
 
-        // Resize to a different grid → supersede + re-dispatch.
+        // Resize to a different grid → supersede + coalesce.
         tab.resize(100, 40);
+        assert!(
+            tab.test_has_pending_redispatch(),
+            "the re-dispatch must coalesce rather than spawn immediately"
+        );
         assert!(tab.test_has_pending_switch());
         assert_eq!(tab.test_pending_target(), Some(10));
         // Queue preserved across the re-dispatch.
+        assert_eq!(tab.test_pending_live_queue(), vec![b"queued".to_vec()]);
+
+        // The next poll resolves the coalesced re-dispatch: a fresh worker
+        // is installed at the NEW grid, still carrying the queued live
+        // output over.
+        assert_eq!(tab.poll_pending_switch(), SwapOutcome::Pending);
+        assert!(!tab.test_has_pending_redispatch());
+        assert_eq!(tab.test_pending_target(), Some(10));
         assert_eq!(tab.test_pending_live_queue(), vec![b"queued".to_vec()]);
         // The re-dispatched worker built a core at the new grid width.
         {
@@ -6949,5 +7108,235 @@ mod tests {
             tab.core.lock().callbacks.is_none(),
             "an old core with no callbacks must swap to a live core with no callbacks"
         );
+    }
+
+    // ── task0003 FR7/FR8: resize-race bypass resilience + duplicate
+    // snapshot fetch dedup ──────────────────────────────────────────────
+
+    /// A structurally-segmented (`EMSNAP2` framed) snapshot payload with
+    /// `OFFTHREAD_REPLAY_SEGMENT_THRESHOLD` segments, all recorded at
+    /// `(cols, rows)` — forcing the off-thread dispatch path via segment
+    /// COUNT rather than byte size (mirrors the existing
+    /// `ac5_small_payload_many_segment_snapshot_dispatches_off_thread`
+    /// fixture), so the underlying content stays tiny and a worker's
+    /// build always completes fast regardless of a test's polling budget.
+    /// Every segment already matching `(cols, rows)` makes
+    /// `stable_target_suffix_start` return `k == 0` for that SAME target —
+    /// the trivial "every segment already matches" bypass-engage case —
+    /// and, symmetrically, `k == segments.len()` (no bypass) for any OTHER
+    /// target, which is exactly the shape task0003 FR7/FR8 need: a
+    /// dispatch-consistent-target-and-segments regression guard (AC-2), and
+    /// a target-mismatch-after-the-fact case (AC-1) that must not pay for
+    /// more than one wasted rebuild.
+    fn many_segment_payload_at(cols: u16, rows: u16) -> (Vec<mux_ipc::protocol::DimSegment>, Vec<u8>) {
+        let content = b"content\r\n".to_vec();
+        let segments: Vec<mux_ipc::protocol::DimSegment> = (0..OFFTHREAD_REPLAY_SEGMENT_THRESHOLD)
+            .map(|_| mux_ipc::protocol::DimSegment {
+                offset: 0,
+                cols,
+                rows,
+            })
+            .collect();
+        (segments, content)
+    }
+
+    /// AC-2: an ordinary (unraced) switch — segments' tail already matches
+    /// the dispatch-time target — engages bypass, observed indirectly via
+    /// the 2nd-pass scrollback-restore worker being spawned
+    /// (`scrollback_populated: false` on the 1st-pass replay is exactly
+    /// when `apply_offthread_swap` spawns it; see D3' in that method's
+    /// doc). Regression guard: this must stay true after the FR7 fix
+    /// below, not just before it.
+    #[test]
+    fn ac2_unraced_switch_engages_bypass() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        let (cols, rows) = {
+            let c = tab.core.lock();
+            (c.cols(), c.rows())
+        };
+        let (segments, content) = many_segment_payload_at(cols, rows);
+        let encoded = mux_ipc::protocol::encode_snapshot_payload(&segments, &content);
+        tab.apply_mux_message(snapshot_msg(10, encoded));
+        assert!(tab.test_has_pending_switch(), "must go off-thread");
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+        assert!(
+            tab.test_has_pending_scrollback_restore(),
+            "an unraced switch whose segments already match the target must \
+             engage bypass (observed via the 2nd-pass scrollback-restore \
+             worker being spawned)"
+        );
+    }
+
+    /// AC-1 (FR7): a resize STORM landing during an in-flight switch —
+    /// several resize events, each superseding the last, before the worker
+    /// is ever polled — must not pay for one wasted off-thread build per
+    /// intermediate, already-superseded target. Confirmed to fail pre-fix:
+    /// before `dispatch_offthread_replay` coalesced a same-pane
+    /// re-dispatch into `pending_redispatch`, EVERY `Tab::resize` call
+    /// whose target differed from the in-flight worker's own immediately
+    /// spawned a brand new worker (`test_offthread_spawn_count` would have
+    /// read 4 here, one per resize, instead of staying at 1 until the
+    /// storm settles).
+    #[test]
+    fn ac1_resize_storm_during_pending_switch_collapses_to_one_redispatch() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        let (cols, rows) = {
+            let c = tab.core.lock();
+            (c.cols(), c.rows())
+        };
+        let (segments, content) = many_segment_payload_at(cols, rows);
+        let encoded = mux_ipc::protocol::encode_snapshot_payload(&segments, &content);
+        tab.apply_mux_message(snapshot_msg(10, encoded));
+        assert!(tab.test_has_pending_switch(), "must go off-thread");
+        let spawns_after_dispatch = tab.test_offthread_spawn_count();
+        assert_eq!(spawns_after_dispatch, 1);
+
+        // A resize storm: several resize events land before the in-flight
+        // worker is ever polled.
+        tab.resize(90, 30);
+        tab.resize(95, 35);
+        tab.resize(100, 40);
+        assert_eq!(
+            tab.test_offthread_spawn_count(),
+            spawns_after_dispatch,
+            "a resize storm must not spawn an extra worker per resize event \
+             — each intermediate target must coalesce, not build"
+        );
+        assert!(
+            tab.test_has_pending_redispatch(),
+            "the storm's final target must be coalesced, waiting for the \
+             next poll"
+        );
+
+        // Exactly one more worker resolves the storm, targeting the FINAL
+        // settled grid (mirroring the measured decode target=207x51 →
+        // replay target=207x49 sequence — here 80x24 → 100x40).
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+        assert_eq!(tab.test_offthread_spawn_count(), spawns_after_dispatch + 1);
+        let c = tab.core.lock();
+        assert_eq!((c.cols(), c.rows()), (100, 40));
+    }
+
+    /// AC-3 (FR8): two `Snapshot` frames for the SAME pane arriving in
+    /// immediate succession (before the first's replay would complete) —
+    /// the second must coalesce into the first's in-flight request rather
+    /// than spawning a second worker right away. Confirmed to fail
+    /// pre-fix: before the same-pane coalesce existed,
+    /// `test_offthread_spawn_count` would have read 2 immediately after
+    /// the second frame, not 1.
+    #[test]
+    fn ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        let (segments1, content1) = many_segment_payload_at(80, 24);
+        let encoded1 = mux_ipc::protocol::encode_snapshot_payload(&segments1, &content1);
+        tab.apply_mux_message(snapshot_msg(10, encoded1));
+        assert!(tab.test_has_pending_switch(), "must go off-thread");
+        assert_eq!(tab.test_offthread_spawn_count(), 1);
+
+        // A second Snapshot for the SAME pane arrives before the first's
+        // replay would complete (segment count differing by one, mirroring
+        // the observed segs=9 then segs=10 trace) and with different
+        // (identifiable) content.
+        let mut segments2 = segments1;
+        segments2.push(mux_ipc::protocol::DimSegment {
+            offset: 0,
+            cols: 80,
+            rows: 24,
+        });
+        let content2 = b"SECOND\r\n".to_vec();
+        let encoded2 = mux_ipc::protocol::encode_snapshot_payload(&segments2, &content2);
+        tab.apply_mux_message(snapshot_msg(10, encoded2));
+
+        assert_eq!(
+            tab.test_offthread_spawn_count(),
+            1,
+            "a duplicate snapshot fetch for the pane already being switched \
+             to must coalesce, not spawn a second worker immediately — the \
+             discarded (first) request's work must not run alongside it"
+        );
+        assert!(tab.test_has_pending_redispatch());
+
+        // Only the second's outcome ever completes and gets displayed.
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+        assert_eq!(tab.test_offthread_spawn_count(), 2);
+        assert!(
+            tab.test_grid_text().contains("SECOND"),
+            "the second fetch's content must be the one that ends up displayed"
+        );
+    }
+
+    /// AC-4: two switches to DIFFERENT panes arriving in immediate
+    /// succession are NOT deduplicated against each other — the dedup in
+    /// AC-3 is scoped to same-pane frames only, so a switch to a different
+    /// pane must still spawn its own worker right away (an ordinary
+    /// pane-to-pane switch must not regress into the coalesce path).
+    #[test]
+    fn ac4_switch_to_different_pane_is_not_coalesced() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        let (segments, content) = many_segment_payload_at(80, 24);
+        let encoded = mux_ipc::protocol::encode_snapshot_payload(&segments, &content);
+        tab.apply_mux_message(snapshot_msg(10, encoded));
+        assert!(tab.test_has_pending_switch());
+        assert_eq!(tab.test_offthread_spawn_count(), 1);
+
+        // The daemon moved the active pane to 20, then a second large
+        // snapshot arrives for it — a genuinely different pane, not a
+        // duplicate of the first.
+        tab.mux_group.as_mut().unwrap().set_active_by_pane(20);
+        let (segments2, content2) = many_segment_payload_at(80, 24);
+        let encoded2 = mux_ipc::protocol::encode_snapshot_payload(&segments2, &content2);
+        tab.apply_mux_message(snapshot_msg(20, encoded2));
+
+        assert_eq!(
+            tab.test_offthread_spawn_count(),
+            2,
+            "a switch to a DIFFERENT pane must spawn its own worker \
+             immediately, not coalesce against the prior pane's request"
+        );
+        assert!(
+            !tab.test_has_pending_redispatch(),
+            "a different-pane switch is not a coalesce candidate"
+        );
+        assert_eq!(tab.test_pending_target(), Some(20));
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+    }
+
+    /// AC-5: a switch to the same pane arriving WELL AFTER the previous one
+    /// has already completed and been displayed (not a near-simultaneous
+    /// race) is NOT dropped — the AC-3 dedup must not degrade into "ignore
+    /// all repeat switches to a pane."
+    #[test]
+    fn ac5_late_repeat_switch_to_same_pane_is_not_dropped() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        let (segments1, content1) = many_segment_payload_at(80, 24);
+        let encoded1 = mux_ipc::protocol::encode_snapshot_payload(&segments1, &content1);
+        tab.apply_mux_message(snapshot_msg(10, encoded1));
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+        assert!(!tab.test_has_pending_switch());
+        assert_eq!(tab.test_offthread_spawn_count(), 1);
+
+        // Well after the first has settled (no in-flight switch left at
+        // all), a repeat switch to the SAME pane arrives.
+        let (segments2, content2) = many_segment_payload_at(80, 24);
+        let encoded2 = mux_ipc::protocol::encode_snapshot_payload(&segments2, &content2);
+        tab.apply_mux_message(snapshot_msg(10, encoded2));
+
+        assert!(
+            tab.test_has_pending_switch(),
+            "a repeat switch arriving after the prior one already settled \
+             must not be dropped"
+        );
+        assert_eq!(
+            tab.test_offthread_spawn_count(),
+            2,
+            "with no in-flight request left to coalesce against, this must \
+             spawn its own worker immediately"
+        );
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
     }
 }
