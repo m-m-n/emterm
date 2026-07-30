@@ -25,7 +25,7 @@ workflow:
     skipped_reason: "バグ修正のみで UI 変更なし"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: bd9b2ac503984e522269db1c17f44f7707156e72
@@ -38,7 +38,22 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Deferred IME request queue + anomaly diagnostics"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/ime/backend.rs
+      - src-tauri/src/ime/winit_bridge.rs
+      - src-tauri/src/ime/null.rs
+      - src-tauri/src/app.rs
+      - src-tauri/src/window_host.rs
+    skills: []
+    domains: [input-handling]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -49,50 +64,50 @@ requirements:
     title: "Deferred IME request queue (no Imm* from event dispatch)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-6]
   FR2:
     title: "Flush semantics (ordering / coalescing / dedup / idle cost)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2, TS-3, TS-4]
   FR3:
     title: "Drop-path detach preserved"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
   FR4:
     title: "IME lifecycle-anomaly diagnostics (warn, latched)"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-8]
   FR5:
     title: "Non-Windows behavior preservation"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-7, TS-9]
   NFR1:
     title: "No perceivable IME positioning latency"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-9]
   NFR2:
     title: "No new crate dependencies"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-9]
   NFR3:
     title: "All tests runnable on Linux host"
     status: ok
     tbd_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-9]
 
 batch:
   review_rework_count: 0
