@@ -96,7 +96,7 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR1, FR2]
-    status: in_progress
+    status: merged
     notes: "review round 1 rework task (batch mode auto-rework, cap 1)"
     branch: em-workflow/mux-tab-switch-replay-latency/task0004
   task0005:
