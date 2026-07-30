@@ -193,17 +193,13 @@ pub struct SidebarEntry {
     /// (the render pipeline reads `App::agent_status`; this module stays
     /// free of `App`); [`build_entries`] always leaves this `None`.
     pub badge: Option<Aggregated>,
-    /// task0006 AC-5: the pane's daemon-minted public ID, when the GUI has
-    /// learned it (`App::mux_public_pane_id`). `None` hides the
-    /// copy-to-clipboard row. [`build_entries`] always leaves this `None`.
-    pub public_pane_id: Option<String>,
 }
 
 /// Build the ordered entry list from a tab's mux window group. Preserves
 /// order, numbering, and names; marks exactly the active window (AC-2).
-/// An empty group yields an empty list. `badge` / `public_pane_id` are left
-/// `None` here (pure over the group alone) — the caller attaches them from
-/// `App::agent_status` / `App::mux_public_pane_id` before drawing.
+/// An empty group yields an empty list. `badge` is left `None` here (pure
+/// over the group alone) — the caller attaches it from `App::agent_status`
+/// before drawing.
 pub fn build_entries(group: &crate::mux::window_group::MuxWindowGroup) -> Vec<SidebarEntry> {
     let active = group.active_index();
     let pane_ids = group.pane_ids();
@@ -217,7 +213,6 @@ pub fn build_entries(group: &crate::mux::window_group::MuxWindowGroup) -> Vec<Si
             active: i == active,
             pane_id: pane_ids.get(i).copied().unwrap_or(0),
             badge: None,
-            public_pane_id: None,
         })
         .collect()
 }
@@ -246,7 +241,7 @@ const NUMBER_COLUMN_WIDTH: f32 = 20.0;
 /// edge only; the overlay variant paints no separator — AC-3).
 const SEPARATOR_WIDTH: f32 = 1.0;
 
-// ── agent-status badge + copy-to-clipboard row (task0006) ──────────────
+// ── agent-status badge (task0006) ───────────────────────────────────────
 
 /// Badge dot diameter — matches `ui::tab_bar`'s `AGENT_BADGE_DIAMETER`
 /// (`IMPLEMENTATION.md` Conventions: "8px dot, 6px gap before title").
@@ -256,12 +251,6 @@ const BADGE_GAP: f32 = 6.0;
 /// Ring stroke width for a *seen* blocked/done badge — matches
 /// `ui::tab_bar`'s `AGENT_BADGE_RING_WIDTH`.
 const BADGE_RING_WIDTH: f32 = 1.5;
-/// Square hit/paint region for the copy-to-clipboard icon at a row's right
-/// edge.
-const COPY_ICON_SIZE: f32 = 20.0;
-/// Gap between the name column's right edge and the copy icon, and between
-/// the icon and the row's own right padding.
-const COPY_ICON_GAP: f32 = 6.0;
 
 // ── overlay floating-card geometry (task0007) ───────────────────────────
 
@@ -276,34 +265,25 @@ const OVERLAY_FILL_ALPHA: f32 = 0.92;
 
 // ── draw ─────────────────────────────────────────────────────────────
 
-/// Per-frame result of [`draw`]: at most one window switch AND/OR one
-/// copy-to-clipboard request (task0006 AC-5). The two are independent hit
-/// targets within a row (the row body switches; a small trailing icon
-/// copies), so in principle either, both, or neither can fire in one
-/// frame — though a single click only ever hits one of the two regions.
+/// Per-frame result of [`draw`]: at most one window switch, reported when
+/// a row body is clicked.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SidebarOutcome {
     /// The clicked entry's window index, if a row body was clicked.
     pub switch_to_window: Option<usize>,
-    /// The public pane ID to place on the clipboard, if a copy icon was
-    /// clicked. The caller (outside this module — it never touches the OS
-    /// clipboard itself) performs the actual write.
-    pub copy_pane_id: Option<String>,
 }
 
 /// Draw the sidebar for the given placement, returning this frame's
-/// [`SidebarOutcome`]. `locale` labels the copy-to-clipboard affordance's
-/// hover text (task0006 AC-5).
+/// [`SidebarOutcome`].
 pub fn draw(
     ctx: &egui::Context,
     entries: &[SidebarEntry],
     placement: Placement,
     width: f32,
-    locale: crate::i18n::Locale,
 ) -> SidebarOutcome {
     match placement {
-        Placement::Persistent => draw_persistent(ctx, entries, width, locale),
-        Placement::Overlay => draw_overlay(ctx, entries, width, locale),
+        Placement::Persistent => draw_persistent(ctx, entries, width),
+        Placement::Overlay => draw_overlay(ctx, entries, width),
     }
 }
 
@@ -313,12 +293,7 @@ pub fn draw(
 /// `Frame` itself (mirrors `tab_bar`'s convention) so `ui.max_rect()`
 /// inside the closure is the panel's full (pre-padding) rect; the 12/8 px
 /// panel padding is then applied manually before laying out rows.
-fn draw_persistent(
-    ctx: &egui::Context,
-    entries: &[SidebarEntry],
-    width: f32,
-    locale: crate::i18n::Locale,
-) -> SidebarOutcome {
+fn draw_persistent(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) -> SidebarOutcome {
     let mut outcome = SidebarOutcome::default();
     let frame = egui::Frame::none()
         .fill(md3::surface_container_low())
@@ -340,7 +315,7 @@ fn draw_persistent(
             let content_rect =
                 panel_rect.shrink2(Vec2::new(PANEL_PAD_HORIZONTAL, PANEL_PAD_VERTICAL));
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(content_rect), |ui| {
-                outcome = draw_rows(ui, entries, locale);
+                outcome = draw_rows(ui, entries);
             });
         });
     outcome
@@ -358,12 +333,7 @@ fn draw_persistent(
 /// (AC-3 — the card's rounded edge is the only boundary; the persistent
 /// variant's left-edge separator is unchanged), elevation-3 shadow reused
 /// from the shared dialog token. No scrim, no open/close animation.
-fn draw_overlay(
-    ctx: &egui::Context,
-    entries: &[SidebarEntry],
-    width: f32,
-    locale: crate::i18n::Locale,
-) -> SidebarOutcome {
+fn draw_overlay(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) -> SidebarOutcome {
     let mut outcome = SidebarOutcome::default();
     // Use the remaining central-panel area (post title-bar / tab-bar /
     // status-bar `TopBottomPanel`s), not the full window `screen_rect()`,
@@ -445,7 +415,7 @@ fn draw_overlay(
                 prepared.content_ui.allocate_new_ui(
                     egui::UiBuilder::new().max_rect(content_rect),
                     |ui| {
-                        outcome = draw_rows(ui, entries, locale);
+                        outcome = draw_rows(ui, entries);
                     },
                 );
 
@@ -478,9 +448,8 @@ fn draw_overlay(
 /// Draw the scrollable row list into `ui` (already positioned/sized to the
 /// panel's content area by the caller). Rows never shrink (AC-4); overflow
 /// scrolls vertically — an empty list draws nothing (bare panel, no
-/// placeholder text). `locale` labels the copy-to-clipboard icon's hover
-/// text (task0006 AC-5).
-fn draw_rows(ui: &mut Ui, entries: &[SidebarEntry], locale: crate::i18n::Locale) -> SidebarOutcome {
+/// placeholder text).
+fn draw_rows(ui: &mut Ui, entries: &[SidebarEntry]) -> SidebarOutcome {
     let mut outcome = SidebarOutcome::default();
     #[cfg(test)]
     tests::LAST_ROW_RECTS.with(|c| c.borrow_mut().clear());
@@ -506,72 +475,12 @@ fn draw_rows(ui: &mut Ui, entries: &[SidebarEntry], locale: crate::i18n::Locale)
                 }
                 paint_row_content(ui, rect, entry, fg);
 
-                // Copy-to-clipboard icon (task0006 AC-5): its own hit
-                // target at the row's right edge, checked BEFORE the row's
-                // own click below so a click on the icon never also fires
-                // a window switch.
-                let mut icon_clicked = false;
-                if let Some(public_id) = &entry.public_pane_id {
-                    let icon_rect = copy_icon_rect(rect);
-                    let icon_id = ui.id().with(("mux-sidebar-copy-pane-id", entry.pane_id));
-                    let icon_resp = ui.interact(icon_rect, icon_id, Sense::click());
-                    paint_copy_icon(ui, icon_rect, icon_resp.hovered(), fg);
-                    icon_clicked = icon_resp.clicked();
-                    if icon_clicked && outcome.copy_pane_id.is_none() {
-                        outcome.copy_pane_id = Some(public_id.clone());
-                    }
-                    let label = match locale {
-                        crate::i18n::Locale::Ja => "pane ID をコピー",
-                        crate::i18n::Locale::En => "Copy pane ID",
-                    };
-                    icon_resp.on_hover_text(label);
-                }
-
-                if resp.clicked() && !icon_clicked && outcome.switch_to_window.is_none() {
+                if resp.clicked() && outcome.switch_to_window.is_none() {
                     outcome.switch_to_window = Some(entry.window_index);
                 }
             }
         });
     outcome
-}
-
-/// The copy-to-clipboard icon's square hit/paint region: right-aligned
-/// inside `row`, inset [`COPY_ICON_GAP`] from the row's own right padding.
-fn copy_icon_rect(row: Rect) -> Rect {
-    let right = row.right() - ROW_HORIZONTAL_PAD;
-    let left = right - COPY_ICON_SIZE;
-    let top = row.center().y - COPY_ICON_SIZE / 2.0;
-    Rect::from_min_size(egui::pos2(left, top), Vec2::splat(COPY_ICON_SIZE))
-}
-
-/// Paint the copy-to-clipboard icon: two overlapping rounded-rect outlines
-/// (a generic "copy" glyph), so it reads as an affordance without needing
-/// an icon font. Hover brightens via the standard 8% state-layer, applied
-/// as an underlying tinted square so it stays visible against the row's
-/// own background (active / hovered / plain).
-fn paint_copy_icon(ui: &Ui, rect: Rect, hovered: bool, color: Color32) {
-    if hovered {
-        ui.painter().rect_filled(
-            rect,
-            Rounding::same(4.0),
-            md3::state_layer(color, md3::STATE_LAYER_HOVER),
-        );
-    }
-    // Two offset stroke-only squares read as a generic "copy" glyph without
-    // needing an icon font or a fill color outside the md3 palette (AC-4:
-    // no hex literals / no colors bypassing the md3 role accessors).
-    let stroke = Stroke::new(1.2, color);
-    let inset = rect.shrink(4.0);
-    let back = Rect::from_min_size(
-        inset.min,
-        Vec2::new(inset.width() * 0.75, inset.height() * 0.75),
-    );
-    let front = Rect::from_min_size(
-        inset.min + Vec2::new(inset.width() * 0.25, inset.height() * 0.25),
-        Vec2::new(inset.width() * 0.75, inset.height() * 0.75),
-    );
-    ui.painter().rect_stroke(back, Rounding::same(1.5), stroke);
-    ui.painter().rect_stroke(front, Rounding::same(1.5), stroke);
 }
 
 /// Background / foreground color pair for a row, per the design decisions:
@@ -598,9 +507,8 @@ fn row_colors(entry: &SidebarEntry, hovered: bool) -> (Option<Color32>, Color32)
 /// Paint the `[number] [badge] name` content of one row: the number
 /// right-aligned in a fixed narrow column, an optional agent-status badge
 /// dot (task0006 AC-1/AC-2 — reserves space only when present), then the
-/// name ellipsized to the remaining width (which also excludes the
-/// copy-to-clipboard icon's reserved region when `public_pane_id` is
-/// known).
+/// name ellipsized to the remaining width, which ends at the row's own
+/// right padding.
 fn paint_row_content(ui: &Ui, rect: Rect, entry: &SidebarEntry, color: Color32) {
     let number_font = FontId::proportional(NUMBER_FONT_SIZE);
     let name_font = FontId::proportional(NAME_FONT_SIZE);
@@ -622,10 +530,7 @@ fn paint_row_content(ui: &Ui, rect: Rect, entry: &SidebarEntry, color: Color32) 
         name_left += BADGE_DIAMETER + BADGE_GAP;
     }
 
-    let mut name_right = rect.right() - ROW_HORIZONTAL_PAD;
-    if entry.public_pane_id.is_some() {
-        name_right -= COPY_ICON_SIZE + COPY_ICON_GAP;
-    }
+    let name_right = rect.right() - ROW_HORIZONTAL_PAD;
     let max_w = (name_right - name_left).max(0.0);
     let name_galley = ui.fonts(|f| layout_ellipsized(f, &entry.name, &name_font, color, max_w));
     let name_pos = egui::pos2(name_left, rect.center().y - name_galley.size().y / 2.0);
@@ -744,7 +649,6 @@ mod tests {
                 active: i == active,
                 pane_id: 100 + i as u32,
                 badge: None,
-                public_pane_id: None,
             })
             .collect()
     }
@@ -764,14 +668,14 @@ mod tests {
         let mut priming = RawInput::default();
         priming.screen_rect = Some(screen_rect());
         let _ = ctx.run(priming, |ctx| {
-            let _ = draw(ctx, items, placement, MIN_WIDTH, crate::i18n::Locale::En);
+            let _ = draw(ctx, items, placement, MIN_WIDTH);
         });
 
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         LAST_ROW_RECTS.with(|c| c.borrow_mut().clear());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(ctx, items, placement, MIN_WIDTH, crate::i18n::Locale::En);
+            let _ = draw(ctx, items, placement, MIN_WIDTH);
         });
         LAST_ROW_RECTS.with(|c| c.borrow().clone())
     }
@@ -799,7 +703,7 @@ mod tests {
             priming.screen_rect = Some(screen_rect());
             priming.events.push(Event::PointerMoved(click_pos));
             let _ = ctx.run(priming, |ctx| {
-                let _ = draw(ctx, items, placement, MIN_WIDTH, crate::i18n::Locale::En);
+                let _ = draw(ctx, items, placement, MIN_WIDTH);
             });
         }
 
@@ -820,7 +724,7 @@ mod tests {
         });
         let mut captured = SidebarOutcome::default();
         let _ = ctx.run(input, |ctx| {
-            captured = draw(ctx, items, placement, MIN_WIDTH, crate::i18n::Locale::En);
+            captured = draw(ctx, items, placement, MIN_WIDTH);
         });
         captured
     }
@@ -945,7 +849,6 @@ mod tests {
                 items,
                 Placement::Overlay,
                 width,
-                crate::i18n::Locale::En,
             );
         });
         LAST_OVERLAY_CARD
@@ -972,7 +875,6 @@ mod tests {
                 items,
                 Placement::Overlay,
                 width,
-                crate::i18n::Locale::En,
             );
         });
         let card = LAST_OVERLAY_CARD
@@ -1149,7 +1051,6 @@ mod tests {
                 items,
                 Placement::Overlay,
                 width1,
-                crate::i18n::Locale::En,
             );
         });
 
@@ -1162,7 +1063,6 @@ mod tests {
                 items,
                 Placement::Overlay,
                 width2,
-                crate::i18n::Locale::En,
             );
         });
         LAST_OVERLAY_CARD
@@ -1328,7 +1228,6 @@ mod tests {
         let target = row_rects(&items, Placement::Persistent)[2].center();
         let outcome = run_with_click(&items, Placement::Persistent, target);
         assert_eq!(outcome.switch_to_window, Some(2));
-        assert_eq!(outcome.copy_pane_id, None);
     }
 
     #[test]
@@ -1361,7 +1260,6 @@ mod tests {
                 &items,
                 Placement::Persistent,
                 MIN_WIDTH,
-                crate::i18n::Locale::En,
             );
         });
         assert_eq!(captured, SidebarOutcome::default());
@@ -1429,7 +1327,6 @@ mod tests {
                 &items,
                 Placement::Persistent,
                 MIN_WIDTH,
-                crate::i18n::Locale::En,
             );
         });
         let rects = LAST_ROW_RECTS.with(|c| c.borrow().clone());
@@ -1603,7 +1500,6 @@ mod tests {
                 &items,
                 Placement::Persistent,
                 width,
-                crate::i18n::Locale::En,
             );
             egui::TopBottomPanel::bottom("t0010-statusbar")
                 .exact_height(40.0)
@@ -1664,7 +1560,6 @@ mod tests {
                 &items,
                 Placement::Overlay,
                 width,
-                crate::i18n::Locale::En,
             );
         });
 
@@ -1700,14 +1595,13 @@ mod tests {
     // ── task0006 AC-1/AC-2: build_entries carries pane_id, badge defaults ──
 
     #[test]
-    fn build_entries_populates_pane_id_from_the_group_and_defaults_badge_and_public_id_to_none() {
+    fn build_entries_populates_pane_id_from_the_group_and_defaults_badge_to_none() {
         let g = group_with(2, 0);
         let got = build_entries(&g);
         assert_eq!(got[0].pane_id, 100);
         assert_eq!(got[1].pane_id, 101);
         for e in &got {
             assert_eq!(e.badge, None);
-            assert_eq!(e.public_pane_id, None);
         }
     }
 
@@ -1745,7 +1639,6 @@ mod tests {
                 items,
                 Placement::Persistent,
                 MIN_WIDTH,
-                crate::i18n::Locale::En,
             );
         });
         let mut shapes = Vec::new();
@@ -1784,58 +1677,68 @@ mod tests {
         assert_eq!(x_without, name_text_x(&also_without_badge));
     }
 
-    // ── task0006 AC-5: copy-to-clipboard row ────────────────────────────
-
-    fn entry_with_public_id(window_index: usize, active: bool, public_id: &str) -> SidebarEntry {
-        SidebarEntry {
-            window_index,
-            name: format!("w{window_index}"),
-            active,
-            pane_id: 100 + window_index as u32,
-            badge: None,
-            public_pane_id: Some(public_id.to_string()),
-        }
-    }
+    // ── task0001: regression tests over the row's single hit target ────
+    // AC-1/AC-9: `ac1_draw_rows_...` is a structural check confirming
+    // `draw_rows` registers no interaction region and paints no glyph
+    // beyond the row itself; AC-3: the exhaustive pattern in
+    // `ac3_sidebar_outcome_...` compiles only when `SidebarOutcome`
+    // carries exactly the window-switch field; AC-2:
+    // `ac1_ac2_click_at_...` behaviorally confirms a click at the row's
+    // former right-edge reserved region now switches windows.
 
     #[test]
-    fn clicking_the_copy_icon_reports_the_public_pane_id_and_no_window_switch() {
-        let items = vec![entry_with_public_id(0, true, "abc-1")];
-        let row = row_rects(&items, Placement::Persistent)[0];
-        let icon_center = copy_icon_rect(row).center();
-        let outcome = run_with_click(&items, Placement::Persistent, icon_center);
-        assert_eq!(outcome.copy_pane_id, Some("abc-1".to_string()));
-        assert_eq!(
-            outcome.switch_to_window, None,
-            "a click on the copy icon must not also switch windows"
+    fn ac1_draw_rows_registers_no_interaction_region_besides_the_row_itself() {
+        // AC-1: `draw_rows`'s per-entry loop must register exactly one hit
+        // target (the row's own `allocate_exact_size(.., Sense::click())`)
+        // and paint no glyph beyond the row's own content.
+        let src = include_str!("mux_sidebar.rs");
+        let start = src
+            .find("fn draw_rows(")
+            .expect("draw_rows present in source");
+        let body = &src[start..];
+        let end = body[1..]
+            .find("\nfn ")
+            .map(|i| i + 1)
+            .unwrap_or(body.len());
+        let draw_rows_src = &body[..end];
+        assert!(
+            !draw_rows_src.contains("ui.interact("),
+            "draw_rows must register no interaction region beyond the row's \
+             own click sense (AC-1); found an extra `ui.interact(` call"
+        );
+        assert!(
+            !draw_rows_src.contains("paint_copy_icon("),
+            "draw_rows must paint no glyph beyond the row's own content \
+             (AC-1); found a `paint_copy_icon(` call"
         );
     }
 
     #[test]
-    fn clicking_the_row_body_still_switches_windows_when_a_copy_icon_is_present() {
-        let items = vec![
-            entry_with_public_id(0, true, "abc-1"),
-            entry_with_public_id(1, false, "abc-2"),
-        ];
-        // Click the row's LEFT side (the name/number area), well clear of
-        // the right-edge copy icon.
-        let row = row_rects(&items, Placement::Persistent)[1];
-        let body_pos = egui::pos2(row.left() + 10.0, row.center().y);
-        let outcome = run_with_click(&items, Placement::Persistent, body_pos);
-        assert_eq!(outcome.switch_to_window, Some(1));
-        assert_eq!(outcome.copy_pane_id, None);
+    fn ac3_sidebar_outcome_exposes_only_the_window_switch_result() {
+        // AC-3: exhaustive struct pattern — compiles only when
+        // `SidebarOutcome` has exactly this one field. Catches a
+        // copy-pane-id field left behind by an incomplete removal at
+        // compile time (rather than a runtime assertion).
+        let SidebarOutcome { switch_to_window: _ } = SidebarOutcome::default();
     }
 
     #[test]
-    fn no_copy_icon_hit_target_when_public_pane_id_is_unknown() {
-        // Same click position as the copy-icon test above, but this entry
-        // has no known public ID — the row's own click sense is the only
-        // thing there, so the click falls through to a window switch
-        // instead of a copy request.
-        let items = entries(1, 0); // public_pane_id: None (test helper default)
+    fn ac1_ac2_click_at_the_row_s_former_icon_region_reports_a_window_switch() {
+        // AC-2: a click positioned inside the region the icon used to
+        // occupy — the row's right edge, inset by the row's own
+        // horizontal padding — must fall through to the row's own click
+        // sense and report a window switch, because no nested
+        // interaction region is registered there anymore.
+        let items = entries(1, 0);
         let row = row_rects(&items, Placement::Persistent)[0];
-        let icon_center = copy_icon_rect(row).center();
-        let outcome = run_with_click(&items, Placement::Persistent, icon_center);
-        assert_eq!(outcome.copy_pane_id, None);
-        assert_eq!(outcome.switch_to_window, Some(0));
+        let former_icon_region =
+            egui::pos2(row.right() - ROW_HORIZONTAL_PAD - 10.0, row.center().y);
+        let outcome = run_with_click(&items, Placement::Persistent, former_icon_region);
+        assert_eq!(
+            outcome.switch_to_window,
+            Some(0),
+            "a click at the former copy-icon position must switch windows \
+             once the copy affordance is removed"
+        );
     }
 }

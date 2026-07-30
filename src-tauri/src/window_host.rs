@@ -1645,7 +1645,6 @@ impl WindowHost {
             search: None,
             profile: None,
             sftp: None,
-            clipboard_copy: None,
         };
         // Snapshot the current maximized state so the title bar can
         // swap its middle glyph between Maximize and Restore. Reading
@@ -1726,13 +1725,6 @@ impl WindowHost {
             app.scroll_set_offset(offset);
             // Viewport shifted under the pointer; cached hover is stale.
             self.invalidate_link_hover();
-        }
-        // task0006 AC-5: mux sidebar's copy-to-clipboard row. Routed
-        // through the same `set_clipboard` path the Ctrl+Shift+C /
-        // mouse-up selection-copy keybinds use — `App` never touches
-        // `arboard::Clipboard` directly (see `FrameEvents::clipboard_copy`).
-        if let Some(text) = frame_events.clipboard_copy {
-            self.set_clipboard(&text);
         }
         // Search-bar interaction: re-run the search on query / option
         // changes (incremental), navigate on the prev / next buttons, or
