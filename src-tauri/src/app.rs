@@ -1455,6 +1455,19 @@ impl App {
         self.ime_backend.on_winit_ime(ime);
     }
 
+    /// Flush any IME side-effect requests the active backend recorded
+    /// since the previous flush. Called once per `about_to_wait` turn
+    /// from `window_host` — never from inside winit's event dispatch,
+    /// which is the whole point: on Windows, issuing the underlying
+    /// IMM32 calls from inside wndproc dispatch is the identified
+    /// CorvusSKK deadlock mechanism (task0001, windows-skk-ime-hang
+    /// SPEC FR1). The default `ImeBackend::flush` impl is a no-op, so
+    /// this is safe to call unconditionally regardless of which
+    /// backend is installed.
+    pub fn flush_ime(&mut self) {
+        self.ime_backend.flush();
+    }
+
     /// Drain queued `ImeEvent`s from the active backend and route them
     /// through the existing Phase 4-E layer
     /// (`on_ime_preedit` / `on_ime_commit` / `on_ime_focus_lost`).
