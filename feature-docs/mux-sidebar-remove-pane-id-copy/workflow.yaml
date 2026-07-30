@@ -27,8 +27,9 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 6fe74b914c87bf204a885519daec723da867eb3a
+    completed_at_commit: 42ed688ccaa07ee439345c61b44ba6c9dd161337
   - id: review
     status: pending
   - id: verify
@@ -50,7 +51,7 @@ tasks:
     domains: [ui, api-contract]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2, NFR3, NFR4, NFR5]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-sidebar-remove-pane-id-copy/task0001
 
