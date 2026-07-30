@@ -1,0 +1,198 @@
+task_id: task0006
+
+# Baseline established in Step 4a, BEFORE any implementation change, via three
+# full `cargo test --lib -- --test-threads=1` runs. Two populations:
+#  - a single deterministic failure unrelated to this task
+#    (welcome_without_windows_leaves_group_none), reproduced in all 3 runs
+#  - a large, NON-deterministic pool of "off-thread replay worker did not
+#    complete in time" panics (test_poll_until_swapped's bounded spin,
+#    tabs.rs) whose exact membership varied run to run — attributed to
+#    worker-thread scheduling contention in this sandboxed environment, not
+#    to any code path this task touches. The union observed across the 3
+#    baseline runs is listed below; any subset of it reappearing after the
+#    implementation is NOT a regression (see final_failures/notes).
+baseline_failures:
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac1_resize_storm_during_pending_switch_collapses_to_one_redispatch
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - status_bar::runtime::tests::runtime_time_provider_timer_fires_wake
+
+# Observed across multiple post-implementation full-suite runs (serial,
+# --test-threads=1): every failure seen is a member of baseline_failures
+# above (welcome_without_windows_leaves_group_none deterministically, plus a
+# shifting subset of the same off-thread-timing-flaky pool — e.g. one run
+# showed {ts10, ts11, ts13, ts7, ts8, ts9, welcome_without_windows}, another
+# showed {ts11, ts13, ts7, ts8, ts9, welcome_without_windows} with ts10 not
+# recurring that time). No new failing test (deterministic or otherwise) was
+# observed on any run. final_failures below lists the union actually
+# observed post-implementation; it is a subset of baseline_failures.
+final_failures:
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+
+acceptance_tests:
+  AC-1:
+    tests: [tabs::tests::t6_ac1_resize_during_in_flight_switch_still_engages_bypass]
+    red_confirmed: true
+    red_reason: >-
+      Pre-fix code rebuilt the in-flight worker at the NEW (post-resize)
+      target directly inside dispatch_offthread_replay's coalesce
+      re-dispatch, so stable_target_suffix_start found no trailing run
+      matching the new target against segments recorded at the pre-resize
+      target: bypass never engaged, so no 2nd-pass scrollback-restore worker
+      spawned. Assertion `tab.test_has_pending_scrollback_restore()` failed.
+      Verified via a temporary git-stash-based probe run directly against
+      the pre-fix committed tabs.rs (not merely reasoned about).
+
+  AC-2:
+    tests: [tabs::tests::ac2_unraced_switch_engages_bypass]
+    red_confirmed: false
+    red_reason: >-
+      Regression guard, not a new criterion: this is task0003's own
+      pre-existing AC-2 test (unraced switch engages bypass), untouched by
+      this task's diff. It passes identically before and after this task's
+      implementation, confirming AC-1's fix introduced no regression for the
+      unraced case (a resize never touches PendingSwitch::pending_resize
+      when no resize occurs).
+
+  AC-3:
+    tests: [tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated]
+    red_confirmed: true
+    red_reason: >-
+      Pre-fix code did not clear pending_switch.live_queue at coalesce time
+      (dispatch_offthread_replay's same-pane branch only stashed
+      pending_redispatch, never touching the queue). L1 survived the P2
+      coalesce; the assertion "L1 was subsumed into P2's own content — the
+      coalesce must clear it" failed (queue still held L1). This also
+      confirms the deeper bug: at poll time round-1's `old.payload ==
+      payload` guard (payloads differ) would have discarded the WHOLE
+      queue including L2, which never got the chance to be queued
+      correctly. Verified via a temporary git-stash-based probe run
+      directly against the pre-fix committed tabs.rs.
+
+  AC-4:
+    tests: [tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once]
+    red_confirmed: true
+    red_reason: >-
+      Pre-fix code's Tab::resize redispatch branch DID coalesce a
+      re-dispatch for a same-payload resize (task0006 removes that call
+      entirely in favor of PendingSwitch::pending_resize) — assertion
+      `!tab.test_has_pending_redispatch()` failed immediately after the
+      resize call. Verified via a temporary git-stash-based probe run
+      directly against the pre-fix committed tabs.rs.
+
+  AC-5:
+    tests: [tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly]
+    red_confirmed: true
+    red_reason: >-
+      Same root cause as AC-3, traced across a 3-transition chain (resize,
+      then two same-pane snapshots) — pre-fix code left L1 in the queue
+      after P2's coalesce; assertion "L1 subsumed by P2's own content at
+      THIS coalesce" failed. Verified via a temporary git-stash-based probe
+      run directly against the pre-fix committed tabs.rs.
+
+  AC-6:
+    tests: [tabs::tests::t6_ac6_duplicate_same_pane_snapshot_still_decodes_twice_replay_build_dedup_only]
+    red_confirmed: false
+    red_reason: >-
+      Documents pre-existing, UNCHANGED behavior: FR8's dedup was, and
+      remains after this task, scoped to the replay-BUILD level only (no
+      second worker spawn) — decode still runs for every incoming frame.
+      This task prioritized FR7 and the live-queue lifecycle (both
+      correctness-critical per the task plan) and did not add fetch/
+      decode-level dedup (the task plan's own documented fallback for this
+      medium-severity, secondary finding when time/complexity forces a
+      choice). This test's outcome is identical before and after this
+      task's diff — it exists to pin the narrower claim explicitly rather
+      than leave FR8's SPEC wording ("does not fetch/decode the snapshot
+      twice") silently unmet by the test suite. See the implementer report
+      for the scope-narrowing note (feature-docs/SPEC.md and
+      VERIFICATION.md are outside this task's write permission; the
+      orchestrator/planner should reconcile FR8's wording with this
+      decision).
+
+  AC-7:
+    tests:
+      - tabs::tests::t6_ac7_resize_storm_performs_no_redispatch_hence_no_payload_clone
+      - tabs::tests::ac1_resize_storm_during_pending_switch_collapses_to_one_redispatch
+    red_confirmed: true
+    red_reason: >-
+      Pre-fix code's Tab::resize redispatch branch cloned
+      pending.payload/.segments (or the pending_redispatch equivalent) and
+      called dispatch_offthread_replay on EVERY resize event while a
+      same-pane switch was in flight — assertion
+      `!tab.test_has_pending_redispatch()` failed on the first resize event
+      of the storm. Verified via a temporary git-stash-based probe run
+      directly against the pre-fix committed tabs.rs. The adapted
+      ac1_resize_storm_... test additionally pins test_offthread_spawn_count
+      staying flat through the whole storm AND after the swap (0 extra
+      spawns, vs. round-1's own +1), a strictly stronger property than
+      task0003's original test asserted.
+
+  AC-8:
+    tests: [tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison]
+    red_confirmed: true
+    red_reason: >-
+      Pre-fix code left the queue populated at coalesce time (only
+      compared/cleared later, at poll time, via the O(n) `old.payload ==
+      payload` byte comparison this task removes) — assertion "the discard
+      decision at coalesce time must not carry the stale queue forward"
+      failed with the queue still holding the stale entry right after the
+      second (large) snapshot's coalesce. Verified via a temporary
+      git-stash-based probe run directly against the pre-fix committed
+      tabs.rs. The O(n) comparison's removal itself is a structural/code
+      property confirmed by inspection (poll_pending_switch's
+      pending_redispatch-take branch now unconditionally inherits
+      old.live_queue/queued_bytes behind a debug_assert_eq! on pane
+      identity, replacing the byte comparison) rather than something a
+      black-box unit test can time reliably.
+
+  AC-9:
+    tests:
+      - tabs::tests::ts12_resize_supersedes_and_redispatches_at_new_grid
+      - tabs::tests::ac1_resize_storm_during_pending_switch_collapses_to_one_redispatch
+      - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+      - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+      - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+    red_confirmed: true
+    red_reason: >-
+      ts12_resize_supersedes_and_redispatches_at_new_grid and
+      ac1_resize_storm_during_pending_switch_collapses_to_one_redispatch's
+      ORIGINAL (task0003) assertions were run against this task's NEW
+      implementation and failed (their mechanics genuinely changed — a
+      resize no longer coalesces a re-dispatch at all) before being
+      adapted, confirming the adaptation was necessary rather than a
+      rubber-stamp. Both were rewritten to assert the new mechanics
+      (PendingSwitch::pending_resize) while preserving their original
+      intent (resize supersedes correctly; a resize storm collapses to
+      minimal work) and now pass. The other three listed tests (task0003's
+      FR8 same-pane-dedup tests, orthogonal to the resize-mechanics change)
+      were re-run unchanged throughout this task's development and
+      continued to pass, confirming FR8's replay-build dedup was not
+      regressed.
+
+notes: >-
+  See implementer report `notes` for a git-worktree-shared-refs/stash
+  incident encountered and fully recovered from during TDD verification
+  (no data loss to this task; a cross-task stash collision with task0004's
+  worktree was surfaced rather than self-resolved, per the "never touch
+  other tasks' worktrees" boundary).
