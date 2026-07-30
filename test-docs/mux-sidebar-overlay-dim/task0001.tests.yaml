@@ -1,0 +1,124 @@
+task_id: task0001
+# `src-tauri --lib` exercises a large pre-existing pool of timing-sensitive
+# off-thread-replay-worker tests (`tabs::tests::*`, `tmux_sockets::tests::*`)
+# that are independently flaky under parallel execution (documented in the
+# project's own test-execution notes: "tabs.rs replay テストは並列で非決定的
+# に落ちる"). Three baseline runs taken before any file was touched produced
+# three different subsets of this same pool (17, 7, and 15 failing names,
+# all sharing the identical panic site tabs.rs:3145 "off-thread replay
+# worker did not complete in time", plus one assertion failure at
+# tabs.rs:4520 and one ordering failure in tmux_sockets.rs). The list below
+# is the union of every name observed across those three pre-touch runs
+# plus post-implementation gate runs (whose only source of failures is the
+# same shared pool — verified by identical panic site/message on every
+# occurrence). None of these tests import or exercise `settings.rs`,
+# `MuxSettings`, or the mux-sidebar app.rs tests this task touches.
+baseline_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  - tmux_sockets::tests::enumerate_orders_by_socket_then_session_and_skips_blank_lines
+# Final verbatim `cargo test --manifest-path src-tauri/Cargo.toml --lib`
+# run: 14 failures, all members of the pool above (strict subset). The
+# separate `crates/app_settings` suite (28 tests) is fully green with no
+# baseline failures.
+final_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - app_settings::settings::tests::test_mux_settings_window_sidebar_overlay_missing_defaults_overlay
+      - emterm::settings::tests::loader_mux_window_sidebar_overlay_missing_defaults_overlay
+    red_confirmed: true
+    red_reason: >-
+      Both asserted `settings.window_sidebar_overlay` / `s.mux.window_sidebar_overlay`
+      truthy before the default flip; observed failures:
+      "assertion failed: settings.window_sidebar_overlay" (crate) and
+      "assertion failed: s.mux.window_sidebar_overlay" (app-side loader).
+  AC-2:
+    tests:
+      - emterm::settings::tests::loader_mux_window_sidebar_overlay_null_resolves_overlay
+    red_confirmed: true
+    red_reason: >-
+      Asserted truthy before the default flip; observed
+      "assertion failed: s.mux.window_sidebar_overlay" (the loader path via
+      RawMux's Option<bool>, which already treated null the same as absent —
+      only the seeded Settings::default() value needed to flip).
+  AC-3:
+    tests:
+      - app_settings::settings::tests::test_mux_settings_window_sidebar_overlay_explicit_false_is_persistent
+      - emterm::settings::tests::loader_mux_window_sidebar_overlay_explicit_false_is_persistent
+    red_confirmed: false
+    red_reason: >-
+      Explicit-value assignment in merge_into/serde was already correct
+      before this task (only the absent/null default was wrong); these new
+      tests passed immediately since AC-3 restates pre-existing explicit-value
+      behavior (D3's compatibility guarantee) that this task must not break,
+      not new behavior it introduces. Added as new tests (both files
+      previously lacked explicit-false coverage) to pin the guarantee
+      going forward.
+  AC-4:
+    tests:
+      - app_settings::settings::tests::test_mux_settings_window_sidebar_overlay_explicit_true_is_overlay
+      - emterm::settings::tests::loader_mux_window_sidebar_overlay_true
+    red_confirmed: false
+    red_reason: >-
+      Pre-existing tests (renamed/re-commented for the new AC numbering);
+      explicit `true` already deserialized to `true` before this task, so
+      they were green both before and after. Renamed from
+      test_mux_settings_window_sidebar_overlay_true / (AC-3 old numbering)
+      to align with the current task plan's AC-4.
+  AC-5:
+    tests:
+      - app_settings::settings::tests::test_mux_settings_window_sidebar_overlay_round_trips
+    red_confirmed: true
+    red_reason: >-
+      The default-settings round-trip half of this test asserted the
+      restored value truthy before the default flip; observed
+      "assertion failed: restored.window_sidebar_overlay". The
+      explicitly-persistent round-trip half was already correct (serde
+      round-trips any explicit bool value regardless of default) and was
+      reworded, not newly failing.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Whole-suite outcome, not a single test. Verified via
+      `cargo test --manifest-path crates/app_settings/Cargo.toml --lib`
+      (28/28 pass, 0 baseline failures) and
+      `cargo test --manifest-path src-tauri/Cargo.toml --lib` (final
+      failures are a strict subset of the pre-existing, unrelated
+      tabs.rs/tmux_sockets.rs flaky pool documented above; every
+      settings::/app:: test is green). No existing test was deleted; three
+      pre-existing tests had their asserted default value and comment
+      updated (the task-mandated flip), and two pre-existing app.rs tests
+      (outside expected_files) had an implicit default-dependent premise
+      made explicit via the existing with_overlay_mode helper — see
+      deviations in the implementer report.
