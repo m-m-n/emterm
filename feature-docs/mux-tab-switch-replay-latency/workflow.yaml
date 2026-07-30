@@ -120,8 +120,12 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR7, FR8]
-    status: in_progress
-    notes: "review round 1 rework task (batch mode auto-rework, cap 1)"
+    status: merged
+    notes: >-
+      Review round 1 rework task (batch mode auto-rework, cap 1). FR8 kept
+      dedup at the replay-build level only (documented scope narrowing,
+      pinned by test t6_ac6); SPEC.md/VERIFICATION.md FR8 wording needs
+      reconciling with this decision before final completion.
     branch: em-workflow/mux-tab-switch-replay-latency/task0006
 
 review:
