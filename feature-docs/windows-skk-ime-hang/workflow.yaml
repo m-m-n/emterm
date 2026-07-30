@@ -53,7 +53,7 @@ tasks:
     domains: [input-handling]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/windows-skk-ime-hang/task0001
 
