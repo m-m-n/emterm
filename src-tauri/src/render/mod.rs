@@ -202,8 +202,13 @@ pub enum SftpFrameEvent {
 
 /// Phase-1 placeholder kept for compatibility; routes to the real renderer
 /// when a tab exists.
-pub fn draw_placeholder(ctx: &egui::Context, app: &App, window_maximized: bool) -> FrameEvents {
-    draw_terminal(ctx, app, window_maximized)
+pub fn draw_placeholder(
+    ctx: &egui::Context,
+    app: &App,
+    window_maximized: bool,
+    mux_sidebar_opacity: f32,
+) -> FrameEvents {
+    draw_terminal(ctx, app, window_maximized, mux_sidebar_opacity)
 }
 
 /// Draw the active tab. If no tabs exist, draws a hint message. The
@@ -213,8 +218,18 @@ pub fn draw_placeholder(ctx: &egui::Context, app: &App, window_maximized: bool) 
 ///
 /// `window_maximized` is forwarded to the CSD title bar so it can
 /// swap the maximize glyph for the restore (overlapped-squares) one
-/// when the window is already maximized.
-pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> FrameEvents {
+/// when the window is already maximized. `mux_sidebar_opacity` (task0002)
+/// is this frame's already-resolved overlay-card whole-card opacity
+/// multiplier (`App::resolve_mux_sidebar_opacity`, called by
+/// `window_host::render` before this pass since this function only holds
+/// `&App`) — threaded into the overlay draw call below; the persistent
+/// variant ignores it (AC-8/FR10).
+pub fn draw_terminal(
+    ctx: &egui::Context,
+    app: &App,
+    window_maximized: bool,
+    mux_sidebar_opacity: f32,
+) -> FrameEvents {
     // Per-frame theme seeded from settings (font_size_pt + cursor
     // style). Active-tab OSC mutations live on `Tab::theme`; layering
     // those on top of the settings-derived base lets OSC 4/10/11/12/22
@@ -327,6 +342,7 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             &sidebar_entries,
             crate::ui::mux_sidebar::Placement::Persistent,
             sidebar_width,
+            mux_sidebar_opacity,
             app.locale,
         );
         if let Some(window) = outcome.switch_to_window {
@@ -421,6 +437,7 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             &sidebar_entries,
             crate::ui::mux_sidebar::Placement::Overlay,
             sidebar_width,
+            mux_sidebar_opacity,
             app.locale,
         );
         if let Some(window) = outcome.switch_to_window {
