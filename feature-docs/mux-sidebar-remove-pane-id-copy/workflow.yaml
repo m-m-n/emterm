@@ -56,8 +56,12 @@ tasks:
     branch: em-workflow/mux-sidebar-remove-pane-id-copy/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, architecture, spec]
+    discretionary: []
+    codex_cross_validation: false
 
 requirements:
   FR1:
