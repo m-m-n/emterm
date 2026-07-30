@@ -35,9 +35,19 @@ workflow:
     status: completed
     completed_at_commit: 86f2223603ad2a353700e3861aee3ca90d077c3c
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: >-
+      Build pass / ime:: 76 テスト green（ignored 1 = Xvfb host-deferred
+      マーカー）。フルスイートは tabs::tests の既知 flaky 6-7 件で exit 101
+      だが、base_commit (050e72a) の検証ランでも同一署名
+      （tabs.rs:3145 replay timeout / tabs.rs:4520 mux_group assertion）で
+      失敗することを確認済み — 本 feature の回帰ではない（証跡:
+      /tmp/emterm-verify-testrun.log, /tmp/emterm-base-tabs.log）。
+      SC-1 構造検証 pass（window 副作用は flush と Drop のみ）。
+      MT-1 は SPEC A1 どおりフィールド確認に委任、MT-2（任意手動）は
+      無人実行のため未実施。
   - id: retrospect
     status: pending
 
