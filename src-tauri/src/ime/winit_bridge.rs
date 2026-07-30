@@ -22,6 +22,28 @@
 //!    requests, rate-limited to actual cell movement
 //!    (`notify_cursor_rect` dedup).
 //!
+//! ## Deferred flush (task0001, windows-skk-ime-hang)
+//!
+//! `BridgeWindow::set_ime_allowed` / `set_ime_cursor_area` are never
+//! called synchronously from an event-dispatch method
+//! (`with_handle` / `notify_focus` / `notify_cursor_rect`). Those
+//! methods only *record* the intent — last-writer-wins for the allow
+//! state, last-writer-wins plus the existing dedup for the cursor rect
+//! — into `pending_allow` / `pending_cursor_area`. [`Self::flush`]
+//! (the `ImeBackend::flush` override) is the only place, besides
+//! `Drop`, that actually calls into `window`. `window_host` calls it
+//! once per `about_to_wait` turn, which runs between winit's message
+//! dispatches rather than inside one. This matters concretely on
+//! Windows: `winit-win32` executes `request_ime_update` inline on the
+//! event-loop thread, and that call exchanges synchronous messages
+//! with IMM32 — issuing it from inside wndproc dispatch (as the
+//! pre-task0001 code did from `with_handle` / `notify_focus`) is the
+//! identified CorvusSKK deadlock mechanism (SPEC.md "Background
+//! Analysis"). `Drop` keeps calling the detach directly and discards
+//! any pending requests, because teardown is not part of event
+//! dispatch (SPEC FR3) and a bridge about to be destroyed has no
+//! future flush to run them.
+//!
 //! ## Why two states, and why the key-suppression gate is platform-conditional
 //!
 //! `Ime::Enabled` / `Ime::Disabled` do not delimit the same thing on
@@ -67,8 +89,10 @@ use super::backend::{ImeBackend, ImeEvent, ImeInitError, KeyDispatchResult, RawK
 /// [`WinitWindowHandle`] backed by `Arc<dyn winit::window::Window>`.
 pub trait BridgeWindow: Send + Sync {
     /// Toggle whether the platform IM server should send composition
-    /// events to this window. Called once at `init` (`true`) and from
-    /// [`WinitImeBridge::notify_focus`].
+    /// events to this window. Called only from [`WinitImeBridge`]'s
+    /// `flush` (the recorded intent from `init` / `notify_focus`) and
+    /// from its `Drop` (direct detach; see module docs "Deferred
+    /// flush").
     fn set_ime_allowed(&self, allowed: bool);
     /// Inform the IM server where the active cursor cell currently
     /// sits, in physical pixels. Drives the candidate window position.
@@ -146,31 +170,59 @@ pub struct WinitImeBridge {
     /// Events produced by `on_winit_ime` waiting for the next
     /// `pump` drain.
     queue: VecDeque<ImeEvent>,
-    /// Last cursor rect handed to the window (physical pixels). Used
-    /// to suppress redundant `set_ime_cursor_area` calls (SPEC.md FR7).
+    /// Last cursor rect *recorded* for the window (physical pixels,
+    /// regardless of whether it has been flushed yet). Used to
+    /// suppress redundant recordings of `set_ime_cursor_area` calls
+    /// (SPEC.md FR7); independent of `pending_cursor_area`, which
+    /// tracks only what the *next* flush still has to deliver.
     last_cursor_area: Option<(i32, i32, i32, i32)>,
+    /// Recorded allow-state request awaiting the next flush.
+    /// Last-writer-wins: a second `notify_focus` (or the constructor's
+    /// initial enable) before any flush overwrites this rather than
+    /// queuing both. `None` means nothing to flush.
+    pending_allow: Option<bool>,
+    /// Recorded cursor-area request awaiting the next flush.
+    /// Last-writer-wins, same as `pending_allow`. `None` means nothing
+    /// to flush.
+    pending_cursor_area: Option<(i32, i32, i32, i32)>,
+    /// Latch (FR4): set once a `WinitIme::Enabled` arrives while
+    /// `ime_enabled` was already `true`, so the anomaly is logged only
+    /// on its first occurrence.
+    enabled_anomaly_warned: bool,
+    /// Latch (FR4): set once a `WinitIme::Disabled` arrives while
+    /// `ime_enabled` was already `false`, so the anomaly is logged
+    /// only on its first occurrence.
+    disabled_anomaly_warned: bool,
 }
 
 impl WinitImeBridge {
     /// Build a bridge attached to a winit window. The returned bridge
-    /// has already called `set_ime_allowed(true)` so winit will start
-    /// surfacing `WindowEvent::Ime` events.
+    /// has *recorded* an allow-state enable request so the first
+    /// `flush` will call `set_ime_allowed(true)` and winit starts
+    /// surfacing `WindowEvent::Ime` events (see module docs "Deferred
+    /// flush" — construction runs during `can_create_surfaces`, itself
+    /// inside event dispatch, so it must not call the window
+    /// directly).
     pub fn init(window: Arc<dyn Window>) -> Result<Self, ImeInitError> {
         // The IME purpose (`Normal`) rides along in the Enable request
-        // issued by `with_handle` → `set_ime_allowed(true)`.
+        // issued when the recorded `pending_allow = Some(true)` is
+        // flushed.
         Ok(Self::with_handle(Box::new(WinitWindowHandle(window))))
     }
 
     /// Test entry: build a bridge against an arbitrary [`BridgeWindow`]
     /// implementation (a mock from the test module).
     pub(crate) fn with_handle(window: Box<dyn BridgeWindow>) -> Self {
-        window.set_ime_allowed(true);
         Self {
             window,
             has_preedit: false,
             ime_enabled: false,
             queue: VecDeque::new(),
             last_cursor_area: None,
+            pending_allow: Some(true),
+            pending_cursor_area: None,
+            enabled_anomaly_warned: false,
+            disabled_anomaly_warned: false,
         }
     }
 
@@ -181,6 +233,19 @@ impl WinitImeBridge {
     pub fn on_winit_ime(&mut self, ime: &WinitIme) {
         match ime {
             WinitIme::Enabled => {
+                // FR4 anomaly diagnostics: winit told us the lifecycle
+                // opened while our own bookkeeping already considered
+                // it open — a signal the platform's Enabled/Disabled
+                // pairing assumption (module docs, "Why two states")
+                // may not hold on this host. Latched: only the first
+                // occurrence logs.
+                if self.ime_enabled && !self.enabled_anomaly_warned {
+                    log::warn!(
+                        "ime: winit sent Ime::Enabled while the bridge already \
+                         considered the IME lifecycle open (see task0001 SPEC FR4)"
+                    );
+                    self.enabled_anomaly_warned = true;
+                }
                 // The IME lifecycle opened. On every non-Windows
                 // target this spans the whole focus duration (see
                 // module docs), so it must not gate key suppression by
@@ -201,6 +266,16 @@ impl WinitImeBridge {
                 }
             }
             WinitIme::Disabled => {
+                // FR4 anomaly diagnostics: winit told us the lifecycle
+                // closed while our own bookkeeping already considered
+                // it closed. Latched: only the first occurrence logs.
+                if !self.ime_enabled && !self.disabled_anomaly_warned {
+                    log::warn!(
+                        "ime: winit sent Ime::Disabled while the bridge already \
+                         considered the IME lifecycle closed (see task0001 SPEC FR4)"
+                    );
+                    self.disabled_anomaly_warned = true;
+                }
                 // IM server detached (user toggled IME off, focus
                 // lost from compositor's POV, fcitx5/ibus crashed).
                 // Close the lifecycle, clear the preedit state, and
@@ -268,13 +343,16 @@ impl ImeBackend for WinitImeBridge {
 
     fn notify_cursor_rect(&mut self, x_px: i32, y_px: i32, w_px: i32, h_px: i32) {
         // FR7 dedup: suppress identical rects so the IM server doesn't
-        // see noise on every frame when the cursor is stationary.
+        // see noise on every frame when the cursor is stationary. This
+        // dedup is against the last *recorded* rect, independent of
+        // whether it has been flushed yet — repeated identical calls
+        // between two flushes still record nothing after the first.
         let next = (x_px, y_px, w_px, h_px);
         if self.last_cursor_area == Some(next) {
             return;
         }
         self.last_cursor_area = Some(next);
-        self.window.set_ime_cursor_area(x_px, y_px, w_px, h_px);
+        self.pending_cursor_area = Some(next);
     }
 
     fn notify_focus(&mut self, focused: bool) {
@@ -299,11 +377,13 @@ impl ImeBackend for WinitImeBridge {
             self.has_preedit = false;
             self.ime_enabled = false;
         }
-        // FR8: defer to winit's set_ime_allowed so the platform IM
-        // server attaches on focus-in and detaches on focus-out. If the
-        // window already saw `Ime::Disabled` from a focus-loss path,
-        // re-toggling allowed here is idempotent on winit.
-        self.window.set_ime_allowed(focused);
+        // FR8: record the allow-state intent so the platform IM server
+        // attaches on focus-in and detaches on focus-out once flushed.
+        // Deferred flush (module docs): last-writer-wins, no call to
+        // `window` here. If the window already saw `Ime::Disabled`
+        // from a focus-loss path, re-recording `allowed` here is still
+        // idempotent once flushed.
+        self.pending_allow = Some(focused);
     }
 
     fn pump(&mut self, events: &mut Vec<ImeEvent>) {
@@ -320,15 +400,35 @@ impl ImeBackend for WinitImeBridge {
         // the inherent method that the unit tests exercise directly.
         WinitImeBridge::on_winit_ime(self, ime);
     }
+
+    fn flush(&mut self) {
+        // Deferred flush (module docs): the only place besides `Drop`
+        // that calls into `window`. Order matters (SPEC AC-4): the
+        // allow-state request must land before the cursor-area request
+        // so a freshly enabled IM server already has somewhere to draw
+        // the candidate window, matching the pre-task0001 enable→seed
+        // order. At most one call per kind; nothing recorded means no
+        // call and no allocation.
+        if let Some(allowed) = self.pending_allow.take() {
+            self.window.set_ime_allowed(allowed);
+        }
+        if let Some((x, y, w, h)) = self.pending_cursor_area.take() {
+            self.window.set_ime_cursor_area(x, y, w, h);
+        }
+    }
 }
 
 impl Drop for WinitImeBridge {
     fn drop(&mut self) {
-        // Detach from the IM server explicitly. winit also drops the
-        // IC when the window is destroyed, but releasing it eagerly
-        // avoids leaving a stale focus claim if the bridge is
-        // replaced mid-session (e.g. switching to NullBackend after a
-        // settings change).
+        // SPEC FR3 / AC-6: any pending allow-state or cursor-area
+        // request is discarded here (never flushed) — a bridge about
+        // to be destroyed has no future flush turn to run them, and
+        // teardown is not part of event dispatch, so calling `window`
+        // directly is safe. Detach from the IM server explicitly:
+        // winit also drops the IC when the window is destroyed, but
+        // releasing it eagerly avoids leaving a stale focus claim if
+        // the bridge is replaced mid-session (e.g. switching to
+        // NullBackend after a settings change).
         self.window.set_ime_allowed(false);
     }
 }
@@ -347,18 +447,52 @@ mod tests {
         inner: Mutex<MockWindowInner>,
     }
 
-    #[derive(Default, Debug)]
+    #[derive(Default, Debug, Clone)]
     struct MockWindowInner {
         allowed_calls: Vec<bool>,
         cursor_calls: Vec<(i32, i32, i32, i32)>,
+        /// Interleaved record of which kind fired, in call order —
+        /// `allowed_calls` / `cursor_calls` alone lose the relative
+        /// ordering between the two kinds (AC-4 / SPEC TS-3).
+        call_order: Vec<CallKind>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum CallKind {
+        Allowed,
+        Cursor,
     }
 
     impl BridgeWindow for MockWindow {
         fn set_ime_allowed(&self, allowed: bool) {
-            self.inner.lock().unwrap().allowed_calls.push(allowed);
+            let mut inner = self.inner.lock().unwrap();
+            inner.allowed_calls.push(allowed);
+            inner.call_order.push(CallKind::Allowed);
         }
         fn set_ime_cursor_area(&self, x: i32, y: i32, w: i32, h: i32) {
-            self.inner.lock().unwrap().cursor_calls.push((x, y, w, h));
+            let mut inner = self.inner.lock().unwrap();
+            inner.cursor_calls.push((x, y, w, h));
+            inner.call_order.push(CallKind::Cursor);
+        }
+    }
+
+    impl MockWindow {
+        /// Clone the recorded state out from behind the lock and drop
+        /// the guard immediately. Tests must assert against the
+        /// snapshot, never against a `MutexGuard` held across
+        /// `assert_eq!` — if the assertion panics while the guard is
+        /// still alive the mutex is left poisoned, and `WinitImeBridge`'s
+        /// `Drop` locking the same mutex during unwind turns one failed
+        /// assertion into a full test-binary abort (a real failure mode
+        /// hit while red-checking this suite; see task0001 report).
+        fn snapshot(&self) -> MockWindowInner {
+            self.inner.lock().unwrap().clone()
+        }
+        /// Reset the recorded state, e.g. to discharge the
+        /// constructor's initial recorded enable before asserting on a
+        /// later turn's calls.
+        fn reset(&self) {
+            *self.inner.lock().unwrap() = MockWindowInner::default();
         }
     }
 
@@ -508,14 +642,21 @@ mod tests {
         );
     }
 
-    // ── TS-winit-7: notify_cursor_rect dedups identical rects
+    // ── TS-winit-7 / AC-3 (SPEC TS-2): notify_cursor_rect dedups
+    //    identical rects; the same-rect dedup keeps working across a
+    //    flush boundary (each distinct rect reaches the window exactly
+    //    once, duplicates in between reach it zero times).
     #[test]
-    fn cursor_rect_is_deduplicated() {
+    fn cursor_rect_is_deduplicated_after_flush() {
         let (mut b, mock) = make_bridge();
+        b.flush(); // discharge the constructor's recorded allow=true
         b.notify_cursor_rect(10, 20, 9, 18);
-        b.notify_cursor_rect(10, 20, 9, 18); // exact same → drop
-        b.notify_cursor_rect(11, 20, 9, 18); // moved → fire
-        let inner = mock.inner.lock().unwrap();
+        b.flush();
+        b.notify_cursor_rect(10, 20, 9, 18); // exact same → not even recorded
+        b.flush(); // → no-op, nothing pending
+        b.notify_cursor_rect(11, 20, 9, 18); // moved → recorded, then flushed
+        b.flush();
+        let inner = mock.snapshot();
         assert_eq!(
             inner.cursor_calls,
             vec![(10, 20, 9, 18), (11, 20, 9, 18)],
@@ -523,33 +664,170 @@ mod tests {
         );
     }
 
-    // ── set_ime_allowed lifecycle: init→true, notify_focus toggles
+    // ── AC-3 (SPEC TS-2): multiple notify_cursor_rect calls recorded
+    //    before a single flush coalesce into exactly one
+    //    set_ime_cursor_area call carrying the LAST recorded rect.
     #[test]
-    fn init_calls_set_ime_allowed_true() {
-        let (_b, mock) = make_bridge();
-        let inner = mock.inner.lock().unwrap();
-        assert_eq!(inner.allowed_calls, vec![true]);
-    }
-
-    #[test]
-    fn notify_focus_propagates_to_set_ime_allowed() {
+    fn cursor_rect_multiple_records_before_flush_coalesce_to_last() {
         let (mut b, mock) = make_bridge();
-        b.notify_focus(false);
-        b.notify_focus(true);
-        let inner = mock.inner.lock().unwrap();
-        assert_eq!(inner.allowed_calls, vec![true, false, true]);
+        b.flush(); // discharge the constructor's recorded allow=true
+        b.notify_cursor_rect(10, 20, 9, 18);
+        b.notify_cursor_rect(10, 20, 9, 18); // dup → not recorded again
+        b.notify_cursor_rect(11, 20, 9, 18); // moved → overwrites pending
+        b.notify_cursor_rect(11, 20, 9, 18); // dup of the new rect → not recorded again
+        b.flush();
+        let inner = mock.snapshot();
+        assert_eq!(
+            inner.cursor_calls,
+            vec![(11, 20, 9, 18)],
+            "several pending updates before one flush must coalesce to a single call"
+        );
     }
 
+    // ── AC-7 (SPEC TS-6): construction-time enable is recorded, not
+    //    called immediately — the window sees nothing until the first
+    //    flush, then exactly `[true]`.
+    #[test]
+    fn init_records_allow_true_and_flushes_it_on_first_flush() {
+        let (mut b, mock) = make_bridge();
+        assert!(
+            mock.snapshot().allowed_calls.is_empty(),
+            "construction must only record the enable, not call the window yet"
+        );
+        b.flush();
+        assert_eq!(mock.snapshot().allowed_calls, vec![true]);
+    }
+
+    // ── AC-2 (SPEC TS-1): notify_focus(true) records; no window call
+    //    happens until flush, and flush produces exactly one call.
+    #[test]
+    fn notify_focus_true_records_until_flush_then_calls_exactly_once() {
+        let (mut b, mock) = make_bridge();
+        b.flush(); // discharge the constructor's recorded allow=true
+        let before = mock.snapshot().allowed_calls.len();
+        b.notify_focus(true);
+        assert_eq!(
+            mock.snapshot().allowed_calls.len(),
+            before,
+            "notify_focus must not reach the window before flush"
+        );
+        b.flush();
+        assert_eq!(&mock.snapshot().allowed_calls[before..], &[true]);
+    }
+
+    #[test]
+    fn notify_focus_propagates_to_set_ime_allowed_after_flush() {
+        let (mut b, mock) = make_bridge();
+        b.flush(); // discharge the constructor's recorded allow=true
+        b.notify_focus(false);
+        b.flush();
+        b.notify_focus(true);
+        b.flush();
+        assert_eq!(mock.snapshot().allowed_calls, vec![true, false, true]);
+    }
+
+    // ── AC-4 (SPEC TS-3): allow-state and cursor-area recorded in the
+    //    same turn flush in order allow → cursor.
+    #[test]
+    fn flush_orders_allow_before_cursor_within_same_turn() {
+        let (mut b, mock) = make_bridge();
+        b.flush(); // discharge the constructor's recorded allow=true
+        mock.reset();
+        b.notify_focus(true);
+        b.notify_cursor_rect(5, 6, 7, 8);
+        b.flush();
+        assert_eq!(
+            mock.snapshot().call_order,
+            vec![CallKind::Allowed, CallKind::Cursor]
+        );
+    }
+
+    // ── AC-5 (SPEC TS-4): a flush with nothing recorded makes no calls
+    //    at all, of either kind.
+    #[test]
+    fn flush_with_nothing_recorded_makes_no_calls() {
+        let (mut b, mock) = make_bridge();
+        b.flush(); // discharge the constructor's recorded allow=true
+        let before = mock.snapshot();
+        b.flush(); // nothing new recorded since the previous flush
+        let after = mock.snapshot();
+        assert_eq!(after.allowed_calls.len(), before.allowed_calls.len());
+        assert_eq!(after.cursor_calls.len(), before.cursor_calls.len());
+    }
+
+    // ── AC-6 (SPEC TS-5): Drop with a pending (never-flushed) allow
+    //    request discards it and calls set_ime_allowed(false) exactly
+    //    once — the constructor's recorded `true` never reaches the
+    //    window at all.
     #[test]
     fn drop_disables_ime() {
         let mock = Arc::new(MockWindow::default());
         {
             let _b = WinitImeBridge::with_handle(Box::new(SharedMock(mock.clone())));
-            // drop happens at scope end
+            // drop happens at scope end; the constructor's pending
+            // allow=true was never flushed.
         }
-        let inner = mock.inner.lock().unwrap();
-        // init=true + drop=false
-        assert_eq!(inner.allowed_calls, vec![true, false]);
+        assert_eq!(mock.snapshot().allowed_calls, vec![false]);
+    }
+
+    // ── AC-6 (SPEC TS-5): a pending cursor-area request left over at
+    //    Drop time is discarded too, not flushed.
+    #[test]
+    fn drop_discards_pending_cursor_rect() {
+        let mock = Arc::new(MockWindow::default());
+        {
+            let mut b = WinitImeBridge::with_handle(Box::new(SharedMock(mock.clone())));
+            b.notify_cursor_rect(1, 2, 3, 4); // recorded, never flushed
+            drop(b);
+        }
+        let inner = mock.snapshot();
+        assert_eq!(inner.allowed_calls, vec![false]);
+        assert!(
+            inner.cursor_calls.is_empty(),
+            "pending cursor rect must be discarded, not flushed, on Drop"
+        );
+    }
+
+    // ── AC-9 (SPEC TS-8): a second consecutive Enabled (no intervening
+    //    Disabled) triggers the anomaly latch on its second occurrence
+    //    only; the first Enabled from a fresh bridge is a normal
+    //    transition and must not warn.
+    #[test]
+    fn double_enabled_second_occurrence_warns_and_latches() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        assert!(
+            !b.enabled_anomaly_warned,
+            "first Enabled from a fresh bridge must not warn"
+        );
+        b.on_winit_ime(&WinitIme::Enabled);
+        assert!(
+            b.enabled_anomaly_warned,
+            "second consecutive Enabled must warn and latch"
+        );
+        // Latch stays set on further repeats — no un-latching.
+        b.on_winit_ime(&WinitIme::Enabled);
+        assert!(b.enabled_anomaly_warned);
+    }
+
+    // ── AC-9 (SPEC TS-8): a second consecutive Disabled (no
+    //    intervening Enabled) triggers the anomaly latch on its second
+    //    occurrence only; the first Disabled that closes a real
+    //    composition is a normal transition and must not warn.
+    #[test]
+    fn double_disabled_second_occurrence_warns_and_latches() {
+        let (mut b, _mock) = make_bridge();
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.on_winit_ime(&WinitIme::Disabled);
+        assert!(
+            !b.disabled_anomaly_warned,
+            "the Disabled that closes a real Enabled lifecycle must not warn"
+        );
+        b.on_winit_ime(&WinitIme::Disabled);
+        assert!(
+            b.disabled_anomaly_warned,
+            "second consecutive Disabled must warn and latch"
+        );
     }
 
     #[test]

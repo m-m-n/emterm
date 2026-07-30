@@ -133,6 +133,20 @@ pub trait ImeBackend: Send {
     fn on_winit_ime(&mut self, _ime: &winit::event::Ime) {
         // Default: ignore. Real backends override.
     }
+
+    /// Execute any IME side-effect requests recorded since the previous
+    /// flush. Called once per `about_to_wait` turn (never from inside
+    /// winit's event dispatch — see `crate::ime::winit_bridge` module
+    /// docs for why). May be called at any frequency, including with
+    /// nothing recorded: the default no-op implementation covers
+    /// backends (`NullBackend`, `MockBackend`) with no deferred queue.
+    /// [`crate::ime::winit_bridge::WinitImeBridge`] overrides it to
+    /// flush its recorded allow-state / cursor-area requests, in that
+    /// order, coalesced to at most one call per kind (task0001,
+    /// windows-skk-ime-hang SPEC FR1).
+    fn flush(&mut self) {
+        // Default: nothing queued, nothing to do.
+    }
 }
 
 /// Max events drained from any single backend per pump call. See
