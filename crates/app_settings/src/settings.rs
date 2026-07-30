@@ -631,7 +631,11 @@ pub struct MuxSettings {
     pub prefix: String,
     #[serde(default)]
     pub tab_always_expand: bool,
-    #[serde(default)]
+    /// Window list display mode: `true` (default) shows the floating
+    /// overlay card, `false` the always-present side panel. Absent or
+    /// explicit-null keys resolve to the overlay default (task0001 D3);
+    /// an explicit `false` always selects the persistent panel.
+    #[serde(default = "default_true")]
     pub window_sidebar_overlay: bool,
     #[serde(default)]
     pub tmux_conf_imported: bool,
@@ -692,7 +696,7 @@ impl Default for MuxSettings {
         Self {
             prefix: default_mux_prefix(),
             tab_always_expand: false,
-            window_sidebar_overlay: false,
+            window_sidebar_overlay: true,
             tmux_conf_imported: false,
             keybinds: std::collections::HashMap::new(),
             statusbar: MuxStatusbarSettings::default(),
@@ -875,19 +879,29 @@ mod tests {
         assert_eq!(settings.statusbar.left, "");
     }
 
-    // ── window_sidebar_overlay (task0001 AC-1/AC-3/AC-4) ────────────────
+    // ── window_sidebar_overlay (task0001 AC-1/AC-3/AC-4/AC-5) ───────────
 
     #[test]
-    fn test_mux_settings_window_sidebar_overlay_missing_defaults_false() {
-        // AC-1: a settings JSON without the field resolves to `false`.
+    fn test_mux_settings_window_sidebar_overlay_missing_defaults_overlay() {
+        // AC-1: a settings JSON without the field resolves to the overlay
+        // display mode (`true`).
         let json = r#"{"prefix": "ctrl+b"}"#;
+        let settings: MuxSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.window_sidebar_overlay);
+    }
+
+    #[test]
+    fn test_mux_settings_window_sidebar_overlay_explicit_false_is_persistent() {
+        // AC-3: an explicit `false` resolves to the persistent display
+        // mode, overriding the overlay default.
+        let json = r#"{"window_sidebar_overlay": false}"#;
         let settings: MuxSettings = serde_json::from_str(json).unwrap();
         assert!(!settings.window_sidebar_overlay);
     }
 
     #[test]
-    fn test_mux_settings_window_sidebar_overlay_true() {
-        // AC-3: `true` resolves to `true` in the deserialized shape.
+    fn test_mux_settings_window_sidebar_overlay_explicit_true_is_overlay() {
+        // AC-4: `true` resolves to the overlay display mode.
         let json = r#"{"window_sidebar_overlay": true}"#;
         let settings: MuxSettings = serde_json::from_str(json).unwrap();
         assert!(settings.window_sidebar_overlay);
@@ -895,18 +909,19 @@ mod tests {
 
     #[test]
     fn test_mux_settings_window_sidebar_overlay_round_trips() {
-        // AC-4: serializing default settings then re-loading them
-        // round-trips the field without loss.
+        // AC-5: serializing default settings then re-loading them
+        // round-trips the overlay display mode, and a round trip of an
+        // explicitly-persistent value preserves the persistent mode.
         let default_settings = MuxSettings::default();
         let json = serde_json::to_string(&default_settings).unwrap();
         let restored: MuxSettings = serde_json::from_str(&json).unwrap();
-        assert!(!restored.window_sidebar_overlay);
-
-        let mut overlay_settings = MuxSettings::default();
-        overlay_settings.window_sidebar_overlay = true;
-        let json = serde_json::to_string(&overlay_settings).unwrap();
-        let restored: MuxSettings = serde_json::from_str(&json).unwrap();
         assert!(restored.window_sidebar_overlay);
+
+        let mut persistent_settings = MuxSettings::default();
+        persistent_settings.window_sidebar_overlay = false;
+        let json = serde_json::to_string(&persistent_settings).unwrap();
+        let restored: MuxSettings = serde_json::from_str(&json).unwrap();
+        assert!(!restored.window_sidebar_overlay);
     }
 
     /// Full-coverage round-trip: the exhaustive struct literal (no
