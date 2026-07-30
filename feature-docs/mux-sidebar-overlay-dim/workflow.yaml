@@ -45,8 +45,9 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 3e8d8e56588f1498898a46f47d7b0daa5e9abd54
+    completed_at_commit: bf4e2a57153e2243e63f4eff444cc024a83599cf
   - id: review
     status: pending
   - id: verify
@@ -82,7 +83,7 @@ tasks:
     domains: [ui]
     complexity: high
     requirements: [FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, NFR1, NFR2, NFR3, NFR4]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-sidebar-overlay-dim/task0002
 
