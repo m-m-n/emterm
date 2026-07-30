@@ -1,0 +1,169 @@
+task_id: task0001
+
+# Baseline (Step 4a, before any edit) and final (after implementation)
+# full-suite `cargo test --lib` failures. Every name below is in the
+# `tabs::tests` module (off-thread replay worker timing races at
+# tabs.rs:3145, plus one mux_group assertion at tabs.rs:4520) — a
+# documented pre-existing non-determinism (project MEMORY.md:
+# "tabs.rs replay テストは並列で非決定的に落ちる（--test-threads=1
+# で安定）"), unrelated to any file this task touches
+# (src-tauri/src/ime/*, app.rs's ime methods, window_host.rs's
+# about_to_wait flush wiring). `baseline_failures` is the UNION
+# observed across 4 full-suite runs (1 literal pre-implementation
+# baseline + 3 post-implementation runs, the latter two incidental to
+# a retroactive red-check on winit_bridge.rs — tabs.rs was never
+# touched in any of them) because the specific failing subset changes
+# nondeterministically run-to-run even with byte-identical code; using
+# only the single first-run snapshot would misclassify later runs'
+# different members as regressions. `final_failures` is the literal
+# last full-suite run's list, fully contained in that union.
+baseline_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Structural criterion, verified by grep, not a unit test.
+      Before: `grep -n '\.set_ime_allowed(\|\.set_ime_cursor_area('
+      src-tauri/src/ime/winit_bridge.rs` matched 3 production call
+      sites reachable from event dispatch (with_handle at
+      construction, notify_focus, notify_cursor_rect) plus Drop.
+      After: the same grep matches only flush() (2 calls) and
+      Drop::drop() (1 call) in production code; the remaining 2
+      matches are the test-only SharedMock delegation shim.
+  AC-2:
+    tests:
+      - ime::winit_bridge::tests::notify_focus_true_records_until_flush_then_calls_exactly_once
+    red_confirmed: true
+    red_reason: >-
+      Failed pre-implementation (notify_focus called
+      window.set_ime_allowed synchronously): "assertion `left == right`
+      failed: notify_focus must not reach the window before flush
+      left: 2 right: 1".
+  AC-3:
+    tests:
+      - ime::winit_bridge::tests::cursor_rect_multiple_records_before_flush_coalesce_to_last
+      - ime::winit_bridge::tests::cursor_rect_is_deduplicated_after_flush
+    red_confirmed: true
+    red_reason: >-
+      cursor_rect_multiple_records_before_flush_coalesce_to_last
+      failed pre-implementation: "left: [(10, 20, 9, 18), (11, 20, 9,
+      18)] right: [(11, 20, 9, 18)]" (no coalescing without
+      deferral). cursor_rect_is_deduplicated_after_flush covers the
+      "same-rect dedup keeps working" clause of AC-3, which is
+      pre-existing FR7 behavior carried forward with explicit flush()
+      calls added (task plan's allowed deviation); it was green both
+      before and after.
+  AC-4:
+    tests:
+      - ime::winit_bridge::tests::flush_orders_allow_before_cursor_within_same_turn
+    red_confirmed: true
+    red_reason: >-
+      A pure no-op-flush revert didn't discriminate this test (the
+      reverted notify_focus/notify_cursor_rect's direct-call order
+      coincidentally reproduced the same relative order). Confirmed
+      red with a targeted revert instead: deferred recording kept
+      intact, only flush()'s internal order swapped to
+      cursor-before-allow -> "left: [Cursor, Allowed] right: [Allowed,
+      Cursor]".
+  AC-5:
+    tests:
+      - ime::winit_bridge::tests::flush_with_nothing_recorded_makes_no_calls
+    red_confirmed: false
+    red_reason: >-
+      Not independently discriminated by the no-op-flush revert used
+      for the other tests (a permanently no-op flush trivially makes
+      "no new calls" true on every call, since nothing is ever queued
+      under that revert either). No cheap revert isolates "flush
+      emits nothing when nothing is recorded" from "flush does
+      nothing at all" without reconstructing the real implementation.
+      The assertion is still meaningful against the real flush() and
+      is green post-implementation.
+  AC-6:
+    tests:
+      - ime::winit_bridge::tests::drop_disables_ime
+      - ime::winit_bridge::tests::drop_discards_pending_cursor_rect
+    red_confirmed: true
+    red_reason: >-
+      Both failed pre-implementation ("left: [true, false] right:
+      [false]") when with_handle/notify_focus called
+      window.set_ime_allowed directly instead of deferring — Drop's
+      own `false` call then followed a leaked `true` call instead of
+      being the only call.
+  AC-7:
+    tests:
+      - ime::winit_bridge::tests::init_records_allow_true_and_flushes_it_on_first_flush
+    red_confirmed: true
+    red_reason: >-
+      Failed pre-implementation: "construction must only record the
+      enable, not call the window yet" — the old with_handle called
+      set_ime_allowed(true) synchronously at construction.
+  AC-8:
+    tests:
+      - ime::winit_bridge::tests::should_suppress_key_truth_table_is_total_over_all_combinations
+      - ime::winit_bridge::tests::preedit_starts_composition_and_dispatch_returns_consumed
+      - ime::winit_bridge::tests::commit_clears_composition_and_unblocks_dispatch
+      - ime::winit_bridge::tests::disabled_produces_focus_out_and_clears_composition
+      - ime::winit_bridge::tests::x11_ambiguous_empty_preedit_start_and_end_toggles_dispatch
+      - ime::winit_bridge::tests::notify_focus_propagates_to_set_ime_allowed_after_flush
+      - ime::winit_bridge::tests::cursor_rect_is_deduplicated_after_flush
+    red_confirmed: false
+    red_reason: >-
+      Regression-prevention criterion, not a new-behavior one: these
+      are the existing gate-predicate / event-translation tests
+      carried forward with no semantic change (two of them gained
+      only explicit flush() calls, the task plan's allowed
+      deviation). They were green before this task and remain green
+      after — there is no red to observe.
+  AC-9:
+    tests:
+      - ime::winit_bridge::tests::double_enabled_second_occurrence_warns_and_latches
+      - ime::winit_bridge::tests::double_disabled_second_occurrence_warns_and_latches
+    red_confirmed: true
+    red_reason: >-
+      Both failed pre-implementation with the latch-set statements
+      removed: "second consecutive Enabled must warn and latch" /
+      "second consecutive Disabled must warn and latch".
+  AC-10:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/test gate, not a new-behavior red: `cargo check` and
+      `cargo test --lib` already passed on the pre-task0001 code
+      (flush() didn't exist yet, so nothing referenced it to fail).
+      Verified green post-implementation: cargo check clean, ime::
+      module 112/112 passing on every run, full-suite failures
+      confined to the pre-existing tabs::tests flaky family (see
+      baseline_failures / final_failures above).
