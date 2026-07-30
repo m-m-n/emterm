@@ -45,8 +45,8 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: pending
-    base_commit: null
+    status: in_progress
+    base_commit: 3e8d8e56588f1498898a46f47d7b0daa5e9abd54
   - id: review
     status: pending
   - id: verify
