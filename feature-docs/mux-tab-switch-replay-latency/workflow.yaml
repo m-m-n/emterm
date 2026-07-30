@@ -55,7 +55,7 @@ workflow:
       t6_ac8 and ac2_unraced_switch_engages_bypass) pass under
       --test-threads=1. VERIFICATION.md TS-1..TS-8 / SC-1..SC-5 satisfied.
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
