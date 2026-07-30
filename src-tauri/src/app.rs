@@ -7513,7 +7513,11 @@ mod tests {
     fn pump_all_applies_daemon_agent_status_update_to_model() {
         use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
 
-        let mut app = App::new();
+        // Subject under test is the model update, not the notification, so
+        // the capturing sink's handle is intentionally unused (bound as
+        // `_sink`) rather than asserted on — its role here is purely to keep
+        // this test off the production `NotifyRustSink`.
+        let (mut app, _sink) = app_with_test_sink();
         app.spawn_initial_tab();
         let update = AgentStatusUpdateMsg {
             pane_id: 42,
