@@ -1,0 +1,104 @@
+schema_version: 1
+feature: mux-tab-switch-replay-latency
+created: 2026-07-31
+base_branch: main
+parent_branch: em-workflow/mux-tab-switch-replay-latency/integration
+
+project:
+  license: MIT
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: b5a06e3b7834bae817b5acc1747ad7666f588a9a
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "UI変更なし、内部パフォーマンス修正のみのため"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+
+requirements:
+  FR1:
+    title: "resize marker 蓄積形状での高速 replay"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "回帰用 bench/テスト追加"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "通常切替の非劣化"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "bypass 等価性維持"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: "既存 bench ガード維持"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: "起動時 reshape 連打の抑制"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: "切替中 resize competition への耐性"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: "snapshot 二重取得の防止"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "既存の二重コスト防止制約の維持"
+    status: ok
+    tbd_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
