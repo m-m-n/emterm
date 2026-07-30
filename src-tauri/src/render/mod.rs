@@ -155,13 +155,6 @@ pub struct FrameEvents {
     /// post-frame by `window_host` against `App` (confirm upload / overwrite,
     /// cancel a session). `None` when nothing was interacted with.
     pub sftp: Option<SftpFrameEvent>,
-    /// A pane's public ID to place on the system clipboard, from the mux
-    /// sidebar's copy-to-clipboard row (task0006 AC-5). Applied post-frame
-    /// by `window_host` via the same `WindowHost::set_clipboard` path the
-    /// selection-copy keybind uses — `draw_terminal` only holds `&App`, so
-    /// it cannot reach the OS clipboard itself (`arboard::Clipboard` lives
-    /// on `WindowHost`, not `App`).
-    pub clipboard_copy: Option<String>,
 }
 
 impl FrameEvents {
@@ -177,7 +170,6 @@ impl FrameEvents {
             || self.search.is_some()
             || self.profile.is_some()
             || self.sftp.is_some()
-            || self.clipboard_copy.is_some()
     }
 }
 
@@ -316,22 +308,16 @@ pub fn draw_terminal(
             .map(crate::ui::mux_sidebar::build_entries)
             .unwrap_or_default()
             .into_iter()
-            // task0006 AC-1/AC-5: attach each window's pane badge + known
-            // public ID from `App::agent_status` / `App::mux_public_pane_id`
-            // — `build_entries` stays pure over the mux group alone.
+            // task0006 AC-1: attach each window's pane badge from
+            // `App::agent_status` — `build_entries` stays pure over the mux
+            // group alone.
             .map(|mut e| {
                 e.badge = app.agent_status_pane_badge(e.pane_id);
-                e.public_pane_id = app.mux_public_pane_id(e.pane_id).map(str::to_string);
                 e
             })
             .collect(),
     };
     let sidebar_width = crate::ui::mux_sidebar::sidebar_width(ctx.screen_rect().width());
-    // task0006 AC-5: at most one copy-to-clipboard request per frame,
-    // across BOTH placement variants (only one is ever drawn per frame, so
-    // this never double-fires) — routed into `FrameEvents::clipboard_copy`
-    // for `window_host` to apply against the OS clipboard post-frame.
-    let mut clipboard_copy_request: Option<String> = None;
     if sidebar_visibility == crate::app::MuxSidebarVisibility::Persistent {
         // The sidebar's click result routes into the SAME
         // `TabEvent::MuxSwitch` application path the (now-collapsed) inline
@@ -343,7 +329,6 @@ pub fn draw_terminal(
             crate::ui::mux_sidebar::Placement::Persistent,
             sidebar_width,
             mux_sidebar_opacity,
-            app.locale,
         );
         if let Some(window) = outcome.switch_to_window {
             if tab_event.is_none() {
@@ -352,9 +337,6 @@ pub fn draw_terminal(
                     window,
                 });
             }
-        }
-        if clipboard_copy_request.is_none() {
-            clipboard_copy_request = outcome.copy_pane_id;
         }
     }
 
@@ -438,7 +420,6 @@ pub fn draw_terminal(
             crate::ui::mux_sidebar::Placement::Overlay,
             sidebar_width,
             mux_sidebar_opacity,
-            app.locale,
         );
         if let Some(window) = outcome.switch_to_window {
             if tab_event.is_none() {
@@ -447,9 +428,6 @@ pub fn draw_terminal(
                     window,
                 });
             }
-        }
-        if clipboard_copy_request.is_none() {
-            clipboard_copy_request = outcome.copy_pane_id;
         }
     }
 
@@ -486,7 +464,6 @@ pub fn draw_terminal(
         profile: None,
         // Likewise drawn separately by `draw_sftp_overlay`.
         sftp: None,
-        clipboard_copy: clipboard_copy_request,
     }
 }
 
@@ -1565,6 +1542,71 @@ fn palette_256(idx: u8) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── task0001 AC-4: frame-event "any fired" predicate ────────────────
+
+    #[test]
+    fn ac4_frame_events_any_false_for_default_true_for_each_remaining_field() {
+        // AC-4: the struct literal below has exactly the fields
+        // `FrameEvents` is meant to carry after the sidebar's
+        // clipboard-copy channel is removed. Compiles only once that
+        // field is gone (catches an incomplete removal at compile time,
+        // same idea as AC-3's exhaustive pattern in `ui::mux_sidebar`).
+        let base = || FrameEvents {
+            title: None,
+            tab: None,
+            scroll_to: None,
+            search: None,
+            profile: None,
+            sftp: None,
+        };
+        assert!(
+            !base().any(),
+            "an all-None FrameEvents must report no event fired"
+        );
+        assert!(
+            FrameEvents {
+                title: Some(crate::ui::TitleBarEvent::Close),
+                ..base()
+            }
+            .any()
+        );
+        assert!(
+            FrameEvents {
+                tab: Some(crate::ui::TabEvent::New),
+                ..base()
+            }
+            .any()
+        );
+        assert!(
+            FrameEvents {
+                scroll_to: Some(0),
+                ..base()
+            }
+            .any()
+        );
+        assert!(
+            FrameEvents {
+                search: Some(crate::ui::search_bar::SearchBarEvent::Close),
+                ..base()
+            }
+            .any()
+        );
+        assert!(
+            FrameEvents {
+                profile: Some(crate::ui::profile_selector::ProfileSelectorEvent::Cancel),
+                ..base()
+            }
+            .any()
+        );
+        assert!(
+            FrameEvents {
+                sftp: Some(SftpFrameEvent::CancelUpload),
+                ..base()
+            }
+            .any()
+        );
+    }
 
     // ── task0006 AC-3: cursor/search origin carry no sidebar term ──────
 
