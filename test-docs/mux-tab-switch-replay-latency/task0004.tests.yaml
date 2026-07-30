@@ -1,0 +1,168 @@
+task_id: task0004
+# Baseline recorded in 4a via the mandated project_commands.test
+# (`cargo test --manifest-path src-tauri/Cargo.toml --lib`), on the
+# unmodified worktree. The whole-workspace `tabs::tests` off-thread family
+# plus `status_bar::runtime::tests::runtime_time_provider_timer_fires_wake`
+# proved NON-DETERMINISTIC under this suite's ~20-85s full-parallel run —
+# confirmed by re-running BOTH the implemented and the unmodified code
+# (via `git stash`/reconstruction on `crates/term_core/src/{terminal_core.rs,
+# bench.rs}` only) 7+ times across this task: every run showed a DIFFERENT
+# subset of this same ~23-test pool, all failing with "off-thread replay
+# worker did not complete in time" or an equivalent timing-sensitive
+# assertion (`tab.mux_group.is_none()`, `supersede must clear the prior
+# pending_scrollback_restore`), none touching `term_core`. This list is the
+# UNION observed across all runs on both the original baseline and multiple
+# confirmatory re-runs on unmodified code — the honest characterization
+# given the demonstrated non-determinism (a single snapshot undercounts the
+# pool). Matches task0001's own tests.yaml, which documented the same pool
+# for the same reason.
+baseline_failures:
+  - status_bar::runtime::tests::runtime_time_provider_timer_fires_wake
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac1_resize_storm_during_pending_switch_collapses_to_one_redispatch
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - status_bar::runtime::tests::runtime_time_provider_timer_fires_wake
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac1_resize_storm_during_pending_switch_collapses_to_one_redispatch
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - terminal_core::tests::head_plus_marker_cluster_above_target_engages_the_split_and_matches_reference
+    red_confirmed: true
+    red_reason: >-
+      Confirmed by temporarily reverting the `(h, head_rows)` computation
+      and `bypass_split`'s gate to the exact pre-task0004 logic (inline
+      target-only leading-run scan + a separate `head_fold_safe` AND term)
+      while keeping this new test in place. It failed with "AC-1: the split
+      must engage (scrollback_populated == false) ... got
+      scrollback_populated == true (D8 did not rescue the above-target
+      direction)" — the HEAD opens at `head_rows` (30), not `target_rows`
+      (24), so the old `leading_target_run_len` computes `h == 0`, and the
+      resulting head+cluster prefix (25 segments, >64 KiB) fails every
+      pre-D7 gate, forcing the full non-bypass drain this fix exists to
+      avoid. Restoring the fix made the test pass.
+  AC-2:
+    tests:
+      - terminal_core::tests::column_change_middle_degrades_head_fold_but_still_engages_the_split
+    red_confirmed: true
+    red_reason: >-
+      Confirmed in the same revert experiment as AC-1 (same temporary
+      reinstatement of the separate `head_fold_safe` AND term). It failed
+      with "AC-2: a column-change MIDDLE behind a small target HEAD, with a
+      dominating target TAIL, must still engage the split
+      (scrollback_populated == false) ... " — `h == 1` (the small target
+      HEAD) makes `middle_is_row_bounded` reject the column-changing
+      MIDDLE, `head_fold_safe` is `false`, and under the pre-task0004 code
+      that ANDs `head_fold_safe` directly into `bypass_split`, the whole
+      split (not just the HEAD fold) is abandoned — full non-bypass drain,
+      `scrollback_populated == true`. Restoring the fix (degrade `h` to `0`
+      instead of gating the whole split) made the test pass.
+  AC-3:
+    tests:
+      - terminal_core::tests::bypass_split_matches_reference_viewport_and_cursor_for_ordinary_switch
+      - terminal_core::tests::prefix_with_too_many_segments_does_not_engage_the_split_regardless_of_byte_length
+      - terminal_core::tests::prefix_at_the_segment_count_bound_with_a_dominating_suffix_engages_the_split_no_head
+      - terminal_core::tests::head_plus_marker_cluster_engages_the_split_and_matches_reference
+      - terminal_core::tests::head_plus_large_content_heavy_middle_does_not_engage_the_split
+      - terminal_core::tests::prefix_at_byte_bound_with_non_dominating_suffix_does_not_engage_the_split
+      - terminal_core::tests::prefix_just_over_the_byte_bound_does_not_engage_the_split
+    red_confirmed: false
+    red_reason: >-
+      Pre-existing, unmodified regression-guard tests (ordinary switch,
+      BYPASS_PREFIX_MAX_SEGMENTS boundary with/without a HEAD, the
+      below-target marker-cluster case, and the NFR1 large-prefix
+      double-cost guard). No observable change for this criterion — it is a
+      must-not-regress check. During initial implementation the
+      generalized `leading_uniform_run_len` DID regress 3 of these
+      (`bypass_split_matches_reference_viewport_and_cursor_for_ordinary_switch`,
+      `prefix_at_byte_bound_with_non_dominating_suffix_does_not_engage_the_split`,
+      `prefix_just_over_the_byte_bound_does_not_engage_the_split`) by
+      folding a single ordinary (non-target) spawn-size segment as a HEAD
+      whose `R` was below the true target — the `candidate_rows >= rows`
+      safety condition was added specifically to close that gap, and all
+      seven are confirmed green in the final implementation
+      (`cargo test --lib -p term_core`).
+  AC-4:
+    tests:
+      - bench::benches::marker_cluster_tail_bench_2mib_matches_bypass_engaged_cost
+    red_confirmed: false
+    red_reason: >-
+      Threshold-tightening change (`5.0x + 50ms` -> `3.0x + 20ms`), not new
+      functionality — there is no natural pre-existing "red" state to
+      observe for a bound becoming stricter. Verified by measurement:
+      `cargo test --release --manifest-path crates/term_core/Cargo.toml
+      --lib marker_cluster_tail_bench_2mib -- --nocapture --include-ignored`
+      measured segment-free 71.0ms vs marker-cluster-tail 78.4ms, well
+      inside the new tightened bound (~233ms), confirming the split still
+      engages fast under the stricter ceiling.
+  AC-5:
+    tests:
+      - terminal_core::tests::head_plus_marker_cluster_engages_the_split_and_matches_reference
+      - terminal_core::tests::head_plus_marker_cluster_above_target_engages_the_split_and_matches_reference
+      - terminal_core::tests::column_change_middle_degrades_head_fold_but_still_engages_the_split
+      - terminal_core::tests::bypass_split_matches_reference_viewport_and_cursor_for_ordinary_switch
+    red_confirmed: false
+    red_reason: >-
+      Pure API-naming refactor (behavior-preserving): the direct
+      `core.scrollback_bypass = false;` field assignment at the HEAD-to-
+      MIDDLE transition became a call to the new named
+      `suspend_snapshot_bypass()` method, with its pre-existing
+      `debug_assert!` moved inside the method body. No behavior changed —
+      every test that exercises the `head_len > 0` path (all four listed)
+      would panic on the relocated `debug_assert!` if the invariant were
+      ever violated; all four pass in debug/test builds where
+      `debug_assert!` is active.
+  AC-6:
+    tests:
+      - bench::benches::snapshot_replay_bench_2mib_seq
+    red_confirmed: false
+    red_reason: >-
+      Pre-existing, unmodified regression guard (not touched by this
+      task's diff — `k == 0` unconditionally for its segment-free payload,
+      so the `h`/`head_rows` computation this task changes is never
+      exercised, per its own `bypass && k > 0` guard). Confirmed still
+      green after the change: `cargo test --release --manifest-path
+      crates/term_core/Cargo.toml --lib snapshot_replay_bench_2mib_seq --
+      --nocapture --include-ignored` measured 224.2ms/call against the
+      SPEC's 1000ms MUST threshold (FR4/NFR1), both in isolation and as
+      part of the full ignored-bench run.

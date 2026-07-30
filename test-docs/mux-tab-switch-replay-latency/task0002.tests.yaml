@@ -1,0 +1,129 @@
+task_id: task0002
+baseline_failures:
+  # Recorded from two `cargo test --lib` runs against this worktree's
+  # pre-implementation state (union of both runs). All of these are
+  # pre-existing, non-deterministic failures unrelated to this task —
+  # `tabs.rs`'s off-thread replay tests are documented (project MEMORY.md)
+  # as flaky under parallel `cargo test` execution; `welcome_without_windows_leaves_group_none`
+  # and the status-bar timer test flake alongside them for the same reason
+  # (thread-scheduling-sensitive timing assertions).
+  - status_bar::runtime::tests::runtime_time_provider_timer_fires_wake
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  # From the post-implementation `cargo test --lib` run. Every entry here
+  # is also in baseline_failures (subset), reproducing the same known
+  # flakiness (a smaller sample happened to fail this particular run).
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::resize_settler_forwards_at_most_once_for_an_oscillating_storm
+      - window_host::tests::resize_settler_absorbs_chaotic_multi_value_churn
+    red_confirmed: true
+    red_reason: >-
+      Temporarily replaced ResizeSettler::observe's body with an
+      unconditional `Some(candidate)` (simulating the pre-fix,
+      undebounced refresh_status_bar_insets behavior) and re-ran the
+      tests: resize_settler_forwards_at_most_once_for_an_oscillating_storm
+      failed with "AC-1: no transient transition during the storm should
+      reach Tab::resize; got [(120, 40), (120, 39), ... 24 entries]" and
+      resize_settler_absorbs_chaotic_multi_value_churn failed similarly
+      (all 30 chaotic values leaked through). Reverted after confirming.
+  AC-2:
+    tests:
+      - window_host::tests::resize_settler_forwards_at_most_once_for_an_oscillating_storm
+      - window_host::tests::resize_settler_backstop_forwards_after_max_observations_even_if_never_settled
+    red_confirmed: true
+    red_reason: >-
+      Temporarily replaced ResizeSettler::observe's body with an
+      unconditional `None` (simulating an over-suppressing, never-flushes
+      buggy fix attempt) and re-ran the tests:
+      resize_settler_forwards_at_most_once_for_an_oscillating_storm failed
+      at "AC-2: the settled size must still reach Tab::resize once
+      settling is confirmed... left: None, right: Some((120, 39))" and
+      resize_settler_backstop_forwards_after_max_observations_even_if_never_settled
+      failed with "the backstop must force a forward within
+      RESIZE_SETTLE_MAX_OBSERVATIONS observations even for a
+      never-settling stream". Reverted after confirming.
+  AC-3:
+    tests:
+      - window_host::tests::resize_settler_forwards_immediately_once_closed
+    red_confirmed: true
+    red_reason: >-
+      Under the same "unconditional None" over-suppression simulation
+      used for AC-2, this test failed at "left: None, right: Some((120,
+      40))" — proving the test actually distinguishes "forwards
+      immediately once closed" from a buggy always-suppress
+      implementation. (It does not distinguish from the pre-fix
+      always-forward behavior, since always-forwarding also satisfies
+      "forwards immediately" — that is the intended, non-adversarial case
+      this AC protects going forward, not the bug AC-1 fixes.)
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      This task makes zero changes to tabs.rs — the mux-attach one-time
+      Resize seed (Tab::apply_mux_message's first_welcome branch, around
+      the mux group seeding logic) is untouched, and does not go through
+      ResizeSettler at all (it calls send_control directly, independent
+      of Tab::resize's group broadcast). No red->green cycle applies
+      since no code on this path changed. Verified as a non-regression by
+      the pre-existing tabs::tests::welcome_seeds_window_list_and_active_index
+      test remaining green across the baseline and final runs, and by
+      `git diff --stat` showing only src-tauri/src/window_host.rs changed
+      for this task.
+  AC-5:
+    tests:
+      - window_host::tests::resize_settler_forwards_at_most_once_for_an_oscillating_storm
+    red_confirmed: false
+    red_reason: >-
+      AC-5's claim is about a downstream, integration-level consequence
+      (scrollback resize-marker count), which requires live
+      daemon/scrollback infrastructure out of this task's unit-test scope
+      (task0001 owns the marker-writing mechanism and its own tests).
+      This task's contribution is upstream: reduce how many distinct
+      sizes ever reach Tab::resize's broadcast, which the AC-1 test above
+      directly demonstrates (at most one size forwarded for the whole
+      storm) and confirmed red under the pre-fix simulation. The causal
+      chain (fewer forwarded sizes -> fewer group Resize broadcasts ->
+      fewer legitimate resize markers) is documented in the task plan's
+      Design section and is not independently re-verified here.
+notes: >-
+  cargo test --lib in this worktree is subject to known, documented
+  flakiness (project MEMORY.md: "tabs.rs replay テストは並列で非決定的に落ちる")
+  affecting a recurring pool of ~18 test names across ac1/ac2/ac3/ac4/ac5/ac7,
+  several ts5/ts7/ts8/ts9/ts10/ts11/ts13 off-thread-replay tests, and
+  status_bar::runtime::tests::runtime_time_provider_timer_fires_wake. Two
+  baseline runs and the final run all drew from this same pool; the final
+  run's failures are a strict subset of the baseline union, so no
+  regression was introduced by this task.

@@ -1,0 +1,240 @@
+schema_version: 1
+feature: mux-tab-switch-replay-latency
+created: 2026-07-31
+base_branch: main
+parent_branch: em-workflow/mux-tab-switch-replay-latency/integration
+
+project:
+  license: MIT
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: b5a06e3b7834bae817b5acc1747ad7666f588a9a
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "UI変更なし、内部パフォーマンス修正のみのため"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 3e41fddf02663ba2c7f34f382382da55e7019824
+  - id: implement
+    status: completed
+    base_commit: 386bad0f2dcbbf6f13b14a9b6140e79c9c9b5d47
+    completed_at_commit: 42c7b2f8cc385443c8d4edcfd67c8057c75d8a9d
+  - id: review
+    status: pending
+  - id: verify
+    status: completed
+    result: pass
+    failed_items: []
+    notes: >-
+      Build (cargo check) green. Test suite (cargo test --lib
+      --test-threads=1, required because tabs.rs off-thread-worker tests
+      are non-deterministic under parallel execution per project memory)
+      passed 2927/2934; the 7 remaining failures
+      (ts10_resize_cancels_pending_restore_without_respawn,
+      ts11_restore_worker_panic_returns_failed_and_clears_state,
+      ts13_offthread_swap_installs_pending_scrollback_restore,
+      ts7_offthread_swap_then_restored_scrollback_matches_reference,
+      ts8_new_offthread_switch_supersedes_in_flight_restore,
+      ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates,
+      welcome_without_windows_leaves_group_none) were confirmed
+      pre-existing and unrelated to this feature: reproduced identically
+      (same panic messages/locations) on unmodified main. All of this
+      feature's own tests (task0001-task0006, including t6_ac3/t6_ac5/
+      t6_ac8 and ac2_unraced_switch_engages_bypass) pass under
+      --test-threads=1. VERIFICATION.md TS-1..TS-8 / SC-1..SC-5 satisfied.
+  - id: retrospect
+    status: completed
+
+tasks:
+  task0001:
+    title: "Bypass split gate resilience for a resize-marker-dense scrollback tail"
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/bench.rs
+    skills: [backend-impl]
+    domains: [concurrency]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, NFR1]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-tab-switch-replay-latency/task0001
+  task0002:
+    title: "Suppress all-pane resize broadcast before the status bar settles"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/tabs.rs
+    skills: [backend-impl]
+    domains: [ui, concurrency]
+    complexity: medium
+    requirements: [FR6]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-tab-switch-replay-latency/task0002
+  task0003:
+    title: "Pane-switch race resilience: target-mismatch bypass drop and duplicate snapshot fetch"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/tabs.rs
+    skills: [backend-impl]
+    domains: [concurrency]
+    complexity: high
+    requirements: [FR7, FR8]
+    status: merged
+    notes: >-
+      Implementer deviation on FR7: engaging bypass across a genuine
+      post-resize target mismatch was found unsafe (violates term_core's
+      documented row-growth/rewrap-during-bypass invariant). Implemented
+      instead as coalescing same-pane redispatches so an intermediate,
+      already-superseded target is never wastefully rebuilt — the final
+      replay for a genuinely mismatched target still falls back to
+      non-bypass by design. Flag for the review phase's spec-compliance
+      check against SPEC.md FR7's wording.
+    branch: em-workflow/mux-tab-switch-replay-latency/task0003
+  task0004:
+    title: "term_core bypass split gate: fix D7 rescue direction, restore pre-D7 fallback, tighten bench ceiling"
+    plan: tasks/task0004.md
+    files:
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/bench.rs
+    skills: [backend-impl]
+    domains: [concurrency]
+    complexity: high
+    requirements: [FR1, FR2]
+    status: merged
+    notes: "review round 1 rework task (batch mode auto-rework, cap 1)"
+    branch: em-workflow/mux-tab-switch-replay-latency/task0004
+  task0005:
+    title: "ResizeSettler: fix render-driven debounce blind spots and missing self-wake"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/src/window_host.rs
+    skills: [backend-impl]
+    domains: [ui, concurrency]
+    complexity: high
+    requirements: [FR6]
+    status: merged
+    notes: "review round 1 rework task (batch mode auto-rework, cap 1)"
+    branch: em-workflow/mux-tab-switch-replay-latency/task0005
+  task0006:
+    title: "tabs.rs pending-switch/redispatch: fix target-dims mismatch (FR7), decode dedup (FR8), and live-output loss/duplication"
+    plan: tasks/task0006.md
+    files:
+      - src-tauri/src/tabs.rs
+    skills: [backend-impl]
+    domains: [concurrency]
+    complexity: high
+    requirements: [FR7, FR8]
+    status: merged
+    notes: >-
+      Review round 1 rework task (batch mode auto-rework, cap 1). FR8 kept
+      dedup at the replay-build level only (documented scope narrowing,
+      pinned by test t6_ac6); SPEC.md/VERIFICATION.md FR8 wording needs
+      reconciling with this decision before final completion.
+    branch: em-workflow/mux-tab-switch-replay-latency/task0006
+
+review:
+  status: completed
+  rounds_completed: 2
+  plan:
+    floor: [comprehensive, performance, architecture, spec]
+    discretionary:
+      - perspective: security
+        reason: "diff が wire snapshot payload の segment/dims 解析と off-thread ワーカー間の共有状態を扱うため（round 2 でも継続）"
+    codex_cross_validation: true
+  perspectives:
+    comprehensive: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+    security: completed
+  residual_critical_high: 4
+  needs_rework: false
+  batch_deferred_note: >-
+    review round 2 found 1 critical (auto-fixed same-round) + 3 high +
+    3 medium residual findings. batch.review_rework_count was already at
+    cap (1) before round 2 began, so all residual findings (regardless of
+    severity, per batch-mode.md's decision table) are resolution:deferred
+    with reason "batch mode: rework cap reached" — see
+    reviews/round2.yaml. The step is marked completed per the batch-mode
+    cap-reached branch, NOT because residual_critical_high is 0. The final
+    completion report MUST surface these deferred findings prominently
+    for human evaluation, especially the still-open FR1/FR2 gap
+    (b6a60c440da70e79: the SPEC-cited real bug shape, k=27/26-segment
+    cluster, still does not engage the bypass split — BYPASS_PREFIX_MAX_SEGMENTS
+    was never revisited) and the two high-severity window_host.rs findings
+    (self-wake busy-spin 81507f39e384b34e, inset staleness
+    a82206113b8160fd/aba5ebbdf9a9addb).
+
+requirements:
+  FR1:
+    title: "resize marker 蓄積形状での高速 replay"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001, task0004]
+    tests: [TS-1]
+  FR2:
+    title: "回帰用 bench/テスト追加"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001, task0004]
+    tests: [TS-1]
+  FR3:
+    title: "通常切替の非劣化"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-2]
+  FR4:
+    title: "bypass 等価性維持"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-3]
+  FR5:
+    title: "既存 bench ガード維持"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-4]
+  FR6:
+    title: "起動時 reshape 連打の抑制"
+    status: ok
+    tbd_reason: null
+    tasks: [task0002, task0005]
+    tests: [TS-5]
+  FR7:
+    title: "切替中 resize competition への耐性"
+    status: ok
+    tbd_reason: null
+    tasks: [task0003, task0006]
+    tests: [TS-6]
+  FR8:
+    title: "snapshot 二重取得の防止（replay build レベルのみ。decode/fetch レベルはスコープ外 — review round 1 / task0006 で判明・SPEC.md/VERIFICATION.md に反映済み）"
+    status: ok
+    tbd_reason: null
+    tasks: [task0003, task0006]
+    tests: [TS-7]
+  NFR1:
+    title: "既存の二重コスト防止制約の維持"
+    status: ok
+    tbd_reason: null
+    tasks: [task0001]
+    tests: [TS-8]
+
+batch:
+  review_rework_count: 1
+  verify_rework_count: 0

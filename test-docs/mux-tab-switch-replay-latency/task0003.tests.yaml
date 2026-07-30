@@ -1,0 +1,91 @@
+task_id: task0003
+
+# NOTE on flakiness: this suite's off-thread-replay tests (any test driving
+# `Tab::poll_pending_switch`/`test_poll_until_swapped`, e.g. ts5/ts7-ts13,
+# ac1-ac7 offthread_swap_*, and the new tests this task adds) are
+# non-deterministic under the project's default test-runner parallelism —
+# documented in the project's own memory notes ("tabs.rs replay テストは並列で
+# 非決定的に落ちる（--test-threads=1 で安定）"). `project_commands.test` run
+# verbatim (no --test-threads=1) reproduces this: baseline runs before any
+# change to this task showed 16, then 12 failing tests across two runs, all
+# but one ("welcome_without_windows_leaves_group_none") being
+# "off-thread replay worker did not complete in time" panics, plus an
+# unrelated pre-existing "status_bar::runtime::tests::runtime_time_provider_timer_fires_wake"
+# flake. Run with `-- --test-threads=1` (this project's own documented
+# stabilization) the failing set is IDENTICAL before and after this task's
+# changes: exactly 7 tests (ts7, ts8, ts9, ts10, ts11, ts13,
+# welcome_without_windows_leaves_group_none), none of which this task
+# touches or is caused by. baseline_failures/final_failures below list that
+# stable (--test-threads=1) set, which is the meaningful signal for
+# attributing regressions; the verbatim (parallel) command's failing set
+# varies run to run (confirmed by re-running it 3 separate times before any
+# code change) and additionally makes some of THIS task's own new tests
+# flake under the exact same pre-existing mechanism (confirmed: none of them
+# fail under --test-threads=1).
+baseline_failures:
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests: [tabs::tests::ac1_resize_storm_during_pending_switch_collapses_to_one_redispatch]
+    red_confirmed: true
+    red_reason: >-
+      Before dispatch_offthread_replay's same-pane coalesce existed, a resize
+      storm (3 resize() calls superseding the in-flight switch) spawned a new
+      off-thread worker per resize event: assertion
+      `tab.test_offthread_spawn_count() == spawns_after_dispatch` failed with
+      left=4, right=1 (verified by temporarily disabling the coalesce branch
+      with `same_pane_in_flight && false` and reverting immediately after).
+  AC-2:
+    tests: [tabs::tests::ac2_unraced_switch_engages_bypass]
+    red_confirmed: false
+    red_reason: >-
+      An ordinary (unraced) switch whose segments already match the
+      dispatch-time target already engaged bypass before this task (task0001
+      owns that gate; task0003 only needed to not break it). This test still
+      passed with the same-pane coalesce branch disabled — it is a
+      regression guard for FR7's "ordinary switch is unaffected" requirement,
+      not new behavior. Empirically confirmed via the same temporary-disable
+      probe used for AC-1/AC-3.
+  AC-3:
+    tests: [tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again]
+    red_confirmed: true
+    red_reason: >-
+      Before the same-pane coalesce existed, a second Snapshot frame for the
+      pane already being switched to spawned a second off-thread worker
+      immediately: assertion `tab.test_offthread_spawn_count() == 1` failed
+      with left=2, right=1 (verified by the same temporary-disable probe).
+  AC-4:
+    tests: [tabs::tests::ac4_switch_to_different_pane_is_not_coalesced]
+    red_confirmed: false
+    red_reason: >-
+      A switch to a genuinely different pane was never coalesced even before
+      this task (dispatch_offthread_replay's cancel-and-spawn-immediately
+      path is pane-agnostic and untouched for the different-pane case). This
+      test is a scope-boundary regression guard for the AC-3 dedup (must stay
+      scoped to same-pane frames), confirmed to still pass with the coalesce
+      branch disabled.
+  AC-5:
+    tests: [tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped]
+    red_confirmed: false
+    red_reason: >-
+      A repeat switch to the same pane arriving after the prior one already
+      settled (pending_switch already None) never coalesces in the new
+      design either (dispatch_offthread_replay only coalesces when
+      pending_switch is Some for the SAME pane) — this was already true
+      before this task and remains true after. Regression guard for the
+      AC-3 dedup's scope (must not degrade into "ignore all repeat
+      switches"), confirmed to still pass with the coalesce branch disabled.
