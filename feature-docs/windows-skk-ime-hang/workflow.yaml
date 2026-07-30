@@ -49,7 +49,7 @@ workflow:
       MT-1 は SPEC A1 どおりフィールド確認に委任、MT-2（任意手動）は
       無人実行のため未実施。
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
