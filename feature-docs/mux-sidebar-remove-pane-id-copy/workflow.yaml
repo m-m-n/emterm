@@ -1,0 +1,153 @@
+schema_version: 1
+feature: mux-sidebar-remove-pane-id-copy
+created: 2026-07-30
+base_branch: main
+parent_branch: em-workflow/mux-sidebar-remove-pane-id-copy/integration
+
+project:
+  license: MIT
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 1f1323e4be34d6a794ad12750ab3ae670b5294ac
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "既存 UI 要素の削除のみで、新規のビジュアル決定は無い（残る行レイアウトは既存の定数で確定済み）"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+  - id: implement
+    status: completed
+    base_commit: 6fe74b914c87bf204a885519daec723da867eb3a
+    completed_at_commit: 42ed688ccaa07ee439345c61b44ba6c9dd161337
+  - id: review
+    status: completed
+    completed_at_commit: 66185821ac6a99ebda4a79d1da901faf1bcd0895
+  - id: verify
+    status: completed
+    result: pass
+    failed_items: []
+    notes: >-
+      TS-1〜TS-6 / TS-7: cargo test --lib -- --test-threads=1 は 2873 passed /
+      7 failed。failure 7 件はすべて tabs.rs の既存 failure で、同一ソースの
+      main 作業ツリー（ベース）でも同じ 7 件が落ちることを独立に確認した
+      （ベース側 2872 passed → feature 側 2873 passed で純増 1 テスト、回帰ゼロ）。
+      TS-8: cargo check exit 0、警告は既存の viewer/settings dist 未生成 2 件のみ。
+      TS-9: App::mux_public_pane_id（app.rs:2381）と WindowHost::set_clipboard
+      （window_host.rs:1377）の存置を確認。
+      TS-10: cargo check --no-default-features exit 0。
+      修改 3 ファイル内に残る copy 系識別子は AC-1 回帰ガードテストの
+      アサーション文字列 2 箇所のみ（review round1 の 8239fed39f2bc6b2 が
+      dead assertion として指摘済み）。
+      MV-1 / MV-2 は GUI 実機での目視確認項目のため自動 verify の対象外。
+  - id: retrospect
+    status: completed
+
+tasks:
+  task0001:
+    title: "Remove the sidebar pane-ID copy affordance and its clipboard channel"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/ui/mux_sidebar.rs
+      - src-tauri/src/render/mod.rs
+      - src-tauri/src/window_host.rs
+    skills: [design-impl]
+    domains: [ui, api-contract]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2, NFR3, NFR4, NFR5]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-sidebar-remove-pane-id-copy/task0001
+
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, architecture, spec]
+    discretionary: []
+    codex_cross_validation: false
+  perspectives:
+    comprehensive: completed
+    architecture: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "draw_rows renders no copy icon and no hover text for one"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1]
+  FR2:
+    title: "No extra in-row hit region; a row click only yields switch_to_window"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-2, TS-3]
+  FR3:
+    title: "Sidebar-originated clipboard path removed end to end"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-3, TS-4]
+  FR4:
+    title: "Icon-only support code removed (constants, helpers, fields, locale param)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-8]
+  NFR1:
+    title: "Behavior preservation — all other sidebar rendering unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-5, TS-6]
+  NFR2:
+    title: "Test integrity — AC-5 tests replaced by FR1/FR2 regression tests"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-7]
+  NFR3:
+    title: "No dead code — cargo check adds no warnings"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-8]
+  NFR4:
+    title: "App::mux_public_pane_ids and WindowHost::set_clipboard preserved"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-9]
+  NFR5:
+    title: "CLI-only build unaffected"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-10]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

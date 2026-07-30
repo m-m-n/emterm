@@ -1,0 +1,113 @@
+task_id: task0001
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests: [ui::mux_sidebar::tests::ac1_draw_rows_registers_no_interaction_region_besides_the_row_itself]
+    red_confirmed: true
+    red_reason: >-
+      Structural check over draw_rows's own source: before the removal it
+      failed with "draw_rows must register no interaction region beyond the
+      row's own click sense (AC-1); found an extra `ui.interact(` call" —
+      the icon's ui.interact(icon_rect, ..) call was still present.
+  AC-2:
+    tests: [ui::mux_sidebar::tests::ac1_ac2_click_at_the_row_s_former_icon_region_reports_a_window_switch]
+    red_confirmed: true
+    red_reason: >-
+      Before the removal, clicking the row's former right-edge icon region
+      (with an entry carrying a known public pane id) failed with
+      "assertion `left == right` failed: ... left: None, right: Some(0)" —
+      the still-present copy icon intercepted the click and reported
+      copy_pane_id instead of switch_to_window.
+  AC-3:
+    tests: [ui::mux_sidebar::tests::ac3_sidebar_outcome_exposes_only_the_window_switch_result]
+    red_confirmed: true
+    red_reason: >-
+      Compile-time proof via an exhaustive struct pattern
+      (`let SidebarOutcome { switch_to_window: _ } = ...`). Before the
+      removal this failed to compile with E0027 "pattern does not mention
+      field `copy_pane_id`", confirmed via `cargo test --lib --no-run`.
+  AC-4:
+    tests: [render::tests::ac4_frame_events_any_false_for_default_true_for_each_remaining_field]
+    red_confirmed: true
+    red_reason: >-
+      Compile-time proof via a `FrameEvents` struct literal listing exactly
+      the six fields expected to survive. Before the removal this failed to
+      compile with E0063 "missing field `clipboard_copy` in initializer of
+      `render::FrameEvents`", confirmed via `cargo test --lib --no-run`.
+  AC-5:
+    tests:
+      - ui::mux_sidebar::tests::badge_absent_leaves_the_name_column_at_its_pre_feature_position
+      - ui::mux_sidebar::tests::persistent_panel_rows_hug_the_right_edge_of_the_screen
+      - ui::mux_sidebar::tests::persistent_and_overlay_rows_sit_16px_apart_on_the_right_edge
+      - ui::mux_sidebar::tests::ac2_overlay_row_rects_are_inset_from_the_painted_card_by_panel_padding
+    red_confirmed: false
+    red_reason: >-
+      Pre-existing regression-net tests (task plan Test Notes: "add nothing
+      there unless a test has to change to compile"). They pin the number's
+      right-aligned position, the badge's position, and the name's origin —
+      none of which ever depended on public_pane_id/the copy icon, so the
+      removal causes no observable change here; there was no red state to
+      confirm. They needed no edits to keep compiling (they never
+      constructed a SidebarEntry with the removed field) and stayed green
+      throughout.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build-outcome criterion, not a red/green unit test. Verified directly
+      via `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+      src-tauri/Cargo.toml` before and after the removal: exit 0 both
+      times, with the same 2 pre-existing warnings (missing viewer/dist and
+      settings/dist bundles, unrelated to this change) and no new ones.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by running the full project test command
+      (`cargo test --lib -- --test-threads=1`): the three tests that pinned
+      the copy affordance
+      (clicking_the_copy_icon_reports_the_public_pane_id_and_no_window_switch,
+      clicking_the_row_body_still_switches_windows_when_a_copy_icon_is_present,
+      no_copy_icon_hit_target_when_public_pane_id_is_unknown) were deleted;
+      every other pre-existing sidebar test (width formula, build_entries,
+      hit-region, overlay geometry, click routing, ellipsis, AC-5 layout)
+      still passes unchanged.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by inspection: `git diff --stat` for this task touches only
+      the three files in expected_files (mux_sidebar.rs, render/mod.rs,
+      window_host.rs) — app.rs (App::mux_public_pane_id and its tests) is
+      untouched. window_host.rs still defines set_clipboard/get_clipboard
+      and the Ctrl+Shift+C/V keybind call sites (lines ~1377/1391,
+      ~3885/4327/4333) unmodified; only the sidebar's
+      frame_events.clipboard_copy application branch was removed.
+  AC-9:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by inspection (grep) over the three touched files for
+      "copy-to-clipboard", "copy_pane_id", "COPY_ICON", "public_pane_id",
+      and "clipboard": the only remaining hits are (a) a test-module
+      section comment and an assertion failure message in mux_sidebar.rs
+      describing the historical removal / asserting the removed
+      identifier's absence, and (b) window_host.rs's surviving
+      set_clipboard/get_clipboard selection-copy infrastructure (AC-8,
+      out of scope for removal) — no remaining text describes the sidebar
+      copy-to-clipboard affordance as present/current behavior.
