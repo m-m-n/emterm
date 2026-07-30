@@ -31,7 +31,8 @@ workflow:
     base_commit: 8934191f9385d76a911d527dc009de3dcc32c4ee
     completed_at_commit: 32ebda3698d1ad5341cbf5f9330b569ac39295fd
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 8849c49bf58a94c9e0cb768e0ddbbf83fa9827ec
   - id: verify
     status: pending
     result: null
@@ -54,12 +55,18 @@ tasks:
     branch: em-workflow/test-notification-sink-leak/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, performance, spec]
     discretionary: []
     codex_cross_validation: false
+  perspectives:
+    comprehensive: completed
+    performance: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
 
 requirements:
   FR1:
