@@ -1,0 +1,31 @@
+feature: windows-skk-ime-hang
+collected_at: "2026-07-31T00:09:22+09:00"
+session_ids: [1baf9fdd-6250-4c80-8aef-e0efc7301390]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "flush が about_to_wait（ホットループ）に毎ターン追加されるため"
+  declined_findings: []
+lessons_candidates:
+  - >-
+    fresh worktree では gitignored のバンドルフォント
+    （src-tauri/assets/fonts/*.ttf|*.otf）が無く build.rs が panic する。
+    worktree ベースの build/verify ではメインツリーからのコピー
+    （または make fetch-fonts）が事前プロビジョニングとして必要。
+  - >-
+    tabs::tests の既知 flaky（replay timeout / mux_group assertion）は
+    この環境では --test-threads=1 でも落ちる（MEMORY の「--test-threads=1
+    で安定」は環境依存）。回帰判定は base_commit での同一コマンド再実行に
+    よる署名比較が確実だった。
+  - >-
+    review round1 の medium 87571f53ecd89037: FR4 の Disabled 異常 warn が
+    Linux の通常フォーカスアウト（notify_focus(false) → 合成 Ime::Disabled）
+    で誤発火しラッチを消費する指摘。フィールド診断価値に直結するため
+    フォローアップ実装の価値が高い。
+  - >-
+    batch モードで Codex CLI が不在だったため、create-spec の相談ループは
+    スキップし Claude 単独で仮定を記録した（SPEC.md Assumptions A1-A5）。
