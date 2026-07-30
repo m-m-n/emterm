@@ -26,6 +26,7 @@ workflow:
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
+    completed_at_commit: 3e41fddf02663ba2c7f34f382382da55e7019824
   - id: implement
     status: pending
   - id: review
