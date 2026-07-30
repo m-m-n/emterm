@@ -1,0 +1,152 @@
+task_id: task0001
+# Baseline recorded in 4a via the mandated project_commands.test
+# (`cargo test --manifest-path src-tauri/Cargo.toml --lib`), on the
+# unmodified worktree. The whole-workspace `tabs::tests` off-thread family
+# plus `status_bar::runtime::tests::runtime_time_provider_timer_fires_wake`
+# proved NON-DETERMINISTIC under this suite's ~85s full-parallel run
+# (confirmed by re-running the UNMODIFIED code — via `git stash` on only
+# `crates/term_core/src/{terminal_core.rs,bench.rs}` — multiple times: each
+# run showed a DIFFERENT subset of this same ~18-test pool, all failing with
+# "off-thread replay worker did not complete in time" or an equivalent
+# timing-sensitive assertion, none touching `term_core`). This list is the
+# UNION observed across the original baseline run and the confirmatory
+# re-run on unmodified code, which is the honest characterization given the
+# demonstrated non-determinism (a single snapshot undercounts the pool).
+baseline_failures:
+  - status_bar::runtime::tests::runtime_time_provider_timer_fires_wake
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+# mux::inherited_pty::tests::dropping_the_adapter_closes_the_owned_descriptor
+# was ALSO observed failing once, in one post-implementation full-suite run
+# only — but 5/5 isolated re-runs (`-- mux::inherited_pty::tests::...`) all
+# passed instantly, and it never appeared in the two full-suite runs on the
+# unmodified (stashed) code either. Treated as the same class of
+# parallel-execution flakiness (this test manages OS file descriptors, has
+# zero code-path relationship to `term_core`, and cannot be reached by
+# anything in `expected_files`); it did not appear in the final recorded run
+# below, so it is not carried into final_failures.
+final_failures:
+  - status_bar::runtime::tests::runtime_time_provider_timer_fires_wake
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - terminal_core::tests::head_plus_marker_cluster_engages_the_split_and_matches_reference
+      - bench::benches::marker_cluster_tail_bench_2mib_matches_bypass_engaged_cost
+    red_confirmed: true
+    red_reason: >-
+      Confirmed by forcing `h` to always 0 (the exact pre-D7 equivalent —
+      `leading_target_run_len` is entirely new code, so `h == 0` always is a
+      faithful stand-in for "before this implementation existed"). The
+      deterministic test failed with "AC-1: the split must engage
+      (scrollback_populated == false) ... got scrollback_populated == true
+      (D7 did not rescue this shape)". The release-mode bench
+      (`--release --include-ignored`) measured 1.44s for the marker-cluster
+      shape against this same pre-fix state (bound 509ms), vs 72.9ms
+      post-fix against a 76.9ms segment-free baseline.
+  AC-2:
+    tests:
+      - bench::benches::snapshot_replay_bench_2mib_seq
+    red_confirmed: false
+    red_reason: >-
+      Pre-existing, unmodified test (not touched by this task) verifying the
+      segment-free path — `k == 0` unconditionally, so `h`/`middle_len` are
+      never computed for it (see the `h` computation's own `bypass && k > 0`
+      guard). There is no observable change for this criterion to prove via
+      red-green; it is a non-regression check, confirmed still green
+      (`cargo test --release ... --include-ignored`) after the change.
+  AC-3:
+    tests:
+      - terminal_core::tests::bypass_split_matches_reference_viewport_and_cursor_for_ordinary_switch
+      - bench::benches::ordinary_switch_bench_950kib_matches_segment_free_cost
+    red_confirmed: false
+    red_reason: >-
+      Pre-existing, unmodified tests for the "ordinary switch" shape
+      (spawn-size HEAD segment differs from target, so `h == 0` under D7 —
+      mathematically identical to the pre-D7 computation). No observable
+      change for this criterion; both remain green after the change
+      (deterministic test in the normal `--lib` run; the release-mode bench
+      re-measured at ~12-16ms ordinary-switch vs ~40-90ms segment-free,
+      consistent with its pre-existing bound).
+  AC-4:
+    tests:
+      - terminal_core::tests::head_plus_marker_cluster_engages_the_split_and_matches_reference
+    red_confirmed: false
+    red_reason: >-
+      Same test function as AC-1; under the pre-fix simulation (`h` forced
+      to 0) the test panics at the earlier AC-1 assertion
+      (`scrollback_populated`) before ever reaching the grid_fingerprint /
+      evicted_total equivalence assertions this criterion is about — when
+      the split does not engage, both `build_from_snapshot` and
+      `build_scrollback_only_from_snapshot` take the identical whole-drain
+      path, so the equivalence claim is only non-vacuous once the split
+      actually engages a bypass-affected code path, which by construction
+      cannot happen pre-fix for this shape. Verified instead that the
+      assertions pass post-fix against a genuinely-engaged split
+      (`scrollback_populated == false` on the bypass side, `true` on the
+      reference side, grids and `evicted_total` equal).
+  AC-5:
+    tests:
+      - terminal_core::tests::prefix_at_the_segment_count_bound_with_a_dominating_suffix_engages_the_split_no_head
+      - terminal_core::tests::prefix_with_too_many_segments_does_not_engage_the_split_regardless_of_byte_length
+    red_confirmed: false
+    red_reason: >-
+      The new test's shape has `h == 0` (no HEAD — first segment already
+      differs from target), so `middle_segment_count == k` and this reduces
+      byte-for-byte to the pre-D7 computation; it was already true before
+      any D7 code existed, so there is no meaningful pre-implementation red
+      to observe for THIS criterion (preserving an existing boundary, not
+      introducing new behavior). Instead confirmed the test is a real,
+      non-vacuous regression guard by injecting a boundary-off-by-one
+      mutation into the NEW gate (`middle_segment_count <=` →
+      `middle_segment_count <` `BYPASS_PREFIX_MAX_SEGMENTS`) and observing
+      it fail with "must still engage the split ... got ... true" before
+      reverting the mutation. The companion pre-existing test (25 segments,
+      no head, rejects) is unmodified and still passes.
+  AC-6:
+    tests:
+      - terminal_core::tests::head_plus_large_content_heavy_middle_does_not_engage_the_split
+    red_confirmed: true
+    red_reason: >-
+      Confirmed by injecting the exact NFR1 risk this test guards against —
+      temporarily skipping the middle-length re-check whenever a HEAD is
+      present (`h > 0 || middle_len <= BYPASS_PREFIX_MAX_BYTES` in place of
+      `middle_len <= BYPASS_PREFIX_MAX_BYTES`) — and observing the test fail
+      with "AC-6: a genuinely large, content-heavy MIDDLE behind a HEAD
+      must NOT engage the split ... got scrollback_populated == false"
+      before reverting the mutation. This is the direct code path D7
+      introduces (folding a HEAD ahead of a MIDDLE); the mutation is the
+      realistic implementation mistake (forgetting to re-scope the
+      pre-existing byte-length gate to the narrower MIDDLE region) this
+      criterion exists to catch.
