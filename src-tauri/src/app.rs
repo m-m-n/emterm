@@ -63,6 +63,104 @@ pub fn auto_research_allowed(last: Option<Instant>, now: Instant) -> bool {
     }
 }
 
+// ── task0002: mux sidebar overlay auto-dim ──────────────────────────────
+//
+// Three named constants (IMPLEMENTATION.md conventions, NFR2 — single
+// definition site next to the resolver they feed). The pre-existing
+// `OVERLAY_FILL_ALPHA` in `ui::mux_sidebar` is unrelated (the bright-state
+// fill's own alpha) and keeps its current value/location untouched.
+
+/// Whole-card opacity multiplier while the overlay card is idle (no hover,
+/// no mux window switch recorded within [`OVERLAY_BRIGHT_HOLD`]). SPEC.md
+/// "Concrete values" / assumption A2.
+pub const OVERLAY_IDLE_OPACITY: f32 = 0.35;
+/// Duration of the bright -> dim fade. Entering the bright state is
+/// immediate (no fade-in) — D4. SPEC.md "Concrete values" / assumption A3.
+pub const OVERLAY_DIM_FADE: std::time::Duration = std::time::Duration::from_millis(200);
+/// How long the overlay card stays at full opacity after a mux window
+/// switch (or while hovered), before the fade begins. SPEC.md "Concrete
+/// values".
+pub const OVERLAY_BRIGHT_HOLD: std::time::Duration = std::time::Duration::from_millis(3000);
+
+/// Pure opacity resolver (IMPLEMENTATION.md D1): the overlay card's
+/// whole-card opacity multiplier plus whether a further frame is needed to
+/// continue an in-flight fade, given the dim state and `now`. No side
+/// effects — the `App` wrapper ([`App::resolve_mux_sidebar_opacity`]) owns
+/// arming/resetting `fade_started` between calls.
+///
+/// - **Bright** (`hovered` true, OR `last_switch` is within
+///   [`OVERLAY_BRIGHT_HOLD`] of `now`): full opacity, immediately, no
+///   interpolation (D4). Hover and the post-switch hold are independent
+///   sufficient conditions (SPEC.md A5) — releasing hover inside a pending
+///   hold keeps the card bright for the remainder of the hold.
+/// - **Dim, no fade tracked** (`fade_started` is `None`): the idle opacity
+///   directly — covers a fresh session with no switch ever recorded (FR5)
+///   and a fully-settled dim state.
+/// - **Dim, fade in flight**: linear interpolation from full opacity down
+///   to the idle opacity over [`OVERLAY_DIM_FADE`], clamped to `0.0..=1.0`
+///   (AC-4 — a `fade_started` in the future clamps `elapsed` to zero via
+///   `checked_duration_since`, so the output never leaves the valid range
+///   even for adversarial inputs).
+pub fn resolve_mux_sidebar_dim_opacity(
+    hovered: bool,
+    last_switch: Option<Instant>,
+    fade_started: Option<Instant>,
+    now: Instant,
+) -> (f32, bool) {
+    let bright = hovered || last_switch.is_some_and(|t| now < t + OVERLAY_BRIGHT_HOLD);
+    if bright {
+        return (1.0, false);
+    }
+    match fade_started {
+        None => (OVERLAY_IDLE_OPACITY, false),
+        Some(started) => {
+            let elapsed = now
+                .checked_duration_since(started)
+                .unwrap_or(std::time::Duration::ZERO);
+            if elapsed >= OVERLAY_DIM_FADE {
+                (OVERLAY_IDLE_OPACITY, false)
+            } else {
+                let t = elapsed.as_secs_f32() / OVERLAY_DIM_FADE.as_secs_f32();
+                let opacity = 1.0 + t * (OVERLAY_IDLE_OPACITY - 1.0);
+                (opacity.clamp(0.0, 1.0), true)
+            }
+        }
+    }
+}
+
+/// Pure deadline provider companion to [`resolve_mux_sidebar_dim_opacity`]
+/// (IMPLEMENTATION.md D5 / Scheduling): the next `Instant` the event loop
+/// must wake for this feature, or `None` when settled. Mirrors
+/// `next_bell_deadline`'s "single upcoming instant" shape rather than a
+/// bounded poll — while hovered there is nothing to schedule (the hover
+/// predicate's own transition requests its redraw separately, in
+/// `window_host`).
+pub fn resolve_mux_sidebar_dim_deadline(
+    hovered: bool,
+    last_switch: Option<Instant>,
+    fade_started: Option<Instant>,
+    now: Instant,
+) -> Option<Instant> {
+    if hovered {
+        return None;
+    }
+    if let Some(t) = last_switch {
+        let hold_end = t + OVERLAY_BRIGHT_HOLD;
+        if now < hold_end {
+            return Some(hold_end);
+        }
+    }
+    let started = fade_started?;
+    let elapsed = now
+        .checked_duration_since(started)
+        .unwrap_or(std::time::Duration::ZERO);
+    if elapsed < OVERLAY_DIM_FADE {
+        Some(started + OVERLAY_DIM_FADE)
+    } else {
+        None
+    }
+}
+
 /// Per-step change applied by the `ZoomIn` / `ZoomOut` keybinds, in
 /// logical points.
 pub const FONT_SIZE_PT_STEP: f32 = 1.0;
@@ -324,6 +422,39 @@ pub struct App {
     /// "active tab is mux-attached" separately — see the Shared Components
     /// contract in IMPLEMENTATION.md).
     active_mux_attached_prev_pump: Option<usize>,
+    /// task0002 FR3: whether the pointer is currently inside the overlay
+    /// card's rect. Fed by `window_host`'s `PointerMoved` handler, using
+    /// the SAME hit test (`ui::mux_sidebar::point_in_sidebar`) the press
+    /// and wheel routing already query, evaluated against
+    /// [`crate::ui::mux_sidebar::Placement::Overlay`] — always `false`
+    /// outside overlay mode (the persistent panel and hidden state never
+    /// dim). Read by [`Self::resolve_mux_sidebar_opacity`].
+    mux_sidebar_overlay_hovered: bool,
+    /// Snapshot of [`Self::mux_sidebar_overlay_hovered`] as of the last
+    /// actually-rendered frame (`record_render_state` /
+    /// `record_render_state_no_tab`). [`Self::mux_sidebar_hover_changed`]
+    /// compares against this so a hover-predicate transition can feed
+    /// `window_host`'s `overlay_work` — mirrors
+    /// `previous_status_bar_view_model`'s read-only-comparison-against-a-
+    /// snapshot shape.
+    mux_sidebar_hover_prev_render: bool,
+    /// task0002 FR4: instant of the most recent mux window switch (next /
+    /// prev / select-by-digit via [`Self::dispatch_mux_action`], or a
+    /// sidebar row click via [`Self::apply_tab_event`]'s `MuxSwitch` arm).
+    /// `None` before any switch has ever happened — [`resolve_mux_sidebar_dim_opacity`]
+    /// treats that as "not recently switched" (FR5).
+    mux_sidebar_last_switch: Option<Instant>,
+    /// task0002 fade bookkeeping: the instant the bright condition (hover
+    /// OR pending hold) most recently stopped holding. Seeded on
+    /// construction to an instant already [`OVERLAY_DIM_FADE`] in the past
+    /// so a freshly constructed app resolves directly to
+    /// [`OVERLAY_IDLE_OPACITY`] (AC-1) rather than opening with a phantom
+    /// fade-in; reset to `None` by [`Self::resolve_mux_sidebar_opacity`]
+    /// whenever bright, and re-armed to `Some(now)` the next time it
+    /// observes "not bright" (the `Option::get_or_insert` idiom — a `None`
+    /// reached from there is therefore always a genuine, just-happened
+    /// bright-to-dim transition, never the fresh-construction case).
+    mux_sidebar_fade_started: Option<Instant>,
     /// Merged agent-status store (mux-agent-status-api task0005, SPEC FR5 /
     /// FR6 / NFR3): one [`crate::agent_status_model::AgentStatusModel`]
     /// covering both plain tabs (this tab's own OSC 777 `agent-status`
@@ -770,13 +901,29 @@ impl App {
         // file-not-found / editor-launch failures.
         let notification_sink: Arc<dyn NotificationSink> = Arc::new(NotifyRustSink);
 
+        // task0002: seed the fade-bookkeeping instant already
+        // `OVERLAY_DIM_FADE` in the past so a freshly constructed app
+        // resolves directly to `OVERLAY_IDLE_OPACITY` (AC-1) instead of
+        // opening with a phantom fade-in. `checked_sub` only fails within
+        // `OVERLAY_DIM_FADE` of process start (an `Instant` reference
+        // point that near boot); falling back to `now` there costs at
+        // most one imperceptible extra fade-in frame.
+        let mux_sidebar_fade_started = Instant::now().checked_sub(OVERLAY_DIM_FADE);
+
         Self {
             tabs: Vec::new(),
             active: 0,
             mux_latch,
             mux_dialog: crate::mux::dialog::MuxDialogState::Closed,
-            mux_sidebar_overlay_open: false,
+            // FR2/AC-7: the overlay's runtime open flag starts open so a
+            // default-configured session shows the window list without a
+            // toggle press.
+            mux_sidebar_overlay_open: true,
             active_mux_attached_prev_pump: None,
+            mux_sidebar_overlay_hovered: false,
+            mux_sidebar_hover_prev_render: false,
+            mux_sidebar_last_switch: None,
+            mux_sidebar_fade_started,
             agent_status: crate::agent_status_model::AgentStatusModel::new(),
             mux_public_pane_ids: std::collections::HashMap::new(),
             settings_launcher: Box::new(crate::settings_launcher::ProcessSettingsLauncher::new()),
@@ -1929,6 +2076,9 @@ impl App {
                     if outcome == MuxActionOutcome::Changed {
                         self.scroll_position = scroll;
                         self.needs_full_redraw = true;
+                        // task0002 AC-6: the sidebar-row-click switch path
+                        // also counts as a switch (SPEC.md A6).
+                        self.record_mux_window_switch();
                     }
                 }
                 false
@@ -2437,6 +2587,132 @@ impl App {
         mux_sidebar_grid_inset(self.mux_sidebar_visibility(), window_width_logical)
     }
 
+    // ── task0002: mux sidebar overlay auto-dim (app-side wiring) ────────
+
+    /// Set the overlay card's hover flag (task0002 FR3). Called from
+    /// `window_host`'s `PointerMoved` / `PointerLeft` handlers with the
+    /// result of `ui::mux_sidebar::point_in_sidebar` evaluated against
+    /// [`crate::ui::mux_sidebar::Placement::Overlay`] — the same hit test
+    /// press/wheel routing already query, so hover and click routing can
+    /// never disagree about the boundary.
+    pub fn set_mux_sidebar_hovered(&mut self, hovered: bool) {
+        self.mux_sidebar_overlay_hovered = hovered;
+    }
+
+    /// Whether the pointer is currently inside the overlay card's rect.
+    pub fn mux_sidebar_overlay_hovered(&self) -> bool {
+        self.mux_sidebar_overlay_hovered
+    }
+
+    /// task0002 AC-9 / D5: whether [`Self::mux_sidebar_overlay_hovered`]
+    /// differs from the snapshot taken at the last actually-rendered frame
+    /// (`record_render_state` / `record_render_state_no_tab`). `window_host`
+    /// folds this into `overlay_work` so a hover-predicate transition is
+    /// never dropped by the frame-skip gate — bare `PointerMoved` is
+    /// deliberately excluded from `has_actionable_egui_input`, so without
+    /// this the card would never actually brighten on hover-enter.
+    pub fn mux_sidebar_hover_changed(&self) -> bool {
+        self.mux_sidebar_overlay_hovered != self.mux_sidebar_hover_prev_render
+    }
+
+    /// Record a mux window switch (task0002 FR4): stamps
+    /// [`Self::mux_sidebar_last_switch`] with `now`. A later switch
+    /// overwrites the timestamp, which is what lets a rapid sequence
+    /// extend brightness (FR4 / AC-3). Called from
+    /// [`Self::dispatch_mux_action`]'s `NextWindow` / `PrevWindow` /
+    /// `SelectWindow` arms and from [`Self::apply_tab_event`]'s
+    /// `MuxSwitch` arm (the sidebar-row-click path) — AC-6.
+    fn record_mux_window_switch(&mut self) {
+        self.mux_sidebar_last_switch = Some(Instant::now());
+    }
+
+    /// Resolve the overlay card's current whole-card opacity plus whether
+    /// a further frame is needed (task0002 D1). Mutating: arms/resets
+    /// [`Self::mux_sidebar_fade_started`] before delegating to the pure
+    /// [`resolve_mux_sidebar_dim_opacity`] — while bright, the fade origin
+    /// is cleared (ready to arm fresh on the next bright-to-dim
+    /// transition); while dim, it is armed via `get_or_insert` (a no-op if
+    /// a fade is already tracked, so calling this more than once per tick
+    /// does not restart an in-flight fade). Called once per frame from
+    /// `window_host::render`, immediately before the egui pass, so
+    /// `render::draw_terminal` (which only holds `&App`) can thread the
+    /// already-resolved value down to `ui::mux_sidebar::draw`.
+    pub fn resolve_mux_sidebar_opacity(&mut self, now: Instant) -> (f32, bool) {
+        let bright = self.mux_sidebar_overlay_hovered
+            || self
+                .mux_sidebar_last_switch
+                .is_some_and(|t| now < t + OVERLAY_BRIGHT_HOLD);
+        if bright {
+            self.mux_sidebar_fade_started = None;
+        } else {
+            self.mux_sidebar_fade_started.get_or_insert(now);
+        }
+        resolve_mux_sidebar_dim_opacity(
+            self.mux_sidebar_overlay_hovered,
+            self.mux_sidebar_last_switch,
+            self.mux_sidebar_fade_started,
+            now,
+        )
+    }
+
+    /// Next `Instant` the event loop must wake for the overlay dim/fade
+    /// feature (task0002 D5 / AC-5), or `None` when settled OR the overlay
+    /// is not currently shown (a hidden sidebar / persistent mode arms no
+    /// deadline at all). Read-only — delegates to
+    /// [`resolve_mux_sidebar_dim_deadline`] once the visibility gate
+    /// passes.
+    pub fn next_mux_sidebar_dim_deadline(&self, now: Instant) -> Option<Instant> {
+        if self.mux_sidebar_visibility() != MuxSidebarVisibility::Overlay {
+            return None;
+        }
+        resolve_mux_sidebar_dim_deadline(
+            self.mux_sidebar_overlay_hovered,
+            self.mux_sidebar_last_switch,
+            self.mux_sidebar_fade_started,
+            now,
+        )
+    }
+
+    /// Whether `about_to_wait` should request a redraw right now for the
+    /// overlay dim/fade feature (task0002 D5, mirrors `needs_bell_repaint`
+    /// / `needs_blink_repaint`'s role for their own concerns). Read-only —
+    /// all state mutation happens in [`Self::resolve_mux_sidebar_opacity`],
+    /// called from `window_host::render` once the redraw this triggers
+    /// actually runs.
+    pub fn mux_sidebar_dim_due(&self, now: Instant) -> bool {
+        // Edge case (SPEC.md): a closed/hidden sidebar arms no deadline
+        // and requests no redraw for this feature — its dim state is
+        // simply frozen wherever it was until the overlay is shown again
+        // (`resolve_mux_sidebar_opacity` is likewise only called while
+        // visible — see `window_host::render`).
+        if self.mux_sidebar_visibility() != MuxSidebarVisibility::Overlay {
+            return false;
+        }
+        if self.mux_sidebar_overlay_hovered {
+            return false;
+        }
+        let hold_active = self
+            .mux_sidebar_last_switch
+            .is_some_and(|t| now < t + OVERLAY_BRIGHT_HOLD);
+        if hold_active {
+            return false;
+        }
+        match self.mux_sidebar_fade_started {
+            // Only reachable via a prior `resolve_mux_sidebar_opacity`
+            // call's bright-branch reset (construction seeds a past
+            // instant, never `None` — see the field doc), so this is
+            // always a genuine just-happened transition needing one more
+            // render to (re-)arm the fade.
+            None => true,
+            Some(started) => {
+                let elapsed = now
+                    .checked_duration_since(started)
+                    .unwrap_or(std::time::Duration::ZERO);
+                elapsed < OVERLAY_DIM_FADE
+            }
+        }
+    }
+
     // ── SFTP upload (drag & drop) ────────────────────────────────
 
     /// Binary-mismatch restart toast: a failed self-spawn (possibly off the
@@ -2725,6 +3001,13 @@ impl App {
         // (TS-9 option b: a same-window digit jump reports `Changed` but does
         // not move `active`, so it must not raise the flag).
         let active_before = tab.mux_group.as_ref().map(|g| g.active_index());
+        // task0002 AC-6: set by the NextWindow / PrevWindow / SelectWindow
+        // arms below on a COMMITTED switch only; consumed after the match
+        // (once the `tab` borrow has ended) to record the switch timestamp.
+        // A plain `bool` local — not a `self.record_mux_window_switch()`
+        // call inline — because `tab` still borrows `self.tabs` here and a
+        // method call needs the whole `&mut self`.
+        let mut window_switch_committed = false;
         let outcome = match action {
             PrefixAction::None | PrefixAction::Literal => MuxActionOutcome::None,
             PrefixAction::Detach => {
@@ -2752,15 +3035,21 @@ impl App {
             }
             PrefixAction::NextWindow => {
                 let target = tab.mux_group.as_ref().unwrap().next_index();
-                Self::switch_to(tab, target, &mut scroll)
+                let result = Self::switch_to(tab, target, &mut scroll);
+                window_switch_committed = result == MuxActionOutcome::Changed;
+                result
             }
             PrefixAction::PrevWindow => {
                 let target = tab.mux_group.as_ref().unwrap().prev_index();
-                Self::switch_to(tab, target, &mut scroll)
+                let result = Self::switch_to(tab, target, &mut scroll);
+                window_switch_committed = result == MuxActionOutcome::Changed;
+                result
             }
             PrefixAction::SelectWindow(d) => {
                 let target = tab.mux_group.as_ref().unwrap().digit_index(d);
-                Self::switch_to(tab, target, &mut scroll)
+                let result = Self::switch_to(tab, target, &mut scroll);
+                window_switch_committed = result == MuxActionOutcome::Changed;
+                result
             }
             PrefixAction::RenameWindow => {
                 // Re-resolved by the dialog handler; surface the active
@@ -2803,6 +3092,13 @@ impl App {
         // The `tab` borrow has ended; commit the swapped scroll value and, on
         // a committed pane switch, force a full redraw so a shorter incoming
         // pane leaves no residual rows from the longer outgoing one (FR2).
+        // task0002 AC-6: record the switch timestamp for the overlay dim
+        // feature — deliberately NOT folded into the `outcome ==
+        // MuxActionOutcome::Changed` block below, since that block also
+        // fires for `NewWindow` (which the task plan excludes).
+        if window_switch_committed {
+            self.record_mux_window_switch();
+        }
         if outcome == MuxActionOutcome::Changed {
             self.scroll_position = scroll;
             self.needs_full_redraw = true;
@@ -4425,6 +4721,10 @@ impl App {
             .saturating_sub(self.scroll_offset());
         self.previous_blink_visible = self.blink_visible_now(core.get_cursor_blink());
         self.previous_status_bar_view_model = Some(self.status_bar_view_model());
+        // task0002 AC-9: snapshot the hover flag so the NEXT frame's
+        // `mux_sidebar_hover_changed` compares against what this frame
+        // actually painted, not a stale earlier value.
+        self.mux_sidebar_hover_prev_render = self.mux_sidebar_overlay_hovered;
         self.needs_full_redraw = false;
         core.clear_dirty();
     }
@@ -4439,6 +4739,7 @@ impl App {
         self.previous_visible_start = 0;
         self.previous_blink_visible = true;
         self.previous_status_bar_view_model = Some(self.status_bar_view_model());
+        self.mux_sidebar_hover_prev_render = self.mux_sidebar_overlay_hovered;
         self.needs_full_redraw = false;
     }
 
@@ -7610,18 +7911,19 @@ mod tests {
         let mut app = app_with_mux_windows(2);
         with_overlay_mode(&mut app, true);
 
-        assert!(!app.mux_sidebar_overlay_open());
-        assert_eq!(
-            app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar),
-            MuxActionOutcome::None
-        );
+        // task0002 AC-7: the runtime flag now starts open by default.
         assert!(app.mux_sidebar_overlay_open());
         assert_eq!(
             app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar),
             MuxActionOutcome::None
         );
+        assert!(!app.mux_sidebar_overlay_open());
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar),
+            MuxActionOutcome::None
+        );
         assert!(
-            !app.mux_sidebar_overlay_open(),
+            app.mux_sidebar_overlay_open(),
             "round-trip back to initial"
         );
     }
@@ -7638,8 +7940,11 @@ mod tests {
             MuxActionOutcome::None
         );
         assert!(
-            !app.mux_sidebar_overlay_open(),
-            "persistent mode: flag stays false"
+            // task0002 AC-7: the flag starts open (unconditionally, even in
+            // persistent mode where it drives no rendering) and the
+            // no-op toggle must leave it untouched.
+            app.mux_sidebar_overlay_open(),
+            "persistent mode: toggle is a no-op, flag stays at its initial value"
         );
         assert_eq!(active_idx(&app), idx_before, "no window switch side effect");
     }
@@ -7648,7 +7953,7 @@ mod tests {
     fn mux_sidebar_overlay_resets_when_focused_tabs_mux_group_tears_down() {
         let mut app = app_with_mux_windows(2);
         with_overlay_mode(&mut app, true);
-        app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar);
+        // task0002 AC-7: already open by construction — no toggle needed.
         assert!(app.mux_sidebar_overlay_open());
 
         // Establish the "focused tab is mux-attached" baseline pump_all
@@ -7682,7 +7987,7 @@ mod tests {
         // group does (see the `active_mux_attached_prev_pump` field doc).
         let mut app = app_with_mux_windows(2);
         with_overlay_mode(&mut app, true);
-        app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar);
+        // task0002 AC-7: already open by construction — no toggle needed.
         assert!(app.mux_sidebar_overlay_open());
         app.pump_all();
 
@@ -7693,6 +7998,390 @@ mod tests {
         assert!(
             app.mux_sidebar_overlay_open(),
             "flag persists across a mere tab switch"
+        );
+    }
+
+    // ── task0002: mux sidebar overlay auto-dim ──────────────────────────
+
+    // AC-1: no hover, no switch => idle; hover => full regardless of
+    // switch; switch just now, no hover => full.
+
+    #[test]
+    fn ac1_resolver_idle_opacity_when_no_hover_and_no_switch() {
+        let now = Instant::now();
+        let (opacity, animating) = resolve_mux_sidebar_dim_opacity(false, None, None, now);
+        assert_eq!(opacity, OVERLAY_IDLE_OPACITY);
+        assert!(!animating);
+    }
+
+    #[test]
+    fn ac1_resolver_full_opacity_when_hovered_regardless_of_switch_timestamp() {
+        let now = Instant::now();
+        // A switch far enough in the past that its hold+fade already
+        // elapsed — hover must still win.
+        let long_ago = now
+            .checked_sub(OVERLAY_BRIGHT_HOLD + OVERLAY_DIM_FADE + Duration::from_secs(1))
+            .expect("test instant underflow — machine uptime too short for this offset");
+        let (opacity, animating) =
+            resolve_mux_sidebar_dim_opacity(true, Some(long_ago), None, now);
+        assert_eq!(opacity, 1.0);
+        assert!(!animating);
+    }
+
+    #[test]
+    fn ac1_resolver_full_opacity_when_switch_recorded_just_now_no_hover() {
+        let now = Instant::now();
+        let (opacity, animating) = resolve_mux_sidebar_dim_opacity(false, Some(now), None, now);
+        assert_eq!(opacity, 1.0);
+        assert!(!animating);
+    }
+
+    // AC-2: switch older than hold+fade => exactly idle; mid-fade =>
+    // strictly between; entering bright => full immediately, no
+    // interpolation.
+
+    #[test]
+    fn ac2_resolver_idle_exactly_after_hold_plus_fade_elapsed() {
+        let now = Instant::now();
+        let switch = now
+            .checked_sub(OVERLAY_BRIGHT_HOLD + OVERLAY_DIM_FADE + Duration::from_millis(1))
+            .expect("test instant underflow — machine uptime too short for this offset");
+        let fade_started = switch + OVERLAY_BRIGHT_HOLD;
+        let (opacity, animating) =
+            resolve_mux_sidebar_dim_opacity(false, Some(switch), Some(fade_started), now);
+        assert_eq!(opacity, OVERLAY_IDLE_OPACITY);
+        assert!(!animating);
+    }
+
+    #[test]
+    fn ac2_resolver_midfade_value_strictly_between_idle_and_full() {
+        let now = Instant::now();
+        let fade_started = now - OVERLAY_DIM_FADE / 2;
+        let (opacity, animating) =
+            resolve_mux_sidebar_dim_opacity(false, None, Some(fade_started), now);
+        assert!(
+            opacity > OVERLAY_IDLE_OPACITY && opacity < 1.0,
+            "expected a strictly mid-fade value, got {opacity}"
+        );
+        assert!(animating);
+    }
+
+    #[test]
+    fn ac2_resolver_bright_state_is_immediate_no_interpolation() {
+        let now = Instant::now();
+        // Even with a fade already tracked (as if mid-dim a moment ago),
+        // hover must snap straight to full with no partial value.
+        let fade_started = now - OVERLAY_DIM_FADE / 2;
+        let (opacity, animating) =
+            resolve_mux_sidebar_dim_opacity(true, None, Some(fade_started), now);
+        assert_eq!(opacity, 1.0);
+        assert!(!animating);
+    }
+
+    // AC-3: a second switch inside the hold window extends brightness past
+    // the first switch's own would-be expiry; releasing hover during a
+    // pending hold keeps the card bright until the hold itself expires.
+
+    #[test]
+    fn ac3_second_switch_extends_brightness_past_the_first_switchs_expiry() {
+        let switch1 = Instant::now();
+        let switch2 = switch1 + Duration::from_secs(1); // well inside switch1's hold
+        // Sample after switch1's own hold would have expired, but still
+        // within switch2's hold.
+        let sample_at = switch1 + OVERLAY_BRIGHT_HOLD + Duration::from_millis(500);
+        let (opacity, animating) =
+            resolve_mux_sidebar_dim_opacity(false, Some(switch2), None, sample_at);
+        assert_eq!(
+            opacity, 1.0,
+            "switch2's hold should still be active at {sample_at:?}"
+        );
+        assert!(!animating);
+    }
+
+    #[test]
+    fn ac3_releasing_hover_during_pending_hold_keeps_bright_until_hold_expires() {
+        let switch = Instant::now();
+        // Hover is false (released) but the switch's hold has not expired.
+        let sample_within_hold = switch + OVERLAY_BRIGHT_HOLD - Duration::from_millis(1);
+        let (opacity, animating) =
+            resolve_mux_sidebar_dim_opacity(false, Some(switch), None, sample_within_hold);
+        assert_eq!(opacity, 1.0, "the hold keeps the card bright without hover");
+        assert!(!animating);
+        // Once the hold expires, brightness ends (the App arms the fade on
+        // the next tick — the pure resolver, given no fade tracked yet,
+        // reads this as already idle).
+        let sample_after_hold = switch + OVERLAY_BRIGHT_HOLD + Duration::from_millis(1);
+        let (opacity_after, _animating_after) =
+            resolve_mux_sidebar_dim_opacity(false, Some(switch), None, sample_after_hold);
+        assert_eq!(opacity_after, OVERLAY_IDLE_OPACITY);
+    }
+
+    // AC-4: output always clamped to 0.0..=1.0, including adversarial
+    // hold/fade origins (future, or far past).
+
+    #[test]
+    fn ac4_resolver_output_always_in_range_for_future_and_far_past_origins() {
+        let now = Instant::now();
+        let far_past = now
+            .checked_sub(OVERLAY_BRIGHT_HOLD + OVERLAY_DIM_FADE + Duration::from_secs(2))
+            .expect("test instant underflow — machine uptime too short for this offset");
+        let far_future = now + Duration::from_secs(999);
+        let cases: Vec<(bool, Option<Instant>, Option<Instant>)> = vec![
+            (false, None, None),
+            (false, Some(far_future), None), // switch recorded "in the future"
+            (false, None, Some(far_future)), // fade origin "in the future"
+            (false, Some(far_past), Some(far_past)),
+            (true, Some(far_past), Some(far_future)),
+        ];
+        for (hovered, last_switch, fade_started) in cases {
+            let (opacity, _animating) =
+                resolve_mux_sidebar_dim_opacity(hovered, last_switch, fade_started, now);
+            assert!(
+                (0.0..=1.0).contains(&opacity),
+                "opacity {opacity} out of range for hovered={hovered}, \
+                 last_switch={last_switch:?}, fade_started={fade_started:?}"
+            );
+        }
+    }
+
+    // Boundary cases (Test Notes): exactly at the hold expiry, exactly at
+    // fade completion.
+
+    #[test]
+    fn boundary_resolver_exactly_at_hold_expiry_is_no_longer_bright() {
+        let switch = Instant::now();
+        let sample = switch + OVERLAY_BRIGHT_HOLD; // exactly the boundary
+        let (opacity, _animating) = resolve_mux_sidebar_dim_opacity(false, Some(switch), None, sample);
+        assert_eq!(
+            opacity, OVERLAY_IDLE_OPACITY,
+            "bright's `now < hold_end` is false exactly at the boundary"
+        );
+    }
+
+    #[test]
+    fn boundary_resolver_exactly_at_fade_completion_is_idle_and_not_animating() {
+        let now = Instant::now();
+        let fade_started = now - OVERLAY_DIM_FADE; // elapsed == OVERLAY_DIM_FADE exactly
+        let (opacity, animating) =
+            resolve_mux_sidebar_dim_opacity(false, None, Some(fade_started), now);
+        assert_eq!(opacity, OVERLAY_IDLE_OPACITY);
+        assert!(!animating, "elapsed == OVERLAY_DIM_FADE must already be settled");
+    }
+
+    #[test]
+    fn boundary_closing_overlay_mid_fade_then_reopening_resolves_to_a_defined_opacity() {
+        let mut app = app_with_mux_windows(2);
+        with_overlay_mode(&mut app, true);
+        assert!(app.mux_sidebar_overlay_open(), "open by construction (AC-7)");
+        let now = Instant::now();
+        app.mux_sidebar_fade_started = Some(now - OVERLAY_DIM_FADE / 2);
+        app.mux_sidebar_overlay_open = false;
+        assert_eq!(app.mux_sidebar_visibility(), MuxSidebarVisibility::Hidden);
+        app.mux_sidebar_overlay_open = true;
+        assert_eq!(app.mux_sidebar_visibility(), MuxSidebarVisibility::Overlay);
+        let (opacity, _animating) = app.resolve_mux_sidebar_opacity(Instant::now());
+        assert!(
+            (0.0..=1.0).contains(&opacity),
+            "reopening must resolve to a defined, in-range opacity — no stale/invalid fade state, got {opacity}"
+        );
+    }
+
+    // AC-5: deadline provider — absent when settled or hovered, present
+    // while a hold is pending or a fade is running; absent at the App
+    // level when the overlay is not shown at all.
+
+    #[test]
+    fn ac5_deadline_absent_when_settled() {
+        let now = Instant::now();
+        let far_past = now
+            .checked_sub(OVERLAY_BRIGHT_HOLD + OVERLAY_DIM_FADE + Duration::from_secs(1))
+            .expect("test instant underflow — machine uptime too short for this offset");
+        let deadline = resolve_mux_sidebar_dim_deadline(
+            false,
+            Some(far_past),
+            Some(far_past + OVERLAY_BRIGHT_HOLD),
+            now,
+        );
+        assert_eq!(deadline, None);
+    }
+
+    #[test]
+    fn ac5_deadline_absent_when_hovered() {
+        let now = Instant::now();
+        assert_eq!(resolve_mux_sidebar_dim_deadline(true, None, None, now), None);
+    }
+
+    #[test]
+    fn ac5_deadline_present_while_hold_pending() {
+        let now = Instant::now();
+        let switch = now;
+        assert_eq!(
+            resolve_mux_sidebar_dim_deadline(false, Some(switch), None, now),
+            Some(switch + OVERLAY_BRIGHT_HOLD)
+        );
+    }
+
+    #[test]
+    fn ac5_deadline_present_while_fade_in_flight() {
+        let now = Instant::now();
+        let fade_started = now - OVERLAY_DIM_FADE / 2;
+        assert_eq!(
+            resolve_mux_sidebar_dim_deadline(false, None, Some(fade_started), now),
+            Some(fade_started + OVERLAY_DIM_FADE)
+        );
+    }
+
+    #[test]
+    fn ac5_app_level_deadline_absent_when_overlay_not_shown() {
+        let mut app = App::new();
+        app.spawn_initial_tab(); // plain local tab — not mux-attached => Hidden
+        app.mux_sidebar_last_switch = Some(Instant::now()); // would be a pending hold if shown
+        assert_eq!(app.mux_sidebar_visibility(), MuxSidebarVisibility::Hidden);
+        assert_eq!(app.next_mux_sidebar_dim_deadline(Instant::now()), None);
+    }
+
+    #[test]
+    fn ac5_app_level_dim_due_false_when_overlay_not_shown() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.mux_sidebar_last_switch = Some(Instant::now());
+        assert!(!app.mux_sidebar_dim_due(Instant::now()));
+    }
+
+    #[test]
+    fn mux_sidebar_dim_due_false_while_hovered() {
+        let mut app = app_with_mux_windows(2);
+        with_overlay_mode(&mut app, true);
+        app.set_mux_sidebar_hovered(true);
+        assert!(!app.mux_sidebar_dim_due(Instant::now()));
+    }
+
+    #[test]
+    fn mux_sidebar_dim_due_false_while_hold_pending() {
+        let mut app = app_with_mux_windows(2);
+        with_overlay_mode(&mut app, true);
+        app.mux_sidebar_last_switch = Some(Instant::now());
+        assert!(!app.mux_sidebar_dim_due(Instant::now()));
+    }
+
+    #[test]
+    fn mux_sidebar_dim_due_true_while_fade_in_flight() {
+        let mut app = app_with_mux_windows(2);
+        with_overlay_mode(&mut app, true);
+        let now = Instant::now();
+        app.mux_sidebar_fade_started = Some(now - OVERLAY_DIM_FADE / 2);
+        assert!(app.mux_sidebar_dim_due(now));
+    }
+
+    #[test]
+    fn mux_sidebar_dim_due_false_once_settled() {
+        let mut app = app_with_mux_windows(2);
+        with_overlay_mode(&mut app, true);
+        let now = Instant::now();
+        let far_past = now
+            .checked_sub(OVERLAY_BRIGHT_HOLD + OVERLAY_DIM_FADE + Duration::from_secs(1))
+            .expect("test instant underflow — machine uptime too short for this offset");
+        app.mux_sidebar_fade_started = Some(far_past);
+        assert!(!app.mux_sidebar_dim_due(now));
+    }
+
+    // AC-6: `dispatch_mux_action` records the switch timestamp for
+    // next / prev / select-by-digit; the sidebar-row-click path
+    // (`apply_tab_event`'s `MuxSwitch` arm) records it too.
+
+    #[test]
+    fn ac6_next_window_records_a_switch_timestamp() {
+        let mut app = app_with_mux_windows(2);
+        assert!(app.mux_sidebar_last_switch.is_none(), "precondition");
+        let before = Instant::now();
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextWindow),
+            MuxActionOutcome::Changed
+        );
+        let recorded = app
+            .mux_sidebar_last_switch
+            .expect("NextWindow must record a switch timestamp");
+        assert!(recorded >= before);
+    }
+
+    #[test]
+    fn ac6_prev_window_records_a_switch_timestamp() {
+        let mut app = app_with_mux_windows(2);
+        assert!(app.mux_sidebar_last_switch.is_none(), "precondition");
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::PrevWindow),
+            MuxActionOutcome::Changed
+        );
+        assert!(app.mux_sidebar_last_switch.is_some());
+    }
+
+    #[test]
+    fn ac6_select_window_by_digit_records_a_switch_timestamp() {
+        let mut app = app_with_mux_windows(3);
+        assert!(app.mux_sidebar_last_switch.is_none(), "precondition");
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::SelectWindow(2)),
+            MuxActionOutcome::Changed
+        );
+        assert!(app.mux_sidebar_last_switch.is_some());
+    }
+
+    #[test]
+    fn ac6_new_window_does_not_record_a_switch_timestamp() {
+        // NewWindow reports `Changed` too but is explicitly excluded from
+        // this feature (task0002 task plan scope) — appending a window is
+        // not "switching to" one.
+        let mut app = app_with_mux_windows(1);
+        assert!(app.mux_sidebar_last_switch.is_none(), "precondition");
+        let _ = app.dispatch_mux_action(PrefixAction::NewWindow);
+        assert!(
+            app.mux_sidebar_last_switch.is_none(),
+            "NewWindow must not record a switch timestamp"
+        );
+    }
+
+    #[test]
+    fn ac6_sidebar_row_click_via_apply_tab_event_records_a_switch_timestamp() {
+        let mut app = app_with_mux_windows(2);
+        assert!(app.mux_sidebar_last_switch.is_none(), "precondition");
+        let before = Instant::now();
+        let exit = app.apply_tab_event(crate::ui::TabEvent::MuxSwitch { tab: 0, window: 1 });
+        assert!(!exit);
+        let recorded = app
+            .mux_sidebar_last_switch
+            .expect("the sidebar row-click path must record a switch timestamp");
+        assert!(recorded >= before);
+    }
+
+    // AC-7: the overlay's runtime open flag is open on a freshly
+    // constructed app state.
+
+    #[test]
+    fn ac7_mux_sidebar_overlay_open_on_a_freshly_constructed_app() {
+        let app = App::new();
+        assert!(app.mux_sidebar_overlay_open());
+    }
+
+    // AC-9: a hover-predicate transition is observable via
+    // `mux_sidebar_hover_changed` (window_host folds this into
+    // `overlay_work`) and clears once `record_render_state` snapshots it.
+
+    #[test]
+    fn ac9_hover_changed_true_after_a_transition_false_once_snapshotted() {
+        let mut app = App::new();
+        assert!(
+            !app.mux_sidebar_hover_changed(),
+            "no transition yet on a fresh app"
+        );
+        app.set_mux_sidebar_hovered(true);
+        assert!(
+            app.mux_sidebar_hover_changed(),
+            "hover flipped from the construction-time snapshot"
+        );
+        app.record_render_state_no_tab();
+        assert!(
+            !app.mux_sidebar_hover_changed(),
+            "settled again once the transition was actually rendered"
         );
     }
 
@@ -7985,6 +8674,9 @@ mod tests {
             s.mux.window_sidebar_overlay = true;
             s
         });
+        // task0002 AC-7 flipped the flag's default to open; set it closed
+        // explicitly here since that is the scenario this test exercises.
+        app.mux_sidebar_overlay_open = false;
         assert!(!app.mux_sidebar_overlay_open);
         assert_eq!(app.mux_sidebar_visibility(), MuxSidebarVisibility::Hidden);
     }

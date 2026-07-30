@@ -1502,6 +1502,30 @@ impl WindowHost {
             app.mark_full_redraw();
         }
 
+        // task0002 D1: resolve the overlay card's opacity ONCE per call,
+        // unconditionally (even on a turn that ends up skipped below) —
+        // `App::resolve_mux_sidebar_opacity` only arms/resets a fade-
+        // bookkeeping instant, which is cheap and idempotent whether or
+        // not this turn goes on to actually paint. `render::draw_terminal`
+        // only holds `&App` (the draw layer stays a pure consumer), so
+        // the value is threaded down as a parameter below. `animating`
+        // feeds the `overlay_work` expression a few lines down so an
+        // in-flight fade is never dropped by the clean-grid skip gate
+        // (FR8 / AC-9).
+        //
+        // Gated on the overlay actually being shown: SPEC.md's edge case
+        // "sidebar closed — no fade state advances" — a hidden/persistent
+        // sidebar's dim state (if any, from an earlier overlay session)
+        // stays frozen rather than continuing to tick while nothing reads
+        // it; `draw_persistent` ignores the value regardless, so `1.0` /
+        // not-animating is a harmless default for every other case.
+        let (mux_sidebar_opacity, mux_sidebar_animating) =
+            if app.mux_sidebar_visibility() == crate::app::MuxSidebarVisibility::Overlay {
+                app.resolve_mux_sidebar_opacity(Instant::now())
+            } else {
+                (1.0, false)
+            };
+
         // Sub-phase 2 dirty-row diff: skip the entire egui+wgpu cycle when
         // nothing in the active tab needs to repaint. The first frame
         // (or any frame that follows a surface reconfigure) bypasses this
@@ -1576,11 +1600,22 @@ impl WindowHost {
             // leaving the latch to fire a frame later than the actual
             // expiry.
             let bell_erase_pending = app.take_bell_erase_pending();
+            // task0002 AC-9 / FR8: `mux_sidebar_animating` (already resolved
+            // above, before the skip decision) keeps an in-flight bright-
+            // to-dim fade from being dropped on an otherwise clean grid.
+            // `mux_sidebar_hover_changed` covers the OTHER transition this
+            // feature needs — hover entering the card brightens it
+            // IMMEDIATELY (D4: no interpolation, so `animating` alone never
+            // sees it) — bare `PointerMoved` is deliberately excluded from
+            // `egui_input_pending` below, so without this the card would
+            // never actually paint its brightened state on hover-enter.
             let overlay_work = app.restart_toast.active()
                 || !app.sftp_ui.toasts.toasts.is_empty()
                 || app.visual_bell_progress().is_some()
                 || app.search_visible()
-                || bell_erase_pending;
+                || bell_erase_pending
+                || mux_sidebar_animating
+                || app.mux_sidebar_hover_changed();
             // Undrained *actionable* egui input (a click, wheel scroll, key,
             // text, or clipboard event) vetoes the skip: `build_raw_input`
             // below is the only drain, so a skipped frame would park it
@@ -1653,7 +1688,8 @@ impl WindowHost {
         // keeps the render module free of winit dependencies.
         let window_maximized = self.window.is_maximized();
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
-            frame_events = crate::render::draw_placeholder(ctx, app, window_maximized);
+            frame_events =
+                crate::render::draw_placeholder(ctx, app, window_maximized, mux_sidebar_opacity);
             // Search overlay is drawn after the chrome so it floats above
             // the tab bar / status bar; it needs `&mut App` for its
             // TextEdit, so it runs as a separate call from `draw_terminal`
@@ -2507,7 +2543,9 @@ fn preedit_effective_dirty_rows(
 /// ([`App::next_blink_deadline`]); `bell_deadline` is `None` when no
 /// visual-bell flash is decaying ([`App::next_bell_deadline`]);
 /// `toast_deadline` is `None` when no restart/SFTP toast is up
-/// ([`App::next_toast_deadline`]).
+/// ([`App::next_toast_deadline`]); `mux_sidebar_dim_deadline` is `None`
+/// when the overlay card's dim/fade feature is settled or not shown
+/// ([`App::next_mux_sidebar_dim_deadline`] — task0002 AC-5).
 ///
 /// Returns `None` when every concern is quiescent — the caller maps this to
 /// `ControlFlow::Wait` (AC-2: an idle terminal, e.g. blink disabled, never
@@ -2517,11 +2555,17 @@ fn next_wait_deadline(
     blink_deadline: Option<Instant>,
     bell_deadline: Option<Instant>,
     toast_deadline: Option<Instant>,
+    mux_sidebar_dim_deadline: Option<Instant>,
 ) -> Option<Instant> {
-    [blink_deadline, bell_deadline, toast_deadline]
-        .into_iter()
-        .flatten()
-        .min()
+    [
+        blink_deadline,
+        bell_deadline,
+        toast_deadline,
+        mux_sidebar_dim_deadline,
+    ]
+    .into_iter()
+    .flatten()
+    .min()
 }
 
 /// Compute the winit `ControlFlow` for this turn from the App's pending
@@ -2530,10 +2574,12 @@ fn next_wait_deadline(
 /// `PocApp::resumed`'s initial control flow and `PocApp::about_to_wait`'s
 /// end-of-turn rearm so the two follow the same rule.
 fn control_flow_for(app: &App) -> ControlFlow {
+    let now = Instant::now();
     match next_wait_deadline(
         app.next_blink_deadline(),
         app.next_bell_deadline(),
         app.next_toast_deadline(),
+        app.next_mux_sidebar_dim_deadline(now),
     ) {
         Some(deadline) => ControlFlow::WaitUntil(deadline),
         None => ControlFlow::Wait,
@@ -3594,6 +3640,9 @@ impl ApplicationHandler for PocApp {
                 // Drop any link-hover underline + hand cursor when the
                 // pointer leaves the window.
                 host.invalidate_link_hover();
+                // task0002 FR3: the pointer can't be inside the overlay
+                // card if it isn't even inside the window.
+                self.app.set_mux_sidebar_hovered(false);
             }
             WindowEvent::PointerMoved { position, .. } => {
                 host.pointer_in_window = true;
@@ -3614,6 +3663,38 @@ impl ApplicationHandler for PocApp {
                 } else {
                     host.pending_egui_events
                         .push(egui::Event::PointerMoved(egui_pos));
+                }
+                // task0002 FR3 / D5 "Hover feed": maintain the overlay
+                // card's hover flag with the SAME hit test the press/wheel
+                // routing below already query
+                // (`ui::mux_sidebar::point_in_sidebar`, evaluated against
+                // the `Overlay` placement only — the persistent panel and
+                // hidden state never dim, and `point_in_sidebar` already
+                // answers `false` for a `None` placement). Sharing the
+                // derivation means hover and click can never disagree
+                // about the boundary (IMPLEMENTATION.md cross-task
+                // decision 3.5).
+                {
+                    let overlay_visible = matches!(
+                        self.app.mux_sidebar_visibility(),
+                        crate::app::MuxSidebarVisibility::Overlay
+                    );
+                    let placement =
+                        overlay_visible.then_some(crate::ui::mux_sidebar::Placement::Overlay);
+                    let window_size_logical = host
+                        .window
+                        .surface_size()
+                        .to_logical::<f32>(host.pixels_per_point as f64);
+                    let top_chrome =
+                        crate::ui::mux_sidebar::top_chrome_inset(self.app.show_tab_bar);
+                    let in_overlay = crate::ui::mux_sidebar::point_in_sidebar(
+                        egui_pos,
+                        placement,
+                        egui::vec2(window_size_logical.width, window_size_logical.height),
+                        top_chrome,
+                        host.status_bar_bot_inset_logical,
+                    );
+                    self.app.set_mux_sidebar_hovered(in_overlay);
                 }
                 // CSD edge-resize hot zone: refresh the cached
                 // ResizeDirection + pointer icon so the next left-press
@@ -4199,7 +4280,24 @@ impl ApplicationHandler for PocApp {
         if toast_due {
             host.last_toast_redraw = Some(Instant::now());
         }
-        if ime_changed || pty_changed || search_changed || blink_due || bell_due || toast_due {
+        // task0002 D5: the overlay card's dim/fade needs a redraw request
+        // at the same two junctures blink/bell/toast do — nothing else
+        // would wake the loop at the bright-hold expiry or during the
+        // fade, since `ControlFlow::WaitUntil` only re-enters this
+        // function, it does not itself trigger a repaint. The actual
+        // state mutation (arming/resetting the fade-bookkeeping instant)
+        // happens in `WindowHost::render` via
+        // `App::resolve_mux_sidebar_opacity`, once the redraw this
+        // requests actually runs — this check is read-only.
+        let mux_sidebar_dim_due = self.app.mux_sidebar_dim_due(Instant::now());
+        if ime_changed
+            || pty_changed
+            || search_changed
+            || blink_due
+            || bell_due
+            || toast_due
+            || mux_sidebar_dim_due
+        {
             host.window().request_redraw();
         }
         // Cursor cell may have moved as a side effect of pumps; notify
@@ -4838,28 +4936,36 @@ mod tests {
     /// periodic wakeup.
     #[test]
     fn next_wait_deadline_none_when_nothing_pending() {
-        assert_eq!(next_wait_deadline(None, None, None), None);
+        assert_eq!(next_wait_deadline(None, None, None, None), None);
     }
 
     /// AC-1: only the blink deadline is pending → that deadline wins.
     #[test]
     fn next_wait_deadline_blink_only() {
         let t = Instant::now() + Duration::from_millis(530);
-        assert_eq!(next_wait_deadline(Some(t), None, None), Some(t));
+        assert_eq!(next_wait_deadline(Some(t), None, None, None), Some(t));
     }
 
     /// AC-1: only the bell deadline is pending → that deadline wins.
     #[test]
     fn next_wait_deadline_bell_only() {
         let t = Instant::now() + Duration::from_millis(150);
-        assert_eq!(next_wait_deadline(None, Some(t), None), Some(t));
+        assert_eq!(next_wait_deadline(None, Some(t), None, None), Some(t));
     }
 
     /// AC-1: only the toast deadline is pending → that deadline wins.
     #[test]
     fn next_wait_deadline_toast_only() {
         let t = Instant::now() + Duration::from_millis(16);
-        assert_eq!(next_wait_deadline(None, None, Some(t)), Some(t));
+        assert_eq!(next_wait_deadline(None, None, Some(t), None), Some(t));
+    }
+
+    /// task0002 AC-5: only the mux sidebar dim deadline is pending → that
+    /// deadline wins.
+    #[test]
+    fn next_wait_deadline_mux_sidebar_dim_only() {
+        let t = Instant::now() + Duration::from_millis(200);
+        assert_eq!(next_wait_deadline(None, None, None, Some(t)), Some(t));
     }
 
     /// AC-1: blink and bell both pending, blink is the sooner deadline →
@@ -4870,25 +4976,26 @@ mod tests {
         let sooner = now + Duration::from_millis(50);
         let later = now + Duration::from_millis(500);
         assert_eq!(
-            next_wait_deadline(Some(sooner), Some(later), None),
+            next_wait_deadline(Some(sooner), Some(later), None, None),
             Some(sooner)
         );
         // Order of arguments must not matter — the later one is bell here.
         assert_eq!(
-            next_wait_deadline(Some(later), Some(sooner), None),
+            next_wait_deadline(Some(later), Some(sooner), None, None),
             Some(sooner)
         );
     }
 
-    /// AC-1: all three concerns pending → the earliest of the three wins.
+    /// AC-1: all four concerns pending → the earliest of the four wins.
     #[test]
-    fn next_wait_deadline_picks_earliest_of_all_three() {
+    fn next_wait_deadline_picks_earliest_of_all_four() {
         let now = Instant::now();
         let blink = now + Duration::from_millis(500);
         let bell = now + Duration::from_millis(10);
         let toast = now + Duration::from_millis(16);
+        let mux_sidebar_dim = now + Duration::from_millis(200);
         assert_eq!(
-            next_wait_deadline(Some(blink), Some(bell), Some(toast)),
+            next_wait_deadline(Some(blink), Some(bell), Some(toast), Some(mux_sidebar_dim)),
             Some(bell)
         );
     }
@@ -5298,6 +5405,43 @@ mod tests {
         assert!(
             !wheel_guard_section.contains("mux_sidebar::sidebar_width("),
             "MouseWheel guard must not re-derive the sidebar width itself"
+        );
+    }
+
+    // ── task0002 D5 "Hover feed": overlay hover shares the same hit test ──
+
+    /// The hover feed (which maintains `App::mux_sidebar_overlay_hovered`)
+    /// must query the SAME `ui::mux_sidebar::point_in_sidebar` helper the
+    /// press/wheel guards above use, not a re-derived boundary check — this
+    /// is what makes "the hit test and the click routing must agree on the
+    /// boundary" (task0002 task plan Scheduling §1) structurally true
+    /// rather than merely coincidental. Mirrors
+    /// `press_and_wheel_guards_share_the_same_sidebar_hit_region_helper`'s
+    /// source-scan approach; the geometric correctness of "is this point
+    /// inside the sidebar" is exercised by `ui::mux_sidebar::tests::ac1_*`.
+    #[test]
+    fn pointer_moved_hover_feed_shares_the_same_sidebar_hit_region_helper() {
+        let src = include_str!("window_host.rs");
+        let arm_start = src
+            .find("WindowEvent::PointerMoved { position, .. } =>")
+            .expect("PointerMoved arm not found in window_host.rs");
+        let arm_body = &src[arm_start..];
+        let arm_end = arm_body
+            .find("\n            WindowEvent::PointerButton")
+            .expect("PointerButton arm not found after PointerMoved");
+        let moved_body = &arm_body[..arm_end];
+        assert!(
+            moved_body.contains("mux_sidebar::point_in_sidebar("),
+            "the PointerMoved hover feed must call the shared hit-region helper"
+        );
+        assert!(
+            !moved_body.contains("mux_sidebar::sidebar_width("),
+            "the PointerMoved hover feed must not re-derive the sidebar width itself"
+        );
+        assert!(
+            moved_body.contains("set_mux_sidebar_hovered("),
+            "the PointerMoved handler must feed the hit-test result into \
+             App::set_mux_sidebar_hovered"
         );
     }
 

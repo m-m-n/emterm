@@ -293,17 +293,22 @@ pub struct SidebarOutcome {
 
 /// Draw the sidebar for the given placement, returning this frame's
 /// [`SidebarOutcome`]. `locale` labels the copy-to-clipboard affordance's
-/// hover text (task0006 AC-5).
+/// hover text (task0006 AC-5). `opacity` (task0002 FR6/FR10) is the
+/// whole-card multiplier the caller (`render::draw_terminal`, reading
+/// `App::resolve_mux_sidebar_opacity`) resolved this frame — the
+/// `Persistent` variant ignores it entirely (always fully opaque, AC-8);
+/// only `draw_overlay` applies it.
 pub fn draw(
     ctx: &egui::Context,
     entries: &[SidebarEntry],
     placement: Placement,
     width: f32,
+    opacity: f32,
     locale: crate::i18n::Locale,
 ) -> SidebarOutcome {
     match placement {
         Placement::Persistent => draw_persistent(ctx, entries, width, locale),
-        Placement::Overlay => draw_overlay(ctx, entries, width, locale),
+        Placement::Overlay => draw_overlay(ctx, entries, width, opacity, locale),
     }
 }
 
@@ -362,6 +367,7 @@ fn draw_overlay(
     ctx: &egui::Context,
     entries: &[SidebarEntry],
     width: f32,
+    opacity: f32,
     locale: crate::i18n::Locale,
 ) -> SidebarOutcome {
     let mut outcome = SidebarOutcome::default();
@@ -383,6 +389,20 @@ fn draw_overlay(
         .default_size(rect.size())
         .constrain(false)
         .show(ctx, |ui| {
+            // task0002 FR6/D2: the toolkit's own whole-widget opacity
+            // facility (`Ui::set_opacity`), applied once at the card's
+            // container level — `Painter::add`/`set` multiply every shape
+            // (fill, shadow, text, badges, icons) painted through a
+            // painter cloned from this `ui` by `opacity` afterward
+            // (`Ui::new_child` / `Frame::begin`/`end` all clone the
+            // parent's painter, so this single call covers the whole
+            // subtree below). At `opacity == 1.0` this is a no-op
+            // (`Painter::add`/`set` only transform when `opacity_factor <
+            // 1.0`), so the bright-state appearance stays byte-identical
+            // to before this feature (AC-8). Deliberately NOT hand-
+            // multiplying individual colors — this module must not gain
+            // raw color constructors (AC-10 / NFR2).
+            ui.set_opacity(opacity);
             // `egui::Area` caches this id's geometry in per-frame-crossing
             // `AreaState` and only ever consults `default_size` on the very
             // first ("sizing pass") frame — from the second frame on,
@@ -764,14 +784,14 @@ mod tests {
         let mut priming = RawInput::default();
         priming.screen_rect = Some(screen_rect());
         let _ = ctx.run(priming, |ctx| {
-            let _ = draw(ctx, items, placement, MIN_WIDTH, crate::i18n::Locale::En);
+            let _ = draw(ctx, items, placement, MIN_WIDTH, 1.0, crate::i18n::Locale::En);
         });
 
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         LAST_ROW_RECTS.with(|c| c.borrow_mut().clear());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(ctx, items, placement, MIN_WIDTH, crate::i18n::Locale::En);
+            let _ = draw(ctx, items, placement, MIN_WIDTH, 1.0, crate::i18n::Locale::En);
         });
         LAST_ROW_RECTS.with(|c| c.borrow().clone())
     }
@@ -799,7 +819,7 @@ mod tests {
             priming.screen_rect = Some(screen_rect());
             priming.events.push(Event::PointerMoved(click_pos));
             let _ = ctx.run(priming, |ctx| {
-                let _ = draw(ctx, items, placement, MIN_WIDTH, crate::i18n::Locale::En);
+                let _ = draw(ctx, items, placement, MIN_WIDTH, 1.0, crate::i18n::Locale::En);
             });
         }
 
@@ -820,7 +840,7 @@ mod tests {
         });
         let mut captured = SidebarOutcome::default();
         let _ = ctx.run(input, |ctx| {
-            captured = draw(ctx, items, placement, MIN_WIDTH, crate::i18n::Locale::En);
+            captured = draw(ctx, items, placement, MIN_WIDTH, 1.0, crate::i18n::Locale::En);
         });
         captured
     }
@@ -945,6 +965,7 @@ mod tests {
                 items,
                 Placement::Overlay,
                 width,
+                1.0,
                 crate::i18n::Locale::En,
             );
         });
@@ -972,6 +993,7 @@ mod tests {
                 items,
                 Placement::Overlay,
                 width,
+                1.0,
                 crate::i18n::Locale::En,
             );
         });
@@ -1124,6 +1146,141 @@ mod tests {
         );
     }
 
+    // ── task0002 AC-8: whole-card opacity application ───────────────────
+
+    /// The maximum fill alpha among the painted card-background rects
+    /// (`Rounding::same(OVERLAY_CORNER_RADIUS)` distinguishes the card's
+    /// own background from the row pills, which round at `ROW_HEIGHT /
+    /// 2.0` instead) in a `FullOutput`'s raw (untessellated) shape list —
+    /// `Painter::add`/`set` apply the opacity transform (`gamma_multiply`)
+    /// before a shape ever reaches this list, so this reads the
+    /// ACTUALLY-PAINTED alpha, not a precomputed value.
+    fn max_card_fill_alpha(output: &egui::FullOutput) -> Option<u8> {
+        fn walk(shape: &egui::epaint::Shape, out: &mut Option<u8>) {
+            use egui::epaint::Shape;
+            match shape {
+                Shape::Vec(v) => {
+                    for s in v {
+                        walk(s, out);
+                    }
+                }
+                Shape::Rect(r) if r.rounding.nw == OVERLAY_CORNER_RADIUS => {
+                    *out = Some(out.map_or(r.fill.a(), |m| m.max(r.fill.a())));
+                }
+                _ => {}
+            }
+        }
+        let mut found = None;
+        for cs in &output.shapes {
+            walk(&cs.shape, &mut found);
+        }
+        found
+    }
+
+    #[test]
+    fn ac8_overlay_opacity_multiplies_the_painted_cards_fill_alpha() {
+        // `egui::Area`'s very first-ever frame is an invisible "sizing
+        // pass" (see `run_with_click`'s doc comment above) — its shapes
+        // resolve to `Shape::Noop` placeholders, not real paint. A priming
+        // frame settles the `Area` before the frame under test, mirroring
+        // every other real-paint helper in this module.
+        fn run_and_capture(items: &[SidebarEntry], opacity: f32) -> egui::FullOutput {
+            let ctx = egui::Context::default();
+            let mut priming = RawInput::default();
+            priming.screen_rect = Some(screen_rect());
+            let _ = ctx.run(priming, |ctx| {
+                let _ = draw(
+                    ctx,
+                    items,
+                    Placement::Overlay,
+                    MIN_WIDTH,
+                    opacity,
+                    crate::i18n::Locale::En,
+                );
+            });
+            let mut input = RawInput::default();
+            input.screen_rect = Some(screen_rect());
+            ctx.run(input, |ctx| {
+                let _ = draw(
+                    ctx,
+                    items,
+                    Placement::Overlay,
+                    MIN_WIDTH,
+                    opacity,
+                    crate::i18n::Locale::En,
+                );
+            })
+        }
+
+        let items = entries(1, 0);
+        let output_full = run_and_capture(&items, 1.0);
+        let alpha_full =
+            max_card_fill_alpha(&output_full).expect("the card background rect must be painted");
+
+        let output_half = run_and_capture(&items, 0.5);
+        let alpha_half =
+            max_card_fill_alpha(&output_half).expect("the card background rect must be painted");
+
+        assert!(
+            alpha_half < alpha_full,
+            "opacity=0.5 should paint a lower alpha than opacity=1.0 \
+             (full={alpha_full}, half={alpha_half})"
+        );
+        // egui's `Color32::gamma_multiply`: `(component as f32 * factor +
+        // 0.5) as u8` — assert the exact linear relationship rather than
+        // just "lower", so a future accidental double-application (or a
+        // non-linear substitute) would fail this test.
+        let expected_half = (alpha_full as f32 * 0.5 + 0.5) as u8;
+        assert_eq!(
+            alpha_half, expected_half,
+            "alpha should scale exactly per egui's gamma_multiply"
+        );
+    }
+
+    #[test]
+    fn ac8_persistent_placement_ignores_the_opacity_input_entirely() {
+        // A value that WOULD make the panel invisible if it were (wrongly)
+        // applied — proves this isn't a no-op merely because both runs
+        // happen to use the same "reasonable" opacity.
+        let items = entries(2, 0);
+
+        let ctx_full = egui::Context::default();
+        let mut input_full = RawInput::default();
+        input_full.screen_rect = Some(screen_rect());
+        let output_full = ctx_full.run(input_full, |ctx| {
+            let _ = draw(
+                ctx,
+                &items,
+                Placement::Persistent,
+                MIN_WIDTH,
+                1.0,
+                crate::i18n::Locale::En,
+            );
+        });
+
+        let ctx_zero = egui::Context::default();
+        let mut input_zero = RawInput::default();
+        input_zero.screen_rect = Some(screen_rect());
+        let output_zero = ctx_zero.run(input_zero, |ctx| {
+            let _ = draw(
+                ctx,
+                &items,
+                Placement::Persistent,
+                MIN_WIDTH,
+                0.0,
+                crate::i18n::Locale::En,
+            );
+        });
+
+        assert_eq!(
+            format!("{:?}", output_full.shapes),
+            format!("{:?}", output_zero.shapes),
+            "the persistent variant's painted output must be byte-identical \
+             regardless of the opacity value supplied — it never even reads \
+             the parameter (draw_persistent's signature has none)"
+        );
+    }
+
     // ── task0009 AC-1/AC-2/AC-3: per-frame card rect authoritative across
     // resize (cached Area surface state must not leak stale geometry) ─────
 
@@ -1149,6 +1306,7 @@ mod tests {
                 items,
                 Placement::Overlay,
                 width1,
+                1.0,
                 crate::i18n::Locale::En,
             );
         });
@@ -1162,6 +1320,7 @@ mod tests {
                 items,
                 Placement::Overlay,
                 width2,
+                1.0,
                 crate::i18n::Locale::En,
             );
         });
@@ -1361,6 +1520,7 @@ mod tests {
                 &items,
                 Placement::Persistent,
                 MIN_WIDTH,
+                1.0,
                 crate::i18n::Locale::En,
             );
         });
@@ -1429,6 +1589,7 @@ mod tests {
                 &items,
                 Placement::Persistent,
                 MIN_WIDTH,
+                1.0,
                 crate::i18n::Locale::En,
             );
         });
@@ -1603,6 +1764,7 @@ mod tests {
                 &items,
                 Placement::Persistent,
                 width,
+                1.0,
                 crate::i18n::Locale::En,
             );
             egui::TopBottomPanel::bottom("t0010-statusbar")
@@ -1664,6 +1826,7 @@ mod tests {
                 &items,
                 Placement::Overlay,
                 width,
+                1.0,
                 crate::i18n::Locale::En,
             );
         });
@@ -1745,6 +1908,7 @@ mod tests {
                 items,
                 Placement::Persistent,
                 MIN_WIDTH,
+                1.0,
                 crate::i18n::Locale::En,
             );
         });
