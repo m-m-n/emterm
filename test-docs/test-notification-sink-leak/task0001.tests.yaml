@@ -1,0 +1,80 @@
+task_id: task0001
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests: [app::tests::pump_all_applies_daemon_agent_status_update_to_model]
+    red_confirmed: false
+    red_reason: >
+      This task swaps which sink the test's app holds; the test's own
+      assertions are unchanged and were already green before this change
+      (App::new()'s production NotifyRustSink swallows D-Bus failures via
+      log::warn — see callbacks.rs NotifyRustSink::send — so the leak never
+      manifested as a test failure). There is no pass/fail delta to observe
+      here; verified instead by code inspection: the test now calls
+      app_with_test_sink() (src-tauri/src/app.rs) instead of App::new(), so
+      app.notification_sink is TestNotifySink rather than NotifyRustSink.
+  AC-2:
+    tests: [app::tests::pump_all_applies_daemon_agent_status_update_to_model]
+    red_confirmed: false
+    red_reason: >
+      The model assertions (mux-pane-42 entry, state Blocked, revision 7)
+      are byte-for-byte unchanged from before this task and were already
+      passing under App::new(); this criterion is a refactor of app
+      construction only, verified green before and after the change by
+      running the test.
+  AC-3:
+    tests: []
+    red_reason: >
+      Not testable as a pass/fail delta via cargo test: before this task
+      the same test already passed while its app held the production
+      NotifyRustSink, so pump_all's notification drain for the
+      Blocked/pane-42/rev-7 transition (notification-eligible: blocked
+      state, pane not visible, both notification settings default-on, rate
+      limiter free for a first report) reached NotifyRustSink::send, which
+      calls notify_rust::Notification::show() — the only code path that
+      talks to the OS notification service. Its Err branch is swallowed
+      (log::warn, never panics), so the leak was invisible to cargo test.
+      Confirmed by inspection instead: the test's app now holds
+      TestNotifySink (a Vec-capturing sink already used by every other
+      notification test in this module), which cannot reach
+      notify_rust::Notification::show(); and by running the full `--lib`
+      suite with this change in place, which produces no
+      notify-rust/D-Bus-related log output for this test.
+  AC-4:
+    tests: []
+    red_reason: >
+      Outcome is the full `--lib` suite result plus `cargo fmt --check`.
+      Full suite: 2908 passed, 6 failed (all 6 are pre-existing baseline
+      failures in tabs.rs, unrelated to app.rs / notifications — see
+      baseline_failures/final_failures above), 3 ignored. Format: `cargo
+      fmt --manifest-path src-tauri/Cargo.toml --check` reports diffs, but
+      none within the lines this task touched (src-tauri/src/app.rs around
+      the pump_all_applies_daemon_agent_status_update_to_model test) —
+      confirmed by inspecting the check's output for that file/line range.
+      All reported diffs are pre-existing drift in unrelated files/lines
+      (e.g. src-tauri/tests/mux_hot_upgrade.rs, unrelated mux-sidebar tests
+      elsewhere in app.rs), consistent with this project's documented
+      convention of not enforcing crate-wide rustfmt. This task's own diff
+      introduces no format drift.
+  AC-5:
+    tests: []
+    red_reason: >
+      Verified via `git diff --stat` on the task branch: only
+      src-tauri/src/app.rs changed (5 insertions, 1 deletion), and the
+      change is confined to the `#[cfg(test)] mod tests` block (the
+      pump_all_applies_daemon_agent_status_update_to_model test body). No
+      production code and no other file changed.
