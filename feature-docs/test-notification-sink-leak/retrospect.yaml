@@ -1,0 +1,51 @@
+feature: test-notification-sink-leak
+collected_at: "2026-07-30T21:58:00+09:00"
+session_ids: [25d0c015-d034-4de5-b708-21ddc843bb9e]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures:
+    - scope: pre-existing
+      note: >
+        The library test suite exits non-zero with 7 failures in tabs::tests
+        (ts7, ts8, ts9, ts10, ts11, ts13, welcome_without_windows_leaves_group_none).
+        Running the same approved command on the main working tree at base
+        93afa65 with code unchanged reproduces the identical set and counts
+        (2907 passed / 7 failed), so none is attributable to this feature.
+        Not a feature failure; recorded so the standing red baseline stays
+        visible.
+    - scope: pre-existing
+      note: >
+        cargo fmt --check reports 71 drift sites; the main tree reports the
+        same 71. None inside the lines this feature touched. Consistent with
+        the project's documented rustfmt-non-enforcement convention.
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >
+    A git worktree does not carry gitignored build assets. This crate's
+    build.rs requires the bundled fonts under src-tauri/assets/fonts/, which
+    are gitignored, so BOTH the task worktree and the integration worktree
+    needed them copied from the main tree before any build/test command could
+    run. Every em-workflow run in this repository will hit this; a pre-step
+    that seeds machine-local build assets into new worktrees would remove the
+    per-run deviation.
+  - >
+    The implement phase's base_commit was pre-filled during create-spec (to
+    the main-tree HEAD) even though the implement protocol is its writer and
+    defines it as the integration tip at implement start. The orchestrator
+    corrected it so the review diff stayed code-only. Worth pinning which
+    phase owns that field.
+  - >
+    Discovery aborts on "multiple integration branches + no feature argument",
+    but leftover branches from completed features accumulate (batch mode keeps
+    them by design), so a fresh batch task can hit the abort with nothing
+    actually resumable. This run resolved it by checking merged-ness: all
+    three leftovers were ancestors of main. A mechanical "resumable = not
+    merged into base_branch" filter in Discovery would make this deterministic.
+  - >
+    One medium review finding stayed unresolved because R4's candidate gate is
+    critical/high only. It was a two-line metadata omission in the task's own
+    tests.yaml record — cheap to fix, but out of gate. Worth deciding whether
+    record-file findings deserve a separate cheap-fix lane.
