@@ -48,8 +48,9 @@ tasks:
     domains: [external-io]
     complexity: low
     requirements: [FR1, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/test-notification-sink-leak/task0001
 
 review:
   status: pending
