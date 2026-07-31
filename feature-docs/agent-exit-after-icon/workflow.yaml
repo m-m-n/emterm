@@ -49,7 +49,7 @@ tasks:
     domains: [input-handling]
     complexity: medium
     requirements: [FR1, NFR2]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/agent-exit-after-icon/task0001
   task0002:
