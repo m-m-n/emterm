@@ -3540,6 +3540,15 @@ impl App {
             Vec::new();
         let mut agent_status_updates: Vec<mux_ipc::protocol::AgentStatusUpdateMsg> = Vec::new();
         let mut agent_status_closed_panes: Vec<u32> = Vec::new();
+        // agent-exit-after-icon (task0002 deviation): each tab's resolved,
+        // true-order, live-only inferred-clear latch inputs this pump
+        // (tagged with the originating tab's `stable_id`, mirroring
+        // `agent_status_plain_events`). See `Tab::pending_latch_inputs`'s
+        // doc.
+        let mut agent_status_latch_inputs: Vec<(
+            u64,
+            crate::agent_status_model::ResolvedLatchInput,
+        )> = Vec::new();
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             // Phase 4-C (APC redesign): `Tab::pump` already routes
             // APC-encoded mux messages into the tab's own state via
@@ -3560,6 +3569,9 @@ impl App {
             let tab_stable_id = tab.stable_id;
             for event in tab.take_pending_agent_status_events() {
                 agent_status_plain_events.push((tab_stable_id, event));
+            }
+            for input in tab.take_pending_latch_inputs() {
+                agent_status_latch_inputs.push((tab_stable_id, input));
             }
             agent_status_updates.extend(tab.take_pending_agent_status_updates());
             agent_status_closed_panes.extend(tab.take_closed_agent_status_panes());
@@ -3760,6 +3772,28 @@ impl App {
         for (tab_stable_id, event) in agent_status_plain_events {
             self.agent_status
                 .apply_plain_tab_event(tab_stable_id, event);
+        }
+        // agent-exit-after-icon (task0002 deviation, FR2): drive each
+        // tab's inferred-clear latch with its resolved, true-order,
+        // live-only inputs from this pass. Independent of (and safe to
+        // run either side of) the real-status loop above: driving the
+        // latch never itself applies a real state change except through
+        // `AgentStatusModel::apply_plain_tab_event` — the SAME path an
+        // explicit `Clear` uses — when a `Mark` input makes the latch
+        // fire.
+        for (tab_stable_id, input) in agent_status_latch_inputs {
+            match input {
+                crate::agent_status_model::ResolvedLatchInput::Set => {
+                    self.agent_status.record_latch_set(tab_stable_id);
+                }
+                crate::agent_status_model::ResolvedLatchInput::Clear => {
+                    self.agent_status.record_latch_clear(tab_stable_id);
+                }
+                crate::agent_status_model::ResolvedLatchInput::Mark(kind) => {
+                    self.agent_status
+                        .record_live_prompt_mark(tab_stable_id, kind);
+                }
+            }
         }
         for update in agent_status_updates {
             // task0006 AC-5: learn/refresh this pane's public ID from the
