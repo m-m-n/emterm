@@ -1,0 +1,142 @@
+task_id: task0003
+baseline_failures:
+  # All confined to `tabs::tests::*` off-thread-replay-worker timing
+  # flakiness (project memory: "tabs.rs replay テストは並列で非決定的に落ちる
+  # — --test-threads=1 で安定") plus one unrelated flaky tmux_sockets test.
+  # Union across two verbatim `project_commands.test` runs in this worktree
+  # (before any task0003 edits) to conservatively capture the flaky set.
+  # None are in mux/, agent_status*, prompts, pane, or daemon modules.
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts12_resize_supersedes_and_redispatches_at_new_grid
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  - tmux_sockets::tests::enumerate_session_name_with_embedded_space_preserved
+final_failures:
+  # All ⊆ baseline_failures (same flaky tabs::tests::*/welcome_without_windows
+  # set; a different subset failed this run, consistent with the flakiness
+  # already observed across the two baseline runs).
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::session::pane::tests::test_record_live_osc133_mark_set_then_d_then_a_fires_inferred_clear
+      - mux::daemon::tests::test_apply_live_osc133_mark_set_then_d_then_a_fires_inferred_clear
+    red_confirmed: true
+    red_reason: >-
+      Temporarily disabled the latch.record_set()/record_clear() calls in
+      MuxPane::apply_agent_status_event. Pane-level test failed:
+      "assertion `left == right` failed: D followed by A must fire exactly
+      once — left: None right: Some(2)". Daemon-level test failed:
+      "must receive AgentStatusUpdate: Elapsed(())" (broadcast never
+      arrived). Reverted after confirming.
+  AC-2:
+    tests:
+      - mux::session::pane::tests::test_record_live_osc133_mark_a_without_prior_d_is_a_noop
+      - mux::daemon::tests::test_apply_live_osc133_mark_a_without_prior_d_leaves_state_unchanged
+    red_confirmed: true
+    red_reason: >-
+      Temporarily forced MuxPane::record_live_osc133_mark to report "fired"
+      on any PromptStart mark, bypassing the latch's own D-gate. Pane-level
+      test failed: "left: Some(2) right: None". Daemon-level test failed:
+      "an A with no prior D must not broadcast". Reverted after confirming.
+  AC-3:
+    tests:
+      - mux::session::pane::tests::test_record_live_osc133_mark_after_explicit_clear_is_a_noop
+      - mux::daemon::tests::test_apply_live_osc133_mark_after_explicit_clear_no_duplicate_clear
+    red_confirmed: true
+    red_reason: >-
+      Temporarily wired only latch.record_set() in apply_agent_status_event
+      (explicit Clear no longer called latch.record_clear()). Pane-level
+      test failed: "left: Some(3) right: None". Daemon-level test failed:
+      "D/A after an explicit Clear must not broadcast a second clear".
+      Reverted after confirming.
+  AC-4:
+    tests:
+      - mux::session::pane::tests::test_resume_snapshot_construction_with_osc133_bytes_in_scrollback_never_fires_latch
+      - mux::ipc::pty_spawn::tests::pty_reader_loop_feeds_report_then_marks_from_the_same_read_in_order
+    red_confirmed: true
+    red_reason: >-
+      Primary evidence: temporarily injected two
+      MuxPane::record_live_osc133_mark calls into resume_pane_with_permit
+      (simulating a regression where snapshot/reattach assembly reached the
+      latch). Test failed: "snapshot/replay construction must never fire the
+      inferred-clear latch — left: None right: Some(Working)". Reverted
+      after confirming. The second test
+      (pty_reader_loop_feeds_report_then_marks_from_the_same_read_in_order)
+      corroborates the "live-only, not scrollback-derived" half of AC-4 by
+      construction (pre-seeded scrollback D/A bytes are proven NOT
+      re-counted — exactly 3 items reach the channel, not 5) but was not
+      separately broken-and-restored; see notes.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::pty_reader_loop_suppresses_osc133_marks_emitted_on_the_alternate_screen
+    red_confirmed: true
+    red_reason: >-
+      Temporarily fed the OSC 133 scanner the raw unfiltered PTY chunk
+      (`data`) instead of the alt-screen-gated `to_write`. Test failed:
+      "left: [CommandEnd, PromptStart, CommandEnd, PromptStart] right:
+      [CommandEnd, PromptStart]" — the alternate-screen D/A pair leaked
+      through. Reverted after confirming.
+  AC-6:
+    tests:
+      - mux::daemon::tests::test_pane_without_osc133_marks_keeps_set_state_indefinitely
+    red_confirmed: false
+    red_reason: >-
+      This test only exercises apply_agent_status_report's pre-existing
+      Set-application logic, which this task did not change (the latch
+      bookkeeping added is a side effect that never touches
+      AgentStatus.state on a Set). No plausible revert of this task's own
+      changes makes this specific test fail without AC-1/AC-2/AC-3's tests
+      failing first, so a genuine red-before-green transition specific to
+      this test was not observed. Kept as an explicit NFR3 regression-guard
+      rather than a red-proven criterion.
+  AC-7:
+    tests:
+      - mux::session::pane::tests::test_new_pane_has_disarmed_latch
+    red_confirmed: true
+    red_reason: >-
+      The referenced field (MuxPane::agent_status_exit_latch) and type
+      (AgentStatusExitLatch) do not exist prior to this task's pane.rs
+      changes — before this task this test fails to compile (unresolved
+      field / unresolved type), which was the actual failure mode observed
+      while incrementally building the field onto MuxPane.
