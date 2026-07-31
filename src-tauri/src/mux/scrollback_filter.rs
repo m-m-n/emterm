@@ -501,6 +501,190 @@ impl Default for AgentStatusOscScanner {
     }
 }
 
+/// Cap on the carry-over held by [`Osc133MarkScanner`] for an in-flight
+/// (not-yet-terminated) OSC body. Mirrors
+/// [`AGENT_STATUS_SCANNER_CARRY_OVER_CAP`]: an OSC 133 mark body is at most
+/// a couple of bytes (`A`/`B`/`C`/`D` or `D;<exit_code>`), so this exists
+/// purely to bound an adversarial or wedged stream's memory footprint.
+const OSC133_SCANNER_CARRY_OVER_CAP: usize = 8 * 1024;
+
+/// Decode state for [`Osc133MarkScanner`]. Identical shape to
+/// [`AgentStatusScanState`] (a plain byte-level OSC scanner differing only
+/// in which body prefix it recognizes) — kept as a separate type rather
+/// than shared so each scanner's state cannot be confused for the other's.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Osc133ScanState {
+    /// No partial OSC sequence in flight.
+    Idle,
+    /// Just consumed an ESC while `Idle`; waiting to see if the next byte is
+    /// `]` (OSC introducer).
+    SeenEsc,
+    /// Inside `ESC ] <body>`, accumulating body bytes in `partial` (the
+    /// introducer itself is not stored — `partial` holds body bytes only).
+    InsideOsc,
+    /// The most recent body byte was ESC, not yet pushed into `partial`,
+    /// pending disambiguation: `\` completes ST, `]` reopens as a fresh OSC
+    /// introducer (the just-seen ESC becomes ITS introducer), anything else
+    /// aborts the in-flight OSC without emitting.
+    InsideOscPendingSt,
+}
+
+/// Per-pane stateful decoder for LIVE OSC 133 semantic-prompt marks
+/// (task0003, SPEC FR1/FR4/FR5).
+///
+/// Structurally identical to [`AgentStatusOscScanner`] (byte-level OSC
+/// scanning that survives a report split across a PTY read boundary) but
+/// recognizes `133;<letter>` bodies instead of `777;emterm;agent-status;`
+/// ones, mapping the letter via [`crate::prompts::PromptMarkKind::from_byte`]
+/// (the same grammar `term_core`'s own `parse_osc133_mark` uses — `A`/`B`/
+/// `C`/`D`, with `D` optionally followed by `;<exit_code>` which this
+/// scanner ignores since the latch only needs the mark KIND).
+///
+/// **FR5 (live-only, main-screen-only):** this scanner has no opinion of
+/// its own about "live vs. replay" or "main vs. alt screen" — it emits a
+/// mark for every complete `133;<letter>` body in whatever bytes it is
+/// fed. The FR5 guarantee comes entirely from the CALLER only ever feeding
+/// it live PTY bytes already narrowed to the main-buffer spans (mirroring
+/// how `pty_reader_loop` already narrows scrollback writes via
+/// `extract_main_buffer_bytes`) — never scrollback/snapshot/reattach bytes
+/// reconstructed for replay.
+///
+/// One instance is owned per pane's reader thread
+/// ([`crate::mux::ipc::pty_spawn::pty_reader_loop`]), mirroring
+/// [`AgentStatusOscScanner`]'s per-pane cross-chunk state.
+pub(in crate::mux) struct Osc133MarkScanner {
+    state: Osc133ScanState,
+    /// Body bytes accumulated for the in-flight OSC (introducer and
+    /// terminator excluded).
+    partial: Vec<u8>,
+    /// True once a single carry-over-overflow warning has fired. Never
+    /// re-armed, matching [`AgentStatusOscScanner`]'s "warn once" behavior.
+    overflow_warned: bool,
+}
+
+impl Osc133MarkScanner {
+    pub(in crate::mux) fn new() -> Self {
+        Self {
+            state: Osc133ScanState::Idle,
+            partial: Vec::new(),
+            overflow_warned: false,
+        }
+    }
+
+    /// Feed one chunk of bytes already narrowed to live, main-buffer PTY
+    /// content. Returns every complete OSC 133 mark that completed during
+    /// this call, in stream order. Any trailing incomplete OSC sequence is
+    /// retained in `self` and resumed on the next `feed` call.
+    pub(in crate::mux) fn feed(&mut self, chunk: &[u8]) -> Vec<crate::prompts::PromptMarkKind> {
+        let mut out = Vec::new();
+        for &b in chunk {
+            self.step(b, &mut out);
+            if self.partial.len() > OSC133_SCANNER_CARRY_OVER_CAP {
+                if !self.overflow_warned {
+                    log::warn!(
+                        "OSC 133 mark scanner: carry-over exceeded {} bytes; dropping in-flight sequence",
+                        OSC133_SCANNER_CARRY_OVER_CAP
+                    );
+                    self.overflow_warned = true;
+                }
+                self.reset();
+            }
+        }
+        out
+    }
+
+    fn step(&mut self, b: u8, out: &mut Vec<crate::prompts::PromptMarkKind>) {
+        match self.state {
+            Osc133ScanState::Idle => {
+                if b == 0x1b {
+                    self.state = Osc133ScanState::SeenEsc;
+                }
+            }
+            Osc133ScanState::SeenEsc => match b {
+                b']' => {
+                    self.partial.clear();
+                    self.state = Osc133ScanState::InsideOsc;
+                }
+                0x1b => {
+                    // Consecutive ESC: keep the latest one as the candidate
+                    // introducer, stay in SeenEsc.
+                }
+                _ => {
+                    // Not an OSC introducer; abandon the candidate.
+                    self.state = Osc133ScanState::Idle;
+                }
+            },
+            Osc133ScanState::InsideOsc => {
+                if b == 0x07 {
+                    // BEL terminator.
+                    self.commit(out);
+                } else if b == 0x1b {
+                    // Could be the start of ST — hold it without pushing to
+                    // `partial` until the next byte disambiguates.
+                    self.state = Osc133ScanState::InsideOscPendingSt;
+                } else {
+                    self.partial.push(b);
+                }
+            }
+            Osc133ScanState::InsideOscPendingSt => match b {
+                b'\\' => {
+                    // ST terminator (ESC \).
+                    self.commit(out);
+                }
+                b']' => {
+                    // The held ESC + this byte form a NEW OSC introducer —
+                    // the old in-flight body is abandoned (never emitted),
+                    // scanning restarts fresh from here.
+                    self.partial.clear();
+                    self.state = Osc133ScanState::InsideOsc;
+                }
+                0x1b => {
+                    // Still ambiguous; keep the latest ESC as the pending
+                    // candidate.
+                }
+                _ => {
+                    // The held ESC aborts the in-flight OSC (not the start
+                    // of ST, not a fresh introducer); this byte itself is
+                    // plain and starts nothing.
+                    self.reset();
+                }
+            },
+        }
+    }
+
+    /// Complete the in-flight OSC: emit a mark only if the body is a
+    /// recognized `133;<letter>` prompt mark, then reset to `Idle` either
+    /// way.
+    fn commit(&mut self, out: &mut Vec<crate::prompts::PromptMarkKind>) {
+        if let Some(rest) = self.partial.strip_prefix(b"133;") {
+            let head = rest.split(|&b| b == b';').next().unwrap_or(rest);
+            if head.len() == 1 {
+                if let Some(kind) = crate::prompts::PromptMarkKind::from_byte(head[0]) {
+                    out.push(kind);
+                }
+            }
+        }
+        self.reset();
+    }
+
+    fn reset(&mut self) {
+        self.partial.clear();
+        self.state = Osc133ScanState::Idle;
+    }
+
+    /// Current size of the in-flight carry-over buffer. Test-only observer.
+    #[cfg(test)]
+    fn carry_over_len(&self) -> usize {
+        self.partial.len()
+    }
+}
+
+impl Default for Osc133MarkScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A matched (strippable) CSI device query: where scanning resumes, and any
 /// C0 control bytes embedded in the query body that must be re-emitted.
 ///
@@ -896,6 +1080,160 @@ mod tests {
         input.extend_from_slice(b"\x1b]777;emterm;agent-status;v=1;state=done\x07");
         let out = AgentStatusOscScanner::new().feed(&input);
         assert_eq!(out, vec!["emterm;agent-status;v=1;state=done".to_string()]);
+    }
+
+    // ── Osc133MarkScanner (task0003, SPEC FR1/FR4/FR5) ──────────────────
+
+    use crate::prompts::PromptMarkKind;
+
+    #[test]
+    fn osc133_scanner_extracts_single_prompt_start_mark() {
+        let input = b"pre\x1b]133;A\x07post";
+        let out = Osc133MarkScanner::new().feed(input);
+        assert_eq!(out, vec![PromptMarkKind::PromptStart]);
+    }
+
+    #[test]
+    fn osc133_scanner_extracts_command_end_mark_st_terminated() {
+        let input = b"\x1b]133;D\x1b\\";
+        let out = Osc133MarkScanner::new().feed(input);
+        assert_eq!(out, vec![PromptMarkKind::CommandEnd]);
+    }
+
+    #[test]
+    fn osc133_scanner_extracts_command_end_mark_with_exit_code() {
+        // `D;<exit_code>` — the exit code is ignored; only the kind matters
+        // to the latch.
+        let input = b"\x1b]133;D;42\x07";
+        let out = Osc133MarkScanner::new().feed(input);
+        assert_eq!(out, vec![PromptMarkKind::CommandEnd]);
+    }
+
+    #[test]
+    fn osc133_scanner_extracts_d_then_a_in_order() {
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1b]133;D\x07");
+        input.extend_from_slice(b"$ ");
+        input.extend_from_slice(b"\x1b]133;A\x07");
+        let out = Osc133MarkScanner::new().feed(&input);
+        assert_eq!(
+            out,
+            vec![PromptMarkKind::CommandEnd, PromptMarkKind::PromptStart]
+        );
+    }
+
+    #[test]
+    fn osc133_scanner_extracts_all_four_kinds() {
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1b]133;A\x07");
+        input.extend_from_slice(b"\x1b]133;B\x07");
+        input.extend_from_slice(b"\x1b]133;C\x07");
+        input.extend_from_slice(b"\x1b]133;D\x07");
+        let out = Osc133MarkScanner::new().feed(&input);
+        assert_eq!(
+            out,
+            vec![
+                PromptMarkKind::PromptStart,
+                PromptMarkKind::CommandStart,
+                PromptMarkKind::CommandExec,
+                PromptMarkKind::CommandEnd,
+            ]
+        );
+    }
+
+    #[test]
+    fn osc133_scanner_ignores_non_133_osc() {
+        let input = b"\x1b]777;emterm;agent-status;v=1;state=working\x07\x1b]0;title\x07";
+        let out = Osc133MarkScanner::new().feed(input);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn osc133_scanner_ignores_unrecognized_133_head() {
+        // `Z` is not a recognized OSC 133 sub-type.
+        let input = b"\x1b]133;Z\x07";
+        let out = Osc133MarkScanner::new().feed(input);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn osc133_scanner_ignores_unterminated_sequence() {
+        let input = b"text\x1b]133;A";
+        let out = Osc133MarkScanner::new().feed(input);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn osc133_scanner_empty_input_returns_empty() {
+        assert!(Osc133MarkScanner::new().feed(b"").is_empty());
+        assert!(
+            Osc133MarkScanner::new()
+                .feed(b"plain text, no escapes")
+                .is_empty()
+        );
+    }
+
+    /// A mark split across two chunks at every possible byte boundary
+    /// results in exactly one decoded mark — mirrors
+    /// `scanner_feed_split_at_every_byte_boundary_yields_exactly_one_event`
+    /// for [`AgentStatusOscScanner`].
+    #[test]
+    fn osc133_scanner_feed_split_at_every_byte_boundary_yields_exactly_one_mark() {
+        let cases: [(&[u8], PromptMarkKind); 2] = [
+            (b"\x1b]133;A\x07", PromptMarkKind::PromptStart),
+            (b"\x1b]133;D\x1b\\", PromptMarkKind::CommandEnd),
+        ];
+        for (full, expected) in cases {
+            for split in 1..full.len() {
+                let mut scanner = Osc133MarkScanner::new();
+                let (head, tail) = full.split_at(split);
+                let mut out = scanner.feed(head);
+                out.extend(scanner.feed(tail));
+                assert_eq!(
+                    out,
+                    vec![expected],
+                    "split at {split} of {full:?} must yield exactly one mark"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn osc133_scanner_bounds_carry_over_on_unterminated_prefix_plus_large_burst() {
+        let mut scanner = Osc133MarkScanner::new();
+        let intro = b"\x1b]133;";
+        assert!(scanner.feed(intro).is_empty());
+        let burst: Vec<u8> = std::iter::repeat_n(b'A', 200_000).collect();
+        let out = scanner.feed(&burst);
+        assert!(out.is_empty(), "still unterminated, so no mark");
+        assert!(
+            scanner.carry_over_len() <= OSC133_SCANNER_CARRY_OVER_CAP,
+            "carry-over must stay bounded by the cap: got {}",
+            scanner.carry_over_len()
+        );
+    }
+
+    #[test]
+    fn osc133_scanner_drops_overflowed_carry_over_without_garbage_mark_and_recovers() {
+        let mut scanner = Osc133MarkScanner::new();
+        scanner.feed(b"\x1b]133;");
+        let burst: Vec<u8> =
+            std::iter::repeat_n(b'A', OSC133_SCANNER_CARRY_OVER_CAP + 1024).collect();
+        let out = scanner.feed(&burst);
+        assert!(
+            out.is_empty(),
+            "overflow must drop the in-flight sequence, not emit a garbage mark"
+        );
+        assert_eq!(
+            scanner.carry_over_len(),
+            0,
+            "carry-over must be reset after overflow"
+        );
+
+        // The scanner recovers cleanly: a subsequent well-formed mark is
+        // still detected in the same `feed` call.
+        let out2 = scanner.feed(b"\x1b]133;A\x07");
+        assert_eq!(out2, vec![PromptMarkKind::PromptStart]);
     }
 
     // ── strip_replayable_rich_content unit tests ────────────────────────
