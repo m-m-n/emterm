@@ -375,6 +375,15 @@ pub struct Tab {
     /// [`Tab::take_pending_agent_status_events`] and applies each event to
     /// `App::agent_status`, keyed by [`Self::stable_id`].
     pending_agent_status_events: Vec<crate::agent_status::AgentStatusEvent>,
+    /// True-order, live-only OSC 777 Set/Clear + OSC 133 D/A sequence for
+    /// this tab's inferred-clear latch this pump (agent-exit-after-icon
+    /// FR2/FR4/FR5; task0002 deviation). Populated by
+    /// `process_outer_via_core`'s reconciliation of
+    /// `cb_state.pending_latch_feed` against the live prompt marks drained
+    /// the same pump. `App::pump_all` drains it via
+    /// [`Self::take_pending_latch_inputs`] and feeds each entry to
+    /// `AgentStatusModel`'s per-tab latch, in order.
+    pending_latch_inputs: Vec<crate::agent_status_model::ResolvedLatchInput>,
     /// Daemon-pushed `AgentStatusUpdate` messages decoded by
     /// [`Self::apply_mux_message`]'s `MessageType::AgentStatusUpdate` arm
     /// this pump (task0005 AC-2). `App::pump_all` drains it via
@@ -614,6 +623,7 @@ impl Tab {
             pending_pane_switch_from: None,
             pending_window_appended: false,
             pending_agent_status_events: Vec::new(),
+            pending_latch_inputs: Vec::new(),
             pending_agent_status_updates: Vec::new(),
             pending_closed_agent_status_panes: Vec::new(),
             pending_switch: None,
@@ -725,6 +735,15 @@ impl Tab {
         &mut self,
     ) -> Vec<crate::agent_status::AgentStatusEvent> {
         std::mem::take(&mut self.pending_agent_status_events)
+    }
+
+    /// Drain this tab's resolved inferred-clear latch inputs this pump
+    /// (agent-exit-after-icon FR2/FR4/FR5; task0002 deviation). See
+    /// [`Self::pending_latch_inputs`]'s doc.
+    pub fn take_pending_latch_inputs(
+        &mut self,
+    ) -> Vec<crate::agent_status_model::ResolvedLatchInput> {
+        std::mem::take(&mut self.pending_latch_inputs)
     }
 
     /// Drain the daemon-pushed `AgentStatusUpdate` messages decoded this
@@ -2458,6 +2477,28 @@ impl Tab {
         drop(c);
         if !device_response.is_empty() {
             self.write_device_response(device_response);
+        }
+        // agent-exit-after-icon (task0002 deviation — see task0002's
+        // implementer report): reconcile this pump's OSC 133 mark
+        // CANDIDATES (`cb_state.pending_latch_feed`, populated by
+        // `NativeCallbacks::on_osc` in true synchronous order alongside
+        // OSC 777 Set/Clear — see `callbacks::LatchFeedEvent`'s doc)
+        // against `pending_marks` (`term_core`'s alt-screen-filtered,
+        // authoritative live-mark list just drained above) to produce a
+        // true-order, live-only sequence for this tab's inferred-clear
+        // latch (FR4/FR5). Computed from `&pending_marks` BEFORE
+        // `backfill_marks` below consumes it by value.
+        let live_kinds: Vec<crate::prompts::PromptMarkKind> = pending_marks
+            .iter()
+            .filter_map(|m| crate::prompts::PromptMarkKind::from_byte(m.kind))
+            .collect();
+        let latch_feed = std::mem::take(&mut self.cb_state.lock().pending_latch_feed);
+        if !latch_feed.is_empty() {
+            self.pending_latch_inputs
+                .extend(crate::agent_status_model::reconcile_latch_feed(
+                    latch_feed,
+                    &live_kinds,
+                ));
         }
         self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
         // New PTY bytes reached the core — latch for the
@@ -4951,6 +4992,70 @@ mod tests {
         let changed = tab.apply_mux_message(msg);
         assert!(!changed);
         assert!(tab.take_pending_agent_status_updates().is_empty());
+    }
+
+    // ── agent-exit-after-icon (task0002): latch feed reconciliation,
+    // end-to-end via `test_process_combined` (real OSC byte parsing through
+    // `NativeCallbacks::on_osc` + `process_outer_via_core`'s reconciliation
+    // — the actual callbacks.rs -> latch-feed -> reconcile path, per
+    // task0002.md's Test Notes) ─────────────────────────────────────────
+
+    #[test]
+    fn latch_feed_end_to_end_set_then_live_d_a_resolves_in_order() {
+        let mut tab = test_tab();
+        let bytes = [
+            b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\".as_slice(),
+            b"\x1b]133;D;0\x07",
+            b"\x1b]133;A\x07",
+        ]
+        .concat();
+        tab.test_process_combined(bytes);
+
+        assert_eq!(
+            tab.take_pending_latch_inputs(),
+            vec![
+                crate::agent_status_model::ResolvedLatchInput::Set,
+                crate::agent_status_model::ResolvedLatchInput::Mark(
+                    crate::prompts::PromptMarkKind::CommandEnd
+                ),
+                crate::agent_status_model::ResolvedLatchInput::Mark(
+                    crate::prompts::PromptMarkKind::PromptStart
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn latch_feed_end_to_end_drops_alt_screen_suppressed_candidate() {
+        // AC-5: a D mark emitted while on the alternate screen is captured
+        // by `on_osc` (candidate) but never reaches `take_prompt_marks()`
+        // (term_core's alt-screen gate) — so it must not resolve, while the
+        // later live D/A pair (after leaving the alt screen) still does.
+        let mut tab = test_tab();
+        let bytes = [
+            b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\".as_slice(),
+            b"\x1b[?1049h",      // enter alt screen
+            b"\x1b]133;D;0\x07", // suppressed candidate
+            b"\x1b[?1049l",      // leave alt screen
+            b"\x1b]133;D;0\x07", // live
+            b"\x1b]133;A\x07",   // live
+        ]
+        .concat();
+        tab.test_process_combined(bytes);
+
+        assert_eq!(
+            tab.take_pending_latch_inputs(),
+            vec![
+                crate::agent_status_model::ResolvedLatchInput::Set,
+                crate::agent_status_model::ResolvedLatchInput::Mark(
+                    crate::prompts::PromptMarkKind::CommandEnd
+                ),
+                crate::agent_status_model::ResolvedLatchInput::Mark(
+                    crate::prompts::PromptMarkKind::PromptStart
+                ),
+            ],
+            "the alt-screen-suppressed D candidate is dropped; only the live pair resolves"
+        );
     }
 
     // ── close-reconcile decision (FR1/FR2/FR3) ────────────────────────────

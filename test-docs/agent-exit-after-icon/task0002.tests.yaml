@@ -1,0 +1,132 @@
+task_id: task0002
+baseline_failures:
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  # Note: this baseline is non-deterministic under load (project MEMORY.md:
+  # "tabs.rs replay テストは並列で非決定的に落ちる（--test-threads=1 で安定）").
+  # The exact set of 20 failures above was observed on the FIRST baseline
+  # run (parallel threads). Subsequent --test-threads=1 runs (baseline
+  # re-checks and the final run) consistently showed a SUBSET of this same
+  # set (6-7 tests), all "off-thread replay worker did not complete in
+  # time" panics plus welcome_without_windows_leaves_group_none — never a
+  # test outside this list. `pkg cache` lock contention observed during the
+  # session confirms other parallel cargo processes (sibling task
+  # worktrees) were competing for CPU, consistent with the documented
+  # flakiness.
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  # All 7 are a subset of baseline_failures (final run, --test-threads=1).
+acceptance_tests:
+  AC-1:
+    tests:
+      - agent_status_model::tests::ac1_set_then_live_d_then_live_a_clears_via_existing_clear_path
+      - tabs::tests::latch_feed_end_to_end_set_then_live_d_a_resolves_in_order
+    red_confirmed: true
+    red_reason: >-
+      Retroactive probe (implementation was built across interdependent
+      files before any single AC was independently red/green-able; see
+      notes): temporarily made AgentStatusExitLatch::record_mark's
+      PromptStart(A)-while-armed-and-command_ended branch return `false`
+      instead of `true` (never fires). ac1 failed with
+      "assertion failed: status.state == None" (state stayed Working).
+      Reverted after confirming.
+  AC-2:
+    tests:
+      - agent_status_model::tests::ac2_set_then_live_a_without_d_leaves_state_unchanged
+    red_confirmed: false
+    red_reason: >-
+      Not independently red-probed: this AC asserts a no-op (state stays
+      unchanged when A arrives without a prior D), which the latch's
+      transition table already satisfies as the "else" branch with no
+      dedicated code path to neuter without also breaking AC-1's negative
+      space. Covered instead by agent_status_exit_latch::tests::
+      set_then_a_without_d_does_not_fire, whose inverse (removing the
+      `!self.command_ended` guard so any armed A fires) was exercised
+      indirectly by the AC-1 probe run (see notes) but not isolated to
+      this exact test.
+  AC-3:
+    tests:
+      - agent_status_model::tests::ac3_explicit_clear_then_live_d_a_does_not_duplicate_clear
+    red_confirmed: true
+    red_reason: >-
+      First version of this test (transitions-empty assertion only) did
+      NOT go red when AgentStatusModel::record_latch_clear was neutered
+      (made a no-op) — apply_plain_tab_event's own same-state dedup
+      masked the bug (a spurious second Clear application on an
+      already-cleared entry produces no transition either way). Rewrote
+      the test to also assert on `revision` (which advances on every
+      apply_plain_tab_event call regardless of state_changed) as the
+      discriminator. Re-probed with record_latch_clear still neutered:
+      failed with "assertion failed: status.revision ==
+      revision_after_explicit_clear" (revision had advanced from the
+      spurious extra Clear). Reverted the neuter after confirming; the
+      fixed test passes with correct code.
+  AC-4:
+    tests:
+      - agent_status_model::tests::ac4_reconcile_latch_feed_drops_replay_equivalent_candidates
+    red_confirmed: true
+    red_reason: >-
+      Temporarily made reconcile_latch_feed's live-mark match unconditional
+      (`if true` instead of `if live_marks.get(live_idx) == Some(&kind)`).
+      ac4 failed with "assertion failed: resolved == [Set]" (a spurious
+      Mark entry appeared). Reverted after confirming.
+  AC-5:
+    tests:
+      - agent_status_model::tests::ac5_reconcile_latch_feed_drops_alt_screen_suppressed_candidates
+      - agent_status_model::tests::ac5_alt_screen_suppressed_d_a_pair_never_reaches_the_model
+      - tabs::tests::latch_feed_end_to_end_drops_alt_screen_suppressed_candidate
+    red_confirmed: true
+    red_reason: >-
+      Same probe as AC-4 (reconcile_latch_feed's live-mark match forced
+      unconditional). All three tests failed: the two agent_status_model
+      tests on the resolved-sequence/state assertions, and the tabs.rs
+      end-to-end test (real OSC byte parsing through
+      NativeCallbacks::on_osc + process_outer_via_core's reconciliation)
+      on the resolved-sequence assertion. Reverted after confirming.
+  AC-6:
+    tests:
+      - agent_status_model::tests::ac6_discard_removes_latch_so_a_later_mark_cannot_resurrect_state
+    red_confirmed: true
+    red_reason: >-
+      Temporarily made AgentStatusModel::discard not remove the tab's
+      latch entry. ac6 failed with "assertion failed:
+      model.drain_transitions().is_empty()" (the stale, still-armed latch
+      fired a spurious Clear for the just-closed tab id, creating a fresh
+      entry + transition). Reverted after confirming.
+  AC-7:
+    tests:
+      - agent_status_model::tests::ac7_tab_without_osc133_support_never_auto_clears
+    red_confirmed: false
+    red_reason: >-
+      Regression guard per task0002.md's Test Notes ("write it to fail
+      loudly if a future change accidentally makes OSC-133-absent tabs
+      start clearing anyway") — asserts the ABSENCE of new behavior (no
+      marks ever arrive; state must stay exactly as reported). This is
+      the pre-existing behavior of apply_plain_tab_event/entries, not
+      something task0002 introduces, so there is no code path to make it
+      red without breaking an unrelated, already-covered invariant
+      (state persists until an explicit report changes it).

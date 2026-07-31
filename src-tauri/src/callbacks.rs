@@ -104,6 +104,32 @@ pub struct EmtermOscRequest {
     pub payload: String,
 }
 
+/// One entry in [`NativeCallbackState::pending_latch_feed`]
+/// (agent-exit-after-icon SPEC FR4): captures OSC 777 agent-status
+/// `Set`/`Clear` reports and OSC 133 `A`/`D`/`B`/`C` mark CANDIDATES in
+/// true synchronous `on_osc` call order — a single ordered log, so the
+/// plain-tab inferred-clear latch (task0002 deviation; see
+/// `crate::agent_status_exit_latch`) never has to reconstruct relative
+/// order from two independently-scheduled queues.
+///
+/// "Candidate" because `on_osc(OSC_SEMANTIC_PROMPT, …)` fires
+/// unconditionally (see that match arm's doc), unlike
+/// `TerminalCore::push_pending_prompt_mark`, which suppresses marks
+/// observed on the alternate screen. `Tab::process_outer_via_core`
+/// cross-references this log against `take_prompt_marks()`'s
+/// alt-screen-filtered output (drained in the same pump) via
+/// `agent_status_model::reconcile_latch_feed` to keep only genuinely live
+/// candidates before feeding `AgentStatusModel`'s per-tab latch (FR5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LatchFeedEvent {
+    /// An OSC 777 agent-status `Set` report (any state/name).
+    Set,
+    /// An OSC 777 agent-status `Clear` report.
+    Clear,
+    /// An OSC 133 mark CANDIDATE, not yet confirmed live.
+    PromptMark(crate::prompts::PromptMarkKind),
+}
+
 /// Trait abstracting the OS-notification surface. `NotifyRustSink` is the
 /// production impl; `TestSink` captures `send` calls in unit tests so we
 /// can verify rate-limit behavior without depending on a real D-Bus
@@ -242,6 +268,11 @@ pub struct NativeCallbackState {
     /// (`pending_agent_status_events`); `App::pump_all` then applies each
     /// event to `App::agent_status` keyed by the tab's `stable_id`.
     pub pending_agent_status: Vec<crate::agent_status::AgentStatusEvent>,
+    /// Ordered agent-status-latch feed (agent-exit-after-icon SPEC FR4;
+    /// task0002 deviation). See [`LatchFeedEvent`]'s doc for the full
+    /// contract. `Tab::process_outer_via_core` drains and reconciles this
+    /// every pump.
+    pub pending_latch_feed: Vec<LatchFeedEvent>,
 }
 
 /// `TerminalCallbacks` implementation for native consumers.
@@ -471,9 +502,30 @@ impl TerminalCallbacks for NativeCallbacks {
                 // `TerminalCore::push_pending_prompt_mark`), which records
                 // each mark with the absolute row it was emitted on. The
                 // native consumer drains them via `take_prompt_marks` under
-                // the core lock, so there is nothing to do here — this
-                // callback fires only to keep the wasm/WebView path's
-                // `on_osc(133, …)` contract intact.
+                // the core lock; this callback fires unconditionally (even
+                // on the alternate screen, unlike `push_pending_prompt_mark`)
+                // only to keep the wasm/WebView path's `on_osc(133, …)`
+                // contract intact.
+                //
+                // agent-exit-after-icon (task0002 deviation): ALSO record a
+                // mark CANDIDATE for the plain-tab inferred-clear latch feed
+                // (FR4) — see `LatchFeedEvent`'s doc for why this is a
+                // "candidate" (not yet alt-screen-confirmed) and how the
+                // relative order versus OSC 777 Set/Clear below is
+                // preserved by construction (both push into the SAME
+                // `pending_latch_feed` from this single synchronous
+                // callback).
+                if let Some(kind) = data
+                    .as_bytes()
+                    .first()
+                    .copied()
+                    .and_then(crate::prompts::PromptMarkKind::from_byte)
+                {
+                    self.state
+                        .lock()
+                        .pending_latch_feed
+                        .push(LatchFeedEvent::PromptMark(kind));
+                }
                 log::debug!("OSC 133 mark seen: {data}");
             }
             OSC_EMTERM_EXTENSION => {
@@ -506,7 +558,19 @@ impl TerminalCallbacks for NativeCallbacks {
                 // `None` for any other OSC 777 kind, so this is a no-op
                 // fall-through for everything else.
                 if let Some(event) = crate::agent_status::parse(data) {
-                    self.state.lock().pending_agent_status.push(event);
+                    // agent-exit-after-icon (task0002 deviation, FR4): push
+                    // the Set/Clear latch-feed marker into the SAME ordered
+                    // log OSC 133 candidates use, under the SAME lock
+                    // acquisition as the existing `pending_agent_status`
+                    // push, so relative order between the two is exactly
+                    // `on_osc`'s true synchronous call order.
+                    let latch_marker = match &event {
+                        crate::agent_status::AgentStatusEvent::Set { .. } => LatchFeedEvent::Set,
+                        crate::agent_status::AgentStatusEvent::Clear => LatchFeedEvent::Clear,
+                    };
+                    let mut s = self.state.lock();
+                    s.pending_latch_feed.push(latch_marker);
+                    s.pending_agent_status.push(event);
                     return;
                 }
                 if let Some(dispatcher) = self.statusbar_dispatcher.as_ref() {
@@ -1014,6 +1078,81 @@ mod tests {
         let s = h.state.lock();
         assert!(s.pending_agent_status.is_empty());
         assert_eq!(s.osc_queue.len(), 1);
+    }
+
+    // ── agent-exit-after-icon (task0002): pending_latch_feed ordering ──
+
+    #[test]
+    fn osc_100_agent_status_set_pushes_set_marker_to_latch_feed() {
+        let h = default_harness();
+        h.cb.on_osc(
+            OSC_EMTERM_EXTENSION,
+            "emterm;agent-status;v=1;state=working",
+        );
+        assert_eq!(h.state.lock().pending_latch_feed, vec![LatchFeedEvent::Set]);
+    }
+
+    #[test]
+    fn osc_100_agent_status_clear_pushes_clear_marker_to_latch_feed() {
+        let h = default_harness();
+        h.cb.on_osc(OSC_EMTERM_EXTENSION, "emterm;agent-status;clear");
+        assert_eq!(
+            h.state.lock().pending_latch_feed,
+            vec![LatchFeedEvent::Clear]
+        );
+    }
+
+    #[test]
+    fn osc_100_invalid_agent_status_payload_does_not_push_to_latch_feed() {
+        let h = default_harness();
+        h.cb.on_osc(OSC_EMTERM_EXTENSION, "emterm;agent-status;v=1");
+        assert!(h.state.lock().pending_latch_feed.is_empty());
+    }
+
+    #[test]
+    fn osc_133_a_and_d_push_prompt_mark_candidates_to_latch_feed() {
+        let h = default_harness();
+        h.cb.on_osc(OSC_SEMANTIC_PROMPT, "D;0");
+        h.cb.on_osc(OSC_SEMANTIC_PROMPT, "A");
+        assert_eq!(
+            h.state.lock().pending_latch_feed,
+            vec![
+                LatchFeedEvent::PromptMark(crate::prompts::PromptMarkKind::CommandEnd),
+                LatchFeedEvent::PromptMark(crate::prompts::PromptMarkKind::PromptStart),
+            ]
+        );
+    }
+
+    #[test]
+    fn osc_133_unrecognized_kind_does_not_push_to_latch_feed() {
+        let h = default_harness();
+        h.cb.on_osc(OSC_SEMANTIC_PROMPT, "Z");
+        assert!(h.state.lock().pending_latch_feed.is_empty());
+    }
+
+    #[test]
+    fn set_and_live_133_marks_preserve_true_relative_order_in_latch_feed() {
+        // FR4: OSC 777 Set/Clear and OSC 133 D/A candidates share ONE
+        // ordered log (`pending_latch_feed`), reflecting the true
+        // synchronous `on_osc` call order — not two independently
+        // populated queues that a caller would have to re-interleave.
+        let h = default_harness();
+        h.cb.on_osc(
+            OSC_EMTERM_EXTENSION,
+            "emterm;agent-status;v=1;state=working",
+        );
+        h.cb.on_osc(OSC_SEMANTIC_PROMPT, "D;0");
+        h.cb.on_osc(OSC_SEMANTIC_PROMPT, "A");
+        h.cb.on_osc(OSC_EMTERM_EXTENSION, "emterm;agent-status;clear");
+        assert_eq!(
+            h.state.lock().pending_latch_feed,
+            vec![
+                LatchFeedEvent::Set,
+                LatchFeedEvent::PromptMark(crate::prompts::PromptMarkKind::CommandEnd),
+                LatchFeedEvent::PromptMark(crate::prompts::PromptMarkKind::PromptStart),
+                LatchFeedEvent::Clear,
+            ]
+        );
     }
 
     // ── Phase D: OSC 777 statusbar routing ────────────────────────────

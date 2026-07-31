@@ -161,6 +161,7 @@ pub mod backend_select {
 // === CLI-shared modules (always built) ===
 
 pub mod agent_status;
+pub mod agent_status_exit_latch;
 pub mod arg_dispatch;
 pub mod cli;
 pub mod i18n;
