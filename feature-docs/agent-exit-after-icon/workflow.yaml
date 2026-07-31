@@ -87,8 +87,8 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR6]
-    status: failed
-    notes: "task0003がまだラッチフィールドをMuxPaneにコミットしておらず、推測実装を避けて中断（task0003は共有ベースと同一コミット時点で未コミット）。task0003完了後にretry予定（batch: retry 1回消費）。conflict_retries=0、retry_consumed未消費。"
+    status: in_progress
+    notes: "1回目失敗（task0003未コミットのためブロック）→ドレイン完了後にretry 1回消費。task0003マージ後の統合ブランチ最新tipからworktree再作成して再ディスパッチ。"
     branch: em-workflow/agent-exit-after-icon/task0004
 
 review:
