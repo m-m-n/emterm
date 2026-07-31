@@ -25,7 +25,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::agent_status::{AgentState, AgentStatusEvent};
-use crate::agent_status_exit_latch::{AgentStatusExitLatch, LatchMarkKind};
+use crate::agent_status_exit_latch::AgentStatusExitLatch;
 
 /// Identifies one agent-status-bearing entity tracked by the model.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -132,18 +132,6 @@ pub fn reconcile_latch_feed(
         }
     }
     resolved
-}
-
-/// Convert the GUI-only `crate::prompts::PromptMarkKind` into the
-/// build-agnostic latch's own [`LatchMarkKind`] (see that type's doc for
-/// why the latch does not reuse `PromptMarkKind` directly).
-fn to_latch_mark_kind(kind: crate::prompts::PromptMarkKind) -> LatchMarkKind {
-    match kind {
-        crate::prompts::PromptMarkKind::PromptStart => LatchMarkKind::PromptStart,
-        crate::prompts::PromptMarkKind::CommandStart => LatchMarkKind::CommandStart,
-        crate::prompts::PromptMarkKind::CommandExec => LatchMarkKind::CommandExec,
-        crate::prompts::PromptMarkKind::CommandEnd => LatchMarkKind::CommandEnd,
-    }
 }
 
 /// The merged agent-status store. Pure state — no I/O, no egui, no protocol
@@ -288,11 +276,7 @@ impl AgentStatusModel {
         tab_stable_id: u64,
         kind: crate::prompts::PromptMarkKind,
     ) {
-        let fire = self
-            .latches
-            .entry(tab_stable_id)
-            .or_default()
-            .record_mark(to_latch_mark_kind(kind));
+        let fire = self.latches.entry(tab_stable_id).or_default().record_mark(kind);
         if fire {
             self.apply_plain_tab_event(tab_stable_id, AgentStatusEvent::Clear);
         }
