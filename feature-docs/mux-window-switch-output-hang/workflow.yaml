@@ -50,7 +50,7 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
     branch: em-workflow/mux-window-switch-output-hang/task0001
 
