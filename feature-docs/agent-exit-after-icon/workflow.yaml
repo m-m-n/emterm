@@ -75,7 +75,7 @@ tasks:
     domains: [input-handling, concurrency]
     complexity: high
     requirements: [FR2, FR3, FR4, FR5, NFR1]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/agent-exit-after-icon/task0003
   task0004:
