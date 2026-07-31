@@ -1,0 +1,105 @@
+task_id: task0004
+baseline_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts12_resize_supersedes_and_redispatches_at_new_grid
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+# Note on baseline_failures / final_failures: every entry above (and every
+# failure observed in the post-implementation runs below) is a
+# `tabs::tests::*` case from the "off-thread replay worker did not complete
+# in time" family (or the closely related `welcome_without_windows_leaves_group_none`),
+# documented in the project's own memory as non-deterministic under
+# parallel/loaded execution (test_execution_notes: "tabs.rs replay テストは並列で
+# 非決定的に落ちる（--test-threads=1 で安定）"). Re-running the full `--lib` suite
+# multiple times after implementation reproduced a DIFFERENT subset of this
+# same family each time (20, then 22, then 20, then 24 failures across four
+# runs; 7 failures even under `--test-threads=1` in isolation), and every
+# single failure across every run was confined to `tabs::tests::*` — a
+# module this task never touches. `final_failures` below is one
+# representative run's set for the record; treat membership as flaky noise,
+# not a fixed list.
+final_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::upgrade::tests::armed_latch_with_no_d_or_a_yet_survives_restore_with_the_same_generation
+    red_confirmed: true
+    red_reason: >-
+      Observed directly: with the struct fields/accessors in place but the
+      restore-side installation line (`*pane.agent_status_exit_latch.lock().unwrap()
+      = latch;`) temporarily neutralized, this test panicked with
+      `assertion left == right failed: AC-1: an armed latch (Set observed, no
+      D/A yet) must survive a hot-upgrade with the same generation
+        left: AgentStatusExitLatch { armed: false, command_ended: false, generation: 0 }
+       right: AgentStatusExitLatch { armed: true, command_ended: false, generation: 1 }`
+      — the restored pane's latch was the fresh default, not the pre-upgrade
+      armed value. Re-enabling the installation line turned it green.
+  AC-2:
+    tests:
+      - mux::upgrade::tests::command_ended_latch_fires_exactly_once_on_the_first_live_a_after_restore
+    red_confirmed: true
+    red_reason: >-
+      Observed directly with the same neutralization as AC-1: panicked with
+      `assertion left == right failed: AC-2 setup: the restored latch must
+      still record command_ended
+        left: AgentStatusExitLatch { armed: false, command_ended: false, generation: 0 }
+       right: AgentStatusExitLatch { armed: true, command_ended: true, generation: 1 }`
+      — the restored pane's latch was disarmed (fresh default), so the
+      pending command_ended state from before the upgrade was lost.
+  AC-3:
+    tests:
+      - mux::upgrade::tests::disarmed_latch_stays_disarmed_after_restore_with_no_spurious_clear
+    red_confirmed: true
+    red_reason: >-
+      Observed directly with the same neutralization as AC-1: panicked with
+      `assertion left == right failed: AC-3: a disarmed latch must be
+      transferred verbatim, not reset or re-derived
+        left: AgentStatusExitLatch { armed: false, command_ended: false, generation: 0 }
+       right: AgentStatusExitLatch { armed: false, command_ended: false, generation: 1 }`
+      — the restored pane's latch lost its pre-upgrade generation (1),
+      silently substituting a fresh default (generation 0) instead of the
+      transferred value, even though both are behaviorally "disarmed".
+# Supplementary (not a separate AC of this task, but strengthened existing
+# task0003 coverage with a latch assertion, also observed red under the same
+# neutralization before this fix, then green after):
+# mux::upgrade::tests::restore_handles_exited_and_unadoptable_panes_while_the_rest_of_the_tree_still_restores
