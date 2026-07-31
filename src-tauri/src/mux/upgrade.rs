@@ -19,6 +19,14 @@
 //! pane whose descriptor cannot be adopted is restored as exited instead of
 //! dropping the whole session (AC-7).
 //!
+//! task0004 (agent-exit-after-icon, SPEC FR6) extends the same per-pane
+//! snapshot/restore pair to also carry each pane's inferred-clear latch
+//! state (task0001 [`crate::agent_status_exit_latch::AgentStatusExitLatch`],
+//! wired per-pane by task0003) across the upgrade boundary, transferred
+//! verbatim via its raw state components — never reset and never
+//! re-derived — so a pane mid-"command_ended" before an upgrade is still
+//! mid-"command_ended" immediately after it.
+//!
 //! Everything in this module is Unix-only (gated at the `mod upgrade;`
 //! declaration in `mux::mod`).
 
@@ -37,6 +45,7 @@ use mux_ipc::handoff::{
     HandoffWindow, decode_handoff_document, encode_handoff_document,
 };
 
+use crate::agent_status_exit_latch::AgentStatusExitLatch;
 use crate::mux::daemon::{from_wire_state, to_wire_state};
 use crate::mux::inherited_pty::InheritedMasterPty;
 use crate::mux::scrollback_buffer::{
@@ -420,6 +429,14 @@ fn snapshot_pane(pane: &MuxPane) -> Result<HandoffPane, SnapshotError> {
         let status = pane.agent_status.lock().unwrap();
         (status.state.map(to_wire_state), status.name.clone(), status.revision)
     };
+    // task0004 (SPEC FR6): capture this pane's inferred-clear latch state
+    // (task0001 `AgentStatusExitLatch`, wired per-pane by task0003)
+    // verbatim, via the exact state components a caller outside the
+    // latch's own module can read (`state_parts`) — never re-derived or
+    // reset, so a pane mid-"command_ended" before the upgrade is still
+    // mid-"command_ended" in the document.
+    let (latch_armed, latch_command_ended, latch_generation) =
+        pane.agent_status_exit_latch.lock().unwrap().state_parts();
     let scrollback = pane.scrollback.lock().unwrap().capture().data;
 
     Ok(HandoffPane {
@@ -435,6 +452,9 @@ fn snapshot_pane(pane: &MuxPane) -> Result<HandoffPane, SnapshotError> {
         child_pid,
         master_fd,
         scrollback,
+        latch_armed,
+        latch_command_ended,
+        latch_generation,
     })
 }
 
@@ -539,9 +559,20 @@ fn restore_pane(
         capacity: DEFAULT_SCROLLBACK_CAPACITY,
         data: doc.scrollback.clone(),
     });
+    // task0004 (SPEC FR6): reconstruct the pane's inferred-clear latch
+    // from the document's raw state components, EXACTLY as recorded —
+    // never reset to a fresh/disarmed latch and never re-derived from
+    // agent_status — so a pane armed (or mid-"command_ended") before the
+    // upgrade restores into that same state, for every restore outcome
+    // below (live-adopted or exited).
+    let latch = AgentStatusExitLatch::from_state_parts(
+        doc.latch_armed,
+        doc.latch_command_ended,
+        doc.latch_generation,
+    );
 
     if doc.exited {
-        return build_exited_pane(doc, scrollback, agent_status);
+        return build_exited_pane(doc, scrollback, agent_status, latch);
     }
 
     let Some(fd) = doc.master_fd else {
@@ -550,7 +581,7 @@ fn restore_pane(
              restoring as exited",
             doc.id
         );
-        return build_exited_pane(doc, scrollback, agent_status);
+        return build_exited_pane(doc, scrollback, agent_status, latch);
     };
 
     let master: Box<dyn MasterPty + Send> = match adopt_master(fd) {
@@ -567,7 +598,7 @@ fn restore_pane(
                 fd,
                 e
             );
-            return build_exited_pane(doc, scrollback, agent_status);
+            return build_exited_pane(doc, scrollback, agent_status, latch);
         }
     };
 
@@ -581,7 +612,7 @@ fn restore_pane(
                 fd,
                 e
             );
-            return build_exited_pane(doc, scrollback, agent_status);
+            return build_exited_pane(doc, scrollback, agent_status, latch);
         }
     };
 
@@ -595,7 +626,7 @@ fn restore_pane(
                 fd,
                 e
             );
-            return build_exited_pane(doc, scrollback, agent_status);
+            return build_exited_pane(doc, scrollback, agent_status, latch);
         }
     };
 
@@ -612,6 +643,11 @@ fn restore_pane(
         agent_status,
         doc.child_pid,
     );
+    // task0004: install the restored latch state BEFORE the reader thread
+    // starts observing this pane's live PTY stream, so the earliest live
+    // OSC 133 mark after restore is evaluated against the CORRECT
+    // pre-upgrade state, never a fresh `AgentStatusExitLatch::new()`.
+    *pane.agent_status_exit_latch.lock().unwrap() = latch;
     spawn_restored_reader_thread(
         &pane,
         reader,
@@ -625,9 +661,16 @@ fn restore_pane(
 
 /// Build an already-exited pane for the restore path (AC-6/AC-7): shared by
 /// every "cannot / should not adopt a descriptor" branch in
-/// [`restore_pane`].
-fn build_exited_pane(doc: &HandoffPane, scrollback: ScrollbackRingBuffer, agent_status: AgentStatus) -> MuxPane {
-    MuxPane::from_restored_exited(
+/// [`restore_pane`]. `latch` is installed verbatim (task0004) — an exited
+/// pane still carries whatever inferred-clear latch state it had at the
+/// moment of the upgrade, even though it can no longer receive live marks.
+fn build_exited_pane(
+    doc: &HandoffPane,
+    scrollback: ScrollbackRingBuffer,
+    agent_status: AgentStatus,
+    latch: AgentStatusExitLatch,
+) -> MuxPane {
+    let pane = MuxPane::from_restored_exited(
         doc.id,
         doc.cols,
         doc.rows,
@@ -636,7 +679,9 @@ fn build_exited_pane(doc: &HandoffPane, scrollback: ScrollbackRingBuffer, agent_
         doc.cwd.clone(),
         doc.title.clone(),
         agent_status,
-    )
+    );
+    *pane.agent_status_exit_latch.lock().unwrap() = latch;
+    pane
 }
 
 /// Adopt `fd` as a `MasterPty` through task0002's inherited master adapter,
@@ -727,7 +772,9 @@ fn spawn_restored_reader_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_status::{AgentState, AgentStatusEvent};
     use crate::mux::session::pane::PaneOutputTarget;
+    use crate::prompts::PromptMarkKind;
     use std::os::unix::io::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc as StdArc, Mutex as StdMutex};
@@ -1063,6 +1110,13 @@ mod tests {
                             child_pid: Some(1234),
                             master_fd: Some(bogus_fd),
                             scrollback: b"leftover".to_vec(),
+                            // task0004: a mid-flight latch, to prove it
+                            // still carries over even when the descriptor
+                            // fails to adopt and the pane restores as
+                            // exited (AC-7's outcome).
+                            latch_armed: true,
+                            latch_command_ended: true,
+                            latch_generation: 5,
                         },
                         // AC-6: recorded exited — adopts no descriptor.
                         HandoffPane {
@@ -1078,6 +1132,9 @@ mod tests {
                             child_pid: None,
                             master_fd: None,
                             scrollback: Vec::new(),
+                            latch_armed: false,
+                            latch_command_ended: false,
+                            latch_generation: 0,
                         },
                     ],
                 }],
@@ -1113,10 +1170,24 @@ mod tests {
         // `log::warn!` call in `restore_pane`'s adopt-failure arm (matching
         // this project's established convention for asserting on log output
         // — see `child_reaper.rs`'s equivalent tests).
+        // task0004: the inferred-clear latch still carries over verbatim
+        // even on the "restore as exited" path taken when a live pane's
+        // descriptor fails to adopt.
+        assert_eq!(
+            *pane1.agent_status_exit_latch.lock().unwrap(),
+            AgentStatusExitLatch::from_state_parts(true, true, 5),
+            "task0004: a mid-flight latch must survive restore even when the pane's \
+             descriptor could not be adopted"
+        );
 
         let pane2 = window.panes.get(&2).unwrap();
         assert!(pane2.exited, "AC-6: a pane recorded exited restores as exited");
         assert_eq!(*pane2.cwd.lock().unwrap(), Some("/tmp".to_string()));
+        assert_eq!(
+            *pane2.agent_status_exit_latch.lock().unwrap(),
+            AgentStatusExitLatch::new(),
+            "task0004: a disarmed latch restores disarmed"
+        );
     }
 
     // ── AC-4: restore sets close-on-exec back on every adopted descriptor,
@@ -1387,6 +1458,267 @@ mod tests {
             std::fs::read(&path).unwrap(),
             b"leftover",
             "the pre-existing file must be left untouched"
+        );
+    }
+
+    // ── task0004 AC-1/AC-2/AC-3: the daemon-side inferred-clear latch
+    // (task0001 AgentStatusExitLatch, wired per-pane by task0003) survives a
+    // snapshot/restore round trip in each of its three reachable states,
+    // preserved verbatim rather than reset or re-derived ────────────────────
+
+    /// Build a live pane on a real PTY, registered in a fresh single-session/
+    /// single-window `SessionManager`, mirroring this file's own established
+    /// live-pane round-trip fixture (see
+    /// `snapshot_then_restore_round_trips_scrollback_and_the_restored_pane_is_writable`).
+    /// Returns the manager plus the ids needed to look the pane back up.
+    fn single_live_pane_manager() -> (SessionManager, u32, u32, u32) {
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        let wid = mgr.create_window(sid, "w".to_string()).unwrap();
+        let pid = mgr.alloc_pane_id();
+        let pane = MuxPane::new(pid, 80, 24, test_output_target(), writer, pair.master, None);
+        mgr.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+        (mgr, sid, wid, pid)
+    }
+
+    /// Snapshot `mgr` and restore it back, simulating the fd surviving a
+    /// process replacement by duplicating the recorded master fd before
+    /// restoring (same technique
+    /// `snapshot_then_restore_round_trips_scrollback_and_the_restored_pane_is_writable`
+    /// uses, so the ORIGINAL pane still alive in `mgr` is never double-closed).
+    fn snapshot_then_restore_live_pane(mgr: &SessionManager) -> SessionManager {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("mux-default.sock");
+        let listen_file = tempfile::NamedTempFile::new_in(dir.path()).expect("listen fd stand-in");
+        let listen_fd = listen_file.as_raw_fd();
+
+        let mut document = snapshot(mgr, listen_fd, &socket_path).expect("snapshot must succeed");
+        let pane_doc = &mut document.sessions[0].windows[0].panes[0];
+        let original_fd = pane_doc.master_fd.expect("live pane must record a master fd");
+        let dup_fd = unsafe { libc::dup(original_fd) };
+        assert!(dup_fd >= 0, "dup(2) failed");
+        pane_doc.master_fd = Some(dup_fd);
+
+        let (title_tx, notification_tx, agent_status_tx, pane_exit_sender) =
+            test_restore_channels();
+        restore(
+            &document,
+            &title_tx,
+            &notification_tx,
+            &agent_status_tx,
+            &pane_exit_sender,
+        )
+    }
+
+    /// AC-1: a pane whose latch is armed (`Set` observed, no `D`/`A` yet) at
+    /// the moment of a hot-upgrade remains armed with the SAME generation
+    /// immediately after the upgrade completes.
+    #[test]
+    fn armed_latch_with_no_d_or_a_yet_survives_restore_with_the_same_generation() {
+        let (mut mgr, sid, wid, pid) = single_live_pane_manager();
+        {
+            let pane = mgr
+                .get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .panes
+                .get_mut(&pid)
+                .unwrap();
+            pane.apply_agent_status_event(AgentStatusEvent::Set {
+                state: AgentState::Working,
+                name: Some("claude".to_string()),
+            });
+        }
+        let expected_latch = *mgr
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&pid)
+            .unwrap()
+            .agent_status_exit_latch
+            .lock()
+            .unwrap();
+        assert_eq!(
+            expected_latch,
+            AgentStatusExitLatch::from_state_parts(true, false, 1),
+            "sanity: a bare Set arms the latch with generation 1"
+        );
+
+        let restored = snapshot_then_restore_live_pane(&mgr);
+
+        let restored_pane = restored
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&pid)
+            .unwrap();
+        assert!(
+            !restored_pane.exited,
+            "AC-1 setup: the pane's descriptor must adopt successfully in this test"
+        );
+        assert_eq!(
+            *restored_pane.agent_status_exit_latch.lock().unwrap(),
+            expected_latch,
+            "AC-1: an armed latch (Set observed, no D/A yet) must survive a hot-upgrade \
+             with the same generation"
+        );
+    }
+
+    /// AC-2: a pane whose latch has recorded `command_ended` (`Set` -> live
+    /// `D`, no `A` yet) at the moment of a hot-upgrade still fires exactly
+    /// one inferred clear when its matching `A` arrives after the upgrade.
+    #[test]
+    fn command_ended_latch_fires_exactly_once_on_the_first_live_a_after_restore() {
+        let (mut mgr, sid, wid, pid) = single_live_pane_manager();
+        {
+            let pane = mgr
+                .get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .panes
+                .get_mut(&pid)
+                .unwrap();
+            pane.apply_agent_status_event(AgentStatusEvent::Set {
+                state: AgentState::Working,
+                name: Some("claude".to_string()),
+            });
+            let fired = pane.record_live_osc133_mark(PromptMarkKind::CommandEnd);
+            assert_eq!(fired, None, "a lone D must not fire a clear");
+        }
+
+        let restored = snapshot_then_restore_live_pane(&mgr);
+
+        let restored_pane = restored
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&pid)
+            .unwrap();
+        assert!(
+            !restored_pane.exited,
+            "AC-2 setup: the pane's descriptor must adopt successfully in this test"
+        );
+        assert_eq!(
+            *restored_pane.agent_status_exit_latch.lock().unwrap(),
+            AgentStatusExitLatch::from_state_parts(true, true, 1),
+            "AC-2 setup: the restored latch must still record command_ended"
+        );
+
+        let fired = restored_pane.record_live_osc133_mark(PromptMarkKind::PromptStart);
+        assert!(
+            fired.is_some(),
+            "AC-2: the pending D->A transition must fire an inferred clear after restore"
+        );
+        assert_eq!(restored_pane.agent_status.lock().unwrap().state, None);
+
+        let fired_again = restored_pane.record_live_osc133_mark(PromptMarkKind::PromptStart);
+        assert_eq!(
+            fired_again, None,
+            "AC-2: a second live A must not re-fire an already-fired latch"
+        );
+    }
+
+    /// AC-3: a pane whose latch is disarmed (no `Set` since the last
+    /// `Clear`) at the moment of a hot-upgrade remains disarmed after the
+    /// upgrade — no spurious clear and no false arm introduced by the
+    /// transfer itself.
+    #[test]
+    fn disarmed_latch_stays_disarmed_after_restore_with_no_spurious_clear() {
+        let (mut mgr, sid, wid, pid) = single_live_pane_manager();
+        {
+            let pane = mgr
+                .get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .panes
+                .get_mut(&pid)
+                .unwrap();
+            pane.apply_agent_status_event(AgentStatusEvent::Set {
+                state: AgentState::Working,
+                name: None,
+            });
+            pane.apply_agent_status_event(AgentStatusEvent::Clear);
+        }
+        let expected_latch = *mgr
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&pid)
+            .unwrap()
+            .agent_status_exit_latch
+            .lock()
+            .unwrap();
+        let (armed, command_ended, _generation) = expected_latch.state_parts();
+        assert!(
+            !armed && !command_ended,
+            "sanity: Set then Clear leaves the latch disarmed"
+        );
+
+        let restored = snapshot_then_restore_live_pane(&mgr);
+
+        let restored_pane = restored
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&pid)
+            .unwrap();
+        assert!(
+            !restored_pane.exited,
+            "AC-3 setup: the pane's descriptor must adopt successfully in this test"
+        );
+        assert_eq!(
+            *restored_pane.agent_status_exit_latch.lock().unwrap(),
+            expected_latch,
+            "AC-3: a disarmed latch must be transferred verbatim, not reset or re-derived"
+        );
+
+        let revision_before = restored_pane.agent_status.lock().unwrap().revision;
+        let d_result = restored_pane.record_live_osc133_mark(PromptMarkKind::CommandEnd);
+        let a_result = restored_pane.record_live_osc133_mark(PromptMarkKind::PromptStart);
+        assert_eq!(d_result, None, "AC-3: no false arm — a live D must not fire while disarmed");
+        assert_eq!(
+            a_result, None,
+            "AC-3: no spurious clear — a live A must not fire while disarmed"
+        );
+        assert_eq!(
+            restored_pane.agent_status.lock().unwrap().revision,
+            revision_before,
+            "AC-3: neither D nor A may change agent_status while the latch is disarmed"
         );
     }
 }
