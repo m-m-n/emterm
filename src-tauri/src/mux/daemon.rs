@@ -17,9 +17,10 @@ use super::ipc::protocol::{
 };
 use super::session::manager::SessionManager;
 use super::session::pane::{
-    AgentStatusReportSender, NotificationSender, PaneExitSender, PaneId, SharedPaneExitSender,
-    TitleChangeSender,
+    AgentStatusFeedItem, AgentStatusReportSender, MuxPane, NotificationSender, PaneExitSender,
+    PaneId, SharedPaneExitSender, TitleChangeSender,
 };
+use crate::prompts::PromptMarkKind;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -1249,7 +1250,7 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     // the daemon owns per-pane agent-status state unconditionally.
     let (agent_status_tx, agent_status_rx): (
         AgentStatusReportSender,
-        mpsc::Receiver<(u32, String)>,
+        mpsc::Receiver<(u32, AgentStatusFeedItem)>,
     ) = mpsc::channel(AGENT_STATUS_CHANNEL_CAPACITY);
 
     // Shutdown signal: sent by handle_destroy_pane/handle_destroy_window when all sessions empty
@@ -1479,7 +1480,7 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     // strings here regardless of attach state.
     let (agent_status_tx, agent_status_rx): (
         AgentStatusReportSender,
-        mpsc::Receiver<(u32, String)>,
+        mpsc::Receiver<(u32, AgentStatusFeedItem)>,
     ) = mpsc::channel(AGENT_STATUS_CHANNEL_CAPACITY);
     tokio::spawn(run_agent_status_task(
         session_manager.clone(),
@@ -1697,6 +1698,41 @@ pub(in crate::mux) fn from_wire_state(
     }
 }
 
+/// Re-evaluate `pane`'s registered `WaitAgentState` waiters (task0004 "Wait
+/// implementation", level-triggered, no polling) and build the
+/// `AgentStatusUpdate` (`replay_derived: false`) message for its CURRENT
+/// state at `revision`. Caller still holds `mgr`'s lock (needed for
+/// `public_pane_id`) and is responsible for dropping it and sending the
+/// returned message afterward.
+///
+/// Shared by [`apply_agent_status_report`] (explicit OSC 777 Set/Clear) and
+/// [`apply_live_osc133_mark`] (task0003, SPEC FR1/FR2 — the inferred clear a
+/// live OSC 133 `D`→`A` transition produces) so both ways a pane's
+/// agent-status revision can change go through IDENTICAL waiter
+/// re-evaluation / broadcast-payload logic — no parallel logic (FR2).
+fn build_agent_status_update_message(
+    mgr: &SessionManager,
+    pane: &MuxPane,
+    pane_id: u32,
+    revision: u64,
+) -> MuxMessage {
+    reevaluate_agent_waiters(pane);
+    let (state, name) = {
+        let status = pane.agent_status.lock().unwrap();
+        (status.state, status.name.clone())
+    };
+    let public_pane_id = mgr.public_pane_id(pane_id);
+    let payload = AgentStatusUpdateMsg {
+        pane_id,
+        public_pane_id,
+        state: state.map(to_wire_state),
+        name,
+        revision,
+        replay_derived: false,
+    };
+    MuxMessage::control(MessageType::AgentStatusUpdate, pane_id, &payload)
+}
+
 /// Apply one raw agent-status OSC report to its pane and broadcast the
 /// result (SPEC FR3 / FR5, task0003 AC-1/AC-2/AC-4).
 ///
@@ -1729,45 +1765,83 @@ async fn apply_agent_status_report(
     };
 
     let revision = pane.apply_agent_status_event(event);
-    // task0004 "Wait implementation": every accepted report (set, clear,
-    // same-state re-report) re-evaluates this pane's registered
-    // `WaitAgentState` waiters (level-triggered, no polling).
-    reevaluate_agent_waiters(pane);
-    let (state, name) = {
-        let status = pane.agent_status.lock().unwrap();
-        (status.state, status.name.clone())
-    };
-    let public_pane_id = mgr.public_pane_id(pane_id);
+    let msg = build_agent_status_update_message(&mgr, pane, pane_id, revision);
     let notify_tx = mgr.notify_tx().clone();
     drop(mgr);
 
-    let payload = AgentStatusUpdateMsg {
-        pane_id,
-        public_pane_id,
-        state: state.map(to_wire_state),
-        name,
-        revision,
-        replay_derived: false,
-    };
-    let msg = MuxMessage::control(MessageType::AgentStatusUpdate, pane_id, &payload);
     if let Err(e) = notify_tx.send(msg) {
         log::debug!("apply_agent_status_report: no active subscribers: {}", e);
     }
 }
 
+/// Apply one live OSC 133 mark to its pane's inferred-clear latch and — only
+/// if the mark completes an armed `D`→`A` transition — broadcast the
+/// resulting inferred clear (task0003, SPEC FR1/FR2/FR3/FR4/FR5).
+///
+/// Delegates the actual latch update and, on firing, the clear application
+/// to [`crate::mux::session::pane::MuxPane::record_live_osc133_mark`] — this
+/// function's only job is finding the pane and, when a clear DID fire,
+/// broadcasting it through the exact same
+/// [`build_agent_status_update_message`] logic [`apply_agent_status_report`]
+/// uses, so mux panes get identical downstream effects (revision increment,
+/// waiter re-evaluation, `AgentStatusUpdate` push) regardless of which path
+/// produced the clear. A mark that produces no clear (AC-2: `A` with no
+/// preceding `D`; AC-3: disarmed after an explicit `Clear`) broadcasts
+/// nothing and leaves state untouched.
+async fn apply_live_osc133_mark(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    pane_id: u32,
+    kind: PromptMarkKind,
+) {
+    let mgr = session_manager.lock().await;
+    let Some((sid, wid)) = mgr.find_pane(pane_id) else {
+        log::debug!("apply_live_osc133_mark: pane {} not found", pane_id);
+        return;
+    };
+    let Some(pane) = mgr
+        .get_session(sid)
+        .and_then(|s| s.windows.get(&wid))
+        .and_then(|w| w.panes.get(&pane_id))
+    else {
+        return;
+    };
+
+    let Some(revision) = pane.record_live_osc133_mark(kind) else {
+        // No inferred clear fired: no state change, no broadcast.
+        return;
+    };
+    let msg = build_agent_status_update_message(&mgr, pane, pane_id, revision);
+    let notify_tx = mgr.notify_tx().clone();
+    drop(mgr);
+
+    if let Err(e) = notify_tx.send(msg) {
+        log::debug!("apply_live_osc133_mark: no active subscribers: {}", e);
+    }
+}
+
 /// Run the daemon-level agent-status task.
 ///
-/// Consumes `(pane_id, raw_payload)` from every pane's reader thread
-/// (regardless of attach state, SPEC FR3) and applies + broadcasts each via
-/// [`apply_agent_status_report`]. Exits when all senders are dropped
-/// (daemon shutdown).
+/// Consumes `(pane_id, item)` from every pane's reader thread (regardless of
+/// attach state, SPEC FR3) and dispatches each [`AgentStatusFeedItem`] to
+/// [`apply_agent_status_report`] (an OSC 777 report) or
+/// [`apply_live_osc133_mark`] (task0003, a live OSC 133 mark) IN RECEIVE
+/// ORDER — a single sequential `while let` loop over one channel, never two
+/// independently-scheduled queues, is what gives SPEC FR4 its ordering
+/// guarantee. Exits when all senders are dropped (daemon shutdown).
 async fn run_agent_status_task(
     session_manager: Arc<Mutex<SessionManager>>,
-    mut agent_status_rx: mpsc::Receiver<(u32, String)>,
+    mut agent_status_rx: mpsc::Receiver<(u32, AgentStatusFeedItem)>,
 ) {
     log::info!("Agent-status task started");
-    while let Some((pane_id, raw_payload)) = agent_status_rx.recv().await {
-        apply_agent_status_report(&session_manager, pane_id, raw_payload).await;
+    while let Some((pane_id, item)) = agent_status_rx.recv().await {
+        match item {
+            AgentStatusFeedItem::Report(raw_payload) => {
+                apply_agent_status_report(&session_manager, pane_id, raw_payload).await;
+            }
+            AgentStatusFeedItem::Osc133Mark(kind) => {
+                apply_live_osc133_mark(&session_manager, pane_id, kind).await;
+            }
+        }
     }
     log::info!("Agent-status task exiting");
 }
@@ -2820,6 +2894,214 @@ mod tests {
         let timeout =
             tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
         assert!(timeout.is_err(), "unknown pane must not broadcast");
+    }
+
+    // ── apply_live_osc133_mark (task0003, SPEC FR1/FR2/FR3/FR4) ──────────
+    // Integration tests exercising the actual daemon path: an accepted OSC
+    // 777 report via `apply_agent_status_report`, then live OSC 133 marks
+    // via `apply_live_osc133_mark` — the same path the daemon's PTY reader
+    // wiring (`mux::ipc::pty_spawn::pty_reader_loop`) drives in production.
+
+    /// AC-1: `Set` (OSC 777) followed by live OSC 133 `D` then `A` results
+    /// in `pane.agent_status` becoming `None`, the pane's revision
+    /// incrementing, a registered `WaitAgentState` waiter being
+    /// re-evaluated (the SAME `reevaluate_agent_waiters` call the explicit
+    /// report path uses — proven here via a stale (closed-receiver) waiter
+    /// getting swept, mirroring
+    /// `reevaluate_agent_waiters_discards_waiter_with_closed_receiver` in
+    /// `mux::ipc::handlers` — a waiter cannot itself match a `None` state,
+    /// `check_wait_immediate` short-circuits on it), and an
+    /// `AgentStatusUpdate(state: None)` being produced for the GUI.
+    #[tokio::test]
+    async fn test_apply_live_osc133_mark_set_then_d_then_a_fires_inferred_clear() {
+        let (mgr, sid, wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+
+        apply_agent_status_report(
+            &mgr,
+            pane_id,
+            "emterm;agent-status;v=1;state=working;name=claude".to_string(),
+        )
+        .await;
+
+        // Register a waiter with an already-closed receiver so its removal
+        // during the inferred-clear's `reevaluate_agent_waiters` call is
+        // the observable proof that call happened (see doc comment above).
+        {
+            let m = mgr.lock().await;
+            let pane = m
+                .get_session(sid)
+                .unwrap()
+                .windows
+                .get(&wid)
+                .unwrap()
+                .panes
+                .get(&pane_id)
+                .unwrap();
+            let (tx, rx) = oneshot::channel();
+            pane.agent_waiters.lock().unwrap().push(
+                crate::mux::session::pane::AgentWaiter {
+                    states: vec![crate::agent_status::AgentState::Idle],
+                    after_revision: None,
+                    responder: Some(tx),
+                },
+            );
+            drop(rx); // simulate a disconnected waiting client
+        }
+
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        // Live `D`: command ended, but no clear yet (still armed only).
+        apply_live_osc133_mark(&mgr, pane_id, PromptMarkKind::CommandEnd).await;
+        let none =
+            tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+        assert!(none.is_err(), "a lone D must not broadcast a clear");
+
+        // Live `A`: completes the D→A transition, fires the inferred clear.
+        apply_live_osc133_mark(&mgr, pane_id, PromptMarkKind::PromptStart).await;
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(1), notify_rx.recv())
+            .await
+            .expect("must receive AgentStatusUpdate")
+            .unwrap();
+        assert_eq!(msg.msg_type, MessageType::AgentStatusUpdate);
+        let payload: AgentStatusUpdateMsg = msg.decode_payload().unwrap();
+        assert_eq!(payload.state, None);
+        assert_eq!(payload.revision, 2);
+        assert!(!payload.replay_derived);
+
+        let m = mgr.lock().await;
+        let pane = m
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&pane_id)
+            .unwrap();
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.state, None);
+        assert_eq!(status.revision, 2);
+        assert!(
+            pane.agent_waiters.lock().unwrap().is_empty(),
+            "the closed-receiver waiter must be swept by reevaluate_agent_waiters"
+        );
+    }
+
+    /// AC-2: `Set` followed only by live OSC 133 `A` (no `D`) leaves
+    /// `pane.agent_status` unchanged — no clear, no broadcast, no revision
+    /// bump.
+    #[tokio::test]
+    async fn test_apply_live_osc133_mark_a_without_prior_d_leaves_state_unchanged() {
+        let (mgr, sid, wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+
+        apply_agent_status_report(
+            &mgr,
+            pane_id,
+            "emterm;agent-status;v=1;state=blocked".to_string(),
+        )
+        .await;
+
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+        apply_live_osc133_mark(&mgr, pane_id, PromptMarkKind::PromptStart).await;
+
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+        assert!(timeout.is_err(), "an A with no prior D must not broadcast");
+
+        let m = mgr.lock().await;
+        let pane = m
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&pane_id)
+            .unwrap();
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(
+            status.state,
+            Some(crate::agent_status::AgentState::Blocked)
+        );
+        assert_eq!(status.revision, 1, "revision must not bump");
+    }
+
+    /// AC-3: an explicit `Clear` followed by live `D`/`A` does not produce
+    /// a second/duplicate clear application or a second revision
+    /// increment — the latch is already disarmed by the explicit `Clear`.
+    #[tokio::test]
+    async fn test_apply_live_osc133_mark_after_explicit_clear_no_duplicate_clear() {
+        let (mgr, sid, wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+
+        apply_agent_status_report(
+            &mgr,
+            pane_id,
+            "emterm;agent-status;v=1;state=done".to_string(),
+        )
+        .await;
+        apply_agent_status_report(&mgr, pane_id, "emterm;agent-status;clear".to_string()).await;
+
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+        apply_live_osc133_mark(&mgr, pane_id, PromptMarkKind::CommandEnd).await;
+        apply_live_osc133_mark(&mgr, pane_id, PromptMarkKind::PromptStart).await;
+
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+        assert!(
+            timeout.is_err(),
+            "D/A after an explicit Clear must not broadcast a second clear"
+        );
+
+        let m = mgr.lock().await;
+        let pane = m
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&pane_id)
+            .unwrap();
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.state, None);
+        assert_eq!(
+            status.revision, 2,
+            "revision must stay at the explicit Clear's value (Set=1, Clear=2)"
+        );
+    }
+
+    /// AC-6 (NFR3 regression guard): a pane whose shell never emits OSC 133
+    /// (no `apply_live_osc133_mark` call ever happens) behaves exactly as
+    /// before this feature — an unresolved `Set` with no explicit `Clear`
+    /// leaves the icon (state) showing indefinitely.
+    #[tokio::test]
+    async fn test_pane_without_osc133_marks_keeps_set_state_indefinitely() {
+        let (mgr, sid, wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
+
+        apply_agent_status_report(
+            &mgr,
+            pane_id,
+            "emterm;agent-status;v=1;state=working;name=claude".to_string(),
+        )
+        .await;
+
+        let m = mgr.lock().await;
+        let pane = m
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&pane_id)
+            .unwrap();
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(
+            status.state,
+            Some(crate::agent_status::AgentState::Working)
+        );
+        assert_eq!(status.revision, 1);
     }
 
     /// AC-5: after a snapshot, each stateful pane produces one
