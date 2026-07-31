@@ -3322,9 +3322,16 @@ mod tests {
     // `probe_candidate_handoff_range` / `real_snapshot` (exercised directly
     // by the dedicated tests further below).
 
+    // task0004 (agent-exit-after-icon, SPEC FR6): the handoff schema
+    // version was bumped from 1 to 2 to carry the new inferred-clear
+    // latch fields (`crates/mux_ipc/src/handoff.rs`). This stand-in
+    // reports the CURRENT schema range so it stays a valid "the candidate
+    // is compatible" probe regardless of future version bumps, instead of
+    // hardcoding a version number that has no bearing on what any of
+    // these tests are actually exercising.
     #[cfg(unix)]
     fn ok_probe(_candidate: &Path) -> Result<std::ops::RangeInclusive<u32>, String> {
-        Ok(1..=1)
+        Ok(mux_ipc::handoff::SUPPORTED_HANDOFF_SCHEMA_VERSIONS)
     }
 
     #[cfg(unix)]
@@ -3382,7 +3389,7 @@ mod tests {
             Path::new("/bin/true"),
             vec!["mux".to_string(), "--daemon".to_string()],
             dir.path(),
-            1,
+            mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
             &ack_slot,
             ok_probe,
             ok_snapshot,
@@ -3498,7 +3505,7 @@ mod tests {
             Path::new("/bin/true"),
             vec!["mux".to_string(), "--daemon".to_string()],
             dir.path(),
-            1,
+            mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
             &ack_slot,
             ok_probe,
             ok_snapshot,
@@ -3559,7 +3566,7 @@ mod tests {
             Path::new("/bin/true"),
             vec!["mux".to_string(), "--daemon".to_string()],
             dir.path(),
-            1,
+            mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
             &ack_slot,
             ok_probe,
             failing_snapshot,
@@ -3595,7 +3602,7 @@ mod tests {
             Path::new("/bin/true"),
             vec!["mux".to_string(), "--daemon".to_string()],
             dir.path(),
-            1,
+            mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
             &ack_slot,
             ok_probe,
             ok_snapshot,
@@ -3719,7 +3726,7 @@ mod tests {
             candidate,
             args.clone(),
             dir.path(),
-            1,
+            mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
             &ack_slot,
             ok_probe,
             ok_snapshot,

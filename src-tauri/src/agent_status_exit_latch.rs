@@ -89,6 +89,31 @@ impl AgentStatusExitLatch {
             PromptMarkKind::CommandStart | PromptMarkKind::CommandExec => false,
         }
     }
+
+    /// This latch's raw state, decomposed into its three components
+    /// `(armed, command_ended, generation)` (task0004: mux daemon
+    /// hot-upgrade transfer). Round-trips exactly with
+    /// [`Self::from_state_parts`].
+    ///
+    /// The `record_*` API alone cannot reconstruct an arbitrary prior
+    /// state after a process replacement — it only ever advances state
+    /// forward — so hot-upgrade's snapshot/restore needs this direct
+    /// escape hatch to carry a pane's EXACT latch state (not merely an
+    /// equivalent one) across the upgrade boundary.
+    pub fn state_parts(&self) -> (bool, bool, u64) {
+        (self.armed, self.command_ended, self.generation)
+    }
+
+    /// Reconstruct a latch directly from its raw state components
+    /// (round-trips with [`Self::state_parts`]) — task0004 hot-upgrade
+    /// restore.
+    pub fn from_state_parts(armed: bool, command_ended: bool, generation: u64) -> Self {
+        Self {
+            armed,
+            command_ended,
+            generation,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -219,5 +244,32 @@ mod tests {
         // while unarmed, this A must not fire.
         latch.record_set();
         assert!(!latch.record_mark(PromptMarkKind::PromptStart));
+    }
+
+    // ── task0004: state_parts / from_state_parts round-trip exactly, for
+    //    every reachable state (disarmed, armed, command_ended) ──────────
+
+    #[test]
+    fn state_parts_round_trips_through_from_state_parts_for_every_reachable_state() {
+        let disarmed = AgentStatusExitLatch::new();
+        let (armed, command_ended, generation) = disarmed.state_parts();
+        assert_eq!(
+            AgentStatusExitLatch::from_state_parts(armed, command_ended, generation),
+            disarmed
+        );
+
+        let mut armed_latch = AgentStatusExitLatch::new();
+        armed_latch.record_set();
+        let parts = armed_latch.state_parts();
+        assert_eq!(AgentStatusExitLatch::from_state_parts(parts.0, parts.1, parts.2), armed_latch);
+
+        let mut command_ended_latch = AgentStatusExitLatch::new();
+        command_ended_latch.record_set();
+        command_ended_latch.record_mark(PromptMarkKind::CommandEnd);
+        let parts = command_ended_latch.state_parts();
+        assert_eq!(
+            AgentStatusExitLatch::from_state_parts(parts.0, parts.1, parts.2),
+            command_ended_latch
+        );
     }
 }

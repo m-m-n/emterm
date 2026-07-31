@@ -30,7 +30,16 @@ use crate::protocol::AgentState;
 /// A monotonically increasing integer, bumped whenever the document's
 /// on-wire shape changes incompatibly. Independent of
 /// [`crate::protocol::PROTOCOL_VERSION`] — see the module docs.
-pub const HANDOFF_SCHEMA_VERSION: u32 = 1;
+///
+/// Bumped to 2 (task0004, SPEC FR6): [`HandoffPane`] gained three new
+/// fields carrying the daemon-side inferred-clear latch's state across a
+/// hot-upgrade boundary. Since `bincode`'s encoding is positional, a
+/// version-1 document decoded against the version-2 struct would
+/// misalign every field after the first affected pane rather than
+/// merely omitting the new ones — the version gate in
+/// [`decode_handoff_document`] is what turns that into a clean rejection
+/// instead of silent corruption.
+pub const HANDOFF_SCHEMA_VERSION: u32 = 2;
 
 /// Inclusive range of [`HandoffDocument`] schema versions this build can
 /// restore.
@@ -79,6 +88,17 @@ pub struct HandoffPane {
     /// parser by replaying these bytes, not by carrying byte-exact parser
     /// state).
     pub scrollback: Vec<u8>,
+    /// This pane's inferred-clear latch state (task0004, SPEC FR6):
+    /// mirrors the daemon-side `AgentStatusExitLatch`'s three state
+    /// components (`state_parts()`/`from_state_parts()`) exactly, as
+    /// primitives rather than the daemon-side type itself — `mux_ipc`
+    /// depends on nothing from the daemon binary (module docs), so the
+    /// latch type (which lives in `src-tauri`) cannot appear here.
+    pub latch_armed: bool,
+    /// See [`Self::latch_armed`].
+    pub latch_command_ended: bool,
+    /// See [`Self::latch_armed`].
+    pub latch_generation: u64,
 }
 
 /// One window's transferable state: its panes plus the window-scoped pane
@@ -217,6 +237,12 @@ mod tests {
             // Arbitrary bytes, including an embedded zero byte and a
             // sequence that is not valid UTF-8, per the Test Notes.
             scrollback: vec![0x1b, b'[', b'2', b'J', 0x00, 0xff, 0xfe, b'o', b'k'],
+            // task0004: a mid-flight latch (armed, command already ended,
+            // non-zero generation) so the round-trip test below actually
+            // exercises non-default values for all three components.
+            latch_armed: true,
+            latch_command_ended: true,
+            latch_generation: 3,
         }
     }
 
@@ -316,6 +342,11 @@ mod tests {
             child_pid: None,
             master_fd: None,
             scrollback: Vec::new(),
+            // An exited pane's latch is disarmed (the default state) —
+            // no Set was pending when the pane exited.
+            latch_armed: false,
+            latch_command_ended: false,
+            latch_generation: 0,
         };
         let doc = HandoffDocument {
             schema_version: HANDOFF_SCHEMA_VERSION,
