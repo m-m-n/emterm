@@ -1,62 +1,32 @@
-//! Core inferred-clear latch (agent-exit-after-icon SPEC FR1).
+//! Build-agnostic per-pane "inferred-clear" latch implementing SPEC.md FR1:
+//! decides when a stale agent-status icon should be inferred-cleared from an
+//! OSC 133 `D` (command end) → `A` (prompt start) transition observed after
+//! the pane's agent-status was last `Set`.
 //!
-//! A small, build-agnostic, side-agnostic per-pane state machine deciding
-//! when a live OSC 133 `D` (command end) followed by `A` (prompt start),
-//! observed after an agent `Set`, should be treated as an inferred
-//! `Clear` — so a stale agent-status icon clears itself when the agent
-//! exits (Ctrl+C / crash / `exit`) without ever reporting an explicit
-//! `Clear`.
+//! Compiled WITHOUT the `gui` feature (CLI-shared, mirrors
+//! [`crate::agent_status`]): both the GUI plain-tab path and the mux daemon
+//! pane path depend on this module without pulling in GUI-only crates.
 //!
-//! Deviation note (task0002): this module and its `lib.rs` registration
-//! are task0001's file scope (`doc/tasks`/`feature-docs` planning). At the
-//! time task0002 was implemented, task0001 had not yet merged into the
-//! parent branch, and task0002 has a hard code dependency on this type
-//! (IMPLEMENTATION.md's "Inferred-clear latch" Shared Component). task0002
-//! implemented it here, matching task0001.md's design/Acceptance Criteria
-//! as closely as possible, so task0002 itself is implementable. If
-//! task0001 lands with a different shape, the parent-side-adoption
-//! protocol resolves the conflict at merge time.
-//!
-//! [`LatchMarkKind`] is a local, build-agnostic mirror of the two mark
-//! kinds this latch inspects. It intentionally does NOT reuse
-//! `crate::prompts::PromptMarkKind`: `prompts` is gated behind the `gui`
-//! feature (GUI-only), but this latch must stay build-agnostic — per
-//! IMPLEMENTATION.md's Layer Structure, both the GUI process and the
-//! build-agnostic mux daemon depend on it without pulling in GUI-only
-//! crates. Callers translate their own mark representation into this
-//! enum at the call site.
+//! One [`AgentStatusExitLatch`] instance covers one pane/tab's lifecycle.
+//! It has no knowledge of `agent_status`/UI/revision state, no I/O, and no
+//! fallible operations — a live mark that doesn't match any transition is
+//! simply a no-op. The latch does not itself decide whether a mark is
+//! "live" vs. replay-derived or main-screen vs. alt-screen; the caller
+//! (task0002 GUI wiring / task0003 mux daemon wiring) is responsible for
+//! only ever handing it live, main-screen-observed marks, in true arrival
+//! order alongside that pane's `Set`/`Clear` calls (SPEC.md FR4, FR5).
 
-/// OSC 133 semantic-prompt sub-type, as far as this latch cares.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LatchMarkKind {
-    /// `A` — prompt start.
-    PromptStart,
-    /// `B` — command start (user input begins). Never a transition input
-    /// for this latch; included for a complete, callers-convert-1:1
-    /// mirror of the underlying OSC 133 sub-types.
-    CommandStart,
-    /// `C` — command exec (user input ends, command runs). Same note as
-    /// `CommandStart`.
-    CommandExec,
-    /// `D` — command end (exit-code-bearing).
-    CommandEnd,
-}
+use crate::prompts::PromptMarkKind;
 
-/// Per-pane inferred-clear latch state (SPEC FR1).
+/// Per-pane state machine deciding when an inferred `Clear` should fire from
+/// a live OSC 133 `D`→`A` transition observed after the pane's agent-status
+/// was last `Set` (SPEC.md FR1).
 ///
-/// State is exactly `armed` / `command_ended` / `generation`; no timeout,
-/// no text inspection (SPEC explicitly excludes both). No fallible
-/// operations — an unrecognized transition is simply a no-op, never a
-/// panic.
-///
-/// Caller contract (enforced by callers, not this type): only live,
-/// main-screen-observed marks may be passed to [`Self::record_mark`], in
-/// true arrival order alongside this pane's [`Self::record_set`] /
-/// [`Self::record_clear`] calls (SPEC FR4, FR5). This latch itself never
-/// touches agent-status/UI/revision state — callers apply an inferred-clear
-/// signal (`record_mark` returning `true`) through the exact same code path
-/// an explicit `Clear` already uses (SPEC FR2).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// State is exactly: whether the latch is armed (a `Set` has been recorded
+/// and not yet cleared), whether the current generation's command has
+/// ended (a `D` mark was seen while armed), and a generation counter that
+/// invalidates any `D` recorded before the most recent `Set`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AgentStatusExitLatch {
     armed: bool,
     command_ended: bool,
@@ -64,54 +34,59 @@ pub struct AgentStatusExitLatch {
 }
 
 impl AgentStatusExitLatch {
-    /// A fresh, disarmed latch (generation 0).
+    /// A fresh, disarmed latch (no `Set` recorded yet).
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Record an explicit `Set` report. Idempotent under repeated `Set`
-    /// calls: each call starts a fresh generation, so a `D` observed
+    /// Record an explicit agent-status `Set` report for this pane.
+    ///
+    /// Arms the latch and starts a fresh generation, so a `D` observed
     /// against the OLD generation can never combine with an `A` observed
-    /// against the NEW generation (SPEC FR1 step 5).
+    /// against the NEW generation. Idempotent under repeated calls — each
+    /// call simply re-arms with a new generation, discarding any
+    /// `command_ended` state accumulated under the previous generation.
     pub fn record_set(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.armed = true;
         self.command_ended = false;
     }
 
-    /// Record an explicit `Clear` report. Returns to disarmed and never
-    /// itself produces an inferred-clear signal — that would double up
-    /// with the explicit clear the caller is already applying.
+    /// Record an explicit agent-status `Clear` report for this pane.
+    ///
+    /// Disarms the latch. Never itself produces an inferred-clear signal —
+    /// the caller is already applying the explicit clear it just recorded.
     pub fn record_clear(&mut self) {
         self.armed = false;
         self.command_ended = false;
     }
 
-    /// Record a live OSC 133 mark. Returns `true` exactly when an
-    /// inferred clear should now be applied (exactly once per qualifying
-    /// `D`→`A` pair), and resets to disarmed in that case — the same
-    /// terminal state as an explicit [`Self::record_clear`].
-    ///
-    /// Transition table:
-    /// - `CommandEnd` (`D`) while `armed && !command_ended`: latches
-    ///   `command_ended`. Repeated `D`s before the matching `A` are
-    ///   absorbed (state only, not a count) — never multiple fires.
-    /// - `PromptStart` (`A`) while `armed && command_ended`: fires,
-    ///   disarms.
-    /// - Anything else (wrong state, or `CommandStart`/`CommandExec`):
-    ///   no-op, no signal.
-    pub fn record_mark(&mut self, kind: LatchMarkKind) -> bool {
+    /// Record a live OSC 133 mark for this pane (pre: LIVE, main-screen-
+    /// observed, in true arrival order — see the caller contract in the
+    /// module docs). Only `CommandEnd` (`D`) and `PromptStart` (`A`) are
+    /// meaningful; every other kind is a no-op. Returns `true` exactly when
+    /// this call should fire an inferred `Clear` — i.e. a live `A` arrived
+    /// while armed and the current generation's command had already ended.
+    /// Firing resets the latch to the same terminal state as an explicit
+    /// `Clear`.
+    pub fn record_mark(&mut self, kind: PromptMarkKind) -> bool {
         match kind {
-            LatchMarkKind::CommandEnd if self.armed && !self.command_ended => {
-                self.command_ended = true;
+            PromptMarkKind::CommandEnd => {
+                if self.armed && !self.command_ended {
+                    self.command_ended = true;
+                }
                 false
             }
-            LatchMarkKind::PromptStart if self.armed && self.command_ended => {
-                self.armed = false;
-                self.command_ended = false;
-                true
+            PromptMarkKind::PromptStart => {
+                if self.armed && self.command_ended {
+                    self.armed = false;
+                    self.command_ended = false;
+                    true
+                } else {
+                    false
+                }
             }
-            _ => false,
+            PromptMarkKind::CommandStart | PromptMarkKind::CommandExec => false,
         }
     }
 }
@@ -120,91 +95,129 @@ impl AgentStatusExitLatch {
 mod tests {
     use super::*;
 
-    // ── AC-1: Set -> D -> A fires exactly once ─────────────────────────
+    // ── AC-1 / TS-1: Set -> live D -> live A fires exactly once ─────────
 
     #[test]
-    fn set_then_d_then_a_fires_inferred_clear() {
+    fn set_then_d_then_a_fires_exactly_once() {
         let mut latch = AgentStatusExitLatch::new();
         latch.record_set();
-        assert!(!latch.record_mark(LatchMarkKind::CommandEnd));
-        assert!(latch.record_mark(LatchMarkKind::PromptStart));
+        assert!(!latch.record_mark(PromptMarkKind::CommandEnd));
+        assert!(latch.record_mark(PromptMarkKind::PromptStart));
     }
 
-    // ── AC-2: Set -> A (no D) never fires ──────────────────────────────
+    // ── AC-2 / TS-2: Set -> live A (no prior D) -> never signals ────────
 
     #[test]
-    fn set_then_a_without_d_does_not_fire() {
+    fn set_then_a_without_prior_d_never_signals() {
         let mut latch = AgentStatusExitLatch::new();
         latch.record_set();
-        assert!(!latch.record_mark(LatchMarkKind::PromptStart));
+        assert!(!latch.record_mark(PromptMarkKind::PromptStart));
+        // Repeating the same A again still never signals.
+        assert!(!latch.record_mark(PromptMarkKind::PromptStart));
     }
 
-    // ── AC-3: Set -> explicit Clear -> D -> A never fires ──────────────
+    // ── AC-3 / TS-3: Set -> explicit Clear -> live D -> live A -> no signal
 
     #[test]
-    fn explicit_clear_before_d_a_suppresses_inferred_clear() {
+    fn explicit_clear_suppresses_subsequent_d_and_a() {
         let mut latch = AgentStatusExitLatch::new();
         latch.record_set();
         latch.record_clear();
-        assert!(!latch.record_mark(LatchMarkKind::CommandEnd));
-        assert!(!latch.record_mark(LatchMarkKind::PromptStart));
+        assert!(!latch.record_mark(PromptMarkKind::CommandEnd));
+        assert!(!latch.record_mark(PromptMarkKind::PromptStart));
     }
 
-    // ── AC-4: a fresh Set invalidates the prior generation's D ─────────
+    // ── AC-4 / TS-4: Set -> live D -> Set again (new generation) -> live A
+    //    -> no signal (the D belonged to the invalidated generation) ─────
 
     #[test]
-    fn d_from_invalidated_generation_never_combines_with_new_generation_a() {
+    fn re_set_invalidates_the_prior_generations_d() {
         let mut latch = AgentStatusExitLatch::new();
         latch.record_set();
-        assert!(!latch.record_mark(LatchMarkKind::CommandEnd));
-        latch.record_set(); // new generation; command_ended resets too
-        assert!(!latch.record_mark(LatchMarkKind::PromptStart));
+        assert!(!latch.record_mark(PromptMarkKind::CommandEnd));
+        latch.record_set(); // re-arm: new generation, command_ended reset
+        assert!(!latch.record_mark(PromptMarkKind::PromptStart));
     }
 
-    // ── AC-5: no Set ever recorded -> D -> A never fires ───────────────
+    // ── AC-5 / TS-5: no Set ever recorded -> live D -> live A -> no signal
 
     #[test]
-    fn no_set_ever_recorded_never_fires() {
+    fn no_set_ever_recorded_never_signals() {
         let mut latch = AgentStatusExitLatch::new();
-        assert!(!latch.record_mark(LatchMarkKind::CommandEnd));
-        assert!(!latch.record_mark(LatchMarkKind::PromptStart));
+        assert!(!latch.record_mark(PromptMarkKind::CommandEnd));
+        assert!(!latch.record_mark(PromptMarkKind::PromptStart));
     }
 
-    // ── AC-6: repeated D before the matching A fires exactly once ─────
+    // ── AC-6 / TS-12: Set -> live D -> live D again (repeated) -> live A
+    //    -> exactly one signal (repeated D does not break the machine) ───
 
     #[test]
     fn repeated_d_before_matching_a_still_fires_exactly_once() {
         let mut latch = AgentStatusExitLatch::new();
         latch.record_set();
-        assert!(!latch.record_mark(LatchMarkKind::CommandEnd));
-        assert!(!latch.record_mark(LatchMarkKind::CommandEnd));
-        assert!(latch.record_mark(LatchMarkKind::PromptStart));
+        assert!(!latch.record_mark(PromptMarkKind::CommandEnd));
+        assert!(!latch.record_mark(PromptMarkKind::CommandEnd)); // repeated D: no-op
+        assert!(latch.record_mark(PromptMarkKind::PromptStart));
     }
 
-    // ── AC-7: after firing, state mirrors an explicit Clear ────────────
+    // ── AC-7: after firing, the latch is observably equivalent to having
+    //    just received an explicit Clear ─────────────────────────────────
 
     #[test]
-    fn after_firing_a_subsequent_d_a_pair_produces_no_further_signal() {
+    fn firing_leaves_latch_equivalent_to_post_clear_state() {
         let mut latch = AgentStatusExitLatch::new();
         latch.record_set();
-        latch.record_mark(LatchMarkKind::CommandEnd);
-        assert!(latch.record_mark(LatchMarkKind::PromptStart));
+        latch.record_mark(PromptMarkKind::CommandEnd);
+        assert!(latch.record_mark(PromptMarkKind::PromptStart)); // fires
 
-        // No intervening Set: behaves as freshly cleared.
-        assert!(!latch.record_mark(LatchMarkKind::CommandEnd));
-        assert!(!latch.record_mark(LatchMarkKind::PromptStart));
+        // A subsequent D/A pair with no intervening Set produces no signal,
+        // exactly as it would right after an explicit Clear.
+        assert!(!latch.record_mark(PromptMarkKind::CommandEnd));
+        assert!(!latch.record_mark(PromptMarkKind::PromptStart));
     }
 
-    // ── Non-A/D kinds are always no-ops ────────────────────────────────
+    // ── Full transition table: kinds other than D/A are always no-ops ───
 
     #[test]
-    fn command_start_and_command_exec_are_always_no_ops() {
+    fn non_d_a_kinds_are_always_no_ops_regardless_of_state() {
+        let mut latch = AgentStatusExitLatch::new();
+        // Disarmed.
+        assert!(!latch.record_mark(PromptMarkKind::PromptStart)); // no-op (not armed)
+
+        latch.record_set();
+        // Armed, command not ended.
+        assert!(!latch.record_mark(PromptMarkKind::CommandStart));
+        assert!(!latch.record_mark(PromptMarkKind::CommandExec));
+
+        latch.record_mark(PromptMarkKind::CommandEnd);
+        // Armed, command ended.
+        assert!(!latch.record_mark(PromptMarkKind::CommandStart));
+        assert!(!latch.record_mark(PromptMarkKind::CommandExec));
+
+        // The pending D->A transition still fires after the no-op kinds.
+        assert!(latch.record_mark(PromptMarkKind::PromptStart));
+    }
+
+    // ── Design note: repeated Set before any D still behaves normally ───
+
+    #[test]
+    fn repeated_set_before_d_still_arms_correctly() {
         let mut latch = AgentStatusExitLatch::new();
         latch.record_set();
-        assert!(!latch.record_mark(LatchMarkKind::CommandStart));
-        assert!(!latch.record_mark(LatchMarkKind::CommandExec));
-        // Latch is still armed, not command_ended: a D/A pair still fires.
-        assert!(!latch.record_mark(LatchMarkKind::CommandEnd));
-        assert!(latch.record_mark(LatchMarkKind::PromptStart));
+        latch.record_set(); // idempotent re-arm
+        assert!(!latch.record_mark(PromptMarkKind::CommandEnd));
+        assert!(latch.record_mark(PromptMarkKind::PromptStart));
+    }
+
+    // ── D while not armed is a no-op (does not spuriously arm command_ended)
+
+    #[test]
+    fn d_while_not_armed_is_a_no_op() {
+        let mut latch = AgentStatusExitLatch::new();
+        assert!(!latch.record_mark(PromptMarkKind::CommandEnd));
+        // Now Set and go straight to A: since the earlier D was a no-op
+        // while unarmed, this A must not fire.
+        latch.record_set();
+        assert!(!latch.record_mark(PromptMarkKind::PromptStart));
     }
 }
