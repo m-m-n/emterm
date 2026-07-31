@@ -8,13 +8,15 @@ use std::sync::Mutex as StdMutex;
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
-use crate::mux::scrollback_filter::{AgentStatusOscScanner, strip_pty_output_for_scrollback_write};
+use crate::mux::scrollback_filter::{
+    AgentStatusOscScanner, Osc133MarkScanner, strip_pty_output_for_scrollback_write,
+};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    AgentStatusReportSender, DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget,
-    PtyOutputChunk, SharedAgentStatusReportSender, SharedNotificationSender, SharedOutputTarget,
-    SharedPaneExitSender, SharedScrollback, SharedShadowParser, SharedTitleSender,
-    TitleChangeSender, lock_shadow_parser,
+    AgentStatusFeedItem, AgentStatusReportSender, DetachReason, MuxPane, NotificationSender,
+    PaneId, PaneOutputTarget, PtyOutputChunk, SharedAgentStatusReportSender,
+    SharedNotificationSender, SharedOutputTarget, SharedPaneExitSender, SharedScrollback,
+    SharedShadowParser, SharedTitleSender, TitleChangeSender, lock_shadow_parser,
 };
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::RawPassthroughBuffer;
@@ -603,6 +605,11 @@ pub(in crate::mux) fn pty_reader_loop(
     // report split across reads is still detected exactly once (SPEC
     // FR1/FR3; review round-1 rework, stable_id `osc_split_lost`).
     let mut agent_status_scanner = AgentStatusOscScanner::new();
+    // Per-pane stateful OSC 133 mark decoder (task0003, SPEC FR1/FR4/FR5):
+    // fed ONLY the live, main-buffer byte spans of each chunk (see
+    // `to_write` below) so a mark reconstructed for snapshot/replay
+    // purposes, or one observed on the alternate screen, never reaches it.
+    let mut osc133_scanner = Osc133MarkScanner::new();
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
@@ -746,9 +753,34 @@ pub(in crate::mux) fn pty_reader_loop(
                 // parses this OSC itself for mux panes. The scanner is
                 // per-pane stateful (see `agent_status_scanner` above) so a
                 // report split across this read and the next is still
-                // detected.
+                // detected. Scanned from the FULL chunk (`data`), unfiltered
+                // by alt-screen — a report's validity does not depend on
+                // screen content (unchanged from before task0003).
                 let reports = agent_status_scanner.feed(data);
-                forward_agent_status_reports(pane_id, reports, &agent_status_report_sender);
+
+                // Detect live OSC 133 marks (task0003, SPEC FR1/FR5) and
+                // feed the pane's inferred-clear latch, ordered with the
+                // reports above through the SAME channel (FR4). Scanned
+                // from `to_write` — the bytes already narrowed to this
+                // chunk's LIVE, MAIN-BUFFER spans above — so a mark
+                // produced while the pane is on the alternate screen never
+                // reaches the scanner (mirrors `term_core`'s own OSC 133
+                // alt-screen suppression) and only live PTY bytes (never
+                // scrollback/snapshot/reattach-reconstructed bytes) ever
+                // do, since `to_write` is computed fresh from THIS read.
+                let osc133_marks = osc133_scanner.feed(to_write);
+
+                if !reports.is_empty() || !osc133_marks.is_empty() {
+                    let mut items: Vec<AgentStatusFeedItem> =
+                        Vec::with_capacity(reports.len() + osc133_marks.len());
+                    items.extend(reports.into_iter().map(AgentStatusFeedItem::Report));
+                    items.extend(
+                        osc133_marks
+                            .into_iter()
+                            .map(AgentStatusFeedItem::Osc133Mark),
+                    );
+                    forward_agent_status_items(pane_id, items, &agent_status_report_sender);
+                }
 
                 // Detect OSC 7 (cwd reporting) and cache the path
                 if let Some(cwd) = crate::mux::ipc::statusbar::detect_osc7_cwd(data) {
@@ -923,8 +955,16 @@ fn capture_passthrough(
     }
 }
 
-/// Forward each decoded agent-status report to the daemon-level agent-status
-/// task via `agent_status_report_sender`.
+/// Forward each decoded agent-status-relevant item (an OSC 777 report body
+/// OR a live OSC 133 mark, task0003 SPEC FR4 — see [`AgentStatusFeedItem`])
+/// to the daemon-level agent-status task via `agent_status_report_sender`,
+/// IN THE ORDER GIVEN. Callers build `items` by appending this chunk's
+/// reports and marks in their own already-correct relative scan order
+/// (reports scanned from the full chunk, marks scanned from the live
+/// main-buffer span of it) so a single sequential forward here — one
+/// channel, one send per item, in order — is what gives FR4 its ordering
+/// guarantee: no separate queue/task exists that could reorder a `Set`
+/// relative to a `D`/`A` pair from the same PTY read.
 ///
 /// Unlike the best-effort PTY-output passthrough, an accepted report MUST
 /// reach the daemon — SPEC FR3 requires every accepted report to advance the
@@ -932,27 +972,30 @@ fn capture_passthrough(
 /// spec bug. A full channel therefore falls back to a blocking send instead
 /// of dropping (review round-1 stable_id `try_send_drops_reports`, addressed
 /// alongside the per-pane statefulness rework since the fix naturally
-/// extends here).
+/// extends here). The same "must not silently drop" guarantee applies to
+/// live OSC 133 marks: dropping one could leave the latch stuck armed
+/// forever with no future mark able to complete the D→A transition it was
+/// waiting on.
 ///
 /// Runs OUTSIDE the `agent_status_report_sender` lock (the sender is cloned
 /// out and the lock released before any send), mirroring the "release lock
 /// before blocking_send" discipline the PTY-output backpressure path above
 /// already follows — a blocked send here cannot deadlock against the
 /// session-manager lock the consuming `run_agent_status_task` also needs.
-fn forward_agent_status_reports(
+fn forward_agent_status_items(
     pane_id: PaneId,
-    reports: Vec<String>,
+    items: Vec<AgentStatusFeedItem>,
     agent_status_report_sender: &SharedAgentStatusReportSender,
 ) {
-    if reports.is_empty() {
+    if items.is_empty() {
         return;
     }
     let sender = agent_status_report_sender.lock().unwrap().clone();
     let Some(tx) = sender else {
         return;
     };
-    for report in reports {
-        match tx.try_send((pane_id, report)) {
+    for item in items {
+        match tx.try_send((pane_id, item)) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(msg)) => {
                 log::debug!(
@@ -961,14 +1004,14 @@ fn forward_agent_status_reports(
                 );
                 if tx.blocking_send(msg).is_err() {
                     log::warn!(
-                        "pane {} agent-status report not delivered: receiver dropped",
+                        "pane {} agent-status item not delivered: receiver dropped",
                         pane_id
                     );
                 }
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 log::debug!(
-                    "pane {} agent-status channel closed; report not delivered",
+                    "pane {} agent-status channel closed; item not delivered",
                     pane_id
                 );
             }
@@ -1494,54 +1537,222 @@ mod tests {
         assert_eq!(message, "long message");
     }
 
-    // ── forward_agent_status_reports (task0012 AC-6 / try_send_drops_reports) ─
+    // ── pty_reader_loop OSC 133 live wiring (task0003, SPEC FR1/FR4/FR5) ──
+    // End-to-end tests through the ACTUAL live PTY reader path (not just
+    // `Osc133MarkScanner` in isolation) so the alt-screen gating this
+    // module wires up is checked against the real code path.
+
+    /// AC-5: OSC 133 marks emitted while the pane is on the alternate
+    /// screen (between `?1049h` and `?1049l`) never reach the
+    /// agent-status channel — mirroring `term_core`'s own OSC 133
+    /// alt-screen suppression. Marks emitted on the main screen, in the
+    /// SAME reader loop run, still do (proving the alt-screen span really
+    /// was what suppressed the first pair, not something else).
+    #[test]
+    fn pty_reader_loop_suppresses_osc133_marks_emitted_on_the_alternate_screen() {
+        let (out_tx, _out_rx) = mpsc::channel::<PtyOutputChunk>(16);
+        let output_target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(out_tx)));
+        let pane = MuxPane::new_test(1, 80, 24, output_target);
+
+        let (agent_status_tx, mut agent_status_rx) =
+            mpsc::channel::<(PaneId, AgentStatusFeedItem)>(16);
+        *pane.agent_status_report_sender.lock().unwrap() = Some(agent_status_tx);
+
+        let mut input = Vec::new();
+        // Alt screen: D then A here must be suppressed.
+        input.extend_from_slice(b"\x1b[?1049h");
+        input.extend_from_slice(b"\x1b]133;D\x07");
+        input.extend_from_slice(b"\x1b]133;A\x07");
+        input.extend_from_slice(b"\x1b[?1049l");
+        // Back on the main screen: D then A here must reach the channel.
+        input.extend_from_slice(b"\x1b]133;D\x07");
+        input.extend_from_slice(b"\x1b]133;A\x07");
+
+        let reader: Box<dyn Read + Send> = Box::new(std::io::Cursor::new(input));
+
+        pty_reader_loop(
+            pane.id,
+            reader,
+            pane.output_target.clone(),
+            pane.shadow_parser.clone(),
+            pane.cwd.clone(),
+            pane.title.clone(),
+            pane.title_sender.clone(),
+            pane.notification_sender.clone(),
+            pane.agent_status_report_sender.clone(),
+            pane.raw_passthrough.clone(),
+            pane.passthrough_scanner.clone(),
+            pane.scrollback.clone(),
+            pane.dims.clone(),
+            Arc::new(StdMutex::new(None)),
+        );
+
+        let mut marks = Vec::new();
+        while let Ok((pane_id, item)) = agent_status_rx.try_recv() {
+            assert_eq!(pane_id, 1);
+            if let AgentStatusFeedItem::Osc133Mark(kind) = item {
+                marks.push(kind);
+            }
+        }
+        assert_eq!(
+            marks,
+            vec![
+                crate::prompts::PromptMarkKind::CommandEnd,
+                crate::prompts::PromptMarkKind::PromptStart,
+            ],
+            "only the main-screen D/A pair may reach the channel"
+        );
+    }
+
+    /// AC-4 (live-path side): OSC 133 marks are scanned from the LIVE PTY
+    /// read `pty_reader_loop` is currently processing, never re-derived
+    /// from this pane's scrollback — a real chunk containing a `Set`-
+    /// shaped agent-status OSC report next to `D`/`A` marks results in
+    /// exactly the marks from THIS read reaching the channel, in the same
+    /// relative order as the report (FR4), regardless of what is already
+    /// sitting in scrollback from an earlier write.
+    #[test]
+    fn pty_reader_loop_feeds_report_then_marks_from_the_same_read_in_order() {
+        let (out_tx, _out_rx) = mpsc::channel::<PtyOutputChunk>(16);
+        let output_target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(out_tx)));
+        let pane = MuxPane::new_test(2, 80, 24, output_target);
+        // Pre-existing scrollback content is irrelevant to what THIS read
+        // forwards — it must never be re-scanned as if it were live.
+        pane.scrollback
+            .lock()
+            .unwrap()
+            .write(b"\x1b]133;D\x07\x1b]133;A\x07");
+
+        let (agent_status_tx, mut agent_status_rx) =
+            mpsc::channel::<(PaneId, AgentStatusFeedItem)>(16);
+        *pane.agent_status_report_sender.lock().unwrap() = Some(agent_status_tx);
+
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1b]777;emterm;agent-status;v=1;state=working\x07");
+        input.extend_from_slice(b"\x1b]133;D\x07");
+        input.extend_from_slice(b"\x1b]133;A\x07");
+        let reader: Box<dyn Read + Send> = Box::new(std::io::Cursor::new(input));
+
+        pty_reader_loop(
+            pane.id,
+            reader,
+            pane.output_target.clone(),
+            pane.shadow_parser.clone(),
+            pane.cwd.clone(),
+            pane.title.clone(),
+            pane.title_sender.clone(),
+            pane.notification_sender.clone(),
+            pane.agent_status_report_sender.clone(),
+            pane.raw_passthrough.clone(),
+            pane.passthrough_scanner.clone(),
+            pane.scrollback.clone(),
+            pane.dims.clone(),
+            Arc::new(StdMutex::new(None)),
+        );
+
+        let mut items = Vec::new();
+        while let Ok((pane_id, item)) = agent_status_rx.try_recv() {
+            assert_eq!(pane_id, 2);
+            items.push(item);
+        }
+        assert_eq!(items.len(), 3, "one report + two marks from THIS read only");
+        assert!(matches!(&items[0], AgentStatusFeedItem::Report(r) if r == "emterm;agent-status;v=1;state=working"));
+        assert!(matches!(
+            items[1],
+            AgentStatusFeedItem::Osc133Mark(crate::prompts::PromptMarkKind::CommandEnd)
+        ));
+        assert!(matches!(
+            items[2],
+            AgentStatusFeedItem::Osc133Mark(crate::prompts::PromptMarkKind::PromptStart)
+        ));
+    }
+
+    // ── forward_agent_status_items (task0012 AC-6 / try_send_drops_reports;
+    //    task0003 generalized to carry OSC 133 marks alongside reports) ────
 
     /// Baseline: a healthy channel delivers via the `try_send` fast path,
     /// no blocking.
     #[test]
-    fn forward_agent_status_reports_delivers_via_try_send_when_channel_has_room() {
-        let (tx, mut rx) = mpsc::channel::<(PaneId, String)>(4);
+    fn forward_agent_status_items_delivers_via_try_send_when_channel_has_room() {
+        let (tx, mut rx) = mpsc::channel::<(PaneId, AgentStatusFeedItem)>(4);
         let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(Some(tx)));
-        forward_agent_status_reports(3, vec!["emterm;agent-status;clear".to_string()], &sender);
-        let (pane_id, report) = rx.try_recv().expect("report must be delivered");
+        forward_agent_status_items(
+            3,
+            vec![AgentStatusFeedItem::Report(
+                "emterm;agent-status;clear".to_string(),
+            )],
+            &sender,
+        );
+        let (pane_id, item) = rx.try_recv().expect("item must be delivered");
         assert_eq!(pane_id, 3);
-        assert_eq!(report, "emterm;agent-status;clear");
+        assert!(matches!(item, AgentStatusFeedItem::Report(r) if r == "emterm;agent-status;clear"));
     }
 
-    /// Empty report list is a no-op — no send attempted, no panic on a
+    /// A live OSC 133 mark travels through the same forwarding path as a
+    /// report (task0003, SPEC FR4).
+    #[test]
+    fn forward_agent_status_items_delivers_osc133_mark() {
+        let (tx, mut rx) = mpsc::channel::<(PaneId, AgentStatusFeedItem)>(4);
+        let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(Some(tx)));
+        forward_agent_status_items(
+            3,
+            vec![AgentStatusFeedItem::Osc133Mark(
+                crate::prompts::PromptMarkKind::CommandEnd,
+            )],
+            &sender,
+        );
+        let (pane_id, item) = rx.try_recv().expect("item must be delivered");
+        assert_eq!(pane_id, 3);
+        assert!(matches!(
+            item,
+            AgentStatusFeedItem::Osc133Mark(crate::prompts::PromptMarkKind::CommandEnd)
+        ));
+    }
+
+    /// Empty item list is a no-op — no send attempted, no panic on a
     /// `None` sender either.
     #[test]
-    fn forward_agent_status_reports_empty_list_is_noop() {
+    fn forward_agent_status_items_empty_list_is_noop() {
         let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(None));
         // Must not panic even though the sender is unset.
-        forward_agent_status_reports(1, Vec::new(), &sender);
+        forward_agent_status_items(1, Vec::new(), &sender);
     }
 
-    /// AC-6: a full channel must NOT silently drop an accepted report
+    /// AC-6: a full channel must NOT silently drop an accepted item
     /// (review round-1 stable_id `try_send_drops_reports`). This proves the
     /// blocking-send fallback actually delivers once capacity frees, rather
     /// than the old best-effort `try_send` that discarded on `Full`.
     #[test]
-    fn forward_agent_status_reports_blocks_instead_of_dropping_on_full_channel() {
-        let (tx, mut rx) = mpsc::channel::<(PaneId, String)>(1);
+    fn forward_agent_status_items_blocks_instead_of_dropping_on_full_channel() {
+        let (tx, mut rx) = mpsc::channel::<(PaneId, AgentStatusFeedItem)>(1);
         // Fill the one available slot directly so the channel is Full.
-        tx.try_send((1, "first".to_string())).unwrap();
+        tx.try_send((1, AgentStatusFeedItem::Report("first".to_string())))
+            .unwrap();
         let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(Some(tx)));
 
         let sender_for_thread = sender.clone();
         let handle = std::thread::spawn(move || {
-            forward_agent_status_reports(1, vec!["second".to_string()], &sender_for_thread);
+            forward_agent_status_items(
+                1,
+                vec![AgentStatusFeedItem::Report("second".to_string())],
+                &sender_for_thread,
+            );
         });
 
         // Drain the first item, freeing the slot the blocked send is
         // waiting on.
-        let first = rx.blocking_recv().expect("first item must still arrive");
-        assert_eq!(first, (1, "first".to_string()));
+        let (first_pane, first_item) = rx.blocking_recv().expect("first item must still arrive");
+        assert_eq!(first_pane, 1);
+        assert!(matches!(first_item, AgentStatusFeedItem::Report(r) if r == "first"));
 
         // The blocking send only completes once the slot is free, so this
         // recv is what proves "second" was not dropped.
-        let second = rx.blocking_recv().expect("second item must not be dropped");
-        assert_eq!(second, (1, "second".to_string()));
+        let (second_pane, second_item) =
+            rx.blocking_recv().expect("second item must not be dropped");
+        assert_eq!(second_pane, 1);
+        assert!(matches!(second_item, AgentStatusFeedItem::Report(r) if r == "second"));
 
         handle.join().expect("forwarding thread must not panic");
     }
@@ -1549,11 +1760,15 @@ mod tests {
     /// A closed channel (receiver dropped) is handled gracefully — the send
     /// is a no-op, no panic, no hang.
     #[test]
-    fn forward_agent_status_reports_closed_channel_does_not_panic() {
-        let (tx, rx) = mpsc::channel::<(PaneId, String)>(1);
+    fn forward_agent_status_items_closed_channel_does_not_panic() {
+        let (tx, rx) = mpsc::channel::<(PaneId, AgentStatusFeedItem)>(1);
         drop(rx);
         let sender: SharedAgentStatusReportSender = Arc::new(StdMutex::new(Some(tx)));
-        forward_agent_status_reports(1, vec!["orphaned".to_string()], &sender);
+        forward_agent_status_items(
+            1,
+            vec![AgentStatusFeedItem::Report("orphaned".to_string())],
+            &sender,
+        );
     }
 
     // ── task0004 round-4 rework (D1'): dimensions travel as structural
