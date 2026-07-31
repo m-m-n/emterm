@@ -167,6 +167,12 @@ pub mod cli;
 pub mod i18n;
 pub mod localtime;
 pub mod logging;
+// `PromptMarkKind` (OSC 133 mark sub-type) has no GUI dependency and is
+// reused by `agent_status_exit_latch`'s build-agnostic latch, so this
+// module is always built rather than gated behind `gui`. `PromptTracker`
+// (the retained-mark storage the GUI path uses) is unaffected — it lives
+// in this same file but is only ever constructed from GUI-only code.
+pub mod prompts;
 pub mod settings_core;
 pub mod viewer_kinds;
 
@@ -214,8 +220,6 @@ pub mod logical_line;
 pub mod notifications;
 #[cfg(feature = "gui")]
 pub mod profiles;
-#[cfg(feature = "gui")]
-pub mod prompts;
 #[cfg(feature = "gui")]
 pub mod render;
 #[cfg(feature = "gui")]
