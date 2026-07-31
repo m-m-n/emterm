@@ -25,7 +25,7 @@ workflow:
     skipped_reason: "UI変更なし。既存のタブ/ステータスバーのアイコン表示ロジックはそのまま、内部状態機械の追加のみのため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
   - id: review
