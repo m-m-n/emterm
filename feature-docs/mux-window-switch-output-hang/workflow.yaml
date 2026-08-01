@@ -31,7 +31,7 @@ workflow:
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
     completed_at_commit: 849434fe336aaf79641b77a9a471625d08ffff9f
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -57,10 +57,14 @@ tasks:
     branch: em-workflow/mux-window-switch-output-hang/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
   residual_critical_high: 0
   needs_rework: false
+  plan:
+    floor: [comprehensive, performance, architecture, spec]
+    discretionary: []
+    codex_cross_validation: true
 
 requirements:
   FR1:
