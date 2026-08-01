@@ -343,6 +343,85 @@ impl PtyOutputChunk {
 /// Bounded channel capacity for PTY output per pane.
 pub const PTY_CHANNEL_CAPACITY: usize = 256;
 
+/// Enqueue `chunk` onto `tx` without ever letting the CALLING task block on
+/// the channel's capacity (mux-window-switch-output-hang task0001).
+///
+/// ### Why this exists
+///
+/// `tx` (a connection's `pane_output_tx`) is drained by exactly one place:
+/// the owning connection's own `select!` loop
+/// (`mux::ipc::connection::handle_connection`, the `pane_output_rx.recv()`
+/// arm). Every call site that matters for the bug this fixes runs FROM
+/// INSIDE THAT SAME connection task (`route_message` ->
+/// `handle_request_pane_snapshot` / `handle_set_visibility`'s
+/// visibility-resume path). A bare `tx.send(chunk).await` blocks the
+/// CURRENT task until capacity frees — but the only thing able to free
+/// capacity is that SAME task's own drain arm, which cannot run while the
+/// task is suspended here. The task then self-deadlocks: no further client
+/// messages are processed and no further PTY output for ANY pane on the
+/// connection is forwarded (SPEC.md "Root Cause").
+///
+/// ### Mechanism (SPEC.md Implementation Approach, candidate 1)
+///
+/// Fast path: `try_send` — non-blocking, succeeds immediately when the
+/// channel has room (the overwhelmingly common case). The chunk lands at
+/// the current tail of the queue, after every chunk already resident there
+/// — this is what preserves FR3's FIFO guarantee relative to
+/// already-queued chunks for the same pane, with no bookkeeping needed
+/// here: it is simply a normal enqueue.
+///
+/// Slow path: when the channel is momentarily full, the actual wait for
+/// capacity is delegated to a freshly `tokio::spawn`ed task holding a
+/// cloned `Sender`. That task is scheduled independently by the tokio
+/// runtime, so it does not block the CALLING task, which returns
+/// immediately — free to keep running its own drain arm (the very thing
+/// that frees the capacity the spawned task is waiting for). tokio's
+/// bounded mpsc channel wakes waiting senders in the order they started
+/// waiting, so a chunk that takes this path still lands strictly after
+/// every chunk already enqueued at the moment this function was called,
+/// and before any producer that only starts waiting later (FR3 preserved
+/// without this function needing pane-identity bookkeeping).
+///
+/// This function is deliberately synchronous (not `async fn`): it can
+/// never itself suspend on channel capacity, which is the structural
+/// guarantee behind "never blocks the calling task".
+///
+/// A closed channel (client gone) is logged and dropped — no new panic or
+/// unhandled error path relative to the pre-existing
+/// `if let Err(e) = ... send(...).await { log::warn!(...) }` handling this
+/// replaces.
+pub fn enqueue_pane_output_chunk(tx: &mpsc::Sender<PtyOutputChunk>, chunk: PtyOutputChunk) {
+    match tx.try_send(chunk) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(chunk)) => {
+            log::warn!(
+                "pane {} output channel full ({} capacity); deferring enqueue \
+                 (kind={:?}) to a background task so this connection's own \
+                 drain arm keeps running (mux-window-switch-output-hang task0001)",
+                chunk.pane_id,
+                PTY_CHANNEL_CAPACITY,
+                chunk.kind,
+            );
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                if let Err(e) = tx.send(chunk).await {
+                    log::warn!(
+                        "deferred pane output enqueue failed (channel closed): {}",
+                        e
+                    );
+                }
+            });
+        }
+        Err(mpsc::error::TrySendError::Closed(chunk)) => {
+            log::warn!(
+                "pane {} output channel closed; dropping chunk (kind={:?})",
+                chunk.pane_id,
+                chunk.kind,
+            );
+        }
+    }
+}
+
 /// Why a pane is currently detached. Combines `NetworkDetach`
 /// (no client connected / kicked / explicit detach) with
 /// `HiddenByVisibility` (client connected but reported hidden).
@@ -1393,7 +1472,9 @@ impl MuxPane {
         restored_child_pid: Option<u32>,
     ) -> Self {
         let pane = match restored_child_pid {
-            Some(pid) => Self::new_with_process_id(id, cols, rows, output_target, writer, master, pid),
+            Some(pid) => {
+                Self::new_with_process_id(id, cols, rows, output_target, writer, master, pid)
+            }
             None => Self::new(id, cols, rows, output_target, writer, master, None),
         };
 
@@ -3452,7 +3533,11 @@ mod tests {
         assert_eq!(pane.id, 9);
         assert_eq!((pane.cols, pane.rows), (80, 24));
         assert!(!pane.exited);
-        assert_eq!(pane.child_pid(), Some(4242), "restored pid flows through PaneChild::ProcessId");
+        assert_eq!(
+            pane.child_pid(),
+            Some(4242),
+            "restored pid flows through PaneChild::ProcessId"
+        );
         assert_eq!(
             *pane.cwd.lock().unwrap(),
             Some("/home/user/project".to_string())
@@ -3503,7 +3588,9 @@ mod tests {
         pane.write_input(b"restored-write\n").unwrap();
 
         let mut buf = [0u8; 64];
-        let n = master_reader.read(&mut buf).expect("master read must succeed");
+        let n = master_reader
+            .read(&mut buf)
+            .expect("master read must succeed");
         assert!(
             buf[..n]
                 .windows(b"restored-write".len())
@@ -3544,5 +3631,86 @@ mod tests {
         );
         // Writing to an exited pane must fail (no writer).
         assert!(pane.write_input(b"x").is_err());
+    }
+
+    // ── enqueue_pane_output_chunk (mux-window-switch-output-hang task0001) ──
+    //
+    // AC-1/AC-2/AC-3: the fix's core mechanism. `enqueue_pane_output_chunk`
+    // is deliberately a plain `fn` (not `async fn`), so it structurally
+    // cannot suspend the calling task on channel capacity — the tests below
+    // pin the OBSERVABLE behavior on top of that structural guarantee: the
+    // fast path delivers synchronously, the slow path still returns without
+    // blocking and the deferred chunk lands strictly after every chunk
+    // already queued (FIFO, FR3), and a closed channel is handled without a
+    // panic (no new unhandled error path).
+
+    /// AC-3 (fast path): with room in the channel, the chunk is enqueued
+    /// synchronously — no deferral, no background task involved.
+    #[test]
+    fn enqueue_pane_output_chunk_fast_path_delivers_synchronously() {
+        let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+        enqueue_pane_output_chunk(&tx, PtyOutputChunk::pty_output(1, b"hi".to_vec()));
+        let chunk = rx.try_recv().expect("fast path must deliver synchronously");
+        assert_eq!(chunk.data, b"hi");
+    }
+
+    /// AC-1/AC-3: with the channel completely full, `enqueue_pane_output_chunk`
+    /// must still return immediately (this IS the self-deadlock fix), and the
+    /// deferred chunk must land strictly after the chunks already resident in
+    /// the channel once capacity frees (FIFO preserved relative to
+    /// already-queued chunks for the same pane).
+    #[tokio::test]
+    async fn enqueue_pane_output_chunk_full_channel_defers_without_blocking_preserves_fifo() {
+        let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(2);
+        tx.send(PtyOutputChunk::pty_output(1, b"a".to_vec()))
+            .await
+            .unwrap();
+        tx.send(PtyOutputChunk::pty_output(1, b"b".to_vec()))
+            .await
+            .unwrap();
+        assert!(
+            tx.try_send(PtyOutputChunk::pty_output(1, b"never".to_vec()))
+                .is_err(),
+            "test prerequisite: channel must be at capacity"
+        );
+
+        // This call must return immediately even though the channel is full
+        // — it is a plain (non-async) function call, so there is no `.await`
+        // point where it could suspend the test task either.
+        enqueue_pane_output_chunk(&tx, PtyOutputChunk::snapshot(1, b"SNAP".to_vec()));
+
+        // The two pre-existing chunks must be observed first...
+        let c1 = rx.recv().await.expect("chunk a");
+        assert_eq!(c1.data, b"a");
+        let c2 = rx.recv().await.expect("chunk b");
+        assert_eq!(c2.data, b"b");
+        // ...then the deferred chunk must eventually arrive, bounded in time
+        // (proves the background task actually completes once capacity
+        // frees, not just that the caller didn't block).
+        let snap = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .expect("deferred chunk must arrive once capacity frees")
+            .expect("channel must not have closed");
+        assert_eq!(snap.kind, ChunkKind::Snapshot);
+        assert_eq!(snap.data, b"SNAP");
+    }
+
+    /// A closed channel (client gone) is handled the same way the
+    /// pre-existing blocking-send call sites handled it: logged and
+    /// dropped, never a panic.
+    #[test]
+    fn enqueue_pane_output_chunk_closed_channel_does_not_panic() {
+        let (tx, rx) = mpsc::channel::<PtyOutputChunk>(1);
+        drop(rx);
+        enqueue_pane_output_chunk(&tx, PtyOutputChunk::pty_output(1, b"x".to_vec()));
+        // Reaching here without a panic is the assertion.
+    }
+
+    /// AC-4: this fix must not replace the bounded channel with an
+    /// unconditionally-growing one. Pins the capacity constant so a future
+    /// change to an unbounded mechanism is caught here.
+    #[test]
+    fn pty_channel_capacity_is_finite_and_unchanged() {
+        assert_eq!(PTY_CHANNEL_CAPACITY, 256);
     }
 }

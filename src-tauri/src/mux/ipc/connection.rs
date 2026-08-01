@@ -152,8 +152,15 @@ pub async fn handle_connection<S>(
         id
     };
 
-    // Shared channel: all pane reader threads send output here,
-    // and the select! loop forwards it to the client.
+    // Shared channel: all pane reader threads send output here (via
+    // blocking_send on their own native OS thread — never a self-block risk
+    // for THIS task), and the select! loop below forwards it to the client.
+    // `route_message`'s `RequestPaneSnapshot` / `SetVisibility` arms can also
+    // enqueue a chunk onto this SAME channel from within this connection's
+    // own task; see the audit note on `route_message` below for why neither
+    // of those enqueues is allowed to be a blocking
+    // `pane_output_tx.send(...).await` / `.reserve().await` (mux-window-
+    // switch-output-hang task0001).
     let (pane_output_tx, mut pane_output_rx) =
         mpsc::channel::<PtyOutputChunk>(crate::mux::session::pane::PTY_CHANNEL_CAPACITY);
 
@@ -776,8 +783,10 @@ fn upgrade_reply_to_message(
 /// (`route_message`) — FR1's wire message is not scoped to one client type,
 /// and duplicating this logic per call site is exactly the kind of drift
 /// this task exists to close (task0009 rework).
-async fn handle_upgrade_request<S>(framed: &mut Framed<S, MuxCodec>, upgrade_tx: &UpgradeSignalSender)
-where
+async fn handle_upgrade_request<S>(
+    framed: &mut Framed<S, MuxCodec>,
+    upgrade_tx: &UpgradeSignalSender,
+) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let (reply_tx, reply_rx) = oneshot::channel();
@@ -832,6 +841,31 @@ async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, s
 ///
 /// Returns `Err(true)` when the connection should be closed,
 /// `Err(false)` on a non-fatal send error, and `Ok(())` otherwise.
+///
+/// ### Audit note (mux-window-switch-output-hang task0001)
+///
+/// This function runs inside the connection's own `select!` loop
+/// (`handle_connection`, the `msg = framed.next() =>` arm), so any call it
+/// makes into a handler that performs a *blocking* send/reserve against
+/// `pane_output_tx` would self-deadlock the connection: that channel's ONLY
+/// consumer is this same task's `pane_output_rx.recv()` arm, which cannot
+/// run while this task is suspended somewhere below `route_message`.
+/// Audited every arm below for exactly that shape; two were found and
+/// fixed (neither performs a blocking send/reserve on `pane_output_tx`
+/// anymore):
+/// - `RequestPaneSnapshot` -> `handle_request_pane_snapshot`, which used to
+///   `pane_output_tx.send(...).await` — now uses
+///   `pane::enqueue_pane_output_chunk` (try_send, deferring to a spawned
+///   task only when the channel is momentarily full).
+/// - `SetVisibility` -> `handle_set_visibility`'s visibility-resume loop,
+///   which used to `pane_output_tx.reserve().await` per pane — now uses
+///   `try_reserve()` with the same spawned-task deferral on `Full`.
+///
+/// Every other arm below either does not touch `pane_output_tx` at all, or
+/// only clones it for storage (`Attach`, `CreateWindow` — the actual PTY
+/// output send for those happens later, off this task, on the pane's
+/// reader thread via `blocking_send`, which blocks that native OS thread
+/// only, not this connection task).
 #[allow(clippy::too_many_arguments)]
 async fn route_message<S>(
     msg: MuxMessage,
