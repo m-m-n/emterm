@@ -46,6 +46,48 @@ const UPGRADE_PREPARE_TIMEOUT: Duration = Duration::from_secs(30);
 /// each, worst-case batch memory is ~4MB (transient, freed after flush).
 const DRAIN_BATCH_LIMIT: usize = 64;
 
+/// Starvation-guard quota (G2 rework, mux-window-switch-output-hang
+/// task0004, review round 3 findings `dd23cfc388062939`/`5c01ffb8d53dc9f7`).
+///
+/// Bound on how many CONSECUTIVE `select!` iterations the client-message
+/// arm (`framed.next()`) may win while deferred output work (a fair
+/// reservation, or a non-empty `deferred_output`) is outstanding, before it
+/// is excluded from exactly one iteration so the reservation/drain arms are
+/// guaranteed to be POLLED at least once. See the design-decision doc at
+/// `msg = framed.next()`'s guard, below, for why this exists and why it is
+/// a bounded round-robin rather than either arm unconditionally winning.
+const CLIENT_MSG_STARVATION_QUOTA: u32 = 8;
+
+/// Pure decision function for the G2 starvation guard: whether the
+/// client-message arm (`framed.next()`) is allowed to be included in THIS
+/// `select!` iteration.
+///
+/// Extracted out of `handle_connection`'s loop body (rather than inlined at
+/// the call site) specifically so the quota/reset arithmetic is
+/// unit-testable deterministically, with no live connection, timing, or
+/// scheduling involved — see this module's `tests` for the direct coverage
+/// (`allow_client_message_arm_true_when_no_deferred_work_regardless_of_counter`
+/// / `allow_client_message_arm_true_for_quota_iterations_then_excludes_on_the_next`).
+/// The accompanying LIVE connection-level regression test
+/// (`connection_level_deferred_snapshot_delivered_despite_continuous_client_traffic`)
+/// exercises the real `select!` loop end-to-end, but — as that test's own
+/// doc explains — the underlying starvation race depends on genuinely
+/// gapless message arrival, which real scheduling/network timing does not
+/// reliably force either way; THIS function is what actually pins the
+/// bounded-iterations guarantee AC-2 requires.
+///
+/// `has_deferred_work` is `pending_deferred_reserve.is_some() ||
+/// !deferred_output.is_empty()`, computed by the caller once per iteration.
+/// `consecutive_client_msgs_while_deferred` is the running count of how
+/// many iterations in a row the client arm has already won while deferred
+/// work was outstanding.
+fn allow_client_message_arm(
+    has_deferred_work: bool,
+    consecutive_client_msgs_while_deferred: u32,
+) -> bool {
+    !has_deferred_work || consecutive_client_msgs_while_deferred < CLIENT_MSG_STARVATION_QUOTA
+}
+
 /// A fair, in-flight reservation on a connection's `pane_output_tx`, used
 /// only to service `deferred_output` when the ordinary `try_send`/
 /// `try_reserve`-based flush (`handlers::flush_deferred_output`) cannot make
@@ -331,6 +373,11 @@ pub async fn handle_connection<S>(
     // try-based retries rather than replacing them.
     let mut pending_deferred_reserve: Option<PendingDeferredReserve> = None;
 
+    // Starvation-guard counter for the client-message arm (G2 rework,
+    // AC-2) — see `CLIENT_MSG_STARVATION_QUOTA`'s doc and the
+    // design-decision comment at `msg = framed.next()`'s guard below.
+    let mut consecutive_client_msgs_while_deferred: u32 = 0;
+
     // Message + output loop using select! to handle both directions concurrently
     loop {
         // Build a future for the render timer (if enabled)
@@ -359,11 +406,72 @@ pub async fn handle_connection<S>(
             }
         };
 
+        // G2 rework (AC-2, review round 3 findings `dd23cfc388062939` /
+        // `5c01ffb8d53dc9f7`) — starvation guard computed BEFORE the
+        // `select!` so both the client-message arm's guard and the
+        // post-`select!` bookkeeping below see the SAME snapshot of
+        // "was there deferred work outstanding going into this
+        // iteration". See the design-decision doc at the client-message
+        // arm's own guard for the full reasoning.
+        let has_deferred_work = pending_deferred_reserve.is_some() || !deferred_output.is_empty();
+        let allow_client_arm =
+            allow_client_message_arm(has_deferred_work, consecutive_client_msgs_while_deferred);
+        let mut took_client_arm = false;
+
         tokio::select! {
-            // biased: prioritize client messages (PtyInput) over PTY output
+            // biased: text order below IS the priority order, subject to
+            // the starvation guard on the very first arm (`allow_client_arm`,
+            // computed just above). See that arm's own doc for the full G2
+            // design decision.
             biased;
 
-            msg = framed.next() => {
+            // G2 rework (AC-2, review round 3 findings `dd23cfc388062939` /
+            // `5c01ffb8d53dc9f7`) — DESIGN DECISION: which invariant wins.
+            //
+            // task0003 established the fair `reserve_owned()` arm further
+            // below (`permit_result`) must be listed BEFORE the drain arm
+            // so it can ever be polled under saturation. Round 3 found
+            // THIS arm has the identical structural problem one level
+            // further out: under `biased`, a client that keeps
+            // `framed.next()` continuously ready (buffered messages
+            // arriving faster than one per loop iteration) wins EVERY
+            // iteration, so every arm below it — the fair reservation AND
+            // the plain drain arm — is never even POLLED, regardless of
+            // what work either could otherwise make progress on. Left
+            // unaddressed, that silently reintroduces the exact "output
+            // stops flowing" bug this whole feature exists to close, one
+            // layer further out than task0003's fix reached.
+            //
+            // Neither documented invariant — "prioritize client messages
+            // for input latency" vs. "deferred output must make bounded
+            // progress" — can simply win outright: always prioritizing
+            // input reopens the starvation this arm's guard exists to
+            // close; always prioritizing output turns every pending
+            // deferral into extra input latency for every OTHER keystroke
+            // too, not just the one that triggered it. Resolution: a
+            // bounded round-robin (quota), not an unconditional priority.
+            // Input latency wins for up to `CLIENT_MSG_STARVATION_QUOTA`
+            // consecutive iterations; once that many have run back-to-back
+            // WHILE there is deferred output work outstanding
+            // (`has_deferred_work`, computed above this `select!`), this
+            // arm is excluded for exactly one iteration via the
+            // `allow_client_arm` guard — forcing `select!` past it to
+            // whichever of the reservation/drain arms actually has work,
+            // since by construction (a `try_send`/`try_reserve` only
+            // defers when the channel was observed full) at least one of
+            // them is guaranteed ready or about to be. The very next
+            // iteration reverts to prioritizing client messages: the
+            // counter is reset to 0 the moment ANY other arm wins (see the
+            // bookkeeping right after this `select!` block), so the
+            // one-iteration penalty never compounds and ordinary traffic
+            // (no deferral pending) sees ZERO behavior change —
+            // `allow_client_arm` is unconditionally `true` whenever
+            // `has_deferred_work` is `false`. Net effect: deferred output
+            // is guaranteed at least one poll at least once every
+            // `CLIENT_MSG_STARVATION_QUOTA + 1` iterations — a bounded
+            // number, as AC-2 requires.
+            msg = framed.next(), if allow_client_arm => {
+                took_client_arm = true;
                 match msg {
                     Some(Ok(msg)) => {
                         // Track active pane from PtyInput and SwitchWindow messages
@@ -701,6 +809,19 @@ pub async fn handle_connection<S>(
                 }
             }
         }
+
+        // G2 rework (AC-2): update the starvation-guard counter for the
+        // NEXT iteration. Only "the client arm ran while deferred work was
+        // already outstanding going into THIS iteration" counts against
+        // the quota; every other outcome — a different arm ran, or there
+        // was no deferred work to begin with — resets it, so the
+        // one-iteration penalty above never compounds and ordinary
+        // traffic is never penalized once the backlog clears.
+        if took_client_arm && has_deferred_work {
+            consecutive_client_msgs_while_deferred += 1;
+        } else {
+            consecutive_client_msgs_while_deferred = 0;
+        }
     }
 
     // Switch all panes in the active session to detached buffering mode.
@@ -1031,6 +1152,24 @@ async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, s
 /// reader thread via `blocking_send`, which blocks that native OS thread
 /// only, not this connection task).
 ///
+/// **Correction (mux-window-switch-output-hang task0004 rework, review
+/// round 3 finding `22251d51cc98261e`):** the claim above — "blocks that
+/// native OS thread only, not this connection task" — was FALSE for
+/// `pty_spawn.rs`'s EOF branch prior to this rework: it held the pane's
+/// `output_target` std mutex across its own `blocking_send`, unlike the
+/// data path a few lines below it in the same file (which already released
+/// the guard first, with an explicit "release lock before blocking_send to
+/// avoid deadlock" comment). task0003's fair-permit path made that mutex
+/// reachable from THIS connection task too (`resume_pane_with_permit`,
+/// `pane.rs`, takes the same std mutex synchronously, no `.await` yield
+/// point) — so a reader thread parked in the EOF branch's `blocking_send`
+/// could block this connection task's own `lock()` call, which could only
+/// be released by this same task's drain arm running, which cannot happen
+/// while blocked there: a cross-thread self-deadlock, reachable via the
+/// `SetVisibility` arm's resume path. Fixed in `pty_spawn.rs` (the EOF
+/// branch now releases the guard before sending, mirroring the data path);
+/// the claim above is accurate again for both PTY-output send paths.
+///
 /// The opportunistic `flush_deferred_output` call at the top (task0002) is
 /// defensive: `handle_connection`'s own drain of `pane_output_rx` is the
 /// primary trigger (capacity can only free there), but giving every
@@ -1273,6 +1412,57 @@ async fn register_session_pane_cwds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── G2 starvation guard (AC-2, mux-window-switch-output-hang task0004
+    // rework, review round 3 findings `dd23cfc388062939`/
+    // `5c01ffb8d53dc9f7`): deterministic coverage for
+    // `allow_client_message_arm`, with no live connection, timing, or
+    // scheduling involved — this is what actually pins the
+    // bounded-iterations guarantee AC-2 requires (see that function's own
+    // doc for why the accompanying live-connection test cannot reliably
+    // force the underlying race either way). ──
+
+    /// When there is no deferred work outstanding, the client arm is
+    /// always allowed — the counter is irrelevant, including past the
+    /// quota. Ordinary traffic (no pending deferral) sees ZERO behavior
+    /// change from this guard.
+    #[test]
+    fn allow_client_message_arm_true_when_no_deferred_work_regardless_of_counter() {
+        assert!(allow_client_message_arm(false, 0));
+        assert!(allow_client_message_arm(false, CLIENT_MSG_STARVATION_QUOTA));
+        assert!(allow_client_message_arm(
+            false,
+            CLIENT_MSG_STARVATION_QUOTA + 100
+        ));
+    }
+
+    /// While deferred work IS outstanding: the client arm remains allowed
+    /// for exactly `CLIENT_MSG_STARVATION_QUOTA` consecutive wins, then is
+    /// excluded on the very next one — the bounded-iterations guarantee
+    /// AC-2 requires. Regression shape: reverting the guard to
+    /// unconditionally `true` (the pre-G2-fix behavior) makes this fail at
+    /// `n == CLIENT_MSG_STARVATION_QUOTA` (confirmed during development).
+    #[test]
+    fn allow_client_message_arm_true_for_quota_iterations_then_excludes_on_the_next() {
+        for n in 0..CLIENT_MSG_STARVATION_QUOTA {
+            assert!(
+                allow_client_message_arm(true, n),
+                "iteration {n} (< quota) must still allow the client arm"
+            );
+        }
+        assert!(
+            !allow_client_message_arm(true, CLIENT_MSG_STARVATION_QUOTA),
+            "the quota'th consecutive iteration must exclude the client arm so the \
+             reservation/drain arms are guaranteed a poll"
+        );
+        // Past the quota stays excluded too (the counter only grows further
+        // if some other bug let it; the guard must not start allowing
+        // again just because the count exceeded the quota by more).
+        assert!(!allow_client_message_arm(
+            true,
+            CLIENT_MSG_STARVATION_QUOTA + 5
+        ));
+    }
 
     fn chunk(pane_id: u32, data: &[u8]) -> PtyOutputChunk {
         PtyOutputChunk::pty_output(pane_id, data.to_vec())
@@ -1639,15 +1829,26 @@ mod tests {
     /// failed reliably, and only with, this many concurrent producers and
     /// this payload size before the AC-3 fix existed) — 8 threads racing
     /// continuously and a 32KB payload per chunk make the channel
-    /// genuinely, continuously saturated rather than momentarily. While
-    /// that saturation is ongoing: a `RequestPaneSnapshot` for pane B is
-    /// deferred, then a `PtyInput` for pane B is sent. Asserts, all within
-    /// a bounded `tokio::time::timeout`:
-    /// - AC-4: the `PtyInput` is processed (the pane's writer observes the
-    ///   exact bytes) and pane A's `PtyOutput` keeps arriving (the
-    ///   connection's own drain arm keeps running, not stalled).
-    /// - AC-3: pane B's deferred `Snapshot` is still delivered — not lost,
-    ///   and not starved indefinitely by pane A's continuous producers.
+    /// genuinely, continuously saturated rather than momentarily.
+    ///
+    /// G4 rework (AC-4, mux-window-switch-output-hang task0004, review
+    /// round 3 finding `30cdb3b4400888fc`): the `RequestPaneSnapshot` now
+    /// targets PANE_A ITSELF — the very pane whose reader threads are
+    /// saturating the channel — while `PtyInput` still targets the
+    /// DIFFERENT pane B. This is SPEC Unit Test 1's exact composition
+    /// ("input to a *different* pane keeps flowing while [the requesting]
+    /// pane's snapshot is pending") AND SPEC Edge case 1 ("snapshot
+    /// requested for the exact pane producing the high-volume output") at
+    /// once — the pre-fix version of this test requested PANE_B's own
+    /// snapshot, so cross-pane input-vs-snapshot-pending was never actually
+    /// exercised. The assertions below also prove ORDER, not just
+    /// eventual truth: B's input must be observed to have landed, and A's
+    /// own output must keep draining, STRICTLY BEFORE A's deferred
+    /// snapshot is delivered — not merely by the time the test ends (the
+    /// pre-fix weakness: a build that processes input only AFTER snapshot
+    /// delivery, or whose "output kept flowing" evidence was really just
+    /// output buffered during the pre-request saturation window, could
+    /// still pass the old assertions).
     #[tokio::test]
     async fn connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing()
      {
@@ -1857,6 +2058,302 @@ mod tests {
         // on `producer_tx` then observes `Closed` and the thread exits.
         // `spawn_blocking` so this async test doesn't itself block on a
         // native thread join.
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || {
+                for p in producers {
+                    p.join().unwrap();
+                }
+            }),
+        )
+        .await
+        .expect("producer threads must exit once the channel closes")
+        .expect("spawn_blocking must not panic");
+    }
+
+    /// AC-2 (G2 rework, mux-window-switch-output-hang task0004, review
+    /// round 3 findings `dd23cfc388062939`/`5c01ffb8d53dc9f7`): a client
+    /// that keeps `framed.next()` CONTINUOUSLY ready must not be able to
+    /// starve the fair-reservation/drain machinery forever. Pane A's
+    /// channel is saturated exactly as in the sibling test above; a
+    /// `RequestPaneSnapshot` for pane A is deferred against the full
+    /// channel, and then — for the ENTIRE wait — a genuinely CONCURRENT
+    /// background task keeps sending harmless `PtyInput` messages for
+    /// pane B as fast as the socket accepts them, so the server's
+    /// client-message arm is essentially always immediately ready to be
+    /// polled. Before the G2 fix, `biased` ordering meant this arm won
+    /// EVERY iteration under that pressure, so the fair-reservation arm
+    /// (and the drain arm behind it) was never even POLLED — the deferred
+    /// snapshot would starve forever. Asserts the snapshot is still
+    /// delivered within a bounded timeout despite the continuous traffic.
+    ///
+    /// Honesty note (development history): a real socket's send/read
+    /// timing has enough natural jitter that this end-to-end test was NOT
+    /// observed to reliably fail even with the G2 guard reverted to
+    /// unconditionally `true` — the exact race the finding describes
+    /// depends on genuinely gapless message arrival, which real
+    /// scheduling does not reliably force either way in this environment.
+    /// This test still exercises the real connection path end-to-end and
+    /// guards against gross regressions (e.g. the mechanism being removed
+    /// or the connection genuinely deadlocking), but the DETERMINISTIC
+    /// proof of the bounded-iterations guarantee is
+    /// `allow_client_message_arm`'s own unit tests, above in this module.
+    ///
+    /// Uses a REAL TCP loopback connection (`TcpStream::into_split()`),
+    /// not this file's usual `tokio::io::duplex()` in-memory pair: this
+    /// test's own red/green history — a single duplex stream split either
+    /// via `Framed::split()` or the generic `tokio::io::split()` was
+    /// observed, empirically, to serialize the flood task's sends and the
+    /// main task's reads behind an internal lock, starving the read side
+    /// regardless of the server's own scheduling (a test-harness artifact,
+    /// not the G2 mechanism this test exists to exercise — that variant
+    /// hung even WITH the G2 fix in place). A real socket's split halves
+    /// are natively lock-free and full-duplex, which is what genuine
+    /// concurrent send-while-read requires here.
+    ///
+    /// Multi-threaded runtime (unlike this file's other connection-level
+    /// tests): the flood task, the connection task, and the main task's
+    /// own reads are three independently-progressing actors here; a
+    /// single-threaded (`current_thread`) runtime's cooperative
+    /// scheduling was observed, empirically, to occasionally starve one of
+    /// them of a turn entirely under sustained flood pressure. Separate OS
+    /// worker threads remove that test-harness-only risk.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn connection_level_deferred_snapshot_delivered_despite_continuous_client_traffic() {
+        let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+        const PANE_A: u32 = 1;
+        const PANE_B: u32 = 2;
+        {
+            let mut mgr = session_manager.lock().await;
+            let sid = mgr.create_session("default".to_string());
+            let wid = mgr.create_window(sid, "shell".to_string()).unwrap();
+
+            let target_a: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_a = MuxPane::new_test(PANE_A, 80, 24, target_a);
+            mgr.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_a);
+
+            let target_b: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_b = MuxPane::new_test(PANE_B, 80, 24, target_b);
+            mgr.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_b);
+        }
+
+        // Real TCP loopback (not an in-memory `tokio::io::duplex()` pair):
+        // the flood task below needs to send CONTINUOUSLY while the main
+        // task reads CONCURRENTLY, and splitting either a combined
+        // `Framed` (`.split()`) or a raw duplex stream (`tokio::io::split`)
+        // for that was observed, empirically, to serialize reads and
+        // writes behind an internal lock and starve the read side
+        // regardless of the server's own scheduling — a test-harness
+        // artifact unrelated to the G2 mechanism this test exists to
+        // exercise. `TcpStream::into_split()` provides genuinely
+        // independent, lock-free read/write halves (a real socket is
+        // natively full-duplex), avoiding that pitfall.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback listener");
+        let addr = listener.local_addr().unwrap();
+
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let session_manager_for_conn = session_manager.clone();
+        let conn_task = tokio::spawn(async move {
+            let (server_stream, _peer) = listener.accept().await.expect("accept loopback conn");
+            handle_connection(
+                server_stream,
+                session_manager_for_conn,
+                shutdown_tx,
+                title_tx,
+                notification_tx,
+                agent_status_tx,
+                pane_exit_sender,
+                upgrade_tx,
+                no_ack_slot(),
+            )
+            .await;
+        });
+
+        let client_stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect loopback client");
+        let _ = client_stream.set_nodelay(true);
+        let (client_read_half, client_write_half) = client_stream.into_split();
+        let mut client_writer =
+            tokio_util::codec::FramedWrite::new(client_write_half, MuxCodec::new());
+        let mut client_reader =
+            tokio_util::codec::FramedRead::new(client_read_half, MuxCodec::new());
+
+        client_writer
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client_reader.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+        let welcome_payload: WelcomeMsg = welcome.decode_payload().unwrap();
+        let session_id = match welcome_payload {
+            WelcomeMsg::Accepted { sessions, .. } => sessions[0].id,
+            WelcomeMsg::Rejected { reason } => panic!("unexpected rejection: {reason}"),
+        };
+
+        client_writer
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        // Inlined equivalent of the sibling test's `drain_until_pane_created`
+        // helper (which is typed against a combined `Framed`, not the
+        // split `FramedRead` half used here).
+        {
+            let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            let expected_pane_ids = [PANE_A, PANE_B];
+            while seen.len() < expected_pane_ids.len() {
+                let msg = tokio::time::timeout(Duration::from_secs(5), client_reader.next())
+                    .await
+                    .expect("must not hang waiting for reattach frames")
+                    .expect("stream must not end")
+                    .expect("frame must decode");
+                if msg.msg_type == MessageType::PaneCreated
+                    && expected_pane_ids.contains(&msg.pane_id)
+                {
+                    seen.insert(msg.pane_id);
+                }
+            }
+        }
+
+        let owned_tx: mpsc::Sender<PtyOutputChunk> = {
+            let mgr = session_manager.lock().await;
+            let pane = mgr
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .get(&PANE_A)
+                .unwrap();
+            match &*pane.output_target.lock().unwrap() {
+                PaneOutputTarget::Connected(tx) => tx.clone(),
+                PaneOutputTarget::Detached { .. } => {
+                    panic!("pane A must be Connected after attach, still Detached")
+                }
+            }
+        };
+
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut producers = Vec::new();
+        for _ in 0..8 {
+            let stop_clone = stop.clone();
+            let producer_tx = owned_tx.clone();
+            producers.push(std::thread::spawn(move || {
+                while !stop_clone.load(StdOrdering::Relaxed) {
+                    if producer_tx
+                        .blocking_send(PtyOutputChunk::pty_output(PANE_A, vec![b'x'; 32768]))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }));
+        }
+
+        // Give the producers time to actually saturate the channel before
+        // issuing the request this test is about.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        client_writer
+            .send(MuxMessage {
+                msg_type: MessageType::RequestPaneSnapshot,
+                pane_id: PANE_A,
+                payload: Vec::new(),
+            })
+            .await
+            .unwrap();
+
+        // Continuous client traffic: a genuinely CONCURRENT background
+        // task floods harmless `PtyInput` for pane B as fast as the socket
+        // accepts sends, for as long as the main task is still waiting
+        // below — the loopback TCP connection's independent read/write
+        // halves (see this test's doc) make this safe, unlike a split
+        // in-memory duplex stream.
+        let flood_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flood_stop_clone = flood_stop.clone();
+        let flood_task = tokio::spawn(async move {
+            while !flood_stop_clone.load(StdOrdering::Relaxed) {
+                if client_writer
+                    .send(MuxMessage {
+                        msg_type: MessageType::PtyInput,
+                        pane_id: PANE_B,
+                        payload: b"x".to_vec(),
+                    })
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        let mut saw_snapshot_for_pane_a = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !saw_snapshot_for_pane_a {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "AC-2: pane A's deferred snapshot must be delivered within a bounded \
+                 time despite CONTINUOUS client-message traffic (the starvation this \
+                 arm's quota guard exists to bound)"
+            );
+            let msg = tokio::time::timeout(remaining, client_reader.next())
+                .await
+                .expect("must not hang")
+                .expect("stream must not end")
+                .expect("frame must decode");
+            if msg.msg_type == MessageType::Snapshot && msg.pane_id == PANE_A {
+                saw_snapshot_for_pane_a = true;
+            }
+        }
+
+        flood_stop.store(true, StdOrdering::Relaxed);
+        stop.store(true, StdOrdering::Relaxed);
+        let _ = flood_task.await;
+        conn_task.abort();
         tokio::time::timeout(
             Duration::from_secs(5),
             tokio::task::spawn_blocking(move || {
