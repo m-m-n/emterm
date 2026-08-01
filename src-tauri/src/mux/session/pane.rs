@@ -343,8 +343,198 @@ impl PtyOutputChunk {
 /// Bounded channel capacity for PTY output per pane.
 pub const PTY_CHANNEL_CAPACITY: usize = 256;
 
+/// Bound on how many items the connection-owned [`DeferredOutputQueue`]
+/// retains while `pane_output_tx` is momentarily full
+/// (mux-window-switch-output-hang task0002 rework, AC-3/FR4).
+/// `PTY_CHANNEL_CAPACITY` bounds the channel itself; this bounds the
+/// "equivalent bound elsewhere" FR4 requires for the deferred path, which
+/// task0001's `tokio::spawn`-per-item design left entirely unbounded
+/// (reviews/round1.yaml F6-F9).
+///
+/// Both deferred item kinds share this one cap ([`DeferredOutputItem::Chunk`]
+/// and [`DeferredOutputItem::VisibilityResume`]): AC-3 requires the same
+/// limit on both, and one shared bound also keeps FIFO ordering between the
+/// two kinds meaningful (see [`DeferredOutputQueue`]'s doc).
+///
+/// Deliberately small: a full channel means the client (or the connection
+/// itself) is not draining fast enough, so retaining a long backlog of
+/// deferred work here would just move the memory-growth problem sideways
+/// instead of bounding it. `Chunk` items retain their already-built payload
+/// (up to a few MiB for a scrollback-bearing snapshot — see
+/// `DEFAULT_SCROLLBACK_CAPACITY`), so keeping this cap small keeps the worst
+/// case a low multiple of that rather than an open-ended backlog.
+pub const MAX_DEFERRED_ITEMS: usize = 8;
+
+/// One item held in the connection-owned [`DeferredOutputQueue`] while
+/// `pane_output_tx` is momentarily full.
+pub enum DeferredOutputItem {
+    /// An already-built chunk (e.g. a `RequestPaneSnapshot` reply) that
+    /// could not be `try_send`'d immediately. Retried verbatim on the next
+    /// flush — its content does not depend on when it is actually
+    /// delivered, only that it lands before anything deferred after it.
+    Chunk(PtyOutputChunk),
+    /// A visibility-resume attempt for this pane that could not get a
+    /// permit immediately. Deliberately NOT a pre-built chunk: the resume
+    /// snapshot must reflect the pane's (and the connection's
+    /// `visible_state`'s) state at the moment capacity actually frees, not
+    /// at the moment the request was deferred — see
+    /// `handlers::flush_deferred_output`'s re-validation (AC-1/F1/F2/F3).
+    VisibilityResume(PaneId),
+}
+
+impl std::fmt::Debug for DeferredOutputItem {
+    /// Manual impl (rather than `#[derive(Debug)]`) so logging a dropped
+    /// item never dumps a `Chunk`'s raw payload bytes — only its size.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeferredOutputItem::Chunk(c) => f
+                .debug_struct("Chunk")
+                .field("pane_id", &c.pane_id)
+                .field("kind", &c.kind)
+                .field("bytes", &c.data.len())
+                .finish(),
+            DeferredOutputItem::VisibilityResume(pane_id) => {
+                f.debug_tuple("VisibilityResume").field(pane_id).finish()
+            }
+        }
+    }
+}
+
+/// Connection-owned, explicitly-bounded FIFO of [`DeferredOutputItem`]s
+/// awaiting capacity on a connection's `pane_output_tx`
+/// (mux-window-switch-output-hang task0002 rework).
+///
+/// ### Why connection-owned (not a spawned task per item)
+///
+/// task0001's fix deferred capacity-waiting to an independently
+/// `tokio::spawn`ed task per full-channel occurrence. Review round 1 found
+/// three problems, all stemming from moving the wait off the connection
+/// task entirely:
+/// - the spawned task is not polled by the runtime the instant it is
+///   spawned, so a producer that starts a plain (non-waiting) `try_send`
+///   after the deferral can land ahead of it once capacity frees, breaking
+///   order relative to already-built chunks (F4/F5);
+/// - a visibility-resume spawned task re-validated nothing when it finally
+///   ran, so a pane hidden again in the interim could be resumed to
+///   `Connected` incorrectly (F1/F2/F3);
+/// - nothing bounded how many such tasks (and, for the chunk path, how many
+///   multi-MiB payloads) could be in flight at once (F6-F9).
+///
+/// Holding deferred items HERE instead — retried only from the connection's
+/// own event loop (`handlers::flush_deferred_output`, called right after the
+/// loop's own drain of `pane_output_rx`, the ONLY place capacity on this
+/// channel is ever freed) — fixes all three: the retry happens on the very
+/// next opportunity after capacity frees (no scheduler-dependent gap),
+/// re-validation happens fresh at that moment (not baked in at defer time),
+/// and the queue has a hard cap (`MAX_DEFERRED_ITEMS`) shared by both item
+/// kinds.
+///
+/// ### Ordering (AC-2/F4/F5): what is, and is not, guaranteed
+///
+/// Items are flushed strictly in the order they were deferred — a plain
+/// FIFO; the flush loop stops at the first item that still can't be sent
+/// rather than skipping ahead, so a later item can never overtake an
+/// earlier one FROM THIS QUEUE. Because the flush runs synchronously in the
+/// same connection task, immediately upon the only event that can free
+/// capacity, a deferred item is never overtaken by another producer that
+/// has to go through this same connection's own scheduling to get its turn
+/// (e.g. a later `RequestPaneSnapshot` on the same connection).
+///
+/// This does NOT extend to the PTY reader thread: `pty_spawn.rs`'s reader
+/// runs on its own native OS thread and calls `try_send` / `blocking_send`
+/// on `pane_output_tx` directly, entirely outside this queue and outside
+/// tokio's cooperative scheduling. A reader-thread send already parked in
+/// `blocking_send`, waiting for a permit at the exact instant capacity
+/// frees, can still win that permit ahead of this queue's own `try_send`
+/// retry — a cross-thread race inherent to sharing one bounded channel
+/// between multiple producers, present in equivalent form even before
+/// task0001 (a plain blocking `.send().await` on the connection task raced
+/// the same reader thread the same way). Closing that specific residual
+/// would require either routing the reader thread's sends through this same
+/// queue (a `pty_spawn.rs` change, out of this task's scope) or a
+/// client-observable generation number so a stale snapshot can be discarded
+/// on arrival (a wire-protocol change in the `mux_ipc` crate, also out of
+/// scope).
+pub struct DeferredOutputQueue {
+    items: std::collections::VecDeque<DeferredOutputItem>,
+}
+
+impl DeferredOutputQueue {
+    pub fn new() -> Self {
+        Self {
+            items: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// Number of items currently queued (test/observability hook).
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Push `item` onto the back of the queue, dropping (and warning about)
+    /// the NEW item instead when already at `MAX_DEFERRED_ITEMS` (AC-3: a
+    /// dropped snapshot/resume recovers via the next request rather than
+    /// growing the backlog without bound).
+    fn push(&mut self, item: DeferredOutputItem) {
+        if self.items.len() >= MAX_DEFERRED_ITEMS {
+            log::warn!(
+                "deferred pane output queue at capacity ({} items); dropping {:?} \
+                 rather than growing an unbounded backlog (mux-window-switch-output-hang \
+                 task0002 AC-3)",
+                MAX_DEFERRED_ITEMS,
+                item,
+            );
+            return;
+        }
+        self.items.push_back(item);
+    }
+
+    /// Defer an already-built chunk (see [`DeferredOutputItem::Chunk`]).
+    pub fn defer_chunk(&mut self, chunk: PtyOutputChunk) {
+        self.push(DeferredOutputItem::Chunk(chunk));
+    }
+
+    /// Defer a visibility-resume attempt for `pane_id` (see
+    /// [`DeferredOutputItem::VisibilityResume`]).
+    pub fn defer_visibility_resume(&mut self, pane_id: PaneId) {
+        self.push(DeferredOutputItem::VisibilityResume(pane_id));
+    }
+
+    /// Pop the front item (used by the flush loop to take the next item to
+    /// attempt).
+    pub fn pop_front(&mut self) -> Option<DeferredOutputItem> {
+        self.items.pop_front()
+    }
+
+    /// Put `item` back at the front (used by the flush loop when an item
+    /// still can't be sent — preserves its place at the head of the queue
+    /// for the next flush attempt).
+    pub fn requeue_front(&mut self, item: DeferredOutputItem) {
+        self.items.push_front(item);
+    }
+
+    /// Drop every remaining item (used once the channel is observed
+    /// `Closed` — every future send attempt would fail the same way, so
+    /// there is no reason to keep retaining the backlog).
+    pub fn clear(&mut self) {
+        self.items.clear();
+    }
+}
+
+impl Default for DeferredOutputQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Enqueue `chunk` onto `tx` without ever letting the CALLING task block on
-/// the channel's capacity (mux-window-switch-output-hang task0001).
+/// the channel's capacity (mux-window-switch-output-hang task0001; reworked
+/// in task0002 to defer into a connection-owned [`DeferredOutputQueue`]
+/// instead of an independently spawned task — see that type's doc for why).
 ///
 /// ### Why this exists
 ///
@@ -353,64 +543,54 @@ pub const PTY_CHANNEL_CAPACITY: usize = 256;
 /// (`mux::ipc::connection::handle_connection`, the `pane_output_rx.recv()`
 /// arm). Every call site that matters for the bug this fixes runs FROM
 /// INSIDE THAT SAME connection task (`route_message` ->
-/// `handle_request_pane_snapshot` / `handle_set_visibility`'s
-/// visibility-resume path). A bare `tx.send(chunk).await` blocks the
+/// `handle_request_pane_snapshot`). A bare `tx.send(chunk).await` blocks the
 /// CURRENT task until capacity frees — but the only thing able to free
 /// capacity is that SAME task's own drain arm, which cannot run while the
 /// task is suspended here. The task then self-deadlocks: no further client
 /// messages are processed and no further PTY output for ANY pane on the
 /// connection is forwarded (SPEC.md "Root Cause").
 ///
-/// ### Mechanism (SPEC.md Implementation Approach, candidate 1)
+/// ### Mechanism
 ///
 /// Fast path: `try_send` — non-blocking, succeeds immediately when the
 /// channel has room (the overwhelmingly common case). The chunk lands at
-/// the current tail of the queue, after every chunk already resident there
-/// — this is what preserves FR3's FIFO guarantee relative to
-/// already-queued chunks for the same pane, with no bookkeeping needed
-/// here: it is simply a normal enqueue.
+/// the current tail of the queue, after every chunk already resident there.
 ///
-/// Slow path: when the channel is momentarily full, the actual wait for
-/// capacity is delegated to a freshly `tokio::spawn`ed task holding a
-/// cloned `Sender`. That task is scheduled independently by the tokio
-/// runtime, so it does not block the CALLING task, which returns
-/// immediately — free to keep running its own drain arm (the very thing
-/// that frees the capacity the spawned task is waiting for). tokio's
-/// bounded mpsc channel wakes waiting senders in the order they started
-/// waiting, so a chunk that takes this path still lands strictly after
-/// every chunk already enqueued at the moment this function was called,
-/// and before any producer that only starts waiting later (FR3 preserved
-/// without this function needing pane-identity bookkeeping).
+/// Slow path: when the channel is momentarily full, `chunk` is pushed onto
+/// `deferred` (bounded, AC-3) instead of being sent. The connection's own
+/// event loop retries it via `handlers::flush_deferred_output` the next
+/// time capacity frees — see [`DeferredOutputQueue`]'s doc for the ordering
+/// guarantee this provides (and its documented residual limit).
 ///
-/// This function is deliberately synchronous (not `async fn`): it can
-/// never itself suspend on channel capacity, which is the structural
-/// guarantee behind "never blocks the calling task".
+/// This function is deliberately synchronous (not `async fn`) and never
+/// spawns a task: it can never itself suspend on channel capacity (the
+/// self-deadlock this exists to avoid), and — unlike task0001's
+/// `tokio::spawn`-based version — it no longer depends on an active tokio
+/// runtime at all, so hitting the Full branch outside one is not a panic
+/// risk (AC-4; see the `outside_tokio_runtime` test below).
 ///
 /// A closed channel (client gone) is logged and dropped — no new panic or
 /// unhandled error path relative to the pre-existing
 /// `if let Err(e) = ... send(...).await { log::warn!(...) }` handling this
 /// replaces.
-pub fn enqueue_pane_output_chunk(tx: &mpsc::Sender<PtyOutputChunk>, chunk: PtyOutputChunk) {
+pub fn enqueue_pane_output_chunk(
+    tx: &mpsc::Sender<PtyOutputChunk>,
+    chunk: PtyOutputChunk,
+    deferred: &mut DeferredOutputQueue,
+) {
     match tx.try_send(chunk) {
         Ok(()) => {}
         Err(mpsc::error::TrySendError::Full(chunk)) => {
             log::warn!(
                 "pane {} output channel full ({} capacity); deferring enqueue \
-                 (kind={:?}) to a background task so this connection's own \
-                 drain arm keeps running (mux-window-switch-output-hang task0001)",
+                 (kind={:?}) to the connection's own deferred queue so this \
+                 connection's own drain arm keeps running (mux-window-switch-output-hang \
+                 task0001/task0002)",
                 chunk.pane_id,
                 PTY_CHANNEL_CAPACITY,
                 chunk.kind,
             );
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                if let Err(e) = tx.send(chunk).await {
-                    log::warn!(
-                        "deferred pane output enqueue failed (channel closed): {}",
-                        e
-                    );
-                }
-            });
+            deferred.defer_chunk(chunk);
         }
         Err(mpsc::error::TrySendError::Closed(chunk)) => {
             log::warn!(
@@ -3633,32 +3813,44 @@ mod tests {
         assert!(pane.write_input(b"x").is_err());
     }
 
-    // ── enqueue_pane_output_chunk (mux-window-switch-output-hang task0001) ──
+    // ── enqueue_pane_output_chunk (mux-window-switch-output-hang task0001,
+    // reworked task0002) ──
     //
     // AC-1/AC-2/AC-3: the fix's core mechanism. `enqueue_pane_output_chunk`
     // is deliberately a plain `fn` (not `async fn`), so it structurally
     // cannot suspend the calling task on channel capacity — the tests below
     // pin the OBSERVABLE behavior on top of that structural guarantee: the
     // fast path delivers synchronously, the slow path still returns without
-    // blocking and the deferred chunk lands strictly after every chunk
-    // already queued (FIFO, FR3), and a closed channel is handled without a
-    // panic (no new unhandled error path).
+    // blocking and defers into the connection-owned `DeferredOutputQueue`
+    // rather than sending, a closed channel is handled without a panic (no
+    // new unhandled error path), and the deferred queue itself is bounded
+    // (task0002 AC-3/AC-4).
 
     /// AC-3 (fast path): with room in the channel, the chunk is enqueued
-    /// synchronously — no deferral, no background task involved.
+    /// synchronously — no deferral.
     #[test]
     fn enqueue_pane_output_chunk_fast_path_delivers_synchronously() {
         let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
-        enqueue_pane_output_chunk(&tx, PtyOutputChunk::pty_output(1, b"hi".to_vec()));
+        let mut deferred = DeferredOutputQueue::new();
+        enqueue_pane_output_chunk(
+            &tx,
+            PtyOutputChunk::pty_output(1, b"hi".to_vec()),
+            &mut deferred,
+        );
         let chunk = rx.try_recv().expect("fast path must deliver synchronously");
         assert_eq!(chunk.data, b"hi");
+        assert!(deferred.is_empty(), "fast path must not defer anything");
     }
 
-    /// AC-1/AC-3: with the channel completely full, `enqueue_pane_output_chunk`
-    /// must still return immediately (this IS the self-deadlock fix), and the
-    /// deferred chunk must land strictly after the chunks already resident in
-    /// the channel once capacity frees (FIFO preserved relative to
-    /// already-queued chunks for the same pane).
+    /// AC-1/AC-3 (task0002 rework): with the channel completely full,
+    /// `enqueue_pane_output_chunk` must still return immediately (this IS
+    /// the self-deadlock fix) by pushing the chunk onto `deferred` instead
+    /// of sending it. Once capacity frees (drained here exactly as the
+    /// connection's own drain arm would) and the queue is flushed (mirroring
+    /// `handlers::flush_deferred_output`'s `Chunk` arm), the deferred chunk
+    /// lands strictly after the chunks already resident in the channel
+    /// (FIFO preserved relative to already-queued chunks for the same
+    /// pane).
     #[tokio::test]
     async fn enqueue_pane_output_chunk_full_channel_defers_without_blocking_preserves_fifo() {
         let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(2);
@@ -3674,36 +3866,87 @@ mod tests {
             "test prerequisite: channel must be at capacity"
         );
 
+        let mut deferred = DeferredOutputQueue::new();
         // This call must return immediately even though the channel is full
         // — it is a plain (non-async) function call, so there is no `.await`
         // point where it could suspend the test task either.
-        enqueue_pane_output_chunk(&tx, PtyOutputChunk::snapshot(1, b"SNAP".to_vec()));
+        enqueue_pane_output_chunk(
+            &tx,
+            PtyOutputChunk::snapshot(1, b"SNAP".to_vec()),
+            &mut deferred,
+        );
+        assert_eq!(
+            deferred.len(),
+            1,
+            "full channel must defer, not send, the chunk"
+        );
 
         // The two pre-existing chunks must be observed first...
         let c1 = rx.recv().await.expect("chunk a");
         assert_eq!(c1.data, b"a");
         let c2 = rx.recv().await.expect("chunk b");
         assert_eq!(c2.data, b"b");
-        // ...then the deferred chunk must eventually arrive, bounded in time
-        // (proves the background task actually completes once capacity
-        // frees, not just that the caller didn't block).
-        let snap = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
-            .await
-            .expect("deferred chunk must arrive once capacity frees")
-            .expect("channel must not have closed");
+
+        // ...then a flush (the same shape as `handlers::flush_deferred_output`'s
+        // `Chunk` arm) delivers the deferred chunk now that capacity is free.
+        while let Some(item) = deferred.pop_front() {
+            match item {
+                DeferredOutputItem::Chunk(chunk) => {
+                    tx.try_send(chunk).expect("capacity must be free by now")
+                }
+                DeferredOutputItem::VisibilityResume(_) => unreachable!(),
+            }
+        }
+        assert!(deferred.is_empty());
+
+        let snap = rx.recv().await.expect("deferred chunk must have been sent");
         assert_eq!(snap.kind, ChunkKind::Snapshot);
         assert_eq!(snap.data, b"SNAP");
     }
 
     /// A closed channel (client gone) is handled the same way the
     /// pre-existing blocking-send call sites handled it: logged and
-    /// dropped, never a panic.
+    /// dropped, never a panic, and nothing is deferred (retrying a send that
+    /// can only ever fail the same way would be pointless).
     #[test]
     fn enqueue_pane_output_chunk_closed_channel_does_not_panic() {
         let (tx, rx) = mpsc::channel::<PtyOutputChunk>(1);
         drop(rx);
-        enqueue_pane_output_chunk(&tx, PtyOutputChunk::pty_output(1, b"x".to_vec()));
+        let mut deferred = DeferredOutputQueue::new();
+        enqueue_pane_output_chunk(
+            &tx,
+            PtyOutputChunk::pty_output(1, b"x".to_vec()),
+            &mut deferred,
+        );
         // Reaching here without a panic is the assertion.
+        assert!(deferred.is_empty(), "a closed channel is not retried");
+    }
+
+    /// AC-4: `enqueue_pane_output_chunk` no longer spawns a task on its Full
+    /// branch (task0002 rework), so it no longer depends on an active tokio
+    /// runtime at all. This is a plain `#[test]` (deliberately NOT
+    /// `#[tokio::test]` — there is no tokio runtime running here) hitting
+    /// the Full branch directly: it must not panic, and the chunk must land
+    /// in `deferred` exactly as it would inside a runtime.
+    #[test]
+    fn enqueue_pane_output_chunk_full_branch_does_not_panic_outside_tokio_runtime() {
+        let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
+        tx.try_send(PtyOutputChunk::pty_output(1, b"filler".to_vec()))
+            .expect("fill the single slot");
+        assert!(
+            tx.try_send(PtyOutputChunk::pty_output(1, b"never".to_vec()))
+                .is_err()
+        );
+
+        let mut deferred = DeferredOutputQueue::new();
+        enqueue_pane_output_chunk(
+            &tx,
+            PtyOutputChunk::pty_output(1, b"x".to_vec()),
+            &mut deferred,
+        );
+        // Reaching here without a panic (no tokio runtime, no `Handle`
+        // available) is the assertion.
+        assert_eq!(deferred.len(), 1);
     }
 
     /// AC-4: this fix must not replace the bounded channel with an
@@ -3712,5 +3955,41 @@ mod tests {
     #[test]
     fn pty_channel_capacity_is_finite_and_unchanged() {
         assert_eq!(PTY_CHANNEL_CAPACITY, 256);
+    }
+
+    /// AC-3 (task0002): the connection-owned deferred queue itself is
+    /// bounded — repeatedly deferring chunks past `MAX_DEFERRED_ITEMS` drops
+    /// the newest arrival (with a warning) instead of growing without limit.
+    #[test]
+    fn deferred_output_queue_drops_new_items_past_the_cap_instead_of_growing_unbounded() {
+        let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
+        tx.try_send(PtyOutputChunk::pty_output(1, b"filler".to_vec()))
+            .expect("fill the single slot");
+
+        let mut deferred = DeferredOutputQueue::new();
+        for i in 0..(MAX_DEFERRED_ITEMS * 2) {
+            enqueue_pane_output_chunk(
+                &tx,
+                PtyOutputChunk::pty_output(1, vec![i as u8]),
+                &mut deferred,
+            );
+        }
+
+        assert_eq!(
+            deferred.len(),
+            MAX_DEFERRED_ITEMS,
+            "queue must never grow past the documented cap"
+        );
+    }
+
+    /// AC-3: the same cap applies to visibility-resume deferrals, not just
+    /// chunk deferrals (both share one `DeferredOutputQueue`).
+    #[test]
+    fn deferred_output_queue_caps_visibility_resumes_too() {
+        let mut deferred = DeferredOutputQueue::new();
+        for pane_id in 0..(MAX_DEFERRED_ITEMS as u32 * 2) {
+            deferred.defer_visibility_resume(pane_id);
+        }
+        assert_eq!(deferred.len(), MAX_DEFERRED_ITEMS);
     }
 }
