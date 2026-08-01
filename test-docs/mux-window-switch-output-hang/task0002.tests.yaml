@@ -1,0 +1,145 @@
+task_id: task0002
+
+# This suite's tabs.rs off-thread-worker tests are documented as flaky even
+# under --test-threads=1 (see task0001.tests.yaml's own note and
+# project_test_execution_notes.md). Directly observed across three runs on
+# this exact worktree (one before any change in this task, two after):
+#
+#   run 1 (before this task's change, step 4a baseline):
+#     ts13_offthread_swap_installs_pending_scrollback_restore
+#     ts7_offthread_swap_then_restored_scrollback_matches_reference
+#     ts8_new_offthread_switch_supersedes_in_flight_restore
+#     ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+#     welcome_without_windows_leaves_group_none
+#   run 2 (full --lib after this task's change):
+#     ts11_restore_worker_panic_returns_failed_and_clears_state
+#     ts8_new_offthread_switch_supersedes_in_flight_restore
+#     ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+#     welcome_without_windows_leaves_group_none
+#   run 3 (tabs::tests scoped, after this task's change):
+#     ts11_restore_worker_panic_returns_failed_and_clears_state
+#     ts7_offthread_swap_then_restored_scrollback_matches_reference
+#     ts8_new_offthread_switch_supersedes_in_flight_restore
+#     ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+#     welcome_without_windows_leaves_group_none
+#
+# Every failure across all three runs is confined to tabs::tests::* — a
+# module this task's diff never touches (expected_files: mux/ipc/handlers.rs,
+# mux/session/pane.rs, mux/ipc/connection.rs only). `baseline_failures` below
+# is task0001.tests.yaml's own documented 7-test set (AC-6's explicit
+# reference baseline, "task0001 マージ時点のベースライン（tabs::tests の
+# 既知 7 件）"); `final_failures` is the union observed across runs 2+3
+# above, a strict subset of it. mux::ipc / mux::session tests are 122/122
+# green in every run (verified separately, scoped).
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::handlers::tests::flush_deferred_output_drops_stale_visibility_resume_when_hidden_again
+      - mux::ipc::handlers::tests::handle_set_visibility_true_returns_promptly_when_channel_full_and_resumes_after_drain
+    red_confirmed: true
+    red_reason: >-
+      flush_deferred_output_drops_stale_visibility_resume_when_hidden_again:
+      temporarily replaced the `if !visible_state.load(Ordering::Acquire) {
+      continue; }` re-validation in flush_deferred_output with `if false {
+      continue; }` and reran — panicked with "a stale visibility-resume must
+      not send a snapshot" (the pane was incorrectly resumed to Connected,
+      exactly the F1/F2/F3 defect). Restored the guard and reran: passes.
+      handle_set_visibility_true_returns_promptly_when_channel_full_and_resumes_after_drain
+      is an adapted pre-existing task0001 test (see its own red_confirmed:
+      true entry in task0001.tests.yaml for the original self-deadlock red);
+      carried here as regression coverage for the "still resumes once
+      flushed" half of the property, not fresh red/green evidence for the
+      re-validation this task adds.
+  AC-2:
+    tests:
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_returns_promptly_when_own_pane_channel_full
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_for_different_pane_returns_promptly_while_channel_full
+      - mux::session::pane::tests::enqueue_pane_output_chunk_full_channel_defers_without_blocking_preserves_fifo
+    red_confirmed: false
+    red_reason: >-
+      These three are adapted pre-existing task0001 tests (see
+      task0001.tests.yaml's own AC-1/AC-2/AC-3 red_confirmed: true entries
+      for the original self-deadlock red) — they pin FIFO ordering RELATIVE
+      TO CHUNKS ALREADY QUEUED before the deferral, which this task's
+      redesign preserves by construction (a plain FIFO queue, flushed
+      strictly in order) and which was never broken by task0001 either, so
+      there is no fresh red state to reproduce for that half of AC-2. The
+      finding this task actually fixes (F4/F5: a chunk generated by an
+      INDEPENDENT concurrent producer, e.g. the PTY reader thread, landing
+      ahead of an already-deferred item once capacity frees) is NOT
+      structurally closed by this design and is NOT covered by an automated
+      test — see DeferredOutputQueue's doc ("Ordering: what is, and is not,
+      guaranteed") for the narrowed claim and why (the residual is a
+      cross-OS-thread race against pty_spawn.rs's reader, which this task's
+      file scope — handlers.rs/pane.rs/connection.rs — cannot close without
+      either a pty_spawn.rs change or a wire-protocol generation number in
+      the mux_ipc crate, both out of scope per AC-2's own documented
+      fallback). Carried to the report's unconfirmed_reds.
+  AC-3:
+    tests:
+      - mux::session::pane::tests::deferred_output_queue_drops_new_items_past_the_cap_instead_of_growing_unbounded
+      - mux::session::pane::tests::deferred_output_queue_caps_visibility_resumes_too
+    red_confirmed: true
+    red_reason: >-
+      Temporarily changed DeferredOutputQueue::push's cap check from `if
+      self.items.len() >= MAX_DEFERRED_ITEMS` to `if false && ...` (disabling
+      the bound) and reran both tests — both panicked on
+      `assert_eq!(deferred.len(), MAX_DEFERRED_ITEMS)` with `left: 16, right:
+      8` (queue grew to 2x the cap with no bound). Restored the check and
+      reran: both pass.
+  AC-4:
+    tests:
+      - mux::session::pane::tests::enqueue_pane_output_chunk_full_branch_does_not_panic_outside_tokio_runtime
+    red_confirmed: true
+    red_reason: >-
+      Temporarily reinstated task0001's old `tokio::spawn(async move {
+      tx2.send(chunk).await })` in the Full branch (this task's fix removes
+      the spawn entirely) and reran — panicked with "there is no reactor
+      running, must be called from the context of a Tokio 1.x runtime"
+      (the plain `#[test]`, not `#[tokio::test]`, has no runtime). Restored
+      the connection-owned-queue fix and reran: passes, because the Full
+      branch no longer spawns anything at all.
+  AC-5:
+    tests:
+      - mux::session::pane::tests::enqueue_pane_output_chunk_fast_path_delivers_synchronously
+      - mux::session::pane::tests::enqueue_pane_output_chunk_full_channel_defers_without_blocking_preserves_fifo
+      - mux::session::pane::tests::enqueue_pane_output_chunk_closed_channel_does_not_panic
+      - mux::session::pane::tests::pty_channel_capacity_is_finite_and_unchanged
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_returns_promptly_when_own_pane_channel_full
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_for_different_pane_returns_promptly_while_channel_full
+      - mux::ipc::handlers::tests::handle_set_visibility_true_returns_promptly_when_channel_full_and_resumes_after_drain
+    red_confirmed: false
+    red_reason: >-
+      Regression gate for task0001's FR1/FR2 (self-deadlock resolved,
+      connection stays responsive), not a new red/green cycle for this task.
+      All 7 were adapted (signatures changed to thread the new
+      DeferredOutputQueue parameter and, for the three "returns promptly"
+      tests, to call flush_deferred_output explicitly in place of awaiting a
+      background task) but the property each pins is unchanged by this
+      rework. Verified green after every adaptation; see task0001.tests.yaml
+      for their original red evidence.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Whole-suite regression gate, not a single test. Verified via
+      `--test-threads=1`: mux::ipc / mux::session tests are 122/122 green in
+      every run. The only failures observed anywhere (baseline and post-
+      implementation) are confined to tabs::tests::*, a module this task's
+      diff never touches; final_failures is a subset of baseline_failures
+      (task0001's own documented 7-test set) as required.

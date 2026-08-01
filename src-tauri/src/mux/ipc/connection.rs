@@ -16,10 +16,10 @@ use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
 use super::handlers::{
-    handle_attach, handle_create_window, handle_destroy_pane, handle_destroy_window,
-    handle_move_window, handle_read_pane, handle_rename_window, handle_request_pane_snapshot,
-    handle_resize, handle_send_text, handle_set_visibility, handle_switch_window,
-    handle_wait_agent_state,
+    flush_deferred_output, handle_attach, handle_create_window, handle_destroy_pane,
+    handle_destroy_window, handle_move_window, handle_read_pane, handle_rename_window,
+    handle_request_pane_snapshot, handle_resize, handle_send_text, handle_set_visibility,
+    handle_switch_window, handle_wait_agent_state,
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
@@ -27,8 +27,8 @@ use super::statusbar::{StatusBarEngine, execute_command};
 use crate::mux::daemon::{SharedUpgradeAckSlot, UpgradeSignal, UpgradeSignalSender};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    AgentStatusReportSender, ChunkKind, NotificationSender, PtyOutputChunk, SharedPaneExitSender,
-    TitleChangeSender,
+    AgentStatusReportSender, ChunkKind, DeferredOutputQueue, NotificationSender, PtyOutputChunk,
+    SharedPaneExitSender, TitleChangeSender,
 };
 
 /// Handshake timeout: client must send Hello within this duration.
@@ -253,6 +253,16 @@ pub async fn handle_connection<S>(
     // re-evaluates output_target after a session switch).
     let visible_state: Arc<AtomicBool> = Arc::new(AtomicBool::new(true));
 
+    // Connection-owned, explicitly-bounded backlog of chunks / visibility
+    // resumes deferred while `pane_output_tx` is momentarily full
+    // (mux-window-switch-output-hang task0002 rework — see
+    // `DeferredOutputQueue`'s doc). Flushed via `flush_deferred_output`
+    // immediately after the loop's own drain of `pane_output_rx` below (the
+    // only place capacity on that channel is ever freed) and, defensively,
+    // at the top of `route_message` so a newly-arrived client message also
+    // gives the queue a chance to progress.
+    let mut deferred_output = DeferredOutputQueue::new();
+
     // Message + output loop using select! to handle both directions concurrently
     loop {
         // Build a future for the render timer (if enabled)
@@ -311,6 +321,7 @@ pub async fn handle_connection<S>(
                             &mut kick_rx,
                             &visible_state,
                             &upgrade_tx,
+                            &mut deferred_output,
                         ).await {
                             if should_break {
                                 break;
@@ -442,6 +453,21 @@ pub async fn handle_connection<S>(
                             elapsed.as_millis(), drained_count, merged_count, total_bytes
                         );
                     }
+
+                    // mux-window-switch-output-hang task0002: this drain is
+                    // the ONLY place capacity on `pane_output_tx` is ever
+                    // freed, so it is also the right place to retry anything
+                    // deferred while the channel was momentarily full (see
+                    // `DeferredOutputQueue`'s doc for why this beats a
+                    // spawned task per deferral).
+                    flush_deferred_output(
+                        &mut deferred_output,
+                        &pane_output_tx,
+                        &session_manager,
+                        active_session_id,
+                        &visible_state,
+                    )
+                    .await;
                 }
             }
             _ = render_tick => {
@@ -842,7 +868,7 @@ async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, s
 /// Returns `Err(true)` when the connection should be closed,
 /// `Err(false)` on a non-fatal send error, and `Ok(())` otherwise.
 ///
-/// ### Audit note (mux-window-switch-output-hang task0001)
+/// ### Audit note (mux-window-switch-output-hang task0001, reworked task0002)
 ///
 /// This function runs inside the connection's own `select!` loop
 /// (`handle_connection`, the `msg = framed.next() =>` arm), so any call it
@@ -855,17 +881,24 @@ async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, s
 /// anymore):
 /// - `RequestPaneSnapshot` -> `handle_request_pane_snapshot`, which used to
 ///   `pane_output_tx.send(...).await` — now uses
-///   `pane::enqueue_pane_output_chunk` (try_send, deferring to a spawned
-///   task only when the channel is momentarily full).
+///   `pane::enqueue_pane_output_chunk` (try_send, deferring onto
+///   `deferred_output` — a connection-owned, bounded `DeferredOutputQueue` —
+///   only when the channel is momentarily full; see that type's doc).
 /// - `SetVisibility` -> `handle_set_visibility`'s visibility-resume loop,
 ///   which used to `pane_output_tx.reserve().await` per pane — now uses
-///   `try_reserve()` with the same spawned-task deferral on `Full`.
+///   `try_reserve()` with the same `deferred_output` deferral on `Full`.
 ///
 /// Every other arm below either does not touch `pane_output_tx` at all, or
 /// only clones it for storage (`Attach`, `CreateWindow` — the actual PTY
 /// output send for those happens later, off this task, on the pane's
 /// reader thread via `blocking_send`, which blocks that native OS thread
 /// only, not this connection task).
+///
+/// The opportunistic `flush_deferred_output` call at the top (task0002) is
+/// defensive: `handle_connection`'s own drain of `pane_output_rx` is the
+/// primary trigger (capacity can only free there), but giving every
+/// incoming client message a chance to progress the queue too closes the
+/// residual edge case of PTY output going quiet right after a deferral.
 #[allow(clippy::too_many_arguments)]
 async fn route_message<S>(
     msg: MuxMessage,
@@ -883,10 +916,20 @@ async fn route_message<S>(
     kick_rx: &mut Option<oneshot::Receiver<()>>,
     visible_state: &Arc<AtomicBool>,
     upgrade_tx: &UpgradeSignalSender,
+    deferred_output: &mut DeferredOutputQueue,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    flush_deferred_output(
+        deferred_output,
+        pane_output_tx,
+        session_manager,
+        *active_session_id,
+        visible_state,
+    )
+    .await;
+
     match msg.msg_type {
         MessageType::CreateWindow => {
             handle_create_window(
@@ -969,8 +1012,14 @@ where
             // request even reached the daemon. The reply is logged inside
             // handle_request_pane_snapshot once the snapshot is built.
             log::warn!("RequestPaneSnapshot: received for pane {}", msg.pane_id);
-            handle_request_pane_snapshot(&msg, *active_session_id, session_manager, pane_output_tx)
-                .await?;
+            handle_request_pane_snapshot(
+                &msg,
+                *active_session_id,
+                session_manager,
+                pane_output_tx,
+                deferred_output,
+            )
+            .await?;
         }
         MessageType::SetVisibility => {
             let payload = match SetVisibilityPayload::from_payload(&msg.payload) {
@@ -986,6 +1035,7 @@ where
                 *active_session_id,
                 pane_output_tx,
                 visible_state,
+                deferred_output,
             )
             .await;
         }
