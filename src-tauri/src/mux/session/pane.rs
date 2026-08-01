@@ -343,22 +343,26 @@ impl PtyOutputChunk {
 /// Bounded channel capacity for PTY output per pane.
 pub const PTY_CHANNEL_CAPACITY: usize = 256;
 
-/// Bound on how many items the connection-owned [`DeferredOutputQueue`]
-/// retains while `pane_output_tx` is momentarily full
-/// (mux-window-switch-output-hang task0002 rework, AC-3/FR4).
-/// `PTY_CHANNEL_CAPACITY` bounds the channel itself; this bounds the
-/// "equivalent bound elsewhere" FR4 requires for the deferred path, which
-/// task0001's `tokio::spawn`-per-item design left entirely unbounded
+/// Bound on how many [`DeferredOutputItem::Chunk`] entries the
+/// connection-owned [`DeferredOutputQueue`] retains while `pane_output_tx`
+/// is momentarily full (mux-window-switch-output-hang task0002 rework,
+/// AC-3/FR4). `PTY_CHANNEL_CAPACITY` bounds the channel itself; this bounds
+/// the "equivalent bound elsewhere" FR4 requires for the deferred path,
+/// which task0001's `tokio::spawn`-per-item design left entirely unbounded
 /// (reviews/round1.yaml F6-F9).
 ///
-/// Both deferred item kinds share this one cap ([`DeferredOutputItem::Chunk`]
-/// and [`DeferredOutputItem::VisibilityResume`]): AC-3 requires the same
-/// limit on both, and one shared bound also keeps FIFO ordering between the
-/// two kinds meaningful (see [`DeferredOutputQueue`]'s doc).
+/// task0003 rework (review round 2, findings `4999311c8becf7eb` /
+/// `ac1d20218d320b08`): this cap now bounds `Chunk` entries ONLY.
+/// [`DeferredOutputItem::VisibilityResume`] entries are deduplicated by
+/// pane id instead (see `DeferredOutputQueue::defer_visibility_resume`) and
+/// are NOT subject to this cap — round 2 found that sharing one cap let a
+/// session with more non-exited panes than `MAX_DEFERRED_ITEMS` strand the
+/// overflow panes `Detached` forever (no client-driven retry exists for a
+/// dropped resume, unlike a `Chunk`, which the client can re-request).
 ///
 /// Deliberately small: a full channel means the client (or the connection
 /// itself) is not draining fast enough, so retaining a long backlog of
-/// deferred work here would just move the memory-growth problem sideways
+/// deferred chunks here would just move the memory-growth problem sideways
 /// instead of bounding it. `Chunk` items retain their already-built payload
 /// (up to a few MiB for a scrollback-bearing snapshot — see
 /// `DEFAULT_SCROLLBACK_CAPACITY`), so keeping this cap small keeps the worst
@@ -426,10 +430,36 @@ impl std::fmt::Debug for DeferredOutputItem {
 /// channel is ever freed) — fixes all three: the retry happens on the very
 /// next opportunity after capacity frees (no scheduler-dependent gap),
 /// re-validation happens fresh at that moment (not baked in at defer time),
-/// and the queue has a hard cap (`MAX_DEFERRED_ITEMS`) shared by both item
-/// kinds.
+/// and the queue has a hard cap on `Chunk` backlog (`MAX_DEFERRED_ITEMS`,
+/// task0003 rework: `VisibilityResume` entries are deduplicated by pane id
+/// instead of sharing that cap — see `defer_visibility_resume`).
 ///
-/// ### Ordering (AC-2/F4/F5): what is, and is not, guaranteed
+/// ### Overflow policy (AC-1/AC-2, task0003 rework of review round 2
+/// findings `4999311c8becf7eb` / `ff58ab6fd17542f4` / `ac1d20218d320b08` /
+/// `1d648d947b4dea8b`)
+///
+/// task0002's policy dropped whichever item arrived NEWEST once
+/// `MAX_DEFERRED_ITEMS` was reached, applied uniformly to both item kinds.
+/// Review round 2 found this actively harmful for both:
+/// - a dropped `VisibilityResume` has no client-driven retry: a repeated
+///   `SetVisibility(true)` is a no-op (`handle_set_visibility`'s
+///   `prev == visible` guard), so the pane stayed `Detached` — silently
+///   reintroducing the "output stops flowing" symptom this feature exists
+///   to remove;
+///   - a dropped `Chunk` (always a `RequestPaneSnapshot` reply in
+///     production) discarded the client's MOST RECENT request in favour of
+///     up to `MAX_DEFERRED_ITEMS` older ones — the worst possible choice
+///     when the client just switched to a new window.
+///
+/// `defer_visibility_resume` now deduplicates by pane id and is never
+/// capped (see its own doc for why that is still bounded in practice).
+/// `defer_chunk` coalesces a new chunk over any existing queued chunk FOR
+/// THE SAME PANE (a snapshot reply is fully self-contained, so only the
+/// newest one for a given pane matters), and only evicts across DIFFERENT
+/// panes' chunks once `MAX_DEFERRED_ITEMS` distinct panes are queued —
+/// evicting the OLDEST such entry, never the one just pushed.
+///
+/// ### Ordering (AC-2/AC-3/F4/F5): what is, and is not, guaranteed
 ///
 /// Items are flushed strictly in the order they were deferred — a plain
 /// FIFO; the flush loop stops at the first item that still can't be sent
@@ -442,15 +472,42 @@ impl std::fmt::Debug for DeferredOutputItem {
 ///
 /// This does NOT extend to the PTY reader thread: `pty_spawn.rs`'s reader
 /// runs on its own native OS thread and calls `try_send` / `blocking_send`
-/// on `pane_output_tx` directly, entirely outside this queue and outside
-/// tokio's cooperative scheduling. A reader-thread send already parked in
-/// `blocking_send`, waiting for a permit at the exact instant capacity
-/// frees, can still win that permit ahead of this queue's own `try_send`
-/// retry — a cross-thread race inherent to sharing one bounded channel
-/// between multiple producers, present in equivalent form even before
-/// task0001 (a plain blocking `.send().await` on the connection task raced
-/// the same reader thread the same way). Closing that specific residual
-/// would require either routing the reader thread's sends through this same
+/// on `pane_output_tx` directly, entirely outside this queue. Correction
+/// (task0003, AC-6): the pre-task0001 code did NOT have this same race in
+/// equivalent form — its blocking `.send().await` joined tokio's semaphore
+/// waiter queue at request time, so it was serviced fairly (FIFO) relative
+/// to the reader thread's own `blocking_send` waiters (it deadlocked for an
+/// entirely different reason: THAT wait itself could only ever be ended by
+/// this same task's own drain arm, which cannot run while suspended there).
+/// task0001/task0002's `try_send`/`try_reserve`-only retries do NOT join
+/// that waiter queue at all, so while a reader-thread send is parked there,
+/// every freed permit is handed to it directly and `try_send` observes zero
+/// capacity essentially always — a systematic priority inversion (review
+/// round 2, findings `7e47bd5fe31dc720` / `2aec511b92102c24`), not the
+/// occasional race the task0002 doc previously described here.
+///
+/// task0003 closes the STARVATION half of that (AC-3): `mux::ipc::connection`
+/// additionally polls `pane_output_tx.clone().reserve_owned()` as its own
+/// `select!` arm whenever this queue is non-empty (listed BEFORE the
+/// channel-drain arm in that `biased` `select!` — see that arm's doc for
+/// why the ordering itself is load-bearing). That future joins the SAME
+/// FIFO waiter queue every reader thread's `blocking_send` does (one per
+/// pane sharing this connection's `pane_output_tx`), so a deferred item is
+/// serviced within a bounded number of reader-thread sends — bounded by
+/// however many reader threads this connection's panes have, all of which
+/// terminate once their PTY exits — rather than indefinitely, without ever
+/// blocking the connection task itself (a `select!` arm's future is only
+/// ever polled, never awaited to completion outside the macro).
+///
+/// What task0003 does NOT close: the STRICT ordering guarantee against the
+/// reader thread. Even with fair queuing, a live chunk the reader thread
+/// produced AFTER a snapshot was requested can still be granted a permit
+/// (and thus reach the client) ahead of that deferred snapshot, if the
+/// reader's send happened to already be queued first. SPEC.md FR3 is
+/// narrowed to say so explicitly (task0003 AC-6) — the guarantee that
+/// survives is "delivered, and within bounded time", not "never reordered
+/// relative to the reader thread". Closing the ordering gap fully would
+/// require either routing the reader thread's sends through this same
 /// queue (a `pty_spawn.rs` change, out of this task's scope) or a
 /// client-observable generation number so a stale snapshot can be discarded
 /// on arrival (a wire-protocol change in the `mux_ipc` crate, also out of
@@ -475,33 +532,85 @@ impl DeferredOutputQueue {
         self.items.is_empty()
     }
 
-    /// Push `item` onto the back of the queue, dropping (and warning about)
-    /// the NEW item instead when already at `MAX_DEFERRED_ITEMS` (AC-3: a
-    /// dropped snapshot/resume recovers via the next request rather than
-    /// growing the backlog without bound).
-    fn push(&mut self, item: DeferredOutputItem) {
-        if self.items.len() >= MAX_DEFERRED_ITEMS {
-            log::warn!(
-                "deferred pane output queue at capacity ({} items); dropping {:?} \
-                 rather than growing an unbounded backlog (mux-window-switch-output-hang \
-                 task0002 AC-3)",
-                MAX_DEFERRED_ITEMS,
-                item,
-            );
-            return;
-        }
-        self.items.push_back(item);
-    }
-
     /// Defer an already-built chunk (see [`DeferredOutputItem::Chunk`]).
+    ///
+    /// task0003 rework (AC-2, review round 2 findings `4999311c8becf7eb` /
+    /// `ac1d20218d320b08`): a chunk here is always a `RequestPaneSnapshot`
+    /// reply in production, which is fully self-contained — only the NEWEST
+    /// one for a given pane still matters to the client that asked for it.
+    /// So a new chunk for a pane already resident in the queue REPLACES it
+    /// (coalesce, newest wins) instead of adding a second entry. Only once
+    /// coalescing still leaves `MAX_DEFERRED_ITEMS` DISTINCT panes' chunks
+    /// queued does capacity pressure evict anything — and then it evicts the
+    /// OLDEST surviving chunk, never the one just pushed (AC-2 forbids ever
+    /// dropping the newest).
     pub fn defer_chunk(&mut self, chunk: PtyOutputChunk) {
-        self.push(DeferredOutputItem::Chunk(chunk));
+        let pane_id = chunk.pane_id;
+        if let Some(pos) = self
+            .items
+            .iter()
+            .position(|item| matches!(item, DeferredOutputItem::Chunk(c) if c.pane_id == pane_id))
+        {
+            log::debug!(
+                "deferred pane output queue: coalescing new chunk for pane {} over the \
+                 previously-queued one (newest wins, mux-window-switch-output-hang \
+                 task0003 AC-2)",
+                pane_id,
+            );
+            self.items.remove(pos);
+        } else {
+            let chunk_count = self
+                .items
+                .iter()
+                .filter(|item| matches!(item, DeferredOutputItem::Chunk(_)))
+                .count();
+            if chunk_count >= MAX_DEFERRED_ITEMS {
+                if let Some(oldest) = self
+                    .items
+                    .iter()
+                    .position(|item| matches!(item, DeferredOutputItem::Chunk(_)))
+                {
+                    let dropped = self.items.remove(oldest);
+                    log::warn!(
+                        "deferred pane output queue at capacity ({} chunks); dropping the \
+                         OLDEST queued chunk {:?} to admit pane {}'s newer one \
+                         (mux-window-switch-output-hang task0003 AC-2: never drop the newest)",
+                        MAX_DEFERRED_ITEMS,
+                        dropped,
+                        pane_id,
+                    );
+                }
+            }
+        }
+        self.items.push_back(DeferredOutputItem::Chunk(chunk));
     }
 
     /// Defer a visibility-resume attempt for `pane_id` (see
     /// [`DeferredOutputItem::VisibilityResume`]).
+    ///
+    /// task0003 rework (AC-1, review round 2 findings `4999311c8becf7eb` /
+    /// `ff58ab6fd17542f4` / `1d648d947b4dea8b`): deduplicated by `pane_id` —
+    /// a pane already awaiting resume does not get a second entry — and,
+    /// once deduplicated, NEVER dropped for being past `MAX_DEFERRED_ITEMS`
+    /// (that cap bounds `Chunk` backlog only, see its doc). A dropped resume
+    /// has no client-driven retry path (`handle_set_visibility`'s
+    /// `prev == visible` guard makes a repeated `SetVisibility(true)` a
+    /// no-op), so losing one here would strand the pane `Detached` until an
+    /// unrelated hide/show cycle — exactly the "output stops flowing"
+    /// symptom this feature exists to remove. The set of distinct pane ids
+    /// a single visibility edge can defer is itself finite and tiny (one
+    /// entry per non-exited pane in the session, no payload), so leaving it
+    /// uncapped does not reopen the unbounded-growth defect FR4 closed.
     pub fn defer_visibility_resume(&mut self, pane_id: PaneId) {
-        self.push(DeferredOutputItem::VisibilityResume(pane_id));
+        let already_queued = self
+            .items
+            .iter()
+            .any(|item| matches!(item, DeferredOutputItem::VisibilityResume(p) if *p == pane_id));
+        if already_queued {
+            return;
+        }
+        self.items
+            .push_back(DeferredOutputItem::VisibilityResume(pane_id));
     }
 
     /// Pop the front item (used by the flush loop to take the next item to
@@ -894,10 +1003,41 @@ pub fn evaluate_output_target(
     }
 }
 
+/// A `pane_output_tx` permit obtained either the FAST way (`try_reserve()`
+/// or `reserve()`, borrowed from a live `&Sender`) or the FAIR way
+/// (`reserve_owned()`, owned — mux-window-switch-output-hang task0003
+/// rework, AC-3/G2: `mux::ipc::connection` polls a `reserve_owned()` future
+/// as its own `select!` arm to avoid the starvation a `try_reserve`-only
+/// retry suffers while a PTY reader thread has a `blocking_send` parked on
+/// the same channel). `resume_pane_with_permit` accepts either so the same
+/// atomic (build snapshot, send, swap to `Connected`) logic serves both
+/// callers without duplicating it per permit type.
+pub enum AnyPermit<'a> {
+    Borrowed(mpsc::Permit<'a, PtyOutputChunk>),
+    Owned(mpsc::OwnedPermit<PtyOutputChunk>),
+}
+
+impl AnyPermit<'_> {
+    /// Consume the permit to send `chunk`. Infallible either way — the slot
+    /// was already reserved — mirroring `mpsc::Permit::send`'s own contract.
+    fn send(self, chunk: PtyOutputChunk) {
+        match self {
+            AnyPermit::Borrowed(p) => p.send(chunk),
+            AnyPermit::Owned(p) => {
+                // `OwnedPermit::send` hands back the underlying `Sender`;
+                // callers here already hold their own clone, so it is
+                // dropped.
+                let _ = p.send(chunk);
+            }
+        }
+    }
+}
+
 /// FR9 race-free Detached -> Connected resume.
 ///
-/// The caller obtains an `mpsc::Permit` for `pane_output_tx` *outside* the
-/// pane lock (via `Sender::reserve().await`), then hands it in here. This
+/// The caller obtains a permit for `pane_output_tx` *outside* the pane lock
+/// (via `Sender::reserve().await`, `try_reserve()`, or the fair
+/// `reserve_owned()` — see [`AnyPermit`]), then hands it in here. This
 /// function holds the pane's `output_target` mutex for the full lifetime of
 /// (build snapshot, send via permit, swap to `Connected`). Because the PTY
 /// reader thread also takes the same `output_target` mutex before its
@@ -905,8 +1045,9 @@ pub fn evaluate_output_target(
 /// the snapshot enqueue and the Connected swap — the snapshot is guaranteed
 /// to land first in the channel's FIFO.
 ///
-/// `Permit::send` is consumed and infallible (the slot is already reserved),
-/// so the entire sequence runs under the std mutex without `await`.
+/// `AnyPermit::send` is consumed and infallible (the slot is already
+/// reserved), so the entire sequence runs under the std mutex without
+/// `await`.
 ///
 /// Returns `ResumeOutcome::NoChange` when the pane is not eligible to
 /// resume (already Connected, owner mismatch, or `NetworkDetach` still
@@ -915,7 +1056,7 @@ pub fn evaluate_output_target(
 pub fn resume_pane_with_permit(
     pane: &MuxPane,
     owned_tx: &mpsc::Sender<PtyOutputChunk>,
-    permit: mpsc::Permit<'_, PtyOutputChunk>,
+    permit: AnyPermit<'_>,
 ) -> ResumeOutcome {
     let mut target = pane.output_target.lock().unwrap();
     match &mut *target {
@@ -3140,7 +3281,7 @@ mod tests {
             .append(b"\x1b_Gi=7;PASS\x1b\\");
 
         let permit = owned_tx.reserve().await.expect("reserve permit");
-        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
         assert!(matches!(outcome, ResumeOutcome::Resumed));
 
         // Target switched to Connected.
@@ -3213,7 +3354,7 @@ mod tests {
             .process(b"ALT-RESUME-SHADOW");
 
         let permit = owned_tx.reserve().await.expect("reserve permit");
-        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
         assert!(matches!(outcome, ResumeOutcome::Resumed));
 
         let chunk = rx.try_recv().expect("snapshot enqueued");
@@ -3240,7 +3381,7 @@ mod tests {
         let pane = MuxPane::new_test(8, 80, 24, target.clone());
 
         let permit = owned_tx.reserve().await.expect("reserve permit");
-        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
         assert!(matches!(outcome, ResumeOutcome::NoChange));
 
         match &*target.lock().unwrap() {
@@ -3261,7 +3402,7 @@ mod tests {
         let pane = MuxPane::new_test(9, 80, 24, target.clone());
 
         let permit = owned_tx.reserve().await.expect("reserve permit");
-        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
         assert!(matches!(outcome, ResumeOutcome::NoChange));
         assert!(matches!(
             *target.lock().unwrap(),
@@ -3282,7 +3423,7 @@ mod tests {
         let pane = MuxPane::new_test(10, 80, 24, target.clone());
 
         let permit = b_tx.reserve().await.expect("reserve permit");
-        let outcome = resume_pane_with_permit(&pane, &b_tx, permit);
+        let outcome = resume_pane_with_permit(&pane, &b_tx, AnyPermit::Borrowed(permit));
         assert!(matches!(outcome, ResumeOutcome::NoChange));
         assert!(matches!(
             *target.lock().unwrap(),
@@ -3322,7 +3463,7 @@ mod tests {
             .write(&vec![b'x'; oversize_capacity]);
 
         let permit = owned_tx.reserve().await.expect("reserve permit");
-        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
         assert!(
             matches!(outcome, ResumeOutcome::NoChange),
             "oversize snapshot must not resume the pane"
@@ -3383,7 +3524,7 @@ mod tests {
         // First attempt: oversize, must stay detached (same assertion as
         // `test_resume_pane_with_permit_stays_detached_when_snapshot_exceeds_frame_limit`).
         let permit = owned_tx.reserve().await.expect("reserve permit");
-        let first_outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        let first_outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
         assert!(
             matches!(first_outcome, ResumeOutcome::NoChange),
             "first (oversize) attempt must not resume the pane"
@@ -3409,7 +3550,7 @@ mod tests {
         // Second attempt (what a hide -> show cycle re-drives): must
         // resume cleanly.
         let permit = owned_tx.reserve().await.expect("reserve permit");
-        let second_outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        let second_outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
         assert!(
             matches!(second_outcome, ResumeOutcome::Resumed),
             "the retry must resume the pane once the oversize condition \
@@ -3845,14 +3986,23 @@ mod tests {
     /// AC-1/AC-3 (task0002 rework): with the channel completely full,
     /// `enqueue_pane_output_chunk` must still return immediately (this IS
     /// the self-deadlock fix) by pushing the chunk onto `deferred` instead
-    /// of sending it. Once capacity frees (drained here exactly as the
-    /// connection's own drain arm would) and the queue is flushed (mirroring
-    /// `handlers::flush_deferred_output`'s `Chunk` arm), the deferred chunk
-    /// lands strictly after the chunks already resident in the channel
-    /// (FIFO preserved relative to already-queued chunks for the same
-    /// pane).
+    /// of sending it.
+    ///
+    /// task0003 rework (AC-5, review round 2 finding `6574d4221dcb5efe`):
+    /// this test used to also hand-roll a `while let Some(item) = pop_front()
+    /// { ... tx.try_send(...) ... }` loop here to "prove" FIFO delivery —
+    /// that copy could diverge from (and did diverge from — it never
+    /// exercised the `Full`-requeue or `Closed`-clear arms) the production
+    /// `handlers::flush_deferred_output`. This module cannot call that
+    /// `pub(super)` function (it lives in `mux::ipc`, a different module
+    /// tree), so the flush-side proof now lives in
+    /// `mux::ipc::handlers::tests` instead, calling the production function
+    /// directly — see `handle_request_pane_snapshot_returns_promptly_when_own_pane_channel_full`
+    /// and the dedicated `flush_deferred_output_*` tests there. This test is
+    /// trimmed to what THIS module owns: that the enqueue itself defers
+    /// without blocking.
     #[tokio::test]
-    async fn enqueue_pane_output_chunk_full_channel_defers_without_blocking_preserves_fifo() {
+    async fn enqueue_pane_output_chunk_full_channel_defers_without_blocking() {
         let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(2);
         tx.send(PtyOutputChunk::pty_output(1, b"a".to_vec()))
             .await
@@ -3880,28 +4030,21 @@ mod tests {
             1,
             "full channel must defer, not send, the chunk"
         );
+        match deferred.pop_front() {
+            Some(DeferredOutputItem::Chunk(chunk)) => {
+                assert_eq!(chunk.pane_id, 1);
+                assert_eq!(chunk.kind, ChunkKind::Snapshot);
+                assert_eq!(chunk.data, b"SNAP");
+            }
+            other => panic!("expected a deferred Chunk, got {other:?}"),
+        }
 
-        // The two pre-existing chunks must be observed first...
+        // The two pre-existing chunks are still exactly as sent — enqueueing
+        // never touched the channel's own contents.
         let c1 = rx.recv().await.expect("chunk a");
         assert_eq!(c1.data, b"a");
         let c2 = rx.recv().await.expect("chunk b");
         assert_eq!(c2.data, b"b");
-
-        // ...then a flush (the same shape as `handlers::flush_deferred_output`'s
-        // `Chunk` arm) delivers the deferred chunk now that capacity is free.
-        while let Some(item) = deferred.pop_front() {
-            match item {
-                DeferredOutputItem::Chunk(chunk) => {
-                    tx.try_send(chunk).expect("capacity must be free by now")
-                }
-                DeferredOutputItem::VisibilityResume(_) => unreachable!(),
-            }
-        }
-        assert!(deferred.is_empty());
-
-        let snap = rx.recv().await.expect("deferred chunk must have been sent");
-        assert_eq!(snap.kind, ChunkKind::Snapshot);
-        assert_eq!(snap.data, b"SNAP");
     }
 
     /// A closed channel (client gone) is handled the same way the
@@ -3957,39 +4100,95 @@ mod tests {
         assert_eq!(PTY_CHANNEL_CAPACITY, 256);
     }
 
-    /// AC-3 (task0002): the connection-owned deferred queue itself is
-    /// bounded — repeatedly deferring chunks past `MAX_DEFERRED_ITEMS` drops
-    /// the newest arrival (with a warning) instead of growing without limit.
+    /// AC-2 (task0003 rework, review round 2 findings `4999311c8becf7eb`/
+    /// `ac1d20218d320b08`): a repeated chunk for the SAME pane coalesces —
+    /// the newer payload replaces the older one in place rather than
+    /// growing the queue, and the survivor is the newest content (never the
+    /// newest dropped in favour of the older one).
     #[test]
-    fn deferred_output_queue_drops_new_items_past_the_cap_instead_of_growing_unbounded() {
-        let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
-        tx.try_send(PtyOutputChunk::pty_output(1, b"filler".to_vec()))
-            .expect("fill the single slot");
-
+    fn deferred_output_queue_coalesces_repeated_chunk_for_same_pane_newest_wins() {
         let mut deferred = DeferredOutputQueue::new();
-        for i in 0..(MAX_DEFERRED_ITEMS * 2) {
-            enqueue_pane_output_chunk(
-                &tx,
-                PtyOutputChunk::pty_output(1, vec![i as u8]),
-                &mut deferred,
-            );
+        deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"V1".to_vec()));
+        deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"V2".to_vec()));
+        assert_eq!(
+            deferred.len(),
+            1,
+            "a second chunk for the same pane must coalesce, not add a second entry"
+        );
+        match deferred.pop_front() {
+            Some(DeferredOutputItem::Chunk(chunk)) => {
+                assert_eq!(
+                    chunk.data, b"V2",
+                    "the newest payload for the pane must survive"
+                );
+            }
+            other => panic!("expected a Chunk, got {other:?}"),
         }
+    }
 
+    /// AC-2: once coalescing still leaves more than `MAX_DEFERRED_ITEMS`
+    /// DISTINCT panes' chunks queued, the OLDEST surviving chunk is evicted
+    /// — never the one just pushed (AC-2 forbids ever dropping the newest).
+    #[test]
+    fn deferred_output_queue_drops_oldest_distinct_pane_chunk_past_the_cap_never_the_newest() {
+        let mut deferred = DeferredOutputQueue::new();
+        let total = MAX_DEFERRED_ITEMS * 2;
+        for pane_id in 0..(total as u32) {
+            deferred.defer_chunk(PtyOutputChunk::pty_output(pane_id, vec![pane_id as u8]));
+        }
         assert_eq!(
             deferred.len(),
             MAX_DEFERRED_ITEMS,
             "queue must never grow past the documented cap"
         );
+
+        let mut surviving_pane_ids = Vec::new();
+        while let Some(item) = deferred.pop_front() {
+            match item {
+                DeferredOutputItem::Chunk(chunk) => surviving_pane_ids.push(chunk.pane_id),
+                other => panic!("expected only Chunk items, got {other:?}"),
+            }
+        }
+        let expected: Vec<u32> = ((total - MAX_DEFERRED_ITEMS) as u32..total as u32).collect();
+        assert_eq!(
+            surviving_pane_ids, expected,
+            "the oldest distinct-pane chunks must be evicted first, so only the \
+             most-recently-deferred MAX_DEFERRED_ITEMS panes survive — including \
+             the very last (newest) one pushed"
+        );
     }
 
-    /// AC-3: the same cap applies to visibility-resume deferrals, not just
-    /// chunk deferrals (both share one `DeferredOutputQueue`).
+    /// AC-1 (task0003 rework, review round 2 findings `4999311c8becf7eb`/
+    /// `ff58ab6fd17542f4`/`1d648d947b4dea8b`): visibility resumes are no
+    /// longer subject to `MAX_DEFERRED_ITEMS` — a session with more
+    /// non-exited panes than the (former, now chunk-only) cap must not
+    /// strand any of them.
     #[test]
-    fn deferred_output_queue_caps_visibility_resumes_too() {
+    fn deferred_output_queue_never_drops_visibility_resumes_past_the_former_cap() {
         let mut deferred = DeferredOutputQueue::new();
-        for pane_id in 0..(MAX_DEFERRED_ITEMS as u32 * 2) {
+        let total = MAX_DEFERRED_ITEMS * 2 + 3;
+        for pane_id in 0..(total as u32) {
             deferred.defer_visibility_resume(pane_id);
         }
-        assert_eq!(deferred.len(), MAX_DEFERRED_ITEMS);
+        assert_eq!(
+            deferred.len(),
+            total,
+            "distinct-pane visibility resumes must never be dropped for capacity"
+        );
+    }
+
+    /// AC-1: a repeated resume request for the SAME pane deduplicates
+    /// instead of growing the queue.
+    #[test]
+    fn deferred_output_queue_dedupes_repeated_visibility_resume_for_same_pane() {
+        let mut deferred = DeferredOutputQueue::new();
+        deferred.defer_visibility_resume(42);
+        deferred.defer_visibility_resume(42);
+        deferred.defer_visibility_resume(42);
+        assert_eq!(
+            deferred.len(),
+            1,
+            "repeated resume requests for the same pane must deduplicate"
+        );
     }
 }

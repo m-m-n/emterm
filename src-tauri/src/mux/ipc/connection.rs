@@ -16,10 +16,10 @@ use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
 use super::handlers::{
-    flush_deferred_output, handle_attach, handle_create_window, handle_destroy_pane,
-    handle_destroy_window, handle_move_window, handle_read_pane, handle_rename_window,
-    handle_request_pane_snapshot, handle_resize, handle_send_text, handle_set_visibility,
-    handle_switch_window, handle_wait_agent_state,
+    apply_fair_permit_to_front_deferred_item, flush_deferred_output, handle_attach,
+    handle_create_window, handle_destroy_pane, handle_destroy_window, handle_move_window,
+    handle_read_pane, handle_rename_window, handle_request_pane_snapshot, handle_resize,
+    handle_send_text, handle_set_visibility, handle_switch_window, handle_wait_agent_state,
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
@@ -45,6 +45,68 @@ const UPGRADE_PREPARE_TIMEOUT: Duration = Duration::from_secs(30);
 /// (returning to select! to check for PtyInput). At 64 chunks × 65KB max
 /// each, worst-case batch memory is ~4MB (transient, freed after flush).
 const DRAIN_BATCH_LIMIT: usize = 64;
+
+/// A fair, in-flight reservation on a connection's `pane_output_tx`, used
+/// only to service `deferred_output` when the ordinary `try_send`/
+/// `try_reserve`-based flush (`handlers::flush_deferred_output`) cannot make
+/// progress (mux-window-switch-output-hang task0003 rework, AC-3/G2 —
+/// review round 2 findings `7e47bd5fe31dc720`/`2aec511b92102c24`).
+///
+/// Boxed + `dyn` because the concrete `async move { ... }` future type
+/// differs at every construction site; erasing it lets this live in a
+/// plain `Option` field across `select!` iterations. `Send` is required
+/// because `handle_connection` itself is spawned via `tokio::spawn`.
+type PendingDeferredReserve = std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<mpsc::OwnedPermit<PtyOutputChunk>, mpsc::error::SendError<()>>,
+            > + Send,
+    >,
+>;
+
+/// Arm a fair reservation on `pane_output_tx` if `deferred_output` still has
+/// work and none is already in flight.
+///
+/// ### Why (AC-3/G2)
+///
+/// `flush_deferred_output`'s `try_send`/`try_reserve` retries never join
+/// tokio's semaphore waiter queue, so while `pty_spawn.rs`'s reader thread
+/// has a `blocking_send` parked there, every freed permit is handed to that
+/// waiter directly — `try_send` observes zero capacity essentially always,
+/// a systematic priority inversion (review round 2, `2aec511b92102c24`/
+/// `7e47bd5fe31dc720`), not an occasional race. Polling
+/// `pane_output_tx.clone().reserve_owned()` as its own `select!` arm (see
+/// `handle_connection` below) joins that SAME FIFO waiter queue, so this
+/// connection's own deferred work is serviced within a bounded number of
+/// reader-thread sends — without ever blocking this task (a `select!` arm's
+/// future is only ever polled, never awaited to completion outside the
+/// macro, so the connection keeps handling every other arm while this one
+/// is still pending).
+///
+/// CRITICAL placement requirement: in `handle_connection`'s `biased;`
+/// `select!`, the arm polling this reservation MUST be listed BEFORE the
+/// `chunk = pane_output_rx.recv()` arm. `select!` under `biased` polls
+/// branches in text order and stops at the first one that resolves; under
+/// sustained saturation `pane_output_rx.recv()` is essentially ALWAYS ready,
+/// so if it were listed first this reservation's future would never even
+/// get POLLED (never mind resolve) — and an un-polled future never
+/// registers itself as a waiter on the semaphore in the first place, so it
+/// would wait forever regardless of how "fair" `reserve_owned()` itself is.
+/// This is not a hypothetical: the connection-level regression test in this
+/// module's `tests` (`connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing`)
+/// caught exactly this ordering bug during development — the mechanism
+/// below is correct, but was originally wired up AFTER the drain arm and
+/// therefore never actually ran.
+fn arm_pending_deferred_reserve(
+    pending: &mut Option<PendingDeferredReserve>,
+    deferred_output: &DeferredOutputQueue,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+) {
+    if pending.is_none() && !deferred_output.is_empty() {
+        let tx = pane_output_tx.clone();
+        *pending = Some(Box::pin(async move { tx.reserve_owned().await }));
+    }
+}
 
 /// Handle a new client connection through handshake and message loop.
 #[allow(clippy::too_many_arguments)]
@@ -263,6 +325,12 @@ pub async fn handle_connection<S>(
     // gives the queue a chance to progress.
     let mut deferred_output = DeferredOutputQueue::new();
 
+    // Fair-reservation state for `deferred_output` (mux-window-switch-output-
+    // hang task0003 rework, AC-3/G2) — see `arm_pending_deferred_reserve`'s
+    // doc for why this exists alongside `flush_deferred_output`'s ordinary
+    // try-based retries rather than replacing them.
+    let mut pending_deferred_reserve: Option<PendingDeferredReserve> = None;
+
     // Message + output loop using select! to handle both directions concurrently
     loop {
         // Build a future for the render timer (if enabled)
@@ -327,6 +395,16 @@ pub async fn handle_connection<S>(
                                 break;
                             }
                         }
+                        // route_message's own defensive flush (or a handler
+                        // it called, e.g. RequestPaneSnapshot/SetVisibility)
+                        // may have left `deferred_output` non-empty against a
+                        // still-full channel — arm the fair reservation so
+                        // that work cannot be starved (AC-3/G2).
+                        arm_pending_deferred_reserve(
+                            &mut pending_deferred_reserve,
+                            &deferred_output,
+                            &pane_output_tx,
+                        );
                     }
                     Some(Err(e)) => {
                         log::warn!("Connection error: {}", e);
@@ -348,6 +426,55 @@ pub async fn handle_connection<S>(
                 let resp = MuxMessage::control(MessageType::Detached, 0, &());
                 let _ = framed.send(resp).await;
                 break;
+            }
+            // task0003 (AC-3/G2): polled only while a fair reservation is in
+            // flight (the `if` guard is re-checked every loop iteration).
+            // MUST be listed before the `chunk = pane_output_rx.recv()` arm
+            // below: under `biased`, `select!` polls branches in TEXT ORDER
+            // and stops at the first one that resolves — with the reader
+            // thread(s) saturating the channel, `pane_output_rx.recv()` is
+            // essentially ALWAYS ready, so if it were listed first this arm
+            // would never even get POLLED (never mind resolve), and could
+            // therefore never register itself as a waiter on
+            // `pane_output_tx`'s semaphore in the first place. Being polled
+            // first here costs nothing when not armed (`Pending` is instant)
+            // and when armed but not yet resolved (ditto) — this connection
+            // keeps servicing every other arm (client messages, the kick
+            // signal, the drain arm below) while the reservation is still
+            // pending; a `select!` arm's future is only ever POLLED, never
+            // awaited to completion outside the macro.
+            permit_result = async {
+                pending_deferred_reserve.as_mut().unwrap().await
+            }, if pending_deferred_reserve.is_some() => {
+                pending_deferred_reserve = None;
+                match permit_result {
+                    Ok(permit) => {
+                        apply_fair_permit_to_front_deferred_item(
+                            &mut deferred_output,
+                            permit,
+                            &pane_output_tx,
+                            &session_manager,
+                            active_session_id,
+                            &visible_state,
+                        )
+                        .await;
+                    }
+                    Err(_) => {
+                        log::warn!(
+                            "pane_output_tx closed while a fair deferred-item reservation \
+                             was pending; dropping the remaining deferred backlog"
+                        );
+                        deferred_output.clear();
+                    }
+                }
+                // More work may remain (only one item is applied per
+                // resolved reservation) — re-arm immediately rather than
+                // waiting for the next drain/message to do it.
+                arm_pending_deferred_reserve(
+                    &mut pending_deferred_reserve,
+                    &deferred_output,
+                    &pane_output_tx,
+                );
             }
             chunk = pane_output_rx.recv() => {
                 if let Some(first) = chunk {
@@ -468,6 +595,16 @@ pub async fn handle_connection<S>(
                         &visible_state,
                     )
                     .await;
+                    // task0003 (AC-3/G2): if the ordinary try-based flush
+                    // above still leaves work queued, the channel is likely
+                    // saturated by a PTY reader thread's own `blocking_send`
+                    // waiters, which a `try_send`/`try_reserve` retry can
+                    // never win fairly — arm the fair reservation instead.
+                    arm_pending_deferred_reserve(
+                        &mut pending_deferred_reserve,
+                        &deferred_output,
+                        &pane_output_tx,
+                    );
                 }
             }
             _ = render_tick => {
@@ -1442,5 +1579,294 @@ mod tests {
         assert_eq!(msg.msg_type, MessageType::Error);
         let payload: ErrorMsg = msg.decode_payload().unwrap();
         assert!(!payload.message.is_empty());
+    }
+
+    // ── mux-window-switch-output-hang task0003 rework: connection-level
+    // coverage for AC-3 (starvation-freedom) and AC-4 (FR2 progress under a
+    // pending deferred snapshot) — review round 2 findings
+    // `dda847f76f68fea7`/`9361b9b42c69fb92` (round 1 also raised this; every
+    // prior test in this feature drove handlers directly and called
+    // `flush_deferred_output` by hand instead of the real `select!` loop). ──
+
+    use crate::mux::session::pane::{DetachReason, MuxPane, PaneOutputTarget, SharedOutputTarget};
+    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::Ordering as StdOrdering;
+
+    fn no_ack_slot() -> SharedUpgradeAckSlot {
+        Arc::new(StdMutex::new(None))
+    }
+
+    struct CapturingWriter(Arc<StdMutex<Vec<u8>>>);
+    impl std::io::Write for CapturingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Read frames off `client` until a `PaneCreated` has been seen for
+    /// every id in `expected_pane_ids` (ignoring every other frame type
+    /// in between, e.g. `SnapshotRestore`).
+    async fn drain_until_pane_created(
+        client: &mut Framed<tokio::io::DuplexStream, MuxCodec>,
+        expected_pane_ids: &[u32],
+    ) {
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        while seen.len() < expected_pane_ids.len() {
+            let msg = tokio::time::timeout(Duration::from_secs(5), client.next())
+                .await
+                .expect("must not hang waiting for reattach frames")
+                .expect("stream must not end")
+                .expect("frame must decode");
+            if msg.msg_type == MessageType::PaneCreated && expected_pane_ids.contains(&msg.pane_id)
+            {
+                seen.insert(msg.pane_id);
+            }
+        }
+    }
+
+    /// AC-3/AC-4: drives the REAL `handle_connection` `select!` loop over a
+    /// duplex stream (mirroring `mux::daemon`'s own `handle_connection`
+    /// spawn test). Pane A's channel is saturated by 8 background OS threads
+    /// calling `blocking_send` exactly the way `pty_spawn.rs`'s reader
+    /// thread does — the scenario `flush_deferred_output`'s `try_send`/
+    /// `try_reserve` retries lose to systematically (G2). A single producer
+    /// thread and small payloads were tried first and did not reliably
+    /// reproduce the starvation (this test's own red/green history: it
+    /// failed reliably, and only with, this many concurrent producers and
+    /// this payload size before the AC-3 fix existed) — 8 threads racing
+    /// continuously and a 32KB payload per chunk make the channel
+    /// genuinely, continuously saturated rather than momentarily. While
+    /// that saturation is ongoing: a `RequestPaneSnapshot` for pane B is
+    /// deferred, then a `PtyInput` for pane B is sent. Asserts, all within
+    /// a bounded `tokio::time::timeout`:
+    /// - AC-4: the `PtyInput` is processed (the pane's writer observes the
+    ///   exact bytes) and pane A's `PtyOutput` keeps arriving (the
+    ///   connection's own drain arm keeps running, not stalled).
+    /// - AC-3: pane B's deferred `Snapshot` is still delivered — not lost,
+    ///   and not starved indefinitely by pane A's continuous producers.
+    #[tokio::test]
+    async fn connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing()
+     {
+        let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+        const PANE_A: u32 = 1;
+        const PANE_B: u32 = 2;
+        let captured_input: Arc<StdMutex<Vec<u8>>> = Arc::new(StdMutex::new(Vec::new()));
+        {
+            let mut mgr = session_manager.lock().await;
+            let sid = mgr.create_session("default".to_string());
+            let wid = mgr.create_window(sid, "shell".to_string()).unwrap();
+
+            let target_a: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_a = MuxPane::new_test(PANE_A, 80, 24, target_a);
+            mgr.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_a);
+
+            let target_b: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_b = MuxPane::new_test_with_writer(
+                PANE_B,
+                80,
+                24,
+                target_b,
+                Box::new(CapturingWriter(captured_input.clone())),
+            );
+            mgr.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_b);
+        }
+
+        let (server_stream, client_stream) = tokio::io::duplex(16 * 1024);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let conn_task = tokio::spawn(handle_connection(
+            server_stream,
+            session_manager.clone(),
+            shutdown_tx,
+            title_tx,
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            no_ack_slot(),
+        ));
+
+        let mut client = Framed::new(client_stream, MuxCodec::new());
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+        let welcome_payload: WelcomeMsg = welcome.decode_payload().unwrap();
+        let session_id = match welcome_payload {
+            WelcomeMsg::Accepted { sessions, .. } => sessions[0].id,
+            WelcomeMsg::Rejected { reason } => panic!("unexpected rejection: {reason}"),
+        };
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        drain_until_pane_created(&mut client, &[PANE_A, PANE_B]).await;
+
+        // Extract the connection's OWN `pane_output_tx` clone now that pane
+        // A is Connected through it (installed by `collect_reattach_data`
+        // during the Attach above) — the REAL channel `handle_connection`'s
+        // own `select!` loop drains, not a stand-in.
+        let owned_tx: mpsc::Sender<PtyOutputChunk> = {
+            let mgr = session_manager.lock().await;
+            let pane = mgr
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .get(&PANE_A)
+                .unwrap();
+            match &*pane.output_target.lock().unwrap() {
+                PaneOutputTarget::Connected(tx) => tx.clone(),
+                PaneOutputTarget::Detached { .. } => {
+                    panic!("pane A must be Connected after attach, still Detached")
+                }
+            }
+        };
+
+        // Background OS thread saturating pane A's channel via
+        // `blocking_send` — exactly the shape `pty_spawn.rs`'s reader
+        // thread uses (AC-3's stated scenario).
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut producers = Vec::new();
+        for _ in 0..8 {
+            let stop_clone = stop.clone();
+            let producer_tx = owned_tx.clone();
+            producers.push(std::thread::spawn(move || {
+                while !stop_clone.load(StdOrdering::Relaxed) {
+                    if producer_tx
+                        .blocking_send(PtyOutputChunk::pty_output(PANE_A, vec![b'x'; 32768]))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }));
+        }
+
+        // Give the producer time to actually saturate the channel (a
+        // parked `blocking_send` waiter) before issuing the request this
+        // test is about.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        client
+            .send(MuxMessage {
+                msg_type: MessageType::RequestPaneSnapshot,
+                pane_id: PANE_B,
+                payload: Vec::new(),
+            })
+            .await
+            .unwrap();
+        client
+            .send(MuxMessage {
+                msg_type: MessageType::PtyInput,
+                pane_id: PANE_B,
+                payload: b"hi".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        let mut saw_output_for_pane_a = false;
+        let mut saw_snapshot_for_pane_b = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !(saw_output_for_pane_a && saw_snapshot_for_pane_b) {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "AC-3/AC-4: connection must keep forwarding pane A's output AND \
+                 deliver pane B's deferred snapshot within a bounded time despite \
+                 sustained saturating output; saw_output_for_pane_a={saw_output_for_pane_a} \
+                 saw_snapshot_for_pane_b={saw_snapshot_for_pane_b}"
+            );
+            let msg = tokio::time::timeout(remaining, client.next())
+                .await
+                .expect("must not hang")
+                .expect("stream must not end")
+                .expect("frame must decode");
+            match (msg.msg_type, msg.pane_id) {
+                (MessageType::PtyOutput, PANE_A) => saw_output_for_pane_a = true,
+                (MessageType::Snapshot, PANE_B) => saw_snapshot_for_pane_b = true,
+                _ => {}
+            }
+        }
+
+        // AC-4: the PtyInput must have been processed (the write is
+        // synchronous inside `route_message`, strictly before any later
+        // frame the loop above already observed).
+        assert_eq!(
+            *captured_input.lock().unwrap(),
+            b"hi",
+            "AC-4: PtyInput for pane B must be processed while pane A's output \
+             saturates the channel"
+        );
+
+        stop.store(true, StdOrdering::Relaxed);
+        drop(client);
+        conn_task.abort();
+        // Dropping `client` closes the duplex pair, which fails the
+        // connection's own sends/receives and ends `handle_connection`,
+        // which drops `pane_output_rx` — every subsequent `blocking_send`
+        // on `producer_tx` then observes `Closed` and the thread exits.
+        // `spawn_blocking` so this async test doesn't itself block on a
+        // native thread join.
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || {
+                for p in producers {
+                    p.join().unwrap();
+                }
+            }),
+        )
+        .await
+        .expect("producer threads must exit once the channel closes")
+        .expect("spawn_blocking must not panic");
     }
 }

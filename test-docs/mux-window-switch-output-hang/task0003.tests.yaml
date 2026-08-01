@@ -1,0 +1,195 @@
+task_id: task0003
+
+# Baseline (step 4a, this worktree, before any change):
+#   CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
+#   2945 passed; 7 failed; 3 ignored — all 7 failures confined to tabs::tests::*
+#   (a module this task's diff never touches: expected_files are
+#   mux/ipc/handlers.rs, mux/ipc/pane.rs, mux/ipc/connection.rs,
+#   feature-docs/.../SPEC.md only). Matches task0001/task0002's own documented
+#   baseline exactly.
+#
+# Final (same command, after every change in this task):
+#   2955 passed; 7 failed; 3 ignored — IDENTICAL 7-test failure set (strict
+#   subset, in fact equal set). mux:: scoped run: 632 passed; 0 failed; 2
+#   ignored (up from task0002's 613/613 — the +19 are this task's new tests).
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::session::pane::tests::deferred_output_queue_never_drops_visibility_resumes_past_the_former_cap
+      - mux::session::pane::tests::deferred_output_queue_dedupes_repeated_visibility_resume_for_same_pane
+      - mux::ipc::handlers::tests::handle_set_visibility_resumes_every_pane_even_when_candidates_exceed_the_former_cap
+    red_confirmed: true
+    red_reason: >-
+      Directly observed: temporarily reverted DeferredOutputQueue::defer_visibility_resume
+      to the old (task0002) shared-cap/drop-newest body (`if self.items.len() >=
+      MAX_DEFERRED_ITEMS { return; }`, no dedup) and re-ran these three tests —
+      all failed: "distinct-pane visibility resumes must never be dropped for
+      capacity: left: 8 right: 19", "repeated resume requests for the same pane
+      must deduplicate: left: 3 right: 1", "every candidate pane's resume must
+      be deferred, none dropped for capacity: left: 8 right: 11". Restored the
+      fix and re-ran — all green, and the full mux:: suite (632 tests) stayed
+      green.
+
+  AC-2:
+    tests:
+      - mux::session::pane::tests::deferred_output_queue_coalesces_repeated_chunk_for_same_pane_newest_wins
+      - mux::session::pane::tests::deferred_output_queue_drops_oldest_distinct_pane_chunk_past_the_cap_never_the_newest
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_drops_oldest_distinct_pane_never_the_newest
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_repeated_request_for_same_pane_does_not_grow_queue
+    red_confirmed: true
+    red_reason: >-
+      Directly observed in the same revert as AC-1 (defer_chunk also reverted
+      to the old shared-cap/drop-newest body): all four failed —
+      "a second chunk for the same pane must coalesce, not add a second entry:
+      left: 2 right: 1", "the oldest distinct-pane chunks must be evicted
+      first...: left: [0,1,2,3,4,5,6,7] right: [8,9,10,11,12,13,14,15]"
+      (drop-newest kept the WRONG end), "only the most-recently-requested
+      MAX_DEFERRED_ITEMS panes must receive a snapshot...: left: [1..8]
+      right: [4..11]", "a second request for the same pane must coalesce...:
+      left: 2 right: 1". Restored the fix and re-ran — all green.
+
+  AC-3:
+    tests:
+      - mux::ipc::connection::tests::connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing
+    red_confirmed: true
+    red_reason: >-
+      Directly observed, twice, against two different bugs. First: with the
+      `permit_result` select! arm's `if pending_deferred_reserve.is_some()`
+      guard forced to `if false && ...` (fair mechanism disabled), the test
+      failed reliably (5/5 runs) after the full 10s bound:
+      "saw_output_for_pane_a=true saw_snapshot_for_pane_b=false" — the
+      snapshot was never delivered. This required an aggressive producer
+      setup (8 background OS threads, 32KB payloads each) to reproduce
+      reliably; a single producer thread with 512B payloads did NOT reliably
+      reproduce starvation on this machine (passed even with the mechanism
+      disabled) and was rejected as too weak a regression test. Second: even
+      WITH the mechanism enabled, the test initially still failed the same
+      way — root cause was the `permit_result` arm being listed AFTER
+      `chunk = pane_output_rx.recv()` in the `biased` select!; since that
+      arm is essentially always ready under sustained saturation, `biased`
+      selection never even polled `permit_result`, so it could never
+      register as a semaphore waiter. Reordering `permit_result` before
+      `chunk` (see connection.rs's doc on `arm_pending_deferred_reserve` and
+      the arm itself) fixed it; re-ran 5/5 green (~0.12s each, far under the
+      10s bound). This is carried into the fix's own doc comments as a
+      documented pitfall.
+
+  AC-4:
+    tests:
+      - mux::ipc::connection::tests::connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing
+    red_confirmed: false
+    red_reason: >-
+      Same test as AC-3 (deliberately combined: AC-4's own text asks for a
+      connection-level test driving handle_connection's select! loop while a
+      snapshot is pending — exactly the fixture AC-3 also needs). The
+      "PtyInput is processed" assertion specifically was never independently
+      exercised against a build lacking this task's fix: in the AC-3
+      red-confirmation run (fair mechanism disabled), the test panicked at
+      the earlier "await both flags" loop (timeout) before reaching the
+      captured_input assertion, so that specific check was never evaluated
+      red. This is consistent with the finding text this AC addresses
+      (dda847f76f68fea7/9361b9b42c69fb92): the underlying FR2 progress
+      guarantee (input processed, output forwarding continues) was already
+      true after task0001/task0002 — what was missing was a connection-level
+      TEST exercising it at all (every prior test called handlers/
+      flush_deferred_output directly). This task's contribution for AC-4 is
+      that coverage gap, not a behavior change, hence red_confirmed: false
+      here even though the same test IS a genuine red/green regression test
+      for AC-3.
+
+  AC-5:
+    tests:
+      - mux::session::pane::tests::enqueue_pane_output_chunk_full_channel_defers_without_blocking
+      - mux::ipc::handlers::tests::flush_deferred_output_requeues_chunk_at_front_when_channel_still_full
+      - mux::ipc::handlers::tests::flush_deferred_output_clears_chunk_backlog_when_channel_closed
+      - mux::ipc::handlers::tests::flush_deferred_output_requeues_visibility_resume_at_front_when_channel_still_full
+      - mux::ipc::handlers::tests::flush_deferred_output_clears_visibility_resume_backlog_when_channel_closed
+    red_confirmed: false
+    red_reason: >-
+      No behavior change to red-confirm: `flush_deferred_output`'s Full ->
+      requeue_front + break / Closed -> clear() dispatch (both the Chunk and
+      VisibilityResume arms) is byte-for-byte unchanged from task0002 — this
+      task only rewired the SUCCESS path's permit type (raw mpsc::Permit ->
+      AnyPermit::Borrowed(permit)), which these four tests never reach. What
+      review round 2 finding `6574d4221dcb5efe` identified as missing was
+      COVERAGE of these arms (the only prior FIFO test hand-rolled its own
+      inline copy of the flush loop instead of calling the production
+      function) — these four tests, plus trimming
+      enqueue_pane_output_chunk_full_channel_defers_without_blocking_preserves_fifo
+      (renamed, hand-rolled portion removed) down to
+      enqueue_pane_output_chunk_full_channel_defers_without_blocking, close
+      that gap by calling `flush_deferred_output` itself. All five were green
+      on first run; verified they exercise the intended arm by construction
+      (deliberately shaped setups: exactly one capacity slot freed for the
+      Full-requeue pair, receiver dropped before calling for the
+      Closed-clear pair) rather than by a red/green transition.
+
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Documentation-only criterion (SPEC.md FR3 + DeferredOutputQueue's doc
+      in pane.rs) — not independently testable as a unit test. Verifiable
+      outcome: `cargo check --lib` compiles clean (doc comments are not
+      typechecked but are read as part of this same diff), and the NARROWED
+      guarantee FR3 now states ("delivered within bounded time, ordering
+      relative to already-queued same-pane chunks and other deferred items
+      preserved; NOT guaranteed relative to live PTY output produced by the
+      reader thread after the request") is exactly what AC-3's test proves
+      (bounded-time delivery under sustained reader-thread contention) and
+      what AC-2's tests prove (coalesce/drop-oldest, never-drop-newest) —
+      i.e. the code and the narrowed doc text agree because the SAME tests
+      that exercise the code also demonstrate the boundary the doc now
+      states. The specific false claim corrected ("present in equivalent
+      form even before task0001") is a prose-only fix with no executable
+      surface to test.
+
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Suite-wide regression check, not a single new test. Verifiable outcome:
+      full `--lib -- --test-threads=1` run before (baseline_failures, step
+      4a) and after (final_failures) this task's full diff are IDENTICAL
+      7-test sets, both confined to tabs::tests::* (a module this task never
+      touches). mux:: scoped run went from task0002's documented 613/613 to
+      632/632 (the +19 are this task's new tests: 4 pane.rs overflow-policy
+      tests replacing 2 removed, +1 pane.rs enqueue test rename/trim, +9
+      handlers.rs tests (AC-1/AC-2/AC-5), +1 connection.rs test (AC-3/AC-4),
+      minus 0 removed net). The four round-1 fixes and FR1/FR2 this task was
+      required to keep intact were spot-checked: `enqueue_pane_output_chunk`
+      still a plain non-async fn with no tokio::spawn (unchanged);
+      `flush_deferred_output`/`resolve_pane_and_resume` still the sole
+      re-validation + de-duplication points (unchanged structure, only the
+      permit type threaded through changed); no new `.send().await` /
+      `.reserve().await` was introduced on the connection task's own
+      execution path (the new `reserve_owned()` future is polled ONLY as a
+      `select!` arm, per AC-3's own red-confirmation that this shape does
+      not block the task).
+
+notes: >-
+  Deviations from expected_files: none — all changes are within
+  src-tauri/src/mux/ipc/handlers.rs, src-tauri/src/mux/ipc/connection.rs,
+  src-tauri/src/mux/session/pane.rs, and
+  feature-docs/mux-window-switch-output-hang/SPEC.md (the exact
+  expected_files list). Local build-environment setup only: copied
+  src-tauri/assets/fonts/*.{ttf,otf} from the integration worktree so
+  build.rs does not panic (per orchestrator instruction, not a scope
+  deviation).
