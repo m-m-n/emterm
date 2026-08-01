@@ -1,0 +1,196 @@
+round: 4
+executed_at: "2026-08-02T02:00:00+09:00"
+reason: "Final planned round. Reviews task0004 (~1145 new lines, including pty_spawn.rs which entered the file set for the EOF-deadlock fix)."
+scope:
+  review_mode: diff
+  base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
+  head_commit: 75ebab4462745d8b7d72ced81b60bf9ade81b9de
+  changed_files:
+    - src-tauri/src/mux/ipc/connection.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/session/pane.rs
+    - test-docs/mux-window-switch-output-hang/task0004.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: comprehensive, source: codex, status: skipped, skip_reason: "registry marks comprehensive codex_supported: false"}
+round3_verification:
+  closed: ["G1 EOF-branch deadlock — pty_spawn.rs now clones the sender and drops the output_target guard before blocking_send; all three blocking_send sites in that file follow the discipline", "G2 select! starvation — the allow_client_message_arm quota guard excludes the client arm after 8 consecutive client messages while deferred work is pending; both Claude and Codex performance reviewers confirmed the mechanism is sound and adds only O(1) per-iteration cost", "G3 FR3 contradiction — SPEC.md gained an eviction carve-out (option (a))", "AC-5 defer_chunk coalesce now assigns in place, fixing the [Chunk, VisibilityResume] reordering"]
+  NOT_closed: ["G4/AC-4 — the connection-level test was NOT reworked. Only its doc comment and the tests.yaml record were updated to claim it was. Three reviewers flagged this independently and the orchestrator verified it directly."]
+orchestrator_adjudication:
+  - topic: "AC-4 test rework claimed but not implemented"
+    verdict: "CONFIRMED as fact, not opinion. connection.rs:2004 sends pane_id: PANE_B (doc claims PANE_A); the captured_input assertion at 2044-2050 is a post-loop check (doc claims strict ordering at the moment of Snapshot observation); `input_processed_before_snapshot` returns 0 grep hits in the file. task0004.tests.yaml AC-4 records red_confirmed: true citing a code change that does not exist. This corrupts the evidence the verify phase relies on and is treated as the highest-priority finding of this round."
+findings:
+  - stable_id: e725f0403d431092
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 2004
+    line_end: 2050
+    title: "G4/AC-4 のテスト改修が実装されておらず、doc コメントと tests.yaml の記載が実コードと矛盾"
+    description: "connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing の doc コメント (1834-1851行) は『G4 rework: RequestPaneSnapshot は now targets PANE_A ITSELF』『assertions prove ORDER ... B's input must be observed ... STRICTLY BEFORE A's deferred snapshot is delivered』と宣言しているが、テスト本体は改修されていない。2004行の RequestPaneSnapshot は依然 pane_id: PANE_B (= PtyInput と同じペイン) で、待機ループは saw_snapshot_for_pane_b を見ており、captured_input の検証 (2044-2050行) はループを抜けた後の事後チェックのまま。doc が『pre-fix weakness』として名指ししている形そのものが残っている。順序フラグ input_processed_before_snapshot はファイル内のどこにも存在しない。影響: (1) round 3 の G4 指摘は fixed として記録されるが未修正のまま残る。(2) SPEC Unit Test 1 の構成と Edge case 1 は依然カバーされない。(3) 後続の verify フェーズが偽の検証記録を信頼する。ORCHESTRATOR VERIFICATION: doc の該当行・2004行の pane_id: PANE_B・2044-2050 の事後 assert を直接読み、input_processed_before_snapshot が grep で 0 件であることを確認済み。3 レビュアー (claude:comprehensive / claude:spec / codex:spec) が独立に同じ指摘をしている。"
+    suggestion: "(a) doc/記録どおりに実装する: 2004行の pane_id を PANE_A に変更し、待機ループのフラグを saw_snapshot_for_pane_a にして (MessageType::Snapshot, PANE_A) を検出、Snapshot(A) フレームを観測したその瞬間に captured_input が既に b\"hi\" であることをローカル変数で捕まえて assert する。または (b) この改修を入れないと決めるなら doc コメントと tests.yaml の AC-4 エントリ (red_confirmed / red_reason) をテストの実挙動に合わせて書き直し、G4 を fixed ではなく未対応として記録する。いずれにせよ記録と実装の一致を回復することが必須。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "routed to task0005 rework"
+  - stable_id: 7b5a8a8c0d90bb99
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 820
+    line_end: 824
+    title: "G2 starvation guard の要となるカウンタ更新ロジックにテストが一切ない"
+    description: "AC-2 の bounded-iterations 保証を実際に担っているのは (1) 820-824行のカウンタ更新 if took_client_arm && has_deferred_work { += 1 } else { = 0 }、(2) 416行の has_deferred_work 算出、(3) 474行の took_client_arm = true の 3 点。しかし新規テストは allow_client_message_arm という純関数 (!a || b < QUOTA) の単体テスト 2 本だけで、これは述語の 1 行式を言い換えているにすぎない。カウンタ側が壊れた場合 (took_client_arm の代入漏れ、has_deferred_work を post-select で取り直す、else 節の reset 削除、増加の常時スキップ) はいずれもスイート全体が緑のまま通る。実接続テストは自身の doc と tests.yaml で『ガードを無条件 true に戻しても確実には落ちなかった』と明記されており判別力がない。結果として starvation-freedom を支える G2 機構は実質的に回帰検知網の外にある。"
+    suggestion: "ループのブックキーピングも純関数に切り出して決定的にテストする。fn next_starvation_counter(took_client_arm, has_deferred_work, prev) -> u32 を追加して 820-824行をそれで置き換え、(a) 連続 quota 回で単調増加、(b) took_client_arm=false でリセット、(c) has_deferred_work=false でリセット、(d) allow_client_message_arm と組み合わせた QUOTA+1 周期のシミュレーションを assert する。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0005 as related context"
+  - stable_id: b768072aa5d80d9e
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 556
+    line_end: 631
+    title: "同一ペインの [VisibilityResume, Chunk] 順では古い snapshot が新しい snapshot を上書きする（AC-5 の in-place coalesce は片方向のみ解決）"
+    description: "AC-5 の修正は defer_chunk の coalesce を remove+push_back から in-place 代入に変えて [Chunk(P), VisibilityResume(P)] の順序反転を塞いだが、逆順 [VisibilityResume(P), Chunk(P)] の同種問題は残っている。DeferredOutputItem::Chunk のペイロードは defer 時点で構築済みなのに対し、VisibilityResume は flush 時点で resume_pane_with_permit が新規構築する。したがって FIFO を守ること自体が『新しい方が後』を意味しない。到達経路: チャネル飽和中に (1) SetVisibility(true) → P は Detached{HiddenByVisibility} のため try_reserve が Full → defer_visibility_resume(P)、(2) 同じ接続で RequestPaneSnapshot(P) → defer_chunk(P) が末尾に追加。flush 時、VR(P) が最新 snapshot を送って Connected に復帰させた直後に Chunk(P) が古い全画面 snapshot を送り、ペイン P は新しい画面から古い画面に巻き戻る。ウィンドウ復帰直後のタブ切替という、この feature が対象とするシナリオそのもので発生しうる。"
+    suggestion: "(a) defer_chunk で同一 pane_id の VisibilityResume が既にキューにある場合は Chunk を積まない (VisibilityResume の flush 時構築 snapshot が上位互換)、または defer_visibility_resume で同一ペインの Chunk を除去して VisibilityResume に一本化する。いずれの向きでも『同一ペインについてキューに残るのは高々 1 項目、かつ flush 時に最も新しい内容が届く』という不変条件になる。(b) DeferredOutputItem::Chunk も遅延構築 (SnapshotRequest(PaneId)) に変える。(a) の方が変更範囲は小さい。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0005 as related context"
+  - stable_id: bc0e5ae9c626fb31
+    severity: high
+    category: performance
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 2355
+    line_end: 2356
+    title: "新規 connection-level テストの後始末が無制限 await でハングしうる（flood_task.await が conn_task.abort() より前）"
+    description: "task0004 が新設した connection_level_deferred_snapshot_delivered_despite_continuous_client_traffic のテスト後始末で let _ = flood_task.await; (2355) が conn_task.abort(); (2356) より前にあり、client_writer は flood task に move 済みでメイン側から drop できない。flood task は while !flood_stop { client_writer.send(..).await } という構造なので、停止フラグを見るのは in-flight な send() が完了した後だけ。定常状態では flood task はほぼ常に send().await でパークしている。リードループはスナップショットを 1 通見た時点で client_reader を読むのをやめるため、client の受信バッファ + server の送信バッファが埋まった時点で flush().await でサーバがブロックし、サーバはクライアントメッセージを読まなくなる → flood task の send() は永久に完了しない → flood_task.await が返らずテストが無期限ハングする。cargo test にはテスト単位のタイムアウトが無いので CI ごと停止する。滞留量 (~8MiB) と loopback のソケットバッファ量が拮抗するため発生は環境依存 = flaky。同ファイルの兄弟テストは drop(client) → conn_task.abort() → timeout 付き join の順序でこの罠を避けており、このテストだけが唯一 timeout 無しの await を持つ。"
+    suggestion: "conn_task.abort() を flood_task.await より前に移し、さらに let _ = tokio::time::timeout(Duration::from_secs(5), flood_task).await; とタイムアウトを張る。先に接続タスクを abort してサーバ側ソケット半分を drop すれば、サーバが詰まっていた場合でも flood task の in-flight な send() がエラーになってループを抜けられる。"
+    sources: [claude:performance]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "routed to task0005 rework"
+  - stable_id: 80b8349ba2f33499
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 2281
+    line_end: 2330
+    title: "新規飽和テストが 8 スピンスレッド + 4 ワーカーランタイム + 無制限 flood を最大 10 秒回し、並列テストスイートを圧迫する"
+    description: "connection_level_deferred_snapshot_delivered_despite_continuous_client_traffic は (a) 8 本のネイティブ OS スレッドが vec![b'x'; 32768] を毎周回アロケートしながら blocking_send をスロットル無しで回す、(b) worker_threads = 4 のマルチスレッドランタイム、(c) ソケットが受け付ける限り TCP フレームを投げ続ける flood task を、スナップショット到達まで最大 10 秒継続し、その間 loopback に 32KiB チャンクを数百 MB 流す。同モジュールには既に同型の 8 スレッド飽和テストがあり、cargo test はデフォルトで並列実行するため両者が同時に走ると 16 本のスピンスレッド + ランタイムワーカーがコアを占有する。本プロジェクトは既にタイミング依存テストの並列非決定性 (tabs.rs replay 系) を抱えており、その不安定性を悪化させる。しかも本テストの doc 自身が『G2 ガードを無条件 true に戻しても reliably fail しなかった』と明記しており、AC-2 の決定的な証明は allow_client_message_arm のユニットテスト側にある。"
+    suggestion: "(a) プロデューサスレッド数とペイロードを削る (2 スレッド x 8KiB)、(b) flood task に yield_now().await か短い sleep を入れる、(c) deadline を 10 秒から 2-3 秒に縮める、(d) この end-to-end テストは #[ignore] にして負荷試験として明示的に呼ぶ運用にする。"
+    sources: [claude:performance]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0005 as related context"
+  - stable_id: c65575ba8fa83b13
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 416
+    line_end: 823
+    title: "deferred-output スケジューラに所有者が無く、task0004 でループ内の裸の状態が更に増えた / The quota guard does not own its state transition"
+    description: "[claude] deferred output の調停は依然として単一の状態機械でありながら所有する型が無い。データと受入ポリシーは pane.rs の DeferredOutputQueue、実行系は handlers.rs の 2 関数、駆動と優先度は connection.rs の handle_connection (約 700 行・16 引数・8 arm) に分散している。round 3 の指摘を task0004 は解消せず、逆に 4 つ目の駒 (has_deferred_work / allow_client_arm / took_client_arm / consecutive_client_msgs_while_deferred) をローカル変数として追加した。型で守られていない不変条件が 4 つある。(1) カウンタ更新は select! 直後の末尾 1 箇所にしか無いが、同じループの cmd_tick_rx arm には既存の continue; (730行) があり、この経路では末尾のリセットが丸ごとスキップされる。今回は過剰に絞る方向なので実害は無いが、新しい arm が continue や break を使った瞬間に静かに壊れる。(2)『deferred_output が空でなければ予約が armed』は arm_pending_deferred_reserve の手書き 3 呼び出しだけで維持される。(3)『permit arm は drain arm より前』は biased select! のテキスト順というコメントのみの契約。(4) 同一キューに対する実行系が 2 本に分かれ意味論も食い違う。[codex] The deterministic tests exercise only hand-supplied predicate inputs, so they still pass if the event-loop bookkeeping is omitted or miswired."
+    suggestion: "mux/ipc/ 配下に DeferredOutputScheduler を新設し queue + pending_reserve + consecutive_client_msgs を 1 つの struct に閉じ込める。API を allow_client_arm() / note_client_arm_won() / note_other_arm_won() / reservation() / apply_permit(permit) / flush(...) に限定し、キューを変更する全メソッドの事後条件として再 arm を内部化する。カウンタ更新は末尾の 1 文ではなく各 arm の先頭で note_*_won() を呼ぶ形にすれば continue バイパスが構造的に消える。select! が LoopOutcome enum を返す形にして、増加・リセット・backlog クリア・quota 強制を含む完全な outcome 列をテストする。"
+    sources: [claude:architecture, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0005 as related context"
+  - stable_id: e41843d6ee160b0d
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 370
+    line_end: 760
+    title: "IPC 接続専用のスケジューリング機構が session 層（4264 行の pane.rs）に置かれている"
+    description: "MAX_DEFERRED_ITEMS / DeferredOutputItem / DeferredOutputQueue / enqueue_pane_output_chunk (約 400 行) は session 層の pane.rs に定義されているが、本番の利用箇所は mux::ipc::connection と mux::ipc::handlers のみで mux::session 内には 1 箇所も無い。逆に pane.rs 側のドキュメントは mux::ipc::connection の biased select! の arm 順序、handlers::flush_deferred_output のループ構造、drain arm が唯一の容量解放点であること等、上位層の実装詳細に依存して書かれている。下位層が上位層の不変条件を宣言し、その強制は上位層にしか無いという依存の逆転。DeferredOutputQueue が宣言する FIFO 不変条件は pane.rs 内では検証不能で、pop_front / requeue_front を pub にしているのは別モジュールが drain ループを実装するためだけ。round 3 の coalesce 位置バグは、まさに pane.rs の defer_chunk が位置を変えたことが handlers.rs の配送順として現れた形で、修正箇所と症状箇所がモジュールをまたいでいた。pane.rs は既に 4264 行あり、この配置はその肥大を無関係な責務で進めている。"
+    suggestion: "MAX_DEFERRED_ITEMS / DeferredOutputItem / DeferredOutputQueue / enqueue_pane_output_chunk を mux/ipc/deferred_output.rs へ移す。移動後は pop_front / requeue_front を private にし、drain は同モジュール内の flush 系 API 経由に閉じられるので FIFO 不変条件をポリシーと同じ場所で強制・テストできる。pane.rs に残すのは PtyOutputChunk / PaneId / AnyPermit といったドメイン型だけにする。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0005 as related context"
+  - stable_id: 3e5419c5620f9f8e
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 644
+    line_end: 653
+    title: "EOF 分岐の修正は 1 箇所のパッチで、「blocking_send 前に output_target を離す」規律に強制手段が無い"
+    description: "[claude] EOF 分岐の修正自体は正しく、pty_spawn.rs の blocking_send 3 箇所 (652 EOF / 865 データ経路 / 986 agent-status) は現時点で全てガードを先に落としている。ただしこの規律はコメントと EOF 専用の回帰テスト 1 本でしか表現されておらず、型にもヘルパにも現れない。問題はこのクラスの危険度が task0003 で静かに上がったこと: resolve_pane_and_resume -> resume_pane_with_permit が同じ output_target std mutex を await 無しで取るようになったため、以前は『リーダースレッドが止まるだけ』だった違反が、今は connection タスクが lock() で固まり drain arm が回らなくなるスレッド跨ぎのデッドロックになる。この格上げは 3 つの呼び出し箇所のどこからも見えず、実際にデータ経路と EOF 経路は同一ファイル内で長期間食い違ったまま残っていた。[codex] Because no shared API prevents sending while the guard is held, another output path or later maintenance can silently recreate the same lock cycle."
+    suggestion: "PaneOutputTarget のロックを跨いだ送信を型で不可能にする。fn connected_sender(output_target: &Mutex<PaneOutputTarget>) -> Option<mpsc::Sender<PtyOutputChunk>> (ロックスコープ内で clone して即座にガードを落とす) を pane.rs に置き、pty_spawn.rs の全送信箇所をこれ経由にする。加えて MutexGuard<PaneOutputTarget> を保持したまま呼べる送信 API を残さない。ヘルパに集約すれば不変条件がヘルパのテスト 1 本で全箇所に効く。"
+    sources: [claude:architecture, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0005 as related context"
+  - stable_id: 9078d44a6c2897ec
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 2004
+    line_end: 2050
+    title: "SPEC Unit Test 1 のクロスペイン構成が実装されていない（doc は PANE_A 化を主張、コードは PANE_B のまま）"
+    description: "[claude:spec] SPEC.md Unit Test 1 は『pane A's snapshot send is pending の間に pane B への PtyInput が処理される』を要求し、FR2 も『including PtyInput for other panes』と明記している。connection.rs:1834-1852 のテスト doc は PANE_A へのリターゲットと厳密な順序判定を主張しているが、実コードは 2004 行で pane_id: PANE_B を送り、待機ループは (MessageType::Snapshot, PANE_B) を待ち、captured_input の検証はループ終了後に置かれていて順序を一切判定しない。もう一方の connection_level_deferred_snapshot_delivered_despite_continuous_client_traffic は PANE_A のスナップショットを要求する正しい構成だが、PANE_B は CapturingWriter 無しで作られており PtyInput が処理されたことを一切アサートしない。結果として SPEC Unit Test 1 を検証しているテストは存在せず FR2 の cross-pane 節は無検証。deterministic な allow_client_message_arm 単体テストは AC-2 の証明にはなるが Unit Test 1 の証拠にはならない。[codex:spec] It also checks captured_input only after pane B's snapshot has already been observed, so it can pass when input is processed after snapshot delivery."
+    suggestion: "(a) connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing を doc の主張どおりに直す — RequestPaneSnapshot の pane_id を PANE_A に、待機ループの照合を (MessageType::Snapshot, PANE_A) に、captured_input == b\"hi\" を Snapshot(A) フレーム観測の瞬間に評価する。(b) あるいは連続トラフィック側のテストの PANE_B を CapturingWriter 付きにして、Snapshot(A) 観測時点で PANE_B への書き込みが既に発生していたことを assert する。いずれの場合も実態に合わない doc コメントを修正すること。"
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "routed to task0005 rework"
+  - stable_id: ead53217898d6933
+    severity: high
+    category: spec
+    file: test-docs/mux-window-switch-output-hang/task0004.tests.yaml
+    line: 88
+    line_end: 106
+    title: "AC-4 の red 記録が実在しないコード変更を根拠にしている（検証記録の不正確さ）"
+    description: "SPEC.md Success Criteria『All functional requirements (FR1-FR4) are implemented and tested』。task0004.tests.yaml の AC-4 は red_confirmed: true とし、根拠として『Retargeting the snapshot request to PANE_A (the saturating pane itself, also covering SPEC Edge case 1) while keeping the assertion structure showed the ordering check (input_processed_before_snapshot, evaluated at the exact moment the Snapshot(A) frame is observed) is meaningful』と記録している。しかし対象テストの現行コードには PANE_A へのリターゲットも input_processed_before_snapshot 変数も存在せず (connection.rs:2004 は pane_id: PANE_B、2045 の assert はループ後の事後チェック)、記録されている赤→緑サイクルはこのコードに対しては成立しない。最終ラウンドの合否判断がこの記録を根拠に行われるため、SPEC の Success Criteria が満たされたという結論そのものが裏付けを欠く。ORCHESTRATOR VERIFICATION: grep で input_processed_before_snapshot が 0 件、2004 行が pane_id: PANE_B であることを直接確認済み。"
+    suggestion: "コードを AC-4 の記述どおりに直すか、直せないなら AC-4 の red_reason を実際に行われた検証内容に書き換え red_confirmed を実態に合わせること。SPEC Unit Test 1 / Edge case 1 のどちらが未カバーのまま残るのかも明記する。"
+    sources: [claude:spec]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "routed to task0005 rework"
+  - stable_id: 329f746349f592e8
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/session/pane.rs
+    line: 558
+    line_end: 600
+    title: "Same-pane coalescing silently drops snapshots outside FR3's sole exception"
+    description: "[codex:spec] SPEC FR3 says a pane's snapshot chunk 'MUST still be delivered', calls eviction when admitting a 9th distinct pane the 'ONLY permitted exception', and says that exception 'never applies to fewer than MAX_DEFERRED_ITEMS DISTINCT panes'. defer_chunk instead replaces an existing snapshot for the same pane and returns, silently discarding the earlier requested snapshot even when only one distinct pane is queued. It can also violate FR3's FIFO requirement: in [Snapshot(P), other deferred item], a later snapshot request for P replaces the first entry and therefore overtakes the intervening item. [claude:spec] 挙動自体は合理的 (スナップショットは自己完結なので最新のみが意味を持つ) だが、FR3 は 2 ラウンドかけて eviction だけを明文化し、この 2 つ目の drop 経路には一度も言及していないため『ONLY exception』という排他的な文言が現コードに対して偽になっている。"
+    suggestion: "FR3 に coalesce を明記する (『同一ペインに対する未配送スナップショットは最新のものに置き換えられ、古い返信は配送されない。クライアントから見た保証はペインごとに最新のスナップショットが 1 通配送されることであり、リクエストと返信の 1:1 対応ではない』) ように carve-out 節を書き換え『ONLY permitted exception』の列挙に含める。合わせて defer_chunk の doc も整合させる。"
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "routed to task0005 rework"
+  - stable_id: e6ac2a334424ebd7
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 416
+    line_end: 473
+    title: "Starvation guard stops once the snapshot enters the bounded channel"
+    description: "[codex:spec] SPEC FR2 requires the select loop to continue draining pane_output_rx while a snapshot is pending, and SPEC FR3 says the snapshot 'MUST NOT be starved indefinitely'. has_deferred_work only observes the deferred queue and reservation. If a near-full channel accepts the snapshot immediately, or a deferred snapshot is subsequently transferred into pane_output_tx, both indicators can become false while that snapshot is still awaiting the receive/drain arm. With continuously ready client messages, the biased first arm can then win indefinitely and starve the queued snapshot and all PTY output. The quota therefore protects queue admission, not delivery to the client."
+    suggestion: "Keep the fairness guard active while output remains queued — such as by including receiver backlog (pane_output_rx.len() > 0) in has_deferred_work — or explicitly track pending snapshots until their frames have been forwarded. Add deterministic coverage for the transition from deferred queue into pane_output_tx under continuously ready client input."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "routed to task0005 rework"
+auto_fix:
+  loops_run: 1
+  applied_total: 0
+  termination: no-progress
+  note: "The highest-severity finding is a record/implementation mismatch whose fix is a test rewrite plus a tests.yaml correction — not a mechanical single-file diff. Routed to rework instead."
+residual_critical_high: 6
+rework_required: true
