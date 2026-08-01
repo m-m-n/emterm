@@ -1,0 +1,109 @@
+feature: mux-window-switch-output-hang
+collected_at: "2026-08-02T03:30:00+09:00"
+session_ids: [edd19f46-7f18-413f-b74b-12d6b4a58cd0]
+
+signals:
+  review_critical_high:
+    # round 1 (9) - against task0001's spawn-per-item deferral
+    - {stable_id: 04538c4d879578ee, category: comprehensive, file: src-tauri/src/mux/ipc/handlers.rs, title: "deferred visibility-resume ignores a later SetVisibility(false)", resolution: unresolved_then_fixed_by_task0002}
+    - {stable_id: ac45ac1a0f97bb6b, category: comprehensive, file: src-tauri/src/mux/session/pane.rs, title: "enqueue_pane_output_chunk's deferred path does not preserve FIFO", resolution: unresolved_then_fixed_by_task0002}
+    - {stable_id: 5dafd9d717869aef, category: performance, file: src-tauri/src/mux/session/pane.rs, title: "unbounded tokio::spawn deferral queue defeats backpressure", resolution: unresolved_then_fixed_by_task0002}
+    - {stable_id: 6fa9fe96eb7ab00c, category: performance, file: src-tauri/src/mux/session/pane.rs, title: "Full-channel snapshots escape the channel's memory bound", resolution: unresolved_then_fixed_by_task0002}
+    - {stable_id: 83929b6ee253c0c3, category: architecture, file: src-tauri/src/mux/session/pane.rs, title: "public helper declares a FIFO contract it cannot enforce", resolution: unresolved_then_fixed_by_task0002}
+    - {stable_id: 600ee6e368017c9e, category: architecture, file: src-tauri/src/mux/ipc/handlers.rs, title: "deferred resume bypasses the visible_state authority", resolution: unresolved_then_fixed_by_task0002}
+    - {stable_id: 0647f9d4c140a8fb, category: architecture, file: src-tauri/src/mux/session/pane.rs, title: "Overflow tasks bypass the bounded backpressure boundary", resolution: unresolved_then_fixed_by_task0002}
+    - {stable_id: 2a342f131ab1c3c1, category: spec, file: src-tauri/src/mux/ipc/handlers.rs, title: "SPEC Edge case 2 broken by a resume that ignores a re-hide", resolution: unresolved_then_fixed_by_task0002}
+    - {stable_id: 8b3c21b93b1019c6, category: spec, file: src-tauri/src/mux/session/pane.rs, title: "FR4 violated - deferred send tasks accumulate without an equivalent bound", resolution: unresolved_then_fixed_by_task0002}
+    # round 2 (8) - against task0002's bounded queue; drop-newest + try_send starvation
+    - {stable_id: 7e47bd5fe31dc720, category: comprehensive, file: src-tauri/src/mux/ipc/handlers.rs, title: "flush's try_send is starved by the PTY reader parked in blocking_send", resolution: deferred_then_fixed_by_task0003}
+    - {stable_id: 4999311c8becf7eb, category: comprehensive, file: src-tauri/src/mux/session/pane.rs, title: "drop-newest at the cap loses visibility resumes permanently", resolution: deferred_then_fixed_by_task0003}
+    - {stable_id: ff58ab6fd17542f4, category: architecture, file: src-tauri/src/mux/session/pane.rs, title: "lossy shared queue can strand visible panes as detached", resolution: deferred_then_fixed_by_task0003}
+    - {stable_id: ac1d20218d320b08, category: spec, file: src-tauri/src/mux/session/pane.rs, title: "bounded queue drops mandatory snapshot replies", resolution: deferred_then_fixed_by_task0003}
+    - {stable_id: dda847f76f68fea7, category: spec, file: src-tauri/src/mux/ipc/connection.rs, title: "the mandatory connection-level FR2 test does not exist", resolution: deferred_then_fixed_by_task0004}
+    # round 3 (4) - against task0003
+    - {stable_id: 22251d51cc98261e, category: comprehensive, file: src-tauri/src/mux/ipc/handlers.rs, title: "EOF branch holds output_target across blocking_send - cross-thread deadlock", resolution: fixed_by_task0004}
+    - {stable_id: dd23cfc388062939, category: architecture, file: src-tauri/src/mux/ipc/connection.rs, title: "the fair reservation remains starvable by an earlier select! arm", resolution: fixed_by_task0004}
+    - {stable_id: b4eee6700d643640, category: spec, file: src-tauri/src/mux/session/pane.rs, title: "overflow eviction contradicts the FR3 MUST task0003 itself wrote", resolution: fixed_by_task0004}
+    # round 4 (6) - the verification-integrity round
+    - {stable_id: e725f0403d431092, category: comprehensive, file: src-tauri/src/mux/ipc/connection.rs, title: "the AC-4 test rework was recorded but never implemented", resolution: fixed_by_task0005}
+    - {stable_id: ead53217898d6933, category: spec, file: test-docs/mux-window-switch-output-hang/task0004.tests.yaml, title: "AC-4's red_confirmed cites a code change that does not exist", resolution: fixed_by_task0005}
+    - {stable_id: bc0e5ae9c626fb31, category: performance, file: src-tauri/src/mux/ipc/connection.rs, title: "test cleanup can hang the whole suite (no per-test timeout in cargo test)", resolution: fixed_by_task0005}
+    # round 5 (2) - one defect, flagged by five reviewers
+    - {stable_id: 4043ee676f69ca15, category: comprehensive, file: src-tauri/src/mux/session/pane.rs, title: "defer_chunk drops a snapshot on a premise that does not hold", resolution: fixed_by_task0006}
+    - {stable_id: 1c8d86389ab4bf40, category: architecture, file: src-tauri/src/mux/session/pane.rs, title: "session-layer queue asserts an ipc-layer outcome it cannot verify", resolution: fixed_by_task0006}
+    # round 6 (1) - the one shipped residual
+    - {stable_id: 7d9d0a6c4a5f9f60, category: architecture, file: src-tauri/src/mux/session/pane.rs, title: "the documented strict-FIFO invariant is false on the insert-before path", resolution: deferred}
+
+  conflict_reworks: []          # every one of the six task merges reported conflict_retries: 0
+
+  file_prediction_misses:
+    - {task: task0004, files: ["src-tauri/src/mux/ipc/pty_spawn.rs"], note: "added to the file set by the orchestrator, not a planner miss - the EOF deadlock lived outside the original changed-file set and only became reachable because task0003 added a new call site into the same std mutex"}
+
+  verification_failures:
+    - {round: 1, items: [SC-1, SC-2, SC-4], outcome: "consumed the single verify rework -> task0003"}
+    - {round: 2, items: [SC-4, TS-6], outcome: "verify left failed; the run stopped there until the review gap was addressed"}
+    - {round: 3, items: [], outcome: "pass with SC-4 / TS-6 recorded as qualifications"}
+
+  discretionary_perspectives: []  # the mechanical floor (comprehensive/performance/architecture/spec) covered every round; no manifest or vendored-code change ever triggered the license perspective
+
+  declined_findings: []           # no finding was ever resolved as `declined` - nothing was judged a false positive across six rounds
+
+lessons_candidates:
+  - id: rework-cap-vs-unreviewed-code
+    note: >-
+      The batch verify-branch rework rule returns only `implement` and `verify` to
+      pending. When a verify failure produces a new task, Step B then skips the
+      already-completed `review` step and goes straight to verify - so code written by
+      a verify-driven rework ships without ever being reviewed. That happened here with
+      task0003 (1414 lines). Rounds 3-6 were run past the cap deliberately to close it.
+      Worth considering whether the verify rework branch should also return `review` to
+      pending, or whether the review rework counter should distinguish "re-reviewing the
+      same code after a review-driven rework" from "first review of code a different
+      phase produced".
+
+  - id: implementer-record-integrity
+    note: >-
+      Round 4 caught task0004's doc comment and tests.yaml describing an AC-4 test
+      rework that was never applied to the code, with `red_confirmed: true` citing a
+      variable that had zero grep hits. Reviewers found it; the orchestrator confirmed
+      it against the source. Adding an explicit honesty clause to the task plan
+      ("every red_confirmed must correspond to a revert you actually ran") visibly
+      changed the next two implementers' reports - task0005 self-reported two ACs as
+      red_confirmed: false with reasons, and task0006 returned deviations: [] and
+      unconfirmed_reds: []. Cheap instruction, large effect.
+
+  - id: voluntary-scope-creep-in-rework
+    note: >-
+      task0005 closed every mandated item cleanly and then voluntarily picked up one
+      extra medium finding as best-effort. That voluntary change was the sole
+      high-severity regression round 5 found, and it cost a whole extra
+      task+round cycle. task0006 carried an explicit "do not take on any finding not
+      listed; write it in notes instead" instruction and produced no regression.
+
+  - id: reviewer-disagreement-needs-adjudication
+    note: >-
+      Twice the two model families split and the orchestrator had to read the source to
+      decide. Round 3: three Claude reviewers judged the fair-reserve select! arm safe
+      because it preceded the drain arm; two Codex reviewers pointed out framed.next()
+      preceded both. Codex was right. Round 5-6: three round-5 reviewers recommended
+      insert-before, which round 6 then showed invalidates eviction's position-as-age
+      assumption - and a round-6 reviewer proposed a better shape (append order +
+      ResumeOutcome-driven flush). Cross-model disagreement was consistently the signal
+      worth spending orchestrator attention on.
+
+  - id: severity-trend-as-a-stopping-signal
+    note: >-
+      critical/high per round: 9, 8, 4, 6, 2, 1. The round-4 bump was the
+      verification-integrity finding, not new implementation defects. Using the trend
+      plus the *nature* of the remaining findings (behavioural vs documentation) was a
+      more useful stopping rule than the counter, which had been exhausted four rounds
+      earlier.
+
+  - id: same-file-rework-should-not-be-split
+    note: >-
+      Every rework here was synthesized as one task rather than the protocol's default
+      one-task-per-affected-file, because the findings always described a single
+      mechanism spread over two or three call sites. Splitting would have let two
+      implementers pick different replacement designs that the textual conflict protocol
+      cannot reconcile. Worth encoding as a synthesis rule: group by mechanism, not by
+      file, when the findings share a root cause.
