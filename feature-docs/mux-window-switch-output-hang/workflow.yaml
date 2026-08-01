@@ -27,11 +27,11 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
-    completed_at_commit: 57e356f2540ffbe2b5d8f54590b7d1fd9b77e451
+    completed_at_commit: 6c3f2ca81e0809ead0114156893e8b4ade7d31d2
   - id: review
-    status: pending
+    status: in_progress
     completed_at_commit: 74656c45ffd62fd74b6745d08060bc92c0d5e5ed
   - id: verify
     status: pending
@@ -159,12 +159,13 @@ tasks:
     domains: [concurrency]
     complexity: medium
     requirements: [FR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-window-switch-output-hang/task0006
+    merge_commit: 6c3f2ca81e0809ead0114156893e8b4ade7d31d2
     notes: "Synthesized from reviews/round5.yaml residual critical/high (2, one underlying defect). Round 5 confirmed task0005 closed every mandated item; the single regression came from a medium finding it picked up voluntarily as best-effort. This task therefore carries an explicit no-extra-scope instruction. One behavioural change only (defer_chunk: insert the Chunk before the queued VisibilityResume instead of dropping it - three reviewers converged on this prescription), plus five documentation/record corrections. The DeferredOutputScheduler owning-type refactor stays deferred, with round 5's observation that the deferral cost is compounding recorded for whoever picks it up. review_rework_count goes 3 -> 4."
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 5
   round3_rationale: "task0003 (1414 lines, written under the verify rework) had never been reviewed: the verify branch of the rework rule returns only implement and verify to pending, so Step B skipped the already-completed review step and went straight to verify. Round 3 reviews that new code. batch.review_rework_count is deliberately NOT consumed - that counter caps the review->implement->review deferral loop, not the first review of code introduced by a different phase's rework. Leaving newly written code unreviewed would defeat --batch's purpose of completing the workflow without human intervention."
   perspectives: [comprehensive, performance, architecture, spec]
