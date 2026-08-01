@@ -68,6 +68,8 @@ tasks:
     requirements: [FR1, FR2, FR3, FR4]
     status: pending
     notes: "Synthesized by the orchestrator from review round 1 residual critical/high findings (9). Deviates from batch-mode.md's one-task-per-affected-file synthesis rule on purpose: all nine findings describe a single mechanism (task0001's spawn-a-detached-waiter deferral) that appears at two call sites, so splitting it would let two implementers pick different replacement designs that the textual conflict protocol cannot reconcile. Rationale recorded in tasks/task0002.md."
+
+review:
   status: pending
   rounds_completed: 1
   perspectives: [comprehensive, performance, architecture, spec]
