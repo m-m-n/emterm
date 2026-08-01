@@ -1,0 +1,270 @@
+round: 1
+executed_at: "2026-08-01T21:45:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
+  head_commit: d55d25b1d338b52fff22171a42de611546c7d313
+  changed_files:
+    - src-tauri/src/mux/ipc/connection.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/session/pane.rs
+    - test-docs/mux-window-switch-output-hang/task0001.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: comprehensive, source: codex, status: skipped, skip_reason: "registry marks comprehensive codex_supported: false"}
+findings:
+  - stable_id: 04538c4d879578ee
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 821
+    line_end: 848
+    title: "遅延 visibility-resume が後続の SetVisibility(false) を無視し、隠れたペインを Connected に戻す"
+    description: "handle_set_visibility の TrySendError::Full 分岐で spawn される遅延タスクは、permit 取得後に visible_state を再確認しない。シーケンス: (1) visible=true・チャネル満杯 → pane P の resume を遅延 spawn、(2) 遅延タスクが走る前に visible=false が届く。隠れエッジは evaluate_output_target(pane, false, false, ..) を呼ぶだけで、P は既に Detached{HiddenByVisibility} なので resolved = Some(HiddenByVisibility) → EvalResult::Unchanged。つまり保留中の遅延 resume はキャンセルされない。(3) 遅延タスクが後で走ると reason は依然 HiddenByVisibility なので resume_pane_with_permit 内の clear_hidden() が None を返し、スナップショットを送って Connected にスワップしてしまう。影響は 2 つ。(a) hidden を宣言済みのクライアントへ PTY 出力が流れ続ける（FR13 の hidden セマンティクス違反）。(b) より深刻なのは次の visible→true エッジで、P は既に Connected なので resume_pane_with_permit が NoChange を返しスナップショットが一切送られない → ウィンドウ再表示時に画面が古いまま/欠落したままになる。これは本 feature が潰そうとしている症状そのもの。handlers.rs:727-731 の doc が言う「a resume that is no longer applicable by then ... is simply a no-op via its own existing checks」は exited / owner mismatch / NetworkDetach しか見ておらず、可視状態の反転はどのチェックにもかかっていない。追加テスト handle_set_visibility_true_returns_promptly_when_channel_full_and_resumes_after_drain も hide 割り込みのケースを踏んでいないため検出されない。"
+    suggestion: "遅延タスクに visible_state を clone して渡し、session_manager.lock().await の後に visible_state.load(Ordering::Acquire) を確認して false なら permit を drop して return する。可視フラグの読みを manager ロック取得後に置くのが要点: 隠れエッジは visible_state.swap(false) を先に済ませてから同じ manager ロックを取るので、ロック取得後に load すれば hide 側との競合が閉じる。合わせて doc を訂正し、hide 割り込みの回帰テスト（visible=true で満杯 → visible=false → 容量解放 → pane が Detached のままであること）を追加する。統合レビュアーは構造化 diff も提示している（handlers.rs の spawn 前に let visible_state = visible_state.clone(); を追加し、spawn 内 mgr ロック取得直後に早期 return を挿入する形）。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "R4 auto-fix: same_site group had diff+prose coexistence -> conflict; batch mode skips conflict sites"
+  - stable_id: ac45ac1a0f97bb6b
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 393
+    line_end: 414
+    title: "enqueue_pane_output_chunk の遅延パスは FIFO を保証しない（doc の主張と実挙動が乖離）"
+    description: "doc は「tokio's bounded mpsc channel wakes waiting senders in the order they started waiting, so a chunk that takes this path still lands strictly after every chunk already enqueued at the moment this function was called, and before any producer that only starts waiting later (FR3 preserved)」と書いているが、後半は成立しない。spawn したタスクが待機列に登録されるのは「呼び出し時点」ではなく「ランタイムが最初にポーリングした時点」であり、その間に他のプロデューサが割り込める。具体的な競合相手が実在する: PTY リーダースレッド（pty_spawn.rs:795 付近）は同じ pane_output_tx に対して try_send → 満杯なら blocking_send を繰り返している。spawn したタスクがまだポーリングされていない間に drain がスロットを空ければ、スナップショット採取後に取り込まれたバイト X の try_send が先に成功して Snapshot チャンクを追い越す。connection.rs:389 の drain は ChunkKind::Snapshot を MessageType::Snapshot として送り、クライアントは build_from_snapshot + scrollback_bypass の全面再構築パスに流すため、先着した X は再構築で丸ごと消える（= ウィンドウ切替時の出力欠落、まさに本 feature の症状クラス）。同様に、満杯中に enqueue_pane_output_chunk が 2 回呼ばれると spawn 2 本の登録順は不定なので、新しいスナップショットの後に古いスナップショットが着地して画面が巻き戻ることもある。新規テストはいずれも遅延中に並行プロデューサが動かない構成なので、この順序崩れは検出できない。【同一サイトに統合された追加所見】pub fn enqueue_pane_output_chunk は非 async だが Full 分岐で tokio::spawn を呼ぶため、tokio ランタイムコンテキスト外から呼ぶと panic する。doc の「deliberately synchronous (not async fn)」という書き方は可搬性が高いように読めるが実際は違う。panic するのは満杯という稀パスのみなので通常運用では露見しない。pane.rs は同じ Sender に対する主要プロデューサ（pty_spawn.rs の PTY リーダー）が素の OS スレッドから blocking_send している領域であり、リーダー側の送信をこの共通ヘルパーに寄せる将来変更は自然に起こりうる。その瞬間に「高負荷時だけデーモンのリーダースレッドが panic する」という再現しづらい障害になる。既存テストは #[test]（ランタイム無し）で Full 分岐を踏まないから通っているだけ。"
+    suggestion: "順序保証を「spawn のスケジューリング運任せ」から外す。案 (a): 接続ごとに 1 本だけの順序付き遅延キューにする（VecDeque + 単一 forwarder タスク、または unbounded mpsc へ push し forwarder だけが send().await する）。遅延チャンク同士の順序が確定し spawn 本数も 1 本に固定される。案 (b): ライブ出力との割り込みを構造的に禁じる（対象ペインの output_target mutex を保持したまま enqueue し、リーダースレッドも同じ mutex を取る）。いずれにせよ doc の FIFO 主張は「同一ペインの既存キュー済みチャンクより後」までに限定して書き直し、並行プロデューサ有りの順序テストを追加する。あわせてランタイム前提を doc に明記し、可視性を pub(crate) に絞る / Handle::try_current() でフォールバックする / Handle を引数で受け取る のいずれかで機械的に守る。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "R4 auto-fix: pane.rs same_site group had divergent prose prescriptions -> conflict; batch mode skips conflict sites"
+  - stable_id: 95b860bce4fd7335
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 406
+    line_end: 414
+    title: "遅延 spawn が bounded channel の backpressure を無効化し、保留チャンクが無制限に積める"
+    description: "満杯時に enqueue_pane_output_chunk は呼び出しごとに tokio::spawn して、チャンクを持ったまま容量待ちさせる。これは実質的に「無制限に伸びる保留送信キュー」で、bounded channel が持っていた backpressure が消える。呼び出し元 handle_request_pane_snapshot はクライアントの RequestPaneSnapshot 1 通ごとに走り、修正後は接続タスクがブロックしなくなったため、クライアントが連続してリクエストを投げれば保留タスクは無制限に増える。各タスクは fits_single_snapshot_frame を通った符号化スナップショット（上限 MAX_SNAPSHOT_FRAME_PAYLOAD、実運用でも scrollback 2MiB 級）を保持するので、遅いクライアント + 高速なウィンドウ切替でデーモン側メモリが跳ねる。handle_set_visibility の遅延パスも同様に「ペイン数ぶんの spawn」を毎エッジ生む。加えて AC-4 のテスト pty_channel_capacity_is_finite_and_unchanged は定数 256 を assert するだけで、「fix の機構として unbounded なキューを導入していない」という AC-4 が守りたい性質は検査できていない。"
+    suggestion: "接続ごとに遅延キューを 1 本にし、その深さに上限（例: PTY_CHANNEL_CAPACITY 相当）を設けて、溢れた場合は「そのペインを Detached に落として ring 蓄積へ回す」か「スナップショット要求を落としてクライアントに再要求させる」など既存の detach/再要求経路に合流させる。少なくとも保留中チャンク数の上限と上限到達時の挙動をコード上で明示する。あわせて AC-4 のテストを「満杯状態で N 回連続 enqueue しても保留数が上限を超えない」ことを見る形に強化する。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium severity: not an R4 auto-fix candidate (gate requires critical/high)"
+  - stable_id: 5dafd9d717869aef
+    severity: high
+    category: performance
+    file: src-tauri/src/mux/session/pane.rs
+    line: 396
+    line_end: 414
+    title: "スロットパスの tokio::spawn 遅延キューが無制限でバックプレッシャを無効化する"
+    description: "enqueue_pane_output_chunk の Full 分岐は、呼び出しごとに chunk を丸ごと move した tokio::spawn を作り、その中で tx.send(chunk).await を待たせる。この遅延キューには一切の上限が無く、生成数も保持バイト数も追跡されていない。結果として capacity=256 の bounded channel が「同時に in-flight にできるバイト数の上限」として機能しなくなる。呼び出し元は handle_request_pane_snapshot (handlers.rs:583) で、渡す encoded_snapshot は pane の scrollback 全体（DEFAULT_SCROLLBACK_CAPACITY = 2 MiB）+ shadow parser のスクリーンダンプをエンコードしたもので、fits_single_snapshot_frame / MAX_SNAPSHOT_FRAME_PAYLOAD まで許容される。チャンネルが満杯になるのは「pane が大量出力していて client 側 drain が追いついていない」状態であり、その状態が続く間 spawn したタスクは完了しない。ユーザーが高速にウィンドウ/タブを切り替えれば切り替え回数ぶんの RequestPaneSnapshot が発行され、その一つ一つが数 MiB の Vec を保持したまま常駐する。client が完全にストールしている場合は解放されず、タスク数もメモリも単調増加する。テスト pty_channel_capacity_is_finite_and_unchanged (AC-4) は定数を固定するだけで、この遅延側の非有界性は一切カバーしていない。"
+    suggestion: "遅延パスに明示的な上限を入れる。(a) 接続ごとに「遅延中チャンク数 / 合計バイト数」を Arc<AtomicUsize> で数え、spawn 時に加算・送信完了時に減算する。上限を超えたら新しい chunk は spawn せずに log::warn! してドロップする（Snapshot チャンクは pane の現在状態の完全な再構成なので、落としても後続の snapshot 要求で回復でき部分欠損にならない）。(b) pane ごとに「未完了の遅延 Snapshot は 1 個まで」に制限し、HashMap<PaneId, JoinHandle> を接続スコープで持ち、新規 spawn 前に古いハンドルを abort() して差し替える。どちらでも AC-4 のテストを「遅延キューが上限を持つこと」を検証する形に拡張する。"
+    sources: [claude:performance]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "R4 auto-fix: pane.rs same_site group had divergent prose prescriptions -> conflict; batch mode skips conflict sites"
+  - stable_id: 6fa9fe96eb7ab00c
+    severity: high
+    category: performance
+    file: src-tauri/src/mux/session/pane.rs
+    line: 406
+    line_end: 413
+    title: "Full-channel snapshots escape the channel's memory bound"
+    description: "Every failed try_send spawns a task that retains the entire chunk until capacity becomes available. Snapshot chunks can approach 2 MiB, and the connection select loop prioritizes inbound messages over draining output. A slow outbound client issuing repeated snapshot requests can therefore accumulate an unbounded number of multi-megabyte buffers and tasks outside the nominal 256-item channel, eventually exhausting daemon memory."
+    suggestion: "Keep overflow state bounded and connection-owned. For example, retain at most one pending snapshot per pane and coalesce newer requests, or use one dispatcher backed by a strictly bounded pending-byte budget. Reject, drop, or disconnect on excess work instead of spawning one task per chunk."
+    sources: [codex:performance]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "R4 auto-fix: pane.rs same_site group had divergent prose prescriptions -> conflict; batch mode skips conflict sites"
+  - stable_id: e6cc3552280e5003
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 804
+    line_end: 849
+    title: "handle_set_visibility の遅延 resume が pane 数ぶんのタスクを無制限に積み上げ、確保済み permit を global lock 待ちの間ずっと保持する"
+    description: "Full 分岐は候補 pane ごとに tokio::spawn する。上限もデデュープも無いため、チャンネルが満杯の間に visible の on/off が繰り返されると（prev == visible ガードは連続する同値だけを弾くので hide→show→hide→show は全て通る）、1 回の visible エッジあたり最大 pane 数ぶんのタスクが積み上がる。これらはキャンセルされないので、client がストールしてチャンネルが解放されない限り tx.reserve().await に張り付いたまま残り続ける。さらに spawn 内は tx.reserve().await で permit を取得した後に session_manager.lock().await を待つ（821-833行）。session_manager は daemon 全体で共有される tokio Mutex で、この間 permit（capacity 256 の枠を 1 つ占有した状態）が握られたままになる。遅延タスクが N 個あれば N スロットが恒常的に live PTY 出力から奪われることになり、この修正が守ろうとしている「出力の流れを止めない」目的と逆向きに働く。修正前のインラインコードは接続タスク 1 本ぶんの逐次実行だったのでこの多重占有は起き得なかった、新しく入った性質。"
+    suggestion: "(a) pane 単位のデデュープを入れる: 接続スコープで Arc<Mutex<HashSet<PaneId>>>（または pane ごとの AtomicBool）を持ち、その pane の遅延 resume が既に in-flight なら spawn をスキップする。(b) permit の保持区間を縮める: spawn 内で reserve().await する前に pane の解決を済ませ、その後で permit を取ってから resume_pane_with_permit に渡す。(a) と (b) は独立に適用可能で、両方入れるのが望ましい。"
+    sources: [claude:performance]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium severity: not an R4 auto-fix candidate (gate requires critical/high)"
+  - stable_id: 9781bef53f475c97
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 821
+    line_end: 848
+    title: "Visibility resumes can fan out into an unbounded task backlog"
+    description: "When the channel is full, the loop spawns one waiting task for every candidate pane. Repeated false/true visibility edges can enqueue another complete set before existing tasks acquire permits, producing O(panes x edges) tasks. Once capacity returns, stale tasks sequentially reserve slots, acquire the global session-manager lock, and scan windows even when another task already resumed the pane, causing memory growth, CPU churn, and delayed PTY output."
+    suggestion: "Use a single connection-scoped resume coordinator with deduplicated pane IDs and a visibility generation token. Cancel or discard stale generations and bound pending work to O(number of panes), rather than spawning one permit waiter per pane per visibility edge."
+    sources: [codex:performance]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: not an R4 auto-fix candidate (gate requires critical/high)"
+  - stable_id: 83929b6ee253c0c3
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 486
+    line_end: 534
+    title: "新公開ヘルパー enqueue_pane_output_chunk が保証できない FIFO 契約を doc で宣言し、両呼び出し元がそれに依存している"
+    description: "enqueue_pane_output_chunk の doc は「tokio の bounded mpsc は待ち始めた順に起こすので、遅延パスを通ったチャンクでも呼び出し時点で既にキューにあるチャンクの後、かつ『後から待ち始めた producer』より前に着く (FR3 preserved)」と明言し、handle_request_pane_snapshot (handlers.rs:579-581) と connection.rs の audit note がその契約を前提に書かれている。しかし遅延パスで実際に待ち行列に並ぶのは tokio::spawn されたタスクが初回 poll された時点であり、呼び出し時点ではない。try_send 失敗から spawn タスク初回 poll までの間に、同じ pane の PTY reader スレッドが blocking_send で待機列に入ると、そちらが先に permit を得る。つまり『スナップショット構築後に発生した新しいライブ出力』が先に、スナップショットが後に届く。修正前の pane_output_tx.send(...).await は await 点で即座に waiter 登録されていたためこの逆転は起きなかったので、これはこの diff が持ち込んだ順序保証の後退。クライアント側はスナップショットを off-thread replay 経路で適用するため、より新しい出力がスナップショットで上書きされる。抽象の公開契約が実装で担保できていないため、将来の呼び出し元も同じ誤前提で書かれる。"
+    suggestion: "(a) 順序保証を構造的に持たせる — 遅延チャンクを spawn タスクに逃がすのではなく、connection が所有する順序付きステージング（VecDeque<PtyOutputChunk> を select! ループが drain 側で優先的に押し込む）に積み、connection 自身が順序権威を持つ形にする。(b) 遅延パスでも pane の output_target ロック経由で reader スレッドと同じ順序ロックを共有させる。(c) 順序保証を提供しないと割り切る — その場合は enqueue_pane_output_chunk / handle_request_pane_snapshot / route_message の doc から FR3 preserved の記述を削除し、スナップショットに世代番号を持たせてクライアント側で古いスナップショットを破棄できるようにする。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "R4 auto-fix: pane.rs same_site group had divergent prose prescriptions -> conflict; batch mode skips conflict sites"
+  - stable_id: 600ee6e368017c9e
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 804
+    line_end: 848
+    title: "遅延された visibility-resume が状態権威 visible_state を再検証せず、hidden のまま Connected に戻し得る"
+    description: "handle_set_visibility の Full アームは、pane の resume を spawn タスクへ委譲する。その際キャプチャするのは session_manager / active_session_id / pane_id だけで、可視性の権威である visible_state は渡されない。spawn タスクは permit 取得後に pane を再解決するが、判定は !p.exited と resume_pane_with_permit 内部の checks（Connected か / owner 一致か / reason.clear_hidden() に残余理由があるか）のみ。HiddenByVisibility 単独の Detached は clear_hidden() が None を返して resume 続行となるため、遅延中に SetVisibility(false) が届いて pane が Detached { HiddenByVisibility } に戻されていても、遅延タスクはそれを Connected に戻す。結果として『クライアントが hidden と宣言している pane に出力を流し続ける』状態になり、可視性機能 (FR13) が回避したかった帯域/CPU コストが復活する。handlers.rs:727-731 の doc は『適用不能になった resume は既存 checks で no-op になるので安全』と書いているが、可視性はその checks に含まれていない。状態遷移を、その状態を所有する権威 (visible_state) の外側へ非同期に持ち出したことが構造的な原因。"
+    suggestion: "spawn タスクに visible_state: Arc<AtomicBool> をクローンして渡し、permit 取得後・pane 解決後に visible_state.load(Ordering::Acquire) が依然 true であることを確認してから resume_pane_with_permit を呼ぶ（false なら permit を drop して return）。より根本的には、可視性判定を resume_pane_with_permit / evaluate_output_target 側の eligibility 判定に組み込み、resume の適用可否をこの状態機械の内側だけで決められるようにして、遅延パスが独自に前提を持たなくて済む形にする。あわせて handlers.rs:727-731 の doc をその実態に合わせて修正する。"
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "R4 auto-fix: same_site group had diff+prose coexistence -> conflict; batch mode skips conflict sites"
+  - stable_id: b21dd3d4926f78d9
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 786
+    line_end: 858
+    title: "reserve → pane 解決 → resume のブロックが同一関数内で二重化し、遅延機構も pane.rs と handlers.rs に二実装ある"
+    description: "handle_set_visibility の Ok(permit) アーム (788-802) と Full アームの spawn 本体 (833-847) は、session_manager.lock() → get_session → windows.values().find_map(panes.get) → .filter(!exited) → resume_pane_with_permit という同一のシーケンスをまるごと重複させている（差分は continue vs return と pane_output_tx vs &tx のみ）。resume の適格性条件（可視性再検証、pane 解決方法、エラーログ）を変えるたびに 2 箇所を同期させる必要があり、片方だけ直す事故が起きやすい。さらに『try_X して Full なら spawn して待つ』という遅延機構そのものも、pane::enqueue_pane_output_chunk（chunk 送信版）と handlers.rs のこのアーム（permit 予約版）に別々に実装されており、方針変更（遅延数の上限、coalesce、メトリクス）が二箇所への shotgun surgery になる。"
+    suggestion: "pane 解決 + resume を単一ヘルパー（async fn reserve_and_resume_pane(...) -> ResumeOutcome 相当、または permit 取得も内包した defer_or_run ヘルパー）に括り出し、inline パスと spawn パスの双方から呼ぶ。遅延方針（Full 時の挙動）は pane::enqueue_pane_output_chunk 側の 1 箇所に集約し、permit 版もそのモジュールが提供する形にして機構の実装を 1 つにする。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: not an R4 auto-fix candidate (gate requires critical/high)"
+  - stable_id: 5601927736ef55ac
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 504
+    line_end: 534
+    title: "bounded チャネルの背圧が無制限の spawn 待機タスクで迂回され、実効キュー長が無界になる"
+    description: "PTY_CHANNEL_CAPACITY = 256 の bounded チャネルは producer に背圧をかける設計だが、この変更で『満杯なら待機を spawn タスクへ逃がす』ようになったため、チャネル前段に無制限個の待機タスクが積める構造になった。呼び出し回数を抑える仕組みは無く、pane ごとの coalesce も無い。handle_request_pane_snapshot 由来の遅延タスクは encoded_snapshot（MAX_SNAPSHOT_FRAME_PAYLOAD まで許容）を保持したまま permit を待つため、クライアントが遅く大量出力中に window 切替を繰り返すと、切替回数ぶんのスナップショットがメモリに滞留し、その全部が後から順次クライアントへ再生される（同一 pane の古いスナップショットも捨てられない）。AC-4 のテストは定数値を pin するだけなので、この実効的な無界化は検知できず『bounded を維持した』という見かけだけが残る。"
+    suggestion: "遅延を有界にする。(a) pane ごとに保留中の遅延チャンクを 1 つに coalesce する（スナップショットは最新のみ意味があるので破棄が正しい）。(b) 遅延タスク数／保留バイト数の上限を設け、超過時はスナップショットを送らずクライアントに再要求させる。(c) 上限に達したことをカウンタで可視化する。あわせて AC-4 のテストを『満杯時に保留できる遅延数／バイト数が有界』を検証する形に強化する。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: not an R4 auto-fix candidate (gate requires critical/high)"
+  - stable_id: 0647f9d4c140a8fb
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 393
+    line_end: 413
+    title: "Overflow tasks bypass the bounded backpressure boundary"
+    description: "Every full-channel snapshot creates a detached task that owns the complete PtyOutputChunk while waiting for capacity. Repeated snapshot requests can therefore accumulate an unbounded number of tasks and potentially multi-megabyte payloads outside the nominal 256-item channel. This directly violates the bounded-memory contract; a test only asserting the channel constant remains 256 cannot detect this secondary unbounded queue."
+    suggestion: "Keep overflow state in a connection-owned, explicitly bounded queue or coalesce pending snapshot requests. Add a test that repeatedly submits requests while the channel remains full and verifies the total pending backlog is bounded."
+    sources: [codex:architecture]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "R4 auto-fix: pane.rs same_site group had divergent prose prescriptions -> conflict; batch mode skips conflict sites"
+  - stable_id: f3f01a7a11ce71cb
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 373
+    line_end: 413
+    title: "Spawned slow path is not a FIFO-preserving enqueue"
+    description: "The helper claims later producers remain behind the deferred chunk, but tokio::spawn returns before the new task necessarily polls send() and joins the channel's waiter queue. A PTY producer or a second deferred snapshot can register first, allowing output captured after snapshot construction to be delivered before the snapshot; applying the later snapshot can then reset and discard that output. Tokio channel fairness only orders already-registered waiters, not task creation order."
+    suggestion: "Use a single connection-owned sequencer that establishes ordering synchronously before returning, while retaining a bounded backlog. Add coverage with a post-snapshot producer and multiple overflow snapshots, not only chunks resident before the helper call."
+    sources: [codex:architecture]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: not an R4 auto-fix candidate (gate requires critical/high)"
+  - stable_id: fe4b7b973a82c577
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 819
+    line_end: 848
+    title: "Detached resume tasks can apply obsolete visibility transitions"
+    description: "The deferred task captures the session and pane but neither the visibility state nor a transition generation. If SetVisibility(true) encounters a full channel and SetVisibility(false) is processed before the permit becomes available, the task later calls resume_pane_with_permit and reconnects the pane even though the connection is currently hidden. This unowned asynchronous control flow lets an obsolete command overwrite newer state."
+    suggestion: "Represent visibility transitions with a connection-owned generation/cancellation token and revalidate it atomically with the pane transition after acquiring the permit, or coalesce pending resumes inside the connection loop so a later hidden edge cancels them."
+    sources: [codex:architecture]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: not an R4 auto-fix candidate (gate requires critical/high)"
+  - stable_id: 2a342f131ab1c3c1
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 821
+    line_end: 848
+    title: "遅延 visibility-resume が再 hide を無視して pane を Connected に戻す（SPEC Edge case 2）"
+    description: "SPEC.md「Test Scenarios / Edge Cases → Edge case 2: Multiple rapid window switches while output is ongoing」で挙げられた高速な連続ウィンドウ切替が、この diff で追加された遅延パスで壊れる。handle_set_visibility(true) の TrySendError::Full 分岐は spawn したタスク内で tx.reserve().await を待つが、そのタスクは pane の存在と !exited しか再確認せず、接続の visible_state を再チェックしない。permit 待ちの間にクライアントが再び hide した場合でも、permit 到着後に resume_pane_with_permit が実行され、pane は Detached { HiddenByVisibility } から Connected に戻され resume snapshot まで送られる。handlers.rs:727-731 の doc の主張する安全網は存在しない。しかも handle_set_visibility 先頭の prev == visible ガードにより、その後の SetVisibility(false) は早期 return するため、pane は次の show→hide サイクルまで hidden のまま Connected で live PTY 出力を流し続ける（一時的でなく持続する状態不整合）。permit が空くまでの時間はソケット drain 速度に依存し、SPEC が対象とする大量出力中はこの窓が長くなるため、遅延パス投入時ほど踏みやすい。"
+    suggestion: "spawn するタスクに visible_state（Arc<AtomicBool>）を clone して渡し、permit 取得後・resume_pane_with_permit 呼び出し前に visible_state.load(Ordering::Acquire) を再確認して false なら permit を drop して return する。あわせて handlers.rs:727-731 の doc から「既存チェックで no-op になる」という誤った記述を訂正する。"
+    sources: [claude:spec]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "spec category is excluded from the R4 auto-fix candidate gate by protocol"
+  - stable_id: 8b3c21b93b1019c6
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/session/pane.rs
+    line: 396
+    line_end: 414
+    title: "FR4「等価な上限」なしに deferred send タスクが無制限に積み上がる / Full-channel fallback creates an unbounded task queue"
+    description: "[claude:spec] SPEC FR4: 「The fix MUST NOT introduce unbounded memory growth as a replacement backpressure mechanism (e.g. an unbounded channel is not an acceptable unconditional replacement for the bounded channel without an equivalent bound elsewhere)」。本 diff は bounded channel 自体は 256 のまま残すが、その手前に個数無制限の副キュー（Full のたびに chunk を保持したまま spawn されるタスク）を作っており、この副キューには「equivalent bound elsewhere」に相当する上限がない。旧実装ではブロッキング send が backpressure として機能し、channel が詰まっている間は接続タスクが新規 RequestPaneSnapshot を受理しなかった（デッドロックという別の欠陥はあるが、メモリは有界だった）。修正後は接続ループが止まらないため、SPEC Edge case 2 で RequestPaneSnapshot が来るたびに deferred タスクが増える。各タスクは encode 済み snapshot を保持し、そのサイズ上限は MAX_SNAPSHOT_FRAME_PAYLOAD でしかチェックされていない。FR4 に対する唯一のテスト（AC-4 → pty_channel_capacity_is_finite_and_unchanged）は定数 256 を assert するだけで、新設した遅延機構の有界性は一切検証していない。[codex:spec] 同じパターンは visibility-resume fallback (handlers.rs:804-848) にも現れる。"
+    suggestion: "遅延中の chunk 数（またはバイト数）に明示的な上限を設ける。接続ごとに Arc<AtomicUsize> で in-flight deferred 数を数え、上限（PTY_CHANNEL_CAPACITY と同程度、snapshot なら数本）を超えたら新しい deferred enqueue を drop して warn する（snapshot は最新の 1 本だけ保持して古いものを置き換える coalesce でも良い）。あわせて AC-4 のテストを「full 状態で N 回連続 enqueue しても保持される chunk 数が上限で頭打ちになる」ことを検証する形に置き換える。同じ上限を deferred visibility resume にも適用する。"
+    sources: [claude:spec, codex:spec]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "spec category is excluded from the R4 auto-fix candidate gate by protocol"
+  - stable_id: 85f6008d4847c329
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/session/pane.rs
+    line: 373
+    line_end: 413
+    title: "FR3 の順序保証の根拠が遅延パスで成立していない（spawn 前に後発 PTY chunk が追い越し可能）"
+    description: "SPEC FR3 は snapshot chunk が「preserves the ordering guarantee that motivated routing snapshots through the same channel as PTY output」であることを要求する。pane.rs:378-383 の doc は tokio の waiter 順序を根拠にしているが、遅延パスの sender は本関数の呼び出し時点では待機列に入らない。tokio::spawn したタスクが最初に poll され tx.send(chunk).await を実行して初めて semaphore の待機列に登録されるため、その間に接続の drain arm が最大 DRAIN_BATCH_LIMIT=64 個の permit を解放し、pane の reader thread の try_send fast path（pty_spawn.rs:796）が先に permit を取得できる。旧実装の send(...).await は .await 到達時点で同期的に待機列へ登録されていたため後発 producer に追い越されなかったので、順序保証は実質弱まっている。結果として snapshot 構築後に生成された PTY chunk が snapshot より先にクライアントへ届き、クライアントは新しい出力を描画した後に古い snapshot でグリッドを置き換える（画面が巻き戻る）。同様に Edge case 2 の高速連続切替で同一 pane の deferred snapshot が 2 本走ると、待機列への登録順＝タスクのスケジューリング順となり、古い snapshot が新しい snapshot の後に届く逆転もあり得る。"
+    suggestion: "(a) 呼び出し元タスクを止めずに待機列への登録順を確定させる — spawn の前に同期的に tx.clone().reserve_owned() の future を生成して最初の poll だけ呼び出し側で行う、あるいは pane ごとの順序トークン/一段のシリアライズキューを設ける。(b) それが過剰なら、FR3 の保証範囲は「呼び出し時点で既にキューにある chunk に対してのみ」であると SPEC と pane.rs:378-383 の doc の双方を訂正し、後発 PTY chunk による追い越しが起き得ることとクライアント側 replay の振る舞いを明記する。"
+    sources: [claude:spec]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium severity: not an R4 auto-fix candidate (gate requires critical/high)"
+  - stable_id: 39de96c92d692d58
+    severity: medium
+    category: spec
+    file: test-docs/mux-window-switch-output-hang/task0001.tests.yaml
+    line: 34
+    line_end: 51
+    title: "Required connection-level progress scenario is not tested"
+    description: "SPEC \"Test Scenarios / Unit Tests, Test 1\" requires exercising the connection select loop and proving that a PtyInput for pane B is processed while pane A's snapshot is pending; \"Integration Tests, Test 1\" similarly requires a full connection-level high-output scenario. The listed AC-1/AC-2 tests invoke handle_request_pane_snapshot directly and manually drain the channel. They never run handle_connection, submit a subsequent PtyInput, or verify that the select loop continues processing messages as required by FR2."
+    suggestion: "Add a connection-level test that fills the output channel, sends RequestPaneSnapshot, then sends PtyInput for another pane and asserts bounded-time input processing while queued output and the snapshot are forwarded in order. Add the specified sustained-output integration variant as well."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium severity: not an R4 auto-fix candidate (gate requires critical/high)"
+auto_fix:
+  loops_run: 1
+  applied_total: 0
+  termination: no-progress
+  conflict_groups_skipped:
+    - site: "src-tauri/src/mux/ipc/handlers.rs handle_set_visibility deferred arm"
+      reason: "diff+prose coexistence within the same site (comprehensive supplied a unified diff, architecture supplied prose) -> conflict; batch mode skips conflict sites without asking"
+    - site: "src-tauri/src/mux/session/pane.rs enqueue_pane_output_chunk"
+      reason: "five prose prescriptions diverge (structural FIFO sequencer vs bounded/coalesced deferred queue vs doc-contract correction) -> conflict; batch mode skips conflict sites without asking"
+residual_critical_high: 9
+rework_required: true

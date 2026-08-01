@@ -27,11 +27,11 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: completed
+    status: pending
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
     completed_at_commit: 849434fe336aaf79641b77a9a471625d08ffff9f
   - id: review
-    status: in_progress
+    status: pending
   - id: verify
     status: pending
     result: null
@@ -55,12 +55,24 @@ tasks:
     merge_commit: 1bfc5181c67aba4796468031782d951623d1b18f
     notes: "resume 2026-08-01: the implementer launched 2026-07-31T09:02:47+09:00 was stopped by the user, leaving no terminal journal event and zero implementation commits. The journal was closed with a `failed` event on user instruction. batch auto-retry consumed (1/1); the retry merged cleanly on the first attempt (conflict_retries: 0). Deviations reported: gitignored font assets copied into the task worktree for local build only; `--test-threads=1` used as the authoritative AC-5 regression comparison because the parallel run is empirically nondeterministic for tabs.rs; handle_set_visibility received a second fix under the plan's mandatory audit note."
     branch: em-workflow/mux-window-switch-output-hang/task0001
-
-review:
-  status: in_progress
-  rounds_completed: 0
-  residual_critical_high: 0
-  needs_rework: false
+  task0002:
+    title: "Rework: bound and sequence the deferred delivery mechanism introduced by task0001"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/ipc/connection.rs
+    skills: [backend-impl]
+    domains: [concurrency]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4]
+    status: pending
+    notes: "Synthesized by the orchestrator from review round 1 residual critical/high findings (9). Deviates from batch-mode.md's one-task-per-affected-file synthesis rule on purpose: all nine findings describe a single mechanism (task0001's spawn-a-detached-waiter deferral) that appears at two call sites, so splitting it would let two implementers pick different replacement designs that the textual conflict protocol cannot reconcile. Rationale recorded in tasks/task0002.md."
+  status: pending
+  rounds_completed: 1
+  perspectives: [comprehensive, performance, architecture, spec]
+  residual_critical_high: 9
+  needs_rework: true
   plan:
     floor: [comprehensive, performance, architecture, spec]
     discretionary: []
@@ -111,5 +123,5 @@ requirements:
     tests: [TS-6]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework_count: 0
