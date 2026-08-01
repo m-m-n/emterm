@@ -35,8 +35,26 @@ workflow:
     completed_at_commit: 74656c45ffd62fd74b6745d08060bc92c0d5e5ed
   - id: verify
     status: pending
-    result: null
-    failed_items: []
+    result: fail
+    executed_at: "2026-08-01T22:55:00+09:00"
+    commands_run:
+      - command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+        exit_code: 0
+      - command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+        exit_code: 101
+        result: "2945 passed / 7 failed / 3 ignored. All 7 failures are tabs::tests::* and identical to the baseline both implementers recorded independently. This feature's diff touches neither src-tauri/src/tabs.rs nor src-tauri/src/app.rs (verified: git diff over the full range returns empty for both). mux::* is 613/613 green. Treated as pre-existing, not a regression (TS-5 pass)."
+    passed_items:
+      - "Build verification: cargo check exit 0"
+      - "TS-4: bound remains finite (PTY_CHANNEL_CAPACITY=256 unchanged; MAX_DEFERRED_ITEMS=8 enforced by the only growth path)"
+      - "TS-5: no new failures beyond the documented pre-existing tabs::tests flakiness"
+      - "SC-3: no regression in the existing mux/tabs suite"
+    failed_items:
+      - id: SC-1
+        detail: "FR1/FR2 (self-deadlock removal, connection responsiveness) hold, but review round 2 found FR3 and FR4 not jointly satisfied: DeferredOutputQueue::push drops the NEWEST item at the cap, which breaks FR3's 'the snapshot chunk MUST still be delivered' and can strand a pane as Detached; and the cross-thread ordering gap against pty_spawn.rs's reader thread leaves FR3-as-written unmet."
+      - id: SC-2
+        detail: "TS-1 / TS-2 / TS-3 are only exercised through direct handler calls; no test drives handle_connection's select! loop, which is exactly what SPEC's Unit Test 1 and Integration Test 1 mandate. TS-3's FIFO test re-implements the flush loop inline instead of calling the production flush_deferred_output. TS-6 is a manual scenario and cannot run unattended."
+      - id: SC-4
+        detail: "Requires review residual_critical_high == 0; the actual value is 8. NOT resolvable by an implement rework in this run: batch.review_rework_count is already 1, so the review phase is capped and will not re-run to re-evaluate the residual count. Recorded here so the human evaluator sees the criterion is unmet rather than silently passed."
   - id: retrospect
     status: pending
 
