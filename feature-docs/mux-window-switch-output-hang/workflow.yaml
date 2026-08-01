@@ -31,7 +31,8 @@ workflow:
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
     completed_at_commit: bfa2af1054ed1a38aea45857c9e7c5732a103542
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 74656c45ffd62fd74b6745d08060bc92c0d5e5ed
   - id: verify
     status: pending
     result: null
@@ -72,11 +73,12 @@ tasks:
     notes: "Synthesized by the orchestrator from review round 1 residual critical/high findings (9). Deviates from batch-mode.md's one-task-per-affected-file synthesis rule on purpose: all nine findings describe a single mechanism (task0001's spawn-a-detached-waiter deferral) that appears at two call sites, so splitting it would let two implementers pick different replacement designs that the textual conflict protocol cannot reconcile. Rationale recorded in tasks/task0002.md. Outcome: one connection-owned bounded DeferredOutputQueue (MAX_DEFERRED_ITEMS=8, shared by chunk and visibility-resume deferrals) replaces every tokio::spawn deferral; flushed by the connection's own event loop after each drain. F1/F2/F3 now close by construction (visible_state is re-validated at flush time, no independently-scheduled task remains to race) and F4's secondary runtime-panic risk disappears with the spawn. AC-2 CAVEAT: the cross-OS-thread race against pty_spawn.rs's reader-thread blocking_send is NOT structurally closed — it lies outside this task's file scope. Per the plan's permitted fallback the implementer narrowed the documented guarantee instead of reasserting the false unconditional FIFO claim; the residual ordering exposure is therefore documented, not eliminated, and is a candidate for a follow-up feature."
 
 review:
-  status: pending
-  rounds_completed: 1
+  status: completed
+  rounds_completed: 2
   perspectives: [comprehensive, performance, architecture, spec]
-  residual_critical_high: 9
-  needs_rework: true
+  residual_critical_high: 8
+  needs_rework: false
+  deferred_note: "Round 2 left 8 critical/high findings. batch.review_rework_count was already 1 (consumed by round 1), so the batch decision table caps rework: all 8 are recorded in reviews/round2.yaml with resolution: deferred and the step completes. They are NOT fixed. Round 1's unbounded-backlog, visibility-revalidation, duplication and runtime-panic findings ARE closed; what remains is (a) flush starvation against the PTY reader thread's blocking_send, (b) the drop-newest overflow policy discarding mandatory snapshot replies and visibility resumes, (c) the cross-thread FIFO gap vs SPEC FR3 as written, and (d) the still-missing connection-level FR2 test."
   plan:
     floor: [comprehensive, performance, architecture, spec]
     discretionary: []
