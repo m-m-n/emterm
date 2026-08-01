@@ -27,7 +27,7 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: pending
+    status: in_progress
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
     completed_at_commit: e4a6899f949ce404abd4c6e35e72dd63307f5e2a
   - id: review
@@ -123,7 +123,8 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4]
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-window-switch-output-hang/task0004
     notes: "Synthesized from reviews/round3.yaml residual critical/high (4). pty_spawn.rs is added to the file set specifically for the EOF-branch deadlock (G1): it sits outside the original changed-file set but is reachable from the connection task only because task0003 added a new call site. review_rework_count goes 1 -> 2 here - round 3 itself did not consume the cap (it was the first review of task0003's code), but routing its findings back to implement is a genuine rework."
 
 review:
