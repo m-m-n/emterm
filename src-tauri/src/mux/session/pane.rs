@@ -461,12 +461,17 @@ impl std::fmt::Debug for DeferredOutputItem {
 /// chunk to the tail, breaking the FIFO invariant this doc declares) — and
 /// only evicts across DIFFERENT panes' chunks once `MAX_DEFERRED_ITEMS`
 /// distinct panes are queued — evicting the OLDEST such entry, never the
-/// one just pushed. This distinct-pane eviction is a SPEC-sanctioned,
-/// bounded-backlog policy (SPEC.md FR3's carve-out, task0004 rework,
-/// G3/AC-3 option (a); review round 3 finding `b4eee6700d643640`), not an
-/// unresolved contradiction of FR3's "MUST be delivered" clause — recovery
-/// is the client re-issuing `RequestPaneSnapshot` on its next switch to the
-/// evicted pane.
+/// one just pushed. Both paths are SPEC-sanctioned (SPEC.md FR3, task0005
+/// rework, G3/AC-3, review round 4 finding `329f746349f592e8`): same-pane
+/// coalescing at ANY queue length, and this distinct-pane eviction once
+/// `MAX_DEFERRED_ITEMS` distinct panes are pending (task0004 rework,
+/// G3/AC-3 option (a); review round 3 finding `b4eee6700d643640`). FR3's
+/// guarantee is "one snapshot per pane, reflecting its newest request, is
+/// delivered", not a 1:1 request/reply correspondence — replacing a
+/// still-queued, now-superseded reply with a newer one is not a dropped
+/// delivery under that guarantee. Recovery for the distinct-pane eviction
+/// case is the client re-issuing `RequestPaneSnapshot` on its next switch
+/// to the evicted pane.
 ///
 /// ### Ordering (AC-2/AC-3/F4/F5): what is, and is not, guaranteed
 ///
@@ -514,8 +519,10 @@ impl std::fmt::Debug for DeferredOutputItem {
 /// (and thus reach the client) ahead of that deferred snapshot, if the
 /// reader's send happened to already be queued first. SPEC.md FR3 is
 /// narrowed to say so explicitly (task0003 AC-6) — the guarantee that
-/// survives is "delivered, and within bounded time", not "never reordered
-/// relative to the reader thread". Closing the ordering gap fully would
+/// survives is "one snapshot per pane, reflecting its newest request,
+/// delivered within bounded time" (task0005 rework, G3/AC-3), not "never
+/// reordered relative to the reader thread". Closing the ordering gap fully
+/// would
 /// require either routing the reader thread's sends through this same
 /// queue (a `pty_spawn.rs` change, out of this task's scope) or a
 /// client-observable generation number so a stale snapshot can be discarded
@@ -552,7 +559,13 @@ impl DeferredOutputQueue {
     /// coalescing still leaves `MAX_DEFERRED_ITEMS` DISTINCT panes' chunks
     /// queued does capacity pressure evict anything — and then it evicts the
     /// OLDEST surviving chunk, never the one just pushed (AC-2 forbids ever
-    /// dropping the newest).
+    /// dropping the newest). If a [`DeferredOutputItem::VisibilityResume`]
+    /// for this pane is ALREADY queued (task0005 rework, medium finding
+    /// pane.rs:556, review round 4), the new chunk is dropped entirely
+    /// rather than queued after it — a Resume's flush always builds a
+    /// FRESH, current snapshot regardless of when it was queued, so an
+    /// older, already-built Chunk landing after it would roll the client's
+    /// view of the pane back to a stale screen.
     pub fn defer_chunk(&mut self, chunk: PtyOutputChunk) {
         let pane_id = chunk.pane_id;
         if let Some(pos) = self
@@ -586,6 +599,32 @@ impl DeferredOutputQueue {
             self.items[pos] = DeferredOutputItem::Chunk(chunk);
             return;
         }
+
+        // Medium finding pane.rs:556 (mux-window-switch-output-hang
+        // task0005, review round 4): the REVERSE order from the case above
+        // — no `Chunk` is queued yet for this pane, but a
+        // `VisibilityResume` IS. That resume's flush (`resume_pane_with_
+        // permit`) always builds a FRESH, current snapshot at flush time,
+        // regardless of when it was queued — so appending this Chunk (built
+        // NOW, at defer time) after it would let an OLDER already-built
+        // screen roll back the fresher one the Resume just delivered. Drop
+        // the redundant Chunk instead of queuing it behind the Resume: the
+        // Resume's own flush-time snapshot already satisfies whatever this
+        // `RequestPaneSnapshot` needed.
+        if self
+            .items
+            .iter()
+            .any(|item| matches!(item, DeferredOutputItem::VisibilityResume(p) if *p == pane_id))
+        {
+            log::debug!(
+                "deferred pane output queue: dropping a redundant Chunk for pane {} — a \
+                 VisibilityResume for the same pane is already queued and will deliver a \
+                 fresher snapshot at flush time (mux-window-switch-output-hang task0005)",
+                pane_id,
+            );
+            return;
+        }
+
         let chunk_count = self
             .items
             .iter()
@@ -4192,6 +4231,49 @@ mod tests {
         match deferred.pop_front() {
             Some(DeferredOutputItem::VisibilityResume(pane_id)) => assert_eq!(pane_id, 1),
             other => panic!("expected the VisibilityResume to remain SECOND, got {other:?}"),
+        }
+        assert!(deferred.pop_front().is_none());
+    }
+
+    /// Medium finding pane.rs:556 (mux-window-switch-output-hang task0005,
+    /// review round 4): the REVERSE order from the pinned test above.
+    /// `[VisibilityResume(1)]` queued FIRST (the pane was resumed from
+    /// hidden while the channel was full), THEN a `RequestPaneSnapshot` for
+    /// the SAME pane arrives and defers a `Chunk` — since no `Chunk` entry
+    /// exists yet for pane 1, the pre-fix `defer_chunk` would `push_back` a
+    /// NEW entry, producing `[VisibilityResume(1), Chunk(1)]`. At flush
+    /// time that delivers the Resume's FRESH (built-at-flush-time) snapshot
+    /// FIRST, then the Chunk's STALE (built-at-defer-time) snapshot SECOND —
+    /// rolling the client's view of the pane back to an OLDER screen. The
+    /// fix: a `VisibilityResume` already queued for this pane means a fresh
+    /// snapshot will be delivered regardless, so the redundant `Chunk` is
+    /// dropped instead of being queued behind it — this is safe because
+    /// `resume_pane_with_permit` (what a `VisibilityResume` flush actually
+    /// runs) builds a full, current snapshot that already satisfies
+    /// whatever the `RequestPaneSnapshot` needed.
+    #[test]
+    fn deferred_output_queue_drops_redundant_chunk_when_visibility_resume_already_queued_for_same_pane()
+     {
+        let mut deferred = DeferredOutputQueue::new();
+        deferred.defer_visibility_resume(1);
+        assert_eq!(deferred.len(), 1);
+
+        deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"stale".to_vec()));
+        assert_eq!(
+            deferred.len(),
+            1,
+            "a Chunk for a pane that already has a queued VisibilityResume must be \
+             dropped, not appended after it — appending would let the Resume's fresh \
+             flush-time snapshot be immediately overwritten by an older, \
+             already-built one"
+        );
+
+        match deferred.pop_front() {
+            Some(DeferredOutputItem::VisibilityResume(pane_id)) => assert_eq!(pane_id, 1),
+            other => panic!(
+                "expected only the VisibilityResume to remain (the redundant Chunk must \
+                 have been dropped), got {other:?}"
+            ),
         }
         assert!(deferred.pop_front().is_none());
     }

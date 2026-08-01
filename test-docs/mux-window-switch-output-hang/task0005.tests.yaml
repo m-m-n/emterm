@@ -1,0 +1,271 @@
+task_id: task0005
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  # `cargo test --lib -- --test-threads=1` BEFORE touching any file =
+  # 2964 passed / 7 failed / 3 ignored, all 7 pre-existing tabs::tests::*.
+  # Independently reproduced by this task before making any change; matches
+  # the baseline given in the task assignment exactly.
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  # `cargo test --lib -- --test-threads=1` AFTER the full implementation =
+  # 2973 passed / 6 failed / 3 ignored. This is a STRICT SUBSET of
+  # baseline_failures (6 of the 7 baseline failures recur;
+  # ts7_offthread_swap_then_restored_scrollback_matches_reference happened to
+  # PASS this run — a known tabs.rs off-thread-worker timing flake, not a
+  # fix: this task touches neither tabs.rs nor app.rs, per the task
+  # assignment's own note). +9 new tests added by this task, all passing
+  # (3 has_unforwarded_pane_output_*, 4 next_client_msg_starvation_count_*,
+  # 1 deferred_output_queue_drops_redundant_chunk_*), plus the ts7 flip
+  # accounts for 2964 + 9 + 1 (flip) = 2974... actual count 2973 (one of the
+  # 9 new tests, deferred_output_queue_drops_redundant_chunk_when_
+  # visibility_resume_already_queued_for_same_pane, was ALSO run under the
+  # `--test-threads=1` full-suite pass along with the rest; arithmetic here
+  # is descriptive, not load-bearing — the subset relation is what matters
+  # and holds). Also ran the plain parallel (default `--test-threads`)
+  # `cargo test --lib` project_commands.test string verbatim: 2959 passed /
+  # 20 failed — all 20 failures are tabs::tests::* (a larger, different
+  # subset than under --test-threads=1, consistent with this project's
+  # documented pre-existing tabs.rs parallel-execution flakiness, project
+  # memory "テスト実行の注意点"); none touch mux::ipc or mux::session::pane,
+  # the files this task changed.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::connection::tests::connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing
+    red_confirmed: true
+    red_reason: >-
+      G1: task0004's doc comment and test-docs/mux-window-switch-output-hang/
+      task0004.tests.yaml AC-4 both claimed a test rework (retargeting
+      RequestPaneSnapshot to PANE_A, matching (Snapshot, PANE_A) in the wait
+      loop, an input_processed_before_snapshot ordering flag) that was never
+      applied to the code — verified directly before touching anything:
+      connection.rs sent pane_id: PANE_B for RequestPaneSnapshot, matched
+      (Snapshot, PANE_B), checked captured_input only after the wait loop
+      ended, and input_processed_before_snapshot had zero occurrences in the
+      file. Implemented the rework exactly as task0005.md's "Required"
+      section specifies: RequestPaneSnapshot now targets PANE_A, PtyInput
+      stays targeting PANE_B, the wait loop matches (Snapshot, PANE_A), and
+      both an input_processed_before_snapshot and an
+      output_flowed_before_snapshot flag are captured at the EXACT moment
+      the Snapshot(A) frame is observed (not after the loop). Confirmed
+      load-bearing by REVERTING just the wait-loop match arm back to
+      (Snapshot, PANE_B) (the pre-task0005 target) while leaving everything
+      else as implemented: the test hung and panicked
+      ("must not hang: Elapsed(())") after the bounded 10s wait, since the
+      real Snapshot(A) frame the server now sends is never matched. Restored
+      the correct (Snapshot, PANE_A) arm afterward; the full test then
+      passed in 0.15s. UNCONFIRMED NUANCE: the "strict same-moment
+      ordering" dimension specifically (as opposed to "the
+      retargeting/matching is load-bearing", which IS red-confirmed above)
+      could not be independently forced red in this environment: by this
+      test's own construction, PtyInput for pane B is the second of only
+      two client-queued frames and gets processed by route_message almost
+      immediately once the client starts draining, while pane A's deferred
+      snapshot must first win a fair reservation against 8
+      continuously-blocking background producer threads — a process that
+      inherently takes many more select! iterations. Input landing before
+      the snapshot is therefore guaranteed by this test's own timing
+      construction, not something a regression could plausibly invert
+      without a much deeper, riskier synthetic change to production
+      scheduling than this task's scope justified. The assertion is
+      implemented exactly as specified and is a real, meaningful
+      strengthening over the previous post-loop check, but this specific
+      nuance is recorded honestly rather than claimed as an observed red,
+      unlike task0004's fabricated claim for the same code.
+  AC-2:
+    tests:
+      - mux::ipc::connection::tests::connection_level_deferred_snapshot_delivered_despite_continuous_client_traffic
+    red_confirmed: false
+    red_reason: >-
+      G2: connection.rs's cleanup order was `let _ = flood_task.await;`
+      BEFORE `conn_task.abort();`, with no timeout wrapping the flood join —
+      `flood_task` owns `client_writer` (moved in), so the main body cannot
+      `drop` it to unstick a parked send, and `cargo test` has no per-test
+      timeout, so this ordering could hang the whole suite if the flood's
+      send() happened to be parked exactly when cleanup ran (the server had
+      already stopped reading past its one needed Snapshot(A) frame).
+      Reordered to abort the connection task FIRST (dropping its half of the
+      socket, which fails the flood's in-flight send with a broken
+      pipe/reset) and wrapped the join in a 5s timeout, mirroring the
+      sibling test's drop(client) -> abort() -> timeout-wrapped join
+      pattern. HONESTLY: reverting to the exact pre-fix ordering and
+      re-running this test 5 times in this development environment did NOT
+      reproduce a hang (all 5 runs completed in ~0.18s) — the same class of
+      real-socket send/read timing jitter this file's own pre-existing
+      "Honesty note" on this test documents for the G2 starvation race
+      itself evidently also governs whether the flood's send() is caught
+      mid-flight at cleanup time. The reordering is kept as a structural fix
+      (aborting the connection first is correct by construction regardless
+      of whether this exact interleaving is forced in any given run, and it
+      cannot make anything worse), but is recorded as NOT red-confirmed
+      rather than fabricating an observed hang that did not happen.
+  AC-3:
+    tests:
+      - mux::session::pane::tests::deferred_output_queue_coalesces_repeated_chunk_for_same_pane_newest_wins
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_evicts_oldest_distinct_pane_per_spec_sanctioned_backlog_policy
+    red_confirmed: false
+    red_reason: >-
+      G3: this AC is a documentation-wording fix, not a behavior change.
+      feature-docs/mux-window-switch-output-hang/SPEC.md's FR3 previously
+      described the distinct-pane eviction as the ONLY permitted exception
+      to "MUST be delivered", which contradicted defer_chunk's already-
+      shipped same-pane coalescing (which discards a superseded reply at ANY
+      queue length, not just past MAX_DEFERRED_ITEMS). Reworded FR3 to state
+      the guarantee as "one snapshot per pane, reflecting the newest
+      request, is delivered" and listed same-pane coalescing alongside
+      distinct-pane eviction as the two permitted exceptions; updated the
+      matching in-source doc comments in pane.rs (DeferredOutputQueue's
+      Overflow-policy and Ordering sections) and handlers.rs (the eviction
+      test's own doc) to the same wording so SPEC.md and the code's
+      self-description agree everywhere. No production code path changed —
+      the listed tests (defer_chunk's own coalesce-pinning test and the
+      distinct-pane-eviction integration test) already existed, already
+      passed before this change, and still pass after it unchanged; a
+      documentation-alignment fix has no behavior to red/green. NOTE: this
+      fix required editing feature-docs/mux-window-switch-output-hang/
+      SPEC.md, which is listed in this task's own expected_files and
+      directly required by task0005.md's G3 section ("Amend FR3..."). Noting
+      this explicitly since feature-docs/** is normally planner-owned and
+      off-limits to implementers; here it is the task's own, deliberately
+      scoped, orchestrator-authorized deliverable (see the implementer
+      report's deviations for the same note).
+  AC-4:
+    tests:
+      - mux::ipc::connection::tests::has_unforwarded_pane_output_true_when_channel_holds_an_undelivered_item_even_with_deferred_bookkeeping_clear
+      - mux::ipc::connection::tests::has_unforwarded_pane_output_false_when_channel_and_deferred_bookkeeping_both_clear
+      - mux::ipc::connection::tests::has_unforwarded_pane_output_true_when_deferred_work_outstanding_even_with_empty_channel
+    red_confirmed: true
+    red_reason: >-
+      G4: the ORIGINAL starvation signal (`pending_deferred_reserve.is_some()
+      || !deferred_output.is_empty()`) observes only the connection's own
+      deferred-output bookkeeping, not whether an admitted item has actually
+      reached the client. The moment a deferred chunk is admitted into
+      pane_output_tx (via flush_deferred_output's try_send/try_reserve, or
+      via apply_fair_permit_to_front_deferred_item's owned permit), both
+      indicators can go false while the item still sits undelivered in
+      pane_output_rx's own buffer — under continuously-ready client
+      messages the biased client arm could then win indefinitely, starving
+      delivery of an already-admitted item. Extracted the combined signal
+      into has_unforwarded_pane_output(has_deferred_work, &pane_output_rx) =
+      has_deferred_work || !pane_output_rx.is_empty(), and wired it into
+      both allow_client_message_arm's guard and the post-select! starvation
+      counter (replacing the narrower has_deferred_work at both call sites).
+      Confirmed load-bearing by temporarily reverting the function body to
+      just `has_deferred_work` (ignoring the channel argument): the first
+      test above (has_unforwarded_pane_output_true_when_channel_holds_an_
+      undelivered_item_even_with_deferred_bookkeeping_clear) failed exactly
+      as expected, panicking on its own assertion message ("AC-4: an item
+      admitted into the channel but not yet drained must still count as
+      pending output, even when the connection's own deferred-output
+      bookkeeping (`has_deferred_work`) alone already reports none
+      outstanding") — confirming a non-empty channel with
+      has_deferred_work=false was NOT detected as pending under the
+      reverted logic. Restored the fix afterward; all three tests plus the
+      full connection.rs test module
+      pass.
+  AC-5:
+    tests:
+      - mux::ipc::connection::tests::next_client_msg_starvation_count_increments_when_client_arm_ran_with_pending_output
+      - mux::ipc::connection::tests::next_client_msg_starvation_count_resets_when_a_different_arm_won
+      - mux::ipc::connection::tests::next_client_msg_starvation_count_resets_when_no_pending_output_outstanding
+      - mux::ipc::connection::tests::next_client_msg_starvation_count_full_quota_cycle_then_reset
+    red_confirmed: false
+    red_reason: >-
+      Medium finding connection.rs:820 (review round 4): the quota counter's
+      increment/reset arithmetic (`consecutive_client_msgs_while_deferred`)
+      previously lived only inline in handle_connection's post-select!
+      bookkeeping, with no direct test — only the one-line predicate
+      allow_client_message_arm had its own unit tests. Extracted the
+      transition into next_client_msg_starvation_count(took_client_arm,
+      has_pending_output, previous_count) -> u32, a pure function with no
+      prior standalone implementation to regress against — the underlying
+      inline logic was already correct (confirmed: the full connection.rs
+      test module, including the two live connection-level tests that
+      exercise this bookkeeping end-to-end, passes unchanged before and
+      after the extraction). This is a coverage-gap closure, the same
+      "red-before-green does not apply to a function with no prior test"
+      pattern task0004's own AC-6 entry used for
+      apply_fair_permit_to_front_deferred_item — each of the four tests was
+      written first, run, and confirmed to exercise its intended branch
+      (increment / reset-on-other-arm / reset-on-no-pending-output / a full
+      quota+1 cycle wired together with allow_client_message_arm) against
+      the newly-extracted function, all passing on first run once compiling.
+  AC-6:
+    tests:
+      - mux::ipc::pty_spawn::tests::eof_branch_does_not_hold_output_target_across_blocking_send
+      - mux::session::pane::tests::deferred_output_queue_drops_oldest_distinct_pane_chunk_past_the_cap_never_the_newest
+      - mux::session::pane::tests::test_bounded_channel_capacity_constant
+      - mux::ipc::handlers::tests::apply_fair_permit_to_front_deferred_item_drops_stale_visibility_resume
+    red_confirmed: false
+    red_reason: >-
+      This AC is a preservation check, not a fresh red/green cycle: confirms
+      rounds 1-4's fixes still hold after this task's changes. Grepped
+      connection.rs and handlers.rs for any blocking `pane_output_tx.send(
+      ...).await` / `pane_output_tx.reserve().await` (unqualified, not
+      try_send/try_reserve) reintroduced on the connection task — every
+      match is either inside a doc comment describing the OLD pre-fix bug,
+      or an unrelated channel (the cmd_tick_tx status-bar timer sender), not
+      pane_output_tx. Confirmed the listed pre-existing tests (EOF-branch
+      guard-drop-before-blocking_send, bounded-backlog cap, PTY_CHANNEL_
+      CAPACITY constant, stale-visibility-resume re-validation at flush
+      time) still pass unchanged. The full-suite comparison in
+      baseline_failures/final_failures above (no failures outside the
+      pre-existing tabs::tests::* set) is the broader confirmation that
+      nothing else regressed.
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Outcome is a full-suite comparison, not a single test. Baseline (step
+      4a, before touching any file) via `cargo test --lib -- --test-
+      threads=1` = 2964 passed / 7 failed / 3 ignored, all 7 pre-existing
+      tabs::tests::* (independently reproduced; matches the baseline given
+      in the task assignment exactly). Final run (same command, after the
+      full implementation) = 2973 passed / 6 failed / 3 ignored — a STRICT
+      SUBSET of baseline_failures (see final_failures above for the ts7
+      flake explanation) plus 9 new passing tests from this task.
+      final_failures ⊆ baseline_failures holds. Additionally ran the plain
+      parallel (default --test-threads) `cargo test --lib` project_commands.
+      test string verbatim: 2959 passed / 20 failed, all 20 tabs::tests::*
+      (a larger, different subset consistent with this project's documented
+      pre-existing tabs.rs parallel-execution flakiness) — none touch
+      mux::ipc or mux::session::pane, the files this task changed.
+notes: >-
+  Scope note: this task's central deliverable was correcting a false
+  verification record (task0004's AC-4 claimed a test rework that was never
+  applied — see test-docs/mux-window-switch-output-hang/task0004.tests.yaml,
+  corrected by this task) and closing 3 code-level review-round-4 findings
+  (G2 hang-ordering, G3 SPEC/code wording contradiction, G4 starvation-signal
+  gap), plus the quota-counter test-coverage gap (AC-5) and one additional
+  medium-priority correctness fix taken up as best-effort
+  (pane.rs:556 — defer_chunk now drops a redundant Chunk when a
+  VisibilityResume for the same pane is already queued, closing the reverse-
+  order case AC-5's task0004 fix did not cover; new test
+  mux::session::pane::tests::deferred_output_queue_drops_redundant_chunk_when_visibility_resume_already_queued_for_same_pane,
+  red-confirmed via revert: without the fix this test failed with
+  `left: 2 right: 1` since the redundant Chunk was appended instead of
+  dropped).
+
+  Explicitly deferred (architecture, "acceptable to defer" per task0005.md):
+  connection.rs:416 (no owning DeferredOutputScheduler type — queue +
+  reservation + counter remain bare loop state), pane.rs:370 (DeferredOutputQueue
+  lives in the session layer while its invariants live in ipc), and
+  pty_spawn.rs:644 (the lock-before-blocking-send rule is honoured at all
+  three sites but not enforced by a structural helper). Also consciously not
+  touched: connection.rs:2281's medium finding to reduce the AC-2 test's
+  thread/payload/deadline footprint — left the 8-thread/32KB saturation
+  shape unchanged (this file's own doc explains that shape was empirically
+  tuned to reliably reproduce saturation; retuning it without many repeated
+  runs to validate risked reintroducing flakiness for a lower-priority,
+  explicitly-optional finding).
