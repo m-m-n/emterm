@@ -27,11 +27,11 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: completed
+    status: in_progress
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
     completed_at_commit: 7a580b3c3b0c6ae2f90b60e558cf99d87bb67d18
   - id: review
-    status: in_progress
+    status: pending
     completed_at_commit: 74656c45ffd62fd74b6745d08060bc92c0d5e5ed
   - id: verify
     status: pending
@@ -128,12 +128,29 @@ tasks:
     merge_commit: 7a580b3c3b0c6ae2f90b60e558cf99d87bb67d18
     notes: "Synthesized from reviews/round3.yaml residual critical/high (4). pty_spawn.rs is added to the file set specifically for the EOF-branch deadlock (G1): it sits outside the original changed-file set but is reachable from the connection task only because task0003 added a new call site. review_rework_count goes 1 -> 2 here - round 3 itself did not consume the cap (it was the first review of task0003's code), but routing its findings back to implement is a genuine rework."
 
+  task0005:
+    title: "Rework: restore record/implementation integrity and close the round-4 residuals"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/src/mux/ipc/connection.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - feature-docs/mux-window-switch-output-hang/SPEC.md
+      - test-docs/mux-window-switch-output-hang/task0004.tests.yaml
+    skills: [backend-impl]
+    domains: [concurrency]
+    complexity: high
+    requirements: [FR2, FR3]
+    status: in_progress
+    branch: em-workflow/mux-window-switch-output-hang/task0005
+    notes: "Synthesized from reviews/round4.yaml residual critical/high (6). The top finding is a record/implementation mismatch: task0004's doc comment and tests.yaml describe an AC-4 test rework that was never applied to the code (verified directly by the orchestrator - connection.rs:2004 still targets PANE_B, the ordering flag has 0 grep hits, yet tests.yaml records red_confirmed: true citing that exact change). Restoring the integrity of the verification record is this task's primary deliverable. review_rework_count goes 2 -> 3: round 4 was the planned final round, but shipping a knowingly false verification record would defeat the point of running the reviews at all."
+
 review:
-  status: in_progress
-  rounds_completed: 3
+  status: pending
+  rounds_completed: 4
   round3_rationale: "task0003 (1414 lines, written under the verify rework) had never been reviewed: the verify branch of the rework rule returns only implement and verify to pending, so Step B skipped the already-completed review step and went straight to verify. Round 3 reviews that new code. batch.review_rework_count is deliberately NOT consumed - that counter caps the review->implement->review deferral loop, not the first review of code introduced by a different phase's rework. Leaving newly written code unreviewed would defeat --batch's purpose of completing the workflow without human intervention."
   perspectives: [comprehensive, performance, architecture, spec]
-  residual_critical_high: 4
+  residual_critical_high: 6
   needs_rework: true
   deferred_note: "Round 2 left 8 critical/high findings. batch.review_rework_count was already 1 (consumed by round 1), so the batch decision table caps rework: all 8 are recorded in reviews/round2.yaml with resolution: deferred and the step completes. They are NOT fixed. Round 1's unbounded-backlog, visibility-revalidation, duplication and runtime-panic findings ARE closed; what remains is (a) flush starvation against the PTY reader thread's blocking_send, (b) the drop-newest overflow policy discarding mandatory snapshot replies and visibility resumes, (c) the cross-thread FIFO gap vs SPEC FR3 as written, and (d) the still-missing connection-level FR2 test."
   plan:
@@ -186,5 +203,5 @@ requirements:
     tests: [TS-6]
 
 batch:
-  review_rework_count: 2
+  review_rework_count: 3
   verify_rework_count: 1
