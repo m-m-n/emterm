@@ -31,8 +31,8 @@ workflow:
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
     completed_at_commit: 6c3f2ca81e0809ead0114156893e8b4ade7d31d2
   - id: review
-    status: in_progress
-    completed_at_commit: 74656c45ffd62fd74b6745d08060bc92c0d5e5ed
+    status: completed
+    completed_at_commit: 909a4e452c75c24f954e486c3b6b61b057e449ac
   - id: verify
     status: pending
     result: fail
@@ -165,13 +165,36 @@ tasks:
     notes: "Synthesized from reviews/round5.yaml residual critical/high (2, one underlying defect). Round 5 confirmed task0005 closed every mandated item; the single regression came from a medium finding it picked up voluntarily as best-effort. This task therefore carries an explicit no-extra-scope instruction. One behavioural change only (defer_chunk: insert the Chunk before the queued VisibilityResume instead of dropping it - three reviewers converged on this prescription), plus five documentation/record corrections. The DeferredOutputScheduler owning-type refactor stays deferred, with round 5's observation that the deferral cost is compounding recorded for whoever picks it up. review_rework_count goes 3 -> 4."
 
 review:
-  status: in_progress
-  rounds_completed: 5
+  status: completed
+  rounds_completed: 6
   round3_rationale: "task0003 (1414 lines, written under the verify rework) had never been reviewed: the verify branch of the rework rule returns only implement and verify to pending, so Step B skipped the already-completed review step and went straight to verify. Round 3 reviews that new code. batch.review_rework_count is deliberately NOT consumed - that counter caps the review->implement->review deferral loop, not the first review of code introduced by a different phase's rework. Leaving newly written code unreviewed would defeat --batch's purpose of completing the workflow without human intervention."
   perspectives: [comprehensive, performance, architecture, spec]
-  residual_critical_high: 2
-  needs_rework: true
-  deferred_note: "Round 2 left 8 critical/high findings. batch.review_rework_count was already 1 (consumed by round 1), so the batch decision table caps rework: all 8 are recorded in reviews/round2.yaml with resolution: deferred and the step completes. They are NOT fixed. Round 1's unbounded-backlog, visibility-revalidation, duplication and runtime-panic findings ARE closed; what remains is (a) flush starvation against the PTY reader thread's blocking_send, (b) the drop-newest overflow policy discarding mandatory snapshot replies and visibility resumes, (c) the cross-thread FIFO gap vs SPEC FR3 as written, and (d) the still-missing connection-level FR2 test."
+  residual_critical_high: 1
+  needs_rework: false
+  deferred_note: |
+    Six rounds. Severity trend: round 1 = 9 critical/high, round 2 = 8, round 3 = 4,
+    round 4 = 6, round 5 = 2, round 6 = 1. The single round-6 residual is a
+    documentation-accuracy finding (the queue's strict-FIFO statement in pane.rs /
+    handlers.rs / SPEC.md FR3 no longer matches the insert-before path), not a
+    behavioural defect - every reviewer who examined it agreed the runtime behaviour
+    is correct. It is recorded `deferred` in reviews/round6.yaml.
+
+    Stopping was an orchestrator decision (reviews/round6.yaml `final_round_decision`),
+    not counter exhaustion. Rounds 3-6 each ran past the batch rework cap deliberately:
+    the verify-branch rework rule returns only implement and verify to pending, so
+    without those extra rounds task0003's 1414 lines, task0004's 1145, and task0005's
+    and task0006's changes would all have shipped without ever being reviewed. Round 4
+    is why that mattered - it caught task0004 documenting an AC-4 test rework it had
+    never applied, with `red_confirmed: true` citing code that did not exist.
+
+    Handover list for whoever picks this up (all detailed in reviews/round6.yaml):
+      1. The FIFO doc statements in pane.rs, handlers.rs and SPEC.md FR3.
+      2. Eviction uses deque position as a proxy for age; insert-before broke that.
+      3. A Resume that does not no-op now sends a second full same-pane snapshot.
+    claude:performance proposes one design closing (2) and (3) together: keep
+    [Resume(P), Chunk(P)] in append order and let flush decide via ResumeOutcome.
+    Also still deferred from rounds 3-5: the DeferredOutputScheduler owning type
+    (round 5 notes its cost is compounding).
   plan:
     floor: [comprehensive, performance, architecture, spec]
     discretionary: []
