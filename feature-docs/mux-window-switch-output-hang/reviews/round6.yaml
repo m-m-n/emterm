@@ -1,0 +1,175 @@
+round: 6
+executed_at: "2026-08-02T03:20:00+09:00"
+reason: "Reviews task0006, the narrow rework that replaced defer_chunk's drop with insert-before. FINAL round — see final_round_decision below."
+scope:
+  review_mode: diff
+  base_commit: f849283386795648e01b228020da1a822f9f628e
+  base_commit_note: "Scoped to task0006 only. Rounds 1-5 reviewed everything before it."
+  head_commit: 909a4e452c75c24f954e486c3b6b61b057e449ac
+  changed_files:
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/connection.rs
+    - feature-docs/mux-window-switch-output-hang/SPEC.md
+    - test-docs/mux-window-switch-output-hang/task0006.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: comprehensive, source: codex, status: skipped, skip_reason: "registry marks comprehensive codex_supported: false"}
+round5_verification:
+  closed: ["The high-severity defer_chunk drop is genuinely fixed. codex:architecture states the insert-before change GENUINELY REMOVES the cross-layer premise round 5 flagged — correctness no longer depends on a Resume always delivering, because the Chunk is delivered regardless. claude:comprehensive confirms the new handlers.rs delivery test actually proves delivery when the resume no-ops.", "SPEC FR3's two exceptions now carry their correct, distinct justifications (claude:spec and codex:spec both verified against the code).", "The task0005.tests.yaml arithmetic error is corrected.", "task0006 stayed inside its scope: deviations [] and unconfirmed_reds [] with one documented test-placement note — no voluntary extra changes, which was the explicit instruction after task0005's voluntary fix caused round 5's regression."]
+  newly_introduced: ["Inserting mid-queue invalidates two things that assumed append-only: the documented strict-FIFO invariant (now false), and eviction's use of deque position as a proxy for age (can now evict a recent chunk instead of the oldest)."]
+final_round_decision:
+  decision: "Stop here. Record the residual findings and complete the review step."
+  rationale: |
+    Six rounds and six implementation generations. The severity trend is unambiguous:
+    round 1 had 9 critical/high, round 6 has 1 — and that one is a documentation
+    statement, not a behavioural defect (all four reviewers who touched it agree the
+    runtime behaviour is correct; production Chunks are self-contained snapshots whose
+    cross-pane order carries no meaning).
+
+    The two substantive mediums (eviction victim selection, duplicate snapshot payload)
+    are both confined to the already-congested path, degrade efficiency rather than
+    correctness, and cannot hang or silently lose a response — which is what this
+    feature exists to prevent.
+
+    Continuing would repeat the round-5-to-6 pattern: each narrow fix satisfies its
+    reviewers and invalidates a neighbouring assumption. claude:performance has already
+    identified the design that resolves both mediums at once (keep [Resume(P), Chunk(P)]
+    append order and let flush decide via ResumeOutcome), which is a better shape than
+    the insert-before that three round-5 reviewers recommended. That is a design change
+    worth a human decision, not another unattended rework.
+findings:
+  - stable_id: 7190054e2f30b371
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 478
+    line_end: 485
+    title: "DeferredOutputQueue の型ドキュメントが宣言する FIFO 不変条件が insert-before 経路で偽になっている"
+    description: "[codex:architecture] The struct doc states as a load-bearing guarantee: 'Items are flushed strictly in the order they were deferred — a plain FIFO... so a later item can never overtake an earlier one FROM THIS QUEUE.' This is directly contradicted by the new defer_chunk insertion path: when a VisibilityResume(pane_id) is already queued and a Chunk for the same pane is deferred afterward, the new code inserts that Chunk before the Resume, so at flush time the later-deferred item is delivered ahead of the earlier-deferred one. This is not merely a stale comment: the same doc block later builds a separate correctness argument (the reader-thread priority-inversion discussion) on the premise that within-queue ordering is strict FIFO. A future maintainer reasoning from this doc could reintroduce an ordering bug. [claude:architecture] 反例: キューが [VisibilityResume(1), Chunk(2)] の状態で pane 1 の RequestPaneSnapshot が defer されると [Chunk(1), VisibilityResume(1), Chunk(2)] になり、後から defer された Chunk(1) が先に defer 済みの両方を追い越す。同じ主張が handlers.rs:583 の handle_request_pane_snapshot doc ('in strict FIFO order relative to items already in the queue') と flush_deferred_output の doc にも波及しており、consumer 向けドキュメントが producer 側の実挙動と逆を述べている。今回のタスクは G2 で『doc の過剰主張を実態に合わせる』ことを明示的な目的にしていたので、その基準からすると取り残しに当たる。実害としてのバグは現時点では無い (production の Chunk は自己完結 snapshot だけで pane 間の相対順序に意味が無く、同一 pane 内では Chunk→Resume が意図した順序)。"
+    suggestion: "Ordering 節を実際の不変条件に書き換える: (a) flush ループは head から順に取り出し送れない item で必ず止まるのでキュー内の並び順どおりに配送される、(b) その並び順は deferral 順とは一致しない — defer_chunk は同 pane の VisibilityResume が既在ならその直前に挿入するため、per-pane の不変条件は『Chunk(P) は常に VisibilityResume(P) より前』であり pane をまたぐ相対順序は保証しない。あわせて handlers.rs:583 と flush_deferred_output の doc も同じ but-clause を持つ表現に揃える (挙動変更は不要、記述のみ)。"
+    sources: [claude:architecture, codex:architecture]
+    confidence: 95
+    resolution: deferred
+    resolution_reason: "final round: documentation-accuracy finding with no behavioural defect; deferred to the human evaluator with the review record intact"
+  - stable_id: b7663c0dfec52106
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/session/pane.rs
+    line: 651
+    line_end: 668
+    title: "挿入により eviction の「位置=古さ」前提が崩れ、直近に構築したスナップショットが捨てられる"
+    description: "eviction は position(|item| matches!(item, Chunk(_)))、つまり『キュー内で位置的に最初の Chunk』を最古とみなして捨てる。これは全 Chunk が push_back されていた (位置順=時間順) 前提でのみ成立していた。本 diff の insert(resume_pos, ...) は Chunk をキュー中間・場合によっては先頭に差し込むため、この前提が壊れる。到達列: 満杯チャネルで visible edge により [R1..R9] が積まれ、P2..P9 の RequestPaneSnapshot が各 Resume の直前に挿入されて chunk_count=8 になる。ここに P1 の要求が来ると最古 C2 を evict して C1 を position 0 に挿入し、キューは [C1, R1, R2, C3, ...] になる。次に別ペイン P10 の要求が来ると eviction は位置的先頭の C1、すなわち直前に積んだ最新の要求を、C3..C9 という本当に古いものより先に捨てる。結果 (a) すでに構築・エンコード済みの数 MiB スナップショットの計算が丸ごと無駄になり、(b) そのペインは無返答なのでクライアントが次の切替で再要求 → 同じ規模の構築・送信をもう一度行う。DeferredOutputQueue の doc が明示する『evict は最古、最新は決して落とさない』も同時に破れている。発生条件は chunk_count が MAX_DEFERRED_ITEMS=8 に達すること、すなわち eviction 経路そのものの前提と同じ。"
+    suggestion: "位置を古さの代理指標に使うのをやめる。(a) DeferredOutputItem::Chunk に単調増加の defer シーケンス番号を持たせ eviction はその最小値を選ぶ。(b) Chunk の挿入位置を変えない設計にする — [Resume(P), Chunk(P)] 順 (Chunk は push_back のまま) にして flush 側で Resume の ResumeOutcome により Chunk を破棄する方式にすれば、位置順=時間順が維持されるため eviction も現行実装のままで正しく動く。(b) は下記の二重送信 finding と同時に解消するため推奨。どちらを採るにせよ [R1, C2, R2, C3, R3] のような挿入済みキューで eviction が時間的最古を選ぶことを固定する回帰テストを追加する。"
+    sources: [claude:performance]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix gate; recorded for the human evaluator"
+  - stable_id: 296a3b4882204f45
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/session/pane.rs
+    line: 671
+    line_end: 683
+    title: "同一ペインのフルスナップショットが2本連続で輻輳中チャネルに流れる"
+    description: "新しい挿入により [Chunk(P), VisibilityResume(P)] が並ぶ。flush 時、Resume が no-op せず実際に resume するケース (pane が flush 時点でも Detached{HiddenByVisibility} かつ visible_state=true) では、Chunk のスナップショット (scrollback 込みで DEFAULT_SCROLLBACK_CAPACITY=2MiB + screen) を送った直後に resume_pane_with_permit が同じペインのフルスナップショットをもう一度構築して送る。つまり同一ペイン分のペイロードが約2倍になる。handle_request_pane_snapshot は pane が detached-hidden でもスナップショットを構築するため、この共存は理論上のものではない。しかも deferred queue に積まれる前提条件そのものが『pane_output_tx が満杯 = 既に輻輳している』なので、最も詰まっているタイミングで冗長な数 MiB を追加投入することになる。1本目は2本目に即座に上書きされるため、クライアント側の replay コストも丸ごと無駄になる。task0005 の drop はこの重複を消していたので、本 diff は正しさ (Resume が no-op したとき無返答になる問題) と引き換えにこのコストを復活させている。"
+    suggestion: "遅延判定 (lazy supersede) にする: キューでは Resume(P) を先、Chunk(P) を後ろに置き、flush 側で Resume の ResumeOutcome を見て分岐する。Resumed なら直後の同一ペイン Chunk を破棄、NoChange なら Chunk をそのまま送る。これで (a) Resume が no-op したときも必ず返答が返る、(b) Resume が実際に送ったときは重複ペイロードが出ない、(c) 常に新しい方が最後に残る、を同時に満たせる。flush_deferred_output が pop した Resume の結果を受けて次要素を peek/破棄できるようにする必要がある (resolve_pane_and_resume は既に ResumeOutcome を返している)。"
+    sources: [claude:performance]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix gate; recorded for the human evaluator"
+  - stable_id: c1b42571ccbab0d9
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 671
+    line_end: 683
+    title: "cap 到達時の eviction と insert-before の同時発火経路にテストが無い（コメント自身が load-bearing と明記）"
+    description: "追加コメントは『eviction は resume の位置を引く BEFORE に適用する、さもないと eviction が位置を無効化する』と、この2ブロックの順序が load-bearing であることを明示している。しかしその組み合わせ (chunk_count >= MAX_DEFERRED_ITEMS かつ同一 pane の VisibilityResume が queue 済み) を通すテストが1本も無い。新規の deferred_output_queue_inserts_chunk_immediately_before_queued_visibility_resume_for_same_pane は queue 長1で cap に触れず、既存の eviction テストは queue に Resume を一切入れていない。順序を入れ替えた場合の壊れ方は具体的で、[C1..C8, Resume(P)] (chunk_count=8=MAX) に defer_chunk(P) が来ると、先に resume_pos=8 を取ってから C1 を evict すると len が 8 になり insert(8, ...) は push_back と等価になって Chunk が Resume の後ろに落ち、task0005 が塞いだはずの stale rollback が復活する。しかも既存テストは全部緑のまま通る。MAX_DEFERRED_ITEMS=8 に対し handle_set_visibility は可視エッジで非 exited の全 pane 分の Resume を積むので、9 pane 以上のセッション + チャネル飽和という本機能の想定シナリオそのもので到達可能。"
+    suggestion: "mux::session::pane::tests に cap 到達 + 同一 pane Resume 併存のケースを1本追加する。pane 1..=MAX_DEFERRED_ITEMS の Chunk を defer して cap を埋め、defer_visibility_resume(99) を積んだ上で defer_chunk(pane 99) を呼び、(a) 最古 Chunk が evict されていること、(b) pop_front() を順に見て Chunk(99) が Resume(99) より前に来ること、(c) chunk 総数が MAX を超えないこと、を assert する。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix gate; recorded for the human evaluator"
+  - stable_id: 277100415a1a6224
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 464
+    line_end: 474
+    title: "AC-3 の eviction 正当化の訂正が pane.rs 側（型 doc と warn ログ）に適用されず、同一 diff 内で矛盾している"
+    description: "task0006 の AC-3 は『coalescing と distinct-pane eviction に同一の正当化を与えていたのが誤りで、eviction は実際に配信を落とす』と結論し SPEC.md FR3 と handlers.rs の doc を訂正した。しかし同じ diff が編集している pane.rs には訂正前の主張がそのまま2箇所残っている: (1) 型 doc 464-474 行『Both paths are SPEC-sanctioned ... not a dropped delivery under that guarantee』(両経路をひとまとめにした上で coalescing にしか当てはまらない理由を提示)、(2) 657-667 行の eviction 時 log::warn! 本文『this eviction is a SPEC-sanctioned bounded-backlog policy ... not a contradiction of FR3's delivery guarantee』。(2) は warn レベルなのでリリースビルドのログにも出力され、実運用の障害調査時に『FR3 的には落ちていない』と読める誤った案内を残す。同じ機能の同じ挙動について SPEC.md/handlers.rs と pane.rs が正反対のことを言っている状態。"
+    suggestion: "handlers.rs / SPEC.md 側の訂正文言に合わせて pane.rs の2箇所を直す。(1) 型 doc は coalescing と eviction を分離して記述する。(2) log::warn! 本文の『not a contradiction of FR3's delivery guarantee』を削り『FR4 のメモリ上限を保つための明示的な carve-out で、evict された pane はこの要求に対する返信を受け取らない (次回の切り替えで再要求されて回復する)』に置き換える。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix gate; recorded for the human evaluator"
+  - stable_id: 622fbc16617273ba
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 478
+    line_end: 485
+    title: "型ドキュメントの strict-FIFO 不変条件が insert-before 経路で成立しなくなっている（consumer 側 doc にも波及）"
+    description: "DeferredOutputQueue の Ordering 節は『Items are flushed strictly in the order they were deferred』『a deferred item is never overtaken by another producer that has to go through this same connection's own scheduling to get its turn (e.g. a later RequestPaneSnapshot on the same connection)』と無条件に宣言している。今回の insert-before はまさにその『later RequestPaneSnapshot』を既存の Resume より前に割り込ませる。同一 pane の Resume を追い越すのは意図的だが、副作用として Resume より後ろに積まれている他 pane の Chunk/VisibilityResume も同時に追い越す。内容面の破綻はないが宣言している不変条件そのものが偽になっており、同じ主張が handlers.rs の handle_request_pane_snapshot 内コメントと flush_deferred_output の doc にも波及している。"
+    suggestion: "Ordering 節を『pane 単位では厳密 FIFO、かつ pane ごとに Chunk が必ずその pane の Resume より前に来る』という実際の不変条件に書き換え、例外を明記する。あわせて handlers.rs の2箇所も同じ but-clause を持つ表現に揃える。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix gate; recorded for the human evaluator"
+  - stable_id: 343bcc07441b4a09
+    severity: medium
+    category: spec
+    file: feature-docs/mux-window-switch-output-hang/SPEC.md
+    line: 88
+    line_end: 90
+    title: "FR3 の FIFO 順序保証が insert-before 実装と直接矛盾する"
+    description: "[claude:spec] SPEC FR3 の順序段落は『Ordering relative to PTY output chunks already queued for that same pane BEFORE the snapshot was requested, and relative to other items deferred through this same connection, IS preserved (FIFO).』と無条件に述べている。今回の diff はこの文を触らないまま defer_chunk を insert-before 実装へ変更した。挿入位置は resume_pos なので、後から defer された Chunk が (a) 先に defer された同一 pane の Resume と、(b) その Resume より後に積まれた全アイテムを追い越す。FR3 が保証すると書いている『同一コネクションで defer された他アイテムに対する FIFO』はこの diff の時点で成立していない。このラウンドで FR3 の破棄例外側の文言は正しく直されたが、同じ FR3 の順序節が新しい挙動に合わせて更新されていない — round 4 の 329f746349f592e8、round 5 の『第3の破棄経路』と全く同じ、FR3 と defer_chunk の乖離が積み重なるパターンの3回目。[codex:spec] Given [VisibilityResume(P), Chunk(Q)], a later snapshot request for P produces [Chunk(P), VisibilityResume(P), Chunk(Q)], so the later P snapshot overtakes Q's already-deferred chunk. 実挙動そのものは妥当 (production で deferred Chunk を作る経路は handle_request_pane_snapshot のみで中身は自己完結した snapshot 応答、coalescing により pane あたり Chunk は高々1件)。問題は正規ドキュメントである SPEC が、出荷コードが意図的に破る保証を無条件に宣言したまま出る点。"
+    suggestion: "FR3 の順序節に今回入れた例外を明記する (1文の spec 修正、コード変更は不要): 『同一コネクションで defer された他アイテムに対する順序は FIFO だが、既に VisibilityResume がキューされている pane の snapshot chunk はその Resume の直前に挿入されるため、その Resume 以降のアイテムを追い越す。この反転は意図的で、Chunk は defer 時構築の古い画面・Resume は flush 時構築の新しい画面なので Chunk→Resume の順が newest-wins を保ちつつ Resume が no-op したときも要求に応えるため。production の deferred Chunk は全て自己完結 snapshot なので PTY バイト列が並べ替わることはない』。"
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix gate; recorded for the human evaluator"
+  - stable_id: d867ebabf32df107
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/session/pane.rs
+    line: 650
+    line_end: 656
+    title: "Eviction can remove a recent snapshot instead of the oldest one"
+    description: "[codex:spec] SPEC FR3 permits eviction of only 'the OLDEST queued distinct-pane chunk' when the 8-pane backlog is full. Eviction removes the first Chunk in deque order, but the round's fix can place a newly requested same-pane chunk at the front (before an older VisibilityResume), so a subsequent full-backlog admission can evict that recently-inserted chunk instead of the chronologically oldest one. これは claude:performance が独立に指摘した『位置=古さ前提の崩れ』と同一の欠陥を仕様適合の観点から述べたもの。"
+    suggestion: "Base eviction on immutable admission age rather than deque position, or otherwise ensure chunk position always reflects chronological order; add an eviction regression test covering the resume-first/full-backlog sequence."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix gate; recorded for the human evaluator"
+  - stable_id: 4f95729634a790de
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 551
+    line_end: 560
+    title: "Oversized snapshot requests are dropped outside FR3's two exceptions"
+    description: "[codex:spec] SPEC FR3 says a snapshot reflecting the pane's most recent request is always delivered except for 'two permitted exceptions'. For a valid resolved pane whose encoded snapshot exceeds the single-frame limit, this branch returns Ok(()) without enqueueing a snapshot or sending an error — a third, unlisted snapshot-loss path. NOTE (claude:spec が独立に評価): 16MiB 上限に対し scrollback 上限 2MiB なので実到達性は乏しく、かつ本 diff のコード変更外。"
+    suggestion: "Either produce a bounded valid snapshot (e.g. trim scrollback while preserving current state) or protocol-support fragmentation; if refusal is intentional, FR3 must document it as an explicit third exception with observable error semantics."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix gate; recorded for the human evaluator"
+auto_fix:
+  loops_run: 1
+  applied_total: 0
+  termination: no-progress
+  note: "The single high is a doc-accuracy finding spanning three files plus SPEC.md; the two substantive mediums share a root cause whose best fix (per claude:performance) is a different queue design than the one just implemented. Neither is a mechanical single-file edit."
+residual_critical_high: 1
+rework_required: false
+rework_note: "Stopping by orchestrator decision, not by counter exhaustion — see final_round_decision. The handover list for whoever picks this up is: (1) the FIFO doc statements in pane.rs / handlers.rs / SPEC.md FR3, (2) eviction using deque position as an age proxy, (3) the duplicate same-pane snapshot when a Resume does not no-op. claude:performance proposes one design that closes (2) and (3) together."
