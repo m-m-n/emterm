@@ -455,9 +455,18 @@ impl std::fmt::Debug for DeferredOutputItem {
 /// capped (see its own doc for why that is still bounded in practice).
 /// `defer_chunk` coalesces a new chunk over any existing queued chunk FOR
 /// THE SAME PANE (a snapshot reply is fully self-contained, so only the
-/// newest one for a given pane matters), and only evicts across DIFFERENT
-/// panes' chunks once `MAX_DEFERRED_ITEMS` distinct panes are queued —
-/// evicting the OLDEST such entry, never the one just pushed.
+/// newest one for a given pane matters) — assigned IN PLACE so the queue
+/// POSITION never changes (task0004 rework, AC-5, review round 3 finding
+/// `0830abe1c16ad0fb`: task0003's `remove` + `push_back` moved a coalesced
+/// chunk to the tail, breaking the FIFO invariant this doc declares) — and
+/// only evicts across DIFFERENT panes' chunks once `MAX_DEFERRED_ITEMS`
+/// distinct panes are queued — evicting the OLDEST such entry, never the
+/// one just pushed. This distinct-pane eviction is a SPEC-sanctioned,
+/// bounded-backlog policy (SPEC.md FR3's carve-out, task0004 rework,
+/// G3/AC-3 option (a); review round 3 finding `b4eee6700d643640`), not an
+/// unresolved contradiction of FR3's "MUST be delivered" clause — recovery
+/// is the client re-issuing `RequestPaneSnapshot` on its next switch to the
+/// evicted pane.
 ///
 /// ### Ordering (AC-2/AC-3/F4/F5): what is, and is not, guaranteed
 ///
@@ -551,35 +560,55 @@ impl DeferredOutputQueue {
             .iter()
             .position(|item| matches!(item, DeferredOutputItem::Chunk(c) if c.pane_id == pane_id))
         {
+            // AC-5 fix (mux-window-switch-output-hang task0004 rework,
+            // review round 3 finding `0830abe1c16ad0fb`): assign the new
+            // content IN PLACE at the SAME queue position rather than
+            // `remove` + `push_back`. The pre-fix remove-then-append moved
+            // a coalesced chunk to the queue's TAIL, breaking the FIFO
+            // invariant this type's own doc declares ("a later item can
+            // never overtake an earlier one FROM THIS QUEUE") — concretely,
+            // `[Chunk(P), VisibilityResume(P)]` followed by a second
+            // `RequestPaneSnapshot` for P reordered into
+            // `[VisibilityResume(P), Chunk(P')]`, so the resume's
+            // freshly-built-at-flush-time snapshot would be delivered
+            // FIRST and then immediately overwritten by the OLDER
+            // already-built chunk arriving second — the opposite of
+            // "newest wins". Assigning in place keeps the position (and
+            // thus the delivery order relative to every other queued item)
+            // unchanged; only the content is replaced.
             log::debug!(
                 "deferred pane output queue: coalescing new chunk for pane {} over the \
-                 previously-queued one (newest wins, mux-window-switch-output-hang \
-                 task0003 AC-2)",
+                 previously-queued one IN PLACE at position {} (newest wins, position \
+                 preserved — mux-window-switch-output-hang task0003 AC-2 / task0004 AC-5)",
                 pane_id,
+                pos,
             );
-            self.items.remove(pos);
-        } else {
-            let chunk_count = self
+            self.items[pos] = DeferredOutputItem::Chunk(chunk);
+            return;
+        }
+        let chunk_count = self
+            .items
+            .iter()
+            .filter(|item| matches!(item, DeferredOutputItem::Chunk(_)))
+            .count();
+        if chunk_count >= MAX_DEFERRED_ITEMS {
+            if let Some(oldest) = self
                 .items
                 .iter()
-                .filter(|item| matches!(item, DeferredOutputItem::Chunk(_)))
-                .count();
-            if chunk_count >= MAX_DEFERRED_ITEMS {
-                if let Some(oldest) = self
-                    .items
-                    .iter()
-                    .position(|item| matches!(item, DeferredOutputItem::Chunk(_)))
-                {
-                    let dropped = self.items.remove(oldest);
-                    log::warn!(
-                        "deferred pane output queue at capacity ({} chunks); dropping the \
-                         OLDEST queued chunk {:?} to admit pane {}'s newer one \
-                         (mux-window-switch-output-hang task0003 AC-2: never drop the newest)",
-                        MAX_DEFERRED_ITEMS,
-                        dropped,
-                        pane_id,
-                    );
-                }
+                .position(|item| matches!(item, DeferredOutputItem::Chunk(_)))
+            {
+                let dropped = self.items.remove(oldest);
+                log::warn!(
+                    "deferred pane output queue at capacity ({} chunks); dropping the \
+                     OLDEST queued chunk {:?} to admit pane {}'s newer one \
+                     (mux-window-switch-output-hang task0003 AC-2: never drop the newest; \
+                     this eviction is a SPEC-sanctioned bounded-backlog policy, SPEC.md \
+                     FR3's carve-out, task0004 G3/AC-3 option (a) — not a contradiction of \
+                     FR3's delivery guarantee)",
+                    MAX_DEFERRED_ITEMS,
+                    dropped,
+                    pane_id,
+                );
             }
         }
         self.items.push_back(DeferredOutputItem::Chunk(chunk));
@@ -4124,6 +4153,47 @@ mod tests {
             }
             other => panic!("expected a Chunk, got {other:?}"),
         }
+    }
+
+    /// AC-5 (mux-window-switch-output-hang task0004 rework, review round 3
+    /// finding `0830abe1c16ad0fb`): coalescing a repeated chunk for the SAME
+    /// pane must preserve its QUEUE POSITION, not move it to the tail. With
+    /// `[Chunk(pane 1), VisibilityResume(pane 1)]` queued, a second
+    /// `RequestPaneSnapshot` for pane 1 must coalesce the `Chunk` IN PLACE
+    /// (still first), NOT reorder into `[VisibilityResume, Chunk]` — the
+    /// pre-fix `remove` + `push_back` behavior, which would let a stale,
+    /// already-built `Chunk` overtake and overwrite a `VisibilityResume`'s
+    /// fresher flush-time-built snapshot on the wire.
+    #[test]
+    fn deferred_output_queue_coalesce_preserves_position_ahead_of_a_later_visibility_resume() {
+        let mut deferred = DeferredOutputQueue::new();
+        deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"first".to_vec()));
+        deferred.defer_visibility_resume(1);
+        assert_eq!(deferred.len(), 2);
+
+        // Second RequestPaneSnapshot for the SAME pane while both entries
+        // are still queued: must coalesce the Chunk IN PLACE, not move it
+        // to the tail.
+        deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"second".to_vec()));
+        assert_eq!(
+            deferred.len(),
+            2,
+            "coalescing must not grow the queue past its pre-coalesce length"
+        );
+
+        match deferred.pop_front() {
+            Some(DeferredOutputItem::Chunk(chunk)) => {
+                assert_eq!(chunk.data, b"second", "the newest payload must survive");
+            }
+            other => panic!(
+                "expected the coalesced Chunk to remain FIRST (position preserved), got {other:?}"
+            ),
+        }
+        match deferred.pop_front() {
+            Some(DeferredOutputItem::VisibilityResume(pane_id)) => assert_eq!(pane_id, 1),
+            other => panic!("expected the VisibilityResume to remain SECOND, got {other:?}"),
+        }
+        assert!(deferred.pop_front().is_none());
     }
 
     /// AC-2: once coalescing still leaves more than `MAX_DEFERRED_ITEMS`
