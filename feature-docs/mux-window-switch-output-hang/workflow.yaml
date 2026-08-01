@@ -27,7 +27,7 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: completed
+    status: pending
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
     completed_at_commit: bfa2af1054ed1a38aea45857c9e7c5732a103542
   - id: review
@@ -90,6 +90,21 @@ tasks:
     merge_commit: ad1a6957fc9d4e0f02c8e3095e6f66c57144f2d1
     notes: "Synthesized by the orchestrator from review round 1 residual critical/high findings (9). Deviates from batch-mode.md's one-task-per-affected-file synthesis rule on purpose: all nine findings describe a single mechanism (task0001's spawn-a-detached-waiter deferral) that appears at two call sites, so splitting it would let two implementers pick different replacement designs that the textual conflict protocol cannot reconcile. Rationale recorded in tasks/task0002.md. Outcome: one connection-owned bounded DeferredOutputQueue (MAX_DEFERRED_ITEMS=8, shared by chunk and visibility-resume deferrals) replaces every tokio::spawn deferral; flushed by the connection's own event loop after each drain. F1/F2/F3 now close by construction (visible_state is re-validated at flush time, no independently-scheduled task remains to race) and F4's secondary runtime-panic risk disappears with the spawn. AC-2 CAVEAT: the cross-OS-thread race against pty_spawn.rs's reader-thread blocking_send is NOT structurally closed — it lies outside this task's file scope. Per the plan's permitted fallback the implementer narrowed the documented guarantee instead of reasserting the false unconditional FIFO claim; the residual ordering exposure is therefore documented, not eliminated, and is a candidate for a follow-up feature."
 
+  task0003:
+    title: "Rework: make the bounded deferral lossless, unstarvable, and covered at the connection level"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/ipc/connection.rs
+      - feature-docs/mux-window-switch-output-hang/SPEC.md
+    skills: [backend-impl]
+    domains: [concurrency]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4]
+    status: pending
+    notes: "Synthesized by the orchestrator from the verify phase's failed_items (SC-1, SC-2). Same one-task-not-per-file rationale as task0002: the defects share one mechanism across two call sites. SC-4 is explicitly out of scope — it needs the review phase to re-run, which the batch review rework cap (already 1) prevents in this run."
+
 review:
   status: completed
   rounds_completed: 2
@@ -148,4 +163,4 @@ requirements:
 
 batch:
   review_rework_count: 1
-  verify_rework_count: 0
+  verify_rework_count: 1
