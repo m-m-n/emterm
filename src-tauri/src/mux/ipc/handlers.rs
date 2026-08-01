@@ -2285,6 +2285,73 @@ mod tests {
         );
     }
 
+    /// AC-1 regression (mux-window-switch-output-hang task0006 rework,
+    /// review round 5 high findings `4043ee676f69ca15` / `1c8d86389ab4bf40`):
+    /// a `RequestPaneSnapshot` for a pane that already has a
+    /// `VisibilityResume` queued for it must still be delivered even when
+    /// that Resume no-ops at flush time — here because the pane is already
+    /// `Connected` by then, one of the four situations
+    /// `resume_pane_with_permit`/`resolve_pane_and_resume` return
+    /// `NoChange` without sending anything (see `defer_chunk`'s own doc for
+    /// the other three). task0005's now-reverted fix dropped the Chunk
+    /// outright in this exact situation, so the client's request got NO
+    /// reply at all — the tab stayed stale until the next unrelated output.
+    /// This is not an exotic setup: `handle_set_visibility` queues a
+    /// `VisibilityResume` for every non-exited pane in the session on a
+    /// visible edge without checking whether that pane is actually
+    /// detached-hidden, so a resume that will no-op is the NORMAL case.
+    #[tokio::test]
+    async fn flush_deferred_output_delivers_chunk_even_when_its_queued_visibility_resume_no_ops() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+
+        // Pane 1 is already Connected — its queued VisibilityResume will
+        // resolve to `ResumeOutcome::NoChange` at flush time.
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid, 1, target.clone());
+            sid
+        };
+
+        let visible_state = Arc::new(AtomicBool::new(true));
+        let mut deferred = DeferredOutputQueue::new();
+        deferred.defer_visibility_resume(1);
+        deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"requested-snapshot".to_vec()));
+        assert_eq!(
+            deferred.len(),
+            2,
+            "the Chunk must be inserted alongside the Resume, not dropped"
+        );
+
+        flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+        assert!(deferred.is_empty());
+
+        let delivered = rx.try_recv().expect(
+            "the snapshot Chunk must still be delivered even though its queued \
+             VisibilityResume no-ops (pane already Connected)",
+        );
+        assert_eq!(delivered.pane_id, 1);
+        assert_eq!(delivered.data, b"requested-snapshot");
+        assert_eq!(
+            delivered.kind,
+            crate::mux::session::pane::ChunkKind::Snapshot
+        );
+
+        // The no-op resume must not have sent a second chunk of its own.
+        assert!(
+            rx.try_recv().is_err(),
+            "a no-op VisibilityResume must not send anything"
+        );
+        assert!(
+            matches!(*target.lock().unwrap(), PaneOutputTarget::Connected(_)),
+            "pane must remain Connected — the resume genuinely no-ops here"
+        );
+    }
+
     // ── mux-window-switch-output-hang task0003 rework: overflow policy
     // (AC-1/AC-2) and flush arm coverage (AC-5) ──
 
@@ -2387,13 +2454,17 @@ mod tests {
     /// full channel, then drained — the panes evicted are the OLDEST
     /// distinct ones; every surviving (most-recently-requested) pane gets
     /// its own snapshot delivered, and the evicted panes get nothing. This
-    /// eviction is an explicitly SPEC-SANCTIONED bounded-backlog policy
-    /// (SPEC.md FR3, task0004 G3 option (a); wording finalized task0005
-    /// G3/AC-3, review round 4 finding `329f746349f592e8`) — FR3's
-    /// guarantee is "one snapshot per pane, reflecting its newest request,
-    /// is delivered", not a 1:1 request/reply correspondence, so this is
-    /// not a dropped delivery under that guarantee — the client recovers by
-    /// switching to the evicted pane again, which re-issues
+    /// eviction IS a dropped delivery — the evicted chunk was that pane's
+    /// ONLY queued reply, so the evicted pane receives nothing for its
+    /// request, unlike same-pane coalescing (which only ever discards an
+    /// already-superseded reply). It is nonetheless an explicitly
+    /// SPEC-SANCTIONED bounded-backlog policy (SPEC.md FR3, task0004 G3
+    /// option (a); wording corrected task0006 rework, review round 5, after
+    /// task0005 G3/AC-3 review round 4 finding `329f746349f592e8` merged
+    /// the two exceptions' justifications into one that only actually held
+    /// for coalescing) — justified solely by keeping the backlog's memory
+    /// bound (FR4) finite, with recovery left client-driven: the client
+    /// recovers by switching to the evicted pane again, which re-issues
     /// `RequestPaneSnapshot`.
     #[tokio::test]
     async fn handle_request_pane_snapshot_evicts_oldest_distinct_pane_per_spec_sanctioned_backlog_policy()
