@@ -2071,19 +2071,44 @@ mod tests {
     /// case 1 ("snapshot requested for the exact pane producing the
     /// high-volume output") at once — the pre-task0005 version of this test
     /// requested PANE_B's own snapshot, so cross-pane input-vs-
-    /// snapshot-pending was never actually exercised. The assertions below
-    /// also prove ORDER, not just eventual truth: B's input must be
-    /// observed to have landed, and A's own output must keep draining,
-    /// STRICTLY BEFORE A's deferred snapshot is delivered — not merely by
-    /// the time the test ends (the pre-task0005 weakness: a build that
-    /// processes input only AFTER snapshot delivery, or whose "output kept
-    /// flowing" evidence was really just output buffered during the
-    /// pre-request saturation window, could still pass the old assertions).
-    /// Confirmed by temporarily reverting to the pre-task0005 shape
-    /// (`RequestPaneSnapshot` targeting `PANE_B`, matching `(Snapshot,
-    /// PANE_B)`, and checking `captured_input` only after the loop) and
-    /// observing the strict-ordering assertions below could not have caught
-    /// the bug this rework exists to catch — restored afterward.
+    /// snapshot-pending was never actually exercised. `input_processed_
+    /// before_snapshot` proves ORDER, not just eventual truth, for pane B's
+    /// input: captured at the exact moment the `Snapshot(A)` frame is
+    /// observed rather than re-derived after the loop ends, a build that
+    /// processes B's `PtyInput` only AFTER delivering A's snapshot (instead
+    /// of interleaved with it, as `route_message` does synchronously)
+    /// cannot pass this assertion merely by the time the test ends.
+    /// `output_flowed_before_snapshot` is WEAKER than that (task0006
+    /// rework, review round 5): it only proves SOME `PtyOutput(PANE_A)`
+    /// frame was observed before the `Snapshot(A)` frame, which the
+    /// pre-request channel saturation (8 background producer threads
+    /// already flooding pane A's channel before `RequestPaneSnapshot` is
+    /// even sent) guarantees trivially, regardless of whether the
+    /// connection keeps draining pane A's output correctly WHILE the
+    /// deferred snapshot is pending. It does not, by itself, distinguish
+    /// "kept draining throughout the wait" from "some output happened to
+    /// already be buffered/in flight before the request landed" — closing
+    /// that gap would require tagging payloads pre/post-request and
+    /// asserting on the tagged sequence, which this task's scope does not
+    /// include.
+    /// Confirmed load-bearing by reverting JUST the wait-loop match arm back
+    /// to `(Snapshot, PANE_B)` (the pre-task0005 target) while leaving
+    /// everything else — the retargeted `RequestPaneSnapshot`, the
+    /// at-the-moment `input_processed_before_snapshot`/
+    /// `output_flowed_before_snapshot` capture — as implemented: the test
+    /// hung and panicked ("must not hang") since the real `Snapshot(A)`
+    /// frame the server actually sends is never matched. Restored the
+    /// correct `(Snapshot, PANE_A)` arm afterward. The "strict same-moment
+    /// ordering" dimension specifically — capturing the flags at the exact
+    /// instant the `Snapshot(A)` frame is observed, rather than re-deriving
+    /// them after the loop ends — could NOT independently be forced red in
+    /// this environment (see `test-docs/mux-window-switch-output-hang/
+    /// task0005.tests.yaml`'s AC-1 entry for the honest account of why: by
+    /// this test's own construction, pane B's `PtyInput` is processed
+    /// almost immediately, so input landing before the snapshot is
+    /// guaranteed by timing, not something a regression could plausibly
+    /// invert here). Recorded accordingly — only the retargeting/matching
+    /// revert is claimed as observed red.
     #[tokio::test]
     async fn connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing()
      {
@@ -2291,13 +2316,17 @@ mod tests {
             }
         }
 
-        // AC-4: pane A's own output must have already been observed
-        // flowing STRICTLY BEFORE its deferred snapshot was delivered, not
-        // merely by the time this loop happens to end.
+        // AC-4: at least one PtyOutput(PANE_A) frame must have already been
+        // observed before the Snapshot(A) frame. Weaker than it may look
+        // (task0006 rework, review round 5): the pre-request channel
+        // saturation guarantees this trivially, so it does not by itself
+        // distinguish "kept draining throughout the deferred-snapshot
+        // wait" from "some output was already buffered/in flight before
+        // the request landed" — see this test's own doc.
         assert!(
             output_flowed_before_snapshot,
-            "AC-4: pane A's own output must keep draining STRICTLY BEFORE its \
-             deferred snapshot is delivered"
+            "AC-4: at least one PtyOutput(PANE_A) frame must be observed STRICTLY BEFORE \
+             its deferred snapshot is delivered"
         );
         // AC-4: the PtyInput for pane B must have already been processed
         // (the write is synchronous inside `route_message`) STRICTLY
