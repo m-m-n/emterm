@@ -1,0 +1,241 @@
+round: 3
+executed_at: "2026-08-02T01:00:00+09:00"
+reason: "task0003 (~1400 lines) had never been reviewed. The verify-branch rework rule returns only implement and verify to pending, so Step B skipped the completed review step. batch.review_rework_count was deliberately NOT consumed for this round — it caps the review->implement->review deferral loop, not the first review of code a different phase produced."
+scope:
+  review_mode: diff
+  base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
+  head_commit: a0b9de13f4a2a2f89d4ade46ec3952c3c8ab6cde
+  changed_files:
+    - src-tauri/src/mux/ipc/connection.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/session/pane.rs
+    - test-docs/mux-window-switch-output-hang/task0003.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: comprehensive, source: codex, status: skipped, skip_reason: "registry marks comprehensive codex_supported: false"}
+orchestrator_adjudication:
+  - topic: "select! arm ordering (starvation)"
+    claude_position: "three Claude reviewers judged the fair-reserve arm safe because it precedes the drain arm"
+    codex_position: "two Codex reviewers flagged that framed.next() precedes BOTH, so sustained client traffic starves the reserve arm"
+    verdict: "Codex is correct. Verified by reading the arm order directly: biased; framed.next(); kick_fut; pending_deferred_reserve; pane_output_rx.recv(). The in-code comment only argues placement relative to the drain arm. Recorded as high."
+  - topic: "PTY reader EOF branch holding output_target across blocking_send"
+    verdict: "Confirmed by reading pty_spawn.rs:624-629 against the data path at :784, which carries an explicit 'release lock before blocking_send to avoid deadlock' comment the EOF path does not honour. Recorded as high."
+findings:
+  - stable_id: 22251d51cc98261e
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 872
+    line_end: 872
+    title: "新しい fair permit 経路も PTY reader の EOF ブランチが握る output_target std mutex で同クラスの self-deadlock に落ちうる"
+    description: "task0003 が追加した apply_fair_permit_to_front_deferred_item -> resolve_pane_and_resume -> resume_pane_with_permit は、connection タスク上で同期 std mutex pane.output_target.lock().unwrap() を取る (pane.rs:1061)。一方 PTY reader スレッドの EOF ブランチ (pty_spawn.rs:624-629) は output_target を握ったまま tx.blocking_send(PtyOutputChunk::pty_output(pane_id, Vec::new())) を実行する。データ経路は pty_spawn.rs:784 で 'IMPORTANT: release lock before blocking_send to avoid deadlock' と明記してガードを解放しているのに、EOF 経路だけスコープ内で送っている。再現手順: (1) pane A の大量出力で pane_output_tx が飽和 -> (2) pane B のシェルが exit し、reader スレッドが output_target を握ったまま blocking_send で semaphore にパーク (pane.exited はまだ false なので resolve_pane_and_resume の .filter(|p| !p.exited) を通過する) -> (3) SetVisibility(true) 由来の deferred resume が fair permit で解決され resume_pane_with_permit(pane B) が output_target.lock() でブロック -> (4) connection タスクが止まるので drain arm が走らず容量が空かず、reader は永久にパーク。本 feature が閉じようとしている『window 切替後に出力が止まる』症状に戻る。さらに connection.rs:1027-1031 に task0003 が追加した audit note は『the actual PTY output send for those happens later, off this task, on the pane's reader thread via blocking_send, which blocks that native OS thread only, not this connection task』と断言しているが、EOF ブランチについてはこれが成り立たない。ORCHESTRATOR VERIFICATION: pty_spawn.rs:627 のロック保持と 784 行のコメントを直接確認し、指摘が事実であることを確認済み。"
+    suggestion: "(a) pty_spawn.rs の EOF ブランチをデータ経路と同じ形にする — lock スコープ内では tx を clone するだけにして、output_target guard を drop してから blocking_send する。(b) それが別タスク扱いなら、少なくとも connection.rs の audit note から『blocks that native OS thread only, not this connection task』の無条件保証を外し、EOF 経路が例外であることと残存デッドロック条件を明記して follow-up を起票する。注: pty_spawn.rs はこの feature の changed_files 外だが、修正は数行で、task0003 がこの経路への新しい到達口を増やしたことが到達性を上げている。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "routed to task0004 rework"
+  - stable_id: 0830abe1c16ad0fb
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 560
+    line_end: 585
+    title: "defer_chunk の coalesce が要素を末尾へ移動させ、DeferredOutputQueue が謳う FIFO 不変条件を破る"
+    description: "defer_chunk は同一 pane の既存 Chunk を self.items.remove(pos) で取り除いたうえで push_back する (pane.rs:560/585)。結果、coalesce された chunk は元の位置ではなくキュー末尾に移動し、その間に積まれていた項目に追い越される。これは同ファイルの DeferredOutputQueue doc (pane.rs:482-489) が明示する不変条件『Items are flushed strictly in the order they were deferred — a plain FIFO ... so a later item can never overtake an earlier one FROM THIS QUEUE』と矛盾する。具体的な壊れ方: キューが [Chunk(P), VisibilityResume(P)] の状態で P への 2 回目の RequestPaneSnapshot が来ると [VisibilityResume(P), Chunk(P')] に並び替わる。flush 時、VisibilityResume はその時点で新しい snapshot を組み立てて送るのに対し、Chunk(P') は defer 時点で組み立て済みの古い内容を後から送る。クライアント側の Snapshot 適用は reset_and_replay_segments なので、新しい方が古い方に上書きされ、その間の出力が失われる。coalesce の意図 (newest content wins) はキュー位置を動かさなくても満たせる。"
+    suggestion: "items.remove(pos) + push_back をやめ、self.items[pos] = DeferredOutputItem::Chunk(chunk) として位置を据え置いたまま内容だけ差し替える。併せて [Chunk(pane1), VisibilityResume(pane1)] の並びに対する順序アサートの回帰テストを追加する。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0004 as related context"
+  - stable_id: c60b56cac9be2557
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 976
+    line_end: 995
+    title: "apply_fair_permit_to_front_deferred_item と AnyPermit::Owned 経路に直接テストが 1 本も無い"
+    description: "task0003 の中核である apply_fair_permit_to_front_deferred_item を直接呼ぶテストが存在しない (呼び出しは connection.rs:452 の本番コードのみ)。AnyPermit::Owned の構築も handlers.rs:982 だけで、pane.rs のテストは全て AnyPermit::Borrowed を使っており、AnyPermit::send の Owned アーム / resume_pane_with_permit に OwnedPermit を渡す経路は一度も実行されない。未カバーの分岐: (1) deferred_output が空のときに permit を drop して no-op になる分岐、(2) 先頭が VisibilityResume かつ visible_state == false のとき permit を drop して item を捨てる分岐、(3) VisibilityResume を AnyPermit::Owned で resume する成功分岐。唯一の間接カバレッジである connection レベルテストは Chunk アームしか通らず、しかも『8 スレッド x 32KB で確実に飽和する』というタイミング前提に依存しており、deferral が実際に起きたことを assert していないのでマシンが速くなると黙って vacuous なテストに退化する。"
+    suggestion: "handlers.rs の tests に apply_fair_permit_to_front_deferred_item を直接叩く単体テストを 4 本追加する (空キュー / 先頭 Chunk / 先頭 VisibilityResume+hidden / 先頭 VisibilityResume+visible)。permit は owned_tx.clone().reserve_owned().await.unwrap() で用意できる。併せて connection レベルテストに『実際に defer されたこと』の観測点を assert して vacuous 化を防ぐ。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0004 as related context"
+  - stable_id: 4dd47fb07e6a6142
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/session/pane.rs
+    line: 547
+    line_end: 586
+    title: "MAX_DEFERRED_ITEMS は件数のみを縛り保持バイト数は非有界。task0003 で 8 枠が常時 Chunk 専用になり上限が確実に到達可能になった"
+    description: "round 2 の未解決所見 b23444abcf91fe6b が task0003 でも残り、むしろ到達しやすくなった。task0002 では 8 枠を Chunk と VisibilityResume が共有していたため resume が積まれるほど保持ペイロード数は減っていた。task0003 は VisibilityResume をキャップ対象外にし、defer_chunk の chunk_count >= MAX_DEFERRED_ITEMS 判定も Chunk のみを数えるため、キューは『8 件のフル Chunk』+『セッションのペイン数ぶんの resume』を同時に保持しうる。つまり 8 枠は常に Chunk 専用になった。Chunk の唯一の上限は fits_single_snapshot_frame (MAX_SNAPSHOT_FRAME_PAYLOAD ~ 16MiB) なので理論上限は 8 x 16MiB ~ 128MiB/接続。通常サイズ (scrollback 2MiB + 画面ダンプ) でも 8 件で 16-24MiB/接続。pane.rs:352-369 の doc は 'a low multiple of a few MiB' と書いているが、コード上それを強制するものは無い。"
+    suggestion: "件数キャップに加えてバイト予算を持たせる (DeferredOutputQueue に bytes: usize、MAX_DEFERRED_BYTES 超過で最古の Chunk を追い出す)。より根本的には Chunk を遅延構築に変える (Chunk(PtyOutputChunk) ではなく SnapshotRequest(PaneId) を保持し flush 時に組み立てる) と保持バイトがゼロになり、VisibilityResume と構造も揃う。"
+    sources: [claude:performance]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0004 as related context"
+  - stable_id: 405069505ee749c4
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 518
+    line_end: 592
+    title: "スナップショットを全部組み立ててから捨てる。task0003 の coalescing で「捨てられる」のがキャップ到達時からキュー長 1 で必ず起きる事象になった"
+    description: "round 2 の未解決所見 7b2fd4bb0ab1fcd5 が task0003 の変更で悪化している。handle_request_pane_snapshot は scrollback の read_segments() コピー (最大 2MiB) -> build_shadow_parser_snapshot -> encode_snapshot_segments を完了させてから enqueue する。この一連は route_message 経由で接続の select! ループ上を同期的に走る。task0003 で defer_chunk に coalescing が入った結果、同一ペインに対する 2 回目のリクエストが 1 回目のエントリがまだキューに残っている間に来ると、1 回目の組み立て結果は items.remove(pos) で丸ごと破棄される。task0002 ではこの破棄は 8 件のキャップ到達時のみだったが、今はキュー長 1 の時点で必ず起きる。ウィンドウ連打切替 + チャネル飽和という本 feature の対象シナリオそのもので、数 MiB 規模の memcpy + encode が毎回無駄になり、その間ぶんだけ他ペインの出力転送とクライアント入力処理が遅延する。"
+    suggestion: "(a) 組み立て前に早期 return する: DeferredOutputQueue に has_queued_chunk_for(pane_id) を生やし、pane 解決直後で pane_output_tx.capacity() == 0 && has_queued_chunk_for(pane_id) なら warn を残して Ok(()) を返す。(b) より良い形: DeferredOutputItem::Chunk(PtyOutputChunk) を SnapshotRequest(PaneId) に変え flush 時に初めて組み立てる。"
+    sources: [claude:performance]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0004 as related context"
+  - stable_id: ca3291815a41dddb
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 446
+    line_end: 478
+    title: "fair reservation は 1 permit につき 1 件しか適用せず、キャップ撤廃で N（ペイン数）件積まれる visibility resume が飽和時に N 回の drain サイクルを要する"
+    description: "apply_fair_permit_to_front_deferred_item は permit 1 つにつきキュー先頭の 1 件しか適用せず、その後 arm_pending_deferred_reserve が新しい reserve_owned() を作り直すため、次の 1 件は waiter 列の末尾から並び直しになる。飽和時は drain 直後の flush_deferred_output の try_send が必ず失敗する (drain と framed.flush().await のネットワーク待ちの間に reader が空き枠を埋め戻すため)。結果『deferred 1 件 = drain サイクル 1 回』に固定され、1 サイクルは最大 DRAIN_BATCH_LIMIT=64 チャンクの feed + ソケット flush を伴う。ここに task0003 の『VisibilityResume はキャップ対象外』が乗る: 1 回の visible エッジで積まれる件数は candidate_pane_ids = セッション内の全ウィンドウの全非 exited ペイン数で、実際に Detached{HiddenByVisibility} かつ owner がこの接続かという絞り込みは無い。よって N ペインのセッションでは最後のペインが Connected に戻るまでに N 回の drain サイクルを要する。resume 不要なペインも同じコストを払い、その permit は NoChange で捨てられ、ライブ PTY 出力に回るはずだったチャネル枠を無駄に消費する。"
+    suggestion: "(a) handle_set_visibility の candidate 収集で、実際に resume 対象になるペイン (Detached{HiddenByVisibility} かつ owner がこの接続) だけを積む。(b) apply_fair_permit_to_front_deferred_item の直後に flush_deferred_output を呼び、reader が埋め戻す前に残っている空き枠を同じループ反復で使い切る。"
+    sources: [claude:performance]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0004 as related context"
+  - stable_id: ad2face19a88d1ab
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/session/pane.rs
+    line: 604
+    line_end: 613
+    title: "Visibility-resume exemption removes the per-connection queue ceiling"
+    description: "defer_visibility_resume deduplicates only pane IDs already present and then appends every new ID without a cap. While pane_output_tx remains backpressured, visibility transitions spanning newly created panes or different sessions can accumulate distinct or stale IDs; pane/session destruction does not remove them. Rapid switching among a fixed set of panes is bounded by deduplication, but distinct-pane churn has no fixed memory ceiling, and the linear iter().any() check makes cumulative insertion cost O(n^2)."
+    suggestion: "Represent visibility recovery as one coalesced pending-rescan marker or generation that resumes currently eligible panes as permits become available. Alternatively, maintain an O(1) pending set tied to pane/session lifecycle and remove stale IDs on destruction or attachment changes, while retaining a bounded retry mechanism that cannot strand panes."
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0004 as related context"
+  - stable_id: dd23cfc388062939
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 362
+    line_end: 448
+    title: "The fair reservation remains starvable by an earlier select branch"
+    description: "The select! is biased, but framed.next() appears before the fair-permit branch. If the output channel is full and the client continuously supplies buffered PtyInput or control messages, the message branch wins every iteration and the reservation future is never polled or applied. Deferred snapshots/resumes can therefore hang indefinitely. This is the same load-bearing ordering dependency documented for pane_output_rx.recv(), but the invariant does not account for every earlier potentially-ready branch. The new test sends only one PtyInput, so it does not cover sustained client traffic. ORCHESTRATOR VERIFICATION: confirmed by reading the arm order directly — biased; framed.next(); kick_fut; pending_deferred_reserve; pane_output_rx.recv(). The in-code comment only argues the reserve arm must precede the DRAIN arm and does not consider framed.next() preceding both."
+    suggestion: "Place the reservation branch before every nonterminal branch that can remain continuously ready. Prefer encapsulating this scheduling policy in a connection-owned deferred-output coordinator rather than relying on textual select! ordering. Add a connection test that continuously streams messages while output is saturated. NOTE: moving it ahead of framed.next() trades against the deliberate 'prioritize client messages over PTY output' policy documented at that arm — the fix must state which invariant wins and why."
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "routed to task0004 rework"
+  - stable_id: f068816e1aeab949
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 1056
+    line_end: 1059
+    title: "AnyPermit is not bound to the sender whose ownership is validated"
+    description: "The permit is RAII-safe and single-use, but resume_pane_with_permit accepts AnyPermit separately from owned_tx. The owner check validates the pane against owned_tx, not that the permit was reserved from that sender. Supplying a permit from channel A with sender B would send the snapshot to A and then install Connected(B) at lines 1174-1175, violating the atomic snapshot-before-live-output contract. The new owned variant makes this critical channel-identity invariant entirely caller-enforced."
+    suggestion: "Replace the separate arguments with an opaque reservation capability constructed from one sender and containing both its identity and permit. Derive the Connected sender from that capability and keep the borrowed/owned representation private. At minimum, validate same_channel before changing pane state."
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0004 as related context"
+  - stable_id: f1366dfd0b0b4380
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 976
+    line_end: 1010
+    title: "apply_fair_permit_to_front_deferred_item が flush_deferred_output と item ディスパッチ方針を二重に持ち stale 扱いが食い違う / Round 3 further splits the deferred-output state machine across layers"
+    description: "[claude] 同じキューの同じ item 種別に対する意味論が 2 箇所に複製され、しかも一致していない。flush_deferred_output (handlers.rs:919-926) は stale な VisibilityResume を continue で捨てて次の item へ進むが、apply_fair_permit_to_front_deferred_item (handlers.rs:992-999) は stale を見つけると permit を drop して return する。後者は『PTY reader スレッドの blocking_send 待ち行列を公平に勝ち取った 1 枠』を stale item 1 件に消費して手放す経路であり、放した枠は即座に parked な reader waiter に渡る。キュー先頭に stale な resume が K 件並ぶと、その後ろの snapshot chunk を届けるのに予約サイクルが K+1 回必要になる。つまり task0003 が謳う『a deferred item is serviced within a bounded number of reader-thread sends』という bound が飽和時に K 倍へ劣化する。[codex] The connection-owned queue and raw mutation API live in session/pane.rs, ordinary execution lives in flush_deferred_output, the new fair execution path is duplicated here, and connection.rs separately owns reservation arming, rearming, and select ordering. Round 3 materially expands the prior split: stale-visibility validation now exists independently in both handler executors, while the type system does not enforce 'queue nonempty => reservation armed'. Missing an arm call reintroduces starvation, while policy drift between the two executors can reconnect a pane after it was hidden again."
+    suggestion: "item ディスパッチを 1 箇所に集約する。最小の変更としては apply_fair_permit_to_front_deferred_item を loop { pop_front() ... } にして stale item は permit を保持したままスキップし、最初の非 stale item に permit を適用する。より構造的には queue / pending reservation / 両実行経路を private な IPC 層の DeferredOutputCoordinator へ移し、defer / try_flush / apply_reserved のような操作だけを公開して pop/requeue を private にする。pane.rs には atomic な pane-resume 操作だけを残す。"
+    sources: [claude:architecture, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0004 as related context"
+  - stable_id: 096cfe77cd11aed5
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 515
+    line_end: 640
+    title: "DeferredOutputQueue が session 層に置かれたまま、不変条件は全て ipc 層にあり型として強制できない"
+    description: "task0003 は AnyPermit を同じ場所に追加し消費側を 3 つに増やしたが、データ構造の置き場所は round 2 指摘のまま動いていない。DeferredOutputQueue は『1 本の IPC 接続の pane_output_tx に対するスケジューリング』という ipc 層の概念で、pane/session ドメインの概念ではない。実際に正しさを担保しているコード (FIFO 前提の stop-at-first-blocked、visible_state の再検証、Closed 時の clear、arm_pending_deferred_reserve を全変異点の後で必ず呼ぶこと) は 100% mux::ipc 側にあり、型自身は何も強制していない。公開 API が pop_front() / requeue_front() / clear() という『取り出したら送るか戻すかしろ』という口約束プロトコルになっているため、pop したまま drop する実装ミスが型検査を素通りし、VisibilityResume を 1 件失うとその pane は Detached に取り残される。層のズレは実害として既に現れていて、pane.rs のテストコメント自身が『This module cannot call that pub(super) function ... so the flush-side proof now lives in mux::ipc::handlers::tests』と書いている。"
+    suggestion: "DeferredOutputItem / DeferredOutputQueue / MAX_DEFERRED_ITEMS / enqueue_pane_output_chunk / AnyPermit を mux::ipc (例えば mux/ipc/deferred.rs) へ移し、pane.rs には PtyOutputChunk と resume_pane_with_permit だけ残す。移動が難しいなら pop_front/requeue_front を非公開にして apply_next(&mut self, sink) のような単一メソッドに閉じ込める。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0004 as related context"
+  - stable_id: 517ea7312719c80f
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 851
+    line_end: 872
+    title: "resolve_pane_and_resume は依然として session 消失 / pane 消失 / pane 終了 を 1 つの NoChange に潰し、戻り値は全呼び出し元が握り潰している"
+    description: "round 2 の指摘は実質的に未解決。task0003 は戻り値を () から ResumeOutcome に変えたが、呼び出し 3 箇所すべて let _ = で捨てているため、追加された戻り値は誰も分岐に使えない死んだ契約になっている。さらに ResumeOutcome::NoChange は (1) session が消えた (2) pane が見つからない (3) pane が exited (4) resume_pane_with_permit 側の拒否 を全部同じ値で表すため区別できない。抽出前のインライン実装が持っていた意味の差 — session 消失なら残り pane も諦めて return、pane 消失ならその pane だけ continue — は失われ、現在は session が消えていても候補 pane 全件ぶん SessionManager の async mutex を取り直して空振りする。より実害が大きいのは観測性で、この早期 return 経路はログを 1 行も出さない。deferred な visibility-resume が黙って捨てられると pane は Detached に残るが、本プロジェクトは DevTools 不可で emterm.log だけが調査手段なので、再現しても原因を追えない。"
+    suggestion: "ResumeOutcome を Resumed / SessionGone / PaneGone / Declined に分け、handle_set_visibility と flush_deferred_output は SessionGone で打ち切り、PaneGone / Declined は log::warn! を 1 行出して次へ進む形で戻り値を実際に消費する。使う予定がないなら -> () に戻したうえで関数内で warn ログを出すほうが誠実。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0004 as related context"
+  - stable_id: b4eee6700d643640
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/session/pane.rs
+    line: 547
+    line_end: 585
+    title: "Deferred-queue overflow deliberately discards required snapshot replies (task0003 が同じ diff で書いた FR3 の MUST と矛盾)"
+    description: "[codex:spec] SPEC FR3 (SPEC.md:47-52) requires every snapshot chunk to be delivered and not dropped. RequestPaneSnapshot replies enter this queue through handlers.rs:588-592, but defer_chunk removes an earlier same-pane snapshot at line 560 and evicts the oldest distinct-pane snapshot at lines 567-583 once more than eight panes are pending. The test at pane.rs:4133-4157 explicitly codifies that evicted requests receive nothing. Under channel saturation, repeated requests or more than eight rapid window switches therefore lose valid snapshot replies; a daemon log is not client-visible delivery. [claude:spec] task0003 が書き換えた FR3 は無条件の MUST として『MUST still be delivered to the client, and MUST NOT be silently dropped or starved indefinitely』を宣言している。narrow されたのは ordering のみで delivery はむしろ強化されている (旧 FR3 に『必ず配信』の明文は無かった)。round 2 の ac1d20218d320b08 は『最新を捨てる』ことへの指摘で、task0003 の coalesce + drop-oldest はその suggestion (a)(b) を実装した改善だが、同時に FR3 側へ (c) 破棄許容の明記を入れなかったため、SPEC と実装の食い違いだけが残った。client 側 tabs.rs::request_pane_snapshot は投げっぱなし (再送・タイムアウト無し、NFR2 で client 側は変更対象外) なので、その pane は再度切り替えるまで snapshot 未達のままになる。"
+    suggestion: "いずれか一方に寄せる。(a) SPEC FR3 に carve-out を明記する (『ただし同時に MAX_DEFERRED_ITEMS を超える DISTINCT pane の snapshot がバックログに滞留した場合に限り最古のものは破棄されうる。client は当該 pane へ再度切り替えた時点で再要求するため回復可能である』)。(b) 破棄を無くすなら Chunk の cap 到達時に payload を捨てて pane_id だけ保持する遅延ビルド形式 (VisibilityResume と同型) にすれば、FR4 の有界性を保ったまま FR3 の MUST を字義どおり満たせる。"
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "routed to task0004 rework"
+  - stable_id: 5c01ffb8d53dc9f7
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 362
+    line_end: 479
+    title: "Biased client-message arm can still starve both reservation and output drain"
+    description: "SPEC FR2 (SPEC.md:41-46) requires the loop to continue draining/forwarding output while a snapshot is pending, and FR3 (lines 47-49) forbids indefinite snapshot starvation. The biased select places framed.next() first at lines 362-366, before both the fair-reservation arm at lines 446-448 and pane_output_rx.recv() at line 479. With continuously buffered client messages, the first arm remains ready, so neither later arm is selected: the receiver never frees capacity and the reservation may never even be polled to register as a waiter. A deferred snapshot and all queued PTY output can therefore remain starved indefinitely while the reader thread continues producing. ORCHESTRATOR VERIFICATION: arm order confirmed by direct reading; the in-code comment only justifies placement relative to the drain arm."
+    suggestion: "Introduce explicit fair scheduling or quotas between inbound messages, deferred reservations, and output draining. Merely moving the pending reservation ahead of the drain is insufficient because a full channel still requires the drain arm to run before that reservation can resolve."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "routed to task0004 rework"
+  - stable_id: 30cdb3b4400888fc
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 1800
+    line_end: 1849
+    title: "新設の接続レベルテストが SPEC Unit Test 1 のクロス pane 構成になっておらず、pending 期間中の進行も証明していない"
+    description: "[claude:spec] SPEC Unit Test 1 は『pane A の snapshot が pending な間に pane B の PtyInput が処理される』ことを要求し、FR2 も『PtyInput for other panes』と、snapshot pending の pane と入力先 pane が別であることを構成の中核に置いている。task0003 のテストは飽和側が PANE_A、RequestPaneSnapshot が PANE_B、PtyInput も PANE_B であり、snapshot pending の pane と入力先 pane が同一。Integration Test 1 は満たすが Unit Test 1 の組み合わせは接続レベルで一度も駆動されない。SPEC Edge case 1『Snapshot requested for the exact pane that is currently producing the high-volume output』も handler 直呼びのみで実 select! ループ上では未カバー。[codex:spec] It then waits until both an arbitrary pane-A output and pane-B snapshot have already been observed, checking captured input only afterward. A build that processes the input after snapshot delivery can pass, and the output flag can be satisfied by output buffered during the 100 ms pre-request saturation period. Consequently it does not prove either cross-pane input processing or output forwarding while the snapshot is actually pending."
+    suggestion: "既存フィクスチャの再利用で足りる。RequestPaneSnapshot の pane_id を PANE_A (飽和している当の pane、= Edge case 1) に変え、PtyInput は PANE_B のまま残す。これで Unit Test 1 の構成と Edge case 1 を同時に満たす。加えて、snapshot が実際に deferred であることを確認するバリア/テストフックを置き、pane-B input と『リクエスト後にタグ付けした出力チャンク』が snapshot 配送より前に観測されることを要求する。"
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; carried into task0004 as related context"
+auto_fix:
+  loops_run: 1
+  applied_total: 0
+  termination: no-progress
+  conflict_groups_skipped:
+    - site: "src-tauri/src/mux/ipc/connection.rs select! arm ordering"
+      reason: "the fix trades against the deliberate documented policy of prioritising client messages over PTY output; choosing which invariant wins is a design decision, not a mechanical edit"
+    - site: "src-tauri/src/mux/session/pane.rs defer_chunk overflow vs SPEC FR3"
+      reason: "two incompatible prescriptions (add a carve-out to SPEC FR3 VS make the queue lossless via deferred snapshot construction) -> conflict"
+  out_of_scope_for_autofix:
+    - "handlers.rs:872 (EOF deadlock): the actual fix belongs in pty_spawn.rs, which is outside changed_files"
+residual_critical_high: 4
+rework_required: true
