@@ -27,11 +27,11 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
-    completed_at_commit: 7a580b3c3b0c6ae2f90b60e558cf99d87bb67d18
+    completed_at_commit: 57e356f2540ffbe2b5d8f54590b7d1fd9b77e451
   - id: review
-    status: pending
+    status: in_progress
     completed_at_commit: 74656c45ffd62fd74b6745d08060bc92c0d5e5ed
   - id: verify
     status: pending
@@ -141,12 +141,13 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR2, FR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-window-switch-output-hang/task0005
+    merge_commit: 57e356f2540ffbe2b5d8f54590b7d1fd9b77e451
     notes: "Synthesized from reviews/round4.yaml residual critical/high (6). The top finding is a record/implementation mismatch: task0004's doc comment and tests.yaml describe an AC-4 test rework that was never applied to the code (verified directly by the orchestrator - connection.rs:2004 still targets PANE_B, the ordering flag has 0 grep hits, yet tests.yaml records red_confirmed: true citing that exact change). Restoring the integrity of the verification record is this task's primary deliverable. review_rework_count goes 2 -> 3: round 4 was the planned final round, but shipping a knowingly false verification record would defeat the point of running the reviews at all."
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 4
   round3_rationale: "task0003 (1414 lines, written under the verify rework) had never been reviewed: the verify branch of the rework rule returns only implement and verify to pending, so Step B skipped the already-completed review step and went straight to verify. Round 3 reviews that new code. batch.review_rework_count is deliberately NOT consumed - that counter caps the review->implement->review deferral loop, not the first review of code introduced by a different phase's rework. Leaving newly written code unreviewed would defeat --batch's purpose of completing the workflow without human intervention."
   perspectives: [comprehensive, performance, architecture, spec]
