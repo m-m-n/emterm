@@ -27,14 +27,14 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: completed
+    status: pending
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
     completed_at_commit: e4a6899f949ce404abd4c6e35e72dd63307f5e2a
   - id: review
-    status: in_progress
+    status: pending
     completed_at_commit: 74656c45ffd62fd74b6745d08060bc92c0d5e5ed
   - id: verify
-    status: failed
+    status: pending
     result: fail
     executed_at: "2026-08-02T00:00:00+09:00"
     rounds: 2
@@ -110,13 +110,29 @@ tasks:
     merge_commit: e4a6899f949ce404abd4c6e35e72dd63307f5e2a
     notes: "Synthesized by the orchestrator from the verify phase's failed_items (SC-1, SC-2). Same one-task-not-per-file rationale as task0002: the defects share one mechanism across two call sites. SC-4 is explicitly out of scope — it needs the review phase to re-run, which the batch review rework cap (already 1) prevents in this run. Outcome: chunk overflow now coalesces per pane and drops oldest (never the newest); visibility resumes are de-duplicated by pane id and exempt from the cap; starvation is closed by a fair reserve_owned() select! arm placed BEFORE the drain arm; the mandatory connection-level FR2/AC-4 test now drives handle_connection. SPEC.md FR3 was narrowed to the guarantee the implementation actually provides. Implementer self-reported that its first starvation fix was inert (the new arm sat after the always-ready drain arm under biased selection) and that its own connection-level test caught it — red/green confirmed after reordering."
 
+  task0004:
+    title: "Rework: close the residual deadlock, starvation, and spec-contradiction findings from review round 3"
+    plan: tasks/task0004.md
+    files:
+      - src-tauri/src/mux/ipc/connection.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - feature-docs/mux-window-switch-output-hang/SPEC.md
+    skills: [backend-impl]
+    domains: [concurrency]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4]
+    status: pending
+    notes: "Synthesized from reviews/round3.yaml residual critical/high (4). pty_spawn.rs is added to the file set specifically for the EOF-branch deadlock (G1): it sits outside the original changed-file set but is reachable from the connection task only because task0003 added a new call site. review_rework_count goes 1 -> 2 here - round 3 itself did not consume the cap (it was the first review of task0003's code), but routing its findings back to implement is a genuine rework."
+
 review:
-  status: in_progress
-  rounds_completed: 2
+  status: pending
+  rounds_completed: 3
   round3_rationale: "task0003 (1414 lines, written under the verify rework) had never been reviewed: the verify branch of the rework rule returns only implement and verify to pending, so Step B skipped the already-completed review step and went straight to verify. Round 3 reviews that new code. batch.review_rework_count is deliberately NOT consumed - that counter caps the review->implement->review deferral loop, not the first review of code introduced by a different phase's rework. Leaving newly written code unreviewed would defeat --batch's purpose of completing the workflow without human intervention."
   perspectives: [comprehensive, performance, architecture, spec]
-  residual_critical_high: 8
-  needs_rework: false
+  residual_critical_high: 4
+  needs_rework: true
   deferred_note: "Round 2 left 8 critical/high findings. batch.review_rework_count was already 1 (consumed by round 1), so the batch decision table caps rework: all 8 are recorded in reviews/round2.yaml with resolution: deferred and the step completes. They are NOT fixed. Round 1's unbounded-backlog, visibility-revalidation, duplication and runtime-panic findings ARE closed; what remains is (a) flush starvation against the PTY reader thread's blocking_send, (b) the drop-newest overflow policy discarding mandatory snapshot replies and visibility resumes, (c) the cross-thread FIFO gap vs SPEC FR3 as written, and (d) the still-missing connection-level FR2 test."
   plan:
     floor: [comprehensive, performance, architecture, spec]
@@ -168,5 +184,5 @@ requirements:
     tests: [TS-6]
 
 batch:
-  review_rework_count: 1
+  review_rework_count: 2
   verify_rework_count: 1
