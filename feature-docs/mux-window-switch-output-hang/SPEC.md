@@ -53,9 +53,13 @@ keep working without the whole client freezing.
   review round 4 finding `329f746349f592e8` — the previous wording of this
   requirement described eviction as the ONLY permitted exception, which
   contradicted `defer_chunk`'s already-shipped same-pane coalescing
-  behavior). Two permitted exceptions exist, both of which discard a
-  snapshot reply that no longer reflects the pane's current state rather
-  than the client's newest request:
+  behavior). Two permitted exceptions exist, with two DIFFERENT
+  justifications (task0006 rework, review round 5: the previous wording
+  here gave both exceptions the same justification, which is true of
+  same-pane coalescing but false of distinct-pane eviction — eviction
+  discards the evicted pane's only, newest queued reply, so that pane
+  receives nothing, not merely a reply that "no longer reflects current
+  state"):
   - **Same-pane coalescing** (task0004 rework, G3/AC-3): if a snapshot
     chunk for a pane is already queued in the connection-owned
     deferred-output backlog (`DeferredOutputQueue`,
@@ -71,11 +75,15 @@ keep working without the whole client freezing.
     (8) DISTINCT panes' snapshot chunks pending delivery, admitting a 9th
     distinct pane's snapshot MAY evict the OLDEST queued distinct-pane chunk
     (never the one just enqueued, and never triggered below `MAX_DEFERRED_ITEMS`
-    distinct panes pending). It exists solely to keep the backlog's memory
-    bound (FR4) finite without an unbounded per-pane byte budget. Recovery
-    is client-driven and not part of this feature: the evicted pane's tab
-    simply stays as last-rendered until the user next switches to it, which
-    re-issues `RequestPaneSnapshot` and receives a fresh snapshot normally.
+    distinct panes pending). Unlike same-pane coalescing, this really does
+    discard a delivery: the evicted chunk is that pane's ONLY queued reply,
+    so the evicted pane receives NOTHING for its request, not a superseded
+    duplicate. It is an explicit carve-out, justified only by the need to
+    keep the backlog's memory bound (FR4) finite without an unbounded
+    per-pane byte budget, plus client-driven recovery: the evicted pane's
+    tab simply stays as last-rendered until the user next switches to it,
+    which re-issues `RequestPaneSnapshot` and receives a fresh snapshot
+    normally.
 
   Ordering relative to PTY output chunks already queued for that same pane
   BEFORE the snapshot was requested, and relative to other items deferred

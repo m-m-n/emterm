@@ -560,12 +560,12 @@ impl DeferredOutputQueue {
     /// queued does capacity pressure evict anything — and then it evicts the
     /// OLDEST surviving chunk, never the one just pushed (AC-2 forbids ever
     /// dropping the newest). If a [`DeferredOutputItem::VisibilityResume`]
-    /// for this pane is ALREADY queued (task0005 rework, medium finding
-    /// pane.rs:556, review round 4), the new chunk is dropped entirely
-    /// rather than queued after it — a Resume's flush always builds a
-    /// FRESH, current snapshot regardless of when it was queued, so an
-    /// older, already-built Chunk landing after it would roll the client's
-    /// view of the pane back to a stale screen.
+    /// for this pane is ALREADY queued and no `Chunk` entry exists for it
+    /// yet, the new chunk is INSERTED immediately BEFORE that Resume rather
+    /// than dropped (mux-window-switch-output-hang task0006 rework, review
+    /// round 5 high findings `4043ee676f69ca15` / `1c8d86389ab4bf40`,
+    /// reverting task0005's drop-instead-of-queue fix — see the insertion
+    /// site below for why that fix's premise did not hold).
     pub fn defer_chunk(&mut self, chunk: PtyOutputChunk) {
         let pane_id = chunk.pane_id;
         if let Some(pos) = self
@@ -600,31 +600,48 @@ impl DeferredOutputQueue {
             return;
         }
 
-        // Medium finding pane.rs:556 (mux-window-switch-output-hang
-        // task0005, review round 4): the REVERSE order from the case above
-        // — no `Chunk` is queued yet for this pane, but a
-        // `VisibilityResume` IS. That resume's flush (`resume_pane_with_
-        // permit`) always builds a FRESH, current snapshot at flush time,
-        // regardless of when it was queued — so appending this Chunk (built
-        // NOW, at defer time) after it would let an OLDER already-built
-        // screen roll back the fresher one the Resume just delivered. Drop
-        // the redundant Chunk instead of queuing it behind the Resume: the
-        // Resume's own flush-time snapshot already satisfies whatever this
-        // `RequestPaneSnapshot` needed.
-        if self
-            .items
-            .iter()
-            .any(|item| matches!(item, DeferredOutputItem::VisibilityResume(p) if *p == pane_id))
-        {
-            log::debug!(
-                "deferred pane output queue: dropping a redundant Chunk for pane {} — a \
-                 VisibilityResume for the same pane is already queued and will deliver a \
-                 fresher snapshot at flush time (mux-window-switch-output-hang task0005)",
-                pane_id,
-            );
-            return;
-        }
-
+        // task0006 rework (review round 5, high findings `4043ee676f69ca15`
+        // (comprehensive) / `1c8d86389ab4bf40` (architecture), plus the
+        // spec-side medium "defer_chunk の VisibilityResume 併存時ドロップは
+        // FR3 が列挙しない第3の破棄経路"): the REVERSE order from the case
+        // above — no `Chunk` is queued yet for this pane, but a
+        // `VisibilityResume` IS. task0005 dropped the redundant Chunk here
+        // outright, on the premise that the Resume's flush
+        // (`resume_pane_with_permit`, via `resolve_pane_and_resume`) always
+        // builds a FRESH, current snapshot regardless of when it was queued.
+        // That premise does not hold: `resume_pane_with_permit` returns
+        // `ResumeOutcome::NoChange` WITHOUT sending anything when the pane
+        // is already `Connected`, when the resolved owner does not match
+        // the caller, or when `reason.clear_hidden()` still yields `Some`
+        // (a `NetworkDetach` bit surviving a visible edge) — and its
+        // sibling `evaluate_output_target` path additionally declines when
+        // the built snapshot exceeds the single-frame limit.
+        // `flush_deferred_output` also discards a Resume outright when
+        // `visible_state` went false in the interim, and
+        // `resolve_pane_and_resume` sends nothing when the session or pane
+        // is gone by flush time. None of this is exotic:
+        // `handle_set_visibility` queues a `VisibilityResume` for EVERY
+        // non-exited pane in the session on a visible edge without
+        // checking whether that pane is actually detached-hidden, so a
+        // Resume that will no-op at flush time is the NORMAL case. Dropping
+        // the Chunk in that case left the client's `RequestPaneSnapshot`
+        // with no reply at all — the tab stayed stale until the next
+        // unrelated output, exactly the symptom this feature exists to
+        // remove.
+        //
+        // Fix: INSERT the Chunk immediately BEFORE the queued Resume
+        // instead of dropping it. Flush order becomes
+        // `Chunk (built now, at defer time)` -> `Resume (built fresh, at
+        // flush time)`, so the newest content still wins when the Resume
+        // actually produces a fresher snapshot (preserving task0005's
+        // newest-wins intent), AND the request is still answered when the
+        // Resume no-ops — the Chunk was already delivered by then. This is
+        // a NEW distinct-pane `Chunk` entry (no `Chunk` for this `pane_id`
+        // existed above), so it goes through the same `MAX_DEFERRED_ITEMS`
+        // cap/eviction check as any other newly-admitted distinct-pane
+        // chunk — applied BEFORE locating the Resume's position, since an
+        // eviction earlier in the queue would otherwise invalidate that
+        // position.
         let chunk_count = self
             .items
             .iter()
@@ -650,6 +667,21 @@ impl DeferredOutputQueue {
                 );
             }
         }
+
+        if let Some(resume_pos) = self.items.iter().position(
+            |item| matches!(item, DeferredOutputItem::VisibilityResume(p) if *p == pane_id),
+        ) {
+            log::debug!(
+                "deferred pane output queue: inserting a new chunk for pane {} immediately \
+                 before its already-queued VisibilityResume (not dropping it — the Resume \
+                 may no-op at flush time; mux-window-switch-output-hang task0006)",
+                pane_id,
+            );
+            self.items
+                .insert(resume_pos, DeferredOutputItem::Chunk(chunk));
+            return;
+        }
+
         self.items.push_back(DeferredOutputItem::Chunk(chunk));
     }
 
@@ -4235,44 +4267,62 @@ mod tests {
         assert!(deferred.pop_front().is_none());
     }
 
-    /// Medium finding pane.rs:556 (mux-window-switch-output-hang task0005,
-    /// review round 4): the REVERSE order from the pinned test above.
-    /// `[VisibilityResume(1)]` queued FIRST (the pane was resumed from
-    /// hidden while the channel was full), THEN a `RequestPaneSnapshot` for
-    /// the SAME pane arrives and defers a `Chunk` — since no `Chunk` entry
-    /// exists yet for pane 1, the pre-fix `defer_chunk` would `push_back` a
-    /// NEW entry, producing `[VisibilityResume(1), Chunk(1)]`. At flush
-    /// time that delivers the Resume's FRESH (built-at-flush-time) snapshot
-    /// FIRST, then the Chunk's STALE (built-at-defer-time) snapshot SECOND —
-    /// rolling the client's view of the pane back to an OLDER screen. The
-    /// fix: a `VisibilityResume` already queued for this pane means a fresh
-    /// snapshot will be delivered regardless, so the redundant `Chunk` is
-    /// dropped instead of being queued behind it — this is safe because
-    /// `resume_pane_with_permit` (what a `VisibilityResume` flush actually
-    /// runs) builds a full, current snapshot that already satisfies
-    /// whatever the `RequestPaneSnapshot` needed.
+    /// AC-2 (mux-window-switch-output-hang task0006 rework, review round 5
+    /// high findings `4043ee676f69ca15` / `1c8d86389ab4bf40`): the REVERSE
+    /// order from the pinned test above. `[VisibilityResume(1)]` queued
+    /// FIRST (the pane was resumed from hidden while the channel was full),
+    /// THEN a `RequestPaneSnapshot` for the SAME pane arrives and defers a
+    /// `Chunk` — since no `Chunk` entry exists yet for pane 1, this must
+    /// INSERT the new Chunk immediately BEFORE the queued Resume, producing
+    /// `[Chunk(1), VisibilityResume(1)]`, rather than dropping it
+    /// (task0005's now-reverted fix) or appending it after the Resume. This
+    /// ordering still yields newest-wins when the Resume's flush actually
+    /// produces a fresher snapshot (the Resume's flush-time-built content
+    /// lands LAST), while guaranteeing the `RequestPaneSnapshot` still gets
+    /// answered when the Resume no-ops at flush time (pane already
+    /// `Connected`, owner mismatch, a surviving `NetworkDetach` bit, or an
+    /// oversize snapshot — see `defer_chunk`'s own doc) — the NORMAL case,
+    /// since `handle_set_visibility` queues a Resume for every non-exited
+    /// pane on a visible edge without checking whether it is actually
+    /// detached-hidden. Delivery itself (the client still receiving a
+    /// snapshot when the Resume no-ops) is exercised end-to-end by
+    /// `mux::ipc::handlers::tests::flush_deferred_output_delivers_chunk_even_when_its_queued_visibility_resume_no_ops`
+    /// — this queue-level test only pins the ORDERING (AC-2), since
+    /// `DeferredOutputQueue` alone has no flush machinery or client channel
+    /// to observe delivery through.
     #[test]
-    fn deferred_output_queue_drops_redundant_chunk_when_visibility_resume_already_queued_for_same_pane()
+    fn deferred_output_queue_inserts_chunk_immediately_before_queued_visibility_resume_for_same_pane()
      {
         let mut deferred = DeferredOutputQueue::new();
         deferred.defer_visibility_resume(1);
         assert_eq!(deferred.len(), 1);
 
-        deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"stale".to_vec()));
+        deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"pending".to_vec()));
         assert_eq!(
             deferred.len(),
-            1,
-            "a Chunk for a pane that already has a queued VisibilityResume must be \
-             dropped, not appended after it — appending would let the Resume's fresh \
-             flush-time snapshot be immediately overwritten by an older, \
-             already-built one"
+            2,
+            "the Chunk must be INSERTED alongside the already-queued VisibilityResume, \
+             not dropped — a dropped Chunk here means the client's RequestPaneSnapshot \
+             gets no reply at all whenever the Resume later no-ops"
         );
 
         match deferred.pop_front() {
+            Some(DeferredOutputItem::Chunk(chunk)) => {
+                assert_eq!(
+                    chunk.data, b"pending",
+                    "the newly-deferred Chunk must survive"
+                );
+            }
+            other => panic!(
+                "expected the Chunk to be queued FIRST, immediately before the \
+                 VisibilityResume, got {other:?}"
+            ),
+        }
+        match deferred.pop_front() {
             Some(DeferredOutputItem::VisibilityResume(pane_id)) => assert_eq!(pane_id, 1),
             other => panic!(
-                "expected only the VisibilityResume to remain (the redundant Chunk must \
-                 have been dropped), got {other:?}"
+                "expected the VisibilityResume to remain queued SECOND (not dropped, not \
+                 overtaken), got {other:?}"
             ),
         }
         assert!(deferred.pop_front().is_none());
