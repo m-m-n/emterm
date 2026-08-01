@@ -66,9 +66,10 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-window-switch-output-hang/task0002
-    notes: "Synthesized by the orchestrator from review round 1 residual critical/high findings (9). Deviates from batch-mode.md's one-task-per-affected-file synthesis rule on purpose: all nine findings describe a single mechanism (task0001's spawn-a-detached-waiter deferral) that appears at two call sites, so splitting it would let two implementers pick different replacement designs that the textual conflict protocol cannot reconcile. Rationale recorded in tasks/task0002.md."
+    merge_commit: ad1a6957fc9d4e0f02c8e3095e6f66c57144f2d1
+    notes: "Synthesized by the orchestrator from review round 1 residual critical/high findings (9). Deviates from batch-mode.md's one-task-per-affected-file synthesis rule on purpose: all nine findings describe a single mechanism (task0001's spawn-a-detached-waiter deferral) that appears at two call sites, so splitting it would let two implementers pick different replacement designs that the textual conflict protocol cannot reconcile. Rationale recorded in tasks/task0002.md. Outcome: one connection-owned bounded DeferredOutputQueue (MAX_DEFERRED_ITEMS=8, shared by chunk and visibility-resume deferrals) replaces every tokio::spawn deferral; flushed by the connection's own event loop after each drain. F1/F2/F3 now close by construction (visible_state is re-validated at flush time, no independently-scheduled task remains to race) and F4's secondary runtime-panic risk disappears with the spawn. AC-2 CAVEAT: the cross-OS-thread race against pty_spawn.rs's reader-thread blocking_send is NOT structurally closed — it lies outside this task's file scope. Per the plan's permitted fallback the implementer narrowed the documented guarantee instead of reasserting the false unconditional FIFO claim; the residual ordering exposure is therefore documented, not eliminated, and is a candidate for a follow-up feature."
 
 review:
   status: pending
