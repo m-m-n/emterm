@@ -1,0 +1,171 @@
+round: 5
+executed_at: "2026-08-02T02:35:00+09:00"
+reason: "Reviews task0005, whose primary deliverable was restoring the integrity of the verification record after round 4 found task0004 documenting a test rework it never applied."
+scope:
+  review_mode: diff
+  base_commit: 7a580b3c3b0c6ae2f90b60e558cf99d87bb67d18
+  base_commit_note: "Scoped to task0005 only (the task0004 merge). Rounds 1-4 reviewed everything before it."
+  head_commit: f849283386795648e01b228020da1a822f9f628e
+  changed_files:
+    - src-tauri/src/mux/ipc/connection.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/session/pane.rs
+    - feature-docs/mux-window-switch-output-hang/SPEC.md
+    - test-docs/mux-window-switch-output-hang/task0004.tests.yaml
+    - test-docs/mux-window-switch-output-hang/task0005.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: performance, source: codex, status: completed, note: "no findings"}
+  - {perspective: comprehensive, source: codex, status: skipped, skip_reason: "registry marks comprehensive codex_supported: false"}
+round4_verification:
+  closed: ["AC-4 test rework — now genuinely implemented: RequestPaneSnapshot targets PANE_A, wait loop matches (Snapshot, PANE_A), ordering captured at the moment of observation. claude:spec and codex:spec both confirm it now substantively covers SPEC Unit Test 1.", "The false AC-4 record in task0004.tests.yaml — corrected to red_confirmed: false with a full account of claim-vs-reality; claude:spec verified the correction against the source.", "flood_task cleanup hang — conn_task.abort() now precedes a timeout-wrapped join.", "Starvation signal narrowness — has_unforwarded_pane_output extends it to receiver backlog; claude:performance (0 findings) and claude:comprehensive both analysed the 8:1 oscillation and found no permanent throttling."]
+  newly_introduced: ["defer_chunk now drops a snapshot Chunk when a same-pane VisibilityResume is queued, on a premise (the resume always delivers a fresh snapshot) that does not hold — five reviewers flagged this independently."]
+orchestrator_note:
+  observation: "task0005 closed every mandated item. The one high-severity regression came from a medium finding it picked up voluntarily as best-effort. Three reviewers converge on the same minimal fix: insert the Chunk BEFORE the queued VisibilityResume instead of dropping it, which preserves newest-wins ordering AND guarantees delivery when the resume no-ops."
+findings:
+  - stable_id: 4043ee676f69ca15
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/session/pane.rs
+    line: 610
+    line_end: 626
+    title: "defer_chunk が VisibilityResume 同居時に snapshot 応答を破棄するが、Resume は無応答で終わりうる"
+    description: "task0005 が追加した新分岐は『同じ pane の VisibilityResume がキューにあれば、その flush が必ず fresh な snapshot を届ける』という前提で RequestPaneSnapshot の応答 Chunk を丸ごと捨てる (return)。この前提は成立しない。VisibilityResume の flush は複数の経路で何も送らずに終わる: handlers.rs:920 / handlers.rs:993 で visible_state == false なら stale として continue / drop(permit)、handlers.rs:851 resolve_pane_and_resume で session/pane が消えている・exited なら permit を捨てて NoChange、pane.rs:1131 resume_pane_with_permit で pane が既に Connected / owner 不一致 / NetworkDetach 残存 / snapshot oversize のいずれでも NoChange。到達手順 (この feature が対象にしている飽和シナリオそのもの): (1) hide→show エッジでチャネル満杯 → pane P の VisibilityResume が defer される。(2) 再び hide→show が起き今回は try_reserve が成功して P が直接 resume され Connected になる (defer_visibility_resume は dedup するがキューに残った古いエントリは消えない)。(3) 飽和継続中に window 切替で RequestPaneSnapshot(P) → chunk は本分岐で破棄。(4) flush 時、キューの VisibilityResume(P) は P が Connected なので NoChange → snapshot は一切届かない。クライアントは要求した snapshot 応答を永久に受け取れず、当該 pane は次の出力まで stale 画面のまま。さらに同じ task0005 が書き換えた SPEC.md FR3 は許容例外を same-pane coalescing と distinct-pane eviction の 2 つだけと明記しており、本分岐はどちらにも該当しない第 3 の破棄経路。ORCHESTRATOR NOTE: 5 レビュアー (claude:comprehensive / claude:architecture / claude:spec / codex:architecture / codex:spec) が独立に同一箇所を指摘した。"
+    suggestion: "『捨てる』ではなく『順序を直す』で解決する。(a) 破棄する代わりに当該 VisibilityResume(pane_id) エントリの直前に Chunk を挿入する (items.insert(pos, DeferredOutputItem::Chunk(chunk)))。flush 時は Chunk(defer 時点) → Resume(flush 時点の fresh snapshot) の順になり、修正が防ごうとした『古い画面へのロールバック』は起きず、Resume が NoChange に終わっても要求への応答は必ず届く。この場合、型 doc の FIFO 記述に本ケースの例外を明記すること。(b) (a) を採らないなら Chunk を Resume の後ろに積んだうえで flush 側を直す — 直前の VisibilityResume が実際に snapshot を送出できた場合にのみ後続の同一 pane Chunk を捨てる (ResumeOutcome を見て判断)。3 レビュアーが独立に (a) を推奨している。既存テスト deferred_output_queue_drops_redundant_chunk_when_visibility_resume_already_queued_for_same_pane と pane.rs:562-568 / SPEC.md FR3 の記述も併せて更新が必要。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "routed to task0006 rework (narrow scope)"
+  - stable_id: 6e50a571258c55d6
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 2082
+    line_end: 2086
+    title: "テスト doc の『revert して確認した』記述が task0005.tests.yaml の検証記録と食い違う"
+    description: "doc は『pre-task0005 の形 (RequestPaneSnapshot を PANE_B に戻し、(Snapshot, PANE_B) にマッチさせ、captured_input をループ後にチェックする) へ一時 revert して観測した』と 3 点まとめての revert 実験を断言している。一方 task0005.tests.yaml の AC-1 は (i) revert したのは wait ループの match アームだけ、(ii) strict same-moment ordering の次元は『この環境では独立に red にできなかった』と明記している。つまり in-source doc は検証記録より強い主張をしており、記録側の honest caveat が doc からは読み取れない。これは round 4 が task0004 に対して指摘した『doc comment が実施していない検証を主張している』と同じ形の乖離であり、その是正が本タスクの中心的成果物であることを踏まえると同じ場所で再発させている。"
+    suggestion: "doc の当該文を tests.yaml の記録と一致させる。実際に行った revert は『wait ループの match アームを戻して hang/panic を確認した』ことだけである旨に書き換え、strict same-moment ordering は red 化できずテスト構成上ほぼ自明に満たされるという caveat をそのまま doc にも残す。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; the doc/record-consistency ones are carried into task0006"
+  - stable_id: 6ab2007dd4e06bc9
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 2287
+    line_end: 2301
+    title: "output_flowed_before_snapshot は doc が『閉じた』と主張する弱点（リクエスト前バッファ出力）を実際には区別できない"
+    description: "doc は pre-task0005 の弱点として『出力が流れ続けた証拠が実はリクエスト前の飽和ウィンドウ中にバッファされた出力にすぎない場合でも旧 assertion は通ってしまう』を挙げ、今回の ordering フラグで是正したと書いている。しかし output_flowed_before_snapshot = saw_output_for_pane_a は『Snapshot(A) フレームより前に PtyOutput(A) フレームを 1 つでも観測したか』でしかなく、その出力がリクエスト前のものか後のものかを一切区別しない。テストは RequestPaneSnapshot 送出前に 8 本の producer + 100ms sleep で飽和させるため、リクエスト時点でチャネルには大量の pre-request PtyOutput(A) が滞留しており、deferred snapshot は FIFO でそれらの後ろに来るので saw_output_for_pane_a は pre-request バッファ出力だけで必ず true になる。doc が名指しした弱点はそのまま残っている。"
+    suggestion: "(a) doc 側を直す: pre-request と post-request の区別までは証明していないと明記し、証明できているのは『Snapshot(A) より前に A の出力フレームが観測される』ことだけだと書く。(b) assertion 側を強める: producer のペイロードにリクエスト前後を識別できるマーカーを入れ、post-request マーカーを含む PtyOutput(A) を Snapshot(A) より前に観測したことを要求する。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; the doc/record-consistency ones are carried into task0006"
+  - stable_id: 3098b28f06391d34
+    severity: medium
+    category: comprehensive
+    file: test-docs/mux-window-switch-output-hang/task0005.tests.yaml
+    line: 27
+    line_end: 33
+    title: "final_failures の新規テスト数が誤っており、辻褄が合わない旨の注記も誤り"
+    description: "『+9 new tests added by this task』とあるが直後の内訳自体が 3 + 4 + 1 = 8 であり、diff 上の新規テストも実際に 8 本。その結果『2964 + 9 + 1 (flip) = 2974... actual count 2973』と齟齬が出たことにされ『arithmetic here is descriptive, not load-bearing』と処理されているが、正しい本数 8 で計算すると 2964 + 8 + 1 = 2973 で報告値と完全に一致する。齟齬は実行結果ではなく記録側の数え間違いに起因しており、『合わないが本質ではない』という注記は事実に反する。検証記録の正確性の回復こそが本タスクの中心的成果物であることを踏まえると、同じ成果物の中に誤った計数とその誤りを追認する注記が残るのは望ましくない。"
+    suggestion: "27 行目を『+8 new tests added by this task』に修正し、弁明ブロックを『2964 + 8 (new) + 1 (ts7 flip) = 2973 で報告値と一致』に置き換える。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; the doc/record-consistency ones are carried into task0006"
+  - stable_id: 1c8d86389ab4bf40
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 614
+    line_end: 625
+    title: "session 層の DeferredOutputQueue が ipc 層の resume 挙動を前提に Chunk を黙って捨てる（その前提は成立しない）/ Queue coalesces work items that are not outcome-equivalent"
+    description: "[claude] task0005 は defer_chunk に『同じ pane の VisibilityResume が既にキューされていれば新しい Chunk を丸ごと捨てる』規則を追加し、根拠を doc で『a Resume's flush always builds a FRESH, current snapshot regardless of when it was queued』と宣言している。しかし resume_pane_with_permit は少なくとも 4 経路で何も送らずに NoChange を返す。さらに handle_set_visibility は visible edge でセッション内の exited でない全 pane について defer_visibility_resume を積み、その pane が実際に detached-hidden かは一切確認しない — つまり『flush しても確実に何も送らない Resume』がキューに入るのは異常系ではなく通常系。アーキテクチャ上の本質は、据え置かれている pane.rs:370 の指摘 (DeferredOutputQueue は session 層にあるのに不変条件は ipc 層にある) がついに実害化した点。ipc 層が所有する事実を、それを参照も検証もできない session 層のコンテナが前提として断言しており、両者を結ぶ型もテストも無い。新規テストが検証しているのはキュー長が 1 であることだけで『本当に snapshot が届く』ことは一切検証していない。将来 doc 自身が挙げている『reader thread の送信をこのキュー経由にする』に進むと ChunkKind::PtyOutput も同じ規則で捨てることになり被害が拡大する。[codex] This couples queue policy to a future handler outcome and violates the stated newest-snapshot delivery contract."
+    suggestion: "配送を落とさない形に変える。(a) キュー済み VisibilityResume(pane) の直前に新 Chunk を insert する (position 保持・newest wins・ロールバック回避)、(b) Chunk を残したうえで flush 時点でスナップショットを組み立て直す。drop を維持するなら不変条件を所有している側で担保すること: resolve_pane_and_resume / resume_pane_with_permit が NoChange を返した場合に drop された Chunk 相当の snapshot を再 defer するフォールバックを ipc 層に置き、テストはキュー長ではなく配送を assert する。あわせて defer_chunk が ChunkKind::Snapshot 以外を受け取ったときこの drop 規則を適用しないガードを入れ reader-thread 経由化に備える。"
+    sources: [claude:architecture, codex:architecture]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "routed to task0006 rework (narrow scope)"
+  - stable_id: 071b305ef9fd14b7
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 443
+    line_end: 454
+    title: "遅延出力スケジューラの所有型不在: task0005 で状態源が 4 つ目（tokio 受信バッファ）に増え、据え置きコストが増大している"
+    description: "next_client_msg_starvation_count の抽出はテスト網羅の改善であって構造の改善ではない。ループ末尾から 5 行を出しただけで所有者は増えず、handle_connection のローカルを直接触る自由関数は 2 個から 4 個に増えた。要の不変条件 (guard と事後 bookkeeping が同一スナップショットの has_pending_output を見る) は依然として同じローカルを 2 箇所で読んでいる慣習だけで保たれている。慣習依存は既に破れており task0005 はそれを塞がず記録した: cmd_tick_rx アームの continue; はループ末尾の counter 遷移を丸ごと迂回する。task0005 はこれを『既知・低リスク』と明文化したが、所有型がイテレーション開始時に自前の状態から算出する形なら構造上到達不能になる種類の穴。さらに task0005 は今後のリファクタを確実に重くした: has_unforwarded_pane_output はスケジューリング判断を &mpsc::Receiver に直結させた。round 3 時点では『ローカル 3 つを struct に寄せる』だった作業が、いま『ローカル 3 つ + チャネル drain アーム』になっている。据え置きのリスクは横ばいではなく複利で増えており、実際に同型の穴が pane.rs 側で実害化した。"
+    suggestion: "受信ハンドルを巻き込まない最小の所有型を導入する。DeferredOutputScheduler { queue, pending_reserve, consecutive_client_msgs } を作り begin_iteration(rx_backlog: bool) -> IterationPolicy と record_outcome(outcome) を持たせる。要点は (a) 受信バッファは is_empty() の結果を plain bool として呼び出し側から渡し型に Receiver を所有も借用もさせない、(b) 遷移をループ末尾の record_outcome ではなく先頭の begin_iteration 側で確定させれば continue による迂回が構造上消える。もう一度据え置く場合は『round 3 と同じ据え置き』ではなくコストが増えた事実を明示的に記録し、次ラウンドが同じ acceptable to defer を無条件に引き継がないようにすること。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; the doc/record-consistency ones are carried into task0006"
+  - stable_id: 67b0167dfc9cde04
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 497
+    line_end: 500
+    title: "Fairness transition remains split across bypassable loop state"
+    description: "The next_client_msg_starvation_count extraction makes the counter arithmetic testable, but it does not make the scheduling invariant enforceable. has_pending_output is manually supplied to the guard and again to next_client_msg_starvation_count, while took_client_arm is maintained separately. This diff itself had to update both sites from has_deferred_work, demonstrating the lockstep-edit cost. Moreover, a continue at line 815 bypasses the transition entirely, so the documented rule that every non-client outcome resets the count is already not structurally true. A skipped status-command tick can retain a stale count and cause client input to reach exclusion after fewer genuinely consecutive client wins."
+    suggestion: "Introduce a connection-output scheduler type owning the deferred queue, pending reservation, and starvation count. Have it produce the per-iteration client-arm decision from one pending-output observation and accept an explicit select outcome afterward. Structure select branches to return an outcome instead of using control flow that can bypass the transition."
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; the doc/record-consistency ones are carried into task0006"
+  - stable_id: 31d12a906dad6b45
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/session/pane.rs
+    line: 614
+    line_end: 626
+    title: "defer_chunk の VisibilityResume 併存時ドロップは FR3 が列挙しない第3の破棄経路"
+    description: "[claude:spec] SPEC.md FR3 (task0005 で改訂) は『For a given pane, the daemon MUST deliver one snapshot chunk to the client reflecting that pane's most recent RequestPaneSnapshot』と定め、Two permitted exceptions exist として (1) same-pane coalescing (2) distinct-pane backlog eviction の 2 つだけを列挙している。しかし同じ task0005 で追加された分岐は第 3 の破棄経路であり、どちらの例外にも該当しない。SPEC 改訂とこのコード変更が同一タスクで行われながら FR3 に反映されていないため、round 3/4 で指摘されたのと同じ『SPEC と実挙動の乖離』が再発している。さらにこの破棄を正当化する根拠はコード上成立しない。[codex:spec] It can also leave no reply retained if the queued resume is later invalidated before flush, violating FR3's newest-request delivery guarantee."
+    suggestion: "(a) 破棄せず順序で解決する — VisibilityResume(P) が既にある場合、新 Chunk をその直前位置に insert する。(b) 現在のドロップ挙動を維持するなら SPEC.md FR3 を第3の例外を含む形に改訂し、かつ Resume が NoChange を返したときに snapshot 要求を取りこぼさない補償を入れる。コード側 doc の『always builds a FRESH, current snapshot』という断定も実際の分岐に合わせて訂正する。"
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; the doc/record-consistency ones are carried into task0006"
+  - stable_id: 94443ada9234c398
+    severity: medium
+    category: spec
+    file: feature-docs/mux-window-switch-output-hang/SPEC.md
+    line: 55
+    line_end: 78
+    title: "FR3 のリード文が distinct-pane eviction を誤って性格づけし、その誤りが handlers.rs のドキュメントに伝播している"
+    description: "[claude:spec] 改訂後の FR3 は『Two permitted exceptions exist, both of which discard a snapshot reply that no longer reflects the pane's current state rather than the client's newest request』と書いているが、これは 2 つ目の例外 (distinct-pane backlog eviction) には当てはまらない。eviction で捨てられるのはその pane の最新 RequestPaneSnapshot に対する唯一のキュー済み応答であり、結果としてその pane には snapshot が 1 つも届かない。eviction は『superseded な応答の破棄』ではなく FR3 本体の MUST に対する真の carve-out であり、正当化は『メモリ上限 (FR4) を有限に保つため + クライアント駆動のリカバリがある』という点にしかない。この誤った性格づけは既にコード側に伝播している: handlers.rs:2387-2394 のテスト doc は eviction について『so this is not a dropped delivery under that guarantee』と断じており、coalescing を免責する 1:1 否定の論法を eviction に適用したもので論理が成立していない。実際その論法が第3の破棄経路を正当化する根拠として再利用されている。[codex:spec] Consequently, the evicted reply may still represent that pane's most recent request, contradicting the shared characterization."
+    suggestion: "FR3 のリード文を 2 つの例外の性格が異なることを明示する形に直す: (1) same-pane coalescing は superseded な応答のみを捨てるため保証を弱めない、(2) distinct-pane eviction は FR4 のメモリ上限を担保するための明示的 carve-out であり evict された pane はその要求に対する snapshot を受け取らない (リカバリはクライアントの再要求に委ねる)。あわせて handlers.rs:2387-2394 の『so this is not a dropped delivery under that guarantee』を『これは FR3 の明示的な carve-out であり配送は実際に失われる』に置き換える。"
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; the doc/record-consistency ones are carried into task0006"
+  - stable_id: 904eaf7a91ad2092
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 2231
+    line_end: 2287
+    title: "修復されたテストは snapshot が実際に deferred な間に入力が処理されたことまでは観測していない / distinct-pane の Integration Test 1 構成が失われた"
+    description: "[codex:spec] SPEC Unit Test 1 requires that the loop process PtyInput for pane B 'while pane A's snapshot send is pending against a full/near-full shared channel'. The test only sleeps 100 ms to assume saturation, then samples captured_input when the client eventually receives Snapshot(A). It neither proves the channel was full when the request was handled nor proves input was processed before the snapshot left DeferredOutputQueue and entered pane_output_tx. An implementation that pauses input until snapshot admission, then processes B while the admitted snapshot waits behind older channel/socket data, would violate Unit Test 1 but pass this assertion. 加えて: The changed test now makes both sustained output and RequestPaneSnapshot target PANE_A; only PtyInput targets PANE_B. This addresses Unit Test 1 / Edge Case 1, but SPEC Integration Test 1 separately requires sustained high-volume output on one pane while issuing RequestPaneSnapshot/SwitchWindow for ANOTHER pane, and that distinct-pane scenario now has no equivalent live-connection coverage."
+    suggestion: "Synchronize on actual deferral/admission state: keep the snapshot unable to obtain a permit, assert or signal that it is queued in DeferredOutputQueue, and require pane B's writer to observe input before permitting snapshot admission. Additionally retain the repaired Snapshot(A)+Input(B) test and add a separate connection-level test with sustained output on pane A and RequestPaneSnapshot targeting pane B, asserting bounded processing and continued responsiveness."
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the R4 auto-fix candidate gate; the doc/record-consistency ones are carried into task0006"
+auto_fix:
+  loops_run: 1
+  applied_total: 0
+  termination: no-progress
+  note: "The single high-severity site has three reviewers converging on one prescription (insert-before rather than drop), but it is prose spanning queue policy + its doc + SPEC FR3 + an existing test that pins the wrong behaviour. Routed to a narrowly-scoped rework instead of an editor dispatch."
+residual_critical_high: 2
+rework_required: true
