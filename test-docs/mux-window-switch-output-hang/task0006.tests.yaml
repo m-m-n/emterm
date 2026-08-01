@@ -1,0 +1,229 @@
+task_id: task0006
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  # `cargo test --lib -- --test-threads=1` BEFORE touching any file =
+  # 2973 passed / 6 failed / 3 ignored, all 6 pre-existing tabs::tests::* —
+  # matches the task assignment's own stated baseline exactly
+  # (ts7_offthread_swap_then_restored_scrollback_matches_reference PASSED
+  # this particular run; see final_failures below for why it does not stay
+  # that way across repeated runs of the unchanged suite).
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  # HONESTY NOTE on why this is not a strict subset of baseline_failures
+  # (it adds ts7): `cargo test --lib -- --test-threads=1` was run FOUR
+  # times total against this task's changes — once as the mandatory
+  # pre-change baseline (above: 2973/6/3, ts7 passing) and three times
+  # after the full implementation was complete, with ZERO code changes
+  # between those three runs:
+  #   run 1 (first post-implementation run): 2973 passed / 7 failed / 3
+  #     ignored — {ts10, ts11, ts13, ts7, ts8, ts9, welcome}
+  #   run 2 (identical code, re-run): 2975 passed / 5 failed / 3 ignored —
+  #     {ts11, ts7, ts8, ts9, welcome} (ts10 AND ts13 passed this time)
+  #   run 3 (identical code, re-run again): 2973 passed / 7 failed / 3
+  #     ignored — same set as run 1
+  # Three runs of byte-identical compiled code producing three different
+  # failure counts/sets is only possible if the divergence is inherent
+  # test-timing nondeterminism in tabs.rs's off-thread replay-worker tests,
+  # not something this task's diff introduced — this task's diff touches
+  # neither tabs.rs nor app.rs (task assignment's own note; confirmed by
+  # `git diff` scope: only src-tauri/src/mux/session/pane.rs,
+  # src-tauri/src/mux/ipc/handlers.rs, src-tauri/src/mux/ipc/connection.rs
+  # (doc comments only, see acceptance_tests below), SPEC.md, and
+  # test-docs/*.yaml were touched). This matches project memory
+  # ("テスト実行の注意点": tabs.rs replay tests are non-deterministic) and mirrors
+  # task0005's own documented flip of this exact test
+  # (task0005.tests.yaml's final_failures note) in the opposite direction.
+  # What actually matters for AC-5 ("no failures beyond the pre-existing
+  # tabs::tests::* set") held in EVERY one of the four runs: every failure
+  # observed, in the baseline run and all three post-implementation runs,
+  # was inside the documented pre-existing tabs::tests::* pool
+  # {ts7, ts8, ts9, ts10, ts11, ts13, welcome_without_windows} — the same
+  # 7-test pool task0005 already identified. Zero failures occurred in
+  # mux::ipc::* or mux::session::pane::* in any of the four runs; a
+  # separate targeted run of just those two modules
+  # (`cargo test --lib -- mux::ipc mux::session::pane`) also passed clean:
+  # 246 passed / 0 failed / 0 ignored. No regression is attributed to this
+  # task's diff.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::handlers::tests::flush_deferred_output_delivers_chunk_even_when_its_queued_visibility_resume_no_ops
+    red_confirmed: true
+    red_reason: >-
+      G1: with pane 1 already Connected (so its queued VisibilityResume
+      resolves to ResumeOutcome::NoChange at flush time) and a
+      RequestPaneSnapshot deferred for the same pane behind that already-
+      queued Resume, the test was written and run BEFORE touching
+      defer_chunk: it failed immediately at the queue-length assertion
+      (`assert_eq!(deferred.len(), 2, ...)`), observing
+      "left: 1 right: 2" — proving the pre-fix defer_chunk dropped the
+      Chunk outright (queue stayed at length 1, just the Resume) rather
+      than queuing it, so the later `flush_deferred_output` call and its
+      delivery assertion were never even reached. Implemented the
+      insert-before-resume fix in defer_chunk (see AC-2 below for the
+      queue-level red/green); re-ran this same test afterward and it
+      passed in full: the chunk is delivered to the client
+      (rx.try_recv() yields the pane 1 snapshot with the exact payload)
+      even though the Resume genuinely no-ops (pane stays Connected, no
+      second chunk sent).
+  AC-2:
+    tests:
+      - mux::session::pane::tests::deferred_output_queue_inserts_chunk_immediately_before_queued_visibility_resume_for_same_pane
+    red_confirmed: true
+    red_reason: >-
+      G1: renamed/rewrote the prior
+      deferred_output_queue_drops_redundant_chunk_when_visibility_resume_already_queued_for_same_pane
+      test (which pinned the old drop behavior) to assert insertion and
+      ordering instead. Run against the pre-fix defer_chunk: failed at
+      `assert_eq!(deferred.len(), 2, ...)` with "left: 1 right: 2" — the
+      Chunk was dropped, not queued. After implementing the fix
+      (defer_chunk now inserts the Chunk at the queued VisibilityResume's
+      position instead of dropping it, applying the same
+      MAX_DEFERRED_ITEMS cap/eviction check any other newly-admitted
+      distinct-pane chunk goes through), the test passes: `pop_front()`
+      yields the Chunk FIRST (newest content, built at defer time) and
+      the VisibilityResume SECOND (its fresh, flush-time-built snapshot
+      would land after and win, preserving task0005's newest-wins
+      intent). The sibling pre-existing test
+      deferred_output_queue_coalesce_preserves_position_ahead_of_a_later_visibility_resume
+      (the OTHER order — Chunk already queued, THEN a VisibilityResume
+      appended) is untouched by this fix and still passes unchanged,
+      confirming that scenario's ordering guarantee (also newest-wins,
+      via in-place coalescing) is preserved.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      G2 item 1/2: documentation-only correction, no behavior change. SPEC.md
+      FR3's lead sentence previously gave both permitted exceptions
+      (same-pane coalescing, distinct-pane eviction) the same justification
+      ("discard a snapshot reply that no longer reflects the pane's current
+      state") — true of coalescing, false of eviction (eviction discards the
+      evicted pane's ONLY, newest queued reply, so that pane receives
+      nothing). Restated FR3 to give each exception its own, correct
+      justification: coalescing drops a superseded reply with the delivery
+      guarantee intact (a fresher one is already queued in its place);
+      eviction is an explicit carve-out that really does lose a delivery,
+      justified only by FR4's memory bound plus client-driven recovery.
+      Applied the matching correction to handlers.rs's
+      handle_request_pane_snapshot_evicts_oldest_distinct_pane_per_spec_sanctioned_backlog_policy
+      test's own doc comment, which repeated the same faulty "not a dropped
+      delivery under that guarantee" reasoning. No test assertions changed
+      (both files' existing tests — the coalesce-pinning test and the
+      distinct-pane-eviction integration test — already existed, already
+      passed before this change, and still pass unchanged after it); a
+      documentation-alignment fix has no behavior to red/green.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      G2 items 3/4/5: three test-doc/record inaccuracies corrected, none of
+      which changed any assertion or production behavior.
+      (a) connection.rs's
+      connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing
+      doc previously claimed a three-part revert experiment ("RequestPaneSnapshot
+      targeting PANE_B, matching (Snapshot, PANE_B), AND checking
+      captured_input only after the loop"); test-docs/mux-window-switch-output-hang/task0005.tests.yaml's
+      AC-1 entry records that only the wait-loop match arm was actually
+      reverted, and that the strict same-moment-ordering dimension could
+      NOT be independently forced red. Rewrote the doc to say exactly that
+      — only the match-arm revert is claimed as observed red, the
+      same-moment-ordering nuance is stated as not independently confirmable
+      in this environment, matching the record precisely.
+      (b) The same test's doc, and an inline comment directly above the
+      output_flowed_before_snapshot assertion, claimed this flag closed the
+      "output may have been buffered before the request" weakness. It does
+      not: output_flowed_before_snapshot only proves SOME PtyOutput(PANE_A)
+      frame was observed before the Snapshot(A) frame, which the pre-request
+      channel saturation (8 background producer threads already flooding
+      pane A's channel before RequestPaneSnapshot is even sent) guarantees
+      trivially, regardless of whether draining continues correctly during
+      the wait. Weakened both doc sites to state exactly this (chose
+      weakening the doc over strengthening the assertion, per the task's own
+      "prefer weakening the doc" guidance — smaller, lower-risk, and this
+      task is scope-limited); the assertion itself is unchanged.
+      (c) test-docs/mux-window-switch-output-hang/task0005.tests.yaml's
+      final_failures comment said "+9 new tests" but listed 3+4+1 = 8, and
+      then admitted the arithmetic did not reconcile (2964 + 9 + 1 = 2974 vs
+      actual 2973) and called this "descriptive, not load-bearing". That
+      claim was itself wrong: 2964 + 8 + 1 (the ts7 flip) = 2973 matches the
+      reported final count exactly. Fixed "+9" to "+8" and deleted the
+      now-inapplicable non-reconciliation note. No test code changed in any
+      of the three corrections; this is a documentation/record-accuracy fix
+      with no behavior to red/green.
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Outcome is a full-suite comparison plus a structural grep audit, not a
+      single test. Baseline (step 4a, before touching any file), via
+      `cargo test --lib -- --test-threads=1`: 2973 passed / 6 failed / 3
+      ignored, all 6 pre-existing tabs::tests::* — matches the task
+      assignment's own stated baseline exactly. Grepped connection.rs and
+      handlers.rs for `pane_output_tx.send(...).await` /
+      `pane_output_tx.reserve().await` (unqualified, not try_send/
+      try_reserve/reserve_owned): every match is inside a doc comment
+      describing the OLD pre-fix bug, none is live code — the hard
+      constraint (never reintroduce a blocking send/reserve on the
+      connection task) holds. Re-ran the full suite three times after the
+      complete implementation; every failure observed across all three runs
+      remained inside the same pre-existing tabs::tests::* pool documented
+      above (see final_failures' own note for the exact per-run
+      breakdown and why the pool's membership fluctuates run-to-run even on
+      byte-identical code) — zero failures in mux::ipc::* or
+      mux::session::pane::*, the modules this task's code changes touch. A
+      separate targeted run, `cargo test --lib -- mux::ipc
+      mux::session::pane`, passed clean: 246 passed / 0 failed / 0 ignored.
+      Everything listed under the task plan's "What round 5 confirmed as
+      closed" section (the AC-4 connection-level test's SPEC Unit Test 1
+      coverage, the corrected task0004.tests.yaml AC-4 record, the
+      flood-task cleanup ordering, has_unforwarded_pane_output) was left
+      untouched by this task's diff and continues to pass under the same
+      full-suite run.
+notes: >-
+  Scope note: this task's ONLY code change is G1 in pane.rs's defer_chunk —
+  a same-pane VisibilityResume queued ahead of an incoming snapshot Chunk no
+  longer causes the Chunk to be dropped; it is inserted immediately before
+  the Resume instead (going through the same MAX_DEFERRED_ITEMS cap/eviction
+  check any other newly-admitted distinct-pane chunk does, applied before
+  locating the Resume's position so an earlier eviction cannot invalidate
+  it). Everything else (G2) is a documentation/verification-record
+  correction with no behavior change — SPEC.md FR3's lead sentence,
+  handlers.rs's eviction-test doc, two connection.rs test-doc/comment sites,
+  and one task0005.tests.yaml arithmetic note. No other review round 5
+  finding was picked up: per the task's own explicit instruction, the
+  DeferredOutputScheduler owning-type refactor (connection.rs:443/497,
+  medium, architecture) and codex:spec's request for an additional
+  distinct-pane connection-level test (connection.rs:2231, medium) are
+  intentionally left untouched and are recorded here, not built —
+  round 5's own note that the deferral cost is compounding is carried
+  forward for the next person.
+
+  Test placement note: the task plan named the existing pane.rs unit test
+  (deferred_output_queue_drops_redundant_chunk_when_visibility_resume_already_queued_for_same_pane)
+  as the one to "update... to assert delivery, not length". That test lives
+  in mux::session::pane's test module, which has no access to
+  flush_deferred_output, a SessionManager, or a pane_output_tx channel (all
+  defined in mux::ipc::handlers, a different module tree) — so "the client
+  still receives a snapshot" cannot be observed from inside it. Split the
+  work in two: renamed/rewrote the pane.rs test to pin the ORDERING
+  guarantee (AC-2 — Chunk inserted immediately before the Resume, not
+  dropped, not appended after), which IS observable at the queue level; and
+  added a new companion test in handlers.rs (already in expected_files) that
+  exercises the full flush_deferred_output path end-to-end and asserts
+  actual delivery (AC-1) — the pane is set up already Connected so its
+  queued Resume genuinely no-ops, and the test asserts the client still
+  receives the Chunk. Recording this split explicitly since it deviates
+  from the plan's literal phrasing (though not from its intent) and neither
+  file is outside expected_files.

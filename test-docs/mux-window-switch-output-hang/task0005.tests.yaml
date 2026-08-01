@@ -24,15 +24,13 @@ final_failures:
   # ts7_offthread_swap_then_restored_scrollback_matches_reference happened to
   # PASS this run — a known tabs.rs off-thread-worker timing flake, not a
   # fix: this task touches neither tabs.rs nor app.rs, per the task
-  # assignment's own note). +9 new tests added by this task, all passing
+  # assignment's own note). +8 new tests added by this task, all passing
   # (3 has_unforwarded_pane_output_*, 4 next_client_msg_starvation_count_*,
-  # 1 deferred_output_queue_drops_redundant_chunk_*), plus the ts7 flip
-  # accounts for 2964 + 9 + 1 (flip) = 2974... actual count 2973 (one of the
-  # 9 new tests, deferred_output_queue_drops_redundant_chunk_when_
-  # visibility_resume_already_queued_for_same_pane, was ALSO run under the
-  # `--test-threads=1` full-suite pass along with the rest; arithmetic here
-  # is descriptive, not load-bearing — the subset relation is what matters
-  # and holds). Also ran the plain parallel (default `--test-threads`)
+  # 1 deferred_output_queue_drops_redundant_chunk_*): 2964 + 8 + 1 (the ts7
+  # flip) = 2973, matching the reported count exactly (corrected task0006 —
+  # the prior "+9"/"arithmetic doesn't reconcile" note here was itself
+  # wrong; the diff added 8 new tests, not 9). Also ran the plain parallel
+  # (default `--test-threads`)
   # `cargo test --lib` project_commands.test string verbatim: 2959 passed /
   # 20 failed — all 20 failures are tabs::tests::* (a larger, different
   # subset than under --test-threads=1, consistent with this project's
