@@ -1,0 +1,100 @@
+task_id: task0001
+
+# Two ways this suite was evaluated (see notes below for why both are
+# recorded): the exact `project_commands.test` string (parallel, default
+# thread count) and an additional `--test-threads=1` run (project
+# convention for this suite's tabs.rs off-thread-worker determinism, and
+# what AC-5 itself asks for).
+#
+# `baseline_failures` / `final_failures` below are the `--test-threads=1`
+# sets: identical before and after this task's change (see notes). The
+# plain parallel command is independently non-deterministic for this
+# suite (confirmed by three consecutive runs of the IDENTICAL post-fix
+# code producing three different failure sets, all confined to
+# tabs::tests::*/app::tests:: — files this task does not touch); using it
+# for a strict before/after diff would misattribute pre-existing
+# parallel flakiness as a regression.
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_returns_promptly_when_own_pane_channel_full
+    red_confirmed: true
+    red_reason: >-
+      Temporarily reverted handle_request_pane_snapshot's enqueue back to the
+      old blocking `pane_output_tx.send(...).await` and reran: panicked with
+      "... must return promptly ...: Elapsed(())" (300ms timeout fired),
+      reproducing the self-deadlock. Restored the fix and reran: passes.
+  AC-2:
+    tests:
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_for_different_pane_returns_promptly_while_channel_full
+    red_confirmed: true
+    red_reason: >-
+      Same revert experiment as AC-1: panicked with "Elapsed(())" pre-fix
+      (a different-pane snapshot request still blocked on the shared
+      channel filled by pane A); passes post-fix.
+  AC-3:
+    tests:
+      - mux::session::pane::tests::enqueue_pane_output_chunk_full_channel_defers_without_blocking_preserves_fifo
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_returns_promptly_when_own_pane_channel_full
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_preserves_fifo_ordering
+    red_confirmed: true
+    red_reason: >-
+      enqueue_pane_output_chunk (pane.rs) is new code this task introduces;
+      its dedicated full-channel FIFO test could not exist/compile before
+      the function did. The companion handler-level test (asserting the two
+      pre-queued chunks arrive before the deferred snapshot) was confirmed
+      red via the AC-1 revert experiment (timeout, never reaching the
+      ordering assertions). handle_request_pane_snapshot_preserves_fifo_ordering
+      is a pre-existing test covering the room-available fast path (already
+      green before this task, since that path was never buggy); carried
+      here as regression coverage for the ordering guarantee, not as new
+      red/green evidence.
+  AC-4:
+    tests:
+      - mux::session::pane::tests::pty_channel_capacity_is_finite_and_unchanged
+    red_confirmed: false
+    red_reason: >-
+      Asserts a structural invariant (PTY_CHANNEL_CAPACITY stays a fixed
+      256; no unbounded queue was introduced as the fix's mechanism) that
+      was already true before this task and remains true after — a
+      regression guard, not a red-to-green behavior change, so there is no
+      failing-before state to reproduce.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Whole-suite regression gate, not a single test. Verified via
+      --test-threads=1 (project convention for this suite's determinism,
+      and what AC-5 itself specifies): baseline and final runs show the
+      IDENTICAL 7 pre-existing tabs.rs failures (client-side off-thread
+      replay, explicitly out of this task's scope, untouched by it); zero
+      new failures. See baseline_failures/final_failures above.
+  AUDIT-1:
+    tests:
+      - mux::ipc::handlers::tests::handle_set_visibility_true_returns_promptly_when_channel_full_and_resumes_after_drain
+    red_confirmed: true
+    red_reason: >-
+      Task plan's mandatory audit note: found a second self-blockable path
+      (handle_set_visibility's visibility-resume loop, `pane_output_tx
+      .reserve().await` per pane) reachable from the same connection task
+      via route_message's SetVisibility arm. Temporarily reverted its
+      try_reserve()-based fix back to the blocking `.reserve().await` and
+      reran: panicked with "Elapsed(())" (300ms timeout fired). Restored
+      the fix and reran: passes.
