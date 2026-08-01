@@ -45,10 +45,21 @@ keep working without the whole client freezing.
   queued PTY output for all panes on the connection
   (`pane_output_rx.recv()` arm).
 - **FR3:** The snapshot chunk for a given pane MUST still be delivered to
-  the client in FIFO order relative to PTY output chunks already queued for
-  that same pane at the time the snapshot was requested (preserves the
-  ordering guarantee that motivated routing snapshots through the same
-  channel as PTY output, per `handlers.rs`'s existing design intent).
+  the client, and MUST NOT be silently dropped or starved indefinitely while
+  the pane's PTY reader thread continues producing (task0003 rework, AC-3).
+  Ordering relative to PTY output chunks already queued for that same pane
+  BEFORE the snapshot was requested, and relative to other items deferred
+  through this same connection, IS preserved (FIFO). Ordering relative to
+  live PTY output the pane's reader thread (a separate OS thread sending
+  directly to `pane_output_tx`, `src-tauri/src/mux/ipc/pty_spawn.rs`)
+  produces AFTER the snapshot was requested is NOT guaranteed — a
+  concurrently-produced live chunk MAY still reach the client ahead of a
+  deferred snapshot if it wins a freed channel permit first. Closing that
+  residual would require either routing the reader thread's sends through
+  the same connection-owned queue, or a client-observable generation number
+  so a stale snapshot can be discarded on arrival — both out of this
+  feature's scope (see `DeferredOutputQueue`'s doc,
+  `src-tauri/src/mux/session/pane.rs`).
 - **FR4:** The fix MUST NOT introduce unbounded memory growth as a
   replacement backpressure mechanism (e.g. an unbounded channel is not an
   acceptable unconditional replacement for the bounded channel without an
