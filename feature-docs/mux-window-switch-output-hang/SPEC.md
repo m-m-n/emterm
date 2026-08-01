@@ -46,7 +46,20 @@ keep working without the whole client freezing.
   (`pane_output_rx.recv()` arm).
 - **FR3:** The snapshot chunk for a given pane MUST still be delivered to
   the client, and MUST NOT be silently dropped or starved indefinitely while
-  the pane's PTY reader thread continues producing (task0003 rework, AC-3).
+  the pane's PTY reader thread continues producing (task0003 rework, AC-3),
+  **except for the bounded-backlog carve-out below (task0004 rework,
+  G3/AC-3 option (a))**: when the connection-owned deferred-output backlog
+  (`DeferredOutputQueue`, `src-tauri/src/mux/session/pane.rs`) already holds
+  `MAX_DEFERRED_ITEMS` (8) DISTINCT panes' snapshot chunks pending delivery,
+  admitting a 9th distinct pane's snapshot MAY evict the OLDEST queued
+  distinct-pane chunk (never the one just enqueued). This is the ONLY
+  permitted exception to the "MUST be delivered" / "MUST NOT be dropped"
+  clause above — it exists solely to keep the backlog's memory bound (FR4)
+  finite without an unbounded per-pane byte budget, and it never applies to
+  fewer than `MAX_DEFERRED_ITEMS` DISTINCT panes pending at once. Recovery
+  is client-driven and not part of this feature: the evicted pane's tab
+  simply stays as last-rendered until the user next switches to it, which
+  re-issues `RequestPaneSnapshot` and receives a fresh snapshot normally.
   Ordering relative to PTY output chunks already queued for that same pane
   BEFORE the snapshot was requested, and relative to other items deferred
   through this same connection, IS preserved (FIFO). Ordering relative to

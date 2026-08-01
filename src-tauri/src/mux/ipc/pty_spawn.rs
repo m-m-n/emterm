@@ -619,13 +619,37 @@ pub(in crate::mux) fn pty_reader_loop(
                     target_state
                 );
                 // FR3: signal exit to the connected client (if any) so the GUI
-                // tears the pane/tab down. Scope the lock so it is released
-                // before the pane-exit enqueue below.
-                {
+                // tears the pane/tab down.
+                //
+                // G1 fix (mux-window-switch-output-hang task0004 rework,
+                // review round 3 finding `22251d51cc98261e`): clone the
+                // sender and drop the `output_target` guard BEFORE the
+                // blocking send, mirroring the data path's documented
+                // discipline below ("IMPORTANT: release lock before
+                // blocking_send to avoid deadlock"), which this EOF branch
+                // previously did not follow. Holding the guard across
+                // `blocking_send` let this reader thread park (channel
+                // saturated) while still holding the pane's `output_target`
+                // mutex; task0003 made that mutex reachable from the
+                // connection task itself (`resume_pane_with_permit`,
+                // `pane.rs`, called via the fair-permit path), which takes
+                // the SAME std mutex synchronously (no `.await` yield
+                // point) — so the connection task would block on
+                // `lock()` until this reader thread's `blocking_send`
+                // completed, which in turn could only complete once the
+                // connection task's own drain arm ran, which it cannot
+                // while blocked on that same `lock()`. A self-deadlock
+                // across two different threads, same shape as the
+                // documented data-path hazard.
+                let connected_tx = {
                     let target = output_target.lock().unwrap();
-                    if let PaneOutputTarget::Connected(ref tx) = *target {
-                        let _ = tx.blocking_send(PtyOutputChunk::pty_output(pane_id, Vec::new()));
+                    match &*target {
+                        PaneOutputTarget::Connected(tx) => Some(tx.clone()),
+                        PaneOutputTarget::Detached { .. } => None,
                     }
+                }; // output_target lock released here, before any send.
+                if let Some(tx) = connected_tx {
+                    let _ = tx.blocking_send(PtyOutputChunk::pty_output(pane_id, Vec::new()));
                 }
                 // FR1: notify the daemon of the pane exit regardless of attach
                 // state so a detached pane is reaped authoritatively (the
@@ -2556,6 +2580,131 @@ mod tests {
                  replayed grid must match the live-fed reference"
             );
         }
+    }
+
+    // ── G1 self-deadlock regression (mux-window-switch-output-hang
+    // task0004, review round 3 finding `22251d51cc98261e`) ────────────────
+
+    /// AC-1: the EOF branch of `pty_reader_loop` must release
+    /// `output_target` BEFORE its `blocking_send`, exactly like the data
+    /// path a few dozen lines below it already does (that path's own
+    /// comment: "IMPORTANT: release lock before blocking_send to avoid
+    /// deadlock"). Pre-fix, the EOF branch held the guard for the entire
+    /// `blocking_send` call; while parked there (channel saturated), ANY
+    /// other thread taking the SAME `output_target` mutex synchronously —
+    /// exactly what the connection task's `resume_pane_with_permit`
+    /// (`pane.rs`) does, reachable via task0003's fair-permit path — would
+    /// block on `lock()` until the send completed, which itself could only
+    /// complete once the connection task's own drain arm freed capacity,
+    /// which it cannot do while blocked on that `lock()`. A cross-thread
+    /// self-deadlock of the connection.
+    ///
+    /// This test simulates exactly that shape without a real connection
+    /// task: a reader thread hits `Ok(0)` (EOF) against a channel that
+    /// already holds one item (capacity 1, so the EOF empty-chunk send
+    /// parks), while a second thread stands in for the connection task by
+    /// taking the same `output_target` lock. Pre-fix, that second thread's
+    /// `lock()` blocks for as long as the reader stays parked (this test
+    /// bounds the wait so a regression fails with a clear message instead
+    /// of hanging the suite); post-fix, the lock is free almost
+    /// immediately because the EOF branch dropped its guard before ever
+    /// calling `blocking_send`.
+    #[test]
+    fn eof_branch_does_not_hold_output_target_across_blocking_send() {
+        use std::time::Duration;
+
+        struct ImmediateEof;
+        impl Read for ImmediateEof {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Ok(0)
+            }
+        }
+
+        // Capacity-1 channel, already holding one item, so it is
+        // saturated: the reader's EOF `blocking_send` below parks until
+        // something drains it.
+        let (tx, mut rx) = mpsc::channel::<PtyOutputChunk>(1);
+        tx.try_send(PtyOutputChunk::pty_output(1, b"filler".to_vec()))
+            .expect("channel must accept the filler chunk");
+
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx)));
+        let pane = MuxPane::new_test(1, 80, 24, target.clone());
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+
+        let reader_thread = std::thread::spawn({
+            let target = target.clone();
+            let shadow_parser = pane.shadow_parser.clone();
+            let cwd = pane.cwd.clone();
+            let title = pane.title.clone();
+            let title_sender = pane.title_sender.clone();
+            let notification_sender = pane.notification_sender.clone();
+            let agent_status_report_sender = pane.agent_status_report_sender.clone();
+            let raw_passthrough = pane.raw_passthrough.clone();
+            let passthrough_scanner = pane.passthrough_scanner.clone();
+            let scrollback = pane.scrollback.clone();
+            let dims = pane.dims.clone();
+            move || {
+                pty_reader_loop(
+                    1,
+                    Box::new(ImmediateEof),
+                    target,
+                    shadow_parser,
+                    cwd,
+                    title,
+                    title_sender,
+                    notification_sender,
+                    agent_status_report_sender,
+                    raw_passthrough,
+                    passthrough_scanner,
+                    scrollback,
+                    dims,
+                    pane_exit_sender,
+                );
+            }
+        });
+
+        // Give the reader thread time to reach `Ok(0)` and enter the EOF
+        // branch's `blocking_send` (parked — the channel is saturated).
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Stand in for the connection task's own lock acquisition
+        // (`resume_pane_with_permit`, `pane.rs`, takes this same mutex
+        // synchronously, no `.await` yield point). Bounded polling instead
+        // of a bare `.join()` so a regression fails this ONE test with a
+        // clear message rather than hanging the whole suite.
+        let lock_probe = std::thread::spawn({
+            let target = target.clone();
+            move || {
+                let _guard = target.lock().unwrap();
+            }
+        });
+        let start = std::time::Instant::now();
+        let acquired_promptly = loop {
+            if lock_probe.is_finished() {
+                break true;
+            }
+            if start.elapsed() > Duration::from_secs(1) {
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(
+            acquired_promptly,
+            "a connection-task-style lock() on output_target must not block on the \
+             reader thread's parked EOF blocking_send (G1 self-deadlock)"
+        );
+        lock_probe.join().unwrap();
+
+        // Drain the channel so the reader's parked blocking_send can
+        // complete and the reader thread exits cleanly.
+        let filler = rx.try_recv().expect("filler chunk must be present");
+        assert_eq!(filler.pane_id, 1);
+        let eof_signal = rx.blocking_recv().expect("EOF empty chunk must be sent");
+        assert!(
+            eof_signal.data.is_empty(),
+            "EOF signal chunk must carry empty data"
+        );
+        reader_thread.join().unwrap();
     }
 
     // ── End-to-end child reap (task0001 AC-1/AC-7; TS-7, TS-8, TS-9) ──────

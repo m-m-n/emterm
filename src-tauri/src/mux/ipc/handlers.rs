@@ -2381,12 +2381,20 @@ mod tests {
         );
     }
 
-    /// AC-2: N (> cap) `RequestPaneSnapshot`s for DISTINCT panes deferred
-    /// against a full channel, then drained — the panes evicted are the
-    /// OLDEST distinct ones; every surviving (most-recently-requested) pane
-    /// gets its own snapshot delivered, and the evicted panes get nothing.
+    /// AC-2 (task0003) / AC-3 option (a) (mux-window-switch-output-hang
+    /// task0004 rework, review round 3 finding `b4eee6700d643640`): N (>
+    /// cap) `RequestPaneSnapshot`s for DISTINCT panes deferred against a
+    /// full channel, then drained — the panes evicted are the OLDEST
+    /// distinct ones; every surviving (most-recently-requested) pane gets
+    /// its own snapshot delivered, and the evicted panes get nothing. This
+    /// eviction is now an explicitly SPEC-SANCTIONED bounded-backlog policy
+    /// (SPEC.md FR3's carve-out, task0004 G3 option (a)) rather than an
+    /// undocumented contradiction of FR3's unconditional "MUST be
+    /// delivered" clause — the client recovers by switching to the evicted
+    /// pane again, which re-issues `RequestPaneSnapshot`.
     #[tokio::test]
-    async fn handle_request_pane_snapshot_drops_oldest_distinct_pane_never_the_newest() {
+    async fn handle_request_pane_snapshot_evicts_oldest_distinct_pane_per_spec_sanctioned_backlog_policy()
+     {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
         let max_deferred = crate::mux::session::pane::MAX_DEFERRED_ITEMS;
         let pane_count = max_deferred + 3;
@@ -2694,6 +2702,189 @@ mod tests {
             deferred.is_empty(),
             "the whole backlog must be dropped once the channel is observed Closed"
         );
+    }
+
+    // ── AC-6 (mux-window-switch-output-hang task0004 rework, review round 3
+    // finding `c60b56cac9be2557`): direct unit coverage for
+    // `apply_fair_permit_to_front_deferred_item`, which previously had NO
+    // test driving it directly (only reachable via the real connection
+    // `select!` loop) — including the `AnyPermit::Owned` arm, which no test
+    // in the suite ever exercised. ──
+
+    /// AC-6: an EMPTY queue is a no-op — the permit is dropped without
+    /// sending anything, releasing its reserved slot back to the channel
+    /// (e.g. another path already drained the queue between the
+    /// reservation being armed and it resolving).
+    #[tokio::test]
+    async fn apply_fair_permit_to_front_deferred_item_empty_queue_drops_permit() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
+        let permit = owned_tx
+            .clone()
+            .reserve_owned()
+            .await
+            .expect("reserve on a fresh channel must succeed");
+
+        let mut deferred = DeferredOutputQueue::new();
+        let visible_state = Arc::new(AtomicBool::new(true));
+        apply_fair_permit_to_front_deferred_item(
+            &mut deferred,
+            permit,
+            &owned_tx,
+            &mgr,
+            0,
+            &visible_state,
+        )
+        .await;
+
+        assert!(
+            owned_tx.try_reserve().is_ok(),
+            "the unused permit must release its slot back to the channel"
+        );
+    }
+
+    /// AC-6: a front `Chunk` item is sent via the fair permit — the queue
+    /// is drained by one and the chunk reaches the channel.
+    #[tokio::test]
+    async fn apply_fair_permit_to_front_deferred_item_sends_front_chunk() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(1);
+        let permit = owned_tx
+            .clone()
+            .reserve_owned()
+            .await
+            .expect("reserve on a fresh channel must succeed");
+
+        let mut deferred = DeferredOutputQueue::new();
+        deferred.defer_chunk(PtyOutputChunk::snapshot(1, b"A".to_vec()));
+
+        let visible_state = Arc::new(AtomicBool::new(true));
+        apply_fair_permit_to_front_deferred_item(
+            &mut deferred,
+            permit,
+            &owned_tx,
+            &mgr,
+            0,
+            &visible_state,
+        )
+        .await;
+
+        assert!(
+            deferred.is_empty(),
+            "the chunk must be popped off the queue"
+        );
+        let sent = rx
+            .try_recv()
+            .expect("the chunk must have been sent via the fair permit");
+        assert_eq!(sent.pane_id, 1);
+        assert_eq!(sent.data, b"A");
+    }
+
+    /// AC-6: a front `VisibilityResume` that is STALE (pane hidden again
+    /// since it was deferred, `visible_state == false`) is discarded — the
+    /// permit is dropped without resuming the pane, and the pane is left
+    /// untouched (still `Detached`).
+    #[tokio::test]
+    async fn apply_fair_permit_to_front_deferred_item_drops_stale_visibility_resume() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
+        let permit = owned_tx
+            .clone()
+            .reserve_owned()
+            .await
+            .expect("reserve on a fresh channel must succeed");
+
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+        }));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid, 1, target.clone());
+            sid
+        };
+
+        let mut deferred = DeferredOutputQueue::new();
+        deferred.defer_visibility_resume(1);
+
+        let visible_state = Arc::new(AtomicBool::new(false)); // hidden again
+        apply_fair_permit_to_front_deferred_item(
+            &mut deferred,
+            permit,
+            &owned_tx,
+            &mgr,
+            session_id,
+            &visible_state,
+        )
+        .await;
+
+        assert!(
+            deferred.is_empty(),
+            "the stale item is discarded (not requeued)"
+        );
+        assert!(
+            matches!(*target.lock().unwrap(), PaneOutputTarget::Detached { .. }),
+            "a stale resume must not resume the pane"
+        );
+        assert!(
+            owned_tx.try_reserve().is_ok(),
+            "the unused permit must release its slot back to the channel"
+        );
+    }
+
+    /// AC-6: a front `VisibilityResume` that is still LIVE (`visible_state
+    /// == true`) resumes the pane via `AnyPermit::Owned` — the arm the
+    /// pre-fix test suite never exercised (review round 3 finding
+    /// `c60b56cac9be2557`: "pane.rs's tests are all `AnyPermit::Borrowed`").
+    #[tokio::test]
+    async fn apply_fair_permit_to_front_deferred_item_resumes_live_visibility_resume_via_owned_permit()
+     {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(1);
+        let permit = owned_tx
+            .clone()
+            .reserve_owned()
+            .await
+            .expect("reserve on a fresh channel must succeed");
+
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+        }));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid, 1, target.clone());
+            sid
+        };
+
+        let mut deferred = DeferredOutputQueue::new();
+        deferred.defer_visibility_resume(1);
+
+        let visible_state = Arc::new(AtomicBool::new(true));
+        apply_fair_permit_to_front_deferred_item(
+            &mut deferred,
+            permit,
+            &owned_tx,
+            &mgr,
+            session_id,
+            &visible_state,
+        )
+        .await;
+
+        assert!(deferred.is_empty());
+        assert!(
+            matches!(*target.lock().unwrap(), PaneOutputTarget::Connected(_)),
+            "pane must resume to Connected"
+        );
+        let snap = rx
+            .try_recv()
+            .expect("the resume snapshot must have been sent via the owned permit");
+        assert_eq!(snap.pane_id, 1);
+        assert_eq!(snap.kind, crate::mux::session::pane::ChunkKind::Snapshot);
     }
 
     // ========================================================================
