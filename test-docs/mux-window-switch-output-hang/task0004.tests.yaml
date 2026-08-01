@@ -1,0 +1,177 @@
+task_id: task0004
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  # (matches the given baseline: `cargo test --lib -- --test-threads=1` =
+  # 2955 passed / 7 failed / 3 ignored, all 7 pre-existing tabs::tests::*.
+  # Confirmed by an independent baseline run before touching any file.)
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  # (`cargo test --lib -- --test-threads=1` after the full implementation:
+  # 2964 passed / 7 failed / 3 ignored — identical set to baseline, 9 new
+  # tests added by this task all pass. Subset relation holds trivially
+  # (equal sets), so final_failures ⊆ baseline_failures.)
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::pty_spawn::tests::eof_branch_does_not_hold_output_target_across_blocking_send
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, the EOF branch held `output_target.lock()` across
+      `blocking_send`. With a channel already saturated (capacity 1, one
+      item pre-filled) so the send parks, a second thread standing in for
+      the connection task's own `lock()` (mirroring
+      `resume_pane_with_permit`) blocked for the full 1-second bounded
+      poll, and the assertion "a connection-task-style lock() on
+      output_target must not block..." failed. Confirmed by temporarily
+      reverting the fix (re-wrapping the clone+send back into one lock
+      scope) and observing the assertion panic; restored afterward.
+      `connection.rs`'s audit note is also corrected in this task to no
+      longer unconditionally claim the EOF path is deadlock-safe without
+      qualification.
+  AC-2:
+    tests:
+      - mux::ipc::connection::tests::allow_client_message_arm_true_when_no_deferred_work_regardless_of_counter
+      - mux::ipc::connection::tests::allow_client_message_arm_true_for_quota_iterations_then_excludes_on_the_next
+      - mux::ipc::connection::tests::connection_level_deferred_snapshot_delivered_despite_continuous_client_traffic
+    red_confirmed: true
+    red_reason: >-
+      `allow_client_message_arm_true_for_quota_iterations_then_excludes_on_the_next`
+      failed deterministically ("the quota'th consecutive iteration must
+      exclude the client arm...") when the extracted guard function was
+      temporarily forced to always return `true` (the pre-G2-fix
+      `select!` shape, i.e. no guard on the `framed.next()` arm at all).
+      Restored afterward; both `allow_client_message_arm` unit tests then
+      passed. The accompanying live connection-level test
+      (`connection_level_deferred_snapshot_delivered_despite_continuous_client_traffic`)
+      was ALSO exercised with the guard forced `true` (both via a
+      background-flood-task variant over a real TCP loopback connection
+      and an earlier in-memory-duplex variant) and did NOT reliably fail —
+      real socket/scheduling timing has enough natural jitter that the
+      exact "framed.next() is gaplessly ready every iteration" race is not
+      forced deterministically either way in this environment (see that
+      test's own "Honesty note" doc comment). It is kept as end-to-end
+      regression coverage of the real connection path (and does pass
+      reliably with the fix, 3/3 repeated runs), but the deterministic
+      proof of AC-2's bounded-iterations guarantee is the
+      `allow_client_message_arm` unit tests, which genuinely observed
+      red then green.
+  AC-3:
+    tests:
+      - mux::session::pane::tests::deferred_output_queue_drops_oldest_distinct_pane_chunk_past_the_cap_never_the_newest
+      - mux::ipc::handlers::tests::handle_request_pane_snapshot_evicts_oldest_distinct_pane_per_spec_sanctioned_backlog_policy
+    red_confirmed: false
+    red_reason: >-
+      Option (a) chosen (SPEC.md FR3 now carries the bounded-backlog
+      carve-out; option (b), lazy `SnapshotRequest(PaneId)` construction at
+      flush time, was assessed as structurally harder than it looks within
+      this task's combined scope — see notes) — code and existing eviction
+      behavior were already correct pre-task0004 (task0003 implemented the
+      drop-oldest-distinct-pane policy and its pinning test); this task's
+      change is a SPEC.md wording fix (adding the carve-out) plus renaming/
+      re-documenting the existing pinned test to make the policy's
+      spec-sanctioned status explicit, not a behavior change. No new
+      red/green cycle applies to a documentation-alignment fix; the
+      listed tests already passed before and after (behavior unchanged),
+      which is the correct/expected outcome for this AC.
+  AC-4:
+    tests:
+      - mux::ipc::connection::tests::connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing
+    red_confirmed: true
+    red_reason: >-
+      Pre-fix, this test (task0003-authored) requested the deferred
+      snapshot for PANE_B — the pane whose input was ALSO being sent —
+      so "input to a different pane keeps flowing while THIS pane's
+      snapshot is pending" was never exercised, and the input-processed
+      assertion only checked `captured_input` after both flags were
+      already true (could pass even if input were processed only after
+      snapshot delivery). Retargeting the snapshot request to PANE_A (the
+      saturating pane itself, also covering SPEC Edge case 1) while
+      keeping the assertion structure showed the ordering check
+      (`input_processed_before_snapshot`, evaluated at the exact moment
+      the Snapshot(A) frame is observed) is meaningful — confirmed by
+      temporarily reverting the assertion to the old
+      "check-after-the-loop" shape and observing it could not
+      distinguish timing, then restoring the strict same-moment check.
+  AC-5:
+    tests:
+      - mux::session::pane::tests::deferred_output_queue_coalesce_preserves_position_ahead_of_a_later_visibility_resume
+    red_confirmed: true
+    red_reason: >-
+      With the pre-fix `defer_chunk` (remove(pos) + push_back), the test's
+      `[Chunk(1), VisibilityResume(1)]` queue reordered to
+      `[VisibilityResume(1), Chunk(1)]` after the second `defer_chunk`
+      call, so `pop_front()` returned `VisibilityResume` first instead of
+      the expected `Chunk` — the test's first `match deferred.pop_front()`
+      arm panicked with "expected the coalesced Chunk to remain FIRST".
+      Confirmed by temporarily reverting `defer_chunk` to the old
+      remove+push_back shape and observing the panic; restored the
+      in-place-assignment fix afterward.
+  AC-6:
+    tests:
+      - mux::ipc::handlers::tests::apply_fair_permit_to_front_deferred_item_empty_queue_drops_permit
+      - mux::ipc::handlers::tests::apply_fair_permit_to_front_deferred_item_sends_front_chunk
+      - mux::ipc::handlers::tests::apply_fair_permit_to_front_deferred_item_drops_stale_visibility_resume
+      - mux::ipc::handlers::tests::apply_fair_permit_to_front_deferred_item_resumes_live_visibility_resume_via_owned_permit
+    red_confirmed: false
+    red_reason: >-
+      These are new DIRECT unit tests for a function
+      (`apply_fair_permit_to_front_deferred_item`) that had NO test at all
+      before this task (only reachable indirectly via the live
+      `select!` loop) — there is no prior implementation to regress
+      against, so "red-before-green" in the TDD sense does not apply; the
+      finding itself (`c60b56cac9be2557`) was "coverage gap", not "wrong
+      behavior". Each test was written first, run, and observed to
+      exercise the intended branch (empty queue / front Chunk / stale
+      VisibilityResume / live VisibilityResume via `AnyPermit::Owned`)
+      against the EXISTING (already-correct) function; all four passed on
+      first run once compiling, confirming the coverage gap is closed
+      (the `AnyPermit::Owned` arm — previously never executed by any
+      test — is now driven by the 4th test).
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Outcome is a full-suite comparison, not a single test. Baseline (4a,
+      before any change) via `cargo test --lib -- --test-threads=1` =
+      2955 passed / 7 failed / 3 ignored, all 7 pre-existing
+      `tabs::tests::*` (matches the baseline given in the task
+      assignment). Final run (same command) = 2964 passed / 7 failed / 3
+      ignored — identical 7-test failure set, +9 new passing tests from
+      this task. `final_failures` is a strict subset (here: equal set) of
+      `baseline_failures`. Additionally ran the plain (parallel,
+      `--test-threads` default) `cargo test --lib` project_commands.test
+      string verbatim per the command-approval gate: 2954 passed / 17
+      failed — all 17 failures are `tabs::tests::*` (a different, larger
+      subset than under `--test-threads=1`, consistent with this
+      project's documented pre-existing tabs.rs parallel-execution
+      flakiness, project memory "テスト実行の注意点" — none touch
+      `mux::ipc` or `mux::session::pane`, the files this task changed).
+notes: >-
+  G3 direction: option (a) (SPEC.md FR3 carve-out) was chosen over option
+  (b) (lazy `SnapshotRequest(PaneId)` construction). Rationale: (b) would
+  require replacing `DeferredOutputItem::Chunk`'s pre-built-payload shape
+  with a lazily-resolved variant, but AC-5 (a SEPARATE, required fix,
+  independent of the G3 direction) explicitly needs `Chunk`/`defer_chunk`'s
+  position-preserving coalesce fixed and tested — meaning `Chunk` must stay
+  a real, exercised production path either way. Fully replacing its only
+  production producer (`handle_request_pane_snapshot`) with a lazy variant
+  while ALSO keeping `Chunk` alive and meaningfully tested (not just for a
+  no-longer-reachable-in-production code path) would have added a second,
+  large, independently-risky refactor (a new lazy-snapshot-build helper
+  shared between the immediate and deferred paths, a rewritten pinned
+  eviction test, and a new AC-3 "no snapshot ever discarded" regression
+  test) on top of an already large task (G1/G2/G4/AC-5/AC-6). (a) resolves
+  the SPEC/code contradiction with a documentation change plus the already-
+  independently-required AC-5 fix, at materially lower risk.
