@@ -563,18 +563,27 @@ pub(super) async fn handle_request_pane_snapshot(
     // `MessageType::Snapshot` (routing to the client's off-thread replay
     // path) while still interleaving correctly with any already-queued PTY
     // bytes for this pane via the shared `pane_output_tx` channel (FR1,
-    // FR5). If the client is gone the channel is closed — that's not a
-    // fatal error for this handler, just drop the reply.
-    if let Err(e) = pane_output_tx
-        .send(PtyOutputChunk::snapshot(pane_id, encoded_snapshot))
-        .await
-    {
-        log::warn!(
-            "RequestPaneSnapshot: failed to enqueue snapshot for pane {}: {}",
-            pane_id,
-            e
-        );
-    }
+    // FR5).
+    //
+    // mux-window-switch-output-hang task0001 (the fix this doc block used to
+    // warn was missing): this MUST NOT be a blocking
+    // `pane_output_tx.send(...).await`. This handler runs INSIDE the
+    // connection's own `select!` loop (via `route_message`), and that loop's
+    // `pane_output_rx.recv()` arm is the ONLY thing able to free capacity on
+    // this channel. A blocking send here would suspend the whole connection
+    // task until that same arm ran again — which it cannot while suspended
+    // here, self-deadlocking the connection (SPEC.md "Root Cause"; this was
+    // exactly the pre-fix bug). `enqueue_pane_output_chunk` never blocks the
+    // caller: it enqueues immediately when there is room, or defers the wait
+    // for capacity to an independently-scheduled spawned task when the
+    // channel is momentarily full. FIFO ordering relative to already-queued
+    // chunks for this pane (FR3) is preserved either way — see that
+    // function's own doc for why. A closed channel (client gone) is logged
+    // and dropped there, same as before.
+    crate::mux::session::pane::enqueue_pane_output_chunk(
+        pane_output_tx,
+        PtyOutputChunk::snapshot(pane_id, encoded_snapshot),
+    );
 
     // SPEC FR4/FR5 (task0003 AC-5): the on-demand snapshot just enqueued had
     // agent-status OSC stripped; resync this pane's current state
@@ -704,6 +713,22 @@ where
 /// a live PTY chunk cannot land between the snapshot send and the
 /// Connected swap — channel FIFO then guarantees the snapshot arrives at
 /// the client ahead of any subsequent live batch.
+///
+/// mux-window-switch-output-hang task0001 audit (see `route_message`'s
+/// audit note in `connection.rs`): reserving a permit is `.reserve().await`
+/// — exactly the same self-blockable shape as
+/// `handle_request_pane_snapshot`'s old blocking send, and reachable from
+/// the SAME connection task via `route_message`'s `SetVisibility` arm. The
+/// per-pane loop below therefore tries `try_reserve()` first (non-blocking,
+/// the common case when the channel has room, runs the resume inline
+/// exactly as before) and, only when the channel is momentarily full, defers
+/// THAT pane's `reserve().await` + resume to an independently spawned task
+/// so this connection's own drain arm is never blocked waiting on it.
+/// `resume_pane_with_permit` re-resolves the pane from `session_manager`
+/// at whatever later point the spawned task actually runs, so a resume that
+/// is no longer applicable by then (pane exited, already resumed by another
+/// path) is simply a no-op via its own existing checks — safe to run
+/// whenever the deferred permit arrives.
 pub(super) async fn handle_set_visibility(
     visible: bool,
     session_manager: &Arc<Mutex<SessionManager>>,
@@ -758,31 +783,79 @@ pub(super) async fn handle_set_visibility(
     };
 
     for pane_id in candidate_pane_ids {
-        let permit = match pane_output_tx.reserve().await {
-            Ok(p) => p,
-            Err(_) => {
+        match pane_output_tx.try_reserve() {
+            Ok(permit) => {
+                let mgr = session_manager.lock().await;
+                let Some(session) = mgr.get_session(active_session_id) else {
+                    drop(permit);
+                    return;
+                };
+                let pane = session
+                    .windows
+                    .values()
+                    .find_map(|w| w.panes.get(&pane_id))
+                    .filter(|p| !p.exited);
+                let Some(pane) = pane else {
+                    drop(permit);
+                    continue;
+                };
+                let _ = resume_pane_with_permit(pane, pane_output_tx, permit);
+            }
+            Err(mpsc::error::TrySendError::Full(())) => {
+                // mux-window-switch-output-hang task0001: the channel is
+                // momentarily full — do NOT `reserve().await` here (this
+                // task's own drain arm is the only thing that can free
+                // capacity, and it cannot run while this task is suspended
+                // waiting for a permit, the exact self-deadlock class this
+                // feature fixes). Defer this pane's reserve-and-resume to an
+                // independently spawned task instead; the connection's own
+                // select! loop keeps running in the meantime.
                 log::warn!(
-                    "[WARN][BACKEND] handle_set_visibility: pane_output_tx closed; aborting resume for pane {} and remaining panes",
+                    "[WARN][BACKEND] handle_set_visibility: pane_output_tx full; \
+                     deferring visibility-resume permit reservation for pane {} \
+                     to a background task",
+                    pane_id
+                );
+                let tx = pane_output_tx.clone();
+                let session_manager = session_manager.clone();
+                tokio::spawn(async move {
+                    let permit = match tx.reserve().await {
+                        Ok(p) => p,
+                        Err(_) => {
+                            log::warn!(
+                                "visibility-resume: pane_output_tx closed while \
+                                 waiting for a deferred permit (pane {})",
+                                pane_id
+                            );
+                            return;
+                        }
+                    };
+                    let mgr = session_manager.lock().await;
+                    let Some(session) = mgr.get_session(active_session_id) else {
+                        drop(permit);
+                        return;
+                    };
+                    let pane = session
+                        .windows
+                        .values()
+                        .find_map(|w| w.panes.get(&pane_id))
+                        .filter(|p| !p.exited);
+                    let Some(pane) = pane else {
+                        drop(permit);
+                        return;
+                    };
+                    let _ = resume_pane_with_permit(pane, &tx, permit);
+                });
+            }
+            Err(mpsc::error::TrySendError::Closed(())) => {
+                log::warn!(
+                    "[WARN][BACKEND] handle_set_visibility: pane_output_tx closed; \
+                     aborting resume for pane {} and remaining panes",
                     pane_id
                 );
                 return;
             }
-        };
-        let mgr = session_manager.lock().await;
-        let Some(session) = mgr.get_session(active_session_id) else {
-            drop(permit);
-            return;
-        };
-        let pane = session
-            .windows
-            .values()
-            .find_map(|w| w.panes.get(&pane_id))
-            .filter(|p| !p.exited);
-        let Some(pane) = pane else {
-            drop(permit);
-            continue;
-        };
-        let _ = resume_pane_with_permit(pane, pane_output_tx, permit);
+        }
     }
 }
 
@@ -1674,6 +1747,213 @@ mod tests {
 
         assert_eq!(post.data, b"POST");
         assert_eq!(post.kind, crate::mux::session::pane::ChunkKind::PtyOutput);
+    }
+
+    // ── mux-window-switch-output-hang task0001: connection self-deadlock fix ──
+
+    /// AC-1: with the pane output channel filled to capacity by pane A's own
+    /// simulated high-volume output, issuing a snapshot request for pane A
+    /// (the SAME pane) must still return promptly. Before the fix,
+    /// `handle_request_pane_snapshot` performed a blocking
+    /// `pane_output_tx.send(...).await` here — this same connection task is
+    /// the ONLY consumer able to free capacity, and it cannot run its own
+    /// drain arm while suspended inside this call, so the pre-fix code would
+    /// hang instead of returning (the exact self-deadlock SPEC.md describes).
+    #[tokio::test]
+    async fn handle_request_pane_snapshot_returns_promptly_when_own_pane_channel_full() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        // Small capacity so it is trivial to fill.
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(2);
+
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid, 1, target.clone());
+            sid
+        };
+
+        // Fill the channel to capacity with pane A's own high-volume output.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(1, b"a".to_vec()))
+            .await
+            .expect("send a");
+        owned_tx
+            .send(PtyOutputChunk::pty_output(1, b"b".to_vec()))
+            .await
+            .expect("send b");
+        assert!(
+            owned_tx
+                .try_send(PtyOutputChunk::pty_output(1, b"never".to_vec()))
+                .is_err(),
+            "test prerequisite: channel must be at capacity"
+        );
+
+        let req = MuxMessage {
+            msg_type: MessageType::RequestPaneSnapshot,
+            pane_id: 1,
+            payload: Vec::new(),
+        };
+
+        // The bug this task fixes: this call must return within a bounded,
+        // short time even though the channel is completely full.
+        tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx),
+        )
+        .await
+        .expect(
+            "handle_request_pane_snapshot must return promptly even when \
+             pane_output_tx is at capacity for the SAME pane (AC-1)",
+        )
+        .expect("handler itself must not error");
+
+        // The two already-queued chunks must be observed before the
+        // deferred snapshot chunk (FIFO, AC-3).
+        let c1 = rx.recv().await.expect("chunk a");
+        assert_eq!(c1.data, b"a");
+        let c2 = rx.recv().await.expect("chunk b");
+        assert_eq!(c2.data, b"b");
+        let snap = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .expect("deferred snapshot chunk must arrive once capacity frees")
+            .expect("channel must not have closed");
+        assert_eq!(snap.pane_id, 1);
+        assert_eq!(snap.kind, crate::mux::session::pane::ChunkKind::Snapshot);
+    }
+
+    /// AC-2: same full-channel setup as AC-1, but the snapshot request
+    /// targets a DIFFERENT pane (B) while pane A is the one whose output
+    /// filled the channel. The connection must keep making progress: this
+    /// call returns promptly, and pane A's already-queued output is still
+    /// forwarded ahead of pane B's snapshot once capacity frees.
+    #[tokio::test]
+    async fn handle_request_pane_snapshot_for_different_pane_returns_promptly_while_channel_full() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(2);
+
+        let target_a: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        let target_b: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid_a = m.create_window(sid, "shell".to_string()).unwrap();
+            let wid_b = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid_a, 1, target_a.clone());
+            add_pane(&mut m, sid, wid_b, 2, target_b.clone());
+            sid
+        };
+
+        // Pane A fills the channel with its own high-volume output.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(1, b"a1".to_vec()))
+            .await
+            .expect("send a1");
+        owned_tx
+            .send(PtyOutputChunk::pty_output(1, b"a2".to_vec()))
+            .await
+            .expect("send a2");
+        assert!(
+            owned_tx
+                .try_send(PtyOutputChunk::pty_output(1, b"never".to_vec()))
+                .is_err(),
+            "test prerequisite: channel must be at capacity"
+        );
+
+        // Snapshot requested for pane B, not the pane producing the output.
+        let req = MuxMessage {
+            msg_type: MessageType::RequestPaneSnapshot,
+            pane_id: 2,
+            payload: Vec::new(),
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx),
+        )
+        .await
+        .expect("handle_request_pane_snapshot must return promptly (AC-2)")
+        .expect("handler itself must not error");
+
+        let c1 = rx.recv().await.expect("pane A chunk 1");
+        assert_eq!(c1.pane_id, 1);
+        assert_eq!(c1.data, b"a1");
+        let c2 = rx.recv().await.expect("pane A chunk 2");
+        assert_eq!(c2.pane_id, 1);
+        assert_eq!(c2.data, b"a2");
+        let snap = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .expect("deferred snapshot for pane B must arrive once capacity frees")
+            .expect("channel must not have closed");
+        assert_eq!(snap.pane_id, 2);
+        assert_eq!(snap.kind, crate::mux::session::pane::ChunkKind::Snapshot);
+    }
+
+    /// Audit fix (mux-window-switch-output-hang task0001): `handle_set_visibility`'s
+    /// visibility-resume path used to `pane_output_tx.reserve().await` per
+    /// pane — the same self-blockable shape as the snapshot bug, reachable
+    /// from the same connection task via `route_message`'s `SetVisibility`
+    /// arm. With the channel full, the call must still return promptly, and
+    /// the deferred resume (snapshot chunk + Connected swap) must still
+    /// land once capacity frees.
+    #[tokio::test]
+    async fn handle_set_visibility_true_returns_promptly_when_channel_full_and_resumes_after_drain()
+    {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(1);
+
+        // Fill the single slot with an unrelated chunk.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(99, b"x".to_vec()))
+            .await
+            .expect("send filler");
+        assert!(
+            owned_tx
+                .try_send(PtyOutputChunk::pty_output(99, b"never".to_vec()))
+                .is_err(),
+            "test prerequisite: channel must be at capacity"
+        );
+
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+        }));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid, 1, target.clone());
+            sid
+        };
+
+        let visible_state = Arc::new(AtomicBool::new(false));
+        tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            handle_set_visibility(true, &mgr, session_id, &owned_tx, &visible_state),
+        )
+        .await
+        .expect(
+            "handle_set_visibility must return promptly even when \
+             pane_output_tx is at capacity",
+        );
+
+        assert!(visible_state.load(Ordering::Acquire));
+
+        // Drain the filler chunk, freeing capacity for the deferred resume.
+        let filler = rx.recv().await.expect("filler chunk");
+        assert_eq!(filler.pane_id, 99);
+
+        let resumed = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .expect("deferred resume snapshot must arrive once capacity frees")
+            .expect("channel must not have closed");
+        assert_eq!(resumed.pane_id, 1);
+        assert_eq!(resumed.kind, crate::mux::session::pane::ChunkKind::Snapshot);
+
+        wait_until(|| matches!(*target.lock().unwrap(), PaneOutputTarget::Connected(_))).await;
     }
 
     // ========================================================================
