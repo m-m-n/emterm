@@ -31,7 +31,7 @@ workflow:
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
     completed_at_commit: e4a6899f949ce404abd4c6e35e72dd63307f5e2a
   - id: review
-    status: completed
+    status: in_progress
     completed_at_commit: 74656c45ffd62fd74b6745d08060bc92c0d5e5ed
   - id: verify
     status: failed
@@ -111,8 +111,9 @@ tasks:
     notes: "Synthesized by the orchestrator from the verify phase's failed_items (SC-1, SC-2). Same one-task-not-per-file rationale as task0002: the defects share one mechanism across two call sites. SC-4 is explicitly out of scope — it needs the review phase to re-run, which the batch review rework cap (already 1) prevents in this run. Outcome: chunk overflow now coalesces per pane and drops oldest (never the newest); visibility resumes are de-duplicated by pane id and exempt from the cap; starvation is closed by a fair reserve_owned() select! arm placed BEFORE the drain arm; the mandatory connection-level FR2/AC-4 test now drives handle_connection. SPEC.md FR3 was narrowed to the guarantee the implementation actually provides. Implementer self-reported that its first starvation fix was inert (the new arm sat after the always-ready drain arm under biased selection) and that its own connection-level test caught it — red/green confirmed after reordering."
 
 review:
-  status: completed
+  status: in_progress
   rounds_completed: 2
+  round3_rationale: "task0003 (1414 lines, written under the verify rework) had never been reviewed: the verify branch of the rework rule returns only implement and verify to pending, so Step B skipped the already-completed review step and went straight to verify. Round 3 reviews that new code. batch.review_rework_count is deliberately NOT consumed - that counter caps the review->implement->review deferral loop, not the first review of code introduced by a different phase's rework. Leaving newly written code unreviewed would defeat --batch's purpose of completing the workflow without human intervention."
   perspectives: [comprehensive, performance, architecture, spec]
   residual_critical_high: 8
   needs_rework: false
