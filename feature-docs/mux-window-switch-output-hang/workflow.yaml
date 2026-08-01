@@ -87,7 +87,7 @@ workflow:
       rounds 3-6 and tasks 0004-0006, passes every automated criterion; the two
       qualifications above are the honest remainder.
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
