@@ -50,8 +50,9 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2]
-    status: in_progress
-    notes: "resume 2026-08-01: the implementer launched 2026-07-31T09:02:47+09:00 was stopped by the user, leaving no terminal journal event and zero implementation commits. The journal was closed with a `failed` event on user instruction. batch auto-retry consumed (1/1) — a second failure aborts the phase per batch-mode.md."
+    status: merged
+    merge_commit: 1bfc5181c67aba4796468031782d951623d1b18f
+    notes: "resume 2026-08-01: the implementer launched 2026-07-31T09:02:47+09:00 was stopped by the user, leaving no terminal journal event and zero implementation commits. The journal was closed with a `failed` event on user instruction. batch auto-retry consumed (1/1); the retry merged cleanly on the first attempt (conflict_retries: 0). Deviations reported: gitignored font assets copied into the task worktree for local build only; `--test-threads=1` used as the authoritative AC-5 regression comparison because the parallel run is empirically nondeterministic for tabs.rs; handle_set_visibility received a second fix under the plan's mandatory audit note."
     branch: em-workflow/mux-window-switch-output-hang/task0001
 
 review:
