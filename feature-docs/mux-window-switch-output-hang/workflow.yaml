@@ -102,7 +102,8 @@ tasks:
     domains: [concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4]
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-window-switch-output-hang/task0003
     notes: "Synthesized by the orchestrator from the verify phase's failed_items (SC-1, SC-2). Same one-task-not-per-file rationale as task0002: the defects share one mechanism across two call sites. SC-4 is explicitly out of scope — it needs the review phase to re-run, which the batch review rework cap (already 1) prevents in this run."
 
 review:
