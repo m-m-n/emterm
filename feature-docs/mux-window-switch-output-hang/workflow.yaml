@@ -51,7 +51,7 @@ tasks:
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2]
     status: in_progress
-    notes: null
+    notes: "resume 2026-08-01: the implementer launched 2026-07-31T09:02:47+09:00 was stopped by the user, leaving no terminal journal event and zero implementation commits. The journal was closed with a `failed` event on user instruction. batch auto-retry consumed (1/1) — a second failure aborts the phase per batch-mode.md."
     branch: em-workflow/mux-window-switch-output-hang/task0001
 
 review:
