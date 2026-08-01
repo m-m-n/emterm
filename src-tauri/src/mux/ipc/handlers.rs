@@ -20,10 +20,10 @@ use crate::agent_status::AgentState as CoreAgentState;
 use crate::mux::daemon::{from_wire_state, to_wire_state};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    AgentStatus, AgentStatusReportSender, AgentWaitOutcome, AgentWaiter, MuxPane,
-    NotificationSender, PaneId, PtyOutputChunk, SharedPaneExitSender, SharedScrollback,
-    SharedShadowParser, TitleChangeSender, encode_snapshot_segments, evaluate_output_target,
-    lock_shadow_parser, resume_pane_with_permit,
+    AgentStatus, AgentStatusReportSender, AgentWaitOutcome, AgentWaiter, DeferredOutputItem,
+    DeferredOutputQueue, MuxPane, NotificationSender, PaneId, PtyOutputChunk, ResumeOutcome,
+    SharedPaneExitSender, SharedScrollback, SharedShadowParser, TitleChangeSender,
+    encode_snapshot_segments, evaluate_output_target, lock_shadow_parser, resume_pane_with_permit,
 };
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.
@@ -459,6 +459,7 @@ pub(super) async fn handle_request_pane_snapshot(
     active_session_id: u32,
     session_manager: &Arc<Mutex<SessionManager>>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    deferred_output: &mut DeferredOutputQueue,
 ) -> Result<(), bool> {
     let pane_id = msg.pane_id;
 
@@ -574,15 +575,20 @@ pub(super) async fn handle_request_pane_snapshot(
     // task until that same arm ran again — which it cannot while suspended
     // here, self-deadlocking the connection (SPEC.md "Root Cause"; this was
     // exactly the pre-fix bug). `enqueue_pane_output_chunk` never blocks the
-    // caller: it enqueues immediately when there is room, or defers the wait
-    // for capacity to an independently-scheduled spawned task when the
-    // channel is momentarily full. FIFO ordering relative to already-queued
-    // chunks for this pane (FR3) is preserved either way — see that
-    // function's own doc for why. A closed channel (client gone) is logged
-    // and dropped there, same as before.
+    // caller: it enqueues immediately when there is room, or pushes onto
+    // `deferred_output` (task0002 rework: a connection-owned, bounded
+    // `DeferredOutputQueue` — see its doc) when the channel is momentarily
+    // full. That queue is flushed by `flush_deferred_output`, called from
+    // the connection's own event loop the next time capacity frees, in
+    // strict FIFO order relative to items already in the queue; ordering
+    // relative to producers outside this connection task (the PTY reader
+    // thread) is NOT structurally guaranteed — see `DeferredOutputQueue`'s
+    // doc for the precise, narrowed claim (AC-2/F4/F5). A closed channel
+    // (client gone) is logged and dropped there, same as before.
     crate::mux::session::pane::enqueue_pane_output_chunk(
         pane_output_tx,
         PtyOutputChunk::snapshot(pane_id, encoded_snapshot),
+        deferred_output,
     );
 
     // SPEC FR4/FR5 (task0003 AC-5): the on-demand snapshot just enqueued had
@@ -714,27 +720,26 @@ where
 /// Connected swap — channel FIFO then guarantees the snapshot arrives at
 /// the client ahead of any subsequent live batch.
 ///
-/// mux-window-switch-output-hang task0001 audit (see `route_message`'s
-/// audit note in `connection.rs`): reserving a permit is `.reserve().await`
-/// — exactly the same self-blockable shape as
+/// mux-window-switch-output-hang task0001/task0002: reserving a permit is
+/// `.reserve().await` — exactly the same self-blockable shape as
 /// `handle_request_pane_snapshot`'s old blocking send, and reachable from
 /// the SAME connection task via `route_message`'s `SetVisibility` arm. The
 /// per-pane loop below therefore tries `try_reserve()` first (non-blocking,
 /// the common case when the channel has room, runs the resume inline
-/// exactly as before) and, only when the channel is momentarily full, defers
-/// THAT pane's `reserve().await` + resume to an independently spawned task
-/// so this connection's own drain arm is never blocked waiting on it.
-/// `resume_pane_with_permit` re-resolves the pane from `session_manager`
-/// at whatever later point the spawned task actually runs, so a resume that
-/// is no longer applicable by then (pane exited, already resumed by another
-/// path) is simply a no-op via its own existing checks — safe to run
-/// whenever the deferred permit arrives.
+/// exactly as before) and, only when the channel is momentarily full,
+/// defers THAT pane's resume attempt onto the connection-owned
+/// `deferred_output` queue instead (task0002 rework: no longer an
+/// independently spawned task — see `DeferredOutputQueue`'s doc for why, and
+/// `flush_deferred_output` below for the retry, which re-validates
+/// `visible_state` fresh at flush time so a pane hidden again in the interim
+/// is never resumed incorrectly, AC-1/F1/F2/F3).
 pub(super) async fn handle_set_visibility(
     visible: bool,
     session_manager: &Arc<Mutex<SessionManager>>,
     active_session_id: u32,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     visible_state: &Arc<AtomicBool>,
+    deferred_output: &mut DeferredOutputQueue,
 ) {
     let prev = visible_state.swap(visible, Ordering::AcqRel);
     if prev == visible {
@@ -785,67 +790,34 @@ pub(super) async fn handle_set_visibility(
     for pane_id in candidate_pane_ids {
         match pane_output_tx.try_reserve() {
             Ok(permit) => {
-                let mgr = session_manager.lock().await;
-                let Some(session) = mgr.get_session(active_session_id) else {
-                    drop(permit);
-                    return;
-                };
-                let pane = session
-                    .windows
-                    .values()
-                    .find_map(|w| w.panes.get(&pane_id))
-                    .filter(|p| !p.exited);
-                let Some(pane) = pane else {
-                    drop(permit);
-                    continue;
-                };
-                let _ = resume_pane_with_permit(pane, pane_output_tx, permit);
+                let _ = resolve_pane_and_resume(
+                    session_manager,
+                    active_session_id,
+                    pane_id,
+                    pane_output_tx,
+                    permit,
+                )
+                .await;
             }
             Err(mpsc::error::TrySendError::Full(())) => {
-                // mux-window-switch-output-hang task0001: the channel is
-                // momentarily full — do NOT `reserve().await` here (this
-                // task's own drain arm is the only thing that can free
-                // capacity, and it cannot run while this task is suspended
-                // waiting for a permit, the exact self-deadlock class this
-                // feature fixes). Defer this pane's reserve-and-resume to an
-                // independently spawned task instead; the connection's own
-                // select! loop keeps running in the meantime.
+                // mux-window-switch-output-hang task0001/task0002: the
+                // channel is momentarily full — do NOT `reserve().await`
+                // here (this task's own drain arm is the only thing that
+                // can free capacity, and it cannot run while this task is
+                // suspended waiting for a permit, the exact self-deadlock
+                // class this feature fixes). Defer this pane's resume onto
+                // the connection-owned queue instead; the connection's own
+                // select! loop keeps running in the meantime, and
+                // `flush_deferred_output` retries it (re-validating
+                // `visible_state` and re-resolving the pane fresh) the next
+                // time capacity frees.
                 log::warn!(
                     "[WARN][BACKEND] handle_set_visibility: pane_output_tx full; \
-                     deferring visibility-resume permit reservation for pane {} \
-                     to a background task",
+                     deferring visibility-resume for pane {} to the connection's \
+                     own deferred queue",
                     pane_id
                 );
-                let tx = pane_output_tx.clone();
-                let session_manager = session_manager.clone();
-                tokio::spawn(async move {
-                    let permit = match tx.reserve().await {
-                        Ok(p) => p,
-                        Err(_) => {
-                            log::warn!(
-                                "visibility-resume: pane_output_tx closed while \
-                                 waiting for a deferred permit (pane {})",
-                                pane_id
-                            );
-                            return;
-                        }
-                    };
-                    let mgr = session_manager.lock().await;
-                    let Some(session) = mgr.get_session(active_session_id) else {
-                        drop(permit);
-                        return;
-                    };
-                    let pane = session
-                        .windows
-                        .values()
-                        .find_map(|w| w.panes.get(&pane_id))
-                        .filter(|p| !p.exited);
-                    let Some(pane) = pane else {
-                        drop(permit);
-                        return;
-                    };
-                    let _ = resume_pane_with_permit(pane, &tx, permit);
-                });
+                deferred_output.defer_visibility_resume(pane_id);
             }
             Err(mpsc::error::TrySendError::Closed(())) => {
                 log::warn!(
@@ -854,6 +826,125 @@ pub(super) async fn handle_set_visibility(
                     pane_id
                 );
                 return;
+            }
+        }
+    }
+}
+
+/// Resolve `pane_id` in the CURRENT session and, if it is still eligible
+/// (session still exists, pane still exists, not exited), hand it `permit`
+/// via `resume_pane_with_permit`. Shared by `handle_set_visibility`'s
+/// immediate fast path (channel had room) and `flush_deferred_output`'s
+/// retry of a deferred visibility-resume — architecture medium finding
+/// handlers.rs:786 (task0002 review round 1): this reserve -> resolve ->
+/// resume block used to be duplicated verbatim across those two call sites
+/// (once inline, once inside the old spawned task).
+///
+/// On any early-out (session gone, pane gone, pane exited), `permit` is
+/// dropped so its reserved channel slot is released back to the channel
+/// rather than leaked.
+async fn resolve_pane_and_resume(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    active_session_id: u32,
+    pane_id: PaneId,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    permit: mpsc::Permit<'_, PtyOutputChunk>,
+) -> ResumeOutcome {
+    let mgr = session_manager.lock().await;
+    let Some(session) = mgr.get_session(active_session_id) else {
+        drop(permit);
+        return ResumeOutcome::NoChange;
+    };
+    let pane = session
+        .windows
+        .values()
+        .find_map(|w| w.panes.get(&pane_id))
+        .filter(|p| !p.exited);
+    let Some(pane) = pane else {
+        drop(permit);
+        return ResumeOutcome::NoChange;
+    };
+    resume_pane_with_permit(pane, pane_output_tx, permit)
+}
+
+/// Retry every item in `deferred_output` against `pane_output_tx`, stopping
+/// at the first one that still can't be sent (preserves FIFO order — see
+/// `DeferredOutputQueue`'s doc). Called by the connection's own event loop
+/// (`mux::ipc::connection::handle_connection`) immediately after it drains
+/// `pane_output_rx` — the only place capacity on that channel is ever freed
+/// — and, defensively, at the top of `route_message` so a newly-arrived
+/// client message also gives the queue a chance to progress even if PTY
+/// output has gone quiet in the meantime.
+///
+/// `Chunk` items are retried verbatim via `try_send`. `VisibilityResume`
+/// items are re-validated against `visible_state` FIRST (AC-1/F1/F2/F3: a
+/// pane hidden again since the resume was deferred must not be resumed to
+/// `Connected`), then attempted via `try_reserve` + `resolve_pane_and_resume`
+/// — which re-resolves the pane from `session_manager` fresh, so a pane that
+/// exited or moved sessions in the interim is simply skipped, exactly like
+/// the immediate path above.
+///
+/// A `Closed` channel drops the ENTIRE remaining backlog (every future send
+/// would fail identically, so there is nothing to gain by retaining it).
+pub(super) async fn flush_deferred_output(
+    deferred_output: &mut DeferredOutputQueue,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    active_session_id: u32,
+    visible_state: &Arc<AtomicBool>,
+) {
+    while let Some(item) = deferred_output.pop_front() {
+        match item {
+            DeferredOutputItem::Chunk(chunk) => match pane_output_tx.try_send(chunk) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(chunk)) => {
+                    deferred_output.requeue_front(DeferredOutputItem::Chunk(chunk));
+                    break;
+                }
+                Err(mpsc::error::TrySendError::Closed(chunk)) => {
+                    log::warn!(
+                        "flush_deferred_output: pane_output_tx closed; dropping deferred \
+                         chunk for pane {} and the rest of the backlog",
+                        chunk.pane_id
+                    );
+                    deferred_output.clear();
+                    return;
+                }
+            },
+            DeferredOutputItem::VisibilityResume(pane_id) => {
+                if !visible_state.load(Ordering::Acquire) {
+                    // Pane was hidden again since this resume was deferred
+                    // (AC-1/F1/F2/F3) — drop it. A later visible=true edge
+                    // re-scans every non-exited pane from scratch, so this
+                    // is a stale resume, not a missed one.
+                    continue;
+                }
+                match pane_output_tx.try_reserve() {
+                    Ok(permit) => {
+                        let _ = resolve_pane_and_resume(
+                            session_manager,
+                            active_session_id,
+                            pane_id,
+                            pane_output_tx,
+                            permit,
+                        )
+                        .await;
+                    }
+                    Err(mpsc::error::TrySendError::Full(())) => {
+                        deferred_output
+                            .requeue_front(DeferredOutputItem::VisibilityResume(pane_id));
+                        break;
+                    }
+                    Err(mpsc::error::TrySendError::Closed(())) => {
+                        log::warn!(
+                            "flush_deferred_output: pane_output_tx closed; dropping deferred \
+                             visibility-resume for pane {} and the rest of the backlog",
+                            pane_id
+                        );
+                        deferred_output.clear();
+                        return;
+                    }
+                }
             }
         }
     }
@@ -1386,7 +1477,16 @@ mod tests {
         };
 
         let visible_state = Arc::new(AtomicBool::new(true));
-        handle_set_visibility(false, &mgr, session_id, &owned_tx, &visible_state).await;
+        let mut deferred = DeferredOutputQueue::new();
+        handle_set_visibility(
+            false,
+            &mgr,
+            session_id,
+            &owned_tx,
+            &visible_state,
+            &mut deferred,
+        )
+        .await;
 
         assert!(!visible_state.load(Ordering::Acquire));
         assert!(matches!(
@@ -1438,7 +1538,16 @@ mod tests {
         // visible_state was false before this call — same precondition the
         // hidden -> visible transition exhibits in production.
         let visible_state = Arc::new(AtomicBool::new(false));
-        handle_set_visibility(true, &mgr, session_id, &owned_tx, &visible_state).await;
+        let mut deferred = DeferredOutputQueue::new();
+        handle_set_visibility(
+            true,
+            &mgr,
+            session_id,
+            &owned_tx,
+            &visible_state,
+            &mut deferred,
+        )
+        .await;
 
         assert!(visible_state.load(Ordering::Acquire));
         assert!(matches!(
@@ -1504,7 +1613,16 @@ mod tests {
         };
 
         let visible_state = Arc::new(AtomicBool::new(false));
-        handle_set_visibility(true, &mgr, session_id, &owned_tx, &visible_state).await;
+        let mut deferred = DeferredOutputQueue::new();
+        handle_set_visibility(
+            true,
+            &mgr,
+            session_id,
+            &owned_tx,
+            &visible_state,
+            &mut deferred,
+        )
+        .await;
 
         assert!(matches!(
             *target.lock().unwrap(),
@@ -1542,7 +1660,16 @@ mod tests {
         };
 
         let visible_state = Arc::new(AtomicBool::new(false));
-        handle_set_visibility(true, &mgr, session_id, &owned_tx, &visible_state).await;
+        let mut deferred = DeferredOutputQueue::new();
+        handle_set_visibility(
+            true,
+            &mgr,
+            session_id,
+            &owned_tx,
+            &visible_state,
+            &mut deferred,
+        )
+        .await;
 
         let mut seen = std::collections::HashSet::new();
         for _ in 0..2 {
@@ -1579,7 +1706,16 @@ mod tests {
         };
 
         let visible_state = Arc::new(AtomicBool::new(true));
-        handle_set_visibility(true, &mgr, session_id, &owned_tx, &visible_state).await;
+        let mut deferred = DeferredOutputQueue::new();
+        handle_set_visibility(
+            true,
+            &mgr,
+            session_id,
+            &owned_tx,
+            &visible_state,
+            &mut deferred,
+        )
+        .await;
 
         // No state change, no snapshot.
         assert!(visible_state.load(Ordering::Acquire));
@@ -1650,7 +1786,8 @@ mod tests {
             pane_id: 1,
             payload: Vec::new(),
         };
-        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx)
+        let mut deferred = DeferredOutputQueue::new();
+        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred)
             .await
             .expect("handle_request_pane_snapshot");
 
@@ -1720,7 +1857,8 @@ mod tests {
             pane_id: 1,
             payload: Vec::new(),
         };
-        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx)
+        let mut deferred = DeferredOutputQueue::new();
+        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred)
             .await
             .expect("handle_request_pane_snapshot");
 
@@ -1749,16 +1887,25 @@ mod tests {
         assert_eq!(post.kind, crate::mux::session::pane::ChunkKind::PtyOutput);
     }
 
-    // ── mux-window-switch-output-hang task0001: connection self-deadlock fix ──
+    // ── mux-window-switch-output-hang task0001 (self-deadlock fix) reworked
+    // in task0002 (bounded, order-preserving deferred delivery via a
+    // connection-owned `DeferredOutputQueue` instead of a spawned task per
+    // full-channel occurrence) ──
 
     /// AC-1: with the pane output channel filled to capacity by pane A's own
     /// simulated high-volume output, issuing a snapshot request for pane A
-    /// (the SAME pane) must still return promptly. Before the fix,
+    /// (the SAME pane) must still return promptly. Before task0001,
     /// `handle_request_pane_snapshot` performed a blocking
     /// `pane_output_tx.send(...).await` here — this same connection task is
     /// the ONLY consumer able to free capacity, and it cannot run its own
     /// drain arm while suspended inside this call, so the pre-fix code would
     /// hang instead of returning (the exact self-deadlock SPEC.md describes).
+    ///
+    /// task0002 rework: the deferred chunk now lands in `deferred` rather
+    /// than being handed to a spawned task, and is only actually sent once
+    /// `flush_deferred_output` is called — exactly what the connection's own
+    /// event loop does right after its own drain of `pane_output_rx`. The
+    /// explicit `flush_deferred_output` call below stands in for that.
     #[tokio::test]
     async fn handle_request_pane_snapshot_returns_promptly_when_own_pane_channel_full() {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
@@ -1799,9 +1946,10 @@ mod tests {
 
         // The bug this task fixes: this call must return within a bounded,
         // short time even though the channel is completely full.
+        let mut deferred = DeferredOutputQueue::new();
         tokio::time::timeout(
             std::time::Duration::from_millis(300),
-            handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx),
+            handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred),
         )
         .await
         .expect(
@@ -1809,17 +1957,31 @@ mod tests {
              pane_output_tx is at capacity for the SAME pane (AC-1)",
         )
         .expect("handler itself must not error");
+        assert_eq!(
+            deferred.len(),
+            1,
+            "a full channel must defer the snapshot chunk, not send it"
+        );
 
         // The two already-queued chunks must be observed before the
-        // deferred snapshot chunk (FIFO, AC-3).
+        // deferred snapshot chunk (FIFO, AC-3) — draining exactly as the
+        // connection's own event loop would.
         let c1 = rx.recv().await.expect("chunk a");
         assert_eq!(c1.data, b"a");
         let c2 = rx.recv().await.expect("chunk b");
         assert_eq!(c2.data, b"b");
-        let snap = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+
+        // ...then flushing (mirrors the connection loop calling
+        // `flush_deferred_output` right after its own drain) delivers the
+        // deferred snapshot now that capacity is free.
+        let visible_state = Arc::new(AtomicBool::new(true));
+        flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+        assert!(deferred.is_empty());
+
+        let snap = rx
+            .recv()
             .await
-            .expect("deferred snapshot chunk must arrive once capacity frees")
-            .expect("channel must not have closed");
+            .expect("deferred snapshot chunk must have been sent");
         assert_eq!(snap.pane_id, 1);
         assert_eq!(snap.kind, crate::mux::session::pane::ChunkKind::Snapshot);
     }
@@ -1828,7 +1990,8 @@ mod tests {
     /// targets a DIFFERENT pane (B) while pane A is the one whose output
     /// filled the channel. The connection must keep making progress: this
     /// call returns promptly, and pane A's already-queued output is still
-    /// forwarded ahead of pane B's snapshot once capacity frees.
+    /// forwarded ahead of pane B's snapshot once capacity frees and the
+    /// queue is flushed.
     #[tokio::test]
     async fn handle_request_pane_snapshot_for_different_pane_returns_promptly_while_channel_full() {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
@@ -1870,13 +2033,15 @@ mod tests {
             pane_id: 2,
             payload: Vec::new(),
         };
+        let mut deferred = DeferredOutputQueue::new();
         tokio::time::timeout(
             std::time::Duration::from_millis(300),
-            handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx),
+            handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx, &mut deferred),
         )
         .await
         .expect("handle_request_pane_snapshot must return promptly (AC-2)")
         .expect("handler itself must not error");
+        assert_eq!(deferred.len(), 1);
 
         let c1 = rx.recv().await.expect("pane A chunk 1");
         assert_eq!(c1.pane_id, 1);
@@ -1884,21 +2049,27 @@ mod tests {
         let c2 = rx.recv().await.expect("pane A chunk 2");
         assert_eq!(c2.pane_id, 1);
         assert_eq!(c2.data, b"a2");
-        let snap = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+
+        let visible_state = Arc::new(AtomicBool::new(true));
+        flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+        assert!(deferred.is_empty());
+
+        let snap = rx
+            .recv()
             .await
-            .expect("deferred snapshot for pane B must arrive once capacity frees")
-            .expect("channel must not have closed");
+            .expect("deferred snapshot for pane B must have been sent");
         assert_eq!(snap.pane_id, 2);
         assert_eq!(snap.kind, crate::mux::session::pane::ChunkKind::Snapshot);
     }
 
-    /// Audit fix (mux-window-switch-output-hang task0001): `handle_set_visibility`'s
-    /// visibility-resume path used to `pane_output_tx.reserve().await` per
-    /// pane — the same self-blockable shape as the snapshot bug, reachable
-    /// from the same connection task via `route_message`'s `SetVisibility`
-    /// arm. With the channel full, the call must still return promptly, and
-    /// the deferred resume (snapshot chunk + Connected swap) must still
-    /// land once capacity frees.
+    /// Audit fix (mux-window-switch-output-hang task0001, reworked task0002):
+    /// `handle_set_visibility`'s visibility-resume path used to
+    /// `pane_output_tx.reserve().await` per pane — the same self-blockable
+    /// shape as the snapshot bug, reachable from the same connection task
+    /// via `route_message`'s `SetVisibility` arm. With the channel full, the
+    /// call must still return promptly, and the deferred resume (snapshot
+    /// chunk + Connected swap) must still land once capacity frees and the
+    /// connection-owned queue is flushed.
     #[tokio::test]
     async fn handle_set_visibility_true_returns_promptly_when_channel_full_and_resumes_after_drain()
     {
@@ -1930,9 +2101,17 @@ mod tests {
         };
 
         let visible_state = Arc::new(AtomicBool::new(false));
+        let mut deferred = DeferredOutputQueue::new();
         tokio::time::timeout(
             std::time::Duration::from_millis(300),
-            handle_set_visibility(true, &mgr, session_id, &owned_tx, &visible_state),
+            handle_set_visibility(
+                true,
+                &mgr,
+                session_id,
+                &owned_tx,
+                &visible_state,
+                &mut deferred,
+            ),
         )
         .await
         .expect(
@@ -1941,19 +2120,110 @@ mod tests {
         );
 
         assert!(visible_state.load(Ordering::Acquire));
+        assert_eq!(
+            deferred.len(),
+            1,
+            "a full channel must defer the visibility resume, not spawn a task for it"
+        );
 
-        // Drain the filler chunk, freeing capacity for the deferred resume.
+        // Drain the filler chunk, freeing capacity for the deferred resume —
+        // exactly what the connection's own event loop does before it calls
+        // `flush_deferred_output`.
         let filler = rx.recv().await.expect("filler chunk");
         assert_eq!(filler.pane_id, 99);
 
-        let resumed = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+        flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+        assert!(deferred.is_empty());
+
+        let resumed = rx
+            .recv()
             .await
-            .expect("deferred resume snapshot must arrive once capacity frees")
-            .expect("channel must not have closed");
+            .expect("deferred resume snapshot must have been sent");
         assert_eq!(resumed.pane_id, 1);
         assert_eq!(resumed.kind, crate::mux::session::pane::ChunkKind::Snapshot);
 
-        wait_until(|| matches!(*target.lock().unwrap(), PaneOutputTarget::Connected(_))).await;
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Connected(_)
+        ));
+    }
+
+    /// AC-1/F1/F2/F3 regression: a visibility-resume deferred while the
+    /// channel was full must NOT be applied if the pane was hidden again
+    /// (`SetVisibility(false)`) before capacity freed and the queue was
+    /// flushed. `flush_deferred_output` re-validates `visible_state` fresh
+    /// at flush time — this pins that the stale resume is dropped rather
+    /// than incorrectly swapping the pane back to `Connected`.
+    #[tokio::test]
+    async fn flush_deferred_output_drops_stale_visibility_resume_when_hidden_again() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(1);
+
+        owned_tx
+            .send(PtyOutputChunk::pty_output(99, b"x".to_vec()))
+            .await
+            .expect("send filler");
+
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+        }));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid, 1, target.clone());
+            sid
+        };
+
+        // visible=true while the channel is full defers the resume.
+        let visible_state = Arc::new(AtomicBool::new(false));
+        let mut deferred = DeferredOutputQueue::new();
+        handle_set_visibility(
+            true,
+            &mgr,
+            session_id,
+            &owned_tx,
+            &visible_state,
+            &mut deferred,
+        )
+        .await;
+        assert_eq!(deferred.len(), 1);
+
+        // Before capacity frees, the SAME connection processes a
+        // SetVisibility(false) for the pane (e.g. a rapid window switch) —
+        // handle_set_visibility's own `!visible` branch re-detaches eligible
+        // panes and flips `visible_state` back to false.
+        handle_set_visibility(
+            false,
+            &mgr,
+            session_id,
+            &owned_tx,
+            &visible_state,
+            &mut deferred,
+        )
+        .await;
+        assert!(!visible_state.load(Ordering::Acquire));
+
+        // Now capacity frees and the queue is flushed.
+        let filler = rx.recv().await.expect("filler chunk");
+        assert_eq!(filler.pane_id, 99);
+        flush_deferred_output(&mut deferred, &owned_tx, &mgr, session_id, &visible_state).await;
+        assert!(
+            deferred.is_empty(),
+            "stale item must be dropped, not requeued"
+        );
+
+        // The stale resume must have been dropped, not applied: no snapshot
+        // chunk was sent, and the pane must still be Detached.
+        assert!(
+            rx.try_recv().is_err(),
+            "a stale visibility-resume must not send a snapshot"
+        );
+        assert!(
+            matches!(*target.lock().unwrap(), PaneOutputTarget::Detached { .. }),
+            "pane hidden again before flush must stay Detached (AC-1/F1/F2/F3)"
+        );
     }
 
     // ========================================================================
