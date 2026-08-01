@@ -27,9 +27,9 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: e947cb92cc325d7001a1a0bddba9bc23ce4fa25e
-    completed_at_commit: 849434fe336aaf79641b77a9a471625d08ffff9f
+    completed_at_commit: bfa2af1054ed1a38aea45857c9e7c5732a103542
   - id: review
     status: pending
   - id: verify
