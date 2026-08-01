@@ -2387,11 +2387,14 @@ mod tests {
     /// full channel, then drained — the panes evicted are the OLDEST
     /// distinct ones; every surviving (most-recently-requested) pane gets
     /// its own snapshot delivered, and the evicted panes get nothing. This
-    /// eviction is now an explicitly SPEC-SANCTIONED bounded-backlog policy
-    /// (SPEC.md FR3's carve-out, task0004 G3 option (a)) rather than an
-    /// undocumented contradiction of FR3's unconditional "MUST be
-    /// delivered" clause — the client recovers by switching to the evicted
-    /// pane again, which re-issues `RequestPaneSnapshot`.
+    /// eviction is an explicitly SPEC-SANCTIONED bounded-backlog policy
+    /// (SPEC.md FR3, task0004 G3 option (a); wording finalized task0005
+    /// G3/AC-3, review round 4 finding `329f746349f592e8`) — FR3's
+    /// guarantee is "one snapshot per pane, reflecting its newest request,
+    /// is delivered", not a 1:1 request/reply correspondence, so this is
+    /// not a dropped delivery under that guarantee — the client recovers by
+    /// switching to the evicted pane again, which re-issues
+    /// `RequestPaneSnapshot`.
     #[tokio::test]
     async fn handle_request_pane_snapshot_evicts_oldest_distinct_pane_per_spec_sanctioned_backlog_policy()
      {
