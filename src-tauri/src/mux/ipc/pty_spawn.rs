@@ -8,9 +8,7 @@ use std::sync::Mutex as StdMutex;
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
-use crate::mux::scrollback_filter::{
-    AgentStatusOscScanner, Osc133MarkScanner, strip_pty_output_for_scrollback_write,
-};
+use crate::mux::scrollback_filter::strip_pty_output_for_scrollback_write;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatusFeedItem, AgentStatusReportSender, DetachReason, MuxPane, NotificationSender,
@@ -511,17 +509,37 @@ fn find_osc_end(bytes: &[u8], from: usize) -> Option<usize> {
     None
 }
 
-fn extract_main_buffer_bytes(data: &[u8], alt_at_start: bool) -> (Cow<'_, [u8]>, bool) {
-    // (pattern, is_enter). `h` enters the alternate screen, `l` returns to main.
-    const TOGGLES: [(&[u8], bool); 6] = [
-        (b"\x1b[?1049h", true),
-        (b"\x1b[?1049l", false),
-        (b"\x1b[?1047h", true),
-        (b"\x1b[?1047l", false),
-        (b"\x1b[?47h", true),
-        (b"\x1b[?47l", false),
-    ];
-    let matches_toggle = |d: &[u8]| TOGGLES.iter().find(|(p, _)| d.starts_with(p)).copied();
+/// (pattern, is_enter) pairs for the alt-screen toggle CSI sequences.
+/// `h` enters the alternate screen, `l` returns to main. Shared with
+/// [`AgentStatusFeedScanner`] (below) so its own alt-screen tracking for
+/// OSC 133 mark gating (SPEC FR5) stays byte-for-byte consistent with this
+/// function's — both must agree on exactly which spans of a chunk count as
+/// "live main buffer".
+const ALT_SCREEN_TOGGLES: [(&[u8], bool); 6] = [
+    (b"\x1b[?1049h", true),
+    (b"\x1b[?1049l", false),
+    (b"\x1b[?1047h", true),
+    (b"\x1b[?1047l", false),
+    (b"\x1b[?47h", true),
+    (b"\x1b[?47l", false),
+];
+
+/// Returns `(bytes, final_alt, spans)`: `bytes` is the concatenated
+/// main-buffer content (as before); `spans` are the byte ranges of `data`
+/// each contributing to `bytes`, in order — added so a caller can gate
+/// OTHER per-byte-position decisions (e.g. [`AgentStatusFeedScanner`]'s OSC
+/// 133 mark eligibility) against the exact same main-buffer spans without
+/// re-deriving them.
+fn extract_main_buffer_bytes(
+    data: &[u8],
+    alt_at_start: bool,
+) -> (Cow<'_, [u8]>, bool, Vec<std::ops::Range<usize>>) {
+    let matches_toggle = |d: &[u8]| {
+        ALT_SCREEN_TOGGLES
+            .iter()
+            .find(|(p, _)| d.starts_with(p))
+            .copied()
+    };
 
     // Fast scan for any toggle. Most chunks (plain output, even SGR-colored)
     // contain none, so we can borrow without building a filtered copy.
@@ -536,14 +554,15 @@ fn extract_main_buffer_bytes(data: &[u8], alt_at_start: bool) -> (Cow<'_, [u8]>,
     }
     if !has_toggle {
         return if alt_at_start {
-            (Cow::Borrowed(&[]), true)
+            (Cow::Borrowed(&[]), true, Vec::new())
         } else {
-            (Cow::Borrowed(data), false)
+            (Cow::Borrowed(data), false, vec![0..data.len()])
         };
     }
 
     // Slow path: split into main-buffer spans, dropping toggles and alt spans.
     let mut out = Vec::with_capacity(data.len());
+    let mut spans = Vec::new();
     let mut alt = alt_at_start;
     let mut span_start: Option<usize> = if alt { None } else { Some(0) };
     let mut i = 0;
@@ -552,6 +571,7 @@ fn extract_main_buffer_bytes(data: &[u8], alt_at_start: bool) -> (Cow<'_, [u8]>,
             if let Some((pat, is_enter)) = matches_toggle(&data[i..]) {
                 if let Some(s) = span_start.take() {
                     out.extend_from_slice(&data[s..i]);
+                    spans.push(s..i);
                 }
                 alt = is_enter;
                 i += pat.len();
@@ -565,8 +585,187 @@ fn extract_main_buffer_bytes(data: &[u8], alt_at_start: bool) -> (Cow<'_, [u8]>,
     }
     if let Some(s) = span_start {
         out.extend_from_slice(&data[s..]);
+        spans.push(s..data.len());
     }
-    (Cow::Owned(out), alt)
+    (Cow::Owned(out), alt, spans)
+}
+
+/// Decode state for [`AgentStatusFeedScanner`] — structurally identical to
+/// the (separate) `AgentStatusOscScanner` / `Osc133MarkScanner` state
+/// machines in `scrollback_filter.rs`, but unified into ONE pass so an OSC
+/// 777 `agent-status` report and an OSC 133 mark from the SAME PTY read are
+/// emitted in TRUE relative byte order (task0012/task0003, SPEC FR4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AgentStatusFeedScanState {
+    /// No partial OSC sequence in flight.
+    Idle,
+    /// Just consumed an ESC while `Idle`; waiting to see if the next byte is
+    /// `]` (OSC introducer).
+    SeenEsc,
+    /// Inside `ESC ] <body>`, accumulating body bytes in `body` (the
+    /// introducer itself is not stored).
+    InsideOsc,
+    /// The most recent body byte was ESC, not yet pushed into `body`,
+    /// pending disambiguation: `\` completes ST, `]` reopens as a fresh OSC
+    /// introducer, anything else aborts the in-flight OSC without emitting.
+    InsideOscPendingSt,
+}
+
+/// Cap on the carry-over held by [`AgentStatusFeedScanner`] for an in-flight
+/// (not-yet-terminated) OSC body — mirrors the caps
+/// `AGENT_STATUS_SCANNER_CARRY_OVER_CAP` / `OSC133_SCANNER_CARRY_OVER_CAP`
+/// in `scrollback_filter.rs` had on the two scanners this type replaces.
+const AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP: usize = 8 * 1024;
+
+/// Per-pane stateful scanner producing [`AgentStatusFeedItem`]s — both OSC
+/// 777 `agent-status` reports (SPEC FR1/FR3) and live OSC 133 marks (SPEC
+/// FR1/FR4/FR5) — from PTY chunks in TRUE byte order within each chunk
+/// (finding: FR4's "single ordered feed" contract; the previous
+/// implementation ran an `AgentStatusOscScanner` over the full chunk and an
+/// `Osc133MarkScanner` over the chunk's live main-buffer subset
+/// independently, then the caller concatenated `reports` then `marks` —
+/// which is the chunk's SCAN order per scanner, not the chunk's BYTE
+/// order. A `D`→`A` pair appearing BEFORE a `Set` report in the actual
+/// stream was still forwarded `Set, D, A`).
+///
+/// Scanning once, with both bodies recognized in the same pass, makes the
+/// forwarded order structurally equal to the byte order — there is no
+/// second list to merge, so there is nothing left to get out of order.
+///
+/// FR5 (live-only, main-screen-only) is preserved exactly: the caller
+/// passes `live_spans`, the byte ranges of `chunk` already known to be live
+/// main-buffer content (the same spans [`extract_main_buffer_bytes`]
+/// computes for the scrollback-write path) — a mark is only emitted when
+/// its completing byte falls inside one of those spans. Reports remain
+/// unconditional (their validity never depended on screen content).
+struct AgentStatusFeedScanner {
+    state: AgentStatusFeedScanState,
+    /// Body bytes accumulated for the in-flight OSC (introducer and
+    /// terminator excluded).
+    body: Vec<u8>,
+    /// True once a single carry-over-overflow warning has fired.
+    overflow_warned: bool,
+}
+
+impl AgentStatusFeedScanner {
+    fn new() -> Self {
+        Self {
+            state: AgentStatusFeedScanState::Idle,
+            body: Vec::new(),
+            overflow_warned: false,
+        }
+    }
+
+    /// Feed one PTY read chunk. `live_spans` are the byte ranges of `chunk`
+    /// eligible for OSC 133 marks (SPEC FR5); reports are recognized
+    /// everywhere in `chunk`. Returns every complete report / mark detected
+    /// during this call, in the exact order their terminator appeared in
+    /// `chunk`. Any trailing incomplete OSC sequence is retained in `self`
+    /// and resumed on the next `feed` call.
+    fn feed(
+        &mut self,
+        chunk: &[u8],
+        live_spans: &[std::ops::Range<usize>],
+    ) -> Vec<AgentStatusFeedItem> {
+        let mut out = Vec::new();
+        for (idx, &b) in chunk.iter().enumerate() {
+            self.step(b, idx, live_spans, &mut out);
+            if self.body.len() > AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP {
+                if !self.overflow_warned {
+                    log::warn!(
+                        "agent-status feed scanner: carry-over exceeded {} bytes; dropping in-flight sequence",
+                        AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP
+                    );
+                    self.overflow_warned = true;
+                }
+                self.reset();
+            }
+        }
+        out
+    }
+
+    fn step(
+        &mut self,
+        b: u8,
+        idx: usize,
+        live_spans: &[std::ops::Range<usize>],
+        out: &mut Vec<AgentStatusFeedItem>,
+    ) {
+        match self.state {
+            AgentStatusFeedScanState::Idle => {
+                if b == 0x1b {
+                    self.state = AgentStatusFeedScanState::SeenEsc;
+                }
+            }
+            AgentStatusFeedScanState::SeenEsc => match b {
+                b']' => {
+                    self.body.clear();
+                    self.state = AgentStatusFeedScanState::InsideOsc;
+                }
+                0x1b => {
+                    // Consecutive ESC: keep the latest one as the candidate
+                    // introducer, stay in SeenEsc.
+                }
+                _ => {
+                    self.state = AgentStatusFeedScanState::Idle;
+                }
+            },
+            AgentStatusFeedScanState::InsideOsc => {
+                if b == 0x07 {
+                    self.commit(idx, live_spans, out);
+                } else if b == 0x1b {
+                    self.state = AgentStatusFeedScanState::InsideOscPendingSt;
+                } else {
+                    self.body.push(b);
+                }
+            }
+            AgentStatusFeedScanState::InsideOscPendingSt => match b {
+                b'\\' => {
+                    self.commit(idx, live_spans, out);
+                }
+                b']' => {
+                    self.body.clear();
+                    self.state = AgentStatusFeedScanState::InsideOsc;
+                }
+                0x1b => {}
+                _ => {
+                    self.reset();
+                }
+            },
+        }
+    }
+
+    /// Complete the in-flight OSC at chunk position `idx` (the index of the
+    /// terminator's final byte): emit a report unconditionally, or a mark
+    /// only when `idx` falls inside `live_spans` (FR5), then reset to
+    /// `Idle` either way.
+    fn commit(
+        &mut self,
+        idx: usize,
+        live_spans: &[std::ops::Range<usize>],
+        out: &mut Vec<AgentStatusFeedItem>,
+    ) {
+        if let Some(rest) = self.body.strip_prefix(b"777;emterm;agent-status;") {
+            let mut payload = String::from("emterm;agent-status;");
+            payload.push_str(&String::from_utf8_lossy(rest));
+            out.push(AgentStatusFeedItem::Report(payload));
+        } else if live_spans.iter().any(|r| r.contains(&idx)) {
+            if let Some(rest) = self.body.strip_prefix(b"133;") {
+                let head = rest.split(|&b| b == b';').next().unwrap_or(rest);
+                if head.len() == 1 {
+                    if let Some(kind) = crate::prompts::PromptMarkKind::from_byte(head[0]) {
+                        out.push(AgentStatusFeedItem::Osc133Mark(kind));
+                    }
+                }
+            }
+        }
+        self.reset();
+    }
+
+    fn reset(&mut self) {
+        self.body.clear();
+        self.state = AgentStatusFeedScanState::Idle;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -600,16 +799,15 @@ pub(in crate::mux) fn pty_reader_loop(
     // why a stateless per-chunk stripper is insufficient (128 KiB CLI chunks
     // straddle the 64 KiB PTY read buffer).
     let mut scrollback_filter = ScrollbackWriteFilter::new();
-    // Per-pane stateful agent-status OSC decoder: retains a partial
-    // `agent-status` OSC 777 sequence across PTY read boundaries so a
-    // report split across reads is still detected exactly once (SPEC
-    // FR1/FR3; review round-1 rework, stable_id `osc_split_lost`).
-    let mut agent_status_scanner = AgentStatusOscScanner::new();
-    // Per-pane stateful OSC 133 mark decoder (task0003, SPEC FR1/FR4/FR5):
-    // fed ONLY the live, main-buffer byte spans of each chunk (see
-    // `to_write` below) so a mark reconstructed for snapshot/replay
-    // purposes, or one observed on the alternate screen, never reaches it.
-    let mut osc133_scanner = Osc133MarkScanner::new();
+    // Per-pane stateful agent-status feed decoder: retains a partial OSC
+    // body across PTY read boundaries so a report/mark split across reads
+    // is still detected exactly once (SPEC FR1/FR3; review round-1 rework,
+    // stable_id `osc_split_lost`), and — unlike a pair of independently
+    // scanned lists — emits reports and OSC 133 marks from the SAME chunk
+    // in true relative byte order (SPEC FR4). Marks are still gated to the
+    // live, main-buffer spans of each chunk (SPEC FR5) via the
+    // `live_spans` argument passed to `feed` below.
+    let mut agent_status_feed_scanner = AgentStatusFeedScanner::new();
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
@@ -716,17 +914,23 @@ pub(in crate::mux) fn pty_reader_loop(
                 // buffer switch (e.g. command output emitted right before a
                 // TUI opens). Capture still happens regardless of attach state
                 // so a later reattach can replay pre-detach history.
-                let (main_bytes, scan_alt) = extract_main_buffer_bytes(data, alt_before);
-                let to_write: &[u8] = if scan_alt == alt_after {
-                    &main_bytes
-                } else {
-                    // The scan ended in a different buffer than the
-                    // authoritative shadow parser: a toggle straddled this
-                    // read boundary or used an unrecognized form. Fall back to
-                    // the conservative whole-chunk gate so we never emit a
-                    // partial toggle sequence into scrollback.
-                    if !alt_before && !alt_after { data } else { &[] }
-                };
+                let (main_bytes, scan_alt, main_spans) =
+                    extract_main_buffer_bytes(data, alt_before);
+                let (to_write, live_spans): (&[u8], Vec<std::ops::Range<usize>>) =
+                    if scan_alt == alt_after {
+                        (&main_bytes, main_spans)
+                    } else {
+                        // The scan ended in a different buffer than the
+                        // authoritative shadow parser: a toggle straddled this
+                        // read boundary or used an unrecognized form. Fall back to
+                        // the conservative whole-chunk gate so we never emit a
+                        // partial toggle sequence into scrollback.
+                        if !alt_before && !alt_after {
+                            (data, vec![0..data.len()])
+                        } else {
+                            (&[], Vec::new())
+                        }
+                    };
                 if !to_write.is_empty() {
                     let (attribution_dims, filtered) =
                         scrollback_filter.feed(to_write, (read_cols, read_rows));
@@ -744,41 +948,30 @@ pub(in crate::mux) fn pty_reader_loop(
                     }
                 }
 
-                // Detect agent-status OSC 777 reports (SPEC FR3) and forward
-                // each to the daemon-level agent-status task. Unlike OSC 9
-                // notification scanning (Detached-only, to avoid double-
-                // firing with the GUI's own live parse), this runs
-                // regardless of attach state: the daemon owns per-pane
-                // agent-status state unconditionally, and the GUI never
-                // parses this OSC itself for mux panes. The scanner is
-                // per-pane stateful (see `agent_status_scanner` above) so a
-                // report split across this read and the next is still
-                // detected. Scanned from the FULL chunk (`data`), unfiltered
-                // by alt-screen — a report's validity does not depend on
-                // screen content (unchanged from before task0003).
-                let reports = agent_status_scanner.feed(data);
-
-                // Detect live OSC 133 marks (task0003, SPEC FR1/FR5) and
-                // feed the pane's inferred-clear latch, ordered with the
-                // reports above through the SAME channel (FR4). Scanned
-                // from `to_write` — the bytes already narrowed to this
-                // chunk's LIVE, MAIN-BUFFER spans above — so a mark
-                // produced while the pane is on the alternate screen never
-                // reaches the scanner (mirrors `term_core`'s own OSC 133
-                // alt-screen suppression) and only live PTY bytes (never
-                // scrollback/snapshot/reattach-reconstructed bytes) ever
-                // do, since `to_write` is computed fresh from THIS read.
-                let osc133_marks = osc133_scanner.feed(to_write);
-
-                if !reports.is_empty() || !osc133_marks.is_empty() {
-                    let mut items: Vec<AgentStatusFeedItem> =
-                        Vec::with_capacity(reports.len() + osc133_marks.len());
-                    items.extend(reports.into_iter().map(AgentStatusFeedItem::Report));
-                    items.extend(
-                        osc133_marks
-                            .into_iter()
-                            .map(AgentStatusFeedItem::Osc133Mark),
-                    );
+                // Detect agent-status OSC 777 reports (SPEC FR3) AND live
+                // OSC 133 marks (task0003, SPEC FR1/FR5) in a SINGLE ordered
+                // pass over the FULL chunk (`data`), then forward both to
+                // the daemon-level agent-status task in that exact byte
+                // order (SPEC FR4). Unlike OSC 9 notification scanning
+                // (Detached-only, to avoid double-firing with the GUI's own
+                // live parse), this runs regardless of attach state: the
+                // daemon owns per-pane agent-status state unconditionally,
+                // and the GUI never parses this OSC itself for mux panes.
+                // The scanner is per-pane stateful (see
+                // `agent_status_feed_scanner` above) so a report/mark split
+                // across this read and the next is still detected exactly
+                // once. Reports are unconditional — a report's validity does
+                // not depend on screen content (unchanged from before
+                // task0003) — while marks are only accepted when their
+                // completing byte falls inside `live_spans`, this chunk's
+                // LIVE, MAIN-BUFFER spans computed above: a mark produced
+                // while the pane is on the alternate screen never reaches
+                // the scanner (mirrors `term_core`'s own OSC 133 alt-screen
+                // suppression), and only live PTY bytes (never
+                // scrollback/snapshot/reattach-reconstructed bytes) ever do,
+                // since `live_spans` is computed fresh from THIS read.
+                let items = agent_status_feed_scanner.feed(data, &live_spans);
+                if !items.is_empty() {
                     forward_agent_status_items(pane_id, items, &agent_status_report_sender);
                 }
 
@@ -1086,9 +1279,10 @@ mod tests {
 
     #[test]
     fn extract_main_buffer_pure_main_borrows_whole_chunk() {
-        let (bytes, alt) = extract_main_buffer_bytes(b"hello \x1b[31mworld\x1b[0m", false);
+        let (bytes, alt, spans) = extract_main_buffer_bytes(b"hello \x1b[31mworld\x1b[0m", false);
         assert_eq!(&*bytes, b"hello \x1b[31mworld\x1b[0m");
         assert!(!alt);
+        assert_eq!(spans, vec![0..bytes.len()]);
         assert!(
             matches!(bytes, Cow::Borrowed(_)),
             "no-toggle main chunk must borrow"
@@ -1097,42 +1291,49 @@ mod tests {
 
     #[test]
     fn extract_main_buffer_pure_alt_yields_nothing() {
-        let (bytes, alt) = extract_main_buffer_bytes(b"alt frame redraw", true);
+        let (bytes, alt, spans) = extract_main_buffer_bytes(b"alt frame redraw", true);
         assert!(bytes.is_empty());
         assert!(alt);
+        assert!(spans.is_empty());
     }
 
     #[test]
     fn extract_main_buffer_keeps_prefix_before_alt_enter() {
         // Command output then a TUI opens in the SAME read — the leading
         // main-buffer output must survive (the regression this guards).
-        let (bytes, alt) = extract_main_buffer_bytes(b"PRE-OUTPUT\x1b[?1049hALTUI", false);
+        let (bytes, alt, spans) = extract_main_buffer_bytes(b"PRE-OUTPUT\x1b[?1049hALTUI", false);
         assert_eq!(&*bytes, b"PRE-OUTPUT");
         assert!(alt);
+        assert_eq!(spans, vec![0..10]);
     }
 
     #[test]
     fn extract_main_buffer_keeps_suffix_after_alt_exit() {
-        let (bytes, alt) = extract_main_buffer_bytes(b"ALTUI\x1b[?1049lPOST-PROMPT", true);
+        let (bytes, alt, spans) = extract_main_buffer_bytes(b"ALTUI\x1b[?1049lPOST-PROMPT", true);
         assert_eq!(&*bytes, b"POST-PROMPT");
         assert!(!alt);
+        assert_eq!(spans, vec![13..24]);
     }
 
     #[test]
     fn extract_main_buffer_drops_balanced_internal_alt_span() {
-        let (bytes, alt) = extract_main_buffer_bytes(b"A\x1b[?1049hHIDDEN\x1b[?1049lB", false);
+        let (bytes, alt, spans) =
+            extract_main_buffer_bytes(b"A\x1b[?1049hHIDDEN\x1b[?1049lB", false);
         assert_eq!(&*bytes, b"AB");
         assert!(!alt);
+        assert_eq!(spans, vec![0..1, 23..24]);
     }
 
     #[test]
     fn extract_main_buffer_handles_47_and_1047_forms() {
-        let (b1, a1) = extract_main_buffer_bytes(b"X\x1b[?47hY", false);
+        let (b1, a1, spans1) = extract_main_buffer_bytes(b"X\x1b[?47hY", false);
         assert_eq!(&*b1, b"X");
         assert!(a1);
-        let (b2, a2) = extract_main_buffer_bytes(b"X\x1b[?1047lY", true);
+        assert_eq!(spans1, vec![0..1]);
+        let (b2, a2, spans2) = extract_main_buffer_bytes(b"X\x1b[?1047lY", true);
         assert_eq!(&*b2, b"Y");
         assert!(!a2);
+        assert_eq!(spans2, vec![9..10]);
     }
 
     // ── ScrollbackWriteFilter (stateful scrollback-write stripper) ─────────
@@ -1667,6 +1868,74 @@ mod tests {
             items[2],
             AgentStatusFeedItem::Osc133Mark(crate::prompts::PromptMarkKind::PromptStart)
         ));
+    }
+
+    /// Regression for the FR4 ordering bug (concatenating a full-chunk
+    /// report scan with a separately-scanned mark list loses TRUE relative
+    /// order): a single read whose actual byte order is `D` → `A` → `Set`
+    /// must forward items in exactly that order, NOT `Set, D, A` (which is
+    /// what naive "reports first, then marks" concatenation would produce
+    /// even though this read never emitted the report first).
+    #[test]
+    fn pty_reader_loop_preserves_true_byte_order_when_marks_precede_a_report_in_the_same_read() {
+        let (out_tx, _out_rx) = mpsc::channel::<PtyOutputChunk>(16);
+        let output_target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(out_tx)));
+        let pane = MuxPane::new_test(4, 80, 24, output_target);
+
+        let (agent_status_tx, mut agent_status_rx) =
+            mpsc::channel::<(PaneId, AgentStatusFeedItem)>(16);
+        *pane.agent_status_report_sender.lock().unwrap() = Some(agent_status_tx);
+
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1b]133;D\x07");
+        input.extend_from_slice(b"\x1b]133;A\x07");
+        input.extend_from_slice(b"\x1b]777;emterm;agent-status;v=1;state=working\x07");
+        let reader: Box<dyn Read + Send> = Box::new(std::io::Cursor::new(input));
+
+        pty_reader_loop(
+            pane.id,
+            reader,
+            pane.output_target.clone(),
+            pane.shadow_parser.clone(),
+            pane.cwd.clone(),
+            pane.title.clone(),
+            pane.title_sender.clone(),
+            pane.notification_sender.clone(),
+            pane.agent_status_report_sender.clone(),
+            pane.raw_passthrough.clone(),
+            pane.passthrough_scanner.clone(),
+            pane.scrollback.clone(),
+            pane.dims.clone(),
+            Arc::new(StdMutex::new(None)),
+        );
+
+        let mut items = Vec::new();
+        while let Ok((pane_id, item)) = agent_status_rx.try_recv() {
+            assert_eq!(pane_id, 4);
+            items.push(item);
+        }
+        assert_eq!(items.len(), 3, "two marks + one report from THIS read");
+        assert!(
+            matches!(
+                items[0],
+                AgentStatusFeedItem::Osc133Mark(crate::prompts::PromptMarkKind::CommandEnd)
+            ),
+            "D must be forwarded first, matching the true byte order: {items:?}"
+        );
+        assert!(
+            matches!(
+                items[1],
+                AgentStatusFeedItem::Osc133Mark(crate::prompts::PromptMarkKind::PromptStart)
+            ),
+            "A must be forwarded second, matching the true byte order: {items:?}"
+        );
+        assert!(
+            matches!(&items[2], AgentStatusFeedItem::Report(r) if r == "emterm;agent-status;v=1;state=working"),
+            "the report must be forwarded LAST since it appeared last in the \
+             byte stream, not first (the bug this test guards against): \
+             {items:?}"
+        );
     }
 
     // ── forward_agent_status_items (task0012 AC-6 / try_send_drops_reports;
