@@ -91,7 +91,7 @@ workflow:
           armed/command_ended/disarmed 3 テストで latch の往復自体は検証済みだが、
           上記 deferred high の残余窓は自動テストで再現していない。
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
