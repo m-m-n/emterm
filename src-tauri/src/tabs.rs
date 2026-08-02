@@ -2644,6 +2644,21 @@ impl Tab {
             // 22/104/110/111/112 mutated the shared `Theme`, every row
             // must repaint with the new palette on the next frame.
             let theme_changed = std::mem::take(&mut s.theme_dirty);
+            // Mux path: `pending_latch_feed` is only drained (and reconciled
+            // into `pending_latch_inputs`) by `process_outer_via_core`, which
+            // does NOT run while `mux_session_name` is set (the outer stream
+            // goes to `mux_apc_extractor` instead — see the branch above).
+            // `NativeCallbacks::on_osc` still pushes onto it unconditionally,
+            // so left alone it grows without bound for the lifetime of the
+            // mux session and, at detach, would flush stale accumulated
+            // marks into this (plain-tab) latch alongside live ones. The
+            // daemon-side `MuxPane.agent_status_exit_latch` is authoritative
+            // for mux ping status, so this GUI-local latch has no use for
+            // mux-path marks — discard them every pump instead of
+            // reconciling.
+            if self.mux_session_name.is_some() {
+                s.pending_latch_feed.clear();
+            }
             drop(s);
             if theme_changed {
                 self.core.lock().mark_all_dirty();
