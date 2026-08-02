@@ -27,9 +27,9 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 97f48669dee4d5e0bad2b82c3e333d429f00a652
-    completed_at_commit: 8926dcf927b4c4e2bc71ae4e74d63000d86dd798
+    completed_at_commit: eb8d3acf05e959aa2a852448501db69d6b8e9592
   - id: review
     status: pending
   - id: verify
@@ -100,9 +100,14 @@ tasks:
     domains: [input-handling, concurrency]
     complexity: medium
     requirements: [FR2, FR3, FR4, FR5]
-    status: pending
-    notes: "review round 1 の残存 high 6b2e83f10c94ad7e から合成（batch auto-rework 1/1）"
-    branch: null
+    status: merged
+    notes: >-
+      review round 1 の残存 high 6b2e83f10c94ad7e から合成（batch auto-rework 1/1）。
+      同領域の medium 929859ff2b4e431e / 5cd6f305dcdeceb7 も併せて解消。
+      pump 開始時点の mux 接続状態をスナップショットし、frame-apply ループ直後・
+      detach tail 再ルート前に両キューを破棄、pending_agent_status は pump 末尾で
+      1 回だけ drain する形にした。回帰テスト 4 本追加。conflict_retries=0。
+    branch: em-workflow/agent-exit-after-icon/task0005
   task0006:
     title: "hot-upgrade の latch snapshot をイベントストリームのカットにする (review rework)"
     plan: tasks/task0006.md
@@ -112,9 +117,17 @@ tasks:
     domains: [concurrency]
     complexity: medium
     requirements: [FR6]
-    status: pending
-    notes: "review round 1 の残存 high 2e6f18b4dc0a7593 から合成（batch auto-rework 1/1）"
-    branch: null
+    status: merged
+    notes: >-
+      review round 1 の残存 high 2e6f18b4dc0a7593 から合成（batch auto-rework 1/1）。
+      制御フロー追跡の結果 codex:spec の指摘が正しいと確定（prepare_upgrade は
+      snapshot 後に SessionManager ロックを手放し、最大 2 秒の ack 待ちの間も
+      pane reader スレッドと run_agent_status_task が latch を書き換え続ける）。
+      prepare_upgrade の return 直前で live 状態を再読込して handoff を書き直す
+      緩和を実装。ack 待ち後の sub-second 残余窓は未閉塞（reader の quiesce が
+      必要で単一ファイル範囲外）— 下記 qualification 参照。conflict_retries=0。
+      deviation: mux/daemon.rs に呼び出し配線を 1 ブロック追加。
+    branch: em-workflow/agent-exit-after-icon/task0006
 
 review:
   status: pending
