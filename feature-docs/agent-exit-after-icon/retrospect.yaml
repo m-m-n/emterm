@@ -1,0 +1,92 @@
+feature: agent-exit-after-icon
+collected_at: "2026-08-03T02:05:00+09:00"
+session_ids: ["9da5e361-9c59-4874-800a-957af889840e"]
+
+signals:
+  review_critical_high:
+    - {stable_id: d043507b2d288967, category: architecture, file: src-tauri/src/mux/ipc/pty_spawn.rs, title: "FR4 単一順序フィード契約が producer 側の連結で破られている", resolution: fixed}
+    - {stable_id: 046863521b1be5fd, category: spec, file: src-tauri/src/mux/ipc/pty_spawn.rs, title: "daemon 側で OSC 777 report と OSC 133 mark が並べ替えられる", resolution: fixed}
+    - {stable_id: e429e9258494abb4, category: security, file: src-tauri/src/tabs.rs, title: "mux モードで pending_latch_feed が無制限に増える", resolution: fixed}
+    - {stable_id: 0591feb321172d6b, category: architecture, file: crates/mux_ipc/src/handoff.rs, title: "handoff スキーマ v2 bump に後方互換経路が無い", resolution: fixed}
+    - {stable_id: 9a1f4c2e7b0d5a83, category: architecture, file: src-tauri/src/app.rs, title: "pump_all の二本立てドレインが FR4 の真順序保証を捨てている", resolution: fixed}
+    - {stable_id: 8028bf0212c00419, category: spec, file: src-tauri/src/app.rs, title: "推測 Clear が同一 pump 内の明示 Set より後に適用される", resolution: fixed}
+    - {stable_id: c73b90ae15d2f6c4, category: architecture, file: src-tauri/src/mux/scrollback_filter.rs, title: "OSC スキャナが 3 実装に分裂し旧 2 本が孤児化", resolution: fixed}
+    - {stable_id: 6b2e83f10c94ad7e, category: spec, file: src-tauri/src/tabs.rs, title: "mux 接続中も GUI ローカル tab status が作られ daemon の推論 Clear で消えない", resolution: fixed}
+    - {stable_id: b58e0d47f3c2916a, category: architecture, file: src-tauri/src/mux/upgrade.rs, title: "rewrite_handoff_file が失敗時に有効な handoff 文書を破壊する", resolution: fixed}
+    - {stable_id: 2e6f18b4dc0a7593, category: spec, file: src-tauri/src/mux/upgrade.rs, title: "hot-upgrade の refresh 後〜exec 間に sub-second の取りこぼし窓が残る", resolution: deferred}
+
+  conflict_reworks: []   # 全 6 タスクとも conflict_retries: 0
+
+  file_prediction_misses:
+    - task: task0006
+      files: [src-tauri/src/mux/daemon.rs]
+      note: >-
+        expected_files は src-tauri/src/mux/upgrade.rs のみだったが、
+        「exec 直前に live 状態を再読込する」呼び出し地点が prepare_upgrade
+        （daemon.rs）側にしか存在せず、配線 1 ブロックの追加が不可避だった。
+
+  verification_failures: []   # verify は pass
+
+  discretionary_perspectives: []   # Layer-2 追加なし（floor の 5 観点のみ）
+
+  declined_findings: []   # declined 判定はゼロ
+
+lessons_candidates:
+  - id: interrupted-review-loop-leaves-uncommitted-edits
+    note: >-
+      前セッションが review round 1 の auto-fix loop 1 の途中で中断し、
+      3 ファイル分の編集が未コミットのまま worktree に残っていた。
+      round1.yaml は auto_fix.loops_run: 0 / termination: pending と
+      記録されており、「記録上は loop 未実行なのに実際には編集済み」という
+      状態だった。再開時に workflow.yaml の status だけを見ると
+      この乖離に気づけない。review-phase.md の R4 に、loop 開始前後で
+      worktree の dirty 状態を round 記録に残す規定があると、
+      再開時の突き合わせが機械的にできる。
+
+  - id: single-file-editor-cannot-carry-a-multi-file-fix
+    note: >-
+      round 1 の app.rs 修正は「Tab 側が単一の順序付き列を吐く」のが本筋だが、
+      review-editor は単一ファイル制約があるため app.rs 内で 2 リストを
+      事後ペアリングする形になった。editor は全タブ横断で位置ペアリングして
+      おり、mux タブ（latch input 0 件・plain event あり）が混ざると
+      対応がずれる欠陥があったため、オーケストレーターがタブ単位ペアリングに
+      修正した。round 2 では architecture / spec 双方が
+      「事後ペアリングという設計自体が新たな暗黙不変条件を生む」と
+      medium で再指摘している。単一ファイル editor で構造的な修正を
+      当てると、症状は消えても設計上の負債が残る。
+
+  - id: orchestrator-must-review-editor-output
+    note: >-
+      上記の app.rs ペアリング欠陥も、pty_spawn.rs のテスト期待値の
+      off-by-one（範囲末尾が入力長を超える 13..25）も、editor の適用直後に
+      オーケストレーターが diff を読んで初めて見つかった。
+      review-phase.md のスコープ検証はハッシュ差分で「どのファイルが
+      変わったか」しか見ないので、内容の妥当性は素通りする。
+      productive loop の後にビルド・テストを回す規定を明示すると
+      少なくとも後者は機械的に捕まる。
+
+  - id: pre-existing-test-failures-need-a-baseline-record
+    note: >-
+      --lib スイートには base_commit 時点で既に失敗する 7 件があり、
+      その切り分けに隔離ワークツリーでの base_commit 再ビルド
+      （フォント資産の手動コピーを含む）が必要だった。切り分けなしでは
+      verify が fail 判定になり、batch の rework 枠を無関係な失敗に
+      使ってしまうところだった。implement 開始時点で baseline failures を
+      workflow.yaml に記録しておけば、verify と各 implementer が
+      同じ基準を共有できる。
+
+  - id: tmpfs-scratch-is-too-small-for-cargo-target
+    note: >-
+      切り分け用の worktree を /tmp に作って cargo test を回したところ
+      tmpfs（20G、空き 1.5G 程度）を使い切り、ツールの stdout 収集ごと
+      ENOSPC で落ちた。Rust の target ディレクトリを伴う一時ワークツリーは
+      /tmp ではなく home 側に作る必要がある。
+
+  - id: main-worktree-target-dir-was-stale
+    note: >-
+      main 作業ツリーの src-tauri/target に、この feature のブランチから
+      ビルドされたと思われる mux_ipc の rlib が残っており、
+      main ツリーで cargo check すると upgrade.rs が HandoffPane の
+      latch フィールド欠落でコンパイルエラーになる。今回のセッションが
+      作った状態ではない（最初に触れた時点で既に再現した）。
+      ユーザーが main で作業する前に cargo clean が必要。
