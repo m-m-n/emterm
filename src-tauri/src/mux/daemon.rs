@@ -983,7 +983,7 @@ async fn prepare_upgrade(
         ));
     }
 
-    let document = {
+    let mut document = {
         let mgr = session_manager.lock().await;
         snapshot(&mgr, listen_fd, socket_path)?
     };
@@ -1051,6 +1051,28 @@ async fn prepare_upgrade(
         }
     }
     *upgrade_ack_slot.lock().unwrap() = None;
+
+    // task0006 (review rework, finding 2e6f18b4dc0a7593): `document` above
+    // was captured before the client-acknowledgement wait, which is the
+    // dominant (multi-second) part of the window between `snapshot` and
+    // this process's eventual `exec` -- pane reader threads and the
+    // daemon's agent-status task (this function's own caller's sibling
+    // task, still running on this runtime) keep applying live agent-status
+    // reports and OSC 133 marks in that window. Re-read each still-live
+    // pane's CURRENT state now, as late as possible before returning, and
+    // patch it into the ALREADY-WRITTEN handoff file -- see
+    // `crate::mux::upgrade::refresh_live_agent_state`'s doc comment for
+    // exactly what this narrows and what residual window remains.
+    {
+        let mgr = session_manager.lock().await;
+        crate::mux::upgrade::refresh_live_agent_state(&mut document, &mgr);
+    }
+    if let Err(e) = crate::mux::upgrade::rewrite_handoff_file(&document, socket_path) {
+        log::warn!(
+            "mux upgrade: failed to refresh agent-status/latch state in the handoff file \
+             before exec: {e}"
+        );
+    }
 
     let handoff_document_path = crate::mux::upgrade::handoff_file_path(socket_path);
     Ok(UpgradeRequest {
