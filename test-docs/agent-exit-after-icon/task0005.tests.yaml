@@ -1,0 +1,114 @@
+task_id: task0005
+baseline_failures:
+  # Given by the orchestrator invocation prompt (verified at base_commit
+  # 97f4866 in a clean worktree), pre-existing and unrelated to this
+  # feature. Not run before editing (see notes); reproduced afterwards
+  # (see final_failures) to confirm the set still matches.
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  # From the final full `--lib -- --test-threads=1` run after implementation.
+  # A subset of baseline_failures: ts13 passed this run (it and its siblings
+  # are documented as non-deterministic under `--test-threads=1` per the
+  # project's LESSONS/known flakiness — "off-thread replay worker did not
+  # complete in time" is a timing race, not something this task touched).
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - tabs::tests::mux_inner_agent_status_set_does_not_create_plain_tab_status
+    red_confirmed: true
+    red_reason: >-
+      Against the pre-fix `process_combined` (agent_status_events drained
+      unconditionally each pump, only pending_latch_feed gated on mux),
+      the test panicked: "a mux pane's inner OSC 777 Set must not create a
+      GUI-local tab status" — take_pending_agent_status_events() returned
+      the mux-inner Set on the pump immediately after it was queued (the
+      test issues a second, still-mux pump with empty bytes so the
+      pre-fix code's per-pump-delayed drain gets a chance to surface it).
+  AC-2:
+    tests:
+      - tabs::tests::mux_inner_agent_status_set_then_da_leaves_no_residual_plain_tab_status
+    red_confirmed: true
+    red_reason: >-
+      Same pre-fix code path as AC-1; the test's first assertion ("no
+      residual GUI-local Set after a mux-inner D->A pair") panicked for
+      the same reason (the mux-inner Set surfaced via the delayed drain).
+      The second assertion (latch inputs empty) already held pre-fix
+      because pending_latch_feed was unconditionally cleared every mux
+      pump even before this rework — only the agent_status side was
+      gated correctly by the fix.
+  AC-3:
+    tests:
+      - tabs::tests::mux_inner_candidates_do_not_leak_into_same_pump_post_detach_tail
+    red_confirmed: true
+    red_reason: >-
+      Against pre-fix code, `events` came back empty instead of
+      containing only the post-detach plain-tab Set: "assertion `left ==
+      right` failed: ... events=[] left: [] right: [Set { state: Working,
+      name: None }]". This is the drain-point-mismatch bug (round1 medium
+      5cd6f305dcdeceb7): pre-fix, `pending_agent_status` was drained once
+      BEFORE the frame-apply loop, so the tail re-route's own
+      contribution (added by `process_outer_via_core` INSIDE the loop)
+      was never picked up this pump at all — it (and the mux-inner Set
+      queued alongside it) would only surface, mixed together, on a LATER
+      pump. The latch_inputs assertion also failed pre-fix for the
+      mirror reason (round1 medium 929859ff2b4e431e): the mux-inner
+      `pending_latch_feed` clear ran before the frame loop, so mux-inner
+      OSC 133/777 candidates added by the loop remained queued when the
+      tail re-route's own `process_outer_via_core` call took
+      `pending_latch_feed`, mixing mux-inner candidates into the
+      plain-tab latch reconciliation.
+  AC-4:
+    tests:
+      - tabs::tests::plain_tab_agent_status_set_surfaces_via_pending_agent_status_events
+      - tabs::tests::latch_feed_end_to_end_set_then_live_d_a_resolves_in_order
+      - tabs::tests::latch_feed_end_to_end_drops_alt_screen_suppressed_candidate
+    red_confirmed: false
+    red_reason: >-
+      AC-4 is "non-mux behavior is unchanged" — by definition its test
+      must pass both before and after the fix (a criterion of no
+      observable change, not new behavior). Confirmed
+      plain_tab_agent_status_set_surfaces_via_pending_agent_status_events
+      passes against BOTH the pre-fix and post-fix `process_combined`
+      (verified directly: reverted just the process_combined edit, ran
+      the new tests, it stayed green while the three mux-scenario tests
+      went red). The other two listed tests
+      (latch_feed_end_to_end_set_then_live_d_a_resolves_in_order,
+      latch_feed_end_to_end_drops_alt_screen_suppressed_candidate) are
+      pre-existing task0002 tests, not authored in this task; they were
+      re-run post-fix and remain green, serving as additional non-mux
+      regression coverage for AC-4.
+  AC-5:
+    tests:
+      - tabs::tests::mux_inner_agent_status_set_does_not_create_plain_tab_status
+      - tabs::tests::mux_inner_agent_status_set_then_da_leaves_no_residual_plain_tab_status
+      - tabs::tests::mux_inner_candidates_do_not_leak_into_same_pump_post_detach_tail
+    red_confirmed: true
+    red_reason: >-
+      All three added and confirmed red against pre-fix code as recorded
+      under AC-1/AC-2/AC-3 above. The third test is the explicit combined
+      scenario the plan requires: one pump carrying mux inner PtyOutput
+      (OSC 777 Set) + a Detached control frame + post-detach plain shell
+      bytes (OSC 777 Set + OSC 133 D/A).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a per-test red/green cycle; verified by running
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib -- --test-threads=1` after implementation
+      and diffing the failure set against the orchestrator-supplied
+      baseline (see baseline_failures/final_failures above): final
+      failures are a subset of the baseline, so no new failures were
+      introduced by this task.

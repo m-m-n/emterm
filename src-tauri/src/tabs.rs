@@ -2591,6 +2591,15 @@ impl Tab {
         // `pending_apc` further down so they flow through the same
         // `partition_apc_for_mux` sink the pre-mux `self.core` parse feeds.
         let mut extracted_mux_apc: Vec<(Vec<u8>, usize)> = Vec::new();
+        // task0005 rework (round1 findings 6b2e83f10c94ad7e / 929859ff2b4e431e
+        // / 5cd6f305dcdeceb7): snapshot mux attachment as it stood at the
+        // START of this pump, before anything below (including a `Detached`
+        // frame extracted from `combined`) can change `self.mux_session_name`.
+        // Used further down to decide whether `pending_agent_status` /
+        // `pending_latch_feed` candidates parsed during this pump belong to
+        // a mux pane's inner content (discard — the daemon is authoritative
+        // for mux panes, SPEC FR3) rather than to plain shell output.
+        let was_mux_at_pump_start = self.mux_session_name.is_some();
         if !combined.is_empty() {
             if self.mux_session_name.is_some() {
                 // Mux established (FR1 / FR2): the outer PTS stream is the mux
@@ -2633,39 +2642,27 @@ impl Tab {
             // — see comment in `drain_and_decode_images` below).
             let pending_apc: Vec<Vec<u8>> = std::mem::take(&mut s.pending_apc);
             let pending_dcs: Vec<Vec<u8>> = std::mem::take(&mut s.pending_dcs);
-            // Plain-tab `agent-status` OSC events parsed by
-            // `NativeCallbacks::on_osc` (task0005 AC-1). Moved into this
-            // tab's own per-pump latch since `App::pump_all` (which owns
-            // `App::agent_status`) drains `Tab` after the `&mut self.tabs`
-            // borrow used by the per-tab loop ends.
-            let agent_status_events: Vec<crate::agent_status::AgentStatusEvent> =
-                std::mem::take(&mut s.pending_agent_status);
             // Phase 6: drain the theme-dirty latch. When an OSC 4/10/11/12/
             // 22/104/110/111/112 mutated the shared `Theme`, every row
             // must repaint with the new palette on the next frame.
             let theme_changed = std::mem::take(&mut s.theme_dirty);
-            // Mux path: `pending_latch_feed` is only drained (and reconciled
-            // into `pending_latch_inputs`) by `process_outer_via_core`, which
-            // does NOT run while `mux_session_name` is set (the outer stream
-            // goes to `mux_apc_extractor` instead — see the branch above).
-            // `NativeCallbacks::on_osc` still pushes onto it unconditionally,
-            // so left alone it grows without bound for the lifetime of the
-            // mux session and, at detach, would flush stale accumulated
-            // marks into this (plain-tab) latch alongside live ones. The
-            // daemon-side `MuxPane.agent_status_exit_latch` is authoritative
-            // for mux ping status, so this GUI-local latch has no use for
-            // mux-path marks — discard them every pump instead of
-            // reconciling.
-            if self.mux_session_name.is_some() {
-                s.pending_latch_feed.clear();
-            }
+            // `pending_agent_status` (plain-tab OSC 777 events) and
+            // `pending_latch_feed` (OSC 133/777 latch candidates) are NOT
+            // drained here — deliberately, task0005 rework. Both are
+            // populated by `NativeCallbacks::on_osc`, fired for EITHER a
+            // pre-mux outer parse (already done above, before this block, if
+            // `mux_session_name` was `None` at pump start) OR mux inner
+            // content parsed by the frame-apply loop further down (which
+            // runs AFTER this point). Draining here would race that loop:
+            // for a mux-attached pump, whatever is queued right now is only
+            // stale leftovers, and for a same-pump mux→detach transition the
+            // loop's mux-inner-origin candidates would not exist yet to be
+            // excluded. See the discard-then-final-drain below the
+            // frame-apply loop (before/after the detach tail re-route) for
+            // where both queues are actually consumed this pump.
             drop(s);
             if theme_changed {
                 self.core.lock().mark_all_dirty();
-                changed = true;
-            }
-            if !agent_status_events.is_empty() {
-                self.pending_agent_status_events.extend(agent_status_events);
                 changed = true;
             }
             if !responses.is_empty() {
@@ -2771,6 +2768,32 @@ impl Tab {
             {
                 changed = true;
             }
+            // task0005 rework (round1 findings 6b2e83f10c94ad7e /
+            // 929859ff2b4e431e): discard any `pending_agent_status` /
+            // `pending_latch_feed` entries that accumulated from mux INNER
+            // content this pump — the frame-apply loop just above drives
+            // `self.core` for the active pane's inner payload
+            // (`apply_active_pane_output` / `flush_coalesced_output`), which
+            // fires `NativeCallbacks::on_osc` / OSC 133 capture exactly like
+            // any other content, so an inner OSC 777 Set or OSC 133 D/A pair
+            // lands in the same queues plain shell output would. Clearing
+            // here, BEFORE the tail re-route below gets its own turn, means
+            // the tail re-route's `process_outer_via_core` call (which
+            // internally drains + reconciles `pending_latch_feed`) only ever
+            // sees candidates from the bytes it itself just parsed — never
+            // leftovers from the mux-inner portion of this same pump.
+            // Gated on whether THIS PUMP started mux-attached, not the
+            // current (possibly now-detached) state, so a same-pump
+            // mux→detach transition cannot let a mux pane's inner OSC 777
+            // Set / OSC 133 marks leak into the GUI-local plain-tab
+            // agent-status model or inferred-clear latch (SPEC FR3: the
+            // daemon is authoritative for mux panes; only its
+            // `AgentStatusUpdate` messages may populate mux-pane status).
+            if was_mux_at_pump_start {
+                let mut s = self.cb_state.lock();
+                s.pending_agent_status.clear();
+                s.pending_latch_feed.clear();
+            }
             // FR5: re-route the post-`Detached` tail through `self.core` in this
             // same pump. The `Detached` arm already cleared the grid via
             // `reset_frame_for_replay(b"")` and reset the extractor; the shell
@@ -2783,6 +2806,22 @@ impl Tab {
                     self.process_outer_via_core(&combined[tail..]);
                     changed = true;
                 }
+            }
+            // Plain-tab `agent-status` OSC events parsed by
+            // `NativeCallbacks::on_osc` this pump (task0005 AC-1/AC-3/AC-4),
+            // sourced only from a pre-mux outer parse (top of this function)
+            // or — when this pump carried a same-pump mux detach — the tail
+            // re-route just above. Never from mux inner-content parsing,
+            // which was discarded above. Drained once, here, after both
+            // possible producers for this pump have already run.
+            // `App::pump_all` (which owns `App::agent_status`) drains this
+            // via `Tab::take_pending_agent_status_events` after the per-tab
+            // loop's `&mut self.tabs` borrow ends.
+            let agent_status_events: Vec<crate::agent_status::AgentStatusEvent> =
+                std::mem::take(&mut self.cb_state.lock().pending_agent_status);
+            if !agent_status_events.is_empty() {
+                self.pending_agent_status_events.extend(agent_status_events);
+                changed = true;
             }
             // Inner content applied by `apply_mux_message` (the `PtyOutput`
             // arm feeding `self.core`) fires `on_apc` / `on_dcs` for any inner
@@ -5070,6 +5109,141 @@ mod tests {
                 ),
             ],
             "the alt-screen-suppressed D candidate is dropped; only the live pair resolves"
+        );
+    }
+
+    // ── task0005 rework (review round1 findings 6b2e83f10c94ad7e /
+    // 929859ff2b4e431e / 5cd6f305dcdeceb7): mux-attached inner OSC 777 /
+    // OSC 133 must never populate the GUI-local plain-tab agent-status
+    // queue or inferred-clear latch — the daemon's `AgentStatusUpdate` /
+    // `MuxPane.agent_status_exit_latch` are the sole authority for mux
+    // panes (SPEC FR3). Uses `mux_tab_active_pane` / `pty_output_apc`
+    // (defined further below, in the mux coalesce test section) to route
+    // OSC bytes through the mux inner-content path exactly as the daemon's
+    // `PtyOutput` frames would. ─────────────────────────────────────────
+
+    #[test]
+    fn plain_tab_agent_status_set_surfaces_via_pending_agent_status_events() {
+        // AC-4 regression guard: a non-mux (plain) tab's OSC 777 Set must
+        // still reach `take_pending_agent_status_events()` — this rework
+        // moved WHERE `pending_agent_status` is drained within
+        // `process_combined`, not WHETHER a plain tab's events are drained.
+        let mut tab = test_tab();
+        tab.test_process_combined(
+            b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\".to_vec(),
+        );
+        assert_eq!(
+            tab.take_pending_agent_status_events(),
+            vec![crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Working,
+                name: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn mux_inner_agent_status_set_does_not_create_plain_tab_status() {
+        // AC-1: an inner OSC 777 `Set` carried by a mux pane's `PtyOutput`
+        // must not populate the GUI-local `pending_agent_status_events`
+        // queue that `App::pump_all` applies as a `PaneKey::Tab` status —
+        // neither the SAME pump that parsed it, nor a LATER pump (a
+        // per-pump-delayed drain of the same stale queue is just as much a
+        // leak, only postponed).
+        let mut tab = mux_tab_active_pane(10);
+        let combined =
+            pty_output_apc(10, b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\");
+        tab.test_process_combined(combined);
+        // A second, still-mux pump with no new bytes: proves the mux-inner
+        // Set from the first pump cannot surface on a later drain either.
+        tab.test_process_combined(Vec::new());
+        assert!(
+            tab.take_pending_agent_status_events().is_empty(),
+            "a mux pane's inner OSC 777 Set must not create a GUI-local tab status"
+        );
+    }
+
+    #[test]
+    fn mux_inner_agent_status_set_then_da_leaves_no_residual_plain_tab_status() {
+        // AC-2/AC-3: a full Set + D + A sequence inside the mux inner
+        // stream — which would arm and fire the plain-tab inferred-clear
+        // latch if it were live plain-tab content — must leave neither a
+        // residual GUI-local Set nor any latch candidates once mux-owned,
+        // including on a later pump's drain (see the sibling test above).
+        let mut tab = mux_tab_active_pane(10);
+        let inner = [
+            b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\".as_slice(),
+            b"\x1b]133;D;0\x07",
+            b"\x1b]133;A\x07",
+        ]
+        .concat();
+        let combined = pty_output_apc(10, &inner);
+        tab.test_process_combined(combined);
+        tab.test_process_combined(Vec::new());
+        assert!(
+            tab.take_pending_agent_status_events().is_empty(),
+            "no residual GUI-local Set after a mux-inner D->A pair"
+        );
+        assert!(
+            tab.take_pending_latch_inputs().is_empty(),
+            "mux-inner OSC 133/777 candidates must not feed the plain-tab inferred-clear latch"
+        );
+    }
+
+    #[test]
+    fn mux_inner_candidates_do_not_leak_into_same_pump_post_detach_tail() {
+        // AC-3/AC-5 explicit scenario: one coalesced pump carries, in
+        // order: (1) a mux inner `PtyOutput` with an OSC 777 Set
+        // (mux-pane-owned — must be discarded), (2) the `Detached` control
+        // frame, (3) plain shell bytes the now-reattached shell printed,
+        // carrying its OWN OSC 777 Set + OSC 133 D/A (plain-tab-owned —
+        // must resolve normally, AC-4). Before the fix, the mux-inner
+        // Set/marks were queued ahead of the tail re-route's own
+        // `process_outer_via_core` call and got taken together with it.
+        let mut tab = mux_tab_active_pane(10);
+
+        let detached = crate::mux::apc::encode_emterm_mux(&MuxMessage {
+            msg_type: MessageType::Detached,
+            pane_id: 0,
+            payload: Vec::new(),
+        });
+
+        let mut combined =
+            pty_output_apc(10, b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\");
+        combined.extend_from_slice(&detached);
+        combined.extend_from_slice(b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\");
+        combined.extend_from_slice(b"\x1b]133;D;0\x07");
+        combined.extend_from_slice(b"\x1b]133;A\x07");
+
+        tab.test_process_combined(combined);
+
+        assert!(
+            tab.mux_session_name.is_none(),
+            "Detached frame must clear mux_session_name"
+        );
+
+        let events = tab.take_pending_agent_status_events();
+        assert_eq!(
+            events,
+            vec![crate::agent_status::AgentStatusEvent::Set {
+                state: crate::agent_status::AgentState::Working,
+                name: None,
+            }],
+            "only the post-detach plain-tab Set must surface, not the mux-inner one; events={events:?}"
+        );
+
+        assert_eq!(
+            tab.take_pending_latch_inputs(),
+            vec![
+                crate::agent_status_model::ResolvedLatchInput::Set,
+                crate::agent_status_model::ResolvedLatchInput::Mark(
+                    crate::prompts::PromptMarkKind::CommandEnd
+                ),
+                crate::agent_status_model::ResolvedLatchInput::Mark(
+                    crate::prompts::PromptMarkKind::PromptStart
+                ),
+            ],
+            "only the post-detach live Set/D/A latch candidates must resolve; mux-inner \
+             candidates discarded"
         );
     }
 
