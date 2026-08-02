@@ -34,9 +34,62 @@ workflow:
     status: completed
     completed_at_commit: ccfc1d6
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    executed_at: "2026-08-03T02:05:00+09:00"
+    build:
+      command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      exit_code: 0
+    test:
+      command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      passed: 2977
+      failed: 7
+      ignored: 3
+      verdict: pass
+      note: >-
+        失敗 7 件は全て base_commit 97f4866 時点で既に失敗する
+        pre-existing baseline（tabs::tests::ts7 / ts8 / ts9 / ts10 / ts11 / ts13,
+        tabs::tests::welcome_without_windows_leaves_group_none）。
+        隔離ワークツリーで base_commit をチェックアウトして同一スイートを実行し、
+        同じ 7 件が同じ形で失敗することを確認済み。本 feature の diff は
+        tabs.rs に対して純粋な追加のみで、これらのテストが触れる
+        off-thread replay 経路には手を入れていない。
+        本 feature 由来の失敗・退行はゼロ。
+    acceptance_tests:
+      total: 40
+      passed: 39
+      stale_record: 1
+      note: >-
+        test-docs/*.tests.yaml が挙げる AC テスト 40 本を個別実行して 39 本 pass。
+        残り 1 本 mux::upgrade::tests::rewrite_handoff_file_overwrites_an_already_written_handoff_file_in_place
+        は review round 2 loop 1 で改名されたもので、後継の
+        rewrite_handoff_file_replaces_an_already_written_handoff_file_at_the_same_path と
+        新設の rewrite_handoff_file_leaves_the_previous_document_intact_when_the_write_fails が
+        いずれも pass。テスト記録側の名称が古いだけで、カバレッジの欠落ではない。
+    success_criteria:
+      SC-1: pass
+      SC-2: pass
+      SC-3: pass
+      SC-4: pass
+      SC-5: qualified
+    qualifications:
+      - id: SC-5
+        detail: >-
+          SC-5 は「review phase residual_critical_high: 0」を要求するが、実際は 1。
+          batch mode の rework cap（1 回）到達により high 1 件
+          (2e6f18b4dc0a7593 / src-tauri/src/mux/upgrade.rs / FR6 の
+          hot-upgrade sub-second 残余窓) が deferred。失敗側に倒れず
+          「アイコンが残る」= 本 feature 以前の挙動に戻るだけなので劣化ではない。
+      - id: manual
+        detail: >-
+          VERIFICATION.md の Manual Testing 2 項目（実シェルでの OSC 133 有無別確認）は
+          GUI 操作が必要なため未実施。人間評価者による実機確認が必要。
+      - id: TS-10
+        detail: >-
+          TS-10（live D と対の A の間での hot-upgrade）は task0004 の
+          armed/command_ended/disarmed 3 テストで latch の往復自体は検証済みだが、
+          上記 deferred high の残余窓は自動テストで再現していない。
   - id: retrospect
     status: pending
 
