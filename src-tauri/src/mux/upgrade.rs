@@ -27,6 +27,20 @@
 //! re-derived — so a pane mid-"command_ended" before an upgrade is still
 //! mid-"command_ended" immediately after it.
 //!
+//! task0006 (review rework, finding `2e6f18b4dc0a7593`) confirmed that
+//! `snapshot`'s read of the tree is atomic (taken under the
+//! `SessionManager` lock) but is NOT a cut of the live event stream: pane
+//! reader threads and the daemon's agent-status task keep running after
+//! `snapshot` returns and can still apply a live `Set`/`Clear`/inferred
+//! clear to a pane's `agent_status` / `agent_status_exit_latch` before
+//! `exec` replaces the process image, leaving the already-written document
+//! stale. [`refresh_live_agent_state`] + [`rewrite_handoff_file`] narrow
+//! that window: called by `prepare_upgrade` as late as possible (after its
+//! multi-second wait for client acknowledgement — the dominant portion of
+//! the window), they re-capture and rewrite just the affected fields. See
+//! [`refresh_live_agent_state`]'s doc comment for exactly what this does
+//! and does not close.
+//!
 //! Everything in this module is Unix-only (gated at the `mod upgrade;`
 //! declaration in `mux::mod`).
 
@@ -323,6 +337,107 @@ pub fn read_and_remove_handoff_file(path: &Path) -> Result<HandoffDocument, Hand
 /// already removes a partially written file on its own failure).
 pub fn remove_handoff_file(path: &Path) {
     let _ = std::fs::remove_file(path);
+}
+
+/// task0006 (review rework, finding `2e6f18b4dc0a7593`): re-read each still
+/// live pane's CURRENT `agent_status` and inferred-clear latch state from
+/// `mgr` and patch those fields, in place, into the matching pane entries of
+/// `document`.
+///
+/// **Why this exists**: `snapshot` takes the `SessionManager` lock only for
+/// the duration of the tree walk, then releases it. Between that release and
+/// the caller's eventual `exec` (`prepare_upgrade`'s bounded wait for client
+/// acknowledgement of the `Upgrading` broadcast, plus the daemon runtime's
+/// own shutdown grace period — both driven by std::thread reader threads
+/// that are NOT part of the async runtime and therefore keep consuming live
+/// PTY bytes right up to `exec`), the daemon's agent-status task keeps
+/// applying live OSC 777 reports and OSC 133 marks to each pane's
+/// `agent_status` / `agent_status_exit_latch` — the SAME fields `snapshot`
+/// already captured. A live `D`→`A` transition (or an explicit `Set`/
+/// `Clear`) landing in that window changes the pane's true state WITHOUT
+/// updating the already-written handoff document: exactly the "torn
+/// snapshot" the finding describes (e.g. an inferred clear fires in this
+/// process, disarming the latch and clearing the icon, while the document
+/// still records the pre-clear armed/command-ended state — the successor
+/// then restores a latch waiting for an `A` that was already consumed and
+/// will never arrive again).
+///
+/// **What this does NOT close**: this only re-reads state that the daemon's
+/// agent-status task already applied by the time it runs; it does not stop
+/// pane reader threads from reading further PTY bytes, so a mark landing in
+/// the (much smaller, sub-second) window between this call and the actual
+/// `exec` is still unrepresented. Closing that residual window fully would
+/// require pausing each pane's reader thread at a defined byte boundary
+/// (the finding's `suggestion`), which touches the reader-thread wiring in
+/// `mux::ipc::pty_spawn` — out of this file's scope. Calling this function
+/// as late as possible (immediately before `prepare_upgrade` returns, i.e.
+/// after the client-acknowledgement wait — by far the dominant, multi-second
+/// portion of the window — has already elapsed) is what makes the residual
+/// gap small rather than eliminating it.
+///
+/// Panes recorded exited in `document` (`master_fd: None`), panes no longer
+/// found in `mgr`, and panes that have since exited in `mgr` are left
+/// untouched — refreshing exited-pane state is a separate, pre-existing
+/// concern (the descriptor/exited-flag mismatch that can also arise if a
+/// pane exits during this same window) that this function does not attempt
+/// to fix.
+pub fn refresh_live_agent_state(document: &mut HandoffDocument, mgr: &SessionManager) {
+    for session_doc in &mut document.sessions {
+        for window_doc in &mut session_doc.windows {
+            for pane_doc in &mut window_doc.panes {
+                if pane_doc.master_fd.is_none() {
+                    // Recorded exited (or already had no descriptor) --
+                    // nothing live to refresh from.
+                    continue;
+                }
+                let Some((sid, wid)) = mgr.find_pane(pane_doc.id) else {
+                    continue;
+                };
+                let Some(pane) = mgr
+                    .get_session(sid)
+                    .and_then(|s| s.windows.get(&wid))
+                    .and_then(|w| w.panes.get(&pane_doc.id))
+                else {
+                    continue;
+                };
+                if pane.exited {
+                    continue;
+                }
+
+                let (agent_state, agent_name, agent_revision) = {
+                    let status = pane.agent_status.lock().unwrap();
+                    (status.state.map(to_wire_state), status.name.clone(), status.revision)
+                };
+                let (latch_armed, latch_command_ended, latch_generation) =
+                    pane.agent_status_exit_latch.lock().unwrap().state_parts();
+
+                pane_doc.agent_state = agent_state;
+                pane_doc.agent_name = agent_name;
+                pane_doc.agent_revision = agent_revision;
+                pane_doc.latch_armed = latch_armed;
+                pane_doc.latch_command_ended = latch_command_ended;
+                pane_doc.latch_generation = latch_generation;
+            }
+        }
+    }
+}
+
+/// Re-serialise `document` and overwrite the ALREADY-WRITTEN handoff file
+/// next to `socket_path` in place (task0006: the companion write for
+/// [`refresh_live_agent_state`]). Unlike [`write_handoff_file`], the file is
+/// expected to already exist from an earlier `snapshot` call in the same
+/// upgrade attempt, so this truncates and rewrites it rather than requiring
+/// a fresh path (`create_new`) -- the same owner-only permission and
+/// symlink-refusing hardening still applies.
+pub fn rewrite_handoff_file(document: &HandoffDocument, socket_path: &Path) -> std::io::Result<()> {
+    let bytes = encode_handoff_document(document);
+    let path = handoff_file_path(socket_path);
+    let mut opts = OpenOptions::new();
+    opts.write(true).truncate(true);
+    opts.mode(0o600);
+    opts.custom_flags(libc::O_NOFOLLOW);
+    let mut file = opts.open(&path)?;
+    file.write_all(&bytes)
 }
 
 /// Snapshot the live session tree into a [`HandoffDocument`] and write it to
@@ -1719,6 +1834,226 @@ mod tests {
             restored_pane.agent_status.lock().unwrap().revision,
             revision_before,
             "AC-3: neither D nor A may change agent_status while the latch is disarmed"
+        );
+    }
+
+    // ── task0006 (review rework, finding 2e6f18b4dc0a7593): refresh closes
+    // the torn-snapshot window for live agent-status/latch state ──────────
+
+    /// Reproduces the finding's exact example: a live D->A transition
+    /// completing AFTER `snapshot` already wrote the document (simulating
+    /// the daemon's agent-status task consuming a live mark during
+    /// `prepare_upgrade`'s post-snapshot client-acknowledgement wait) must
+    /// be reflected by `refresh_live_agent_state` -- otherwise the
+    /// successor would restore a latch waiting for an `A` that was already
+    /// consumed in THIS process and will never arrive again.
+    #[test]
+    fn refresh_live_agent_state_pulls_in_a_clear_that_completed_after_snapshot() {
+        let (mut mgr, sid, wid, pid) = single_live_pane_manager();
+        {
+            let pane = mgr
+                .get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .panes
+                .get_mut(&pid)
+                .unwrap();
+            pane.apply_agent_status_event(AgentStatusEvent::Set {
+                state: AgentState::Working,
+                name: Some("claude".to_string()),
+            });
+            let fired = pane.record_live_osc133_mark(PromptMarkKind::CommandEnd);
+            assert_eq!(fired, None, "a lone D must not fire a clear yet");
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("mux-default.sock");
+        let listen_file = tempfile::NamedTempFile::new_in(dir.path()).expect("listen fd stand-in");
+        let listen_fd = listen_file.as_raw_fd();
+
+        let mut document = snapshot(&mgr, listen_fd, &socket_path).expect("snapshot must succeed");
+        {
+            let pane_doc = &document.sessions[0].windows[0].panes[0];
+            assert!(
+                pane_doc.latch_armed && pane_doc.latch_command_ended,
+                "the original snapshot must record the pre-clear armed/command_ended state"
+            );
+            assert_eq!(
+                pane_doc.agent_state,
+                Some(to_wire_state(AgentState::Working)),
+                "the original snapshot must record the pre-clear agent_state"
+            );
+        }
+
+        // Simulate the daemon's agent-status task consuming a live A DURING
+        // prepare_upgrade's post-snapshot acknowledgement wait -- exactly
+        // the window the finding describes -- WITHOUT re-snapshotting.
+        let fired = {
+            let pane = mgr
+                .get_session(sid)
+                .unwrap()
+                .windows
+                .get(&wid)
+                .unwrap()
+                .panes
+                .get(&pid)
+                .unwrap();
+            pane.record_live_osc133_mark(PromptMarkKind::PromptStart)
+        };
+        assert!(
+            fired.is_some(),
+            "the pending D->A transition must fire an inferred clear in THIS process"
+        );
+
+        refresh_live_agent_state(&mut document, &mgr);
+
+        let refreshed_pane_doc = &document.sessions[0].windows[0].panes[0];
+        assert!(
+            !refreshed_pane_doc.latch_armed && !refreshed_pane_doc.latch_command_ended,
+            "task0006: refresh must pull in the disarm that happened after the original snapshot"
+        );
+        assert_eq!(
+            refreshed_pane_doc.agent_state, None,
+            "task0006: refresh must pull in the inferred clear's agent_state update"
+        );
+    }
+
+    /// A pane that exits (in `mgr`) after the original snapshot must be left
+    /// exactly as originally recorded -- refreshing exited-pane state is a
+    /// separate, pre-existing concern this function does not attempt to fix
+    /// (see its doc comment).
+    #[test]
+    fn refresh_live_agent_state_leaves_a_pane_that_since_exited_untouched() {
+        let (mut mgr, sid, wid, pid) = single_live_pane_manager();
+        {
+            let pane = mgr
+                .get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .panes
+                .get_mut(&pid)
+                .unwrap();
+            pane.apply_agent_status_event(AgentStatusEvent::Set {
+                state: AgentState::Working,
+                name: Some("claude".to_string()),
+            });
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("mux-default.sock");
+        let listen_file = tempfile::NamedTempFile::new_in(dir.path()).expect("listen fd stand-in");
+        let listen_fd = listen_file.as_raw_fd();
+        let mut document = snapshot(&mgr, listen_fd, &socket_path).expect("snapshot must succeed");
+        let recorded = document.sessions[0].windows[0].panes[0].clone();
+
+        // The pane exits in `mgr`, AND its agent_status is explicitly
+        // cleared, AFTER the snapshot above -- proving refresh really SKIPS
+        // an exited pane rather than happening to leave the same value.
+        mgr.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .panes
+            .get_mut(&pid)
+            .unwrap()
+            .mark_exited();
+        mgr.get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&pid)
+            .unwrap()
+            .apply_agent_status_event(AgentStatusEvent::Clear);
+
+        refresh_live_agent_state(&mut document, &mgr);
+
+        assert_eq!(
+            document.sessions[0].windows[0].panes[0], recorded,
+            "task0006: a pane that has since exited must be left exactly as originally recorded"
+        );
+    }
+
+    /// A document pane whose id no longer resolves in `mgr` (e.g. destroyed
+    /// between snapshot and refresh) must be left untouched, not panic.
+    #[test]
+    fn refresh_live_agent_state_leaves_a_pane_no_longer_present_in_the_manager_untouched() {
+        let (mgr, _sid, _wid, _pid) = single_live_pane_manager();
+        let mut document = HandoffDocument {
+            schema_version: HANDOFF_SCHEMA_VERSION,
+            incarnation: "deadbeef".to_string(),
+            listen_fd: 3,
+            next_session_id: 1,
+            next_pane_id: 1,
+            sessions: vec![HandoffSession {
+                id: 1,
+                name: "s".to_string(),
+                window_order: vec![1],
+                active_window_id: Some(1),
+                next_window_id: 2,
+                windows: vec![HandoffWindow {
+                    id: 1,
+                    name: "w".to_string(),
+                    active_pane_id: Some(1),
+                    next_pane_id: 2,
+                    panes: vec![HandoffPane {
+                        id: 999, // no such pane in `mgr`
+                        cols: 80,
+                        rows: 24,
+                        cwd: None,
+                        title: None,
+                        agent_state: Some(to_wire_state(AgentState::Working)),
+                        agent_name: Some("claude".to_string()),
+                        agent_revision: 3,
+                        exited: false,
+                        child_pid: Some(1234),
+                        master_fd: Some(42),
+                        scrollback: Vec::new(),
+                        latch_armed: true,
+                        latch_command_ended: true,
+                        latch_generation: 7,
+                    }],
+                }],
+            }],
+        };
+        let recorded = document.sessions[0].windows[0].panes[0].clone();
+
+        refresh_live_agent_state(&mut document, &mgr);
+
+        assert_eq!(
+            document.sessions[0].windows[0].panes[0], recorded,
+            "task0006: a pane no longer present in mgr must be left untouched, not panic"
+        );
+    }
+
+    /// [`rewrite_handoff_file`] must overwrite the SAME handoff file
+    /// [`write_handoff_file`] already created, in place -- unlike
+    /// `write_handoff_file`'s `create_new`, a second call must not fail just
+    /// because the file already exists.
+    #[test]
+    fn rewrite_handoff_file_overwrites_an_already_written_handoff_file_in_place() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("mux-default.sock");
+        let path = handoff_file_path(&socket_path);
+
+        let mut document = minimal_document();
+        write_handoff_file(&document, &path).expect("initial write must succeed");
+
+        document.next_session_id = 42;
+        rewrite_handoff_file(&document, &socket_path)
+            .expect("rewrite must succeed over an already-existing handoff file");
+
+        let bytes = std::fs::read(&path).expect("file must still exist at the same path");
+        let decoded = decode_handoff_document(&bytes).expect("must decode as a valid document");
+        assert_eq!(
+            decoded.next_session_id, 42,
+            "rewrite must persist the updated content, not the original write"
         );
     }
 }
