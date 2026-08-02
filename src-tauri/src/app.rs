@@ -3765,35 +3765,58 @@ impl App {
             self.image_viewer.handle_events(image_events);
         }
         // Apply this pass' collected agent-status inputs now that the
-        // `&mut self.tabs` borrow has ended (task0005). Order does not
-        // matter across the three kinds since they key disjoint pane sets
-        // (`PaneKey::Tab` for plain-tab events, `PaneKey::MuxPane` for
-        // daemon updates and pane closes).
-        for (tab_stable_id, event) in agent_status_plain_events {
-            self.agent_status
-                .apply_plain_tab_event(tab_stable_id, event);
-        }
-        // agent-exit-after-icon (task0002 deviation, FR2): drive each
-        // tab's inferred-clear latch with its resolved, true-order,
-        // live-only inputs from this pass. Independent of (and safe to
-        // run either side of) the real-status loop above: driving the
-        // latch never itself applies a real state change except through
-        // `AgentStatusModel::apply_plain_tab_event` — the SAME path an
-        // explicit `Clear` uses — when a `Mark` input makes the latch
-        // fire.
+        // `&mut self.tabs` borrow has ended (task0005). FR4 requires a tab's
+        // real-status events and its latch inputs to be applied as ONE
+        // ordered stream: `reconcile_latch_feed` derives both lists from the
+        // same `pending_latch_feed` in order, so within a single tab each
+        // `Set`/`Clear` latch input corresponds 1:1 and same-order with one
+        // `AgentStatusEvent`. Walking the latch inputs and pulling that tab's
+        // next unconsumed plain event per `Set`/`Clear` reconstructs the true
+        // order; a bare `Mark` consumes no plain event (it only ever applies
+        // a real change indirectly, via `record_live_prompt_mark`'s own
+        // inferred `apply_plain_tab_event(Clear)` when the latch fires).
+        //
+        // The pairing MUST be per tab, never positional across the flattened
+        // lists: the two lists are filled by the same tab loop but a tab can
+        // contribute to one and not the other. A mux-connected tab still
+        // pushes real-status events while `process_combined` discards its
+        // latch feed (that tab's pane status is daemon-authoritative), so it
+        // contributes plain events and zero latch inputs. Consuming
+        // positionally would let that tab's events satisfy ANOTHER tab's
+        // `Set`/`Clear` and push the real events after the latch bookkeeping
+        // they belong with — reintroducing the very reordering this loop
+        // exists to prevent. Events with no matching latch input are applied
+        // afterwards, in their original order.
+        let mut agent_status_plain_events: Vec<
+            Option<(u64, crate::agent_status::AgentStatusEvent)>,
+        > = agent_status_plain_events.into_iter().map(Some).collect();
         for (tab_stable_id, input) in agent_status_latch_inputs {
             match input {
-                crate::agent_status_model::ResolvedLatchInput::Set => {
-                    self.agent_status.record_latch_set(tab_stable_id);
-                }
-                crate::agent_status_model::ResolvedLatchInput::Clear => {
-                    self.agent_status.record_latch_clear(tab_stable_id);
+                crate::agent_status_model::ResolvedLatchInput::Set
+                | crate::agent_status_model::ResolvedLatchInput::Clear => {
+                    let paired = agent_status_plain_events
+                        .iter_mut()
+                        .find(|slot| matches!(slot, Some((id, _)) if *id == tab_stable_id))
+                        .and_then(Option::take);
+                    if let Some((_, event)) = paired {
+                        self.agent_status
+                            .apply_plain_tab_event(tab_stable_id, event);
+                    }
+                    if matches!(input, crate::agent_status_model::ResolvedLatchInput::Set) {
+                        self.agent_status.record_latch_set(tab_stable_id);
+                    } else {
+                        self.agent_status.record_latch_clear(tab_stable_id);
+                    }
                 }
                 crate::agent_status_model::ResolvedLatchInput::Mark(kind) => {
                     self.agent_status
                         .record_live_prompt_mark(tab_stable_id, kind);
                 }
             }
+        }
+        for (tab_stable_id, event) in agent_status_plain_events.into_iter().flatten() {
+            self.agent_status
+                .apply_plain_tab_event(tab_stable_id, event);
         }
         for update in agent_status_updates {
             // task0006 AC-5: learn/refresh this pane's public ID from the
