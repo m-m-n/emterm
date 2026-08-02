@@ -31,7 +31,8 @@ workflow:
     base_commit: 97f48669dee4d5e0bad2b82c3e333d429f00a652
     completed_at_commit: eb8d3acf05e959aa2a852448501db69d6b8e9592
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: ccfc1d6
   - id: verify
     status: pending
     result: null
@@ -130,10 +131,16 @@ tasks:
     branch: em-workflow/agent-exit-after-icon/task0006
 
 review:
-  status: pending
-  rounds_completed: 1
-  needs_rework: true
-  residual_critical_high: 2
+  status: completed
+  rounds_completed: 2
+  needs_rework: false
+  residual_critical_high: 1
+  deferred:
+    - stable_id: 2e6f18b4dc0a7593
+      severity: high
+      category: spec
+      file: src-tauri/src/mux/upgrade.rs
+      reason: "batch mode: rework cap reached"
   perspectives: [comprehensive, security, performance, architecture, spec]
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
