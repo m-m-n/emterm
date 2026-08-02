@@ -27,11 +27,11 @@ workflow:
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
     status: completed
   - id: implement
-    status: completed
+    status: pending
     base_commit: 97f48669dee4d5e0bad2b82c3e333d429f00a652
     completed_at_commit: 8926dcf927b4c4e2bc71ae4e74d63000d86dd798
   - id: review
-    status: in_progress
+    status: pending
   - id: verify
     status: pending
     result: null
@@ -91,10 +91,37 @@ tasks:
     status: merged
     notes: "1回目失敗（task0003未コミットのためブロック）→ドレイン完了後にretry 1回消費して再ディスパッチ、成功。"
     branch: em-workflow/agent-exit-after-icon/task0004
+  task0005:
+    title: "mux 接続中の GUI ローカル tab status を作らない (review rework)"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/src/tabs.rs
+    skills: [backend-impl]
+    domains: [input-handling, concurrency]
+    complexity: medium
+    requirements: [FR2, FR3, FR4, FR5]
+    status: pending
+    notes: "review round 1 の残存 high 6b2e83f10c94ad7e から合成（batch auto-rework 1/1）"
+    branch: null
+  task0006:
+    title: "hot-upgrade の latch snapshot をイベントストリームのカットにする (review rework)"
+    plan: tasks/task0006.md
+    files:
+      - src-tauri/src/mux/upgrade.rs
+    skills: [backend-impl]
+    domains: [concurrency]
+    complexity: medium
+    requirements: [FR6]
+    status: pending
+    notes: "review round 1 の残存 high 2e6f18b4dc0a7593 から合成（batch auto-rework 1/1）"
+    branch: null
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
+  needs_rework: true
+  residual_critical_high: 2
+  perspectives: [comprehensive, security, performance, architecture, spec]
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
@@ -166,5 +193,5 @@ requirements:
     tests: [TS-13, TS-14]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework_count: 0
