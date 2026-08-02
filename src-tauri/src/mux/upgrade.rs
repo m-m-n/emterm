@@ -422,22 +422,48 @@ pub fn refresh_live_agent_state(document: &mut HandoffDocument, mgr: &SessionMan
     }
 }
 
-/// Re-serialise `document` and overwrite the ALREADY-WRITTEN handoff file
-/// next to `socket_path` in place (task0006: the companion write for
-/// [`refresh_live_agent_state`]). Unlike [`write_handoff_file`], the file is
-/// expected to already exist from an earlier `snapshot` call in the same
-/// upgrade attempt, so this truncates and rewrites it rather than requiring
-/// a fresh path (`create_new`) -- the same owner-only permission and
-/// symlink-refusing hardening still applies.
+/// Re-serialise `document` and atomically replace the ALREADY-WRITTEN
+/// handoff file next to `socket_path` (task0006: the companion write for
+/// [`refresh_live_agent_state`]). Unlike [`write_handoff_file`], the target
+/// path is expected to already exist from an earlier `snapshot` call in the
+/// same upgrade attempt.
+///
+/// Unlike an in-place truncate-then-write, this never destroys the
+/// already-written (stale but decodable) document before the replacement is
+/// known-good: the new content is written in full to a same-directory temp
+/// path (same `create_new` + owner-only + `O_NOFOLLOW` hardening as
+/// [`create_handoff_file`], via [`write_bytes_or_remove`] for the
+/// partial-write-cleans-up-after-itself invariant), and only a successful
+/// write is `rename(2)`d over the real path. If the write to the temp path
+/// fails, the temp path is removed and the pre-existing handoff file at
+/// `path` is left completely untouched, so a caller that only logs and
+/// continues on `Err` (as `daemon.rs` does) hands the successor the
+/// still-valid prior document instead of a torn one.
 pub fn rewrite_handoff_file(document: &HandoffDocument, socket_path: &Path) -> std::io::Result<()> {
     let bytes = encode_handoff_document(document);
     let path = handoff_file_path(socket_path);
-    let mut opts = OpenOptions::new();
-    opts.write(true).truncate(true);
-    opts.mode(0o600);
-    opts.custom_flags(libc::O_NOFOLLOW);
-    let mut file = opts.open(&path)?;
-    file.write_all(&bytes)
+    let mut tmp_path = path.clone();
+    let mut tmp_name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    tmp_name.push(".tmp");
+    tmp_path.set_file_name(tmp_name);
+
+    // A leftover temp file from a previous crashed run would make
+    // `create_handoff_file`'s `create_new` fail spuriously -- clear it
+    // first, best-effort.
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let file = create_handoff_file(&tmp_path)?;
+    if let Err(e) = write_bytes_or_remove(file, &tmp_path, &bytes) {
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, &path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Snapshot the live session tree into a [`HandoffDocument`] and write it to
@@ -2032,12 +2058,14 @@ mod tests {
         );
     }
 
-    /// [`rewrite_handoff_file`] must overwrite the SAME handoff file
-    /// [`write_handoff_file`] already created, in place -- unlike
-    /// `write_handoff_file`'s `create_new`, a second call must not fail just
-    /// because the file already exists.
+    /// [`rewrite_handoff_file`] must replace the SAME handoff file
+    /// [`write_handoff_file`] already created -- unlike `write_handoff_file`'s
+    /// `create_new`, a second call must not fail just because the file
+    /// already exists, and the visible result at `path` must be the new
+    /// content (regardless of the temp-file-then-rename mechanics used to
+    /// get there).
     #[test]
-    fn rewrite_handoff_file_overwrites_an_already_written_handoff_file_in_place() {
+    fn rewrite_handoff_file_replaces_an_already_written_handoff_file_at_the_same_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket_path = dir.path().join("mux-default.sock");
         let path = handoff_file_path(&socket_path);
@@ -2054,6 +2082,57 @@ mod tests {
         assert_eq!(
             decoded.next_session_id, 42,
             "rewrite must persist the updated content, not the original write"
+        );
+    }
+
+    /// The core regression this fix closes (finding `b58e0d47f3c2916a`): if
+    /// `rewrite_handoff_file` cannot produce the new content, the
+    /// PREVIOUSLY-WRITTEN handoff document at `path` must survive intact and
+    /// decodable -- never truncated/torn -- since the caller (`daemon.rs`)
+    /// only logs a warning on `Err` and continues toward `exec`, handing
+    /// whatever is on disk to the successor process.
+    ///
+    /// Forces the failure by pre-occupying the same-directory temp path
+    /// (`<handoff file>.tmp`) with a directory, so the internal
+    /// `create_handoff_file(tmp_path)` call fails before any byte of the new
+    /// content is written anywhere near the real path -- exercising the
+    /// same "the real path must be untouched by a failed rewrite" property
+    /// a mid-write failure (e.g. ENOSPC) would.
+    #[test]
+    fn rewrite_handoff_file_leaves_the_previous_document_intact_when_the_write_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("mux-default.sock");
+        let path = handoff_file_path(&socket_path);
+
+        let document = minimal_document();
+        write_handoff_file(&document, &path).expect("initial write must succeed");
+        let original_bytes = std::fs::read(&path).expect("initial file must exist");
+
+        let mut tmp_path = path.clone();
+        let mut tmp_name = path.file_name().unwrap().to_os_string();
+        tmp_name.push(".tmp");
+        tmp_path.set_file_name(tmp_name);
+        std::fs::create_dir(&tmp_path).expect("occupy the temp path with a directory");
+
+        let mut broken_document = document.clone();
+        broken_document.next_session_id = 42;
+        let result = rewrite_handoff_file(&broken_document, &socket_path);
+        assert!(
+            result.is_err(),
+            "rewrite must fail when it cannot create its temp file"
+        );
+
+        let bytes_after = std::fs::read(&path).expect("original handoff file must still exist");
+        assert_eq!(
+            bytes_after, original_bytes,
+            "a failed rewrite must leave the previously written handoff document byte-for-byte \
+             intact, not truncated or partially overwritten"
+        );
+        let decoded =
+            decode_handoff_document(&bytes_after).expect("surviving document must still decode");
+        assert_eq!(
+            decoded.next_session_id, document.next_session_id,
+            "surviving document must be the ORIGINAL content, not the failed rewrite's"
         );
     }
 }
