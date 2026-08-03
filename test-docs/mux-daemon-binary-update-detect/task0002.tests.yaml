@@ -1,0 +1,102 @@
+task_id: task0002
+# Recorded before any file was touched, EXCEPT that the crate did not
+# compile at all at that point (a pre-existing, unrelated bug in
+# src-tauri/src/mux/session/pane.rs -- a test call site missing an
+# `AnyPermit::Borrowed(...)` wrap, introduced by an already-merged, unrelated
+# feature). That one-line, mechanically-obvious fix (matching every other
+# call site in the same file) was applied first so the suite could compile
+# and this baseline could be measured; it is recorded as a deviation, not as
+# part of this task's behavior change. baseline_failures below is what
+# `cargo test --lib` reported once the crate compiled.
+#
+# tabs::tests::* are known non-deterministic under this suite (see project
+# memory: "tabs.rs replay テストは並列で非決定的に落ちる"). Independent runs
+# during this task (with and without --test-threads=1) each produced a
+# DIFFERENT subset of tabs::tests failures, all with the same two failure
+# signatures ("off-thread replay worker did not complete in time" /
+# assorted timing-sensitive assertions) -- confirmed unrelated to this
+# task's files (mux/daemon.rs, mux/cli.rs, mux/identity.rs, mux/mod.rs;
+# tabs.rs itself was never touched). baseline_failures lists the specific
+# names observed on the recording run; final_failures lists the specific
+# names observed on the final run -- the sets differ only within this known-
+# flaky tabs:: module, never within mux::.
+baseline_failures:
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts12_resize_supersedes_and_redispatches_at_new_grid
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  # Every tabs:: name above is pre-existing, known-flaky noise (see header);
+  # none is in this task's scope (mux::daemon / mux::cli / mux::identity),
+  # and every mux::* test -- old and new -- passed on every run performed
+  # during this task, including a dedicated `mux::` scoped run.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_fires_upgrade_and_reports_notice_when_reachable_again
+    red_confirmed: true
+    red_reason: "cannot find function `recover_from_legacy_daemon_with` in this scope (E0425) -- the parameterized Compatible-arm trigger did not exist yet"
+  AC-2:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_unchanged_verdict_does_not_fire
+    red_confirmed: true
+    red_reason: "cannot find function `recover_from_legacy_daemon_with` in this scope (E0425)"
+  AC-3:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_undecidable_verdict_does_not_fire
+    red_confirmed: true
+    red_reason: "cannot find function `recover_from_legacy_daemon_with` in this scope (E0425)"
+  AC-4:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_upgrade_rejected_warns_and_still_succeeds
+    red_confirmed: true
+    red_reason: "cannot find function `recover_from_legacy_daemon_with` in this scope (E0425)"
+  AC-5:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_upgrade_timeout_warns_and_still_succeeds
+    red_confirmed: true
+    red_reason: "cannot find function `recover_from_legacy_daemon_with` in this scope (E0425)"
+  AC-6:
+    tests:
+      - mux::cli::tests::recover_from_legacy_daemon_emits_fr5_warning_before_falling_back
+    red_confirmed: true
+    red_reason: "cannot find function `recover_from_legacy_daemon_with` in this scope (E0425), and crate::mux::identity::Verdict did not yet have a consumer path from cli.rs's test module"
+  AC-7:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_production_entry_point_does_not_fire_against_the_stand_in
+    red_confirmed: false
+    red_reason: "This AC's test slice (production entry point wiring identity::check) could not be made to fail first: identity::check's own stand-in always returns Undecidable, so even a naive Compatible-arm with no trigger at all satisfies the same assertion (zero Upgrade frames). The AC's other two clauses -- 'no duplication in either caller' (structural: cli.rs's resolve_attach_socket_with and daemon.rs's ensure_daemon_running are unmodified, still call the single recover_from_legacy_daemon) and 'Windows / CLI-only builds compile with zero behavior change' -- are verified by code inspection (the cfg(not(unix)) variant is a byte-for-byte copy of the pre-task0002 function body) and by a green `cargo check --no-default-features` in this session; Windows cross-compilation itself was not executed (no cargo-xwin target set up in this sandbox, and not part of project_commands)."
