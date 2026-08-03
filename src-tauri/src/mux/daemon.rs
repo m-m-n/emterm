@@ -532,6 +532,13 @@ pub(in crate::mux) fn read_upgrade_response<S: std::io::Read>(stream: &mut S) ->
 /// timeout tests fast.
 const UPGRADE_REACHABLE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const UPGRADE_REACHABLE_POLL_MAX_ATTEMPTS: u32 = 40;
+/// Overall wall-clock budget for [`wait_for_daemon_reachable_at_current_version`].
+/// Each attempt's `handshake_with_version` can block for up to ~5s on a
+/// per-read timeout if a peer accepts the connection but withholds its
+/// Welcome frame, so the attempt-count cap alone (40 attempts) does not
+/// bound total elapsed time (~200s worst case). This deadline caps the
+/// whole loop regardless of how many per-attempt timeouts are consumed.
+const UPGRADE_REACHABLE_POLL_DEADLINE: Duration = Duration::from_secs(20);
 
 /// Poll `sock_path` (bounded, see [`UPGRADE_REACHABLE_POLL_MAX_ATTEMPTS`])
 /// until a daemon there completes a Hello handshake at [`PROTOCOL_VERSION`],
@@ -542,7 +549,11 @@ const UPGRADE_REACHABLE_POLL_MAX_ATTEMPTS: u32 = 40;
 /// `pub(in crate::mux)`: shared by [`recover_from_legacy_daemon`] and
 /// `mux::cli::execute_upgrade`.
 pub(in crate::mux) fn wait_for_daemon_reachable_at_current_version(sock_path: &Path) -> bool {
+    let deadline = std::time::Instant::now() + UPGRADE_REACHABLE_POLL_DEADLINE;
     for _ in 0..UPGRADE_REACHABLE_POLL_MAX_ATTEMPTS {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
         if let Ok(mut stream) = connect_daemon(sock_path)
             && let Ok(WelcomeMsg::Accepted { .. }) =
                 handshake_with_version(&mut stream, PROTOCOL_VERSION)
@@ -1079,21 +1090,58 @@ pub enum DaemonRunOutcome {
 /// prints `"<min> <max>"` and exits 0). Any spawn failure, non-zero exit, or
 /// unparsable output means "incompatible" (IMPLEMENTATION.md D3) -- there is
 /// no partial-trust fallback.
+///
+/// `deadline` bounds how long this call polls the spawned subprocess for:
+/// unlike wrapping this whole function in `tokio::time::timeout` (which only
+/// stops AWAITING it and leaves the blocking-pool thread and the child
+/// process itself running forever), this function owns the child directly
+/// (`Command::spawn`, not `Command::output`) and actively `kill()`s it if
+/// `deadline` passes before it exits, so a hung candidate binary is
+/// terminated rather than merely abandoned.
 #[cfg(unix)]
 fn probe_candidate_handoff_range(
     candidate: &Path,
+    deadline: std::time::Instant,
 ) -> Result<std::ops::RangeInclusive<u32>, String> {
-    let output = std::process::Command::new(candidate)
+    let mut child = std::process::Command::new(candidate)
         .args(["mux", "probe-handoff"])
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("failed to run handoff probe on {candidate:?}: {e}"))?;
-    if !output.status.success() {
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "handoff probe on {candidate:?} timed out and was killed"
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => {
+                return Err(format!(
+                    "failed to wait on handoff probe subprocess for {candidate:?}: {e}"
+                ));
+            }
+        }
+    };
+
+    let mut stdout_buf = Vec::new();
+    if let Some(mut out) = child.stdout.take() {
+        use std::io::Read;
+        let _ = out.read_to_end(&mut stdout_buf);
+    }
+    if !status.success() {
         return Err(format!(
             "handoff probe on {candidate:?} exited with {:?}",
-            output.status.code()
+            status.code()
         ));
     }
-    parse_schema_range(String::from_utf8_lossy(&output.stdout).trim())
+    parse_schema_range(String::from_utf8_lossy(&stdout_buf).trim())
 }
 
 /// Parse a `"<min> <max>"` schema-range line (the handoff probe's output
@@ -1650,6 +1698,12 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
                         continue;
                     }
                 };
+                // The probe's own deadline (bounding the subprocess it
+                // spawns, so a hung candidate is actually killed) mirrors
+                // `prepare_upgrade`'s outer `UPGRADE_PROBE_TIMEOUT` join
+                // timeout; computed here, immediately before the call, so
+                // the two stay effectively in sync.
+                let probe_deadline = std::time::Instant::now() + UPGRADE_PROBE_TIMEOUT;
                 match prepare_upgrade(
                     &session_manager,
                     listener.as_raw_fd(),
@@ -1658,7 +1712,7 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
                     &sock_path,
                     mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
                     &upgrade_ack_slot,
-                    probe_candidate_handoff_range,
+                    move |c: &Path| probe_candidate_handoff_range(c, probe_deadline),
                     real_snapshot,
                 )
                 .await
