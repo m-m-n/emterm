@@ -328,22 +328,46 @@ pub fn execute_daemon() -> Result<(), Box<dyn std::error::Error>> {
 /// re-entry ... is not yet wired here"). `cli.rs` is outside task0004's
 /// file scope; this is the minimal edit needed to close that flagged gap
 /// now that both tasks are present.
+///
+/// task0004 (NFR3, "Candidate validation" call site 2): re-validates the
+/// candidate immediately before EVERY exec attempt (the recorded-path
+/// resolution the accept loop validated is necessarily stale relative to
+/// exec time — the on-disk candidate could have been altered in the
+/// intervening window), via [`decide_replacement`]. A refusal here skips
+/// the exec attempt entirely and takes the SAME re-entry path an exec
+/// failure takes today, so the daemon keeps serving.
 #[cfg(unix)]
 fn perform_upgrade_replacement(mut req: daemon::UpgradeRequest) {
     use std::os::unix::process::CommandExt;
 
     loop {
-        let err = std::process::Command::new(&req.target)
-            .args(&req.args)
-            .env(&req.env_addition.0, &req.env_addition.1)
-            .exec();
+        match decide_replacement(crate::mux::identity::validate_candidate_path(
+            &req.target,
+            crate::mux::identity::effective_uid(),
+        )) {
+            ReplacementDecision::Attempt => {
+                let err = std::process::Command::new(&req.target)
+                    .args(&req.args)
+                    .env(&req.env_addition.0, &req.env_addition.1)
+                    .exec();
 
-        log::error!(
-            "Failed to exec upgrade target {:?}: {err} (handoff document at {:?} was not \
-             consumed); re-entering service in this process",
-            req.target,
-            req.handoff_document_path
-        );
+                log::error!(
+                    "Failed to exec upgrade target {:?}: {err} (handoff document at {:?} was \
+                     not consumed); re-entering service in this process",
+                    req.target,
+                    req.handoff_document_path
+                );
+            }
+            ReplacementDecision::Reenter { reason } => {
+                log::error!(
+                    "mux upgrade replacement refused for target {:?}: {reason} (handoff \
+                     document at {:?} was not consumed); re-entering service without \
+                     attempting exec",
+                    req.target,
+                    req.handoff_document_path
+                );
+            }
+        }
 
         match daemon::run_daemon_in_handoff_mode(&req.handoff_document_path) {
             Ok(daemon::DaemonRunOutcome::Terminated) => return,
@@ -358,6 +382,29 @@ fn perform_upgrade_replacement(mut req: daemon::UpgradeRequest) {
                 return;
             }
         }
+    }
+}
+
+/// Decision for [`perform_upgrade_replacement`]'s per-attempt validation
+/// gate (AC-3): parameterized on the validation OUTCOME (not performing the
+/// validation itself), so it is table-tested across accepted/refused rows
+/// without a real exec.
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+enum ReplacementDecision {
+    /// Validation passed: attempt the exec.
+    Attempt,
+    /// Validation failed: skip the exec attempt and re-enter service
+    /// through the existing handoff-mode path. Carries the refusal reason
+    /// for the caller's error log.
+    Reenter { reason: String },
+}
+
+#[cfg(unix)]
+fn decide_replacement(validation: Result<(), String>) -> ReplacementDecision {
+    match validation {
+        Ok(()) => ReplacementDecision::Attempt,
+        Err(reason) => ReplacementDecision::Reenter { reason },
     }
 }
 
@@ -1657,6 +1704,29 @@ mod tests {
         temp_env::with_var("EMTERM_MUX", Some("1"), || {
             assert!(check_nesting().is_err());
         });
+    }
+
+    // ---- task0004 AC-3: `perform_upgrade_replacement`'s attempt-or-reenter
+    // decision helper, table-tested across accepted/refused outcomes
+    // (the final pre-exec site cannot be end-to-end tested without a real
+    // exec -- this decision helper plus TS-9's unmodified regression suite
+    // are the planned coverage, per the task plan's Test Notes) ----
+
+    #[cfg(unix)]
+    #[test]
+    fn decide_replacement_attempts_on_accepted_validation() {
+        assert_eq!(decide_replacement(Ok(())), ReplacementDecision::Attempt);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn decide_replacement_reenters_on_refused_validation() {
+        assert_eq!(
+            decide_replacement(Err("upgrade candidate is owned by uid 2000".to_string())),
+            ReplacementDecision::Reenter {
+                reason: "upgrade candidate is owned by uid 2000".to_string()
+            }
+        );
     }
 
     // ---- send-keys target resolution tests ----

@@ -922,6 +922,21 @@ fn trigger_binary_update_if_detected<S: std::io::Read + std::io::Write>(
             let response = read_upgrade_response(&mut probe);
             drop(probe);
             match response {
+                // task0004 (NFR1, "Trigger-side warning suppression"): a
+                // reason carrying the pinned suppression marker (produced
+                // only for a repeat refusal of the SAME candidate the daemon
+                // already refused once) emits no user-facing line -- the
+                // first refusal was already visible; the repeat is silent.
+                // Any other reason behaves exactly as before.
+                UpgradeResponse::Rejected(reason)
+                    if reason.starts_with(UPGRADE_SUPPRESSED_MARKER) =>
+                {
+                    log::debug!(
+                        "automatic binary-update upgrade request suppressed by the daemon \
+                         (repeat refusal of an already-refused candidate): {reason}"
+                    );
+                    Ok(LegacyRecovery::Compatible)
+                }
                 UpgradeResponse::Rejected(reason) => {
                     let line = format!(
                         "Warning: mux daemon declined the automatic in-place upgrade after detecting a binary update: {reason}"
@@ -945,6 +960,113 @@ fn trigger_binary_update_if_detected<S: std::io::Read + std::io::Write>(
                 }
             }
         }
+    }
+}
+
+// ============================================================================
+// task0004 (mux-daemon-binary-update-detect, NFR1/NFR3): upgrade-candidate
+// validation call sites and repeat-refusal suppression, daemon-side
+// (`run_daemon`'s upgrade-signal branch, `admit_upgrade_candidate` below) and
+// the trigger-side marker consumer (`trigger_binary_update_if_detected`
+// above, already updated).
+// ============================================================================
+
+/// Run-loop-scoped repeat-refusal suppression state (Design "Repeat-refusal
+/// suppression", NFR1): the most recently refused candidate's `(device,
+/// inode)` plus the refusal reason it produced. In-memory only -- owned by a
+/// local in `run_daemon`, so a daemon restart naturally clears it.
+#[cfg(unix)]
+type RefusedCandidate = ((u64, u64), String);
+
+/// Marker prefix pinning the suppressed-repeat rejection reason (Design
+/// "Pinned suppression reason"): a data contract shared between this
+/// module's daemon-side producer ([`suppression_reason`], used by
+/// [`admit_upgrade_candidate`]) and the trigger-side consumer
+/// (`trigger_binary_update_if_detected`'s rejected-reply arm, above).
+#[cfg(unix)]
+const UPGRADE_SUPPRESSED_MARKER: &str = "upgrade-suppressed: ";
+
+/// Build the pinned suppression-marker rejection reason (Design "Pinned
+/// suppression reason"): the exact marker, the ORIGINAL refusal reason, and
+/// the recovery hint that installing a new binary or restarting the daemon
+/// re-enables the attempt.
+#[cfg(unix)]
+fn suppression_reason(original_reason: &str) -> String {
+    format!(
+        "{UPGRADE_SUPPRESSED_MARKER}{original_reason} (install a new binary or restart the \
+         daemon to re-enable the attempt)"
+    )
+}
+
+/// Outcome of [`admit_upgrade_candidate`] (Design "Repeat-refusal
+/// suppression" + "Candidate validation"): whether the upgrade-signal branch
+/// may proceed to the compatibility probe.
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+enum UpgradeAdmission {
+    /// Proceed to the compatibility probe. Carries the candidate's captured
+    /// `(device, inode)` (if any), so the caller can record a POST-probe
+    /// refusal (a probe spawn failure, timeout, or schema-range rejection)
+    /// keyed on the SAME identity without re-stating it.
+    Admitted { candidate_id: Option<(u64, u64)> },
+    /// Refuse immediately (repeat-suppressed OR validation-failed) with this
+    /// reply reason; no probe is spawned, no snapshot is taken.
+    Blocked(String),
+}
+
+/// The upgrade-signal branch's "suppress -> validate" sequencing (Test
+/// Notes: "extract the branch's 'validate -> suppress -> probe' sequencing
+/// into a parameterized helper... injecting the probe function and the
+/// refusal sink" -- the probe call itself stays in the caller since
+/// [`prepare_upgrade`] is already independently parameterized over it; this
+/// helper owns everything BEFORE that call). `capture_id` / `validate` are
+/// injected so this is unit-testable without a real candidate binary or a
+/// real daemon uid (AC-2 unit half, AC-4, AC-5).
+///
+/// Mutates `last_refused`: cleared on anything other than a matching repeat
+/// (Design: "If it differs, or the capture fails -> clear the state"), and
+/// set to the fresh reason when validation itself fails (Design
+/// "Recording": "validation failure... record that candidate's (device,
+/// inode) and the reason").
+#[cfg(unix)]
+fn admit_upgrade_candidate(
+    candidate: &Path,
+    last_refused: &mut Option<RefusedCandidate>,
+    capture_id: impl Fn(&Path) -> Option<(u64, u64)>,
+    validate: impl Fn(&Path) -> Result<(), String>,
+) -> UpgradeAdmission {
+    let candidate_id = capture_id(candidate);
+
+    if let Some((last_id, last_reason)) = last_refused.as_ref() {
+        if candidate_id == Some(*last_id) {
+            return UpgradeAdmission::Blocked(suppression_reason(last_reason));
+        }
+    }
+    *last_refused = None;
+
+    if let Err(reason) = validate(candidate) {
+        if let Some(id) = candidate_id {
+            *last_refused = Some((id, reason.clone()));
+        }
+        return UpgradeAdmission::Blocked(reason);
+    }
+
+    UpgradeAdmission::Admitted { candidate_id }
+}
+
+/// Record a refusal produced AFTER [`admit_upgrade_candidate`] already
+/// admitted the candidate -- a probe spawn failure, probe timeout, or
+/// schema-range gate rejection from [`prepare_upgrade`] (Design
+/// "Recording"). Keyed on the SAME `candidate_id` [`admit_upgrade_candidate`]
+/// already captured, so this never re-stats the candidate.
+#[cfg(unix)]
+fn record_post_probe_refusal(
+    last_refused: &mut Option<RefusedCandidate>,
+    candidate_id: Option<(u64, u64)>,
+    reason: &str,
+) {
+    if let Some(id) = candidate_id {
+        *last_refused = Some((id, reason.to_string()));
     }
 }
 
@@ -1632,6 +1754,11 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
         &sock_path,
     );
 
+    // task0004 (NFR3): the daemon's own effective uid, computed once and
+    // reused by every candidate-validation call in the upgrade-signal branch
+    // below (`admit_upgrade_candidate`'s injected `validate` closure).
+    let daemon_uid = crate::mux::identity::effective_uid();
+
     let session_manager = Arc::new(Mutex::new(restored_manager));
 
     tokio::spawn(run_title_update_task(session_manager.clone(), title_rx));
@@ -1675,6 +1802,12 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
     // disk so mid-upgrade connections queue in the kernel backlog).
     let mut pending_upgrade: Option<UpgradeRequest> = None;
 
+    // task0004 (NFR1, Design "Repeat-refusal suppression"): the most
+    // recently refused candidate's (device, inode) plus the reason it
+    // produced. In-memory only, run-loop-scoped alongside `pending_upgrade`
+    // -- a daemon restart naturally clears it.
+    let mut last_refused_candidate: Option<RefusedCandidate> = None;
+
     loop {
         #[cfg(unix)]
         tokio::select! {
@@ -1707,6 +1840,35 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
                         continue;
                     }
                 };
+
+                // task0004 (NFR1/NFR3): fast-reject a repeat refusal of the
+                // SAME (device, inode) without spawning a probe, and refuse
+                // a candidate whose current on-disk state is not
+                // owner-controlled BEFORE the handoff schema probe ever
+                // runs (Design "Candidate validation" / "Repeat-refusal
+                // suppression").
+                let candidate_id = match admit_upgrade_candidate(
+                    &candidate,
+                    &mut last_refused_candidate,
+                    crate::mux::identity::capture_dev_ino,
+                    |c| crate::mux::identity::validate_candidate_path(c, daemon_uid),
+                ) {
+                    UpgradeAdmission::Blocked(reason) => {
+                        if reason.starts_with(UPGRADE_SUPPRESSED_MARKER) {
+                            log::debug!(
+                                "mux upgrade: suppressing repeat refusal for candidate {:?}: {}",
+                                candidate,
+                                reason
+                            );
+                        } else {
+                            log::warn!("mux upgrade refused: {}", reason);
+                        }
+                        let _ = reply.send(Err(reason));
+                        continue;
+                    }
+                    UpgradeAdmission::Admitted { candidate_id } => candidate_id,
+                };
+
                 // The probe's own deadline (bounding the subprocess it
                 // spawns, so a hung candidate is actually killed) mirrors
                 // `prepare_upgrade`'s outer `UPGRADE_PROBE_TIMEOUT` join
@@ -1732,6 +1894,16 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
                     }
                     Err(reason) => {
                         log::warn!("mux upgrade aborted: {}", reason);
+                        // task0004 (Design "Recording"): a probe spawn
+                        // failure, probe timeout, or schema-range gate
+                        // rejection is recorded exactly like a validation
+                        // failure, so a repeat of the SAME candidate is
+                        // suppressed on the next signal too.
+                        record_post_probe_refusal(
+                            &mut last_refused_candidate,
+                            candidate_id,
+                            &reason,
+                        );
                         let _ = reply.send(Err(reason));
                     }
                 }
@@ -2846,6 +3018,315 @@ mod tests {
             messages[0]
         );
     }
+
+    // ---- task0004 AC-6: trigger-side warning suppression for a
+    // marker-prefixed rejection ----
+
+    /// AC-6: a marker-prefixed rejection (a repeat refusal the daemon
+    /// already suppressed) emits NO user-facing line and still returns
+    /// success.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_suppressed_rejection_emits_no_message() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("update-detect-suppressed.sock");
+        let (server, upgrade_frames_seen) = spawn_fake_current_daemon(
+            sock_path.clone(),
+            Some(UpgradeBehavior::Reject(format!(
+                "{UPGRADE_SUPPRESSED_MARKER}world-writable candidate (install a new binary or \
+                 restart the daemon to re-enable the attempt)"
+            ))),
+        );
+
+        let mut messages: Vec<String> = Vec::new();
+        let result = recover_from_legacy_daemon_with(
+            &sock_path,
+            |_sock_path: &Path| identity::Verdict::Updated(PathBuf::from("/fake/new-emterm")),
+            |line: &str| messages.push(line.to_string()),
+        );
+
+        server.join().expect("fake current-protocol daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert_eq!(
+            upgrade_frames_seen.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert!(
+            messages.is_empty(),
+            "AC-6: a marker-prefixed rejection must emit no user-facing line, got: {messages:?}"
+        );
+    }
+
+    /// AC-6: a rejection WITHOUT the marker still emits the existing
+    /// visible warning -- unchanged from before this task.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_unmarked_rejection_still_warns() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("update-detect-unmarked.sock");
+        let (server, upgrade_frames_seen) = spawn_fake_current_daemon(
+            sock_path.clone(),
+            Some(UpgradeBehavior::Reject(
+                "candidate binary supports handoff schema 1-1, this daemon needs 2".to_string(),
+            )),
+        );
+
+        let mut messages: Vec<String> = Vec::new();
+        let result = recover_from_legacy_daemon_with(
+            &sock_path,
+            |_sock_path: &Path| identity::Verdict::Updated(PathBuf::from("/fake/new-emterm")),
+            |line: &str| messages.push(line.to_string()),
+        );
+
+        server.join().expect("fake current-protocol daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert_eq!(
+            upgrade_frames_seen.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(messages.len(), 1, "expected exactly one message: {messages:?}");
+        assert!(
+            messages[0].contains("declined the automatic in-place upgrade"),
+            "AC-6: an unmarked rejection must still emit the existing visible warning: {:?}",
+            messages[0]
+        );
+    }
+
+    // ---- task0004 AC-2 (unit half) / AC-4 / AC-5: `admit_upgrade_candidate`
+    // sequencing -- the run-loop `select!` body is not unit-testable whole
+    // (Test Notes), so these exercise the extracted "suppress -> validate"
+    // helper directly, plus the REAL `prepare_upgrade` (already
+    // parameterized over its probe) with an injected counting probe to
+    // prove the "before any probe subprocess is spawned" / "exactly one
+    // spawn across two signals" claims end to end. ----
+
+    /// AC-2 (unit half): a validation-failing candidate is `Blocked` with
+    /// the validator's own reason, recorded for later suppression, and (by
+    /// construction -- `admit_upgrade_candidate` never calls a probe itself)
+    /// this happens without ever reaching one.
+    #[cfg(unix)]
+    #[test]
+    fn admit_upgrade_candidate_blocks_on_validation_failure_and_records_it() {
+        let mut last_refused: Option<RefusedCandidate> = None;
+        let candidate = Path::new("/fake/candidate");
+
+        let outcome = admit_upgrade_candidate(
+            candidate,
+            &mut last_refused,
+            |_c| Some((7, 42)),
+            |_c| Err("world-writable candidate".to_string()),
+        );
+
+        match outcome {
+            UpgradeAdmission::Blocked(reason) => assert_eq!(reason, "world-writable candidate"),
+            other => panic!("expected Blocked, got {other:?}"),
+        }
+        assert_eq!(
+            last_refused,
+            Some(((7, 42), "world-writable candidate".to_string())),
+            "AC-2: a validation refusal must be recorded for suppression"
+        );
+    }
+
+    /// AC-4: after a refused attempt (here, a real schema-probe rejection
+    /// via `prepare_upgrade` with an injected COUNTING probe), a second
+    /// signal for a candidate with the SAME (device, inode) is rejected
+    /// WITHOUT spawning the probe again -- the counter stays at exactly one
+    /// across both signals -- and the reply reason starts with the pinned
+    /// `upgrade-suppressed: ` marker.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn admit_upgrade_candidate_suppresses_repeat_refusal_after_a_real_probe_rejection() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A permissive ambient umask (e.g. `002`) would otherwise leave a
+        // freshly created tempdir group-writable, making "the parent
+        // directory is conforming" environment-dependent -- harden
+        // explicitly rather than relying on umask.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
+            .expect("harden tempdir to a conforming mode");
+        let candidate = tempfile::NamedTempFile::new_in(dir.path()).expect("candidate file");
+        let daemon_uid = crate::mux::identity::effective_uid();
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let ack_slot = no_ack_slot();
+        let probe_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut last_refused: Option<RefusedCandidate> = None;
+
+        // First signal: validation passes (an owner-only regular file with
+        // a conforming parent), so admission proceeds to the probe.
+        let candidate_id = match admit_upgrade_candidate(
+            candidate.path(),
+            &mut last_refused,
+            crate::mux::identity::capture_dev_ino,
+            |c| crate::mux::identity::validate_candidate_path(c, daemon_uid),
+        ) {
+            UpgradeAdmission::Admitted { candidate_id } => candidate_id,
+            UpgradeAdmission::Blocked(reason) => {
+                panic!("expected the first signal to be admitted, got Blocked({reason})")
+            }
+        };
+
+        let counter = Arc::clone(&probe_calls);
+        let counting_probe = move |_c: &Path| -> Result<std::ops::RangeInclusive<u32>, String> {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("simulated schema mismatch".to_string())
+        };
+        let result = prepare_upgrade(
+            &mgr,
+            -1,
+            candidate.path(),
+            vec!["mux".to_string(), "--daemon".to_string()],
+            dir.path(),
+            1,
+            &ack_slot,
+            counting_probe,
+            |_mgr: &SessionManager,
+             _fd: RawFd,
+             _path: &Path|
+             -> Result<mux_ipc::handoff::HandoffDocument, String> {
+                panic!("snapshot must not run when the probe rejects")
+            },
+        )
+        .await;
+        let reason = result.expect_err("the counting probe always rejects");
+        record_post_probe_refusal(&mut last_refused, candidate_id, &reason);
+        assert_eq!(probe_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // Second signal: SAME candidate (same device, inode) -> suppressed
+        // WITHOUT spawning the probe again.
+        match admit_upgrade_candidate(
+            candidate.path(),
+            &mut last_refused,
+            crate::mux::identity::capture_dev_ino,
+            |c| crate::mux::identity::validate_candidate_path(c, daemon_uid),
+        ) {
+            UpgradeAdmission::Blocked(reason2) => {
+                assert!(
+                    reason2.starts_with(UPGRADE_SUPPRESSED_MARKER),
+                    "AC-4: a suppressed rejection must start with the pinned marker: {reason2:?}"
+                );
+                assert!(
+                    reason2.contains("simulated schema mismatch"),
+                    "AC-4: the suppressed reason must carry the original refusal reason: \
+                     {reason2:?}"
+                );
+            }
+            UpgradeAdmission::Admitted { .. } => panic!("AC-4: the repeat must be suppressed"),
+        }
+        assert_eq!(
+            probe_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "AC-4: the probe must be spawned exactly once across both signals"
+        );
+    }
+
+    /// AC-5: after a refusal, a candidate whose (device, inode) DIFFERS
+    /// clears the suppression state and is validated and probed normally
+    /// (not suppressed).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn admit_upgrade_candidate_clears_suppression_for_a_differing_candidate_and_probes_normally()
+     {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A permissive ambient umask (e.g. `002`) would otherwise leave a
+        // freshly created tempdir group-writable, making "the parent
+        // directory is conforming" (needed for `new_candidate` below to be
+        // admitted) environment-dependent -- harden explicitly rather than
+        // relying on umask.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
+            .expect("harden tempdir to a conforming mode");
+        let daemon_uid = crate::mux::identity::effective_uid();
+
+        // First candidate: world-writable -> refused by VALIDATION (not the
+        // probe), recording its (device, inode).
+        let refused_candidate = tempfile::NamedTempFile::new_in(dir.path()).expect("file");
+        std::fs::set_permissions(
+            refused_candidate.path(),
+            std::fs::Permissions::from_mode(0o646),
+        )
+        .expect("loosen permissions");
+
+        let mut last_refused: Option<RefusedCandidate> = None;
+        match admit_upgrade_candidate(
+            refused_candidate.path(),
+            &mut last_refused,
+            crate::mux::identity::capture_dev_ino,
+            |c| crate::mux::identity::validate_candidate_path(c, daemon_uid),
+        ) {
+            UpgradeAdmission::Blocked(_) => {}
+            UpgradeAdmission::Admitted { .. } => {
+                panic!("a world-writable candidate must be refused by validation")
+            }
+        }
+        assert!(
+            last_refused.is_some(),
+            "the validation refusal must be recorded"
+        );
+
+        // Second signal: a DIFFERENT candidate (different device/inode),
+        // conforming permissions -- must clear the suppression state and be
+        // validated + probed normally.
+        let new_candidate = tempfile::NamedTempFile::new_in(dir.path()).expect("file");
+        match admit_upgrade_candidate(
+            new_candidate.path(),
+            &mut last_refused,
+            crate::mux::identity::capture_dev_ino,
+            |c| crate::mux::identity::validate_candidate_path(c, daemon_uid),
+        ) {
+            UpgradeAdmission::Admitted { .. } => {}
+            UpgradeAdmission::Blocked(reason) => {
+                panic!("AC-5: a differing candidate must not inherit suppression: {reason}")
+            }
+        }
+        assert!(
+            last_refused.is_none(),
+            "AC-5: the suppression state must be cleared for a differing candidate"
+        );
+
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let ack_slot = no_ack_slot();
+        let probe_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&probe_calls);
+        let counting_probe = move |_c: &Path| -> Result<std::ops::RangeInclusive<u32>, String> {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(mux_ipc::handoff::SUPPORTED_HANDOFF_SCHEMA_VERSIONS)
+        };
+        let result = prepare_upgrade(
+            &mgr,
+            0,
+            new_candidate.path(),
+            vec!["mux".to_string(), "--daemon".to_string()],
+            dir.path(),
+            mux_ipc::handoff::HANDOFF_SCHEMA_VERSION,
+            &ack_slot,
+            counting_probe,
+            ok_snapshot,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "AC-5: the differing candidate must probe normally: {result:?}"
+        );
+        assert_eq!(probe_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    // AC-7: this task adds no non-Unix-gated item -- a Windows / CLI-only
+    // build must compile with zero behavior change (NFR2). Asserted here by
+    // construction (every new item introduced by task0004 in this file and
+    // in `identity.rs` is `#[cfg(unix)]`); the actual cross-build
+    // verification is `cargo check --no-default-features` (project
+    // convention, not a unit test).
 
     /// AC-7 (partial, unit-testable slice): the production entry point
     /// [`recover_from_legacy_daemon`] wires the real [`identity::check`]
