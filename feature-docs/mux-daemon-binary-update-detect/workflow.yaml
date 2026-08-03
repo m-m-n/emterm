@@ -1,0 +1,128 @@
+schema_version: 1
+feature: mux-daemon-binary-update-detect
+created: 2026-08-03
+base_branch: main
+parent_branch: em-workflow/mux-daemon-binary-update-detect/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test mux_hot_upgrade -- --test-threads=1"
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 419380f1f24431149f5b60064556276c765a2cf3
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Rust の daemon/CLI 内部変更のみで、視覚デザイン対象の UI が存在しないため"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "identity ファイルによるバイナリ更新の検出"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "検出時の hot-upgrade 自動発火（通知付き）"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "同一バイナリでは差し替えない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "upgrade 対象パスの正しい解決"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: "hot-upgrade 非対応 daemon の扱い（警告して続行）"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: "既存の安全ゲートの維持"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: "identity 情報欠落時のフォールバック"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Performance — 軽量な検出コスト"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Compatibility — Unix/Linux 限定、Windows 不変"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Security — identity ファイルのハードニングと exec 対象の導出制限"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
