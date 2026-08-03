@@ -1,0 +1,27 @@
+feature: mux-daemon-binary-update-detect
+collected_at: "2026-08-03T20:33:00+09:00"
+session_ids: [f9a8a3da-d059-4854-8410-ca76c8a10454]
+signals:
+  review_critical_high:
+    - {stable_id: sid-nfr3-group-write-blocks-dev-builds, category: spec, file: src-tauri/src/mux/identity.rs, resolution: deferred}
+    - {stable_id: sid-probe-exec-not-pinned-same-file, category: spec, file: src-tauri/src/mux/cli.rs, resolution: deferred}
+    - {stable_id: sid-legacy-daemon-shutdown-on-upgrade-refusal, category: spec, file: src-tauri/src/mux/daemon.rs, resolution: deferred}
+    - {stable_id: sid-cli-upgrade-coordinator-duplication-false-success, category: architecture, file: src-tauri/src/mux/cli.rs, resolution: deferred}
+    - {stable_id: sid-probe-stdout-drain-unbounded, category: performance, file: src-tauri/src/mux/daemon.rs, resolution: deferred}
+    - {stable_id: sid-upgrade-candidate-exec-without-validation, category: spec, file: src-tauri/src/mux/daemon.rs, resolution: fixed}
+    - {stable_id: sid-notification-without-proof-of-replacement, category: spec, file: src-tauri/src/mux/daemon.rs, resolution: fixed}
+    - {stable_id: sid-failed-upgrade-not-suppressed, category: performance, file: src-tauri/src/mux/daemon.rs, resolution: fixed}
+    - {stable_id: sid-suppression-affects-explicit-upgrade-and-key-too-coarse, category: architecture, file: src-tauri/src/mux/daemon.rs, resolution: fixed}
+    - {stable_id: sid-validate-failure-suppression-regression, category: comprehensive, file: src-tauri/src/mux/daemon.rs, resolution: fixed}
+    - {stable_id: sid-shared-binary-copy-leak-and-race, category: performance, file: src-tauri/tests/mux_hot_upgrade.rs, resolution: fixed}
+    - {stable_id: sid-tmpfs-bloat-reintroduced-via-failed-hardlink, category: performance, file: src-tauri/tests/mux_hot_upgrade.rs, resolution: fixed}
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - "この feature の implement フェーズは、前回セッションが task0004 の launch を journal に記録した直後にクラッシュ／中断し、'launched' のまま終端イベントが無い状態で resume した。queue_launch_guard.py はこの状態を『in-flight』と判定して再起動を deny し続けるため、SubagentStop failure net が本来書くはずの 'failed' イベントを orchestrator が手動で journal に追記して正規の retry 経路に乗せる必要があった（worktree 内に未コミットの作業が残っていたことが手掛かりになった）。cross-session interruption からの resume はこの仕組みの想定外ケースかもしれない。"
+  - "review-editor による auto-fix は『suggestion の意図を汲んで単一ファイルを直す』ため、一見正しく見える修正（validate を suppression チェックより前に並べ替える）が実際には元のバグを閉じていない、というケースが2ループ連続で発生した（loop1: 並べ替えただけで record 自体は残っていたため無効、loop2: record を止めたら既存テストと NFR1 を壊した）。プロトコルが『各 loop 後に全パースペクティブで再レビューする』ことを必須にしているのは、まさにこの『直したつもりが直っていない』を検出するために効いた。3 loop 目でようやく RefusalStage という設計変更で正しく解決した。"
+  - "std::fs::hard_link はコピー先とコピー元が別ファイルシステムだと EXDEV で必ず失敗し std::fs::copy にフォールバックする、という基本的な事実を loop2 の修正が見落としていた（/tmp が tmpfs、cargo 成果物が別デバイス）。『hard_link を優先すれば軽量になる』という設計は、両者が同一ファイルシステム上にあることを検証しない限り成立しない。loop3 でコピー先を cargo 成果物と同じディレクトリ配下に移して解決した。"
+  - "batch モードで review の rework cap（1 回）が既に前回セッションの round1 で消費済みだったため、round2 で見つかった残存 high 5 件は自動的に deferred 扱いとなり review が completed になった。rework cap は『セッションをまたいで消費され続けるカウンタ』であることを踏まえると、複数セッションにわたる長期タスクでは 1 回の rework 機会をどこで使うかがボトルネックになりうる。"
