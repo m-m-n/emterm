@@ -8200,6 +8200,55 @@ mod tests {
     }
 
     #[test]
+    fn ac1_pristine_startup_reopens_overlay_via_transient_detach_without_manual_flag_reset() {
+        // Reproduces the pristine-startup path the task's root-cause
+        // diagnosis describes (a transient detach fires during the startup
+        // sequence, closing the flag via the existing detach guard, before
+        // the real attach completes) end-to-end via `on_mux_message` +
+        // `pump_all` — the production path. Unlike
+        // `ac1_overlay_reopens_on_the_not_attached_to_attached_transition`,
+        // this does NOT force `mux_sidebar_overlay_open = false` by direct
+        // field assignment; the flag starts open at construction (AC-7) and
+        // every transition below is driven through real mux messages.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        with_overlay_mode(&mut app, true);
+        assert!(app.mux_sidebar_overlay_open(), "AC-7: open by construction");
+
+        // The initial attach completing during startup.
+        app.on_mux_message(0, mux_welcome_message(1));
+        app.pump_all();
+        assert!(app.mux_sidebar_overlay_open());
+
+        // A transient detach fires during startup (per this task's
+        // root-cause diagnosis), tearing the mux group down and closing the
+        // flag via the existing detach guard.
+        app.on_mux_message(
+            0,
+            MuxMessage {
+                msg_type: MessageType::Detached,
+                pane_id: 0,
+                payload: Vec::new(),
+            },
+        );
+        app.pump_all();
+        assert!(
+            !app.mux_sidebar_overlay_open(),
+            "the transient detach closes the flag via the detach guard"
+        );
+
+        // The real attach completes.
+        app.on_mux_message(0, mux_welcome_message(1));
+        app.pump_all();
+
+        assert!(
+            app.mux_sidebar_overlay_open(),
+            "pristine startup (attach -> transient detach -> re-attach) \
+             reopens the overlay without any manual flag reset"
+        );
+    }
+
+    #[test]
     fn ac3_overlay_stays_closed_across_further_pumps_while_continuously_attached() {
         // AC-3 (FR1 negative): the bookkeeping already records the active
         // tab as attached; an explicit close followed by further pumps
