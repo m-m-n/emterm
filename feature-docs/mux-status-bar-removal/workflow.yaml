@@ -33,7 +33,7 @@ workflow:
     skipped_reason: "Pure removal/cleanup of an existing UI surface; no new UI, no visual or layout design decisions. The replacement UI (mux sidebar) already exists and is unchanged."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
   - id: review
