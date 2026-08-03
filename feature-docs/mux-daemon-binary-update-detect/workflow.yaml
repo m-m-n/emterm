@@ -35,7 +35,8 @@ workflow:
     base_commit: bda16c60713e9d9dcc9633b874a4b76a92694d92
     completed_at_commit: 8123b32e97e1367ca6b9c9df080d77c314b56510
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 55ad5b02bb55b3a6c693b22154c5cd32689df563
   - id: verify
     status: pending
     result: null
@@ -115,8 +116,8 @@ tasks:
     branch: em-workflow/mux-daemon-binary-update-detect/task0005
 
 review:
-  status: pending
-  rounds_completed: 1
+  status: completed
+  rounds_completed: 2
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
@@ -127,7 +128,7 @@ review:
     performance: completed
     architecture: completed
     spec: completed
-  residual_critical_high: 3
+  residual_critical_high: 5
   needs_rework: false
 
 requirements:
