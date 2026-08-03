@@ -31,8 +31,9 @@ workflow:
     status: completed
     completed_at_commit: b8a9886ee80df5010be337c01e3e24f22445d75b
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 7b8e87785596dba6fbcd125657956892e9002803
+    completed_at_commit: d66000e81313f5a7020fd8cca0687ad3f6888e8d
   - id: review
     status: pending
   - id: verify
@@ -49,8 +50,9 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR1, FR2, FR3, NFR1, NFR2]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-window-sidebar-overlay-hidden/task0001
+    merge_commit: d66000e81313f5a7020fd8cca0687ad3f6888e8d
 
 review: {}
 
