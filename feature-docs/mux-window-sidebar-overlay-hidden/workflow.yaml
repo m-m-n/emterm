@@ -35,7 +35,8 @@ workflow:
     base_commit: 7b8e87785596dba6fbcd125657956892e9002803
     completed_at_commit: d66000e81313f5a7020fd8cca0687ad3f6888e8d
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: c273e5607c67905d7d2b2548392e7212b9766fbd
   - id: verify
     status: pending
   - id: retrospect
@@ -54,7 +55,12 @@ tasks:
     branch: em-workflow/mux-window-sidebar-overlay-hidden/task0001
     merge_commit: d66000e81313f5a7020fd8cca0687ad3f6888e8d
 
-review: {}
+review:
+  rounds_completed: 1
+  perspectives: [comprehensive, spec]
+  residual_critical_high: 0
+  needs_rework: false
+  status: completed
 
 requirements:
   FR1:
