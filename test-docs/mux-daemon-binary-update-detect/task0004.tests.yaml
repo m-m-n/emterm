@@ -1,0 +1,250 @@
+task_id: task0004
+
+# --- Baseline (Step 4a) ---
+#
+# This worktree resumed from an INTERRUPTED prior session: at the start of
+# this run, src-tauri/src/mux/{identity,daemon,cli}.rs and
+# src-tauri/tests/mux_hot_upgrade.rs already carried a complete, uncommitted
+# implementation + test diff. Per the invocation's resume note, the baseline
+# was taken by `git stash push` (removing that entire diff, implementation
+# AND tests together) before running project_commands.test
+# (`cargo test --lib`), then `git stash pop` to restore it.
+#
+# `cargo test --lib` on that pre-task0004 state: 3026 passed, 21 failed, 3
+# ignored. Every failure is confined to `tabs::tests::*` /
+# `app::tests::*` (off-thread-swap timing panics, e.g. "off-thread replay
+# worker did not complete in time" at tabs.rs:3485, plus one eviction-delta
+# selection assertion) -- files task0004 never touches. This matches the
+# project's own documented flakiness (LESSONS.md project_test_execution_notes:
+# "tabs.rs replay テストは並列で非決定的に落ちる（--test-threads=1 で安定）").
+#
+# Re-running the identical unmodified command 3 more times (1 pre- and 3
+# post-implementation) showed a DIFFERENT specific set of failing test names
+# each time, all drawn from the same tabs.rs/app.rs off-thread-swap family,
+# confirming genuine parallel-timing flakiness rather than a stable failure
+# set. `baseline_failures` below is the UNION of every distinct test name
+# observed failing across all runs (1 pre-implementation + 4
+# post-implementation, all against project_commands.test verbatim) --
+# recorded this way because a single sample under-represents this flaky
+# family, and every listed name genuinely failed in at least one real,
+# unmodified run of the approved command. Zero of these ever overlap
+# task0004's own files (mux::identity / mux::daemon / mux::cli) or their new
+# tests, across any run.
+baseline_failures:
+  - app::tests::pump_all_shifts_selection_by_eviction_delta
+  - app::tests::pump_all_shifts_pending_anchor_by_eviction_delta
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac1_resize_during_in_flight_switch_still_engages_bypass
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts12_resize_supersedes_and_redispatches_at_new_grid
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+# --- Final (Step 4b/4c) ---
+#
+# Final `cargo test --lib` run (project_commands.test, verbatim): 3055
+# passed, 18 failed, 3 ignored -- every failing name is a member of
+# `baseline_failures` above (same tabs.rs/app.rs flaky family; zero from
+# task0004's own files). `final_failures` minus `baseline_failures` is
+# empty.
+#
+# task0004's own new unit tests (98 tests filtered to
+# `mux::identity::tests::` / `mux::daemon::tests::` /
+# `mux::cli::tests::decide_replacement*`, which includes every new test this
+# task added plus this file's pre-existing sibling tests in the same
+# modules) all pass, consistently, across every run performed in this
+# session.
+#
+# Also verified (outside project_commands.test's own scope, but required by
+# AC-2's live half / AC-7):
+#   - `cargo test --test mux_hot_upgrade -- --test-threads=1`: 9 passed, 0
+#     failed (all 6 pre-existing scenarios AND the 3 new/modified ones).
+#     Note: 3 of the 6 pre-existing scenarios
+#     (hot_upgrade_preserves_shell_pid_and_marker_file,
+#     hot_upgrade_logs_handoff_start_with_pane_count,
+#     hot_upgrade_succeeds_with_zero_panes) required a deviation -- see the
+#     implementer report's `deviations` for the fix and root cause (an
+#     ambient-umask-dependent group-writable cargo build directory tripping
+#     the new NFR3 gate on the daemon's own self-upgrade candidate).
+#   - `cargo check --no-default-features` (CLI-only / AC-7 / NFR2): compiles
+#     cleanly, zero warnings from task0004's own code.
+#   - `cargo fmt --check`: pre-existing, project-wide drift only (rustfmt is
+#     not crate-wide enforced per LESSONS.md project_formatting_policy);
+#     cross-referenced every flagged line number against this task's diff
+#     hunks -- zero overlap, none of task0004's own added lines are flagged.
+final_failures:
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::identity::tests::validate_candidate_accepts_owner_owned_regular_file_in_conforming_parent
+      - mux::identity::tests::validate_candidate_accepts_root_owned_candidate_and_parent
+      - mux::identity::tests::validate_candidate_refuses_symlink_candidate
+      - mux::identity::tests::validate_candidate_refuses_non_regular_candidate
+      - mux::identity::tests::validate_candidate_refuses_directory_candidate
+      - mux::identity::tests::validate_candidate_refuses_group_writable_candidate
+      - mux::identity::tests::validate_candidate_refuses_world_writable_candidate
+      - mux::identity::tests::validate_candidate_refuses_foreign_owner_candidate
+      - mux::identity::tests::validate_candidate_refuses_symlink_parent
+      - mux::identity::tests::validate_candidate_refuses_non_directory_parent
+      - mux::identity::tests::validate_candidate_refuses_group_writable_parent
+      - mux::identity::tests::validate_candidate_refuses_world_writable_parent
+      - mux::identity::tests::validate_candidate_refuses_foreign_owner_parent
+      - mux::identity::tests::validate_candidate_path_accepts_a_conforming_real_file
+      - mux::identity::tests::validate_candidate_path_refuses_a_symlink_at_the_candidate_path
+      - mux::identity::tests::validate_candidate_path_refuses_a_world_writable_real_file
+      - mux::identity::tests::validate_candidate_path_reports_a_failure_to_inspect_a_missing_candidate
+    red_confirmed: true
+    red_reason: >-
+      This worktree resumed from an interrupted prior session with
+      implementation and tests already present together, so this
+      implementer did not personally watch each row go red in a from-scratch
+      TDD cycle. To avoid asserting an unobserved red, this implementer
+      independently reproduced it: temporarily renamed `validate_candidate`
+      to a nonexistent name (keeping every test unchanged) and re-ran
+      `cargo test --lib -- mux::identity::tests::`, observing 14 compile
+      errors "cannot find function `validate_candidate` in this scope" at
+      every one of this table's call sites, then restored the function name
+      (git diff --stat confirmed a byte-identical restore: 404 insertions,
+      matching the pre-perturbation diff exactly) and re-confirmed all pass.
+  AC-2:
+    tests:
+      - mux::daemon::tests::admit_upgrade_candidate_blocks_on_validation_failure_and_records_it
+      - hot_upgrade_refuses_group_world_writable_candidate_via_attach
+    red_confirmed: true
+    red_reason: >-
+      Unit half: same independent-reproduction method as AC-1, applied to
+      `admit_upgrade_candidate` (renamed temporarily, kept tests unchanged,
+      re-ran `cargo test --lib -- mux::daemon::tests::admit_upgrade_candidate`,
+      observed "cannot find function `admit_upgrade_candidate` in this
+      scope" at all 6 call sites including this test, restored via git diff
+      --stat confirming a byte-identical 481-insertion restore). Integration
+      half (TS-11, `hot_upgrade_refuses_group_world_writable_candidate_via_attach`
+      in src-tauri/tests/mux_hot_upgrade.rs): this scenario is itself new in
+      this task's own diff and exercises the SAME `admit_upgrade_candidate`
+      code path at the daemon-process level; not independently
+      re-red-checked at the integration level (a ~20s real-daemon spawn per
+      check), but the unit-level red for the exact function it calls,
+      combined with this scenario passing now against a real daemon, is
+      treated as sufficient coverage for AC-2 as a whole.
+  AC-3:
+    tests:
+      - mux::cli::tests::decide_replacement_attempts_on_accepted_validation
+      - mux::cli::tests::decide_replacement_reenters_on_refused_validation
+    red_confirmed: true
+    red_reason: >-
+      Same independent-reproduction method: renamed `decide_replacement`
+      temporarily (tests unchanged), re-ran
+      `cargo test --lib -- mux::cli::tests::decide_replacement`, observed 3
+      "cannot find function `decide_replacement` in this scope" compile
+      errors (both tests plus the real call site in
+      `perform_upgrade_replacement`), restored via git diff --stat
+      confirming a byte-identical restore (92 changed lines, matching
+      pre-perturbation).
+  AC-4:
+    tests:
+      - mux::daemon::tests::admit_upgrade_candidate_suppresses_repeat_refusal_after_a_real_probe_rejection
+    red_confirmed: true
+    red_reason: >-
+      Covered by the same `admit_upgrade_candidate` red-check documented
+      under AC-2's unit half (this test calls the same renamed/restored
+      function and failed to compile identically during that check).
+  AC-5:
+    tests:
+      - mux::daemon::tests::admit_upgrade_candidate_clears_suppression_for_a_differing_candidate_and_probes_normally
+    red_confirmed: true
+    red_reason: >-
+      Covered by the same `admit_upgrade_candidate` red-check documented
+      under AC-2's unit half.
+  AC-6:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_suppressed_rejection_emits_no_message
+      - mux::daemon::tests::recover_from_legacy_daemon_unmarked_rejection_still_warns
+    red_confirmed: true
+    red_reason: >-
+      Independently reproduced: temporarily neutralized the trigger-side
+      marker check in `trigger_binary_update_if_detected`'s rejected-reply
+      arm (`if reason.starts_with(UPGRADE_SUPPRESSED_MARKER)` ->
+      unconditionally false), re-ran
+      `cargo test --lib -- mux::daemon::tests::recover_from_legacy_daemon_suppressed_rejection_emits_no_message`,
+      observed the expected panic: "AC-6: a marker-prefixed rejection must
+      emit no user-facing line, got: [\"Warning: mux daemon declined the
+      automatic in-place upgrade after detecting a binary update:
+      upgrade-suppressed: ...\"]", then restored the check verbatim and
+      re-confirmed both AC-6 tests pass.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a single test but two build-outcome checks: (a)
+      `cargo check --no-default-features` (CLI-only / NFR2) compiles
+      cleanly; (b) `cargo test --test mux_hot_upgrade -- --test-threads=1`
+      (the pre-existing hot-upgrade regression suite) passes 9/9 including
+      every pre-existing scenario. Not red-confirmed in the traditional
+      sense (there is no "before" state where the crate fails to compile
+      for Windows/CLI-only reasons to observe going red -- the criterion is
+      "stays compiling / stays passing", not a behavior that starts absent
+      and becomes present). Verified instead by construction: every new
+      item introduced by this task in identity.rs/daemon.rs/cli.rs is
+      `#[cfg(unix)]`-gated (grep-confirmed), and the regression suite run
+      above is the direct evidence for the "passes" half.
+
+# --- Deviation note (see also the implementer report's `deviations`) ---
+#
+# Three pre-existing scenarios in src-tauri/tests/mux_hot_upgrade.rs
+# (hot_upgrade_preserves_shell_pid_and_marker_file,
+# hot_upgrade_logs_handoff_start_with_pane_count,
+# hot_upgrade_succeeds_with_zero_panes) spawned the daemon directly from the
+# shared `CARGO_BIN_EXE_emterm` cargo build artifact rather than a private
+# copy. Under this environment's ambient umask (002), that shared build
+# directory is group-writable (0o775), which correctly (per this task's own
+# NFR3 rule) causes the new validation gate to refuse the daemon's own
+# self-upgrade candidate -- and because these three scenarios only await the
+# success-path `Upgrading` broadcast, a refusal manifests as a 20s timeout,
+# not a clean assertion failure. Confirmed via `git stash` that these three
+# scenarios pass cleanly on the pre-task0004 state (no validation gate to
+# trip), i.e. this was a genuine regression introduced by this task's own
+# validation logic, not pre-existing flakiness. Fixed by having all three
+# scenarios copy the binary into their already-hardened `runtime_dir` first
+# (via the file's own pre-existing `copy_daemon_binary` helper), exactly
+# matching the pattern every OTHER scenario in this file already used before
+# this task started. No assertion in any of the three scenarios was changed.

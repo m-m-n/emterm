@@ -108,15 +108,34 @@ impl Drop for DaemonGuard {
 // ---------------------------------------------------------------------------
 
 /// A fresh, collision-free isolated runtime directory for one scenario.
+///
+/// task0004 (mux-daemon-binary-update-detect, NFR3): creates the directory
+/// now and hardens its permission bits to `0o755` explicitly, rather than
+/// leaving creation to whichever caller's own `create_dir_all` happens to
+/// run first (harmless -- `create_dir_all` is idempotent, so every existing
+/// call site's own `create_dir_all(&runtime_dir)` still succeeds unchanged).
+/// A daemon candidate binary's PARENT directory is one of NFR3's own
+/// validation targets (no group/world write); relying on the invoking
+/// process's ambient umask to produce a conforming mode is exactly the kind
+/// of environmental nondeterminism the project's test discipline avoids -- a
+/// permissive umask (e.g. `002`) would otherwise make this shared isolated
+/// directory group-writable, and every scenario that replaces the daemon
+/// binary directly inside it (several pre-existing scenarios above) would
+/// then be refused by the validation gate this task adds, even though
+/// nothing about the SCENARIO itself is wrong.
 fn unique_runtime_dir(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
+    let dir = std::env::temp_dir().join(format!(
         "emterm-mux-hotupgrade-{label}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock before UNIX epoch")
             .as_nanos()
-    ))
+    ));
+    std::fs::create_dir_all(&dir).expect("create isolated runtime dir");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
+        .expect("harden isolated runtime dir to a conforming (non-group/world-writable) mode");
+    dir
 }
 
 /// The daemon socket path for a given `XDG_RUNTIME_DIR`, mirroring
@@ -654,8 +673,17 @@ fn read_file_with_retry(path: &Path, timeout: Duration) -> String {
 #[test]
 fn hot_upgrade_preserves_shell_pid_and_marker_file() {
     let runtime_dir = unique_runtime_dir("main");
-    let exe = PathBuf::from(env!("CARGO_BIN_EXE_emterm"));
-    let child = spawn_isolated_daemon(&exe, &runtime_dir);
+    // task0004 (NFR3): spawn from a PRIVATE copy inside the hardened
+    // `runtime_dir` rather than the shared `CARGO_BIN_EXE_emterm` path
+    // directly -- that shared cargo build output directory's permission
+    // bits are outside this test's control (e.g. an ambient umask of `002`
+    // leaves it group-writable), which would make the daemon's own
+    // self-upgrade candidate fail NFR3's parent-directory rule for reasons
+    // having nothing to do with this scenario. Mirrors every other
+    // scenario below's established use of `copy_daemon_binary`.
+    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    copy_daemon_binary(&daemon_bin_path);
+    let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
@@ -726,8 +754,11 @@ fn hot_upgrade_preserves_shell_pid_and_marker_file() {
 #[test]
 fn hot_upgrade_logs_handoff_start_with_pane_count() {
     let runtime_dir = unique_runtime_dir("handoff-log");
-    let exe = PathBuf::from(env!("CARGO_BIN_EXE_emterm"));
-    let child = spawn_isolated_daemon(&exe, &runtime_dir);
+    // task0004 (NFR3): see the identical rationale in
+    // `hot_upgrade_preserves_shell_pid_and_marker_file` above.
+    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    copy_daemon_binary(&daemon_bin_path);
+    let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
@@ -778,8 +809,11 @@ fn hot_upgrade_logs_handoff_start_with_pane_count() {
 #[test]
 fn hot_upgrade_succeeds_with_zero_panes() {
     let runtime_dir = unique_runtime_dir("zero-panes");
-    let exe = PathBuf::from(env!("CARGO_BIN_EXE_emterm"));
-    let child = spawn_isolated_daemon(&exe, &runtime_dir);
+    // task0004 (NFR3): see the identical rationale in
+    // `hot_upgrade_preserves_shell_pid_and_marker_file` above.
+    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    copy_daemon_binary(&daemon_bin_path);
+    let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
@@ -1507,4 +1541,139 @@ fn hot_upgrade_no_misfire_when_identity_file_absent() {
              handshake was rejected: {reason}"
         ),
     }
+}
+
+// =============================================================================
+// task0004 extension (feature-docs/mux-daemon-binary-update-detect)
+// =============================================================================
+//
+// The scenario below proves this task's own live half: a candidate binary at
+// the daemon's recorded identity path that fails NFR3's ownership/writability
+// gate is refused BEFORE any handoff-schema probe subprocess is spawned, the
+// daemon keeps serving the pre-existing pane untouched, and the refusal is
+// visible on the attaching client's standard error (AC-2, task0004.md TS-11).
+
+/// How long to wait for the validation-refusal warning line on the attach
+/// client's standard error -- generous enough to cover the identity check,
+/// the validation gate itself, and the Upgrade round-trip, mirroring
+/// [`NOTICE_LINE_TIMEOUT`]'s budget for the success-path counterpart.
+const REFUSAL_WARNING_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// AC-2 (TS-11 integration half, NFR3/FR6): after a rename(2) replacement,
+/// loosening the NEW candidate's permission bits to group/world-writable
+/// must make the daemon refuse the automatic in-place upgrade -- visibly, on
+/// the attaching client's standard error -- instead of spawning the
+/// handoff-schema probe (observed here as: no successful-upgrade notice, and
+/// the daemon's own executable-path resolution still reporting the dangling
+/// "(deleted)" marker of the OLD image, since no `execve` ever happened) and
+/// without harming the pre-existing pane (its shell PID survives, read back
+/// through the SAME still-open connection -- no replacement, no restart).
+#[test]
+fn hot_upgrade_refuses_group_world_writable_candidate_via_attach() {
+    let runtime_dir = unique_runtime_dir("writable-candidate");
+    std::fs::create_dir_all(&runtime_dir).expect("create isolated runtime dir");
+
+    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    copy_daemon_binary(&daemon_bin_path);
+
+    let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
+    let daemon_pid = child.id();
+    let _guard = DaemonGuard {
+        child,
+        runtime_dir: runtime_dir.clone(),
+    };
+
+    let sock_path = socket_path_for(&runtime_dir);
+    wait_for_socket(&sock_path, SOCKET_WAIT_TIMEOUT);
+    let mut stream = connect(&sock_path, SOCKET_WAIT_TIMEOUT);
+    let _welcome = handshake(&mut stream);
+
+    let pane_id = create_shell_pane(&mut stream);
+    send_pane_line(
+        &mut stream,
+        pane_id,
+        "printf 'EMTERM_HOTUPG_PID:%s\\n' \"$$\"; printf '%s%s\\n' EMTERM_HOTUPG _BEFOREDONE",
+    );
+    let before = read_pane_until(
+        &mut stream,
+        pane_id,
+        "EMTERM_HOTUPG_BEFOREDONE",
+        "TS-11 pre-replacement shell round-trip",
+        SHELL_ROUNDTRIP_TIMEOUT,
+    );
+    let pid_before = extract_pid_after(&before, "EMTERM_HOTUPG_PID:");
+
+    replace_binary_with_valid_copy(&daemon_bin_path);
+    // NFR3: loosen the freshly replaced candidate's permission bits to
+    // group+world-writable -- the exact condition this task's validation
+    // gate must refuse, on top of an otherwise valid binary.
+    let mut perms = std::fs::metadata(&daemon_bin_path)
+        .expect("stat replaced candidate binary")
+        .permissions();
+    perms.set_mode(0o777);
+    std::fs::set_permissions(&daemon_bin_path, perms)
+        .expect("loosen replaced candidate binary to group/world-writable");
+    assert!(
+        exe_link_reports_deleted(daemon_pid),
+        "test setup sanity: after a rename(2) replacement the daemon's own executable-path \
+         resolution must report the kernel's dangling-inode \"(deleted)\" marker"
+    );
+
+    let mut attach_child = Command::new(&daemon_bin_path)
+        .args(["mux", "attach"])
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env_remove("EMTERM_MUX")
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn `<new binary> mux attach`");
+    let attach_stderr = attach_child
+        .stderr
+        .take()
+        .expect("attach child stderr was piped");
+    let stderr_buf = spawn_stderr_collector(attach_stderr);
+    let _attach_guard = ChildGuard(attach_child);
+
+    let warning = wait_for_stderr_needle(
+        &stderr_buf,
+        "declined the automatic in-place upgrade",
+        "TS-11: waiting for the validation-refusal warning on the attach client's stderr",
+        REFUSAL_WARNING_TIMEOUT,
+    );
+    assert!(
+        warning.contains("write"),
+        "AC-2: expected the refusal reason to name the group/world-write rule; got: {warning:?}"
+    );
+    assert!(
+        !warning.contains(UPGRADE_NOTICE_LINE),
+        "AC-2: a refused upgrade must never also print the success notice; got: {warning:?}"
+    );
+
+    assert!(
+        exe_link_reports_deleted(daemon_pid),
+        "AC-2/NFR3: a refused upgrade must never exec -- the daemon must still be running the \
+         OLD image"
+    );
+
+    send_pane_line(
+        &mut stream,
+        pane_id,
+        "printf 'EMTERM_HOTUPG_PID:%s\\n' \"$$\"; printf '%s%s\\n' EMTERM_HOTUPG _AFTERDONE",
+    );
+    let after = read_pane_until(
+        &mut stream,
+        pane_id,
+        "EMTERM_HOTUPG_AFTERDONE",
+        "TS-11 post-refusal shell round-trip",
+        SHELL_ROUNDTRIP_TIMEOUT,
+    );
+    let pid_after = extract_pid_after(&after, "EMTERM_HOTUPG_PID:");
+    assert_eq!(
+        pid_before, pid_after,
+        "AC-2/FR6: the pane's shell must survive a refused upgrade untouched (pid before=\
+         {pid_before}, after={pid_after})"
+    );
 }
