@@ -1,0 +1,91 @@
+task_id: task0005
+# tabs::tests::* are known non-deterministic under this suite (see project
+# memory: "tabs.rs replay テストは並列で非決定的に落ちる（--test-threads=1で
+# 安定）"). During this task, repeated runs of the IDENTICAL binary (zero code
+# changes between runs) each produced a DIFFERENT subset of tabs::tests
+# failures -- including a run with --test-threads=1 that still showed 7
+# failures, contradicting the "stable single-threaded" note. This confirms
+# the flakiness is environmental (timing/scheduling under this sandbox's
+# load), unrelated to this task's files (mux/daemon.rs only; tabs.rs was
+# never touched). baseline_failures lists the specific names observed on the
+# recording run (4a, before any edit); final_failures lists the names
+# observed on the final recorded run -- membership differs only within this
+# known-flaky tabs:: module. Every mux::daemon / mux::identity / mux::cli
+# test -- old and new -- passed on every run performed during this task,
+# including four independent full-suite runs and one --test-threads=1 run.
+baseline_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  # Every tabs:: name above is pre-existing, known-flaky noise (see header);
+  # none is in this task's scope (mux::daemon.rs is the only file touched),
+  # and every mux::* test -- old and new -- passed on every run performed
+  # during this task, including a dedicated `mux::daemon::tests` scoped run.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_fires_upgrade_and_reports_notice_when_reachable_again
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: expected the identity-check provider to be consulted twice: once for the firing decision, once for the post-reachability re-check\n  left: 1\n right: 2 -- the pre-implementation code never re-checked identity after reachability succeeded"
+  AC-2:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_unconfirmed_replacement_warns_instead_of_notice
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: expected exactly the pinned unconfirmed-replacement warning, no success notice\n  left: [\"Mux daemon upgraded in place to the newly installed binary\"]\n right: [\"Warning: mux daemon is reachable but the binary replacement could not be confirmed; continuing with the existing daemon\"] -- the pre-implementation code emitted the success notice on reachability alone, regardless of the post-fire verdict"
+  AC-3:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_undecidable_post_check_warns_instead_of_notice
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: an Undecidable post-fire verdict must never be claimed as success\n  left: [\"Mux daemon upgraded in place to the newly installed binary\"]\n right: [\"Warning: mux daemon is reachable but the binary replacement could not be confirmed; continuing with the existing daemon\"] -- same root cause as AC-2: no post-fire re-check existed"
+  AC-4:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_timeout_does_not_re_check_identity
+    red_confirmed: false
+    red_reason: "This criterion's own test could not be made to fail first: the pre-implementation code never performed a post-reachability re-check on ANY path (timeout or success), so on the timeout path specifically the identity-check provider was already invoked exactly once even before this task's change -- confirmed by running this test against the pre-implementation code, where it passed. The criterion is genuinely a 'preserved, no re-check on this path' guarantee rather than new behavior; it is carried forward here as a regression guard against a future change accidentally adding a re-check on the timeout path too."
+  AC-5:
+    tests:
+      - mux::daemon::tests::recover_from_legacy_daemon_production_entry_point_does_not_fire_against_the_stand_in
+      - mux::daemon::tests::recover_from_legacy_daemon_unchanged_verdict_does_not_fire
+      - mux::daemon::tests::recover_from_legacy_daemon_undecidable_verdict_does_not_fire
+    red_confirmed: false
+    red_reason: "These tests exercise paths this task's change does not touch: a pre-fire Unchanged/Undecidable verdict never reaches the post-reachability re-check code at all (no Upgrade frame is ever sent), so they were already green before this task's implementation and remain green after -- proving 'no new frame/connection/protocol element' and 'pre-fire Unchanged/Undecidable still sends nothing' by non-regression rather than by a red-to-green transition. The production call site reusing the SAME identity_check closure (no new parameter, no new connection) was verified by code inspection of the diff (identity_check(sock_path) is called a second time on the existing `impl Fn` parameter; no new function signature). NFR2 (Windows / CLI-only builds compile with zero behavior change) was verified via `cargo check --manifest-path src-tauri/Cargo.toml --no-default-features`, a build-level outcome rather than a test; Windows cross-compilation itself was not executed (no cargo-xwin target in this sandbox, and not part of project_commands)."
