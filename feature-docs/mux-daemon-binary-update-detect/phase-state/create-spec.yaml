@@ -1,0 +1,85 @@
+schema_version: 1
+feature: mux-daemon-binary-update-detect
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: de057f9f0340e7fd25ee7c2935531c53c9af7d0e
+last_input_digest: null
+active_request_id: create-spec-run-0002
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-08-03T00:00:00+09:00"
+    questions:
+      - question_id: detection.method
+        status: answered
+      - question_id: trigger.policy
+        status: answered
+      - question_id: legacy-daemon.ux
+        status: answered
+      - question_id: trigger.scope
+        status: answered
+      - question_id: identity.reference
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  detection.method:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-03T00:00:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [identity-file]
+    normalized_answer: "identity-file"
+    resolution_note: "batch mode, gate create-spec.requirement-clarification: Codex consultation converged on the analyst's own recommendation (identity-file). Recorded as an assumption per batch-policies.yaml record_as_assumption: true."
+  trigger.policy:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-03T00:00:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [auto-with-notice]
+    normalized_answer: "auto-with-notice"
+    resolution_note: "batch mode, gate create-spec.requirement-clarification: Codex consultation converged on auto-with-notice. Recorded as an assumption."
+  legacy-daemon.ux:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-03T00:00:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [warn-and-proceed]
+    normalized_answer: "warn-and-proceed"
+    resolution_note: "batch mode, gate create-spec.requirement-clarification: Codex consultation converged on warn-and-proceed. Recorded as an assumption."
+  trigger.scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-03T00:00:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [attach-and-mux-start]
+    normalized_answer: "attach-and-mux-start"
+    resolution_note: "batch mode, gate create-spec.requirement-clarification: Codex consultation converged on attach-and-mux-start. Recorded as an assumption."
+  identity.reference:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-03T00:00:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [daemon-own-path]
+    normalized_answer: "daemon-own-path"
+    resolution_note: "batch mode, gate create-spec.requirement-clarification: Codex consultation converged on daemon-own-path. Recorded as an assumption."
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-03T00:00:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [skip]
+    normalized_answer: "skip"
+    resolution_note: "batch mode, gate create-spec.design-step: action decide_autonomously — selected the analyst's own recommended option (skip); backend-only Rust change, no UI."
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: null
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
