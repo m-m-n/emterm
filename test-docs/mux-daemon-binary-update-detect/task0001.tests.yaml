@@ -1,0 +1,147 @@
+task_id: task0001
+baseline_failures:
+  # All in tabs::tests (unrelated pre-existing timing flakiness in the
+  # off-thread replay worker; documented in project memory as
+  # non-deterministic under parallel `cargo test` and stabilized only by
+  # --test-threads=1, which project_commands.test does not use). None
+  # touch mux::identity, mux::daemon, mux::mod, or mux::session::pane.
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  # Every post-implementation run's failure set was a subset of the 24
+  # names above (verified across 5+ repeated runs of the exact
+  # project_commands.test string; the subset varies run-to-run because the
+  # underlying flakiness is timing-based, never because of new tests
+  # failing). Listed empty here per the subset rule: nothing NEW failed.
+  []
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::identity::tests::record_or_invalidate_writes_owner_only_file_that_round_trips_through_check
+      - mux::identity::tests::encode_decode_round_trips_a_path_containing_whitespace
+    red_confirmed: true
+    red_reason: >-
+      New module (identity.rs did not exist before this task); mutation-
+      confirmed by changing the temp-file mode from 0o600 to 0o644, which
+      made the mode assertion fail with "left: 420 right: 384" (0o644 vs
+      0o600 in decimal) -- proving the test actually checks the permission
+      bits rather than passing vacuously.
+  AC-2:
+    tests:
+      - mux::identity::tests::record_or_invalidate_removes_existing_file_and_records_nothing_when_capture_fails
+      - mux::identity::tests::record_or_invalidate_removes_existing_file_when_resolution_itself_fails
+    red_confirmed: true
+    red_reason: >-
+      Mutation-confirmed by removing the `std::fs::remove_file` call in
+      record_or_invalidate's capture-failure branch: both tests failed
+      with "a pre-existing identity file must be removed" /
+      "assertion failed: !identity_file_path(&socket_path).exists()".
+  AC-3:
+    tests:
+      - mux::identity::tests::compare_reports_unchanged_when_dev_ino_match
+      - mux::identity::tests::compare_reports_updated_when_dev_ino_differ
+      - mux::identity::tests::compare_reports_updated_when_recorded_path_not_found
+      - mux::identity::tests::compare_reports_undecidable_on_any_other_stat_error
+    red_confirmed: true
+    red_reason: >-
+      Mutation-confirmed twice: (1) stubbed `compare` to always return
+      Unchanged -- the three non-Unchanged-row tests failed with the
+      exact expected-vs-actual mismatch; (2) removed decode's
+      TrailingGarbage rejection -- the never-Updated-from-a-parse-failure
+      invariant (exercised via check_reports_undecidable_when_identity_
+      file_has_trailing_garbage) failed with "left: Unchanged right:
+      Undecidable" / "left: Updated{...} right: Undecidable" on the
+      compare_* tests too, proving the "never Updated from a parse
+      failure" wiring is real.
+  AC-4:
+    tests:
+      - mux::identity::tests::check_reports_undecidable_when_identity_file_is_missing
+      - mux::identity::tests::check_reports_undecidable_when_identity_file_is_truncated
+      - mux::identity::tests::check_reports_undecidable_when_identity_file_is_garbage
+      - mux::identity::tests::check_reports_undecidable_when_identity_file_has_trailing_garbage
+    red_confirmed: true
+    red_reason: >-
+      Mutation-confirmed for the two most failure-prone paths: (1) removed
+      the magic-marker check in `decode` -- initially the garbage-file test
+      used a short, arbitrary byte string that happened to ALSO trip the
+      truncation check, so the mutation went undetected; rewrote the test
+      to corrupt only the magic byte of an otherwise well-formed, correctly
+      sized encoding (isolating the wrong-magic path), re-ran the mutation,
+      and the strengthened test then failed with "left: Updated{...}
+      right: Undecidable", proving decode had silently accepted the
+      corrupted magic. (2) trailing-garbage rejection removal -- confirmed
+      under AC-3's red_reason. The missing-file case is the base "no file
+      to read" path and was not separately mutated (nothing to break: any
+      removal of the read-error handling would also break several other
+      tests that already exercise `check`'s Err mapping).
+  AC-5:
+    tests:
+      - mux::identity::tests::write_identity_file_refuses_a_symlink_at_the_destination_path
+      - mux::identity::tests::write_identity_file_refuses_a_symlink_at_the_temp_path
+      - mux::identity::tests::record_or_invalidate_is_best_effort_and_continues_when_persistence_fails
+    red_confirmed: true
+    red_reason: >-
+      Mutation-confirmed by stubbing `refuse_if_symlink` to always return
+      Ok(()): the destination-symlink test failed ("a pre-placed symlink at
+      the destination must be refused") and the best-effort-continuation
+      test failed ("a persistence failure must degrade to no recorded
+      identity, not abort") -- both because the write then silently
+      succeeded through the symlink instead of refusing. The temp-path test
+      still passed on this specific mutation because `clear_stale_temp_
+      file`'s independent symlink check (a separate guard, not
+      `refuse_if_symlink`) still caught it -- confirming that guard's own
+      necessity rather than redundancy.
+  AC-6:
+    tests:
+      - mux::identity::tests::resolve_upgrade_candidate_returns_the_recorded_path_when_present
+      - mux::identity::tests::resolve_upgrade_candidate_refuses_with_a_reason_when_absent
+    red_confirmed: true
+    red_reason: >-
+      Mutation-confirmed by making resolve_upgrade_candidate ignore its
+      argument and always return Ok(dummy path): the refusal test failed
+      with "no recorded identity must refuse rather than resolve:
+      \"/usr/bin/emterm\"". The daemon.rs wiring itself (the actual
+      upgrade-signal branch call site) has no unit test of its own per the
+      task plan's Test Notes -- end-to-end proof is deferred to task0003's
+      TS-3, as the plan explicitly scopes it.
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Verified by build, not by a test: (1) grepped daemon.rs after the
+      edit -- `self_exec::self_exe_path` no longer appears in the upgrade-
+      signal branch (only `crate::mux::identity::resolve_upgrade_candidate`
+      does); the module-gating precedent (`#[cfg(unix)] pub mod identity;`
+      in mod.rs, matching `upgrade`/`inherited_pty`) means the module does
+      not exist at all on non-unix targets. (2) `cargo check --no-default-
+      features` (CLI-only) and the default `cargo check` both compile
+      clean after the change. Before the identity module and the daemon.rs
+      wiring existed, the CLI-only build already compiled fine (this
+      criterion has no "red" state to observe -- it is a build-must-stay-
+      green criterion, not a behavior-must-start-failing one). Windows
+      itself was not cross-built in this task (no toolchain available in
+      this environment); confidence rests on the identical `#[cfg(unix)]`
+      gating already proven correct for the sibling `upgrade` /
+      `inherited_pty` modules.
