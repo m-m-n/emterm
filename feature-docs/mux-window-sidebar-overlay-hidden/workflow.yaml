@@ -28,7 +28,8 @@ workflow:
     skipped_reason: "Internal state-machine bug fix in existing pump logic (one boolean assignment plus tests). No new UI surface, no visual/layout/token change; the overlay sidebar's appearance is untouched. No design-system candidates exist in this project's resolved inputs."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: b8a9886ee80df5010be337c01e3e24f22445d75b
   - id: implement
     status: pending
   - id: review
@@ -38,7 +39,16 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Open overlay sidebar on mux attach transition"
+    plan: tasks/task0001.md
+    files: [src-tauri/src/app.rs]
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: low
+    requirements: [FR1, FR2, FR3, NFR1, NFR2]
+    status: pending
 
 review: {}
 
@@ -48,35 +58,35 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2]
   FR2:
     title: "Sidebar visible from startup under init-mux"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS4]
   FR3:
     title: "Reattach restores open state"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS4]
+    tasks: [task0001]
+    tests: [TS1, TS4]
   NFR1:
     title: "Change confinement"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS2, TS3]
   NFR2:
     title: "No settings-schema change"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3]
 
 batch:
