@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-window-sidebar-overlay-hidden
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: c7d7fb719ab514879f3d314dfc41268c230772f4
+last_input_digest: null
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:pending
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
