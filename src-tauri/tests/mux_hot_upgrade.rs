@@ -207,6 +207,34 @@ fn copy_daemon_binary(dest: &Path) {
     std::fs::set_permissions(dest, perms).expect("mark copied daemon binary executable");
 }
 
+/// A single, process-wide, read-only copy of the built `emterm` test binary,
+/// created once (via [`std::sync::OnceLock`]) rather than per-scenario.
+///
+/// Used only by scenarios that never rename-replace or chmod the binary they
+/// spawn from: NFR3 requires merely that the candidate's PARENT directory not
+/// be group/world-writable (see `unique_runtime_dir`'s doc comment), which
+/// this shared, hardened directory satisfies just as well as a private
+/// per-scenario copy -- without each such scenario paying for its own full
+/// copy of a (debug-build) multi-hundred-MB binary into tmpfs. Scenarios that
+/// DO mutate the file at this path (rename-replace, chmod) must keep using
+/// `copy_daemon_binary` for their own private copy instead of this one.
+fn shared_readonly_daemon_binary() -> &'static PathBuf {
+    static SHARED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    SHARED.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!(
+            "emterm-mux-hotupgrade-shared-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create shared hardened dir for daemon binary copy");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect(
+            "harden shared daemon-binary dir to a conforming (non-group/world-writable) mode",
+        );
+        let dest = dir.join("emterm-under-test");
+        copy_daemon_binary(&dest);
+        dest
+    })
+}
+
 /// Atomically replace the file at `path` (which a running daemon's own
 /// executable-path resolution points at) with a script that cannot serve as
 /// a valid handoff candidate: it exits non-zero on any invocation.
@@ -673,16 +701,16 @@ fn read_file_with_retry(path: &Path, timeout: Duration) -> String {
 #[test]
 fn hot_upgrade_preserves_shell_pid_and_marker_file() {
     let runtime_dir = unique_runtime_dir("main");
-    // task0004 (NFR3): spawn from a PRIVATE copy inside the hardened
-    // `runtime_dir` rather than the shared `CARGO_BIN_EXE_emterm` path
-    // directly -- that shared cargo build output directory's permission
-    // bits are outside this test's control (e.g. an ambient umask of `002`
-    // leaves it group-writable), which would make the daemon's own
-    // self-upgrade candidate fail NFR3's parent-directory rule for reasons
-    // having nothing to do with this scenario. Mirrors every other
-    // scenario below's established use of `copy_daemon_binary`.
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
-    copy_daemon_binary(&daemon_bin_path);
+    // task0004 (NFR3): spawn from the shared, process-wide read-only copy
+    // rather than the shared `CARGO_BIN_EXE_emterm` path directly -- that
+    // shared cargo build output directory's permission bits are outside this
+    // test's control (e.g. an ambient umask of `002` leaves it
+    // group-writable), which would make the daemon's own self-upgrade
+    // candidate fail NFR3's parent-directory rule for reasons having nothing
+    // to do with this scenario. This scenario never mutates the binary it
+    // spawns from, so it does not need its own private copy (see
+    // `shared_readonly_daemon_binary`'s doc comment).
+    let daemon_bin_path = shared_readonly_daemon_binary().clone();
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
@@ -755,9 +783,9 @@ fn hot_upgrade_preserves_shell_pid_and_marker_file() {
 fn hot_upgrade_logs_handoff_start_with_pane_count() {
     let runtime_dir = unique_runtime_dir("handoff-log");
     // task0004 (NFR3): see the identical rationale in
-    // `hot_upgrade_preserves_shell_pid_and_marker_file` above.
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
-    copy_daemon_binary(&daemon_bin_path);
+    // `hot_upgrade_preserves_shell_pid_and_marker_file` above; this scenario
+    // also never mutates the binary it spawns from.
+    let daemon_bin_path = shared_readonly_daemon_binary().clone();
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
@@ -810,9 +838,9 @@ fn hot_upgrade_logs_handoff_start_with_pane_count() {
 fn hot_upgrade_succeeds_with_zero_panes() {
     let runtime_dir = unique_runtime_dir("zero-panes");
     // task0004 (NFR3): see the identical rationale in
-    // `hot_upgrade_preserves_shell_pid_and_marker_file` above.
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
-    copy_daemon_binary(&daemon_bin_path);
+    // `hot_upgrade_preserves_shell_pid_and_marker_file` above; this scenario
+    // also never mutates the binary it spawns from.
+    let daemon_bin_path = shared_readonly_daemon_binary().clone();
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
@@ -1313,8 +1341,10 @@ fn hot_upgrade_no_churn_when_binary_unchanged() {
     let runtime_dir = unique_runtime_dir("no-churn");
     std::fs::create_dir_all(&runtime_dir).expect("create isolated runtime dir");
 
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
-    copy_daemon_binary(&daemon_bin_path);
+    // task0004 (NFR3): see the identical rationale in
+    // `hot_upgrade_preserves_shell_pid_and_marker_file` above; this scenario
+    // never mutates the binary it spawns from.
+    let daemon_bin_path = shared_readonly_daemon_binary().clone();
 
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {

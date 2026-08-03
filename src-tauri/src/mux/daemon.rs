@@ -1058,19 +1058,35 @@ fn admit_upgrade_candidate(
 ) -> UpgradeAdmission {
     let candidate_id = capture_id(candidate);
 
-    if let Some((last_id, last_reason)) = last_refused.as_ref() {
-        if candidate_id == Some(*last_id) {
-            return UpgradeAdmission::Blocked(suppression_reason(last_reason));
-        }
-    }
-    *last_refused = None;
-
+    // sid-suppression-affects-explicit-upgrade-and-key-too-coarse: the
+    // repeat-refusal suppression check now runs AFTER `validate`, not
+    // before it, so a candidate that passes validation is always admitted
+    // -- even when its (device, inode) still matches the last-refused
+    // candidate (e.g. an operator fixed a world-writable candidate with
+    // `chmod` without changing the file's identity). Suppression is thus
+    // reserved for repeats of a POST-probe refusal (`record_post_probe_refusal`,
+    // recorded once a candidate has already cleared `validate`), never for
+    // masking a candidate that has since become valid.
+    //
+    // TODO: distinguish explicit `emterm mux upgrade` requests from
+    // automatic trigger-detected ones (e.g. an `origin` field on
+    // `UpgradeSignal`) so suppression -- which exists only to quiet a
+    // repeatedly re-firing automatic trigger -- never applies to an
+    // explicit user command at all; that is a wire-protocol change out of
+    // scope here.
     if let Err(reason) = validate(candidate) {
         if let Some(id) = candidate_id {
             *last_refused = Some((id, reason.clone()));
         }
         return UpgradeAdmission::Blocked(reason);
     }
+
+    if let Some((last_id, last_reason)) = last_refused.as_ref() {
+        if candidate_id == Some(*last_id) {
+            return UpgradeAdmission::Blocked(suppression_reason(last_reason));
+        }
+    }
+    *last_refused = None;
 
     UpgradeAdmission::Admitted { candidate_id }
 }
@@ -1876,7 +1892,7 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
                 ) {
                     UpgradeAdmission::Blocked(reason) => {
                         if reason.starts_with(UPGRADE_SUPPRESSED_MARKER) {
-                            log::debug!(
+                            log::warn!(
                                 "mux upgrade: suppressing repeat refusal for candidate {:?}: {}",
                                 candidate,
                                 reason
