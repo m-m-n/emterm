@@ -1,0 +1,28 @@
+feature: mux-window-sidebar-overlay-hidden
+collected_at: "2026-08-03T22:07:00+09:00"
+session_ids:
+  - a21487d0-5a10-4167-a37c-39ecbb3b1f2a
+signals:
+  review_critical_high:
+    - stable_id: e3e3f5fb2821ca0c
+      category: comprehensive
+      file: src-tauri/src/app.rs
+      title: "新ルールは pristine 起動パスでは no-op — FR2 の真因を潰せていない可能性"
+      resolution: declined
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings:
+    - stable_id: e3e3f5fb2821ca0c
+      category: comprehensive
+      resolution_reason: >-
+        2経路閉鎖性（flagをfalseにできるのはtoggleとdetachガードのみ）から、
+        観測されたバグの前提自体がdetachガード発火を必然的に含むため、
+        pristine起動でのno-opシナリオはバグ観測と論理的に両立しないと判断
+    - stable_id: 9852e371eb5f7af5
+      category: spec
+      resolution_reason: "IMPLEMENTATION.md D2 が挙動を明示的に受容済みと記録しており SPEC の規範文とも矛盾しないと再評価で確認"
+lessons_candidates:
+  - "統合worktreeでcargo build/testを実行する前に、gitignoredなsrc-tauri/assets/fonts/がメインツリーからコピーされていないとbuild.rsのfont_missingチェックで失敗する。implementer・orchestrator双方がこの手順を都度手動で踏んだ。新規worktree作成時に自動化する価値があるかもしれない。"
+  - "同一物理サイト(file+line近傍)に対して異なるperspectiveのreviewerがseverityの異なるfindingを出したケース(comprehensive:high vs spec:medium、同じapp.rs:4010)があった。R3のconfidence加点ルール(2perspective一致で+15)は機能したが、severityが割れる場合の集約はorchestratorの個別判断に委ねられた。"
