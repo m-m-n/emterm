@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-daemon-binary-update-detect
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: de057f9f0340e7fd25ee7c2935531c53c9af7d0e
 last_input_digest: null
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -77,7 +77,21 @@ worker_runs:
     status: needs_user_input
     input_digest: null
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: null
+    output_digest: null
+  - request_id: create-spec-spec-run-0001
+    status: completed
+    input_digest: null
+    output_digest: null
+artifacts:
+  - path: feature-docs/mux-daemon-binary-update-detect/REQUIREMENTS.md
+    sha256: null
+    produced_by: create-spec-spec-run-0001
+  - path: feature-docs/mux-daemon-binary-update-detect/SPEC.md
+    sha256: null
+    produced_by: create-spec-spec-run-0001
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
