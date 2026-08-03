@@ -8,6 +8,11 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 
+// mux-daemon-binary-update-detect task0002 (D5): the binary-update identity
+// check, consumed only by the Unix-only recovery-probe trigger below.
+#[cfg(unix)]
+use crate::mux::identity;
+
 use super::ipc::connection::handle_connection;
 use super::ipc::handlers::{handle_destroy_pane, reevaluate_agent_waiters};
 use super::ipc::protocol::{
@@ -571,20 +576,38 @@ fn wait_for_daemon_exit(sock_path: &Path) -> Result<(), String> {
 
 /// Probe the daemon already occupying `sock_path` and recover automatically
 /// when it is running the adjacent older protocol version (AC-1, task0010
-/// rework — see IMPLEMENTATION.md "Old GUI × new daemon pairing").
+/// rework — see IMPLEMENTATION.md "Old GUI × new daemon pairing"), and, on
+/// Unix, trigger the existing hot-upgrade path when a same-protocol daemon's
+/// binary was replaced (mux-daemon-binary-update-detect task0002, D5).
 ///
 /// Performs a real handshake first; only on a version mismatch does it
 /// retry with [`PREVIOUS_PROTOCOL_VERSION`] (which the legacy daemon
 /// accepts) and send a `Shutdown` there.
 ///
 /// Returns `Ok(LegacyRecovery::Compatible)` when the running daemon already
-/// speaks [`PROTOCOL_VERSION`] (nothing to do), `Ok(LegacyRecovery::Recovered)`
-/// once a legacy daemon has been asked to exit and has released the socket,
-/// or `Err` with a short, human-readable message (never a bincode/decode
-/// error, per AC-3) when recovery could not complete.
+/// speaks [`PROTOCOL_VERSION`] (nothing to do, or a binary-update trigger
+/// ran and concluded), `Ok(LegacyRecovery::Recovered)` once a legacy daemon
+/// has been asked to exit and has released the socket, or `Err` with a
+/// short, human-readable message (never a bincode/decode error, per AC-3)
+/// when recovery could not complete.
 ///
 /// `pub(in crate::mux)` (task0001): widened so `mux::cli::execute_attach`
 /// can run the same probe before deciding whether to respawn.
+#[cfg(unix)]
+pub(in crate::mux) fn recover_from_legacy_daemon(
+    sock_path: &Path,
+) -> Result<LegacyRecovery, String> {
+    recover_from_legacy_daemon_with(sock_path, identity::check, |line: &str| {
+        eprintln!("{line}");
+    })
+}
+
+/// Non-Unix build of [`recover_from_legacy_daemon`]: the binary-update
+/// detection trigger (D5) is Unix-only because the `identity` module it
+/// depends on is Unix-only (IMPLEMENTATION.md Conventions, "every new item
+/// is Unix-only"), so this preserves the pre-task0002 behavior verbatim —
+/// zero behavior change (NFR2).
+#[cfg(not(unix))]
 pub(in crate::mux) fn recover_from_legacy_daemon(
     sock_path: &Path,
 ) -> Result<LegacyRecovery, String> {
@@ -708,6 +731,209 @@ pub(in crate::mux) fn recover_from_legacy_daemon(
         Err(e) => Err(format!(
             "Failed to communicate with the existing mux daemon: {e}"
         )),
+    }
+}
+
+/// Unix, parameterized variant of [`recover_from_legacy_daemon`]
+/// (mux-daemon-binary-update-detect task0002, D5/D6): injects the identity-
+/// verdict provider and a user-message sink so unit tests can drive every
+/// verdict and assert emitted lines without a real identity file or a real
+/// terminal. [`recover_from_legacy_daemon`] is the production entry point,
+/// wired to [`identity::check`] and standard error.
+///
+/// Numbered flow (D5) for the Compatible arm: delegated to
+/// [`trigger_binary_update_if_detected`]. The legacy arm (version mismatch)
+/// is otherwise unchanged from the pre-task0002 behavior, plus the pinned
+/// FR5 warning (D6) at the single point it commits to the shutdown-then-
+/// respawn fallback.
+#[cfg(unix)]
+pub(in crate::mux) fn recover_from_legacy_daemon_with(
+    sock_path: &Path,
+    identity_check: impl Fn(&Path) -> identity::Verdict,
+    mut message: impl FnMut(&str),
+) -> Result<LegacyRecovery, String> {
+    let mut probe = connect_daemon(sock_path)
+        .map_err(|e| format!("Could not connect to the existing mux daemon: {e}"))?;
+    match handshake_with_version(&mut probe, PROTOCOL_VERSION) {
+        Ok(WelcomeMsg::Accepted { .. }) => {
+            trigger_binary_update_if_detected(probe, sock_path, identity_check, message)
+        }
+        Ok(WelcomeMsg::Rejected { reason }) => {
+            drop(probe); // the daemon already closed its side after rejecting
+            let reported = parse_rejected_server_version(&reason)
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            log::warn!(
+                "mux daemon at {:?} reports protocol version {} (this build is {}); \
+                 attempting automatic recovery",
+                sock_path,
+                reported,
+                PROTOCOL_VERSION
+            );
+
+            let mut legacy = connect_daemon(sock_path).map_err(|e| {
+                format!(
+                    "Detected an incompatible mux daemon (protocol version {reported}) \
+                     but it became unreachable while recovering: {e}"
+                )
+            })?;
+            match handshake_with_version(&mut legacy, PREVIOUS_PROTOCOL_VERSION) {
+                Ok(WelcomeMsg::Accepted { .. }) => {
+                    // task0005 Recovery path: a plain shutdown kills every
+                    // pane, so ask the legacy daemon to upgrade itself in
+                    // place first. Only fall back to shutdown-then-respawn
+                    // if it never becomes reachable at the current protocol
+                    // version (AC-6/AC-7). A daemon built before this
+                    // feature silently discards the Upgrade frame (D7), so
+                    // that timeout is the expected route for those, not an
+                    // error.
+                    let upgraded = match send_upgrade(&mut legacy) {
+                        Ok(()) => {
+                            drop(legacy);
+                            wait_for_daemon_reachable_at_current_version(sock_path)
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to send an upgrade request to the protocol \
+                                 version {reported} daemon: {e}; falling back to \
+                                 shutdown"
+                            );
+                            drop(legacy);
+                            false
+                        }
+                    };
+
+                    if upgraded {
+                        log::info!(
+                            "Legacy daemon (protocol version {reported}) upgraded in \
+                             place; a compatible daemon is now reachable",
+                        );
+                        return Ok(LegacyRecovery::Compatible);
+                    }
+                    log::warn!(
+                        "Legacy daemon (protocol version {reported}) did not become \
+                         reachable at the current protocol version after an upgrade \
+                         request; falling back to shutdown"
+                    );
+                    // mux-daemon-binary-update-detect task0002 D6: warn the
+                    // user before the fallback destroys panes. Single point
+                    // both the ignored-upgrade-timeout route and the
+                    // failed-send route converge on (both set
+                    // `upgraded = false` above).
+                    const FR5_WARNING: &str = "The running mux daemon predates in-place upgrade support; panes cannot be preserved and will be recreated.";
+                    message(FR5_WARNING);
+                    log::warn!("{FR5_WARNING}");
+
+                    // Fallback: existing shutdown-then-respawn path. The
+                    // upgrade attempt above already dropped the connection
+                    // (or never sent), so reconnect for the Shutdown.
+                    let mut legacy_for_shutdown = connect_daemon(sock_path).map_err(|e| {
+                        format!(
+                            "Detected an incompatible mux daemon (protocol version \
+                             {reported}) but it became unreachable while falling back \
+                             to shutdown: {e}"
+                        )
+                    })?;
+                    match handshake_with_version(&mut legacy_for_shutdown, PREVIOUS_PROTOCOL_VERSION)
+                    {
+                        Ok(WelcomeMsg::Accepted { .. }) => {
+                            send_shutdown(&mut legacy_for_shutdown).map_err(|e| {
+                                format!(
+                                    "Detected an incompatible mux daemon (protocol version \
+                                     {reported}) but failed to send its shutdown request: {e}"
+                                )
+                            })?;
+                            drop(legacy_for_shutdown);
+                            wait_for_daemon_exit(sock_path)?;
+                            log::info!(
+                                "Recovered mux socket from a protocol version {} daemon; a \
+                                 compatible daemon can now start",
+                                reported
+                            );
+                            Ok(LegacyRecovery::Recovered)
+                        }
+                        Ok(WelcomeMsg::Rejected {
+                            reason: retry_reason,
+                        }) => Err(format!(
+                            "The running mux daemon (protocol version {reported}) could not \
+                             be recovered automatically: {retry_reason}. Stop it manually \
+                             (e.g. `pkill -f 'emterm mux --daemon'`) and retry."
+                        )),
+                        Err(e) => Err(format!(
+                            "Detected an incompatible mux daemon (protocol version \
+                             {reported}) but failed to negotiate a compatible shutdown \
+                             after the upgrade attempt: {e}"
+                        )),
+                    }
+                }
+                Ok(WelcomeMsg::Rejected {
+                    reason: retry_reason,
+                }) => Err(format!(
+                    "The running mux daemon (protocol version {reported}) could not \
+                     be recovered automatically: {retry_reason}. Stop it manually \
+                     (e.g. `pkill -f 'emterm mux --daemon'`) and retry."
+                )),
+                Err(e) => Err(format!(
+                    "Detected an incompatible mux daemon (protocol version {reported}) \
+                     but failed to negotiate a compatible shutdown: {e}"
+                )),
+            }
+        }
+        Err(e) => Err(format!(
+            "Failed to communicate with the existing mux daemon: {e}"
+        )),
+    }
+}
+
+/// D5's Compatible-arm binary-update trigger: consults `identity_check`
+/// against `sock_path` and, only on [`identity::Verdict::Updated`], fires
+/// the existing hot-upgrade path on the already-handshaked `probe`
+/// connection (no second connection, no payload — the client never
+/// transmits a path, NFR3). Always resolves to `Ok(LegacyRecovery::Compatible)`:
+/// a detection or upgrade failure here never becomes an attach / mux-start
+/// failure (D5's "fires at most once, never converts a failure").
+#[cfg(unix)]
+fn trigger_binary_update_if_detected<S: std::io::Read + std::io::Write>(
+    mut probe: S,
+    sock_path: &Path,
+    identity_check: impl Fn(&Path) -> identity::Verdict,
+    mut message: impl FnMut(&str),
+) -> Result<LegacyRecovery, String> {
+    match identity_check(sock_path) {
+        identity::Verdict::Unchanged | identity::Verdict::Undecidable => {
+            Ok(LegacyRecovery::Compatible)
+        }
+        identity::Verdict::Updated(_clean_target) => {
+            if let Err(e) = send_upgrade(&mut probe) {
+                log::warn!("Failed to send an automatic binary-update upgrade request: {e}");
+                return Ok(LegacyRecovery::Compatible);
+            }
+            let response = read_upgrade_response(&mut probe);
+            drop(probe);
+            match response {
+                UpgradeResponse::Rejected(reason) => {
+                    let line = format!(
+                        "Warning: mux daemon declined the automatic in-place upgrade after detecting a binary update: {reason}"
+                    );
+                    message(&line);
+                    log::warn!("{line}");
+                    Ok(LegacyRecovery::Compatible)
+                }
+                UpgradeResponse::ProceededOrUnknown => {
+                    if wait_for_daemon_reachable_at_current_version(sock_path) {
+                        const NOTICE: &str =
+                            "Mux daemon upgraded in place to the newly installed binary";
+                        message(NOTICE);
+                        log::warn!("{NOTICE}");
+                    } else {
+                        const TIMEOUT_WARNING: &str = "Warning: timed out waiting for the mux daemon to become reachable after an automatic binary-update upgrade; continuing with the existing daemon";
+                        message(TIMEOUT_WARNING);
+                        log::warn!("{TIMEOUT_WARNING}");
+                    }
+                    Ok(LegacyRecovery::Compatible)
+                }
+            }
+        }
     }
 }
 
@@ -2217,6 +2443,334 @@ mod tests {
             other => panic!("expected Ok(Compatible), got {other:?}"),
         }
         assert!(sock_path.exists(), "a compatible daemon is left untouched");
+    }
+
+    // ---- mux-daemon-binary-update-detect task0002: Compatible-arm
+    // binary-update trigger (D5, AC-1..AC-5) ----
+    //
+    // These tests call the parameterized `recover_from_legacy_daemon_with`
+    // directly, injecting the identity verdict and a message-sink closure,
+    // per the task plan's Testability note (the established
+    // `resolve_attach_socket_with` / `execute_upgrade_at` injection
+    // pattern) -- production `identity::check` always reports Undecidable
+    // (this task's stand-in), so these verdicts cannot be driven through
+    // real identity files.
+
+    /// Configures how [`spawn_fake_current_daemon`] reacts to an `Upgrade`
+    /// frame arriving after its (current-protocol) handshake.
+    #[cfg(unix)]
+    enum UpgradeBehavior {
+        /// Reply with an `Error` frame carrying this reason (AC-4).
+        Reject(String),
+        /// Drop the connection without replying, and never accept another
+        /// one -- the reachability wait must time out (AC-5).
+        Silent,
+        /// Drop the connection without replying, then keep accepting and
+        /// answering Hello at [`PROTOCOL_VERSION`] as if the replacement had
+        /// completed, so the reachability wait succeeds (AC-1).
+        BecomeUpgraded,
+    }
+
+    /// Write a bare `Error` control frame carrying `message` (mirrors
+    /// [`write_welcome`]'s shape for the fake-daemon fixtures).
+    #[cfg(unix)]
+    fn write_error<S: std::io::Write>(stream: &mut S, message: &str) {
+        let msg = MuxMessage::control(
+            MessageType::Error,
+            0,
+            &ErrorMsg {
+                message: message.to_string(),
+            },
+        );
+        let body = msg.to_frame_body();
+        stream
+            .write_all(&(body.len() as u32).to_be_bytes())
+            .expect("write frame length");
+        stream.write_all(&body).expect("write frame body");
+        stream.flush().expect("flush");
+    }
+
+    /// Stand-in CURRENT-protocol ([`PROTOCOL_VERSION`]) daemon for the
+    /// binary-update trigger tests (AC-1..AC-5): accepts the
+    /// [`PROTOCOL_VERSION`] Hello unconditionally, and when `behavior` is
+    /// `Some`, expects an `Upgrade` frame after the handshake and reacts per
+    /// [`UpgradeBehavior`]; when `None`, no `Upgrade` is expected and the
+    /// thread exits after the first handshake (AC-2/AC-3, where the trigger
+    /// must not fire at all). Returns the join handle plus a counter of how
+    /// many `Upgrade` frames were observed, so tests can assert "exactly
+    /// one" (AC-1) or "none" (AC-2/AC-3).
+    #[cfg(unix)]
+    fn spawn_fake_current_daemon(
+        sock_path: std::path::PathBuf,
+        behavior: Option<UpgradeBehavior>,
+    ) -> (
+        std::thread::JoinHandle<()>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::os::unix::net::UnixListener;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let listener =
+            UnixListener::bind(&sock_path).expect("bind fake current-protocol daemon socket");
+        let upgrade_frames_seen = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&upgrade_frames_seen);
+        let upgraded = Arc::new(AtomicBool::new(false));
+
+        let handle = std::thread::spawn(move || {
+            loop {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let hello_frame = read_frame(&mut stream);
+                assert_eq!(hello_frame.msg_type, MessageType::Hello);
+                let hello: HelloMsg = hello_frame.decode_payload().expect("Hello payload");
+                assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
+
+                let accept = WelcomeMsg::Accepted {
+                    server_version: PROTOCOL_VERSION,
+                    sessions: Vec::<crate::mux::ipc::protocol::SessionInfo>::new(),
+                };
+                write_welcome(&mut stream, &accept);
+
+                if upgraded.load(Ordering::SeqCst) {
+                    // Post-"upgrade" connection: prove reachability and stop.
+                    break;
+                }
+
+                let Some(behavior) = behavior.as_ref() else {
+                    // No Upgrade expected -- one round trip and done.
+                    break;
+                };
+
+                let frame = read_frame(&mut stream);
+                assert_eq!(
+                    frame.msg_type,
+                    MessageType::Upgrade,
+                    "expected an Upgrade frame after the handshake"
+                );
+                counter.fetch_add(1, Ordering::SeqCst);
+
+                match behavior {
+                    UpgradeBehavior::Reject(reason) => {
+                        write_error(&mut stream, reason);
+                        break;
+                    }
+                    UpgradeBehavior::Silent => {
+                        drop(stream);
+                        break;
+                    }
+                    UpgradeBehavior::BecomeUpgraded => {
+                        upgraded.store(true, Ordering::SeqCst);
+                        drop(stream);
+                    }
+                }
+            }
+        });
+        (handle, upgrade_frames_seen)
+    }
+
+    /// AC-1: against a current-protocol fake daemon, with an injected
+    /// `Updated` verdict, the probe sends exactly one `Upgrade` frame and --
+    /// once the daemon is reachable again -- emits exactly the pinned
+    /// notice line once, and returns success.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_fires_upgrade_and_reports_notice_when_reachable_again() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("update-detect-fire.sock");
+        let (server, upgrade_frames_seen) =
+            spawn_fake_current_daemon(sock_path.clone(), Some(UpgradeBehavior::BecomeUpgraded));
+
+        let mut messages: Vec<String> = Vec::new();
+        let result = recover_from_legacy_daemon_with(
+            &sock_path,
+            |_sock_path: &Path| identity::Verdict::Updated(PathBuf::from("/fake/new-emterm")),
+            |line: &str| messages.push(line.to_string()),
+        );
+
+        server.join().expect("fake current-protocol daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert_eq!(
+            upgrade_frames_seen.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "expected exactly one Upgrade frame"
+        );
+        assert_eq!(
+            messages,
+            vec!["Mux daemon upgraded in place to the newly installed binary".to_string()],
+            "expected exactly the pinned notice line, emitted once"
+        );
+    }
+
+    /// AC-2: with an injected `Unchanged` verdict, no `Upgrade` frame is
+    /// sent, no notice is emitted, and the daemon is left untouched -- byte-
+    /// identical to the pre-feature Compatible path.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_unchanged_verdict_does_not_fire() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("update-detect-unchanged.sock");
+        let (server, upgrade_frames_seen) = spawn_fake_current_daemon(sock_path.clone(), None);
+
+        let mut messages: Vec<String> = Vec::new();
+        let result = recover_from_legacy_daemon_with(
+            &sock_path,
+            |_sock_path: &Path| identity::Verdict::Unchanged,
+            |line: &str| messages.push(line.to_string()),
+        );
+
+        server.join().expect("fake current-protocol daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert_eq!(
+            upgrade_frames_seen.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no Upgrade frame must be sent for an Unchanged verdict"
+        );
+        assert!(messages.is_empty(), "no message expected: {messages:?}");
+        assert!(sock_path.exists(), "a compatible daemon is left untouched");
+    }
+
+    /// AC-3: an injected `Undecidable` verdict behaves exactly like AC-2's
+    /// `Unchanged` verdict -- no fire, no notice.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_undecidable_verdict_does_not_fire() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("update-detect-undecidable.sock");
+        let (server, upgrade_frames_seen) = spawn_fake_current_daemon(sock_path.clone(), None);
+
+        let mut messages: Vec<String> = Vec::new();
+        let result = recover_from_legacy_daemon_with(
+            &sock_path,
+            |_sock_path: &Path| identity::Verdict::Undecidable,
+            |line: &str| messages.push(line.to_string()),
+        );
+
+        server.join().expect("fake current-protocol daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert_eq!(
+            upgrade_frames_seen.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no Upgrade frame must be sent for an Undecidable verdict"
+        );
+        assert!(messages.is_empty(), "no message expected: {messages:?}");
+        assert!(sock_path.exists(), "a compatible daemon is left untouched");
+    }
+
+    /// AC-4: when the daemon replies with a rejection to the fired
+    /// `Upgrade`, the emitted warning contains the daemon's reason, and the
+    /// probe still returns success.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_upgrade_rejected_warns_and_still_succeeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("update-detect-rejected.sock");
+        let (server, upgrade_frames_seen) = spawn_fake_current_daemon(
+            sock_path.clone(),
+            Some(UpgradeBehavior::Reject("no recorded identity".to_string())),
+        );
+
+        let mut messages: Vec<String> = Vec::new();
+        let result = recover_from_legacy_daemon_with(
+            &sock_path,
+            |_sock_path: &Path| identity::Verdict::Updated(PathBuf::from("/fake/new-emterm")),
+            |line: &str| messages.push(line.to_string()),
+        );
+
+        server.join().expect("fake current-protocol daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert_eq!(
+            upgrade_frames_seen.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(messages.len(), 1, "expected exactly one message: {messages:?}");
+        assert!(
+            messages[0].contains("no recorded identity"),
+            "expected the warning to contain the daemon's reason: {:?}",
+            messages[0]
+        );
+    }
+
+    /// AC-5: when the fired `Upgrade` is followed by a reachability
+    /// timeout, a warning is emitted and the probe still returns success.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_upgrade_timeout_warns_and_still_succeeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("update-detect-timeout.sock");
+        let (server, upgrade_frames_seen) =
+            spawn_fake_current_daemon(sock_path.clone(), Some(UpgradeBehavior::Silent));
+
+        let mut messages: Vec<String> = Vec::new();
+        let result = recover_from_legacy_daemon_with(
+            &sock_path,
+            |_sock_path: &Path| identity::Verdict::Updated(PathBuf::from("/fake/new-emterm")),
+            |line: &str| messages.push(line.to_string()),
+        );
+
+        server.join().expect("fake current-protocol daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert_eq!(
+            upgrade_frames_seen.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(messages.len(), 1, "expected exactly one message: {messages:?}");
+        assert!(
+            messages[0].to_lowercase().contains("timed out") || messages[0].to_lowercase().contains("timeout"),
+            "expected a timeout warning: {:?}",
+            messages[0]
+        );
+    }
+
+    /// AC-7 (partial, unit-testable slice): the production entry point
+    /// [`recover_from_legacy_daemon`] wires the real [`identity::check`]
+    /// (this task's stand-in, always `Undecidable`), so against a current-
+    /// protocol daemon it behaves exactly like the AC-2/AC-3 no-fire path
+    /// with zero test-only wiring -- proving the production call site
+    /// actually consumes the pinned check API rather than leaving it
+    /// unwired.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_production_entry_point_does_not_fire_against_the_stand_in() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("update-detect-production-entry.sock");
+        let (server, upgrade_frames_seen) = spawn_fake_current_daemon(sock_path.clone(), None);
+
+        let result = recover_from_legacy_daemon(&sock_path);
+
+        server.join().expect("fake current-protocol daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert_eq!(
+            upgrade_frames_seen.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the stand-in identity::check always reports Undecidable, so the \
+             production entry point must not fire"
+        );
     }
 
     /// AC-2: `emterm mux kill`'s underlying helper succeeds against a v1

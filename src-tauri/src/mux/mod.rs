@@ -31,6 +31,8 @@ pub mod dialog;
 // comparison verdict used to detect a binary replacement. Unix only,
 // matching `upgrade` / `inherited_pty` — device/inode identity and the
 // hardening primitives it depends on have no Windows equivalent (NFR2).
+// (task0002's isolated-worktree stand-in for this module is superseded by
+// this real implementation at integration, per IMPLEMENTATION.md D2.)
 #[cfg(unix)]
 pub mod identity;
 // task0002 (mux daemon hot-upgrade): raw-descriptor → `MasterPty` adapter
