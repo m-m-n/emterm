@@ -1,0 +1,136 @@
+schema_version: 1
+feature: mux-status-bar-removal
+created: 2026-08-04
+base_branch: main
+parent_branch: em-workflow/mux-status-bar-removal/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      feature_gate_check_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_integration_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test mux_hot_upgrade -- --test-threads=1"
+    typescript:
+      language: typescript
+      test_command: "bun test"
+      typecheck_command: "bun run typecheck"
+      build_command: "bun run build:viewer && bun run build:settings"
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: c7d7fb719ab514879f3d314dfc41268c230772f4
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Pure removal/cleanup of an existing UI surface; no new UI, no visual or layout design decisions. The replacement UI (mux sidebar) already exists and is unchanged."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  rounds_completed: 0
+  perspectives: []
+  residual_critical_high: 0
+  needs_rework: false
+  status: pending
+
+requirements:
+  FR1:
+    title: "Remove GUI-side mux status bar state and rendering path"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS2]
+  FR2:
+    title: "Remove the daemon-side mux status bar engine"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "Retire the StatusUpdate / RequestStatusUpdate protocol messages"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "Remove the mux statusbar settings schema on all mirrors"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3, TS6]
+  FR5:
+    title: "Terminal grid height identical with and without mux"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS4, TS7]
+  FR6:
+    title: "Preserve the general (non-mux) status bar"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS4]
+  FR7:
+    title: "Preserve per-pane cwd tracking (relocate detect_osc7_cwd)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5]
+  FR8:
+    title: "Tolerate stale peers and stale settings"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2, TS3]
+  NFR1:
+    title: "CLI-only build remains green"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Full test suites remain green"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "No behavior change to tab bar / sidebar / agent status"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
