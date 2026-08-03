@@ -54,8 +54,9 @@ tasks:
     domains: [data-persistence, external-io, input-handling]
     complexity: high
     requirements: [FR1, FR3, FR4, FR6, FR7, NFR1, NFR2, NFR3]
-    status: pending
+    status: in_progress
     notes: null
+    branch: em-workflow/mux-daemon-binary-update-detect/task0001
   task0002:
     title: "Update-detection trigger in the shared recovery probe (client side)"
     plan: tasks/task0002.md
@@ -68,8 +69,9 @@ tasks:
     domains: [external-io]
     complexity: high
     requirements: [FR1, FR2, FR3, FR5, FR6, FR7, NFR1, NFR2, NFR3]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/mux-daemon-binary-update-detect/task0002
   task0003:
     title: "Integration tests for binary-update detection (mux_hot_upgrade.rs extension)"
     plan: tasks/task0003.md
@@ -79,8 +81,9 @@ tasks:
     domains: [external-io]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR7]
-    status: pending
+    status: merged
     notes: null
+    branch: em-workflow/mux-daemon-binary-update-detect/task0003
 
 review:
   status: pending

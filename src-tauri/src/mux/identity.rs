@@ -34,7 +34,7 @@ const IDENTITY_FILE_NAME: &str = "mux-identity.txt";
 
 /// Format-version marker, checked byte-for-byte at the start of the file.
 /// Any content that doesn't begin with this exact magic is malformed
-/// (folds into [`CheckVerdict::Undecidable`] at the [`check`] call site).
+/// (folds into [`Verdict::Undecidable`] at the [`check`] call site).
 const IDENTITY_MAGIC: &[u8] = b"MUXID1\n";
 
 /// Size, in bytes, of the fixed-width header following the magic marker:
@@ -58,13 +58,13 @@ pub struct RecordedIdentity {
 /// failure or a non-not-found stat error — both of those always fold into
 /// `Undecidable` (FR7: an undecidable comparison never fires an upgrade).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CheckVerdict {
+pub enum Verdict {
     /// The recorded `(device, inode)` equals the current stat of the
     /// recorded path.
     Unchanged,
     /// The recorded path's `(device, inode)` no longer matches, or the
     /// path no longer exists. Carries the recorded clean executable path.
-    Updated { path: PathBuf },
+    Updated(PathBuf),
     /// The identity file is missing, unreadable, malformed, or truncated;
     /// or stat-ing the recorded path failed with something other than
     /// "not found".
@@ -108,7 +108,7 @@ fn encode(identity: &RecordedIdentity) -> Vec<u8> {
 }
 
 /// Decode failure detail. Kept private -- [`check`]'s callers only ever see
-/// [`CheckVerdict::Undecidable`]; this is structured for the unit test
+/// [`Verdict::Undecidable`]; this is structured for the unit test
 /// table proving each rejection reason is actually reached.
 #[derive(Debug, PartialEq, Eq)]
 enum DecodeError {
@@ -298,7 +298,7 @@ pub fn record_or_invalidate(
 /// Read and decode the identity file at `socket_path`'s sibling location.
 /// Any I/O failure or decode failure collapses into a single opaque
 /// "unusable" outcome -- [`check`] maps that straight to
-/// [`CheckVerdict::Undecidable`], never distinguishing the reason (Design:
+/// [`Verdict::Undecidable`], never distinguishing the reason (Design:
 /// "identity file missing / unreadable / malformed / truncated" are all one
 /// verdict).
 fn read_identity_file(socket_path: &Path) -> Result<RecordedIdentity, ()> {
@@ -316,25 +316,21 @@ fn read_identity_file(socket_path: &Path) -> Result<RecordedIdentity, ()> {
 /// `Updated` -- NFR2-style caution, mirroring `self_exec::is_missing`'s own
 /// "any other stat error falls back" policy, except here the safe fallback
 /// is `Undecidable` rather than `false`).
-fn compare(recorded: &RecordedIdentity, current: Result<Option<(u64, u64)>, ()>) -> CheckVerdict {
+fn compare(recorded: &RecordedIdentity, current: Result<Option<(u64, u64)>, ()>) -> Verdict {
     match current {
-        Ok(Some(dev_ino)) if dev_ino == (recorded.dev, recorded.ino) => CheckVerdict::Unchanged,
-        Ok(Some(_)) => CheckVerdict::Updated {
-            path: recorded.path.clone(),
-        },
-        Ok(None) => CheckVerdict::Updated {
-            path: recorded.path.clone(),
-        },
-        Err(()) => CheckVerdict::Undecidable,
+        Ok(Some(dev_ino)) if dev_ino == (recorded.dev, recorded.ino) => Verdict::Unchanged,
+        Ok(Some(_)) => Verdict::Updated(recorded.path.clone()),
+        Ok(None) => Verdict::Updated(recorded.path.clone()),
+        Err(()) => Verdict::Undecidable,
     }
 }
 
 /// Client-side check (Design "Comparison predicate"; NFR1 cost bound: at
 /// most one small-file read plus one stat of the recorded path, nothing
 /// else).
-pub fn check(socket_path: &Path) -> CheckVerdict {
+pub fn check(socket_path: &Path) -> Verdict {
     let Ok(recorded) = read_identity_file(socket_path) else {
-        return CheckVerdict::Undecidable;
+        return Verdict::Undecidable;
     };
     let current = match std::fs::metadata(&recorded.path) {
         Ok(meta) => Ok(Some((meta.dev(), meta.ino()))),
@@ -392,7 +388,7 @@ mod tests {
 
         assert_eq!(
             check(&socket_path),
-            CheckVerdict::Unchanged,
+            Verdict::Unchanged,
             "an untouched recorded path must round-trip as Unchanged"
         );
     }
@@ -453,7 +449,7 @@ mod tests {
     #[test]
     fn compare_reports_unchanged_when_dev_ino_match() {
         let r = recorded(7, 42);
-        assert_eq!(compare(&r, Ok(Some((7, 42)))), CheckVerdict::Unchanged);
+        assert_eq!(compare(&r, Ok(Some((7, 42)))), Verdict::Unchanged);
     }
 
     #[test]
@@ -461,11 +457,11 @@ mod tests {
         let r = recorded(7, 42);
         assert_eq!(
             compare(&r, Ok(Some((7, 99)))),
-            CheckVerdict::Updated { path: r.path.clone() }
+            Verdict::Updated(r.path.clone())
         );
         assert_eq!(
             compare(&r, Ok(Some((8, 42)))),
-            CheckVerdict::Updated { path: r.path.clone() }
+            Verdict::Updated(r.path.clone())
         );
     }
 
@@ -474,14 +470,14 @@ mod tests {
         let r = recorded(7, 42);
         assert_eq!(
             compare(&r, Ok(None)),
-            CheckVerdict::Updated { path: r.path.clone() }
+            Verdict::Updated(r.path.clone())
         );
     }
 
     #[test]
     fn compare_reports_undecidable_on_any_other_stat_error() {
         let r = recorded(7, 42);
-        assert_eq!(compare(&r, Err(())), CheckVerdict::Undecidable);
+        assert_eq!(compare(&r, Err(())), Verdict::Undecidable);
     }
 
     // ── AC-4: missing / truncated / malformed identity files all yield
@@ -491,7 +487,7 @@ mod tests {
     fn check_reports_undecidable_when_identity_file_is_missing() {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket_path = dir.path().join("mux-default.sock");
-        assert_eq!(check(&socket_path), CheckVerdict::Undecidable);
+        assert_eq!(check(&socket_path), Verdict::Undecidable);
     }
 
     #[test]
@@ -501,7 +497,7 @@ mod tests {
         // Magic marker present, but the fixed header is cut short.
         std::fs::write(identity_file_path(&socket_path), b"MUXID1\n\x01\x02\x03")
             .expect("write truncated identity file");
-        assert_eq!(check(&socket_path), CheckVerdict::Undecidable);
+        assert_eq!(check(&socket_path), Verdict::Undecidable);
     }
 
     #[test]
@@ -517,7 +513,7 @@ mod tests {
         bytes[0] = b'X';
         std::fs::write(identity_file_path(&socket_path), bytes)
             .expect("write garbage identity file");
-        assert_eq!(check(&socket_path), CheckVerdict::Undecidable);
+        assert_eq!(check(&socket_path), Verdict::Undecidable);
     }
 
     #[test]
@@ -531,7 +527,7 @@ mod tests {
             .expect("write identity file with trailing garbage");
         assert_eq!(
             check(&socket_path),
-            CheckVerdict::Undecidable,
+            Verdict::Undecidable,
             "trailing garbage must never be parsed as an Updated verdict"
         );
     }
