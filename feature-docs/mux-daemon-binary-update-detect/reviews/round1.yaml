@@ -1,0 +1,272 @@
+round: 1
+executed_at: "2026-08-03T17:03:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: bda16c60713e9d9dcc9633b874a4b76a92694d92
+  head_commit: 475060e8b284af092172288929109dd0d4ebd6da
+  changed_files:
+    - src-tauri/src/mux/cli.rs
+    - src-tauri/src/mux/daemon.rs
+    - src-tauri/src/mux/identity.rs
+    - src-tauri/src/mux/mod.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/tests/mux_hot_upgrade.rs
+    - test-docs/mux-daemon-binary-update-detect/task0001.tests.yaml
+    - test-docs/mux-daemon-binary-update-detect/task0002.tests.yaml
+    - test-docs/mux-daemon-binary-update-detect/task0003.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+
+findings:
+  - stable_id: sid-identity-write-before-socket-ownership
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 1487
+    title: "A non-owning daemon process could overwrite the active daemon's identity file before failing to bind"
+    description: "record_or_invalidate was called before startup() acquired the listener; a losing contender in a bind race could overwrite the active daemon's identity sidecar."
+    suggestion: "Move record_or_invalidate to run after startup() successfully returns a listener."
+    sources: [claude:comprehensive, claude:spec, claude:security, codex:architecture]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: "loop 1: record_or_invalidate moved to after startup() succeeds. Re-confirmed resolved by 4 independent reviewer passes across rounds 2 and 3 (comprehensive, spec, security claude; architecture codex)."
+
+  - stable_id: sid-blocking-probe-in-event-loop
+    severity: high
+    category: performance
+    file: src-tauri/src/mux/daemon.rs
+    line: 907
+    title: "Candidate-handoff probe ran a synchronous, untimed subprocess call directly inside the daemon's async event loop"
+    description: "probe_candidate_handoff_range used std::process::Command::output() with no timeout, now reachable on the automatic-upgrade hot path; a hung candidate binary could stall the entire daemon."
+    suggestion: "Wrap the probe in spawn_blocking + a bounded timeout."
+    sources: [claude:performance]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: "loop 1: wrapped in tokio::task::spawn_blocking + tokio::time::timeout (UPGRADE_PROBE_TIMEOUT). Confirmed bounded-wait behavior by performance:claude round 2/3."
+
+  - stable_id: sid-reachability-polling-no-deadline
+    severity: high
+    category: performance
+    file: src-tauri/src/mux/daemon.rs
+    line: 544
+    title: "Reachability polling after an upgrade attempt lacked an overall wall-clock deadline"
+    description: "wait_for_daemon_reachable_at_current_version capped attempts at 40 but each attempt could consume ~5s under handshake_with_version's read timeout, allowing total elapsed time to reach ~200s."
+    suggestion: "Add an overall Instant-based deadline in addition to the attempt cap."
+    sources: [codex:performance]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: "loop 2: added UPGRADE_REACHABLE_POLL_DEADLINE (20s) checked each iteration. Note: round-3 comprehensive:claude flagged this 20s budget as itself shorter than the daemon's own 30s UPGRADE_PREPARE_TIMEOUT contract -- tracked separately below (sid-reachability-deadline-budget-mismatch)."
+
+  - stable_id: sid-probe-timeout-leaks-subprocess
+    severity: high
+    category: performance
+    file: src-tauri/src/mux/daemon.rs
+    line: 1221
+    title: "Probe timeout detached rather than terminated the hung subprocess/blocking task"
+    description: "tokio::time::timeout only stops awaiting the JoinHandle; the underlying spawn_blocking task and the candidate subprocess it started were never cancelled or killed, leaking a thread + process per hung attempt."
+    suggestion: "Spawn the child explicitly, poll with a deadline, and kill+wait it on timeout."
+    sources: [claude:performance, codex:performance]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: "loop 2: rewrote probe_candidate_handoff_range to Command::spawn + poll/kill-on-deadline. Round-3 re-review confirmed the child is genuinely killed and reaped on timeout, but surfaced 2 residual regressions from this same rewrite (tracked separately below: sid-probe-stdout-pipe-deadlock, sid-probe-timeout-interface-split, and codex found an additional kill-error/try_wait-error reap gap folded into sid-probe-stdout-pipe-deadlock)."
+
+  - stable_id: sid-probe-client-timeout-mismatch-false-success
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/daemon.rs
+    line: 1228
+    title: "Loop 2's probe timeout (10s) exceeded the client's upgrade-response read timeout (5s), letting a refused/hung upgrade be misreported as a successful in-place replacement"
+    description: "If the probe took longer than the client's 5s read timeout, the client's read_upgrade_response fell into ProceededOrUnknown before the daemon's actual refusal arrived, and the subsequent reachability poll then succeeded trivially against the SAME unmodified daemon -- printing a false 'upgraded' notice. This broke an existing invariant documented elsewhere in the codebase (cli.rs's AC-10 comment) that a same-daemon reachability success must not be read as an upgrade success."
+    suggestion: "Reduce UPGRADE_PROBE_TIMEOUT below the client's 5s read timeout so a refusal is always observed in time."
+    sources: [claude:comprehensive]
+    confidence: 70
+    resolution: fixed
+    resolution_reason: "loop 3: UPGRADE_PROBE_TIMEOUT reduced from 10s to 3s with a documenting comment. This substantially reduces (but per spec:claude/spec:codex round 3, does not structurally eliminate) the false-success window described in sid-notification-without-proof-of-replacement below -- that finding is deferred to rework since it requires positive post-upgrade evidence (e.g. an identity re-check), not just a timing adjustment."
+
+  - stable_id: sid-upgrade-candidate-exec-without-validation
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/daemon.rs
+    line: 1691
+    title: "Upgrade candidate binary is exec'd without ownership/writability validation, violating SPEC NFR3"
+    description: "The daemon resolves the upgrade candidate from its own recorded identity (a genuine improvement over client-supplied input) but never validates that the CURRENT file at that path is owner-controlled, non-symlinked, and not group/world-writable before executing it (first via the handoff-schema probe, then via the final execve). SPEC NFR3 requires 'a path writable by others ... is never exec'd unverified.' Recorded-path resolution is necessarily stale relative to exec time (that staleness is exactly what this feature detects and reacts to), so an attacker who can write to that path in a shared/misconfigured install location could have their binary exec'd with daemon privileges."
+    suggestion: "Before the handoff probe and the final exec, validate the candidate as a regular, non-symlink, owner-controlled, non-group/world-writable file (and its parent directory), refusing the upgrade through the existing refusal path on failure."
+    sources: [codex:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "category:spec is excluded from this phase's mechanical auto-fix loop by design (spec-level changes require judgment, not mechanical patching). Confirmed unaddressed and unchanged across rounds 1-3 by spec:codex. Routed to rework via the review.residual-critical-high batch path."
+
+  - stable_id: sid-notification-without-proof-of-replacement
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/daemon.rs
+    line: 934
+    title: "The 'daemon upgraded' notice is emitted on reachability alone, without positive proof the daemon was actually replaced (SPEC FR2/AC-6/AC-8)"
+    description: "wait_for_daemon_reachable_at_current_version succeeding only proves SOME current-protocol daemon answered -- it cannot distinguish a genuinely-replaced new image from the original, unmodified daemon that refused or ignored the upgrade and kept serving. Loop 3's probe-timeout reduction (10s -> 3s, see sid-probe-client-timeout-mismatch-false-success) substantially narrows the race window that made this likely, but does not structurally close it: the SPEC requires proof of replacement, not merely a reduced-probability absence of false positives."
+    suggestion: "After reconnecting, re-run identity::check (or equivalent) and require Unchanged against the newly-recorded on-disk identity before emitting the success notice; treat continued Updated/Undecidable as refusal/unknown, never success."
+    sources: [claude:spec, codex:spec, codex:architecture]
+    confidence: 90
+    resolution: deferred
+    resolution_reason: "category:spec is excluded from this phase's mechanical auto-fix loop. Severity confirmed high and unchanged across rounds 2-3 by both claude:spec and codex:spec even after loop 3's timeout fix (which addresses a contributing timing factor but not the underlying missing-positive-evidence design gap). Routed to rework."
+
+  - stable_id: sid-failed-upgrade-not-suppressed
+    severity: high
+    category: performance
+    file: src-tauri/src/mux/daemon.rs
+    line: 917
+    title: "A rejected/timed-out automatic upgrade is never suppressed, so every subsequent client launch repeats the same costly attempt"
+    description: "Identity stays Updated after a failed automatic-upgrade attempt (the identity file only changes at daemon start), so every later emterm mux / mux attach / mux script repeats the full Upgrade round-trip, a daemon-side candidate probe (bounded but still real cost), and a client-side reachability poll (up to ~20s), against a candidate that is structurally guaranteed to fail again (e.g. an incompatible handoff schema, or no recorded identity to serve as an exec target)."
+    suggestion: "Add single-flight/backoff suppression keyed by the candidate's (device, inode): e.g. daemon-side state recording a recently-rejected candidate identity, or a client-side 'already attempted' marker, cleared automatically when the candidate identity changes or an upgrade succeeds."
+    sources: [claude:comprehensive, claude:performance, codex:performance]
+    confidence: 90
+    resolution: deferred
+    resolution_reason: "Escalated to high by codex:performance in round 3 (previously medium in rounds 1-2). Deliberately NOT attempted as a loop-3 mechanical auto-fix: a correct fix requires new persistent/shared state (single-flight + backoff) whose design (cache key, TTL, invalidation, concurrency) is better scoped as a proper implementation task with its own tests than a single-file review-editor patch in the final allowed auto-fix loop. Routed to rework alongside the two spec findings above."
+
+  - stable_id: sid-concurrent-clients-redundant-upgrade
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/daemon.rs
+    line: 913
+    title: "Concurrently-launched clients can each independently observe Updated and each send an Upgrade, causing redundant work and duplicate notifications"
+    description: "No mutual exclusion exists between identity_check and send_upgrade; refined across rounds 2-3 from an initial 'double execve' concern to the confirmed actual impact: redundant probe/snapshot work and one notification line per concurrent client, not a second execve (the new daemon re-records its identity before accepting, and the accept-loop break on pending_upgrade limits duplicate execve)."
+    suggestion: "Serialize firing via an O_EXCL/flock lock file keyed by the target identity, or have the daemon no-op a duplicate Upgrade request for an already-in-flight or already-completed generation."
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "Medium severity; not required to unblock review completion. Left for a future round or rework-planner discretion."
+
+  - stable_id: sid-legacy-recovery-cfg-duplication
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 610
+    title: "Legacy-recovery state machine duplicated across the unix/non-unix cfg split; Windows is missing the FR5 pane-destruction warning"
+    description: "~120-125 lines of protocol negotiation, upgrade-attempt, and shutdown-fallback logic are duplicated verbatim between the #[cfg(unix)] and #[cfg(not(unix))] implementations. This has already drifted once: the FR5 warning (D6) was added only to the Unix side, so Windows silently destroys panes with no warning."
+    suggestion: "Extract one platform-neutral state machine parameterized by the Unix-only identity-check hook and message sink; keep cfg wrappers limited to those hooks."
+    sources: [claude:architecture, claude:comprehensive, codex:architecture]
+    confidence: 95
+    resolution: deferred
+    resolution_reason: "Medium severity, confirmed unchanged across all 3 rounds. Cross-validated by both models across 2 perspectives. Left for rework-planner discretion or a follow-up task."
+
+  - stable_id: sid-identity-read-hardening-asymmetry
+    severity: medium
+    category: security
+    file: src-tauri/src/mux/identity.rs
+    line: 306
+    title: "Identity-file read path lacks O_NOFOLLOW and a size cap, asymmetric with the write path's hardening"
+    description: "read_identity_file uses std::fs::read, following symlinks and allocating without bound; the write path (create_identity_temp_file, refuse_if_symlink) is fully hardened. A symlink placed at the identity-file path (same-UID only, given the 0o700 socket directory) to a device like /dev/zero can hang or OOM every client launch that probes this path."
+    suggestion: "Open with O_NOFOLLOW and Read::take(a small format-bound max), folding any failure into Verdict::Undecidable exactly as today."
+    sources: [claude:security, claude:performance, claude:spec, codex:performance, codex:spec]
+    confidence: 95
+    resolution: deferred
+    resolution_reason: "Medium severity, the single most cross-validated finding of the round (5 independent sources across 3 perspectives x 2 models), confirmed unchanged across all 3 rounds since neither auto-fix loop touched identity.rs. Left for rework-planner discretion or a follow-up task."
+
+  - stable_id: sid-stale-standin-test-contract
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 2489
+    title: "Stale 'stand-in' contract comments and misleadingly-named test left over from a superseded interim implementation"
+    description: "task0002 built against an isolated stand-in mux::identity (always Undecidable) that was superseded by task0001's real module at merge; the test file's comments, a test name, and an assert message still assert the stand-in's now-false premise, obscuring the actual (correct) reason the referenced test passes."
+    suggestion: "Rewrite the comments/test name/assert message to state the real reason (no identity file recorded in the test tempdir -> Undecidable), and consider adding a positive-wiring test now that the real module exists."
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "Medium severity, documentation/test-clarity issue with no runtime impact. Left for rework-planner discretion or a follow-up task."
+
+  - stable_id: sid-decoded-path-not-validated
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/identity.rs
+    line: 144
+    title: "decode() accepts an empty or relative executable path, which later misfires as Updated (FR7 violation)"
+    description: "path_len == 0 (or a relative path) decodes successfully; check()'s subsequent metadata() call on that path returns NotFound, which compare() maps to Verdict::Updated -- so a corrupt identity record fires an unnecessary upgrade instead of falling back to Undecidable as FR7 requires."
+    suggestion: "Reject empty/non-absolute decoded paths in decode() as a new malformed-content variant, folding into Undecidable exactly like the existing truncation/trailing-garbage checks."
+    sources: [claude:spec, codex:spec]
+    confidence: 90
+    resolution: deferred
+    resolution_reason: "Medium severity, category:spec, confirmed unchanged across rounds. Left for rework-planner discretion or a follow-up task."
+
+  - stable_id: sid-sidecar-failure-disables-daemon-capability
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/identity.rs
+    line: 286
+    title: "A sidecar (identity-file) write failure unnecessarily disables the daemon's own in-process upgrade capability"
+    description: "A successfully-captured in-memory identity is discarded when the client-visible identity file fails to write, and run_daemon's upgrade branch then refuses every upgrade request (including manually-triggered ones) using that same None, even though the daemon's own knowledge of its executable path was captured successfully."
+    suggestion: "Separate capture from publication: retain the captured RecordedIdentity for daemon-local upgrade resolution regardless of sidecar write success; use write success only to gate client-side detection."
+    sources: [codex:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "Medium severity. Left for rework-planner discretion or a follow-up task."
+
+  - stable_id: sid-compatible-no-longer-guarantees-reachable
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 929
+    title: "LegacyRecovery::Compatible no longer guarantees a reachable compatible daemon after an upgrade-reachability timeout"
+    description: "The timeout branch of the automatic-upgrade trigger still returns Compatible even when reachability could not be confirmed, breaking the enum's documented postcondition; both callers (ensure_daemon_running, resolve_attach_socket_with) treat Compatible as 'no action needed', which can leave them pointed at a dead or stalled socket."
+    suggestion: "Reserve Compatible for a freshly-verified reachable daemon; represent the timeout/indeterminate case as a distinct outcome callers must handle explicitly."
+    sources: [codex:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "Medium severity; closely related to sid-notification-without-proof-of-replacement (same root design gap: reachability != proof). Left for rework-planner discretion, likely addressable together with that finding."
+
+  - stable_id: sid-probe-stdout-pipe-deadlock
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/daemon.rs
+    line: 1106
+    title: "Loop 2's probe rewrite (Command::spawn + poll) lost Command::output()'s concurrent stdout draining, risking a pipe deadlock and unbounded post-exit read"
+    description: "Regression introduced by the loop-2 fix for sid-probe-timeout-leaks-subprocess: stdout is only read after the child exits, so a candidate writing more than the pipe buffer (64KiB) blocks the child from exiting, defeating try_wait until the deadline kills it; separately, the try_wait-error branch returns without killing/reaping, and the post-exit read_to_end has no deadline of its own if a grandchild inherits the write end."
+    suggestion: "Read stdout concurrently on a separate thread (or via non-blocking I/O) while polling for exit, joining/receiving with a bound tied to the same deadline; also kill+reap on the try_wait-error path."
+    sources: [claude:performance, codex:performance]
+    confidence: 90
+    resolution: deferred
+    resolution_reason: "Medium severity regression surfaced by round-3 re-review after loop 2. Not re-opened as a 4th auto-fix loop (loop cap of 3 reached at loop 3). Left for rework-planner discretion or a follow-up task."
+
+  - stable_id: sid-probe-timeout-interface-split
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 1254
+    title: "Loop 2's probe-timeout fix split the deadline across two layers (prepare_upgrade's outer timeout vs. the probe closure's own kill logic) with no type-level link between them"
+    description: "The probe function type cannot carry a deadline, so the caller (run_daemon) and the callee (prepare_upgrade) each independently compute/consume UPGRADE_PROBE_TIMEOUT, held in sync only by convention and a comment. A future probe implementation that spawns its own subprocess but doesn't also self-bound and kill it would silently reintroduce the exact leak loop 2 just fixed."
+    suggestion: "Carry the deadline through the probe function's signature (e.g. add an Instant parameter) so prepare_upgrade computes it once and the probe cannot be implemented without receiving it."
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "Medium severity regression/design-debt surfaced by round-3 re-review after loop 2. Left for rework-planner discretion or a follow-up task."
+
+  - stable_id: sid-reachability-deadline-budget-mismatch
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/daemon.rs
+    line: 541
+    title: "The new 20s reachability deadline (loop 2) is shorter than the daemon's own 30s upgrade-preparation budget, risking a false 'timed out' report for an upgrade that was actually still succeeding"
+    description: "UPGRADE_REACHABLE_POLL_DEADLINE (20s) can expire before the daemon's own UPGRADE_PREPARE_TIMEOUT (30s, ipc/connection.rs) does, since preparation (candidate probe + unbounded session-tree snapshot + ack wait) blocks the daemon's accept loop the whole time; the client can give up and report a timeout on an upgrade that succeeds moments later."
+    suggestion: "Raise the client-side reachability deadline to comfortably exceed the daemon's own preparation budget, or derive both from one shared constant with the ordering documented in one place."
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "Medium severity regression surfaced by round-3 re-review after loop 2. Left for rework-planner discretion or a follow-up task."
+
+auto_fix:
+  loops_run: 3
+  applied_total: 5
+  termination: loop-cap
+residual_critical_high: 3
+rework_required: true
