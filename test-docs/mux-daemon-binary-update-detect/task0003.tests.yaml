@@ -1,0 +1,123 @@
+task_id: task0003
+
+# --- Baseline (Step 4a, recorded BEFORE touching src-tauri/tests/mux_hot_upgrade.rs) ---
+#
+# project_commands.test (`cargo test --lib`) does not compile at all on this
+# branch: a pre-existing, UNRELATED E0308 type mismatch in
+# src-tauri/src/mux/session/pane.rs:2366, inside that file's own #[cfg(test)]
+# module (test_resume_snapshot_construction_with_osc133_bytes_in_scrollback_never_fires_latch
+# passes a `Permit<'_, PtyOutputChunk>` where `resume_pane_with_permit` now
+# expects `AnyPermit<'_>`). Confirmed byte-identical to both `main` and this
+# feature's own integration branch (`git show <ref>:...pane.rs` diffed clean
+# against both), so this is inherited, not introduced by this task, and out
+# of this task's file scope (production code, not
+# src-tauri/tests/mux_hot_upgrade.rs).
+#
+# This does NOT affect this task's actual test target: `cargo test --test
+# mux_hot_upgrade` links the library WITHOUT `--cfg test` (integration tests
+# are a separate compilation unit), so pane.rs's `#[cfg(test)] mod tests`
+# block is never compiled for that target. Baseline for the real target,
+# run per this task's own Test Notes
+# (`cargo test --test mux_hot_upgrade -- --test-threads=1`): 4 passed, 0
+# failed (all four pre-existing scenarios).
+baseline_failures:
+  - "cargo test --lib (project_commands.test): FAILS TO COMPILE (not a test failure) due to a pre-existing E0308 in src-tauri/src/mux/session/pane.rs:2366's own #[cfg(test)] module; confirmed identical on main and the integration branch; unrelated to this task and out of its file scope. Does not affect --test mux_hot_upgrade (see baseline_failures note above)."
+
+# --- Final (Step 4b/4c, after appending the new scenarios) ---
+#
+# cargo test --test mux_hot_upgrade -- --test-threads=1: 6 passed, 2 failed.
+# The 4 pre-existing scenarios still pass, byte-identical (AC-6). Of the 4
+# NEW scenarios: 2 pass now (TS-4, TS-7 — absence assertions with nothing
+# yet able to misfire) and 2 FAIL BY DESIGN (TS-3, TS-5 — this task's own
+# Design section: "these scenarios are written against the
+# IMPLEMENTATION.md contracts that task0001/task0002 build to in parallel
+# ... they are expected to fail by timing out at a clearly-named bounded
+# wait until the sibling tasks land on the integration branch, and must not
+# be weakened to pass early" — the exact same precedent already documented,
+# unedited, at the top of this same file for the parent hot-upgrade
+# feature's task0003/0004/0005 split). These two are NOT regressions (no
+# previously-passing test broke; they are brand-new tests whose red state
+# is the explicit, pre-declared, mandatory acceptance condition until
+# task0001/task0002 merge into the same integration branch) — see the
+# implementer's JSON report `notes` for the full reasoning.
+#
+# cargo test --lib (project_commands.test): unchanged from baseline — still
+# fails to compile for the same pre-existing pane.rs reason (this task
+# never touched pane.rs).
+final_failures:
+  - "hot_upgrade_fires_on_binary_replacement_via_attach (TS-3): designed pre-merge red — times out waiting for the pinned notice line; see acceptance_tests.AC-1 below."
+  - "hot_upgrade_fires_on_binary_replacement_via_mux_start (TS-5): designed pre-merge red — times out waiting for the pinned notice line; see acceptance_tests.AC-3 below."
+  - "cargo test --lib (project_commands.test): unchanged pre-existing compile failure, same as baseline_failures above."
+
+acceptance_tests:
+  AC-1:
+    tests: [hot_upgrade_fires_on_binary_replacement_via_attach]
+    red_confirmed: true
+    red_reason: >-
+      Observed: "timed out after 25s waiting for \"Mux daemon upgraded in
+      place to the newly installed binary\" on the child's standard error
+      (collected so far: \"\")" at src-tauri/tests/mux_hot_upgrade.rs:1062.
+      task0001 (mux::identity) and task0002 (Compatible-arm trigger wiring)
+      have not landed on this branch, so nothing detects the replaced
+      binary or fires the upgrade yet. This is the task plan's own
+      DESIGNED pre-merge red state ("expected to fail by timing out ...
+      until the sibling tasks land ... must not be weakened to pass
+      early"), not a defect in the test.
+  AC-2:
+    tests: [hot_upgrade_no_churn_when_binary_unchanged]
+    red_confirmed: false
+    red_reason: >-
+      Absence assertion (no misfire on an unchanged binary). Nothing in the
+      current codebase can misfire an upgrade at all yet (task0001/task0002
+      not landed), so the assertion passes vacuously right now and could
+      not be forced red without first implementing the out-of-scope
+      production trigger it exists to guard against post-merge. Its value
+      is as a regression guard once the identity check lands (per the task
+      plan's Design section), not as a red-before-merge proof like AC-1/AC-3.
+  AC-3:
+    tests: [hot_upgrade_fires_on_binary_replacement_via_mux_start]
+    red_confirmed: true
+    red_reason: >-
+      Observed: "timed out after 25s waiting for \"Mux daemon upgraded in
+      place to the newly installed binary\" on the `mux script` vehicle's
+      stderr (collected so far: \"\")" at
+      src-tauri/tests/mux_hot_upgrade.rs:1062. Same missing-dependency
+      reason as AC-1; expected, designed red state, not a defect.
+  AC-4:
+    tests: [hot_upgrade_no_misfire_when_identity_file_absent]
+    red_confirmed: false
+    red_reason: >-
+      Same rationale as AC-2: an absence assertion (missing identity file
+      -> no misfire even with a replaced binary) that cannot be forced red
+      without the out-of-scope production trigger already existing.
+  AC-5:
+    tests:
+      - hot_upgrade_fires_on_binary_replacement_via_attach
+      - hot_upgrade_no_churn_when_binary_unchanged
+      - hot_upgrade_fires_on_binary_replacement_via_mux_start
+      - hot_upgrade_no_misfire_when_identity_file_absent
+    red_confirmed: false
+    red_reason: >-
+      Cross-cutting structural property (every new wait is a bounded
+      Instant::now()+timeout loop that panics naming the stuck step;
+      every scenario uses an isolated unique_runtime_dir and RAII cleanup
+      -- DaemonGuard plus the new ChildGuard -- that also terminates any
+      spawned attach/script child on failure/drop), verified by
+      construction / code review across all four new scenarios rather than
+      by a single pass/fail assertion -- the same treatment the
+      pre-existing file's own header note already gives this class of
+      criterion (its AC-6/AC-7).
+  AC-6:
+    tests:
+      - hot_upgrade_preserves_shell_pid_and_marker_file
+      - hot_upgrade_logs_handoff_start_with_pane_count
+      - hot_upgrade_succeeds_with_zero_panes
+      - hot_upgrade_aborts_on_incompatible_schema_probe
+    red_confirmed: false
+    red_reason: >-
+      Preservation criterion (nothing here should change), not new
+      behavior -- there is no meaningful "red" state to observe. Verified
+      by these four scenarios' source remaining byte-identical (this
+      task's only edit was a pure append after the last pre-existing test)
+      and by all four continuing to pass after the append
+      (cargo test --test mux_hot_upgrade -- --test-threads=1).
