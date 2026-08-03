@@ -127,9 +127,10 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - `emterm --version` prints the version and exits; `emterm --help`/`-h` prints usage (both on the GUI and CLI-only build)
   - Unrecognized top-level flags print a usage error to stderr and exit with code 2 instead of being silently ignored
 
-- **Claude Code Plugin**
+- **[Claude Code Plugin](plugins/emterm/README.md)**
   - Installable Claude Code plugin (Linux) that reports Claude Code's lifecycle (idle/working/blocked) to eMterm's agent-status mechanism via a hook
   - Exposes eMterm's display commands (`display-markdown`, `display-json`, `display-yaml`, `display-image`) and mux commands (`mux-read`, `mux-send`, `mux-wait`) as Claude Code skills
+  - Install steps and hook reference: [plugins/emterm/README.md](plugins/emterm/README.md)
 
 ## Requirements
 
