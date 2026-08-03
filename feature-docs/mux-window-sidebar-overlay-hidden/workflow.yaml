@@ -49,7 +49,8 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR1, FR2, FR3, NFR1, NFR2]
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-window-sidebar-overlay-hidden/task0001
 
 review: {}
 
