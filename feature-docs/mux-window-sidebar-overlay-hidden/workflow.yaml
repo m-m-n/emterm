@@ -38,7 +38,25 @@ workflow:
     status: completed
     completed_at_commit: c273e5607c67905d7d2b2548392e7212b9766fbd
   - id: verify
-    status: pending
+    status: completed
+    result: pass
+    failed_items: []
+    notes: |
+      build (default + --no-default-features): pass.
+      unit tests (--lib --test-threads=1): 3073/3080 pass; 7 failures all in
+      tabs::tests (off-thread swap replay worker subsystem: ts7/ts8/ts9/ts10/
+      ts11/ts13, welcome_without_windows_leaves_group_none), identical to the
+      implementer's own recorded baseline_failures captured before this
+      feature's changes — confirmed pre-existing/unrelated (this feature
+      touches only app.rs pump logic, never tabs.rs).
+      TS1 (task0001 attach-transition unit tests incl. the review-added
+      pristine-startup regression test): pass.
+      TS2 (ac7_* detach-guard/overlay regression group, 8 tests): pass.
+      integration test --test cli_subcommands (26 tests): pass.
+      TS4 (manual init-mux startup + reattach verification): not run in this
+      automated session — requires the user to launch emterm via
+      ~/bin/init-mux and observe the sidebar. Recorded as an outstanding
+      manual verification item for the user.
   - id: retrospect
     status: pending
 
