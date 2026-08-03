@@ -1224,8 +1224,17 @@ const UPGRADE_ANNOUNCE_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 /// `run_daemon`'s `tokio::select!` loop, freezing the daemon's entire
 /// accept/dispatch loop. A hang resolves to the existing upgrade-refusal
 /// reply path, same as any other probe failure.
+///
+/// MUST stay strictly below the client's upgrade-response read timeout
+/// (`connect_daemon`'s `set_read_timeout`, currently 5s): if a refusal
+/// reply took longer to arrive than the client is willing to wait on that
+/// read, the client's read times out first and falls into
+/// `UpgradeResponse::ProceededOrUnknown`, then `wait_for_daemon_reachable_at_current_version`
+/// trivially succeeds against the same still-running old daemon -- a
+/// refused upgrade gets misreported as a successful in-place replacement
+/// (the AC-10 same-daemon-reachability trap documented in cli.rs).
 #[cfg(unix)]
-const UPGRADE_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+const UPGRADE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Perform upgrade preparation (design steps 1-3): probe compatibility,
 /// snapshot the live session tree to the handoff file next to `socket_path`
