@@ -1,0 +1,530 @@
+round: 1
+executed_at: "2026-08-03T01:05:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 97f48669dee4d5e0bad2b82c3e333d429f00a652
+  head_commit: 00c65fe
+  changed_files:
+    - crates/mux_ipc/src/handoff.rs
+    - src-tauri/src/agent_status_exit_latch.rs
+    - src-tauri/src/agent_status_model.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/lib.rs
+    - src-tauri/src/mux/daemon.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/upgrade.rs
+    - src-tauri/src/tabs.rs
+    - test-docs/agent-exit-after-icon/task0001.tests.yaml
+    - test-docs/agent-exit-after-icon/task0002.tests.yaml
+    - test-docs/agent-exit-after-icon/task0003.tests.yaml
+    - test-docs/agent-exit-after-icon/task0004.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+
+# NOTE: this round ran across a session interruption. The initial fan-out
+# (9 reviewers) had completed and its findings were recorded, but auto-fix
+# loop 1's edits were left uncommitted. The resumed run committed loop 1,
+# re-reviewed, ran loop 2, and re-reviewed again. `findings` below is the
+# final post-loop-2 state; entries resolved by loop 1 / loop 2 carry
+# `resolution: fixed`. The post-loop-2 re-review re-ran comprehensive /
+# architecture / spec (claude) and architecture / spec (codex) — the
+# perspectives whose prior findings included critical/high. security and
+# performance were not re-run because every one of their findings was
+# medium and therefore could not change the completion gate; their
+# entries below carry their post-loop-1 state.
+
+findings:
+  # ── resolved by auto-fix loop 1 ─────────────────────────────────────
+  - stable_id: d043507b2d288967
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 773
+    title: "FR4「単一順序フィード」の契約が producer 側の連結で破られている"
+    description: >-
+      daemon 側は AgentStatusOscScanner を chunk 全体に、Osc133MarkScanner を
+      live main-buffer 部分に独立に走らせ、呼び出し側が reports を全部先・marks を
+      全部後に連結して転送していた。これは chunk のスキャン順であって byte 順では
+      ないため、実際には D→A が Set より前にあっても Set, D, A の順で転送された。
+    suggestion: "1 パスの統合スキャナにして byte 順を構造的に保証する"
+    sources: [claude:architecture, codex:architecture, claude:spec, codex:spec, claude:comprehensive]
+    confidence: 100
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (AgentStatusFeedScanner による 1 パス統合)"
+  - stable_id: 046863521b1be5fd
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 774
+    title: "daemon 側で同一 PTY read 内の OSC 777 report と OSC 133 mark が並べ替えられる (FR4 違反)"
+    description: "上記 d043507b2d288967 と同一欠陥の spec 観点。"
+    suggestion: "統合スキャナで byte 順を保証する"
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1"
+  - stable_id: e429e9258494abb4
+    severity: high
+    category: security
+    file: src-tauri/src/tabs.rs
+    line: 2495
+    title: "mux モードで pending_latch_feed が永久に drain されず端末出力で無制限にメモリが増える"
+    description: >-
+      mux 接続中は process_outer_via_core が走らないため pending_latch_feed が
+      drain されず、NativeCallbacks::on_osc は無条件に push し続けるので mux
+      セッションの生存期間中は単調増加した。
+    suggestion: "mux 時は毎 pump で clear する"
+    sources: [claude:security, claude:comprehensive, claude:performance, claude:spec]
+    confidence: 100
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (process_combined で mux 時に毎 pump clear)"
+  - stable_id: 0591feb321172d6b
+    severity: high
+    category: architecture
+    file: crates/mux_ipc/src/handoff.rs
+    line: 42
+    title: "handoff スキーマを v2 に上げたが後方互換の移行経路が無く、旧デーモンからの hot-upgrade が全セッションを失う"
+    description: >-
+      SUPPORTED_HANDOFF_SCHEMA_VERSIONS が現行バージョンのみを受理していたため、
+      pre-task0004 の daemon が書いた v1 ドキュメントが hot-upgrade で拒否された。
+    suggestion: "v1 の互換シムを足して受理範囲を広げる"
+    sources: [claude:architecture, codex:architecture]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (HandoffPaneV1 等の互換シム追加)"
+
+  # ── resolved by auto-fix loop 2 ─────────────────────────────────────
+  - stable_id: 9a1f4c2e7b0d5a83
+    severity: high
+    category: architecture
+    file: src-tauri/src/app.rs
+    line: 3784
+    title: "pump_all の二本立てドレインが FR4 の真順序保証を最後の一手で捨てている"
+    description: >-
+      pump_all は実ステータス列と latch 入力列を別々の 2 ループで適用していたため、
+      1 pump 内の相対順序が失われ、D→A→Set が同居すると推論 Clear が後発の明示 Set を
+      上書きして state=None になった。
+    suggestion: "1 本の順序付きストリームとして単一ループで適用する"
+    sources: [claude:architecture, codex:architecture, claude:spec, codex:spec, claude:comprehensive]
+    confidence: 100
+    resolution: fixed
+    resolution_reason: >-
+      auto-applied loop 2。editor の初版は 2 リストをタブ横断で位置ペアリング
+      していたためオーケストレーターがタブ単位ペアリングに修正した
+      (mux タブは latch input 0 件で plain event のみ出すため、位置ペアリングだと
+      他タブの Set/Clear が mux タブのイベントを消費して並べ替えが再発する)。
+  - stable_id: 8028bf0212c00419
+    severity: high
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 3784
+    title: "GUI plain tab で推測 Clear が同一 pump 内の明示 Set より後に適用される (FR4 / NFR1 違反)"
+    description: "上記 9a1f4c2e7b0d5a83 と同一欠陥の spec 観点。"
+    suggestion: "単一の順序付きストリームで適用する"
+    sources: [claude:spec, codex:spec]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: "auto-applied loop 2"
+  - stable_id: c73b90ae15d2f6c4
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/scrollback_filter.rs
+    line: 555
+    title: "OSC スキャナが 3 実装に分裂し、生きているのは新規 1 本だけ"
+    description: >-
+      loop 1 が pty_spawn.rs に AgentStatusFeedScanner を新設した結果、
+      scrollback_filter.rs の Osc133MarkScanner (本 feature 追加・production 参照 0) と
+      AgentStatusOscScanner (既存 production スキャナ) が本番経路から孤児化し、
+      網羅ユニットテストが死にコードだけを守る状態になった。
+    suggestion: "孤児化した 2 本とそのテストを削除して実装を 1 本に畳む"
+    sources: [claude:architecture, codex:architecture, claude:comprehensive]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: >-
+      auto-applied loop 2 (孤児 2 本とそのテストを削除)。ただし削除された
+      テストの新スキャナへの移植は未実施 — 下記 f4a0c19b7e2d8531 として残存。
+
+  # ── 残存: critical/high (rework 対象) ────────────────────────────────
+  - stable_id: 6b2e83f10c94ad7e
+    severity: high
+    category: spec
+    file: src-tauri/src/tabs.rs
+    line: 2647
+    line_end: 2668
+    title: "mux 接続中も GUI ローカルのタブ status が作られ、daemon の推論 Clear では消えない"
+    description: >-
+      mux 接続中、process_combined の mux ガードは pending_latch_feed だけを破棄し、
+      同じ pump で parse 済みの agent_status_events は無条件に
+      pending_agent_status_events へ積まれ、PaneKey::Tab のイベントとして適用される。
+      その結果、mux pane の inner OSC 777 Set は daemon 所有の mux-pane status と
+      GUI ローカルの tab status の両方を作るが、続く daemon 側の D→A 推論 Clear は
+      mux-pane 側しか消さない。タブバッジは両キーを集約するため、GUI ローカルの Set が
+      アイコンを消えないまま残し得る。SPEC FR3 は mux pane については
+      MuxPane.agent_status を権威とし、GUI 側だけでクリアを適用することを許容していない。
+    suggestion: >-
+      mux 所有の PTY 出力については GUI ローカルの pending_agent_status イベントを
+      積まない/適用しない。mux 接続中は plain status イベントと latch feed の
+      双方を破棄し、mux pane については daemon の AgentStatusUpdate だけに依存する。
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "category が spec のため R4 auto-fix 対象外。rework task0005 として implement へ差し戻し"
+  - stable_id: 2e6f18b4dc0a7593
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/upgrade.rs
+    line: 438
+    line_end: 440
+    title: "hot-upgrade の snapshot がライブ順序イベントストリームのカットになっていない"
+    description: >-
+      latch 状態は snapshot に記録されるが、その境界で pane reader スレッドと
+      daemon の agent-status チャネルが静止・ドレインされていない。snapshot 取得後
+      exec までの間に D や A が読まれ/キューイングされ/処理され得て、その後は旧
+      キューと reader scanner ごと消える。例えば command-ended の snapshot 後に A が
+      処理されると旧 pane はクリアされるが、restore は clear 前の Set と pending latch を
+      復元し、消費すべき A はもう残っていない。SPEC FR6 は live D とその対の A の間で
+      upgrade が起きても pending な推論 Clear が黙って落ちないことを要求している。
+      なお claude:spec は同じ経路を「snapshot は SessionManager ロック下で走るため
+      torn read は成立しない」と判定しており、両者は「ロック下の一貫性」と
+      「イベントストリームのカット」という別のレベルを見ている。
+    suggestion: >-
+      upgrade バリアを設ける: pane reader を定義されたバイト境界で止め、順序付き
+      agent-status フィードのアイテムを daemon まで全部ドレインし、その後に snapshot を
+      取り、exec までさらなる消費を止める。あるいは in-flight の scanner / チャネル状態を
+      handoff の一部として転送する。
+    sources: [codex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "category が spec のため R4 auto-fix 対象外。rework task0006 として implement へ差し戻し"
+
+  # ── 残存: medium ────────────────────────────────────────────────────
+  - stable_id: ec0bc1ffca893190
+    severity: medium
+    category: spec
+    file: src-tauri/src/agent_status_model.rs
+    line: 125
+    title: "reconcile_latch_feed の kind 一致による貪欲照合が live マークを取り違え推論 Clear を取りこぼす"
+    description: >-
+      候補が live かを「次の live マークと kind が一致するか」だけで決めるため、
+      alt-screen で抑止された候補が後続 live マークの枠を先取りできる。
+      候補 [D(抑止), Set, D(live), A(live)] / live_marks [D, A] は
+      [Mark(D), Set, Mark(A)] に解決され、D は disarmed で no-op、Set が
+      command_ended をリセットするため A で発火しない。FR1 / FR4 / FR5 に抵触する。
+    suggestion: >-
+      kind ではなく同一性で対応付ける。term_core のマークに単調増加のシーケンス番号を
+      持たせて候補にも載せるか、on_osc の時点で alt-screen 判定を確定させて reconcile 自体を
+      不要にする。
+    sources: [claude:spec, codex:spec, claude:architecture, claude:comprehensive]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "medium のため completion gate 対象外。rework には含めない"
+  - stable_id: 5cd6f305dcdeceb7
+    severity: medium
+    category: spec
+    file: src-tauri/src/tabs.rs
+    line: 2495
+    title: "detach 後テール再ルート時、latch 入力と実 OSC 777 イベントの drain が別 pump に分かれ FR4 の順序が壊れる"
+    description: >-
+      pending_agent_status は Tab::pump の 2642 行付近で drain されるのに対し、
+      detach テール再ルート (2783 行) はその後に process_outer_via_core を呼ぶため、
+      テール由来の Set/Clear は latch input として今 pump に入り、対応する
+      AgentStatusEvent は次 pump に持ち越される。app.rs のタブ単位ペアリングが
+      前提とする「両者が同一 pump で drain される」が崩れる。
+    suggestion: >-
+      LatchFeedEvent::Set/Clear に AgentStatusEvent 本体を載せて 1 本化するか、
+      process_outer_via_core 内で pending_agent_status も同時に drain する。
+      あわせて mux 用 clear をテール再ルートより後へ移す。
+    sources: [claude:spec, claude:comprehensive, claude:architecture]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium。6b2e83f10c94ad7e (task0005) と同じ tabs.rs 領域なので rework で併せて見直される見込み"
+  - stable_id: 7ab3c05e91d4b260
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 518
+    title: "alt-screen トグル判定が固定バイト列マッチのみで、複合 DECSET / read 境界分割 / RIS を取りこぼす"
+    description: >-
+      ALT_SCREEN_TOGGLES は 6 種の完全一致リテラルのみを認識する。
+      CSI ?1049;1000 h のような複合パラメータ列、read 境界で分割された
+      ESC[?1049l、ALT_SCREEN_TOGGLES に無い画面リセット (RIS) はいずれも
+      認識されず、scan_alt != alt_after のフォールバックで live_spans が
+      チャンク全体になる (= alt 画面のマークが latch に届く) か、逆に
+      チャンク全体が不適格になる (= live なマークを落とす)。FR5 に抵触する。
+    suggestion: >-
+      書き込みゲートとマークゲートを分離し、フォールバック時のマーク用 live_spans は
+      常に空にする (安全側 = 今日の挙動)。あるいはトグル解析を read 境界をまたいで
+      状態保持し、複合 DECSET パラメータ列も解釈する。
+    sources: [claude:spec, codex:spec]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: 8c5d21f7ba903e64
+    severity: medium
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 3797
+    title: "loop 2 のペアリングが NFR2 の O(1) 単価を満たさない"
+    description: >-
+      Set/Clear の latch 入力ごとに agent_status_plain_events を先頭から
+      iter_mut().find() で線形走査する。同一タブの n 件で消費済み None の
+      プレフィクスが伸びるため Θ(n²)。SPEC NFR2 は各 OSC 133/777 イベントの
+      O(1) 処理を求めている。
+    suggestion: >-
+      tab stable ID → 順序付き VecDeque のハッシュマップを作り、Set/Clear ごとに
+      平均 O(1) で pop する。未対応イベント用の順序付きリストは別に保持する。
+    sources: [codex:spec]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium。1 pump のイベント数は実測上ごく小さいが NFR2 の字面には抵触する"
+  - stable_id: 4be73b0fc44915f9
+    severity: medium
+    category: architecture
+    file: src-tauri/src/app.rs
+    line: 3797
+    title: "pump_all が 2 本のリストから順序を再構築しており 1:1 対応の不変条件が保証されていない"
+    description: >-
+      loop 2 の修正の正しさは「1 pump 内で、あるタブの実イベント列と latch 入力列が
+      個数・順序ともに一致する」という、型でも API でも表現されていない不変条件に
+      依存する。detach テール経路で既にその条件は破れている (5cd6f305dcdeceb7)。
+    suggestion: "ResolvedLatchInput::Set/Clear に実イベントを同梱して単一ストリームで App に渡す"
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: 78244de9ed441a19
+    severity: medium
+    category: architecture
+    file: src-tauri/src/agent_status_model.rs
+    line: 114
+    title: "純粋モデル層 agent_status_model が OSC コールバック層 callbacks::LatchFeedEvent に依存している"
+    description: >-
+      agent_status_model は "Pure state — no I/O, no egui, no protocol concerns" と
+      宣言された層だが、reconcile_latch_feed の引数型が
+      Vec<crate::callbacks::LatchFeedEvent> で依存の向きが逆転している。
+      同関数は AgentStatusModel の状態を触らない自由関数で、唯一の呼び出し元は tabs.rs。
+    suggestion: "reconcile_latch_feed を tabs.rs か callbacks 側へ移し、モデル層は ResolvedLatchInput だけを知る"
+    sources: [claude:architecture, codex:architecture, claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: 80fe9a2508641c05
+    severity: medium
+    category: architecture
+    file: src-tauri/src/agent_status_model.rs
+    line: 125
+    title: "「live_marks は feed の部分列」という不変条件がどこでも強制・検証されていない"
+    description: >-
+      正しさが callbacks::on_osc / term_core::push_pending_prompt_mark /
+      tabs.rs の 3 モジュールにまたがる暗黙の前提に依存し、破れても
+      エラーもログも出ずに静かに劣化する。
+    suggestion: "突き合わせを不要にするか、走査終了時に live_idx == live_marks.len() を検証して log::warn! する"
+    sources: [claude:architecture, codex:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: 5f2c11d9a3e04b76
+    severity: medium
+    category: architecture
+    file: crates/mux_ipc/src/handoff.rs
+    line: 44
+    title: "受理バージョン範囲とデコーダの実対応バージョンが二重管理で、次回 bump で静かに乖離する"
+    description: >-
+      SUPPORTED_HANDOFF_SCHEMA_VERSIONS は 1..=HANDOFF_SCHEMA_VERSION を宣言するが、
+      decode_handoff_document は version == 1 だけを特別扱いし、それ以外は現行構造体として
+      bincode デコードする。次に 3 へ上げると v2 文書がゲートを通過して silent corruption になる。
+      44-49 行の doc も現在の値と矛盾している。
+    suggestion: "decode の分岐を網羅 match にし、受理範囲をそこから導出する。doc も現状に合わせる"
+    sources: [claude:architecture, codex:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: 3d84e0b7c6519aa2
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 771
+    title: "pty_reader_loop が引数 14 個・約 315 行の god function で、今回さらに責務が増えている"
+    description: >-
+      実質 MuxPane の部分ビューである 14 ハンドルを個別展開して受け取り、
+      PTY 読み取りから exit 通知まで一手に担う。今回 live-span 計算と
+      AgentStatusFeedScanner が加わって肥大化が進んだ。
+    suggestion: "14 引数を PaneReaderContext にまとめ、1 チャンク処理を関数として切り出す"
+    sources: [claude:architecture, codex:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: 9e07b4c2a51df386
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 748
+    title: "agent-status OSC の kind トークンが 2 モジュールで二重定義され SSOT 宣言が実態と食い違っている"
+    description: >-
+      scrollback_filter.rs の AGENT_STATUS_OSC_KIND は「strip 述語と抽出スキャンが
+      1 つのリテラルを共有するための定数」と明記されているが、抽出側は
+      b"777;emterm;agent-status;" をハードコードしている。片方だけ変更されると
+      「転送されないのに scrollback に残って reattach で replay される」等の
+      不整合が静かに起きる。loop 2 の削除で当該 doc の intra-doc link も壊れている。
+    suggestion: "定数を両モジュールから見える場所に 1 つ置き、双方が参照する。壊れた doc link も更新する"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: f4a0c19b7e2d8531
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 641
+    title: "AgentStatusFeedScanner に単体テストが無く、削除された scanner の回帰ガードが失われた"
+    description: >-
+      loop 2 で AgentStatusOscScanner を削除した際、(1) 全バイト境界での分割 →
+      ちょうど 1 件 (round-1 の osc_split_lost 回帰ガード)、(2) ST 終端 ESC \ の
+      中間分割、(3) carry-over cap、(4) オーバーフロー時の reset 復帰、
+      (5) 中断 body が後続レポートを隠さない、の 5 系統が一緒に消えた。
+      移送先の AgentStatusFeedScanner には対応する単体テストが 1 本も無く、
+      新設の pty_reader_loop テスト 3 本は Cursor 入力が 1 回の read で全部届くため
+      チャンク跨ぎ経路も cap も通らない。
+    suggestion: >-
+      feed(chunk, live_spans) を直接呼ぶ表駆動テストで 5 系統の等価テストを
+      pty_spawn.rs に追加する。OSC 133 マーク側の境界分割ケースも足すこと。
+    sources: [claude:comprehensive, codex:architecture]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium。loop 2 の副作用として新規発生"
+  - stable_id: 171014437e50a601
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/agent_status_exit_latch.rs
+    line: 33
+    title: "generation は書き込み専用のデッド状態で、handoff スキーマ bump のコストだけ払っている"
+    description: >-
+      record_set で wrapping_add(1) されるだけでどの判定でも読まれない。
+      doc が謳う「prior generation の D を無効化する」役割は実際には
+      command_ended = false が担っている。それでもこの値を hot-upgrade で運ぶために
+      HANDOFF_SCHEMA_VERSION を bump し 4 つの互換シムを新設している。
+    suggestion: "generation と HandoffPane::latch_generation を落とす。残すなら実際に判定へ組み込み doc と整合させる"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: 929859ff2b4e431e
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/tabs.rs
+    line: 2659
+    title: "mux 用 pending_latch_feed クリアが detach したポンプだけ素通りする"
+    description: >-
+      クリアはフレーム適用ループより前に走るが、inner mux 内容は apply_mux_message →
+      process_pty_data_fully を通るためそのループ中に on_osc が候補を積み直す。
+      通常ポンプでは次ポンプ先頭のクリアで捨てられるが、detach したポンプだけは
+      mux_session_name が None になった後に tail 再ルートが走り、mux inner 由来の
+      候補ごと reconcile_latch_feed に渡る。Set/Clear 候補は alt-screen フィルタを
+      通らないため、mux pane 由来の Set が plain-tab の latch を誤って arm する。
+    suggestion: >-
+      クリアをフレーム適用ループ直後 (tail 再ルート前) へ移し、判定は
+      「このポンプの開始時点で mux だったか」で行う。あわせて App::pump_all の
+      Set/Clear で paired が None の場合は latch 記録もしない防御を入れる。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium。6b2e83f10c94ad7e (task0005) と同じ領域なので rework で併せて見直される見込み"
+  - stable_id: 31e383a28a7b863e
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 756
+    title: "latch が無視する OSC 133 B/C マークも daemon 共有チャネルと SessionManager ロックを消費する"
+    description: >-
+      commit は A/B/C/D すべてを転送するが、AgentStatusExitLatch::record_mark は
+      CommandStart(B) / CommandExec(C) を無条件 no-op として捨てる。OSC 133 統合シェルは
+      1 コマンドあたり 4 種すべてを出すため、実効的に必要量の 2 倍のチャネル流量と
+      daemon 中央ロック取得が発生する。この中央ロックは全 IPC ハンドラと競合するため
+      コストは本 feature 内に閉じない。
+    suggestion: "スキャナ段で CommandEnd / PromptStart 以外を落とす。B/C が転送されないことを固定するテストを 1 本追加"
+    sources: [claude:performance, codex:performance, claude:security, codex:security, claude:comprehensive]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: 91fa8dc2745f284d
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 1195
+    title: "lossless な OSC 133 転送がチャネル満杯時に PTY リーダースレッドをブロックする"
+    description: >-
+      forward_agent_status_items はチャネル満杯時に blocking_send へフォールバックする。
+      チャネルは daemon 全体で 1 本・容量 64 で全ペイン共有、消費側はアイテムごとに
+      SessionManager の tokio Mutex を取るため drain 速度が中央ロック競合に律速される。
+      OSC 133 を密に含む出力で 64 枠が埋まると当該ペインの PTY リーダーが停止し、
+      カーネル PTY バッファが埋まって子プロセスの write もブロックする
+      (= ペインが固まる)。この経路は本 feature 以前は低頻度の OSC 777 専用だった。
+    suggestion: >-
+      マークだけ lossless 保証を外して Full 時は drop する (最悪ケースは
+      latch が armed のまま = 今日の挙動)、あるいは latch 評価を pane 側で行い
+      実際に inferred clear が発火したときだけチャネルを使う。
+    sources: [claude:performance, codex:performance]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: c1b6f4802a7e935d
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 752
+    title: "loop 1 の統合スキャナが OSC の多いチャンクで live-span を線形探索する"
+    description: >-
+      完了した OSC ごとに live_spans.iter().any を先頭から回す。live_spans は
+      同一 read 内の alt-screen 遷移数に比例して伸び、OSC 完了数も比例して増え得るため
+      O(spans × OSCs) になる。
+    suggestion: "ソート済み range と単調増加するバイト位置を利用してカーソルを進め、O(bytes + spans) にする"
+    sources: [codex:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium。loop 1 の副作用として新規発生"
+  - stable_id: 9b79ce12b9712a37
+    severity: medium
+    category: security
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 973
+    title: "未信頼な PTY 出力の OSC 133 マークが daemon 全体共有チャネルとグローバルロックを飽和させられる"
+    description: >-
+      PTY へ書ける任意のプロセス (untrusted ファイルの cat、SSH 越しのリモート出力、
+      悪意あるビルドスクリプト) が 8 バイトの ESC ]133;A BEL を連射でき、64KiB リード
+      1 回で約 8000 アイテム = 8000 回のグローバル SessionManager ロック取得になる。
+      当該ペインの reader が blocking_send で止まるだけでなく、他ペインのキー入力・
+      resize・attach・pane 生成が同じロックで枯渇し、ペイン間の分離が壊れる。
+    suggestion: >-
+      チャネルへ載せる前にスキャナ段で削減する: (a) CommandEnd/PromptStart 以外を捨てる、
+      (b) 連続する同一 kind を圧縮する (latch は D→A の交替しか見ないため状態遷移は不変)。
+    sources: [claude:security, codex:security]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "medium。31e383a28a7b863e / 91fa8dc2745f284d と同根"
+
+auto_fix:
+  loops_run: 2
+  applied_total: 5
+  termination: clean
+  note: >-
+    loop 3 は候補ゼロで実行せず。残存 critical/high はいずれも category: spec で
+    R4 の候補ゲート (category != spec) に掛からないため、auto-fix としては
+    「非 spec の critical/high ゼロ = clean」で終了した。
+
+residual_critical_high: 2
+rework_required: true

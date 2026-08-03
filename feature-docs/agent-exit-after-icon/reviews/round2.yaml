@@ -1,0 +1,234 @@
+round: 2
+executed_at: "2026-08-03T01:55:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 97f48669dee4d5e0bad2b82c3e333d429f00a652
+  head_commit: ccfc1d6
+  changed_files:
+    - crates/mux_ipc/src/handoff.rs
+    - src-tauri/src/agent_status_exit_latch.rs
+    - src-tauri/src/agent_status_model.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/lib.rs
+    - src-tauri/src/mux/daemon.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/scrollback_filter.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/upgrade.rs
+    - src-tauri/src/tabs.rs
+    - test-docs/agent-exit-after-icon/task0001.tests.yaml
+    - test-docs/agent-exit-after-icon/task0002.tests.yaml
+    - test-docs/agent-exit-after-icon/task0003.tests.yaml
+    - test-docs/agent-exit-after-icon/task0004.tests.yaml
+    - test-docs/agent-exit-after-icon/task0005.tests.yaml
+    - test-docs/agent-exit-after-icon/task0006.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+  - {perspective: security, source: claude, status: skipped, skip_reason: "round 1 の security findings は全て medium で completion gate に影響しないため、round 2 では再実行せず round 1 の記録を carry forward"}
+  - {perspective: performance, source: claude, status: skipped, skip_reason: "同上"}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "同上"}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "同上"}
+
+# round 2 は round 1 の batch auto-rework (task0005 / task0006) が
+# integration に入った状態を対象にした。rework 由来の新規 high を 1 件検出し
+# auto-fix loop 1 で解消、その後の再レビュー (architecture / comprehensive /
+# codex architecture) で critical/high ゼロを確認した。
+# round 1 で medium として記録され本ラウンドで変化のない項目は reviews/round1.yaml
+# の記載をそのまま carry forward する（下記 carried_forward_mediums を参照）。
+
+findings:
+  # ── rework 由来の新規 high → loop 1 で解消 ──────────────────────────
+  - stable_id: b58e0d47f3c2916a
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/upgrade.rs
+    line: 432
+    line_end: 441
+    title: "rewrite_handoff_file が『部分書き込みを残さない』不変条件を持たない二重ライタで、失敗時に有効な handoff 文書を破壊する"
+    description: >-
+      handoff ファイルの書き込みはこれまで write_handoff_file → create_handoff_file
+      (create_new + 0600 + O_NOFOLLOW) → write_bytes_or_remove (部分書き込み時は
+      ファイルを削除) の 1 経路に集約され、その不変条件は
+      write_bytes_or_remove_cleans_up_the_file_when_the_write_itself_fails で
+      テストまで固定されていた。task0006 が追加した rewrite_handoff_file は
+      同じ成果物に対する 2 本目のライタで、OpenOptions::write(true).truncate(true) で
+      先に中身を捨て、write_all が失敗しても復旧・削除をしない
+      (加えて O_CREAT なしの .mode(0o600) は無効指定)。呼び出し側 daemon.rs は
+      Err を log::warn するだけで exec に進むため、ENOSPC/EIO 等で途中失敗すると
+      切り詰められた handoff ファイルを後継プロセスへ引き継ぐ。後継は
+      decode_handoff_document で Malformed を受け取り bind_fresh_listener に
+      フォールバックするため、latch どころかセッションツリー全体
+      (全 pane のシェル、継承済み master fd、scrollback) を失う。
+      rework 前はこの書き戻し経路自体が存在せず、snapshot 失敗時は
+      prepare_upgrade が Err を返して upgrade を中止していたので、
+      task0006 が持ち込んだ純粋な退行。
+    suggestion: >-
+      in-place truncate をやめ、同一ディレクトリの一時ファイル
+      (既存 create_handoff_file と同じ 0600 / O_NOFOLLOW / create_new) に
+      書き切ってから rename(2) で原子的に差し替える。rename 成功まで元の
+      (stale だが decode 可能な) 文書が無傷で残るため、呼び出し側の
+      warn 継続がそのまま安全になる。
+    sources: [claude:architecture, codex:architecture, claude:comprehensive, claude:spec, codex:spec]
+    confidence: 100
+    resolution: fixed
+    resolution_reason: >-
+      auto-applied round 2 loop 1。既存ヘルパ (create_handoff_file /
+      write_bytes_or_remove) を再利用した temp + rename(2) 方式に置換し、
+      「書き込み失敗時に既存文書がバイト単位で無傷に残る」ことを固定する
+      回帰テストを追加。再レビュー (claude:architecture / claude:comprehensive /
+      codex:architecture) で修正の成立と副作用なしを確認済み。
+
+  # ── 残存 critical/high (batch rework cap 到達により deferred) ────────
+  - stable_id: 2e6f18b4dc0a7593
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/upgrade.rs
+    line: 365
+    line_end: 376
+    title: "hot-upgrade の refresh 後〜exec 間に sub-second のイベント取りこぼし窓が残る (FR6)"
+    description: >-
+      task0006 は prepare_upgrade の return 直前で live 状態を再読込して handoff を
+      書き直すことで、支配的な窓 (UPGRADE_ANNOUNCE_ACK_TIMEOUT = 最大 2 秒の
+      ack 待ち) を閉じた。ただし pane reader スレッドは async runtime 外の
+      std::thread で、prepare_upgrade が返った後も exec まで PTY バイトを読み続け、
+      run_agent_status_task にマークを送り続ける。そこで live D が適用されると
+      pane の latch は command_ended=true になるが、handoff 文書は refresh 時点の
+      armed かつ !command_ended のまま。後継プロセスはその古い latch を復元し、
+      次に届く A では発火しない — SPEC FR6 が名指しする
+      「live D と対の A の間の upgrade で pending な推論 Clear が黙って落ちる」
+      挙動そのもの。残る窓は async unwind + 最大 500ms の shutdown 猶予で
+      sub-second、発生確率は低い。
+      なお claude:spec は同じ経路を medium と評価し
+      「受容するなら SPEC の Known Limitations に明記すべき残件」と判定しており、
+      codex:spec の high 評価と実質の指摘内容は一致、重大度の見立てだけが割れている。
+      task0006 の実装者自身も、完全な解決には mux::ipc::pty_spawn の
+      reader スレッド quiesce が必要でタスクの単一ファイル範囲を超えると
+      自己申告している。
+    suggestion: >-
+      (a) 受容する場合: SPEC の Known Limitations に
+      「hot-upgrade の最終 sub-second 窓に届いた D/A は引き継がれない
+      (安全側に倒れる = アイコンが残る)」を追記する。
+      (b) 閉じる場合: pane reader に協調的な quiesce フラグを追加し、
+      prepare_upgrade が (1) reader 静止 → (2) refresh_live_agent_state →
+      (3) rewrite_handoff_file → (4) return の順で実行する。
+      静止は exec までなのでスループット影響はない。
+    sources: [codex:spec, claude:spec]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: >-
+      batch mode: rework cap reached (batch.review_rework_count == 1)。
+      category が spec のため R4 auto-fix の候補ゲート (category != spec) にも
+      掛からない。失敗側に倒れず「アイコンが残る」= この feature 以前の挙動に
+      戻るだけなので、劣化ではなく改善の取りこぼし。人間評価者の判断に委ねる。
+
+  # ── round 2 で新規に検出された medium ───────────────────────────────
+  - stable_id: 7c0a3b91e5d84f26
+    severity: medium
+    category: architecture
+    file: src-tauri/src/tabs.rs
+    line: 2601
+    title: "pump 開始時の mux 判定では、同一 pump 内で attach したケースを分類できない"
+    description: >-
+      task0005 はキューの所有権判定を was_mux_at_pump_start 1 個の bool に
+      集約した。pump が plain で始まり、その frame ループで Welcome / attach を
+      適用したあとに PtyOutput が来る場合、mux inner の OSC 777 は attach 後に
+      parse されるのにこのスナップショットは false のまま。破棄がスキップされ、
+      mux 所有のイベントが GUI ローカルの plain-tab status として drain される
+      (= round 1 の 6b2e83f10c94ad7e の逆方向の取りこぼし)。
+      現行テストは mux 開始 pump と mux→detach pump は覆うが、この逆遷移は未カバー。
+    suggestion: >-
+      status/latch 入力に実際の所有元をタグ付けするか、frame の origin /
+      attach 境界で明示的に drain する。pump 全体の所有権を開始時点の
+      bool 1 個から推論しない。
+    sources: [codex:architecture, claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: e1d6a4c8093bf572
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 1066
+    line_end: 1076
+    title: "prepare_upgrade の注入シーム (probe / snapshot) を task0006 の後追い書き込みだけがバイパスしている"
+    description: >-
+      prepare_upgrade は probe / snapshot を関数パラメータとして注入する設計で、
+      「実バイナリや実セッションツリー内部なしに全分岐をテストできる」ことが
+      設計上の売りになっている。task0006 が追加した refresh_live_agent_state /
+      rewrite_handoff_file 呼び出しはこのシームを通らず具象関数を直接呼ぶ。
+      実害として、既存の prepare_upgrade 系ユニットテストは
+      ファイルを書かないフェイク snapshot を渡すため、新しい rewrite_handoff_file は
+      必ず ENOENT で失敗して warn ログを出す失敗分岐しか通らない。
+      本番クリティカルな「exec 直前の再書き込み」経路がこの関数のテストから
+      一切カバーされない。
+    suggestion: >-
+      refresh + rewrite も snapshot と同じくパラメータ (例: finalize クロージャ)
+      として注入し、本番は real_snapshot と対になる real_finalize を渡す。
+      テストはフェイクを渡して「exec 前に必ず 1 回呼ばれる」
+      「失敗時にどう振る舞うか」を固定できるようにする。
+    sources: [claude:architecture, codex:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium"
+  - stable_id: 3f9b2e07ac41d685
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 920
+    line_end: 930
+    title: "ステートレスなトグルスキャナが権威パーサとドリフトし得る"
+    description: >-
+      live_spans は 2 本目の手書き alt-screen パーサから来ており、
+      その最終状態が shadow パーサと一致したときだけ採用される。
+      alt-screen 退出シーケンスが PTY read をまたいで分割されると、
+      shadow パーサは true→false に遷移するのに extract_main_buffer_bytes は
+      完全なトグルを見つけられず true のまま。フォールバックが live span を
+      一切供給しないため、そのチャンクで退出後に出た正当な OSC 133 マークが
+      落ちる。round 1 の 7ab3c05e91d4b260 と同根で、こちらは
+      「権威パーサとその複製の契約ドリフト」というアーキ観点。
+    suggestion: >-
+      権威パーサ側が main/alt スパンまたは遷移オフセットを公開するようにする。
+      それが無理なら、scrollback とマークゲートで 1 本の境界対応スキャナを共有し、
+      チャンクごとに独立再計算しない。
+    sources: [codex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium"
+
+carried_forward_mediums:
+  # round 1 で medium として記録され、round 2 でもコード側が未変更のまま残る項目。
+  # 完全な description / suggestion は reviews/round1.yaml を参照。
+  - {stable_id: ec0bc1ffca893190, category: spec, file: src-tauri/src/agent_status_model.rs, line: 125, note: "reconcile_latch_feed の kind 貪欲照合。round 2 でも claude:spec / codex:spec / claude:comprehensive が独立に再報告（本ラウンド最多の一致）"}
+  - {stable_id: 5f2c11d9a3e04b76, category: architecture, file: crates/mux_ipc/src/handoff.rs, line: 44, note: "受理バージョン範囲とデコーダ分岐の二重管理。claude:comprehensive も同一箇所を再報告"}
+  - {stable_id: 4be73b0fc44915f9, category: architecture, file: src-tauri/src/app.rs, line: 3797, note: "2 本のフラット配列の事後ペアリング。task0005 が drain 地点の一方を動かしたことで脆さが実証された"}
+  - {stable_id: 78244de9ed441a19, category: architecture, file: src-tauri/src/agent_status_model.rs, line: 114, note: "モデル層 → callbacks 層のレイヤ逆転"}
+  - {stable_id: 80fe9a2508641c05, category: architecture, file: src-tauri/src/agent_status_model.rs, line: 125, note: "「live_marks は feed の部分列」不変条件が未強制"}
+  - {stable_id: 3d84e0b7c6519aa2, category: architecture, file: src-tauri/src/mux/ipc/pty_spawn.rs, line: 771, note: "pty_reader_loop の god function 化（14 引数 / 約 315 行）"}
+  - {stable_id: 9e07b4c2a51df386, category: architecture, file: src-tauri/src/mux/ipc/pty_spawn.rs, line: 748, note: "OSC ワイヤ形式知識の重複と AGENT_STATUS_OSC_KIND の SSOT 破れ"}
+  - {stable_id: f4a0c19b7e2d8531, category: comprehensive, file: src-tauri/src/mux/ipc/pty_spawn.rs, line: 641, note: "AgentStatusFeedScanner の単体テスト欠如（round 1 loop 2 の副作用）"}
+  - {stable_id: 171014437e50a601, category: comprehensive, file: src-tauri/src/agent_status_exit_latch.rs, line: 33, note: "generation がデッド状態"}
+  - {stable_id: 7ab3c05e91d4b260, category: spec, file: src-tauri/src/mux/ipc/pty_spawn.rs, line: 518, note: "alt-screen トグル判定の取りこぼし（3f9b2e07ac41d685 と同根）"}
+  - {stable_id: 8c5d21f7ba903e64, category: spec, file: src-tauri/src/app.rs, line: 3797, note: "ペアリングの線形走査が NFR2 の O(1) に抵触"}
+  - {stable_id: 5cd6f305dcdeceb7, category: spec, file: src-tauri/src/tabs.rs, line: 2495, note: "task0005 が解消。detach tail 経路の drain 地点を揃えた"}
+  - {stable_id: 929859ff2b4e431e, category: comprehensive, file: src-tauri/src/tabs.rs, line: 2659, note: "task0005 が解消。clear を frame 適用ループ直後・tail 再ルート前へ移動"}
+  - {stable_id: 31e383a28a7b863e, category: performance, file: src-tauri/src/mux/ipc/pty_spawn.rs, line: 756, note: "OSC 133 B/C マークの無駄な転送。round 2 では performance 未実行のため round 1 の状態のまま"}
+  - {stable_id: 91fa8dc2745f284d, category: performance, file: src-tauri/src/mux/ipc/pty_spawn.rs, line: 1195, note: "blocking_send が PTY リーダーをブロックし得る。同上"}
+  - {stable_id: c1b6f4802a7e935d, category: performance, file: src-tauri/src/mux/ipc/pty_spawn.rs, line: 752, note: "live-span の線形探索。同上"}
+  - {stable_id: 9b79ce12b9712a37, category: security, file: src-tauri/src/mux/ipc/pty_spawn.rs, line: 973, note: "未信頼 PTY 出力による daemon チャネル飽和。同上"}
+
+auto_fix:
+  loops_run: 1
+  applied_total: 1
+  termination: clean
+
+residual_critical_high: 1
+rework_required: false

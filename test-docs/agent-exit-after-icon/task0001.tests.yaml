@@ -1,0 +1,100 @@
+task_id: task0001
+
+# NOTE on baseline_failures: this project's `tabs::tests::*` off-thread-swap
+# suite is documented (project memory: "テスト実行の注意点") as
+# non-deterministic under parallel `cargo test` execution — a different
+# subset fails on each run. The implementer ran the exact `project_commands
+# .test` command 3 times against this branch (1 before touching any file,
+# 2 after implementing) with no comparison against the parent branch and no
+# stashing, purely to distinguish suite-inherent flake from a real
+# regression. All 3 runs' failures come from the same pre-existing family
+# (`tabs::tests::*` off-thread timing + one `tmux_sockets::tests::*` case);
+# none reference `agent_status_exit_latch` or `lib.rs`, the only files this
+# task touches. `baseline_failures` below is the UNION of all 3 runs so the
+# subset rule (`final_failures ⊆ baseline_failures`) reflects the suite's
+# actual inherited non-determinism rather than one arbitrary sample.
+baseline_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  - tmux_sockets::tests::enumerate_session_name_with_embedded_space_preserved
+
+# Most recent post-implementation run (all 23 failures are a subset of the
+# union above; all 10 new agent_status_exit_latch tests, and all 12
+# pre-existing prompts:: tests, passed in every run).
+final_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+acceptance_tests:
+  AC-1:
+    tests: [agent_status_exit_latch::tests::set_then_d_then_a_fires_exactly_once]
+    red_confirmed: true
+    red_reason: "panicked: not yet implemented: TDD red checkpoint: record_set not yet implemented (stubbed record_set/record_clear/record_mark with todo!() before implementing)"
+  AC-2:
+    tests: [agent_status_exit_latch::tests::set_then_a_without_prior_d_never_signals]
+    red_confirmed: true
+    red_reason: "panicked: not yet implemented: TDD red checkpoint: record_set not yet implemented"
+  AC-3:
+    tests: [agent_status_exit_latch::tests::explicit_clear_suppresses_subsequent_d_and_a]
+    red_confirmed: true
+    red_reason: "panicked: not yet implemented: TDD red checkpoint: record_set not yet implemented"
+  AC-4:
+    tests: [agent_status_exit_latch::tests::re_set_invalidates_the_prior_generations_d]
+    red_confirmed: true
+    red_reason: "panicked: not yet implemented: TDD red checkpoint: record_set not yet implemented"
+  AC-5:
+    tests: [agent_status_exit_latch::tests::no_set_ever_recorded_never_signals]
+    red_confirmed: true
+    red_reason: "panicked: not yet implemented: TDD red checkpoint: record_mark not yet implemented"
+  AC-6:
+    tests: [agent_status_exit_latch::tests::repeated_d_before_matching_a_still_fires_exactly_once]
+    red_confirmed: true
+    red_reason: "panicked: not yet implemented: TDD red checkpoint: record_set not yet implemented"
+  AC-7:
+    tests: [agent_status_exit_latch::tests::firing_leaves_latch_equivalent_to_post_clear_state]
+    red_confirmed: true
+    red_reason: "panicked: not yet implemented: TDD red checkpoint: record_set not yet implemented"

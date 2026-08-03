@@ -25,6 +25,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::agent_status::{AgentState, AgentStatusEvent};
+use crate::agent_status_exit_latch::AgentStatusExitLatch;
 
 /// Identifies one agent-status-bearing entity tracked by the model.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -80,12 +81,70 @@ pub struct Counts {
     pub done: u32,
 }
 
+/// A true-order, live-only input to a plain tab's inferred-clear latch
+/// (agent-exit-after-icon SPEC FR2/FR4/FR5), produced by
+/// [`reconcile_latch_feed`] from `callbacks::LatchFeedEvent` candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedLatchInput {
+    /// A live OSC 777 agent-status `Set` report.
+    Set,
+    /// A live OSC 777 agent-status `Clear` report.
+    Clear,
+    /// A live, alt-screen-confirmed OSC 133 mark.
+    Mark(crate::prompts::PromptMarkKind),
+}
+
+/// Reconcile this pump's OSC 133 mark CANDIDATES
+/// (`callbacks::LatchFeedEvent`, which may include alt-screen-suppressed
+/// marks — see that type's doc) against `live_marks`, the alt-screen
+/// -filtered ground truth for the SAME pump (e.g.
+/// `TerminalCore::take_prompt_marks`'s output, converted to
+/// `PromptMarkKind`), to produce a single true-order, live-only sequence
+/// for [`AgentStatusModel`]'s per-tab inferred-clear latch
+/// (agent-exit-after-icon FR4/FR5).
+///
+/// `live_marks` is, by construction, an ordered subsequence of the
+/// `PromptMark` candidates in `feed` (every live mark also fired the
+/// candidate-producing callback, in the same relative position) — so a
+/// single forward walk correctly tells live candidates from
+/// alt-screen-suppressed ones without this function (or any caller) ever
+/// re-deriving alt-screen state itself. OSC 777 `Set`/`Clear` candidates
+/// are never suppressed and always pass through unchanged, in their
+/// original position.
+pub fn reconcile_latch_feed(
+    feed: Vec<crate::callbacks::LatchFeedEvent>,
+    live_marks: &[crate::prompts::PromptMarkKind],
+) -> Vec<ResolvedLatchInput> {
+    let mut live_idx = 0;
+    let mut resolved = Vec::with_capacity(feed.len());
+    for candidate in feed {
+        match candidate {
+            crate::callbacks::LatchFeedEvent::Set => resolved.push(ResolvedLatchInput::Set),
+            crate::callbacks::LatchFeedEvent::Clear => resolved.push(ResolvedLatchInput::Clear),
+            crate::callbacks::LatchFeedEvent::PromptMark(kind) => {
+                if live_marks.get(live_idx) == Some(&kind) {
+                    live_idx += 1;
+                    resolved.push(ResolvedLatchInput::Mark(kind));
+                }
+                // else: alt-screen-suppressed (or otherwise non-live)
+                // candidate — dropped, `live_idx` not advanced.
+            }
+        }
+    }
+    resolved
+}
+
 /// The merged agent-status store. Pure state — no I/O, no egui, no protocol
 /// concerns — so it is unit-tested directly (see `tests` below).
 #[derive(Debug, Default)]
 pub struct AgentStatusModel {
     entries: HashMap<PaneKey, AgentStatus>,
     transitions: VecDeque<Transition>,
+    /// Per-plain-tab inferred-clear latches (agent-exit-after-icon FR2),
+    /// keyed by the same `u64` `PaneKey::Tab` uses. Lazily created on
+    /// first use (`Set` or a live mark); discarded together with the
+    /// tab's [`AgentStatus`] entry in [`AgentStatusModel::discard`].
+    latches: HashMap<u64, AgentStatusExitLatch>,
 }
 
 impl AgentStatusModel {
@@ -173,9 +232,54 @@ impl AgentStatusModel {
     }
 
     /// Discard a pane/tab's entry entirely (tab close / mux pane close).
-    /// No-op when the key is not tracked.
+    /// No-op when the key is not tracked. Also discards the tab's
+    /// inferred-clear latch instance, if any (agent-exit-after-icon
+    /// AC-6) — mirrors the existing entry-discard handling so a closed
+    /// tab never leaves a stale latch behind.
     pub fn discard(&mut self, pane: &PaneKey) {
         self.entries.remove(pane);
+        if let PaneKey::Tab(tab_stable_id) = pane {
+            self.latches.remove(tab_stable_id);
+        }
+    }
+
+    /// Record a live OSC 777 `Set` report for a plain tab's inferred-clear
+    /// latch (agent-exit-after-icon FR2). Lazily creates the latch on
+    /// first use. Pure bookkeeping — does not itself touch
+    /// state/name/revision (the caller separately applies the real report
+    /// via [`Self::apply_plain_tab_event`]).
+    pub fn record_latch_set(&mut self, tab_stable_id: u64) {
+        self.latches.entry(tab_stable_id).or_default().record_set();
+    }
+
+    /// Record a live OSC 777 `Clear` report for a plain tab's
+    /// inferred-clear latch (agent-exit-after-icon FR2). See
+    /// [`Self::record_latch_set`]'s doc for the bookkeeping-only note.
+    pub fn record_latch_clear(&mut self, tab_stable_id: u64) {
+        self.latches
+            .entry(tab_stable_id)
+            .or_default()
+            .record_clear();
+    }
+
+    /// Record a live, alt-screen-confirmed OSC 133 mark for a plain tab's
+    /// inferred-clear latch (agent-exit-after-icon FR2/FR4/FR5). Callers
+    /// (the plain-tab wiring; see [`reconcile_latch_feed`]) must supply
+    /// only live, main-screen marks, in true arrival order relative to
+    /// this tab's [`Self::record_latch_set`] / [`Self::record_latch_clear`]
+    /// calls. When the latch reports an inferred clear, it is applied
+    /// through [`Self::apply_plain_tab_event`] — the EXACT same code path
+    /// an explicit `Clear` already uses (FR2); there is no parallel/
+    /// duplicate clear-application logic.
+    pub fn record_live_prompt_mark(
+        &mut self,
+        tab_stable_id: u64,
+        kind: crate::prompts::PromptMarkKind,
+    ) {
+        let fire = self.latches.entry(tab_stable_id).or_default().record_mark(kind);
+        if fire {
+            self.apply_plain_tab_event(tab_stable_id, AgentStatusEvent::Clear);
+        }
     }
 
     /// Clear the unseen flag on every currently-tracked entry among `panes`.
@@ -658,6 +762,260 @@ mod tests {
             AgentState::Done,
         ] {
             assert_eq!(state_from_wire(state_to_wire(state)), state);
+        }
+    }
+
+    // ── agent-exit-after-icon (task0002): plain-tab inferred-clear latch ──
+    //
+    // Integration tests exercising the actual callbacks.rs (`LatchFeedEvent`
+    // candidates) -> reconcile_latch_feed -> latch -> AgentStatusModel path,
+    // per task0002.md's Test Notes.
+
+    use crate::callbacks::LatchFeedEvent;
+    use crate::prompts::PromptMarkKind;
+
+    fn set_event(state: AgentState) -> AgentStatusEvent {
+        AgentStatusEvent::Set { state, name: None }
+    }
+
+    // ── AC-1: Set -> live D -> live A clears via the existing Clear path ──
+
+    #[test]
+    fn ac1_set_then_live_d_then_live_a_clears_via_existing_clear_path() {
+        let mut model = AgentStatusModel::new();
+        model.apply_plain_tab_event(1, set_event(AgentState::Working));
+        model.record_latch_set(1);
+        model.drain_transitions();
+
+        model.record_live_prompt_mark(1, PromptMarkKind::CommandEnd);
+        assert_eq!(model.status(&tab(1)).unwrap().state, Some(AgentState::Working));
+
+        model.record_live_prompt_mark(1, PromptMarkKind::PromptStart);
+
+        let status = model.status(&tab(1)).unwrap();
+        assert_eq!(status.state, None);
+        assert_eq!(status.revision, 2, "went through the real revision-minting apply path");
+
+        let transitions = model.drain_transitions();
+        assert_eq!(
+            transitions,
+            vec![Transition {
+                pane: tab(1),
+                old_state: Some(AgentState::Working),
+                new_state: None,
+                name: None,
+            }],
+            "the inferred clear enqueued exactly the transition an explicit Clear would"
+        );
+    }
+
+    // ── AC-2: Set -> live A only (no D) leaves state unchanged ────────────
+
+    #[test]
+    fn ac2_set_then_live_a_without_d_leaves_state_unchanged() {
+        let mut model = AgentStatusModel::new();
+        model.apply_plain_tab_event(1, set_event(AgentState::Working));
+        model.record_latch_set(1);
+        model.drain_transitions();
+
+        model.record_live_prompt_mark(1, PromptMarkKind::PromptStart);
+
+        assert_eq!(model.status(&tab(1)).unwrap().state, Some(AgentState::Working));
+        assert!(model.drain_transitions().is_empty());
+    }
+
+    // ── AC-3: explicit Clear -> live D/A produces no duplicate clear ──────
+
+    #[test]
+    fn ac3_explicit_clear_then_live_d_a_does_not_duplicate_clear() {
+        let mut model = AgentStatusModel::new();
+        model.apply_plain_tab_event(1, set_event(AgentState::Working));
+        model.record_latch_set(1);
+        model.drain_transitions();
+
+        model.apply_plain_tab_event(1, AgentStatusEvent::Clear);
+        model.record_latch_clear(1);
+        let explicit_clear_transitions = model.drain_transitions();
+        assert_eq!(explicit_clear_transitions.len(), 1, "the explicit clear itself");
+        let revision_after_explicit_clear = model.status(&tab(1)).unwrap().revision;
+
+        model.record_live_prompt_mark(1, PromptMarkKind::CommandEnd);
+        model.record_live_prompt_mark(1, PromptMarkKind::PromptStart);
+
+        let status = model.status(&tab(1)).unwrap();
+        assert_eq!(status.state, None);
+        // Revision is the discriminator: `apply_plain_tab_event` already
+        // dedupes a same-state re-report's TRANSITION even without the
+        // latch's own disarm, so an empty transition queue alone would not
+        // prove the latch stayed disarmed. Revision still advances on every
+        // `apply_plain_tab_event` call regardless of whether the state
+        // changed, so it catches a disarmed-latch bug that a
+        // transition-only assertion would miss.
+        assert_eq!(
+            status.revision, revision_after_explicit_clear,
+            "the disarmed latch must not apply a second Clear at all"
+        );
+        assert!(
+            model.drain_transitions().is_empty(),
+            "no second/duplicate clear transition from the disarmed latch"
+        );
+    }
+
+    // ── AC-4: marks from a snapshot/replay-equivalent scenario never fire ─
+
+    #[test]
+    fn ac4_reconcile_latch_feed_drops_replay_equivalent_candidates() {
+        // A "scenario equivalent to snapshot/replay": the candidate never
+        // reached `take_prompt_marks()`'s live-mark output at all (replay
+        // bypasses `on_osc` entirely — see `LatchFeedEvent`'s doc), so
+        // `live_marks` here is empty even though candidates exist.
+        let feed = vec![
+            LatchFeedEvent::Set,
+            LatchFeedEvent::PromptMark(PromptMarkKind::CommandEnd),
+            LatchFeedEvent::PromptMark(PromptMarkKind::PromptStart),
+        ];
+        let resolved = reconcile_latch_feed(feed, &[]);
+        assert_eq!(resolved, vec![ResolvedLatchInput::Set]);
+
+        // Feeding the resolved (Mark-free) sequence to the model: no fire.
+        let mut model = AgentStatusModel::new();
+        model.apply_plain_tab_event(1, set_event(AgentState::Working));
+        for input in resolved {
+            apply_resolved(&mut model, 1, input);
+        }
+        assert_eq!(model.status(&tab(1)).unwrap().state, Some(AgentState::Working));
+    }
+
+    // ── AC-5: marks captured on the alternate screen never fire ───────────
+
+    #[test]
+    fn ac5_reconcile_latch_feed_drops_alt_screen_suppressed_candidates() {
+        // Two D candidates observed by `on_osc` (fires unconditionally),
+        // but `take_prompt_marks()` (alt-screen-gated) only ever captured
+        // the SECOND one — the first was suppressed while on the alt
+        // screen. `live_marks` reflects that: only one CommandEnd.
+        let feed = vec![
+            LatchFeedEvent::Set,
+            LatchFeedEvent::PromptMark(PromptMarkKind::CommandEnd), // alt-screen: suppressed
+            LatchFeedEvent::PromptMark(PromptMarkKind::CommandEnd), // live
+            LatchFeedEvent::PromptMark(PromptMarkKind::PromptStart), // live
+        ];
+        let live_marks = [PromptMarkKind::CommandEnd, PromptMarkKind::PromptStart];
+        let resolved = reconcile_latch_feed(feed, &live_marks);
+        assert_eq!(
+            resolved,
+            vec![
+                ResolvedLatchInput::Set,
+                ResolvedLatchInput::Mark(PromptMarkKind::CommandEnd),
+                ResolvedLatchInput::Mark(PromptMarkKind::PromptStart),
+            ],
+            "the alt-screen-suppressed D candidate is dropped, not the live pair"
+        );
+
+        let mut model = AgentStatusModel::new();
+        model.apply_plain_tab_event(1, set_event(AgentState::Working));
+        for input in resolved {
+            apply_resolved(&mut model, 1, input);
+        }
+        assert_eq!(
+            model.status(&tab(1)).unwrap().state,
+            None,
+            "the live D/A pair still fires normally"
+        );
+    }
+
+    #[test]
+    fn ac5_alt_screen_suppressed_d_a_pair_never_reaches_the_model() {
+        // The alt-screen scenario that must NOT fire: a D/A pair observed
+        // by `on_osc` while on the alt screen never appears in
+        // `take_prompt_marks()`'s live output at all.
+        let feed = vec![
+            LatchFeedEvent::Set,
+            LatchFeedEvent::PromptMark(PromptMarkKind::CommandEnd),
+            LatchFeedEvent::PromptMark(PromptMarkKind::PromptStart),
+        ];
+        let resolved = reconcile_latch_feed(feed, &[]); // nothing was live
+        assert_eq!(resolved, vec![ResolvedLatchInput::Set]);
+
+        let mut model = AgentStatusModel::new();
+        model.apply_plain_tab_event(1, set_event(AgentState::Working));
+        for input in resolved {
+            apply_resolved(&mut model, 1, input);
+        }
+        assert_eq!(model.status(&tab(1)).unwrap().state, Some(AgentState::Working));
+    }
+
+    // ── AC-6: closing a tab discards its latch instance too ───────────────
+
+    #[test]
+    fn ac6_discard_removes_latch_so_a_later_mark_cannot_resurrect_state() {
+        let mut model = AgentStatusModel::new();
+        model.apply_plain_tab_event(1, set_event(AgentState::Working));
+        model.record_latch_set(1);
+        model.drain_transitions();
+
+        model.discard(&tab(1));
+        assert!(model.status(&tab(1)).is_none());
+
+        // A stray D/A pair for the now-closed tab id creates a FRESH
+        // (unarmed) latch and must not resurrect an entry or fire.
+        model.record_live_prompt_mark(1, PromptMarkKind::CommandEnd);
+        model.record_live_prompt_mark(1, PromptMarkKind::PromptStart);
+        assert!(model.status(&tab(1)).is_none());
+        assert!(model.drain_transitions().is_empty());
+    }
+
+    // ── AC-7: no OSC 133 ever -> Set persists indefinitely (regression) ───
+
+    #[test]
+    fn ac7_tab_without_osc133_support_never_auto_clears() {
+        let mut model = AgentStatusModel::new();
+        model.apply_plain_tab_event(1, set_event(AgentState::Working));
+        model.record_latch_set(1);
+        model.drain_transitions();
+
+        // No live marks ever arrive for this tab (shell has no OSC 133
+        // integration) — the icon must stay exactly as reported.
+        assert_eq!(model.status(&tab(1)).unwrap().state, Some(AgentState::Working));
+        assert!(model.drain_transitions().is_empty());
+    }
+
+    // ── reconcile_latch_feed: ordering + pass-through behavior ────────────
+
+    #[test]
+    fn reconcile_latch_feed_preserves_true_relative_order() {
+        let feed = vec![
+            LatchFeedEvent::Set,
+            LatchFeedEvent::PromptMark(PromptMarkKind::CommandEnd),
+            LatchFeedEvent::PromptMark(PromptMarkKind::PromptStart),
+            LatchFeedEvent::Clear,
+        ];
+        let live_marks = [PromptMarkKind::CommandEnd, PromptMarkKind::PromptStart];
+        let resolved = reconcile_latch_feed(feed, &live_marks);
+        assert_eq!(
+            resolved,
+            vec![
+                ResolvedLatchInput::Set,
+                ResolvedLatchInput::Mark(PromptMarkKind::CommandEnd),
+                ResolvedLatchInput::Mark(PromptMarkKind::PromptStart),
+                ResolvedLatchInput::Clear,
+            ]
+        );
+    }
+
+    #[test]
+    fn reconcile_latch_feed_empty_feed_yields_empty_resolved() {
+        assert_eq!(reconcile_latch_feed(vec![], &[]), vec![]);
+    }
+
+    /// Test helper mirroring what `App::pump_all` does with a
+    /// [`ResolvedLatchInput`] drained from a tab (see `tabs.rs`'s
+    /// `pending_latch_inputs` / `app.rs`'s consumer loop).
+    fn apply_resolved(model: &mut AgentStatusModel, tab_stable_id: u64, input: ResolvedLatchInput) {
+        match input {
+            ResolvedLatchInput::Set => model.record_latch_set(tab_stable_id),
+            ResolvedLatchInput::Clear => model.record_latch_clear(tab_stable_id),
+            ResolvedLatchInput::Mark(kind) => model.record_live_prompt_mark(tab_stable_id, kind),
         }
     }
 }

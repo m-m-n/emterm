@@ -1,0 +1,109 @@
+task_id: task0006
+baseline_failures:
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Not a test-shaped criterion -- it requires determining, from actual
+      control-flow tracing (not a test), whether a consumption path can
+      change latch state between snapshot and exec. Traced prepare_upgrade
+      (src-tauri/src/mux/daemon.rs): snapshot() releases the SessionManager
+      lock immediately after the tree walk; prepare_upgrade then broadcasts
+      Upgrading and waits up to UPGRADE_ANNOUNCE_ACK_TIMEOUT (2s) for client
+      acks; run_daemon() then returns to execute_daemon(), which calls
+      rt.shutdown_timeout(DAEMON_RUNTIME_SHUTDOWN_GRACE = 500ms) before the
+      actual exec() in perform_upgrade_replacement (cli.rs). Pane reader
+      threads are plain std::thread::spawn loops (pty_spawn.rs
+      register_pane_and_start_reader / pty_reader_loop) -- NOT part of the
+      tokio runtime, so rt.shutdown_timeout does not stop them; they keep
+      scanning PTY bytes for OSC 133 marks and OSC 777 reports and forward
+      them via forward_agent_status_items to run_agent_status_task (a
+      tokio::spawn'd task, daemon.rs ~1831), which applies them to
+      pane.agent_status / pane.agent_status_exit_latch -- the SAME Arc
+      objects snapshot() already read. CONCLUSION: the consumption path is
+      REAL, confirmed by this control-flow trace, not merely plausible. This
+      contradicts claude:spec's "SessionManager lock makes it atomic"
+      assessment -- that lock only covers snapshot's own tree walk, not the
+      window between snapshot returning and exec.
+  AC-2:
+    tests:
+      - mux::upgrade::tests::refresh_live_agent_state_pulls_in_a_clear_that_completed_after_snapshot
+      - mux::upgrade::tests::refresh_live_agent_state_leaves_a_pane_that_since_exited_untouched
+      - mux::upgrade::tests::refresh_live_agent_state_leaves_a_pane_no_longer_present_in_the_manager_untouched
+      - mux::upgrade::tests::rewrite_handoff_file_overwrites_an_already_written_handoff_file_in_place
+    red_confirmed: true
+    red_reason: >
+      refresh_live_agent_state_pulls_in_a_clear_that_completed_after_snapshot
+      failed with "task0006: refresh must pull in the disarm that happened
+      after the original snapshot" (upgrade.rs:1910) against a stubbed
+      no-op refresh_live_agent_state; rewrite_handoff_file_overwrites_an_
+      already_written_handoff_file_in_place failed with "left: 1 right: 42
+      -- rewrite must persist the updated content" (upgrade.rs:2051)
+      against a stubbed no-op rewrite_handoff_file. Both stubs were then
+      reverted to the real implementation (verified byte-identical to the
+      pre-stub file via diff) and all tests re-run green. Note: this AC's
+      literal wording ("either the successor observes the A, or it was
+      drained before snapshot") is not implemented verbatim -- a full byte-
+      boundary reader-thread barrier (the finding's own suggestion) would
+      require changes to mux::ipc::pty_spawn's reader-thread wiring, outside
+      this task's file scope (src-tauri/src/mux/upgrade.rs). Instead,
+      refresh_live_agent_state + rewrite_handoff_file re-capture and
+      persist the affected fields as late as possible (right before
+      prepare_upgrade returns, after the dominant multi-second
+      client-acknowledgement wait has elapsed), closing the scenario in the
+      finding's own example but leaving a smaller, sub-second residual
+      window (async-unwind + up to 500ms runtime shutdown grace) open. See
+      notes / final report for full detail.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Not applicable -- AC-3 only applies to the "path does not exist"
+      branch (declined outcome). This task concluded the path DOES exist
+      (AC-1), so no "why it is safe" comment was written; instead
+      upgrade.rs's module doc comment and refresh_live_agent_state's doc
+      comment explain why the path exists, what the fix closes, and what
+      residual gap remains.
+  AC-4:
+    tests:
+      - mux::upgrade::tests::armed_latch_with_no_d_or_a_yet_survives_restore_with_the_same_generation
+      - mux::upgrade::tests::command_ended_latch_fires_exactly_once_on_the_first_live_a_after_restore
+      - mux::upgrade::tests::disarmed_latch_stays_disarmed_after_restore_with_no_spurious_clear
+      - mux::upgrade::tests::restore_handles_exited_and_unadoptable_panes_while_the_rest_of_the_tree_still_restores
+    red_confirmed: false
+    red_reason: >
+      Pre-existing task0004 tests, unmodified by this task; re-run and
+      confirmed still green (not re-driven red, since this task's changes
+      are additive -- snapshot/restore's existing latch-carrying behavior
+      was not touched).
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >
+      baseline_failures above is the orchestrator-provided, pre-verified
+      list (base_commit 97f4866, per the task invocation) rather than a
+      fresh 4a run captured by this agent before editing -- the invocation
+      explicitly supplied it and instructed recording it as-is. Ran
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib -- --test-threads=1` AFTER the full
+      implementation: exactly these 7 tests failed and no others (one run
+      showed 6 of the 7 -- ts11 passed that run, matching the project's own
+      documented ts* non-determinism note -- a second run showed all 7).
+      final_failures is therefore a subset of (in fact equal to)
+      baseline_failures; no failure was added by this task.

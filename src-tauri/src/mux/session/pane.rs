@@ -7,11 +7,13 @@ use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
 use crate::agent_status::{AgentState, AgentStatusEvent};
+use crate::agent_status_exit_latch::AgentStatusExitLatch;
 use crate::mux::scrollback_buffer::{
     DEFAULT_SCROLLBACK_CAPACITY, MAX_DIM_MARKERS, ScrollbackRingBuffer,
 };
 use crate::mux::session::child_reaper;
 use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
+use crate::prompts::PromptMarkKind;
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
 
@@ -72,17 +74,40 @@ pub type PaneExitSender = mpsc::Sender<PaneId>;
 /// what lets a detached pane still notify the daemon on EOF (M1).
 pub type SharedPaneExitSender = Arc<StdMutex<Option<PaneExitSender>>>;
 
-/// Channel carrying a raw agent-status OSC 777 payload string (the full
-/// `emterm;agent-status;…` body, `agent_status::parse`'s input contract)
-/// from a pane's reader thread to the daemon-level agent-status task
-/// (`pane_id`, `payload`).
+/// One item flowing through the daemon-lifetime per-pane agent-status
+/// channel (task0003, SPEC FR4): either a raw agent-status OSC 777 report
+/// body, or a live OSC 133 prompt mark. Both travel through the SAME
+/// channel (not two independently-scheduled ones) so the daemon's single
+/// consuming task (`mux::daemon::run_agent_status_task`) applies both in
+/// the exact relative order the reader thread observed them on the PTY
+/// stream — two separate channels/tasks could race and reorder a `Set`
+/// relative to a `D`/`A` pair from the same PTY read, which SPEC FR4
+/// explicitly forbids.
+#[derive(Debug, Clone)]
+pub enum AgentStatusFeedItem {
+    /// A raw `agent-status` OSC 777 report body (the full
+    /// `emterm;agent-status;…` payload, `agent_status::parse`'s input
+    /// contract).
+    Report(String),
+    /// A live, main-screen-observed OSC 133 mark (task0001's
+    /// `AgentStatusExitLatch` input). The reader thread only ever sends
+    /// marks it captured on the LIVE PTY stream while the pane was on the
+    /// main screen — never marks reconstructed for snapshot/replay/
+    /// reattach purposes, and never alt-screen-suppressed marks (SPEC FR5).
+    Osc133Mark(PromptMarkKind),
+}
+
+/// Channel carrying agent-status-relevant events for a pane (raw OSC 777
+/// report bodies AND live OSC 133 marks, SPEC FR4 — see
+/// [`AgentStatusFeedItem`]) from a pane's reader thread to the daemon-level
+/// agent-status task (`pane_id`, item).
 ///
 /// Unlike `NotificationSender`, this must be forwarded regardless of attach
 /// state (SPEC FR3: the daemon owns per-pane agent-status state
 /// unconditionally, not only while detached) — mirroring the daemon-lifetime
 /// `TitleChangeSender` wiring rather than the Detached-only notification
 /// scanner.
-pub type AgentStatusReportSender = mpsc::Sender<(PaneId, String)>;
+pub type AgentStatusReportSender = mpsc::Sender<(PaneId, AgentStatusFeedItem)>;
 
 /// Daemon-lifetime agent-status report sender shared with each pane reader
 /// thread. Follows the `SharedNotificationSender` / `SharedPaneExitSender`
@@ -106,6 +131,18 @@ pub struct AgentStatus {
 
 /// Thread-safe shared reference to a pane's agent-status state.
 pub type SharedAgentStatus = Arc<StdMutex<AgentStatus>>;
+
+/// Thread-safe shared reference to a pane's inferred-clear latch (task0001
+/// `AgentStatusExitLatch`, SPEC FR1/FR2). One instance per pane, alongside
+/// `agent_status`/`agent_waiters`: created with the pane, discarded when
+/// the pane is (no special-case pane-lifecycle handling needed — the whole
+/// agent-status entry already goes away with the pane).
+///
+/// task0003 AC-7: named/shaped identically to the sibling `SharedAgentStatus`
+/// (`Arc<StdMutex<_>>` around a plain, `Copy`-able state struct) so
+/// task0004's hot-upgrade carry-across can locate and clone this field on
+/// `MuxPane` without needing to read this task's plan.
+pub type SharedAgentStatusExitLatch = Arc<StdMutex<AgentStatusExitLatch>>;
 
 /// A registered `WaitAgentState` request awaiting a qualifying state change
 /// (task0004, IMPLEMENTATION.md "Wait implementation"). Level-triggered:
@@ -1339,6 +1376,12 @@ pub struct MuxPane {
     /// Registered `WaitAgentState` waiters for this pane (task0004). See
     /// [`AgentWaiter`].
     pub agent_waiters: SharedAgentWaiters,
+    /// This pane's inferred-clear latch (task0001 `AgentStatusExitLatch`,
+    /// SPEC FR1/FR2). Fed by [`Self::apply_agent_status_event`] (explicit
+    /// Set/Clear) and [`Self::record_live_osc133_mark`] (live OSC 133
+    /// marks); a fired inferred clear is applied through the SAME path as
+    /// an explicit `Clear` — no parallel clear logic.
+    pub agent_status_exit_latch: SharedAgentStatusExitLatch,
     /// Per-pane raw passthrough buffer for image / Markdown OSC sequences
     /// captured while the pane is detached (network detach OR client hidden).
     /// Drained into the reattach / resume snapshot.
@@ -1582,6 +1625,7 @@ impl MuxPane {
             agent_status: Arc::new(StdMutex::new(AgentStatus::default())),
             agent_status_report_sender: Arc::new(StdMutex::new(None)),
             agent_waiters: Arc::new(StdMutex::new(Vec::new())),
+            agent_status_exit_latch: Arc::new(StdMutex::new(AgentStatusExitLatch::new())),
             raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),
@@ -1790,20 +1834,65 @@ impl MuxPane {
     /// `agent_status::parse` already returned `Some` for — a rejected
     /// (`None`) parse must never reach here, which is what leaves state and
     /// revision untouched on rejection (AC-2).
+    ///
+    /// task0003 (SPEC FR1): every accepted event also feeds this pane's
+    /// inferred-clear latch — `Set` arms it (new generation), `Clear`
+    /// disarms it. This is the SINGLE place an explicit Set/Clear reaches
+    /// the latch, so [`Self::record_live_osc133_mark`] (the live OSC 133
+    /// feed) and this method can never drift out of sync with each other.
     pub fn apply_agent_status_event(&self, event: AgentStatusEvent) -> u64 {
-        let mut status = self.agent_status.lock().unwrap();
-        match event {
-            AgentStatusEvent::Set { state, name } => {
-                status.state = Some(state);
-                status.name = name;
+        let is_clear = matches!(event, AgentStatusEvent::Clear);
+        let revision = {
+            let mut status = self.agent_status.lock().unwrap();
+            match event {
+                AgentStatusEvent::Set { state, name } => {
+                    status.state = Some(state);
+                    status.name = name;
+                }
+                AgentStatusEvent::Clear => {
+                    status.state = None;
+                    status.name = None;
+                }
             }
-            AgentStatusEvent::Clear => {
-                status.state = None;
-                status.name = None;
-            }
+            status.revision += 1;
+            status.revision
+        };
+        let mut latch = self.agent_status_exit_latch.lock().unwrap();
+        if is_clear {
+            latch.record_clear();
+        } else {
+            latch.record_set();
         }
-        status.revision += 1;
-        status.revision
+        revision
+    }
+
+    /// Record a live, main-screen-observed OSC 133 mark for this pane
+    /// (task0001 `AgentStatusExitLatch`, SPEC FR1/FR2) and, if it completes
+    /// an armed `D`→`A` transition, apply the resulting inferred clear
+    /// through the EXACT SAME path an explicit `Clear` report takes
+    /// ([`Self::apply_agent_status_event`]) — same revision increment,
+    /// same downstream broadcast the caller drives from the returned
+    /// revision, no parallel clear logic (FR2).
+    ///
+    /// Callers (the daemon's live PTY reader path for this pane) must only
+    /// ever pass marks that are LIVE and main-screen-observed, in true
+    /// arrival order relative to this pane's Set/Clear reports (FR4/FR5) —
+    /// this method has no way to tell a live mark from a replayed one, so
+    /// that guarantee is entirely the caller's responsibility.
+    ///
+    /// Returns `Some(revision)` when an inferred clear fired; `None` when
+    /// the mark produced no state change (AC-2/AC-3: e.g. an `A` with no
+    /// preceding `D`, or any mark while disarmed).
+    pub fn record_live_osc133_mark(&self, kind: PromptMarkKind) -> Option<u64> {
+        let fired = {
+            let mut latch = self.agent_status_exit_latch.lock().unwrap();
+            latch.record_mark(kind)
+        };
+        if fired {
+            Some(self.apply_agent_status_event(AgentStatusEvent::Clear))
+        } else {
+            None
+        }
     }
 
     /// Mark PTY as exited (task0001 SPEC FR3/FR4, task plan D2; task plan
@@ -1957,6 +2046,7 @@ impl MuxPane {
             agent_status: Arc::new(StdMutex::new(agent_status)),
             agent_status_report_sender: Arc::new(StdMutex::new(None)),
             agent_waiters: Arc::new(StdMutex::new(Vec::new())),
+            agent_status_exit_latch: Arc::new(StdMutex::new(AgentStatusExitLatch::new())),
             raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),
@@ -2000,6 +2090,7 @@ impl MuxPane {
             agent_status: Arc::new(StdMutex::new(AgentStatus::default())),
             agent_status_report_sender: Arc::new(StdMutex::new(None)),
             agent_waiters: Arc::new(StdMutex::new(Vec::new())),
+            agent_status_exit_latch: Arc::new(StdMutex::new(AgentStatusExitLatch::new())),
             raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),
@@ -2153,6 +2244,147 @@ mod tests {
             Arc::strong_count(&status_handle),
             1,
             "agent_status must be discarded along with the destroyed pane"
+        );
+    }
+
+    // ── task0003: inferred-clear latch wiring (SPEC FR1/FR2/FR3) ─────────
+
+    /// AC-7: a freshly created pane's inferred-clear latch is present and
+    /// disarmed (mirrors "new pane has no agent-status", the sibling field
+    /// this one is shaped after).
+    #[test]
+    fn test_new_pane_has_disarmed_latch() {
+        let target = make_output_target();
+        let pane = MuxPane::new_test(1, 80, 24, target);
+        assert_eq!(
+            *pane.agent_status_exit_latch.lock().unwrap(),
+            AgentStatusExitLatch::new()
+        );
+    }
+
+    /// AC-1 (pane-level): `Set` then live `D` then live `A` fires the
+    /// inferred clear through `apply_agent_status_event`'s exact effects —
+    /// state becomes `None` and the revision increments exactly once more.
+    #[test]
+    fn test_record_live_osc133_mark_set_then_d_then_a_fires_inferred_clear() {
+        let target = make_output_target();
+        let pane = MuxPane::new_test(1, 80, 24, target);
+        let set_revision = pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Working,
+            name: Some("claude".to_string()),
+        });
+        assert_eq!(set_revision, 1);
+
+        let d_result = pane.record_live_osc133_mark(PromptMarkKind::CommandEnd);
+        assert_eq!(d_result, None, "a lone D must not fire a clear");
+
+        let a_result = pane.record_live_osc133_mark(PromptMarkKind::PromptStart);
+        assert_eq!(a_result, Some(2), "D followed by A must fire exactly once");
+
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.state, None);
+        assert_eq!(status.name, None);
+        assert_eq!(status.revision, 2);
+    }
+
+    /// AC-2 (pane-level): `Set` followed only by live `A` (no `D`) leaves
+    /// state unchanged — no inferred clear, no revision bump.
+    #[test]
+    fn test_record_live_osc133_mark_a_without_prior_d_is_a_noop() {
+        let target = make_output_target();
+        let pane = MuxPane::new_test(1, 80, 24, target);
+        pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Blocked,
+            name: None,
+        });
+
+        let result = pane.record_live_osc133_mark(PromptMarkKind::PromptStart);
+        assert_eq!(result, None);
+
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.state, Some(AgentState::Blocked));
+        assert_eq!(status.revision, 1);
+    }
+
+    /// AC-3 (pane-level): an explicit `Clear` disarms the latch, so a
+    /// subsequent live `D`/`A` pair does not produce a second/duplicate
+    /// clear or a second revision increment.
+    #[test]
+    fn test_record_live_osc133_mark_after_explicit_clear_is_a_noop() {
+        let target = make_output_target();
+        let pane = MuxPane::new_test(1, 80, 24, target);
+        pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Done,
+            name: None,
+        });
+        let clear_revision = pane.apply_agent_status_event(AgentStatusEvent::Clear);
+        assert_eq!(clear_revision, 2);
+
+        let d_result = pane.record_live_osc133_mark(PromptMarkKind::CommandEnd);
+        assert_eq!(d_result, None);
+        let a_result = pane.record_live_osc133_mark(PromptMarkKind::PromptStart);
+        assert_eq!(a_result, None);
+
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(status.state, None);
+        assert_eq!(status.revision, 2, "no third revision from D/A after Clear");
+    }
+
+    /// AC-4: OSC 133 marks captured on scrollback content REPLAYED for a
+    /// reattach/visibility-resume snapshot (`resume_pane_with_permit`, the
+    /// real production snapshot-construction path — not a hand-rolled
+    /// substitute) never drive the latch. Even with a full `Set` -> `D`
+    /// -> `A` byte sequence sitting in scrollback, building and sending a
+    /// resume snapshot from it must leave `agent_status` exactly as the
+    /// explicit report left it.
+    #[tokio::test]
+    async fn test_resume_snapshot_construction_with_osc133_bytes_in_scrollback_never_fires_latch()
+     {
+        let (owned_tx, _rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+        }));
+        let pane = MuxPane::new_test(9, 80, 24, target.clone());
+
+        // A full Set -> D -> A OSC 133 byte sequence, literally present in
+        // scrollback content (as it would be after a real shell session) —
+        // nothing strips OSC 133 bytes from scrollback (it is not a
+        // viewer-launch sequence), so this is exactly what a replay would
+        // carry.
+        pane.scrollback
+            .lock()
+            .unwrap()
+            .write(b"$ claude\r\n\x1b]133;D\x07\x1b]133;A\x07$ ");
+        let set_revision = pane.apply_agent_status_event(AgentStatusEvent::Set {
+            state: AgentState::Working,
+            name: Some("claude".to_string()),
+        });
+        assert_eq!(set_revision, 1);
+
+        let permit = owned_tx.reserve().await.expect("reserve permit");
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+        // The real snapshot-construction path ran (and — for a sanity
+        // check that this test actually exercised the D/A bytes — the
+        // scrollback content in fact contains them), yet the latch/state
+        // must be untouched by it.
+        let status = pane.agent_status.lock().unwrap();
+        assert_eq!(
+            status.state,
+            Some(AgentState::Working),
+            "snapshot/replay construction must never fire the inferred-clear latch"
+        );
+        assert_eq!(status.revision, 1, "no extra revision from snapshot assembly");
+        assert_eq!(
+            *pane.agent_status_exit_latch.lock().unwrap(),
+            {
+                let mut expected = AgentStatusExitLatch::new();
+                expected.record_set();
+                expected
+            },
+            "the latch must still be exactly what the explicit Set left it as"
         );
     }
 
