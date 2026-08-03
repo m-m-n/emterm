@@ -30,7 +30,16 @@ use crate::protocol::AgentState;
 /// A monotonically increasing integer, bumped whenever the document's
 /// on-wire shape changes incompatibly. Independent of
 /// [`crate::protocol::PROTOCOL_VERSION`] — see the module docs.
-pub const HANDOFF_SCHEMA_VERSION: u32 = 1;
+///
+/// Bumped to 2 (task0004, SPEC FR6): [`HandoffPane`] gained three new
+/// fields carrying the daemon-side inferred-clear latch's state across a
+/// hot-upgrade boundary. Since `bincode`'s encoding is positional, a
+/// version-1 document decoded against the version-2 struct would
+/// misalign every field after the first affected pane rather than
+/// merely omitting the new ones — the version gate in
+/// [`decode_handoff_document`] is what turns that into a clean rejection
+/// instead of silent corruption.
+pub const HANDOFF_SCHEMA_VERSION: u32 = 2;
 
 /// Inclusive range of [`HandoffDocument`] schema versions this build can
 /// restore.
@@ -40,8 +49,7 @@ pub const HANDOFF_SCHEMA_VERSION: u32 = 1;
 /// so it can also restore its immediate predecessor's format.
 /// [`decode_handoff_document`] rejects any document whose version falls
 /// outside this range.
-pub const SUPPORTED_HANDOFF_SCHEMA_VERSIONS: RangeInclusive<u32> =
-    HANDOFF_SCHEMA_VERSION..=HANDOFF_SCHEMA_VERSION;
+pub const SUPPORTED_HANDOFF_SCHEMA_VERSIONS: RangeInclusive<u32> = 1..=HANDOFF_SCHEMA_VERSION;
 
 /// One pane's transferable state.
 ///
@@ -79,6 +87,138 @@ pub struct HandoffPane {
     /// parser by replaying these bytes, not by carrying byte-exact parser
     /// state).
     pub scrollback: Vec<u8>,
+    /// This pane's inferred-clear latch state (task0004, SPEC FR6):
+    /// mirrors the daemon-side `AgentStatusExitLatch`'s three state
+    /// components (`state_parts()`/`from_state_parts()`) exactly, as
+    /// primitives rather than the daemon-side type itself — `mux_ipc`
+    /// depends on nothing from the daemon binary (module docs), so the
+    /// latch type (which lives in `src-tauri`) cannot appear here.
+    pub latch_armed: bool,
+    /// See [`Self::latch_armed`].
+    pub latch_command_ended: bool,
+    /// See [`Self::latch_armed`].
+    pub latch_generation: u64,
+}
+
+/// Version-1 shape of [`HandoffPane`] (pre-task0004): identical to the
+/// current struct minus the three latch fields.
+///
+/// Kept only so [`decode_handoff_document`] can read a schema-version-1
+/// document written by a pre-task0004 daemon during hot-upgrade and
+/// upgrade it into the current [`HandoffPane`] with the latch fields
+/// defaulted to disarmed (no Set was pending under the old binary, since
+/// the latch didn't exist yet).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffPaneV1 {
+    id: u32,
+    cols: u16,
+    rows: u16,
+    cwd: Option<String>,
+    title: Option<String>,
+    agent_state: Option<AgentState>,
+    agent_name: Option<String>,
+    agent_revision: u64,
+    exited: bool,
+    child_pid: Option<u32>,
+    master_fd: Option<i32>,
+    scrollback: Vec<u8>,
+}
+
+impl From<HandoffPaneV1> for HandoffPane {
+    fn from(v1: HandoffPaneV1) -> Self {
+        HandoffPane {
+            id: v1.id,
+            cols: v1.cols,
+            rows: v1.rows,
+            cwd: v1.cwd,
+            title: v1.title,
+            agent_state: v1.agent_state,
+            agent_name: v1.agent_name,
+            agent_revision: v1.agent_revision,
+            exited: v1.exited,
+            child_pid: v1.child_pid,
+            master_fd: v1.master_fd,
+            scrollback: v1.scrollback,
+            // A version-1 document predates the inferred-clear latch
+            // (task0004): treat every pane as disarmed.
+            latch_armed: false,
+            latch_command_ended: false,
+            latch_generation: 0,
+        }
+    }
+}
+
+/// Version-1 shape of [`HandoffWindow`]: identical to the current struct,
+/// but its panes are [`HandoffPaneV1`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffWindowV1 {
+    id: u32,
+    name: String,
+    active_pane_id: Option<u32>,
+    next_pane_id: u32,
+    panes: Vec<HandoffPaneV1>,
+}
+
+impl From<HandoffWindowV1> for HandoffWindow {
+    fn from(v1: HandoffWindowV1) -> Self {
+        HandoffWindow {
+            id: v1.id,
+            name: v1.name,
+            active_pane_id: v1.active_pane_id,
+            next_pane_id: v1.next_pane_id,
+            panes: v1.panes.into_iter().map(HandoffPane::from).collect(),
+        }
+    }
+}
+
+/// Version-1 shape of [`HandoffSession`]: identical to the current struct,
+/// but its windows are [`HandoffWindowV1`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffSessionV1 {
+    id: u32,
+    name: String,
+    window_order: Vec<u32>,
+    active_window_id: Option<u32>,
+    next_window_id: u32,
+    windows: Vec<HandoffWindowV1>,
+}
+
+impl From<HandoffSessionV1> for HandoffSession {
+    fn from(v1: HandoffSessionV1) -> Self {
+        HandoffSession {
+            id: v1.id,
+            name: v1.name,
+            window_order: v1.window_order,
+            active_window_id: v1.active_window_id,
+            next_window_id: v1.next_window_id,
+            windows: v1.windows.into_iter().map(HandoffWindow::from).collect(),
+        }
+    }
+}
+
+/// Version-1 shape of [`HandoffDocument`]: identical to the current struct,
+/// but its sessions are [`HandoffSessionV1`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffDocumentV1 {
+    schema_version: u32,
+    incarnation: String,
+    listen_fd: i32,
+    next_session_id: u32,
+    next_pane_id: u32,
+    sessions: Vec<HandoffSessionV1>,
+}
+
+impl From<HandoffDocumentV1> for HandoffDocument {
+    fn from(v1: HandoffDocumentV1) -> Self {
+        HandoffDocument {
+            schema_version: HANDOFF_SCHEMA_VERSION,
+            incarnation: v1.incarnation,
+            listen_fd: v1.listen_fd,
+            next_session_id: v1.next_session_id,
+            next_pane_id: v1.next_pane_id,
+            sessions: v1.sessions.into_iter().map(HandoffSession::from).collect(),
+        }
+    }
 }
 
 /// One window's transferable state: its panes plus the window-scoped pane
@@ -194,6 +334,11 @@ pub fn decode_handoff_document(bytes: &[u8]) -> Result<HandoffDocument, HandoffD
             supported: SUPPORTED_HANDOFF_SCHEMA_VERSIONS,
         });
     }
+    if version == 1 {
+        let doc_v1: HandoffDocumentV1 =
+            bincode::deserialize(bytes).map_err(|_| HandoffDecodeError::Malformed)?;
+        return Ok(HandoffDocument::from(doc_v1));
+    }
     bincode::deserialize(bytes).map_err(|_| HandoffDecodeError::Malformed)
 }
 
@@ -217,6 +362,12 @@ mod tests {
             // Arbitrary bytes, including an embedded zero byte and a
             // sequence that is not valid UTF-8, per the Test Notes.
             scrollback: vec![0x1b, b'[', b'2', b'J', 0x00, 0xff, 0xfe, b'o', b'k'],
+            // task0004: a mid-flight latch (armed, command already ended,
+            // non-zero generation) so the round-trip test below actually
+            // exercises non-default values for all three components.
+            latch_armed: true,
+            latch_command_ended: true,
+            latch_generation: 3,
         }
     }
 
@@ -316,6 +467,11 @@ mod tests {
             child_pid: None,
             master_fd: None,
             scrollback: Vec::new(),
+            // An exited pane's latch is disarmed (the default state) —
+            // no Set was pending when the pane exited.
+            latch_armed: false,
+            latch_command_ended: false,
+            latch_generation: 0,
         };
         let doc = HandoffDocument {
             schema_version: HANDOFF_SCHEMA_VERSION,
@@ -389,6 +545,61 @@ mod tests {
             decode_handoff_document(&[0x01, 0x02]),
             Err(HandoffDecodeError::Malformed)
         );
+    }
+
+    /// Hot-upgrade backward compatibility: a version-1 document (written by
+    /// a pre-task0004 daemon, before the latch fields existed) decodes
+    /// successfully into the current [`HandoffPane`] shape with the latch
+    /// fields defaulted to disarmed.
+    #[test]
+    fn test_decode_handoff_document_upgrades_v1_document_with_disarmed_latch() {
+        let pane_v1 = HandoffPaneV1 {
+            id: 1,
+            cols: 80,
+            rows: 24,
+            cwd: Some("/home/user/project".to_string()),
+            title: Some("zsh".to_string()),
+            agent_state: Some(AgentState::Working),
+            agent_name: Some("claude".to_string()),
+            agent_revision: 3,
+            exited: false,
+            child_pid: Some(4242),
+            master_fd: Some(11),
+            scrollback: vec![0x1b, b'[', b'2', b'J', 0x00, 0xff, 0xfe, b'o', b'k'],
+        };
+        let doc_v1 = HandoffDocumentV1 {
+            schema_version: 1,
+            incarnation: "a1b2c3d4".to_string(),
+            listen_fd: 3,
+            next_session_id: 2,
+            next_pane_id: 2,
+            sessions: vec![HandoffSessionV1 {
+                id: 1,
+                name: "main".to_string(),
+                window_order: vec![1],
+                active_window_id: Some(1),
+                next_window_id: 2,
+                windows: vec![HandoffWindowV1 {
+                    id: 1,
+                    name: "shell".to_string(),
+                    active_pane_id: Some(1),
+                    next_pane_id: 2,
+                    panes: vec![pane_v1],
+                }],
+            }],
+        };
+        let encoded = bincode::serialize(&doc_v1).expect("v1 document serialization");
+
+        let decoded = decode_handoff_document(&encoded).expect("v1 document should decode");
+
+        assert_eq!(decoded.schema_version, HANDOFF_SCHEMA_VERSION);
+        assert_eq!(decoded.incarnation, "a1b2c3d4");
+        let pane = &decoded.sessions[0].windows[0].panes[0];
+        assert_eq!(pane.id, 1);
+        assert_eq!(pane.child_pid, Some(4242));
+        assert!(!pane.latch_armed);
+        assert!(!pane.latch_command_ended);
+        assert_eq!(pane.latch_generation, 0);
     }
 
     /// Locks in the encoding assumption `decode_handoff_document` depends
