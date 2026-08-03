@@ -1,0 +1,40 @@
+schema_version: 1
+feature: mux-daemon-binary-update-detect
+phase: create-plan
+status: completed
+generation: 1
+base_revision: a7062906187c5cc7c257daca01c05438198a0a4d
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: completed
+    input_digest: null
+    output_digest: null
+artifacts:
+  - path: feature-docs/mux-daemon-binary-update-detect/IMPLEMENTATION.md
+    sha256: null
+    produced_by: create-plan-run-0001
+  - path: feature-docs/mux-daemon-binary-update-detect/VERIFICATION.md
+    sha256: null
+    produced_by: create-plan-run-0001
+  - path: feature-docs/mux-daemon-binary-update-detect/tasks/task0001.md
+    sha256: null
+    produced_by: create-plan-run-0001
+  - path: feature-docs/mux-daemon-binary-update-detect/tasks/task0002.md
+    sha256: null
+    produced_by: create-plan-run-0001
+  - path: feature-docs/mux-daemon-binary-update-detect/tasks/task0003.md
+    sha256: null
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: mux-daemon-binary-update-detect-p0001
+    status: applied
+    base_input_digest: null
+    base_workflow_blob: null
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
