@@ -1,0 +1,343 @@
+round: 2
+executed_at: "2026-08-03T20:35:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: bda16c60713e9d9dcc9633b874a4b76a92694d92
+  head_commit: 55ad5b02bb55b3a6c693b22154c5cd32689df563
+  changed_files:
+    - src-tauri/src/mux/cli.rs
+    - src-tauri/src/mux/daemon.rs
+    - src-tauri/src/mux/identity.rs
+    - src-tauri/src/mux/mod.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/tests/mux_hot_upgrade.rs
+    - test-docs/mux-daemon-binary-update-detect/task0001.tests.yaml
+    - test-docs/mux-daemon-binary-update-detect/task0002.tests.yaml
+    - test-docs/mux-daemon-binary-update-detect/task0003.tests.yaml
+    - test-docs/mux-daemon-binary-update-detect/task0004.tests.yaml
+    - test-docs/mux-daemon-binary-update-detect/task0005.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: completed}
+
+findings:
+  # --- round1 findings that were the direct target of task0004/task0005 rework ---
+  - stable_id: sid-upgrade-candidate-exec-without-validation
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/daemon.rs
+    line: 1691
+    title: "Upgrade candidate binary is exec'd without ownership/writability validation, violating SPEC NFR3"
+    description: "round1 deferred finding. task0004 added validate_candidate_path gating both the pre-probe admission (daemon.rs) and the pre-exec re-check (cli.rs). Confirmed by round2 security/comprehensive/spec reviewers as structurally closed (no exec route bypasses validation). Exposed two narrower residual gaps, tracked separately below (sid-nfr3-group-write-blocks-dev-builds, sid-probe-exec-not-pinned-same-file)."
+    sources: [claude:security, claude:comprehensive, claude:spec, codex:spec]
+    confidence: 90
+    resolution: fixed
+    resolution_reason: "task0004: candidate validation gate implemented at both call sites; core mechanism confirmed sound by round2's independent security/comprehensive review."
+
+  - stable_id: sid-notification-without-proof-of-replacement
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/daemon.rs
+    line: 934
+    title: "The 'daemon upgraded' notice was emitted on reachability alone, without positive proof of replacement"
+    description: "round1 deferred finding. task0005 added a post-reachability identity::check requiring Unchanged verdict before emitting the success notice. Confirmed resolved by round2 security/architecture reviewers (ordering is sound: new daemon re-records identity before its accept loop starts)."
+    sources: [claude:security, claude:architecture]
+    confidence: 90
+    resolution: fixed
+    resolution_reason: "task0005: post-reachability identity re-check implemented; confirmed sound by round2 review."
+
+  - stable_id: sid-failed-upgrade-not-suppressed
+    severity: high
+    category: performance
+    file: src-tauri/src/mux/daemon.rs
+    line: 917
+    title: "A rejected/timed-out automatic upgrade was never suppressed, causing repeated costly attempts"
+    description: "round1 deferred finding. task0004 added (device,inode)-keyed repeat-refusal suppression. Round2's own re-review (loop1-3) found and fixed 2 regressions this mechanism itself introduced (see sid-suppression-affects-explicit-upgrade-and-key-too-coarse, sid-validate-failure-suppression-regression below); the final RefusalStage(Validation/PostProbe) design is confirmed correct by architecture/comprehensive/spec across claude+codex in the loop3 re-review, with 3 relevant unit tests passing."
+    sources: [claude:architecture, claude:comprehensive, codex:performance, codex:architecture]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: "task0004 + round2 loop3 fix (RefusalStage design): repeat-refusal suppression now correctly scoped to post-probe refusals only, preserving NFR1 while not blocking a since-fixed candidate."
+
+  # --- issues introduced by the review-round2 auto-fix loops themselves, and fixed within the same round ---
+  - stable_id: sid-suppression-affects-explicit-upgrade-and-key-too-coarse
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 1871
+    title: "Repeat-refusal suppression was keyed too coarsely: a validate-fixed candidate (e.g. chmod) stayed suppressed"
+    description: "Round2 R2 finding. Suppression state didn't distinguish 'validation failure' from 'post-probe failure', so a candidate that failed validation once and was later fixed (same device/inode) stayed blocked. loop1's naive fix (stop recording validate failures) broke 2 existing unit tests and lost NFR1 suppression for repeat validation failures. loop3's RefusalStage(Validation/PostProbe) design fixes the key-granularity gap correctly while preserving NFR1, confirmed by round2's final re-review (architecture/spec/comprehensive, claude+codex)."
+    sources: [claude:architecture, claude:spec, claude:comprehensive, codex:architecture]
+    confidence: 90
+    resolution: fixed
+    resolution_reason: "loop3: RefusalStage design. The 'suppression also blocks the explicit `emterm mux upgrade` command' aspect remains an intentional TODO (would need an UpgradeSignal origin field / wire change), tracked as an open gap but not re-filed as a separate residual finding since severity for that narrow aspect alone is not high."
+
+  - stable_id: sid-validate-failure-suppression-regression
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/daemon.rs
+    line: 1081
+    title: "loop1's fix for key-too-coarse broke 2 existing unit tests and dropped NFR1 suppression for validate failures"
+    description: "loop1 (round2) fixed key-too-coarse by simply clearing last_refused on validate failure, which (a) contradicted admit_upgrade_candidate_blocks_on_validation_failure_and_records_it and admit_upgrade_candidate_clears_suppression_for_a_differing_candidate_and_probes_normally's existing assertions, and (b) let a permanently-invalid candidate re-trigger a visible warning on every attach. loop3's RefusalStage design fixes both: repeat validate failures for the same candidate are suppressed (existing tests updated only in shape, not in what they assert), while validation success always clears the Validation-stage record."
+    sources: [claude:comprehensive, codex:spec]
+    confidence: 90
+    resolution: fixed
+    resolution_reason: "loop3: RefusalStage design. Orchestrator independently re-ran the 3 relevant unit tests (all pass) after the fix."
+
+  - stable_id: sid-shared-binary-copy-leak-and-race
+    severity: high
+    category: performance
+    file: src-tauri/tests/mux_hot_upgrade.rs
+    line: 221
+    title: "loop1's shared-OnceLock test binary copy leaked ~600MB per test process and had a predictable-path symlink race"
+    description: "loop1 fixed round1's tmpfs-bloat finding by sharing one binary copy across 4 non-mutating scenarios via a process-lifetime OnceLock, but the shared directory was never cleaned up (no Drop path) and its pid-based name was predictable, enabling a symlink pre-creation race (codex:security). loop2 reverted the shared-OnceLock approach entirely, restoring per-scenario private copies inside each scenario's own unique_runtime_dir (cleaned via the existing DaemonGuard::drop)."
+    sources: [claude:performance, claude:comprehensive, codex:performance, codex:security]
+    confidence: 90
+    resolution: fixed
+    resolution_reason: "loop2: reverted to per-scenario private copies under unique_runtime_dir; confirmed leak-free and race-free by round2's loop2/loop3 re-reviews."
+
+  - stable_id: sid-tmpfs-bloat-reintroduced-via-failed-hardlink
+    severity: high
+    category: performance
+    file: src-tauri/tests/mux_hot_upgrade.rs
+    line: 207
+    title: "loop2's hard_link-preferring copy always fell back to a full 604MB copy because /tmp and the cargo build dir are different filesystems"
+    description: "loop2 tried std::fs::hard_link before falling back to std::fs::copy, but the destination (unique_runtime_dir under /tmp, tmpfs) and the source (CARGO_BIN_EXE_emterm, typically on the same filesystem as the project checkout) are on different devices in this environment, so hard_link always returned EXDEV and every one of the 9 scenarios fell back to a full copy — reintroducing round1's original multi-GB tmpfs peak. loop3 moved the binary-copy destination to a new unique_bin_dir() colocated with CARGO_BIN_EXE_emterm (same filesystem, confirmed via `stat -c %d`), so hard_link now genuinely succeeds; DaemonGuard was extended to clean up this new directory."
+    sources: [claude:comprehensive, claude:performance, codex:performance]
+    confidence: 95
+    resolution: fixed
+    resolution_reason: "loop3: unique_bin_dir() colocated with the cargo build output. Orchestrator independently confirmed via `stat -c %d` that both paths report the same device (2065) and ran the full mux_hot_upgrade integration suite (9/9 pass)."
+
+  # --- residual findings, deferred (batch.review_rework_count already >= 1 from the prior session's round1 rework) ---
+  - stable_id: sid-nfr3-group-write-blocks-dev-builds
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/identity.rs
+    line: 455
+    title: "NFR3's parent-directory group-write refusal blocks hot-upgrade for daemons launched from umask-002 development builds"
+    description: "validate_entry refuses S_IWGRP on both the candidate and its parent directory, but SPEC NFR3 only requires refusing paths writable by others (S_IWOTH). Under umask 002 (common on Debian/Ubuntu-family systems, confirmed in this repo's own environment), cargo's target-host/release/ is 0o775, so a daemon launched from a dev build always fails validation and hot-upgrade never fires — directly undermining the feature's stated purpose (Overview: 'rebuilt and reinstalled but the fix is not there'). category:spec is excluded from mechanical auto-fix; not addressed by any loop."
+    sources: [claude:spec, claude:comprehensive]
+    confidence: 90
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached (batch.review_rework_count already 1 from the prior session's round1 rework). category:spec is also excluded from mechanical auto-fix by design."
+
+  - stable_id: sid-probe-exec-not-pinned-same-file
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/cli.rs
+    line: 344
+    title: "The handoff-schema-probed candidate is not pinned to the file ultimately exec'd (TOCTOU)"
+    description: "The daemon probes the candidate by pathname, then this final gate re-validates ownership/permissions by pathname and execs by pathname again. An owner-controlled rename between probe and exec can substitute an unprobed, schema-incompatible binary that still passes the NFR3 checks. Not addressed by any loop (category:spec excluded from auto-fix)."
+    sources: [codex:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached. category:spec excluded from mechanical auto-fix."
+
+  - stable_id: sid-legacy-daemon-shutdown-on-upgrade-refusal
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/daemon.rs
+    line: 801
+    title: "A previous-protocol daemon that explicitly refuses an upgrade is misclassified as silent and shut down, destroying its panes"
+    description: "recover_from_legacy_daemon_with's legacy arm sends Upgrade and drops the connection without reading UpgradeResponse; on subsequent reachability-poll failure it falls through to the FR5 shutdown-and-respawn path, which SPEC reserves for a daemon that silently discards Upgrade — not one that explicitly refused via the handoff schema-range gate (FR6 requires the original daemon keep running with panes intact in that case). Not addressed by any loop."
+    sources: [codex:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached. category:spec excluded from mechanical auto-fix."
+
+  - stable_id: sid-cli-upgrade-coordinator-duplication-false-success
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/cli.rs
+    line: 1518
+    title: "execute_upgrade_at (explicit `emterm mux upgrade`) duplicates the automatic-trigger's upgrade coordination but lacks its post-reachability identity re-check, so it can report success on a refused/failed replacement"
+    description: "task0005 added a post-reachability identity::check to the automatic trigger (trigger_binary_update_if_detected) so reachability alone is never read as proof of replacement. The explicit CLI command (execute_upgrade_at) implements the same send/poll/report sequence independently and was never given the same fix: it still prints 'Mux daemon upgraded in place' on reachability alone. Because perform_upgrade_replacement's exec-failure and refusal paths re-enter service on the SAME protocol version, this is a concrete false-success path for the explicit command, not just a theoretical duplication."
+    sources: [claude:architecture, codex:architecture]
+    confidence: 80
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached; the fix (extracting one shared upgrade-coordination helper used by both call sites, or at minimum adding the same identity re-check to execute_upgrade_at) touches 2 files and is not a mechanical single-file auto-fix candidate suited to review-editor's scope."
+
+  - stable_id: sid-probe-stdout-drain-unbounded
+    severity: high
+    category: performance
+    file: src-tauri/src/mux/daemon.rs
+    line: 1342
+    title: "Post-exit probe stdout drain has no size or time bound, risking a permanently-leaked blocking-pool thread"
+    description: "After the probe child exits, read_to_end waits for EOF with no byte or time limit. A candidate that leaves a descendant holding the inherited stdout pipe can block this read indefinitely; the outer tokio::time::timeout only stops awaiting the spawn_blocking task, it does not cancel it, so the blocking-pool thread is lost for the daemon's remaining lifetime. Round1 residual (sid-probe-stdout-pipe-deadlock), re-confirmed and escalated to high in round2's final pass. Not addressed by any loop (this is a distinct site from the loop-3 daemon.rs edits)."
+    sources: [claude:performance, codex:performance]
+    confidence: 90
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached."
+
+  - stable_id: sid-legacy-recovery-cfg-duplication
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 608
+    title: "recover_from_legacy_daemon's unix/non-unix implementations duplicate ~125 lines of recovery state machine"
+    description: "Round1 residual, re-confirmed unchanged in round2's final pass by both claude and codex architecture."
+    sources: [claude:architecture, codex:architecture]
+    confidence: 90
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached."
+
+  - stable_id: sid-sidecar-failure-disables-daemon-capability
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/identity.rs
+    line: 268
+    title: "A sidecar (identity-file) write failure discards the already-captured in-process identity, disabling daemon-local upgrade for the daemon's lifetime"
+    description: "Round1 residual, re-confirmed unchanged in round2's final pass by both claude and codex architecture."
+    sources: [claude:architecture, codex:architecture]
+    confidence: 90
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached."
+
+  - stable_id: sid-suppression-marker-in-freetext-protocol-field
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 931
+    title: "Repeat-refusal suppression is encoded as a string prefix in a free-text error-reason field instead of a typed protocol field"
+    description: "UPGRADE_SUPPRESSED_MARKER is a private daemon.rs constant matched via starts_with by the trigger; the explicit CLI path doesn't interpret it at all. New in round2 (born from task0004's suppression feature), re-confirmed unchanged across loop1-3."
+    sources: [claude:architecture, codex:architecture]
+    confidence: 85
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached; a proper fix needs an IPC protocol type addition, out of scope for mechanical single-file auto-fix."
+
+  - stable_id: sid-compatible-no-longer-guarantees-reachable
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 975
+    title: "LegacyRecovery::Compatible is returned even when the post-upgrade reachability poll times out, breaking its documented postcondition"
+    description: "Round1 residual, re-confirmed unchanged across all 3 loops. review-editor explicitly determined in loop1 that a correct fix needs a new enum variant with matching arms in mux::cli — out of scope for a single-file edit — and skipped it rather than making an unsafe partial change."
+    sources: [claude:architecture, codex:architecture]
+    confidence: 85
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached; review-editor determined in loop1 this needs a cross-file enum change and correctly declined to make an unsafe single-file fix."
+
+  - stable_id: sid-refusal-stage-key-collapses-distinct-failures
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/daemon.rs
+    line: 1112
+    title: "loop3's RefusalStage suppression key doesn't compare the actual failure reason, so a NEW validation failure for the same candidate can be silently suppressed with a stale reason"
+    description: "New gap introduced by loop3's own fix, found by codex:architecture in the final re-review. If a candidate's permissions are partly repaired such that validation now fails for a different rule, the suppression key (stage + device/inode only) still matches the prior record, so the new failure reason is masked by the old one for automatic clients, and an explicit client sees the stale reason."
+    sources: [codex:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached; discovered in the last allowed loop's own re-review, no further auto-fix loop available."
+
+  - stable_id: sid-missing-path-suppression-gap
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/daemon.rs
+    line: 1103
+    title: "When candidate_id capture fails (recorded path missing/deleted), validate-failure suppression never applies, so the warning repeats on every attach"
+    description: "New gap introduced by loop3's own fix, found by claude:comprehensive in the final re-review. The candidate_id==None path (identity recorded but its target no longer exists, e.g. after `make clean`) clears last_refused unconditionally, which is exactly the case NFR1 was meant to cover (a permanently-invalid candidate should only warn once per daemon lifetime)."
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached; discovered in the last allowed loop's own re-review."
+
+  - stable_id: sid-refusal-stage-missing-test-coverage
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/daemon.rs
+    line: 1112
+    title: "Neither of loop3's 2 new RefusalStage branches (repeat-validate-failure suppression; validate-success clears a Validation-stage record) has direct unit test coverage"
+    description: "The 3 pre-existing unit tests don't exercise 'same candidate, validate fails twice' or 'same candidate, validate fails then passes' — exactly the 2 behaviors loop3 changed. A future regression in either direction would pass CI silently. claude:comprehensive proposed 2 concrete test cases in its finding."
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached; test-coverage gap, not a functional defect — left for a follow-up task."
+
+  - stable_id: sid-accept-loop-still-stalls-during-probe
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/daemon.rs
+    line: 1973
+    title: "The daemon's accept loop is not polled while awaiting the upgrade-candidate probe (up to ~3-5s)"
+    description: "prepare_upgrade is awaited inline inside the same tokio::select! arm that polls listener.accept(); the probe subprocess itself is off-loaded via spawn_blocking, but the awaiting select! arm still blocks new connections and signal handling for the probe's duration. Re-confirmed unchanged across round2's loops."
+    sources: [claude:performance, codex:performance]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached."
+
+  - stable_id: sid-reachability-deadline-not-bounding-handshake
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/daemon.rs
+    line: 552
+    title: "The 20s reachability poll deadline is only checked between attempts, not during an in-flight handshake, so total elapsed time can exceed the documented bound"
+    description: "Round1 residual (sid-reachability-deadline-budget-mismatch), re-confirmed unchanged across round2's loops."
+    sources: [claude:performance, codex:performance]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached."
+
+  - stable_id: sid-setup-failure-leak-before-daemonguard
+    severity: medium
+    category: performance
+    file: src-tauri/tests/mux_hot_upgrade.rs
+    line: 697
+    title: "A setup failure between binary-copy and DaemonGuard construction leaks the copy/directory (no RAII owner exists yet)"
+    description: "New in round2 (test-infra), found by codex:performance during loop2/loop3 re-review. All 9 scenarios create their runtime/bin directories and copy the binary before constructing DaemonGuard; a panic or error in that window leaks the directory."
+    sources: [codex:performance]
+    confidence: 55
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached; low-probability path (only on setup failure), left for a follow-up task."
+
+  - stable_id: sid-identity-read-hardening-asymmetry
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/identity.rs
+    line: 304
+    title: "Identity-file reads don't use O_NOFOLLOW, asymmetric with the write path's hardening"
+    description: "Round1 residual, re-confirmed unchanged across round2's loops."
+    sources: [claude:spec, codex:spec]
+    confidence: 90
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached. category:spec excluded from mechanical auto-fix."
+
+  - stable_id: sid-decoded-path-not-validated
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/identity.rs
+    line: 144
+    title: "decode() accepts an empty or relative executable path, which later misfires as Updated instead of Undecidable"
+    description: "Round1 residual, re-confirmed unchanged across round2's loops."
+    sources: [claude:spec, codex:spec]
+    confidence: 90
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached. category:spec excluded from mechanical auto-fix."
+
+  - stable_id: sid-startup-identity-toctou
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/identity.rs
+    line: 272
+    title: "Startup identity capture stats the resolved exe path rather than the running image, so a rename between exec and stat can record the newly-installed file's identity instead of the running one"
+    description: "New in round2, found independently by claude:spec and codex:spec. A daemon whose own binary is replaced in the narrow window between its exec and its own startup identity capture would record the NEW file's (dev,ino), then report Unchanged forever afterward — the exact 'stale image never detected' state this whole feature exists to prevent, in a rare startup-race form."
+    sources: [claude:spec, codex:spec]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached. category:spec excluded from mechanical auto-fix."
+
+auto_fix:
+  loops_run: 3
+  applied_total: 6
+  termination: loop-cap
+residual_critical_high: 5
+rework_required: false
