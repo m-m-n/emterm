@@ -1045,10 +1045,14 @@ enum UpgradeAdmission {
 /// real daemon uid (AC-2 unit half, AC-4, AC-5).
 ///
 /// Mutates `last_refused`: cleared on anything other than a matching repeat
-/// (Design: "If it differs, or the capture fails -> clear the state"), and
-/// set to the fresh reason when validation itself fails (Design
-/// "Recording": "validation failure... record that candidate's (device,
-/// inode) and the reason").
+/// (Design: "If it differs, or the capture fails -> clear the state"),
+/// including when validation itself fails. A validation failure is NOT
+/// recorded into `last_refused`: recording it would incorrectly suppress a
+/// later candidate that shares the same `(device, inode)` but has since
+/// been fixed (e.g. an operator ran `chmod` on a world-writable candidate
+/// without changing its identity) and now passes `validate`. Suppression
+/// recording is reserved for POST-probe refusals only (see
+/// [`record_post_probe_refusal`]).
 #[cfg(unix)]
 fn admit_upgrade_candidate(
     candidate: &Path,
@@ -1075,9 +1079,11 @@ fn admit_upgrade_candidate(
     // explicit user command at all; that is a wire-protocol change out of
     // scope here.
     if let Err(reason) = validate(candidate) {
-        if let Some(id) = candidate_id {
-            *last_refused = Some((id, reason.clone()));
-        }
+        // Do not record this into `last_refused`: doing so would suppress a
+        // later candidate with the same (device, inode) that has since
+        // passed validation (e.g. after a `chmod` fix). Suppression is
+        // reserved for POST-probe refusals; clear any stale state instead.
+        *last_refused = None;
         return UpgradeAdmission::Blocked(reason);
     }
 
