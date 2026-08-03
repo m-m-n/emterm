@@ -1168,6 +1168,17 @@ fn real_snapshot(
 #[cfg(unix)]
 const UPGRADE_ANNOUNCE_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Bound on how long [`prepare_upgrade`] waits for the candidate binary's
+/// `probe-handoff` subprocess (`probe_candidate_handoff_range`) to complete.
+/// That probe is a real subprocess spawn/exec on the candidate binary,
+/// which can hang indefinitely (e.g. stuck resolving a shared library) --
+/// without this bound, a hung probe would stall this async fn's caller,
+/// `run_daemon`'s `tokio::select!` loop, freezing the daemon's entire
+/// accept/dispatch loop. A hang resolves to the existing upgrade-refusal
+/// reply path, same as any other probe failure.
+#[cfg(unix)]
+const UPGRADE_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Perform upgrade preparation (design steps 1-3): probe compatibility,
 /// snapshot the live session tree to the handoff file next to `socket_path`
 /// (owned end-to-end by `crate::mux::upgrade`), wait -- bounded -- for
@@ -1192,14 +1203,39 @@ async fn prepare_upgrade(
     socket_path: &Path,
     current_schema_version: u32,
     upgrade_ack_slot: &SharedUpgradeAckSlot,
-    probe: impl Fn(&Path) -> Result<std::ops::RangeInclusive<u32>, String>,
+    probe: impl Fn(&Path) -> Result<std::ops::RangeInclusive<u32>, String> + Send + 'static,
     snapshot: impl FnOnce(
         &SessionManager,
         RawFd,
         &Path,
     ) -> Result<mux_ipc::handoff::HandoffDocument, String>,
 ) -> Result<UpgradeRequest, String> {
-    let range = probe(candidate)?;
+    // The real `probe` (`probe_candidate_handoff_range`) runs a synchronous,
+    // untimed subprocess spawn/wait on the candidate binary. This async fn
+    // is awaited directly inside `run_daemon`'s `tokio::select!` loop, so
+    // calling it in-line here would block that loop's executor thread on
+    // whatever the candidate binary does at startup. Run it on a blocking
+    // thread and bound the wait, so a hung candidate degrades to the
+    // existing upgrade-refusal path instead of stalling the daemon.
+    let candidate_owned = candidate.to_path_buf();
+    let range = match tokio::time::timeout(
+        UPGRADE_PROBE_TIMEOUT,
+        tokio::task::spawn_blocking(move || probe(&candidate_owned)),
+    )
+    .await
+    {
+        Ok(Ok(Ok(range))) => range,
+        Ok(Ok(Err(e))) => return Err(e),
+        Ok(Err(join_err)) => {
+            return Err(format!("handoff probe task failed to run: {join_err}"));
+        }
+        Err(_) => {
+            return Err(format!(
+                "handoff probe on {candidate:?} timed out after {:?}",
+                UPGRADE_PROBE_TIMEOUT
+            ));
+        }
+    };
     if !range.contains(&current_schema_version) {
         return Err(format!(
             "candidate binary {candidate:?} supports handoff schema {}-{}, this daemon needs {}",
@@ -1475,20 +1511,6 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
         }
     }
 
-    // task0001 (mux-daemon-binary-update-detect, Design D4): record-or-
-    // invalidate the daemon's own start-binary identity on EVERY pass
-    // through this function -- fresh bind, post-execve handoff start, and
-    // failed-exec re-entry (`run_daemon_in_handoff_mode`) all funnel through
-    // `run_daemon` itself, so placing this call here, right after the
-    // socket's parent directory is ensured, covers all three routes
-    // uniformly. Kept in-process (not re-read from disk) so the
-    // upgrade-signal branch below resolves its exec candidate from exactly
-    // the value that was persisted, never from a fresh resolution (D3).
-    let recorded_identity = crate::mux::identity::record_or_invalidate(
-        std::env::current_exe().ok().as_deref(),
-        &sock_path,
-    );
-
     // Daemon-level channels are created BEFORE `startup()` (task0009 rework:
     // a handoff-mode start's `restore` re-wires each restored live pane's
     // reader thread through these SAME senders, exactly like a freshly
@@ -1534,6 +1556,25 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
         &agent_status_tx,
         &pane_exit_sender,
     )?;
+
+    // task0001 (mux-daemon-binary-update-detect, Design D4): record-or-
+    // invalidate the daemon's own start-binary identity on EVERY pass
+    // through this function -- fresh bind, post-execve handoff start, and
+    // failed-exec re-entry (`run_daemon_in_handoff_mode`) all funnel through
+    // `run_daemon` itself, so placing this call here, right after `startup()`
+    // has returned successfully, covers all three routes uniformly while
+    // ensuring the identity file is only published once this process has
+    // confirmed it owns the listening socket -- a competing process that
+    // loses the bind race never gets this far and so never overwrites the
+    // active daemon's identity sidecar (cluster1-identity-write-timing).
+    // Kept in-process (not re-read from disk) so the upgrade-signal branch
+    // below resolves its exec candidate from exactly the value that was
+    // persisted, never from a fresh resolution (D3).
+    let recorded_identity = crate::mux::identity::record_or_invalidate(
+        std::env::current_exe().ok().as_deref(),
+        &sock_path,
+    );
+
     let session_manager = Arc::new(Mutex::new(restored_manager));
 
     tokio::spawn(run_title_update_task(session_manager.clone(), title_rx));
