@@ -38,9 +38,26 @@ workflow:
     status: completed
     completed_at_commit: 55ad5b02bb55b3a6c693b22154c5cd32689df563
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: |
+      build (default + --no-default-features/NFR2): pass.
+      unit tests: mux module 713/713 pass (--lib -- mux:: --test-threads=1);
+      full --lib run shows 21 (7 under --test-threads=1) failures, all in
+      tabs::tests, an unrelated off-thread-swap subsystem this feature never
+      touches. Confirmed pre-existing: identical to task0004's own
+      baseline_failures captured before this feature's changes, and matches
+      LESSONS.md's documented tabs.rs replay-test flakiness. Not a
+      regression from this feature.
+      E2E (cargo test --test mux_hot_upgrade -- --test-threads=1): 9/9 pass.
+      format (cargo fmt --check): fails with ~120 diffs spanning files this
+      feature never touched (app.rs, tabs.rs, ui/mux_sidebar.rs,
+      window_host.rs, etc.) — pre-existing project-wide style drift; project
+      convention (CLAUDE.md/memory) is rustfmt is not enforced.
+      All TS-1..TS-13 (VERIFICATION.md) map to mux/identity/daemon behavior,
+      covered by the passing mux-module unit + E2E runs.
+    completed_at_commit: 1521e1969151652d0b33fb46b637bd0fa3fa850f
   - id: retrospect
     status: pending
 
