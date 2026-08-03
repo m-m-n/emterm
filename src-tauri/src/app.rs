@@ -7858,29 +7858,7 @@ mod tests {
     fn app_with_mux_windows(n: usize) -> App {
         let mut app = App::new();
         app.spawn_initial_tab();
-        let windows: Vec<WindowInfo> = (0..n)
-            .map(|i| WindowInfo {
-                id: i as u32,
-                name: format!("w{i}"),
-                active_pane_id: 100 + i as u32,
-            })
-            .collect();
-        let welcome = MuxMessage::control(
-            MessageType::Welcome,
-            0,
-            &WelcomeMsg::Accepted {
-                server_version: 1,
-                sessions: vec![SessionInfo {
-                    id: 1,
-                    name: "main".to_string(),
-                    window_count: n as u32,
-                    pane_count: n as u32,
-                    active_window_index: 0,
-                    windows,
-                }],
-            },
-        );
-        app.on_mux_message(0, welcome);
+        app.on_mux_message(0, mux_welcome_message(n));
         app
     }
 
