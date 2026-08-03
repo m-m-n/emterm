@@ -58,7 +58,7 @@ workflow:
       ~/bin/init-mux and observe the sidebar. Recorded as an outstanding
       manual verification item for the user.
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
