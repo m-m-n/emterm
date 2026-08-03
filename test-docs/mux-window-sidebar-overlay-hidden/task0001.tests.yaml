@@ -1,0 +1,43 @@
+task_id: task0001
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests: [app::tests::ac1_overlay_reopens_on_the_not_attached_to_attached_transition]
+    red_confirmed: true
+    red_reason: "assertion failed at app.rs:8130 — \"AC-1: not-attached -> attached transition reopens the overlay\": flag stayed closed after a real Welcome attach + pump because pump_all had no attach-transition assignment yet"
+  AC-2:
+    tests: [app::tests::ac2_overlay_reopens_on_reattach_after_an_explicit_close]
+    red_confirmed: true
+    red_reason: "assertion failed at app.rs:8169 — \"AC-2: reattach after an explicit close reopens the overlay\": flag stayed closed after Detach + reattach because pump_all had no attach-transition assignment yet"
+  AC-3:
+    tests: [app::tests::ac3_overlay_stays_closed_across_further_pumps_while_continuously_attached]
+    red_confirmed: false
+    red_reason: "AC-3 is a negative/regression guard (the rule must NOT fire on a steady attached state). Before the attach-transition rule existed, there was nothing to misfire, so the assertion trivially held against current code — it could not be made to fail first. It stayed green after implementation too, correctly proving the rule does not fire on Some(active)->Some(active) (no transition)."
+  AC-4:
+    tests:
+      - app::tests::ac7_mux_sidebar_overlay_open_on_a_freshly_constructed_app
+      - app::tests::mux_sidebar_overlay_resets_when_focused_tabs_mux_group_tears_down
+      - app::tests::mux_sidebar_overlay_survives_switching_away_from_the_mux_tab
+      - app::tests::ac2_toggle_round_trips_when_overlay_mode_enabled
+      - app::tests::ac3_toggle_is_strict_noop_when_overlay_mode_disabled
+    red_confirmed: false
+    red_reason: "AC-4 is pure regression coverage (existing tests + full --lib suite must stay green); no red phase applicable. Verified: the five listed tests pass, and the full --lib suite (--test-threads=1) ends with final_failures == baseline_failures (the 7 pre-existing tabs.rs off-thread-replay-timing / welcome_without_windows_leaves_group_none failures, unrelated to app.rs)."
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: "AC-5 is a diff-scope/NFR check, not a test: verified via `git diff --stat` (only src-tauri/src/app.rs plus this tests.yaml changed), and by inspection that the construction-time `mux_sidebar_overlay_open: true` init and `active_mux_attached_prev_pump: None` init at construction were left untouched, no settings-schema change was made, and `window_sidebar_overlay` is read nowhere new (the new rule is unconditional, matching the existing detach guard)."
