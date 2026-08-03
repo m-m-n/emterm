@@ -26,6 +26,13 @@ pub mod bridge;
 pub mod cli;
 pub mod daemon;
 pub mod dialog;
+// task0001 (mux-daemon-binary-update-detect): daemon start-binary identity
+// recording (record-or-invalidate at startup) and the client-side
+// comparison verdict used to detect a binary replacement. Unix only,
+// matching `upgrade` / `inherited_pty` — device/inode identity and the
+// hardening primitives it depends on have no Windows equivalent (NFR2).
+#[cfg(unix)]
+pub mod identity;
 // task0002 (mux daemon hot-upgrade): raw-descriptor → `MasterPty` adapter
 // for descriptors inherited across a process replacement. Unix only —
 // process replacement (`execve`) and the descriptor semantics it depends on

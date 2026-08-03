@@ -1249,6 +1249,20 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
         }
     }
 
+    // task0001 (mux-daemon-binary-update-detect, Design D4): record-or-
+    // invalidate the daemon's own start-binary identity on EVERY pass
+    // through this function -- fresh bind, post-execve handoff start, and
+    // failed-exec re-entry (`run_daemon_in_handoff_mode`) all funnel through
+    // `run_daemon` itself, so placing this call here, right after the
+    // socket's parent directory is ensured, covers all three routes
+    // uniformly. Kept in-process (not re-read from disk) so the
+    // upgrade-signal branch below resolves its exec candidate from exactly
+    // the value that was persisted, never from a fresh resolution (D3).
+    let recorded_identity = crate::mux::identity::record_or_invalidate(
+        std::env::current_exe().ok().as_deref(),
+        &sock_path,
+    );
+
     // Daemon-level channels are created BEFORE `startup()` (task0009 rework:
     // a handoff-mode start's `restore` re-wires each restored live pane's
     // reader thread through these SAME senders, exactly like a freshly
@@ -1352,10 +1366,18 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
             }
             Some(signal) = upgrade_rx.recv() => {
                 let UpgradeSignal { reply } = signal;
-                let candidate = match crate::self_exec::self_exe_path() {
+                // task0001 (Design D3): the exec candidate comes exclusively
+                // from the identity recorded at this process's own startup
+                // -- never from a fresh executable-path resolution, which
+                // resolves to a "(deleted)" path after a rename-replacement
+                // and would re-launch the SAME old image. No recorded
+                // identity means the capture at startup failed; refuse
+                // rather than fall back to fresh resolution (NFR3).
+                let candidate = match crate::mux::identity::resolve_upgrade_candidate(
+                    recorded_identity.as_ref(),
+                ) {
                     Ok(p) => p,
-                    Err(e) => {
-                        let msg = format!("cannot resolve upgrade candidate binary: {e}");
+                    Err(msg) => {
                         log::warn!("mux upgrade aborted: {}", msg);
                         let _ = reply.send(Err(msg));
                         continue;
