@@ -359,6 +359,186 @@ pub fn resolve_upgrade_candidate(recorded: Option<&RecordedIdentity>) -> Result<
     }
 }
 
+// ============================================================================
+// task0004 (mux-daemon-binary-update-detect, NFR3): candidate-validation --
+// the daemon never probes or execs an upgrade candidate whose current
+// on-disk state is not owner-controlled. Two layers, per the task plan's
+// Design "Candidate validation": a pure decision function over captured
+// attributes ([`validate_candidate`], table-testable without privileged
+// fixtures), and a thin capture wrapper ([`validate_candidate_path`]) that
+// reads the candidate's and its parent directory's metadata WITHOUT
+// following a symlink at the inspected path itself.
+// ============================================================================
+
+/// Kind of filesystem entry inspected at a path, WITHOUT following any
+/// symlink at that path itself (Design "Candidate validation" step 2: "the
+/// check must describe the entry at that path, not a symlink target").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    RegularFile,
+    Directory,
+    Symlink,
+    /// Anything else stat can report (device node, fifo, socket, ...).
+    Other,
+}
+
+fn kind_description(kind: EntryKind) -> &'static str {
+    match kind {
+        EntryKind::RegularFile => "a regular file",
+        EntryKind::Directory => "a directory",
+        EntryKind::Symlink => "a symlink",
+        EntryKind::Other => "a special file",
+    }
+}
+
+/// Captured attributes of one filesystem entry -- either the upgrade
+/// candidate itself or its parent directory -- needed by the pure decision
+/// function [`validate_candidate`]. Captured WITHOUT following a symlink at
+/// the inspected path by [`capture_entry`] / [`validate_candidate_path`].
+#[derive(Debug, Clone, Copy)]
+pub struct EntryAttributes {
+    pub kind: EntryKind,
+    pub uid: u32,
+    pub mode: u32,
+}
+
+/// Which role an [`EntryAttributes`] plays in [`validate_candidate`]'s rule
+/// table -- only the expected [`EntryKind`] and the label used in a refusal
+/// reason differ between the candidate and its parent directory.
+#[derive(Debug, Clone, Copy)]
+enum EntryRole {
+    Candidate,
+    ParentDirectory,
+}
+
+impl EntryRole {
+    fn expected_kind(self) -> EntryKind {
+        match self {
+            EntryRole::Candidate => EntryKind::RegularFile,
+            EntryRole::ParentDirectory => EntryKind::Directory,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            EntryRole::Candidate => "upgrade candidate",
+            EntryRole::ParentDirectory => "upgrade candidate's parent directory",
+        }
+    }
+}
+
+/// Validate one captured entry against NFR3's rule table -- ALL must hold,
+/// in order: the entry must be the expected kind (regular file for the
+/// candidate, directory for its parent -- a symlink at either is refused
+/// under this same check, never followed); its owner must be the daemon's
+/// own effective uid or root; and neither the group-write nor world-write
+/// permission bit may be set. Returns a human-readable reason naming the
+/// FIRST failed rule.
+fn validate_entry(attrs: EntryAttributes, role: EntryRole, daemon_uid: u32) -> Result<(), String> {
+    let expected = role.expected_kind();
+    if attrs.kind != expected {
+        return Err(format!(
+            "{} must be {}, but is {}",
+            role.label(),
+            kind_description(expected),
+            kind_description(attrs.kind),
+        ));
+    }
+    if attrs.uid != daemon_uid && attrs.uid != 0 {
+        return Err(format!(
+            "{} is owned by uid {} (neither the daemon's effective uid {} nor root)",
+            role.label(),
+            attrs.uid,
+            daemon_uid,
+        ));
+    }
+    let write_bits = attrs.mode & (libc::S_IWGRP | libc::S_IWOTH) as u32;
+    if write_bits != 0 {
+        return Err(format!(
+            "{} permission bits {:o} allow group or world write",
+            role.label(),
+            attrs.mode & 0o777,
+        ));
+    }
+    Ok(())
+}
+
+/// Pure decision over captured attributes of the candidate AND its parent
+/// directory (Design "Candidate validation", NFR3): ALL rules must hold for
+/// BOTH entries. Table-testable without privileged fixtures -- callers
+/// parameterize `daemon_uid` and both [`EntryAttributes`] directly (a
+/// foreign-uid or root-owner row is simply a value, never a file actually
+/// created on disk).
+pub fn validate_candidate(
+    candidate: EntryAttributes,
+    parent: EntryAttributes,
+    daemon_uid: u32,
+) -> Result<(), String> {
+    validate_entry(candidate, EntryRole::Candidate, daemon_uid)?;
+    validate_entry(parent, EntryRole::ParentDirectory, daemon_uid)?;
+    Ok(())
+}
+
+/// Capture one filesystem entry's attributes WITHOUT following a symlink at
+/// `path` itself (NFR3): `symlink_metadata`, never `metadata`.
+fn capture_entry(path: &Path) -> io::Result<EntryAttributes> {
+    let meta = std::fs::symlink_metadata(path)?;
+    let file_type = meta.file_type();
+    let kind = if file_type.is_symlink() {
+        EntryKind::Symlink
+    } else if file_type.is_dir() {
+        EntryKind::Directory
+    } else if file_type.is_file() {
+        EntryKind::RegularFile
+    } else {
+        EntryKind::Other
+    };
+    Ok(EntryAttributes {
+        kind,
+        uid: meta.uid(),
+        mode: meta.mode(),
+    })
+}
+
+/// Capture wrapper (Design "Candidate validation" step 2): inspects
+/// `candidate` and its parent directory -- each via `symlink_metadata`, so
+/// neither read ever follows a symlink at the inspected path -- then applies
+/// [`validate_candidate`]. An I/O failure capturing either entry is itself a
+/// refusal (a candidate that cannot even be stat-ed is certainly not
+/// verified-safe to exec).
+pub fn validate_candidate_path(candidate: &Path, daemon_uid: u32) -> Result<(), String> {
+    let candidate_attrs = capture_entry(candidate)
+        .map_err(|e| format!("failed to inspect upgrade candidate {candidate:?}: {e}"))?;
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| format!("upgrade candidate {candidate:?} has no parent directory"))?;
+    let parent_attrs = capture_entry(parent).map_err(|e| {
+        format!("failed to inspect upgrade candidate's parent directory {parent:?}: {e}")
+    })?;
+    validate_candidate(candidate_attrs, parent_attrs, daemon_uid)
+}
+
+/// The daemon's own effective uid, used by [`validate_candidate_path`]'s
+/// NFR3 ownership rule and by production call sites that need a real
+/// `daemon_uid` to pass in.
+pub fn effective_uid() -> u32 {
+    // SAFETY: `geteuid(2)` takes no arguments, touches no memory this
+    // process controls, and cannot fail.
+    unsafe { libc::geteuid() }
+}
+
+/// Capture `path`'s current `(device, inode)` WITHOUT following a symlink at
+/// `path` itself, for the repeat-refusal suppression key (NFR1, Design
+/// "Repeat-refusal suppression"). `None` on any stat failure -- the caller
+/// treats that the same as "the candidate's identity differs from the
+/// recorded refusal" (Design: "If it differs, or the capture fails -> clear
+/// the state").
+pub fn capture_dev_ino(path: &Path) -> Option<(u64, u64)> {
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|m| (m.dev(), m.ino()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,5 +816,229 @@ mod tests {
         let err = resolve_upgrade_candidate(None)
             .expect_err("no recorded identity must refuse rather than resolve");
         assert!(!err.is_empty(), "the refusal reason must be human-readable");
+    }
+
+    // ── task0004 AC-1/AC-3: `validate_candidate`'s full decision table
+    // (pure -- no privileged fixtures; foreign-uid and root-owner rows are
+    // parameterized attribute values, never created on disk) ─────────────
+
+    const DAEMON_UID: u32 = 1000;
+    const ROOT_UID: u32 = 0;
+    const FOREIGN_UID: u32 = 2000;
+
+    fn attrs(kind: EntryKind, uid: u32, mode: u32) -> EntryAttributes {
+        EntryAttributes { kind, uid, mode }
+    }
+
+    fn conforming_candidate() -> EntryAttributes {
+        attrs(EntryKind::RegularFile, DAEMON_UID, 0o644)
+    }
+
+    fn conforming_parent() -> EntryAttributes {
+        attrs(EntryKind::Directory, DAEMON_UID, 0o755)
+    }
+
+    #[test]
+    fn validate_candidate_accepts_owner_owned_regular_file_in_conforming_parent() {
+        assert!(
+            validate_candidate(conforming_candidate(), conforming_parent(), DAEMON_UID).is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_candidate_accepts_root_owned_candidate_and_parent() {
+        let candidate = attrs(EntryKind::RegularFile, ROOT_UID, 0o644);
+        let parent = attrs(EntryKind::Directory, ROOT_UID, 0o755);
+        assert!(
+            validate_candidate(candidate, parent, DAEMON_UID).is_ok(),
+            "a root-owned candidate and parent must be accepted even though the daemon's own \
+             uid differs"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_symlink_candidate() {
+        let candidate = attrs(EntryKind::Symlink, DAEMON_UID, 0o777);
+        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
+            .expect_err("a symlink candidate must be refused");
+        assert!(
+            err.contains("upgrade candidate") && err.contains("symlink"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_non_regular_candidate() {
+        let candidate = attrs(EntryKind::Other, DAEMON_UID, 0o644);
+        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
+            .expect_err("a special-file candidate must be refused");
+        assert!(err.contains("special file"), "{err}");
+    }
+
+    #[test]
+    fn validate_candidate_refuses_directory_candidate() {
+        let candidate = attrs(EntryKind::Directory, DAEMON_UID, 0o755);
+        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
+            .expect_err("a directory candidate must be refused");
+        assert!(err.contains("a regular file"), "{err}");
+    }
+
+    #[test]
+    fn validate_candidate_refuses_group_writable_candidate() {
+        let candidate = attrs(EntryKind::RegularFile, DAEMON_UID, 0o664);
+        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
+            .expect_err("a group-writable candidate must be refused");
+        assert!(
+            err.contains("upgrade candidate") && err.contains("group or world write"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_world_writable_candidate() {
+        let candidate = attrs(EntryKind::RegularFile, DAEMON_UID, 0o646);
+        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
+            .expect_err("a world-writable candidate must be refused");
+        assert!(
+            err.contains("upgrade candidate") && err.contains("group or world write"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_foreign_owner_candidate() {
+        let candidate = attrs(EntryKind::RegularFile, FOREIGN_UID, 0o644);
+        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
+            .expect_err("a candidate owned by neither the daemon's uid nor root must be refused");
+        assert!(
+            err.contains("upgrade candidate") && err.contains("uid"),
+            "{err}"
+        );
+    }
+
+    // ── the same rows, applied to the PARENT directory ────────────────────
+
+    #[test]
+    fn validate_candidate_refuses_symlink_parent() {
+        let parent = attrs(EntryKind::Symlink, DAEMON_UID, 0o777);
+        let err = validate_candidate(conforming_candidate(), parent, DAEMON_UID)
+            .expect_err("a symlink parent directory must be refused");
+        assert!(
+            err.contains("parent directory") && err.contains("symlink"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_non_directory_parent() {
+        let parent = attrs(EntryKind::RegularFile, DAEMON_UID, 0o644);
+        let err = validate_candidate(conforming_candidate(), parent, DAEMON_UID)
+            .expect_err("a non-directory parent must be refused");
+        assert!(
+            err.contains("parent directory") && err.contains("a directory"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_group_writable_parent() {
+        let parent = attrs(EntryKind::Directory, DAEMON_UID, 0o775);
+        let err = validate_candidate(conforming_candidate(), parent, DAEMON_UID)
+            .expect_err("a group-writable parent must be refused");
+        assert!(
+            err.contains("parent directory") && err.contains("group or world write"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_world_writable_parent() {
+        let parent = attrs(EntryKind::Directory, DAEMON_UID, 0o757);
+        let err = validate_candidate(conforming_candidate(), parent, DAEMON_UID)
+            .expect_err("a world-writable parent must be refused");
+        assert!(
+            err.contains("parent directory") && err.contains("group or world write"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_foreign_owner_parent() {
+        let parent = attrs(EntryKind::Directory, FOREIGN_UID, 0o755);
+        let err = validate_candidate(conforming_candidate(), parent, DAEMON_UID)
+            .expect_err("a parent owned by neither the daemon's uid nor root must be refused");
+        assert!(
+            err.contains("parent directory") && err.contains("uid"),
+            "{err}"
+        );
+    }
+
+    // ── the capture wrapper (`validate_candidate_path`), against real files:
+    // proves the symlink-refusal detail actually applies to a REAL symlink,
+    // not just the pure table above ────────────────────────────────────────
+
+    #[test]
+    fn validate_candidate_path_accepts_a_conforming_real_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A permissive ambient umask (e.g. `002`) would otherwise leave a
+        // freshly created tempdir group-writable, making this "conforming
+        // parent" assumption environment-dependent -- harden explicitly
+        // rather than relying on umask.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
+            .expect("harden tempdir to a conforming mode");
+        let candidate = tempfile::NamedTempFile::new_in(dir.path()).expect("candidate file");
+        assert!(
+            validate_candidate_path(candidate.path(), effective_uid()).is_ok(),
+            "a plain owner-only temp file in a conforming parent must be accepted"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_path_refuses_a_symlink_at_the_candidate_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("real-binary");
+        std::fs::write(&target, b"binary").expect("write real target");
+        let link = dir.path().join("candidate-link");
+        std::os::unix::fs::symlink(&target, &link).expect("pre-place symlink");
+
+        let err = validate_candidate_path(&link, effective_uid())
+            .expect_err("a symlink AT the candidate path itself must be refused");
+        assert!(err.contains("symlink"), "{err}");
+    }
+
+    #[test]
+    fn validate_candidate_path_refuses_a_world_writable_real_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let candidate = tempfile::NamedTempFile::new_in(dir.path()).expect("candidate file");
+        std::fs::set_permissions(candidate.path(), std::fs::Permissions::from_mode(0o646))
+            .expect("loosen candidate permissions");
+
+        let err = validate_candidate_path(candidate.path(), effective_uid())
+            .expect_err("a world-writable real file must be refused");
+        assert!(err.contains("group or world write"), "{err}");
+    }
+
+    #[test]
+    fn validate_candidate_path_reports_a_failure_to_inspect_a_missing_candidate() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("does-not-exist");
+        let err = validate_candidate_path(&missing, effective_uid())
+            .expect_err("a candidate that cannot be stat-ed must be refused, not panic");
+        assert!(!err.is_empty());
+    }
+
+    // ── `capture_dev_ino` (NFR1 suppression key) ───────────────────────────
+
+    #[test]
+    fn capture_dev_ino_returns_none_for_a_missing_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(capture_dev_ino(&dir.path().join("does-not-exist")), None);
+    }
+
+    #[test]
+    fn capture_dev_ino_returns_some_for_an_existing_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = tempfile::NamedTempFile::new_in(dir.path()).expect("file");
+        assert!(capture_dev_ino(file.path()).is_some());
     }
 }
