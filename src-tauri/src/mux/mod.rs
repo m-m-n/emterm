@@ -26,6 +26,14 @@ pub mod bridge;
 pub mod cli;
 pub mod daemon;
 pub mod dialog;
+// mux-daemon-binary-update-detect task0002: minimal stand-in for the
+// binary-update identity check (see identity.rs module docs). Unix only,
+// matching `inherited_pty` / `upgrade` below — the real module's
+// rename-replacement / stat semantics have no Windows equivalent.
+// task0001 owns the real implementation; this file is expected to be
+// replaced wholesale at merge (IMPLEMENTATION.md D2).
+#[cfg(unix)]
+pub mod identity;
 // task0002 (mux daemon hot-upgrade): raw-descriptor → `MasterPty` adapter
 // for descriptors inherited across a process replacement. Unix only —
 // process replacement (`execve`) and the descriptor semantics it depends on

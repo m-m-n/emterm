@@ -2363,7 +2363,7 @@ mod tests {
         assert_eq!(set_revision, 1);
 
         let permit = owned_tx.reserve().await.expect("reserve permit");
-        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, AnyPermit::Borrowed(permit));
         assert!(matches!(outcome, ResumeOutcome::Resumed));
 
         // The real snapshot-construction path ran (and — for a sanity

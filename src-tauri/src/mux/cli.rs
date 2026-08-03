@@ -2461,4 +2461,41 @@ mod tests {
             other => panic!("expected Compatible (no fallback), got {other:?}"),
         }
     }
+
+    /// AC-6 (mux-daemon-binary-update-detect task0002, D6/FR5): against a
+    /// legacy daemon that silently ignores the `Upgrade` frame, the pinned
+    /// FR5 warning line is emitted through the injected message sink before
+    /// the existing shutdown-then-respawn fallback commits, and the
+    /// fallback outcome (`Recovered`) is unchanged from today's tests —
+    /// reuses [`spawn_fake_legacy_daemon_with_upgrade`]'s ignored-upgrade
+    /// configuration (the same fixture backing
+    /// `recover_from_legacy_daemon_falls_back_after_ignored_upgrade`).
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_emits_fr5_warning_before_falling_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("fr5-warning.sock");
+        let legacy = spawn_fake_legacy_daemon_with_upgrade(sock_path.clone(), false);
+
+        let mut messages: Vec<String> = Vec::new();
+        let result = daemon::recover_from_legacy_daemon_with(
+            &sock_path,
+            |_sock_path: &std::path::Path| crate::mux::identity::Verdict::Undecidable,
+            |line: &str| messages.push(line.to_string()),
+        );
+
+        legacy.join().expect("fake legacy daemon thread panicked");
+
+        match result {
+            Ok(daemon::LegacyRecovery::Recovered) => {}
+            other => panic!("expected Recovered (fallback after timeout), got {other:?}"),
+        }
+        assert!(
+            messages.iter().any(|m| {
+                m == "The running mux daemon predates in-place upgrade support; panes \
+                      cannot be preserved and will be recreated."
+            }),
+            "expected the pinned FR5 warning line, got {messages:?}"
+        );
+    }
 }
