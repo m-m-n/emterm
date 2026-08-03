@@ -93,6 +93,14 @@ const LOG_READ_TIMEOUT: Duration = Duration::from_secs(5);
 struct DaemonGuard {
     child: Child,
     runtime_dir: PathBuf,
+    /// task0004 (sid-tmpfs-bloat-reintroduced-via-failed-hardlink): the
+    /// scenario's private daemon-binary directory, which lives NEXT TO
+    /// `CARGO_BIN_EXE_emterm` (same filesystem as the cargo build output,
+    /// so `copy_daemon_binary`'s `hard_link` actually succeeds instead of
+    /// always falling back to a multi-hundred-MB `std::fs::copy` into
+    /// `/tmp` tmpfs) rather than inside `runtime_dir`. `None` for the rare
+    /// scenario that never copies a binary at all.
+    bin_dir: Option<PathBuf>,
 }
 
 impl Drop for DaemonGuard {
@@ -100,6 +108,9 @@ impl Drop for DaemonGuard {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.runtime_dir);
+        if let Some(bin_dir) = &self.bin_dir {
+            let _ = std::fs::remove_dir_all(bin_dir);
+        }
     }
 }
 
@@ -135,6 +146,48 @@ fn unique_runtime_dir(label: &str) -> PathBuf {
     std::fs::create_dir_all(&dir).expect("create isolated runtime dir");
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
         .expect("harden isolated runtime dir to a conforming (non-group/world-writable) mode");
+    dir
+}
+
+/// A fresh, collision-free directory for one scenario's private daemon
+/// binary copy, placed next to `CARGO_BIN_EXE_emterm` itself (i.e. the
+/// cargo build output directory, normally on the same filesystem as the
+/// build -- ext4 or similar) rather than under `std::env::temp_dir()`
+/// (`/tmp`, typically tmpfs).
+///
+/// task0004 (sid-tmpfs-bloat-reintroduced-via-failed-hardlink): a
+/// hard-link's source and destination must be on the same filesystem
+/// (`EXDEV` otherwise), and `/tmp` is essentially always a different
+/// filesystem than the cargo build output. Every scenario's
+/// `copy_daemon_binary` call therefore always fell back to a full
+/// multi-hundred-MB `std::fs::copy` into tmpfs, reintroducing the
+/// round1 problem the hard-link-first change was meant to fix. Placing
+/// the destination directory alongside `CARGO_BIN_EXE_emterm` restores
+/// the intended fast, cheap hard-link path.
+///
+/// Uses the identical `label` + pid + nanos naming scheme as
+/// [`unique_runtime_dir`] (with a `bin-` prefix to keep the two kinds of
+/// directory visually distinct) so collisions are avoided the same way.
+/// Hardened to `0o755` before use, same as `unique_runtime_dir`, so a
+/// permissive ambient umask can never make it group/world-writable --
+/// NFR3 validates a daemon candidate binary's PARENT directory for
+/// exactly that.
+fn unique_bin_dir(label: &str) -> PathBuf {
+    let base = Path::new(env!("CARGO_BIN_EXE_emterm"))
+        .parent()
+        .expect("CARGO_BIN_EXE_emterm has a parent directory")
+        .to_path_buf();
+    let dir = base.join(format!(
+        "emterm-mux-hotupgrade-bin-{label}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before UNIX epoch")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create isolated binary dir");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
+        .expect("harden isolated binary dir to a conforming (non-group/world-writable) mode");
     dir
 }
 
@@ -693,12 +746,14 @@ fn hot_upgrade_preserves_shell_pid_and_marker_file() {
     // spawns from, but still uses its own copy (hard-linked where possible,
     // see `copy_daemon_binary`) so cleanup is handled by `DaemonGuard::drop`
     // like every other scenario, with no process-lifetime-scoped shared path.
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    let bin_dir = unique_bin_dir("main");
+    let daemon_bin_path = bin_dir.join("emterm-under-test");
     copy_daemon_binary(&daemon_bin_path);
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
+        bin_dir: Some(bin_dir),
     };
 
     let sock_path = socket_path_for(&runtime_dir);
@@ -770,12 +825,14 @@ fn hot_upgrade_logs_handoff_start_with_pane_count() {
     // `hot_upgrade_preserves_shell_pid_and_marker_file` above; this scenario
     // also never mutates the binary it spawns from, but still uses its own
     // private copy in its own isolated runtime dir.
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    let bin_dir = unique_bin_dir("handoff-log");
+    let daemon_bin_path = bin_dir.join("emterm-under-test");
     copy_daemon_binary(&daemon_bin_path);
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
+        bin_dir: Some(bin_dir),
     };
 
     let sock_path = socket_path_for(&runtime_dir);
@@ -827,12 +884,14 @@ fn hot_upgrade_succeeds_with_zero_panes() {
     // `hot_upgrade_preserves_shell_pid_and_marker_file` above; this scenario
     // also never mutates the binary it spawns from, but still uses its own
     // private copy in its own isolated runtime dir.
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    let bin_dir = unique_bin_dir("zero-panes");
+    let daemon_bin_path = bin_dir.join("emterm-under-test");
     copy_daemon_binary(&daemon_bin_path);
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
+        bin_dir: Some(bin_dir),
     };
 
     let sock_path = socket_path_for(&runtime_dir);
@@ -866,13 +925,15 @@ fn hot_upgrade_aborts_on_incompatible_schema_probe() {
 
     // A private copy this scenario can safely mutate (see `poison_binary_at`
     // for why this simulates an incompatible candidate binary).
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    let bin_dir = unique_bin_dir("incompatible-schema");
+    let daemon_bin_path = bin_dir.join("emterm-under-test");
     copy_daemon_binary(&daemon_bin_path);
 
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
+        bin_dir: Some(bin_dir),
     };
 
     let sock_path = socket_path_for(&runtime_dir);
@@ -1201,7 +1262,8 @@ fn hot_upgrade_fires_on_binary_replacement_via_attach() {
     let runtime_dir = unique_runtime_dir("attach-replace");
     std::fs::create_dir_all(&runtime_dir).expect("create isolated runtime dir");
 
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    let bin_dir = unique_bin_dir("attach-replace");
+    let daemon_bin_path = bin_dir.join("emterm-under-test");
     copy_daemon_binary(&daemon_bin_path);
 
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
@@ -1209,6 +1271,7 @@ fn hot_upgrade_fires_on_binary_replacement_via_attach() {
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
+        bin_dir: Some(bin_dir),
     };
 
     let sock_path = socket_path_for(&runtime_dir);
@@ -1333,13 +1396,15 @@ fn hot_upgrade_no_churn_when_binary_unchanged() {
     // `hot_upgrade_preserves_shell_pid_and_marker_file` above; this scenario
     // never mutates the binary it spawns from, but still uses its own
     // private copy in its own isolated runtime dir.
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    let bin_dir = unique_bin_dir("no-churn");
+    let daemon_bin_path = bin_dir.join("emterm-under-test");
     copy_daemon_binary(&daemon_bin_path);
 
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
+        bin_dir: Some(bin_dir),
     };
 
     let sock_path = socket_path_for(&runtime_dir);
@@ -1390,7 +1455,8 @@ fn hot_upgrade_fires_on_binary_replacement_via_mux_start() {
     let runtime_dir = unique_runtime_dir("mux-start-replace");
     std::fs::create_dir_all(&runtime_dir).expect("create isolated runtime dir");
 
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    let bin_dir = unique_bin_dir("mux-start-replace");
+    let daemon_bin_path = bin_dir.join("emterm-under-test");
     copy_daemon_binary(&daemon_bin_path);
 
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
@@ -1398,6 +1464,7 @@ fn hot_upgrade_fires_on_binary_replacement_via_mux_start() {
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
+        bin_dir: Some(bin_dir),
     };
 
     let sock_path = socket_path_for(&runtime_dir);
@@ -1486,13 +1553,15 @@ fn hot_upgrade_no_misfire_when_identity_file_absent() {
     let runtime_dir = unique_runtime_dir("no-identity");
     std::fs::create_dir_all(&runtime_dir).expect("create isolated runtime dir");
 
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    let bin_dir = unique_bin_dir("no-identity");
+    let daemon_bin_path = bin_dir.join("emterm-under-test");
     copy_daemon_binary(&daemon_bin_path);
 
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
+        bin_dir: Some(bin_dir),
     };
 
     let sock_path = socket_path_for(&runtime_dir);
@@ -1593,7 +1662,8 @@ fn hot_upgrade_refuses_group_world_writable_candidate_via_attach() {
     let runtime_dir = unique_runtime_dir("writable-candidate");
     std::fs::create_dir_all(&runtime_dir).expect("create isolated runtime dir");
 
-    let daemon_bin_path = runtime_dir.join("emterm-under-test");
+    let bin_dir = unique_bin_dir("writable-candidate");
+    let daemon_bin_path = bin_dir.join("emterm-under-test");
     copy_daemon_binary(&daemon_bin_path);
 
     let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
@@ -1601,6 +1671,7 @@ fn hot_upgrade_refuses_group_world_writable_candidate_via_attach() {
     let _guard = DaemonGuard {
         child,
         runtime_dir: runtime_dir.clone(),
+        bin_dir: Some(bin_dir),
     };
 
     let sock_path = socket_path_for(&runtime_dir);

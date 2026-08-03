@@ -997,7 +997,27 @@ fn trigger_binary_update_if_detected<S: std::io::Read + std::io::Write>(
 /// inode)` plus the refusal reason it produced. In-memory only -- owned by a
 /// local in `run_daemon`, so a daemon restart naturally clears it.
 #[cfg(unix)]
-type RefusedCandidate = ((u64, u64), String);
+type RefusedCandidate = ((u64, u64), String, RefusalStage);
+
+/// Which stage of [`admit_upgrade_candidate`] produced a recorded refusal
+/// (sid-validate-failure-suppression-regression fix): a `validate` failure
+/// and a POST-probe failure ([`record_post_probe_refusal`]) are suppressed
+/// independently. A `Validation`-stage record only suppresses a REPEATED
+/// `validate` failure for the same `(device, inode)`; it is ignored once
+/// that candidate passes `validate` (e.g. after an operator `chmod`-fixes a
+/// world-writable candidate), so a since-fixed candidate is never
+/// incorrectly blocked. A `PostProbe`-stage record only suppresses the
+/// post-probe re-check, matching the pre-existing behavior.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefusalStage {
+    /// Recorded when `validate` itself rejected the candidate.
+    Validation,
+    /// Recorded by [`record_post_probe_refusal`]: a probe spawn failure,
+    /// probe timeout, or schema-range gate rejection AFTER `validate`
+    /// already passed.
+    PostProbe,
+}
 
 /// Marker prefix pinning the suppressed-repeat rejection reason (Design
 /// "Pinned suppression reason"): a data contract shared between this
@@ -1044,15 +1064,17 @@ enum UpgradeAdmission {
 /// injected so this is unit-testable without a real candidate binary or a
 /// real daemon uid (AC-2 unit half, AC-4, AC-5).
 ///
-/// Mutates `last_refused`: cleared on anything other than a matching repeat
-/// (Design: "If it differs, or the capture fails -> clear the state"),
-/// including when validation itself fails. A validation failure is NOT
-/// recorded into `last_refused`: recording it would incorrectly suppress a
-/// later candidate that shares the same `(device, inode)` but has since
-/// been fixed (e.g. an operator ran `chmod` on a world-writable candidate
-/// without changing its identity) and now passes `validate`. Suppression
-/// recording is reserved for POST-probe refusals only (see
-/// [`record_post_probe_refusal`]).
+/// Mutates `last_refused`, tagging every record with a [`RefusalStage`] so a
+/// `validate` failure and a POST-probe failure ([`record_post_probe_refusal`])
+/// are suppressed independently
+/// (sid-validate-failure-suppression-regression): a `validate` failure
+/// records a `Validation`-stage entry so a REPEAT of the exact same failure
+/// for the same `(device, inode)` is suppressed (NFR1), but that record is
+/// ignored once the candidate passes `validate` (e.g. an operator ran
+/// `chmod` on a world-writable candidate without changing its identity) --
+/// it never masks an admission. Cleared on anything other than a matching
+/// repeat (Design: "If it differs, or the capture fails -> clear the
+/// state").
 #[cfg(unix)]
 fn admit_upgrade_candidate(
     candidate: &Path,
@@ -1079,15 +1101,37 @@ fn admit_upgrade_candidate(
     // explicit user command at all; that is a wire-protocol change out of
     // scope here.
     if let Err(reason) = validate(candidate) {
-        // Do not record this into `last_refused`: doing so would suppress a
-        // later candidate with the same (device, inode) that has since
-        // passed validation (e.g. after a `chmod` fix). Suppression is
-        // reserved for POST-probe refusals; clear any stale state instead.
-        *last_refused = None;
+        // sid-validate-failure-suppression-regression: a repeat `validate`
+        // failure for the SAME (device, inode), where the last recorded
+        // refusal was ALSO a `Validation`-stage one, is still suppressed
+        // (NFR1) -- a permanently invalid candidate (e.g. distributed
+        // world-writable) must not re-warn on every single signal. A
+        // `PostProbe`-stage record never suppresses a `validate` failure
+        // (it is a different failure mode), and any OTHER candidate always
+        // gets a fresh `Blocked` with the raw reason.
+        if let Some((last_id, last_reason, RefusalStage::Validation)) = last_refused.as_ref() {
+            if candidate_id == Some(*last_id) {
+                return UpgradeAdmission::Blocked(suppression_reason(last_reason));
+            }
+        }
+        // Record this as a `Validation`-stage refusal so a REPEAT of the
+        // same failure is suppressed above. Not recorded as `PostProbe`:
+        // that stage's suppression check (below) is intentionally skipped
+        // for `Validation` records, so a candidate that later passes
+        // `validate` (e.g. after a `chmod` fix) is never incorrectly
+        // blocked by a stale `Validation` refusal.
+        match candidate_id {
+            Some(id) => *last_refused = Some((id, reason.clone(), RefusalStage::Validation)),
+            None => *last_refused = None,
+        }
         return UpgradeAdmission::Blocked(reason);
     }
 
-    if let Some((last_id, last_reason)) = last_refused.as_ref() {
+    // Only a `PostProbe`-stage record suppresses here: a `Validation`-stage
+    // record means this SAME candidate previously failed `validate` but has
+    // now passed it (its identity is unchanged, e.g. after a `chmod` fix),
+    // so it must be admitted rather than masked by the stale refusal.
+    if let Some((last_id, last_reason, RefusalStage::PostProbe)) = last_refused.as_ref() {
         if candidate_id == Some(*last_id) {
             return UpgradeAdmission::Blocked(suppression_reason(last_reason));
         }
@@ -1109,7 +1153,7 @@ fn record_post_probe_refusal(
     reason: &str,
 ) {
     if let Some(id) = candidate_id {
-        *last_refused = Some((id, reason.to_string()));
+        *last_refused = Some((id, reason.to_string(), RefusalStage::PostProbe));
     }
 }
 
@@ -3368,7 +3412,11 @@ mod tests {
         }
         assert_eq!(
             last_refused,
-            Some(((7, 42), "world-writable candidate".to_string())),
+            Some((
+                (7, 42),
+                "world-writable candidate".to_string(),
+                RefusalStage::Validation
+            )),
             "AC-2: a validation refusal must be recorded for suppression"
         );
     }
