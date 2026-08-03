@@ -932,10 +932,31 @@ fn trigger_binary_update_if_detected<S: std::io::Read + std::io::Write>(
                 }
                 UpgradeResponse::ProceededOrUnknown => {
                     if wait_for_daemon_reachable_at_current_version(sock_path) {
-                        const NOTICE: &str =
-                            "Mux daemon upgraded in place to the newly installed binary";
-                        message(NOTICE);
-                        log::warn!("{NOTICE}");
+                        // task0005 (SPEC FR2/AC-6/AC-8): reachability alone
+                        // cannot distinguish a genuinely replaced daemon
+                        // from the original one that refused or ignored the
+                        // upgrade and kept serving -- re-check through the
+                        // SAME injected identity-check provider used for the
+                        // firing decision. Only an Unchanged post-fire
+                        // verdict is positive proof of replacement (the
+                        // answering daemon has already re-recorded its own
+                        // identity per D4's startup ordering); Updated or
+                        // Undecidable means the replacement could not be
+                        // confirmed, so the success notice must not be
+                        // emitted.
+                        match identity_check(sock_path) {
+                            identity::Verdict::Unchanged => {
+                                const NOTICE: &str =
+                                    "Mux daemon upgraded in place to the newly installed binary";
+                                message(NOTICE);
+                                log::warn!("{NOTICE}");
+                            }
+                            identity::Verdict::Updated(_) | identity::Verdict::Undecidable => {
+                                const UNCONFIRMED_WARNING: &str = "Warning: mux daemon is reachable but the binary replacement could not be confirmed; continuing with the existing daemon";
+                                message(UNCONFIRMED_WARNING);
+                                log::warn!("{UNCONFIRMED_WARNING}");
+                            }
+                        }
                     } else {
                         const TIMEOUT_WARNING: &str = "Warning: timed out waiting for the mux daemon to become reachable after an automatic binary-update upgrade; continuing with the existing daemon";
                         message(TIMEOUT_WARNING);
@@ -2674,10 +2695,57 @@ mod tests {
         (handle, upgrade_frames_seen)
     }
 
-    /// AC-1: against a current-protocol fake daemon, with an injected
-    /// `Updated` verdict, the probe sends exactly one `Upgrade` frame and --
-    /// once the daemon is reachable again -- emits exactly the pinned
-    /// notice line once, and returns success.
+    // ---- mux-daemon-binary-update-detect task0005: positive replacement
+    // proof before the upgraded notice (client side) ----
+    //
+    // These tests drive the trigger's post-reachability identity re-check
+    // via a stateful scripted provider, since the ordinary constant-verdict
+    // closure used by the task0002 tests above cannot distinguish the
+    // pre-fire call from the post-fire re-check call.
+
+    /// Stateful identity-check stand-in: returns `verdicts` in order, one
+    /// per call, repeating the last scripted verdict for any call beyond
+    /// the sequence. Exposes the total call count so tests can assert
+    /// "invoked exactly once" (no re-check, task0005 AC-4) vs "invoked
+    /// twice" (pre-fire then post-fire, task0005 AC-1..AC-3). `Cell` (not
+    /// `Mutex`/atomics) is sufficient: the trigger and its identity-check
+    /// closure both run synchronously on the test's own thread.
+    #[cfg(unix)]
+    struct ScriptedIdentityCheck {
+        verdicts: Vec<identity::Verdict>,
+        calls: std::cell::Cell<usize>,
+    }
+
+    #[cfg(unix)]
+    impl ScriptedIdentityCheck {
+        fn new(verdicts: Vec<identity::Verdict>) -> Self {
+            assert!(!verdicts.is_empty(), "at least one scripted verdict is required");
+            Self {
+                verdicts,
+                calls: std::cell::Cell::new(0),
+            }
+        }
+
+        fn check(&self, _sock_path: &Path) -> identity::Verdict {
+            let idx = self.calls.get();
+            self.calls.set(idx + 1);
+            self.verdicts
+                .get(idx)
+                .cloned()
+                .unwrap_or_else(|| self.verdicts.last().cloned().expect("non-empty verdicts"))
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.get()
+        }
+    }
+
+    /// AC-1: with the provider scripted `Updated` (pre-fire) then
+    /// `Unchanged` (post-fire), and a fake daemon that stays reachable, the
+    /// trigger sends exactly one `Upgrade` frame and -- once the
+    /// post-reachability re-check confirms `Unchanged` -- emits exactly the
+    /// pinned notice line once, and returns success (the shipped TS-8
+    /// behavior is preserved).
     #[cfg(unix)]
     #[test]
     fn recover_from_legacy_daemon_fires_upgrade_and_reports_notice_when_reachable_again() {
@@ -2686,10 +2754,14 @@ mod tests {
         let (server, upgrade_frames_seen) =
             spawn_fake_current_daemon(sock_path.clone(), Some(UpgradeBehavior::BecomeUpgraded));
 
+        let provider = ScriptedIdentityCheck::new(vec![
+            identity::Verdict::Updated(PathBuf::from("/fake/new-emterm")),
+            identity::Verdict::Unchanged,
+        ]);
         let mut messages: Vec<String> = Vec::new();
         let result = recover_from_legacy_daemon_with(
             &sock_path,
-            |_sock_path: &Path| identity::Verdict::Updated(PathBuf::from("/fake/new-emterm")),
+            |sock_path: &Path| provider.check(sock_path),
             |line: &str| messages.push(line.to_string()),
         );
 
@@ -2708,6 +2780,149 @@ mod tests {
             messages,
             vec!["Mux daemon upgraded in place to the newly installed binary".to_string()],
             "expected exactly the pinned notice line, emitted once"
+        );
+        assert_eq!(
+            provider.call_count(),
+            2,
+            "expected the identity-check provider to be consulted twice: once for the \
+             firing decision, once for the post-reachability re-check"
+        );
+    }
+
+    /// task0005 AC-2: with the provider scripted `Updated` (pre-fire) then
+    /// `Updated` again (post-fire -- the replacement did not take), no
+    /// replacement notice is emitted; exactly one pinned unconfirmed-
+    /// replacement warning line is emitted instead; the trigger still
+    /// returns success.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_unconfirmed_replacement_warns_instead_of_notice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("update-detect-unconfirmed.sock");
+        let (server, upgrade_frames_seen) =
+            spawn_fake_current_daemon(sock_path.clone(), Some(UpgradeBehavior::BecomeUpgraded));
+
+        let provider = ScriptedIdentityCheck::new(vec![
+            identity::Verdict::Updated(PathBuf::from("/fake/new-emterm")),
+            identity::Verdict::Updated(PathBuf::from("/fake/new-emterm")),
+        ]);
+        let mut messages: Vec<String> = Vec::new();
+        let result = recover_from_legacy_daemon_with(
+            &sock_path,
+            |sock_path: &Path| provider.check(sock_path),
+            |line: &str| messages.push(line.to_string()),
+        );
+
+        server.join().expect("fake current-protocol daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert_eq!(
+            upgrade_frames_seen.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "expected exactly one Upgrade frame"
+        );
+        assert_eq!(
+            messages,
+            vec![
+                "Warning: mux daemon is reachable but the binary replacement could not be \
+                 confirmed; continuing with the existing daemon"
+                    .to_string()
+            ],
+            "expected exactly the pinned unconfirmed-replacement warning, no success notice"
+        );
+        assert_eq!(provider.call_count(), 2, "expected pre-fire and post-fire calls");
+    }
+
+    /// task0005 AC-3: with the provider scripted `Updated` then
+    /// `Undecidable`, behavior equals AC-2's -- undecidable evidence is
+    /// never claimed as success.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_undecidable_post_check_warns_instead_of_notice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("update-detect-undecidable-postcheck.sock");
+        let (server, upgrade_frames_seen) =
+            spawn_fake_current_daemon(sock_path.clone(), Some(UpgradeBehavior::BecomeUpgraded));
+
+        let provider = ScriptedIdentityCheck::new(vec![
+            identity::Verdict::Updated(PathBuf::from("/fake/new-emterm")),
+            identity::Verdict::Undecidable,
+        ]);
+        let mut messages: Vec<String> = Vec::new();
+        let result = recover_from_legacy_daemon_with(
+            &sock_path,
+            |sock_path: &Path| provider.check(sock_path),
+            |line: &str| messages.push(line.to_string()),
+        );
+
+        server.join().expect("fake current-protocol daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert_eq!(
+            upgrade_frames_seen.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "expected exactly one Upgrade frame"
+        );
+        assert_eq!(
+            messages,
+            vec![
+                "Warning: mux daemon is reachable but the binary replacement could not be \
+                 confirmed; continuing with the existing daemon"
+                    .to_string()
+            ],
+            "an Undecidable post-fire verdict must never be claimed as success"
+        );
+        assert_eq!(provider.call_count(), 2, "expected pre-fire and post-fire calls");
+    }
+
+    /// task0005 AC-4: on a reachability timeout, the identity-check provider
+    /// is invoked exactly once (pre-fire only -- no post-reachability
+    /// re-check is performed), the existing timeout warning is emitted, and
+    /// the trigger still returns success.
+    #[cfg(unix)]
+    #[test]
+    fn recover_from_legacy_daemon_timeout_does_not_re_check_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock_path = dir.path().join("update-detect-timeout-no-recheck.sock");
+        let (server, upgrade_frames_seen) =
+            spawn_fake_current_daemon(sock_path.clone(), Some(UpgradeBehavior::Silent));
+
+        let provider = ScriptedIdentityCheck::new(vec![identity::Verdict::Updated(
+            PathBuf::from("/fake/new-emterm"),
+        )]);
+        let mut messages: Vec<String> = Vec::new();
+        let result = recover_from_legacy_daemon_with(
+            &sock_path,
+            |sock_path: &Path| provider.check(sock_path),
+            |line: &str| messages.push(line.to_string()),
+        );
+
+        server.join().expect("fake current-protocol daemon thread panicked");
+
+        match result {
+            Ok(LegacyRecovery::Compatible) => {}
+            other => panic!("expected Ok(Compatible), got {other:?}"),
+        }
+        assert_eq!(
+            upgrade_frames_seen.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(messages.len(), 1, "expected exactly one message: {messages:?}");
+        assert!(
+            messages[0].to_lowercase().contains("timed out") || messages[0].to_lowercase().contains("timeout"),
+            "expected a timeout warning: {:?}",
+            messages[0]
+        );
+        assert_eq!(
+            provider.call_count(),
+            1,
+            "a reachability timeout must not trigger a post-reachability re-check"
         );
     }
 
