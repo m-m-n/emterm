@@ -122,9 +122,10 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
   - `emterm --version` はバージョンを表示して終了、`emterm --help`/`-h` は使用方法を表示（GUI版・CLI単体版とも対応）
   - 未知のトップレベルフラグは無視されず、stderrに使用方法エラーを出力して終了コード2で終了
 
-- **Claude Codeプラグイン**
+- **[Claude Codeプラグイン](plugins/emterm/README.md)**
   - インストール可能なClaude Codeプラグイン（Linux）。フックを通じてClaude Codeのライフサイクル状態（idle/working/blocked）をeMtermのエージェント状態機構に報告
   - eMtermの表示コマンド（`display-markdown`、`display-json`、`display-yaml`、`display-image`）とmuxコマンド（`mux-read`、`mux-send`、`mux-wait`）をClaude Codeスキルとして公開
+  - インストール手順とフック仕様: [plugins/emterm/README.md](plugins/emterm/README.md)
 
 ## 必要条件
 

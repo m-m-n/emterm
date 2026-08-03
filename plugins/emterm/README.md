@@ -18,6 +18,58 @@ This plugin connects Claude Code to [eMterm](https://github.com/m-m-n/emterm), a
 
 If `emterm` is not on `PATH`, the display and mux skills fail when invoked; the agent-status hook is unaffected.
 
+## Recommended shell integration
+
+The agent-status hook sets `working` when a turn starts and `idle` when it ends via `Stop`. Exiting Claude Code with Ctrl+C, `exit`, or a crash fires no such hook, and the badge stays on `working` until eMterm sees the shell return to an interactive prompt via OSC 133 `D` (command end) → `A` (prompt start) marks. Without those marks, the icon does not clear.
+
+Add the following to your shell config. It emits OSC 133 bare when eMterm is the terminal, and DCS-wrapped when inside external tmux.
+
+**bash** (`~/.bashrc`):
+```bash
+if [ -n "$TMUX" ]; then
+  _emterm_osc133() { printf '\ePtmux;\e\e]133;%s\e\e\\\e\\' "$1"; }
+elif [ "$TERM_PROGRAM" = "emterm" ]; then
+  _emterm_osc133() { printf '\e]133;%s\e\\' "$1"; }
+fi
+if declare -F _emterm_osc133 >/dev/null; then
+  _emterm_first=1
+  _emterm_precmd() {
+    local ec=$?
+    if [ -z "$_emterm_first" ]; then
+      _emterm_osc133 "D;$ec"
+    fi
+    _emterm_first=
+    _emterm_osc133 "A"
+  }
+  PROMPT_COMMAND="_emterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+fi
+```
+
+**zsh** (`~/.zshrc`):
+```zsh
+if [ -n "$TMUX" ]; then
+  _emterm_osc133() { printf '\ePtmux;\e\e]133;%s\e\e\\\e\\' "$1" }
+elif [ "$TERM_PROGRAM" = "emterm" ]; then
+  _emterm_osc133() { printf '\e]133;%s\e\\' "$1" }
+fi
+if typeset -f _emterm_osc133 >/dev/null; then
+  _emterm_first=1
+  _emterm_precmd() {
+    local ec=$?
+    if [[ -z "$_emterm_first" ]]; then
+      _emterm_osc133 "D;$ec"
+    fi
+    _emterm_first=
+    _emterm_osc133 "A"
+  }
+  _emterm_preexec() { _emterm_osc133 "C" }
+  precmd_functions+=(_emterm_precmd)
+  preexec_functions+=(_emterm_preexec)
+fi
+```
+
+The tmux branch requires `set -g allow-passthrough on` in `~/.tmux.conf`. See the main [OSC 133 Semantic Prompt in tmux](../../README.md#osc-133-semantic-prompt-in-tmux) section for details and for the PS1 `B` marker snippet needed for eMterm's prompt-jump navigation.
+
 ## What gets wired
 
 - Six hooks report Claude Code lifecycle events to eMterm agent-status: `UserPromptSubmit` → `working`, `PostToolUse` → `working`, `PostToolUseFailure` → `working`, `Stop` → `idle`, `PermissionRequest` → `blocked`, `Notification` → `blocked`. `PermissionRequest` fires when a permission dialog is shown to you, which is the ordinary way `blocked` appears. The `Notification` hook covers the cases where Claude Code raises an OS-level notification instead — its matcher fires only for `elicitation_dialog` and `agent_needs_input`, so an ordinary idle notification cannot overwrite the `idle` that `Stop` just set.
