@@ -69,7 +69,7 @@ tasks:
     domains: [external-io]
     complexity: high
     requirements: [FR1, FR2, FR3, FR5, FR6, FR7, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-daemon-binary-update-detect/task0002
   task0003:
