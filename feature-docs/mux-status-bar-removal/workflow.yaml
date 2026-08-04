@@ -33,9 +33,11 @@ workflow:
     skipped_reason: "Pure removal/cleanup of an existing UI surface; no new UI, no visual or layout design decisions. The replacement UI (mux sidebar) already exists and is unchanged."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: e2ffd33861969cee87289ea5341a5b13d7e79010
   - id: implement
     status: pending
+    base_commit: c7d7fb719ab514879f3d314dfc41268c230772f4
   - id: review
     status: pending
   - id: verify
@@ -43,7 +45,42 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Remove mux status bar across all Rust layers"
+    plan: tasks/task0001.md
+    files:
+      - crates/mux_ipc/src/protocol.rs
+      - crates/app_settings/src/settings.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/app.rs
+      - src-tauri/src/status_bar/runtime.rs
+      - src-tauri/src/ui/status_bar.rs
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/settings.rs
+      - src-tauri/src/windows_exec.rs
+      - src-tauri/src/mux/ipc/statusbar.rs
+      - src-tauri/src/mux/ipc/mod.rs
+      - src-tauri/src/mux/ipc/connection.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/mux/upgrade.rs
+      - src-tauri/src/mux/session/pane.rs
+    skills: [backend-impl]
+    domains: [api-contract, concurrency, data-persistence, input-handling, ui]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR2, NFR3]
+    status: pending
+  task0002:
+    title: "Remove mux statusbar settings from the TypeScript mirror"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/web-shared/settings/types.ts
+      - src-tauri/web-shared/settings/sections/mux-section.test.ts
+    skills: [frontend-impl]
+    domains: [api-contract]
+    complexity: low
+    requirements: [FR4, NFR2]
+    status: pending
 
 review:
   rounds_completed: 0
@@ -58,77 +95,77 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2]
   FR2:
     title: "Remove the daemon-side mux status bar engine"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   FR3:
     title: "Retire the StatusUpdate / RequestStatusUpdate protocol messages"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   FR4:
     title: "Remove the mux statusbar settings schema on all mirrors"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002]
     tests: [TS3, TS6]
   FR5:
     title: "Terminal grid height identical with and without mux"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS4, TS7]
   FR6:
     title: "Preserve the general (non-mux) status bar"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS4]
   FR7:
     title: "Preserve per-pane cwd tracking (relocate detect_osc7_cwd)"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   FR8:
     title: "Tolerate stale peers and stale settings"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS2, TS3]
   NFR1:
     title: "CLI-only build remains green"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR2:
     title: "Full test suites remain green"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002]
     tests: []
   NFR3:
     title: "No behavior change to tab bar / sidebar / agent status"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
 
 batch:
