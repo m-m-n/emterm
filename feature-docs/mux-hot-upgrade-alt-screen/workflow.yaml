@@ -45,7 +45,7 @@ workflow:
       involvement; the design step adds nothing.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: fb9b5f5f3110366995c120e914cd9e3b4dd0f4aa
