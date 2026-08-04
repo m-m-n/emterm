@@ -24,11 +24,26 @@
 use std::collections::HashMap;
 
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
+use parking_lot::Mutex;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::render::emoji_resample::{HQ_SOURCE_PX, lanczos3_downscale_rgba};
 use crate::render::font::fallback::FallbackChain;
 use crate::render::font::traits::{AtlasFormat, GlyphRasterizer};
+
+/// External handles a widget needs to render color emoji through the
+/// swash rasterization path. The widget itself stays oblivious to wgpu /
+/// swash; it just asks the cache for a `TextureHandle` per emoji cluster.
+///
+/// Relocated here (agent-badge-emoji-distinction task0001 Design 3) from
+/// `ui::status_bar` — its original home — now that the tab bar and mux
+/// sidebar also consume it, alongside the status bar. Tests pass `None`
+/// so they don't need to stand up a real font stack.
+pub struct EmojiResources<'a> {
+    pub rasterizer: &'a dyn GlyphRasterizer,
+    pub fallback: &'a FallbackChain,
+    pub cache: &'a Mutex<EmojiTextureCache>,
+}
 
 /// Pre-filter: a grapheme cluster is a color-emoji candidate when any
 /// of its codepoints is pictographic or carries an emoji-forming
