@@ -1768,3 +1768,250 @@ fn hot_upgrade_refuses_group_world_writable_candidate_via_attach() {
          {pid_before}, after={pid_after})"
     );
 }
+
+// =============================================================================
+// task0003 extension (feature-docs/mux-hot-upgrade-alt-screen)
+// =============================================================================
+//
+// The scenario below is a DIFFERENT feature's task0003 from the
+// "task0003 extension (feature-docs/mux-daemon-binary-update-detect)"
+// section above (same task NUMBER, different feature). It proves the
+// post-restore observable contract this feature's own task0003.md pins
+// (IMPLEMENTATION.md Shared Components, "Post-restore observable
+// contract"): an alt-screen pane's alternate-screen state survives a
+// hot-upgrade + reconnect + reattach cycle.
+//
+// ## Acceptance criteria mapping (task0003.md, mux-hot-upgrade-alt-screen)
+//
+// - AC-1 / AC-2: [`hot_upgrade_preserves_alt_screen_state_on_reattach`]
+// - AC-3 (every pre-existing scenario in this file still passes) is
+//   satisfied by this entire section being purely additive.
+// - AC-4 (a clearly-named bounded wait / assertion, never a hang; expected-
+//   to-fail-until-integration status documented) is this note plus the
+//   scenario's own bounded helpers (all reused from above) and named
+//   assertions below.
+// - AC-5: documented in `test/README.md`.
+//
+// ## Expected to fail until task0002 lands
+//
+// At the time this section was written, task0002 (the handoff-document
+// schema-3 alt-screen carry, feature-docs/mux-hot-upgrade-alt-screen) is
+// still in progress on its own branch. The scenario below is written
+// against the post-restore observable contract, not against already-landed
+// behaviour: in THIS worktree the daemon's handoff document does not yet
+// carry alt-screen state, so a restored pane's shadow parser reports the
+// alternate screen as INACTIVE after the upgrade, and the scenario's own
+// named assertion below fails cleanly (never a hang). This is intentional
+// per this feature's task0003.md ("do not weaken the scenario to pass
+// locally") and must not be treated as a defect in this file. It turns
+// green once task0002 merges into the integration branch.
+
+/// The pre-alt-screen marker (Test Notes: a string that cannot occur in
+/// shell prompts or daemon logs by accident), printed on the MAIN screen
+/// before the pane is driven onto the alternate screen -- lands in
+/// scrollback via ordinary shell output. Must equal the concatenation of
+/// the two literal tokens the driving command below passes to `printf
+/// '%s%s'` (`EMTERM_ALTUPG_PREALT` + `_MARKER`).
+const PRE_ALT_MARKER: &str = "EMTERM_ALTUPG_PREALT_MARKER";
+
+/// The alt-screen marker, printed immediately AFTER the raw alternate-
+/// screen-enter escape sequence (`ESC[?1049h`, emitted via `printf`'s own
+/// octal-escape interpretation of `\033` -- see the scenario below). Must
+/// equal the concatenation of the two literal tokens the driving command
+/// passes to `printf '%s%s'` (`EMTERM_ALTUPG_ALTSCREEN` + `_MARKER`).
+///
+/// Splitting each marker into two tokens (mirrors this file's own
+/// pre-existing `EMTERM_HOTUPG` / `_BEFOREDONE` / `_AFTERDONE` convention
+/// above) is why `read_pane_until` below only matches on the REAL evaluated
+/// `printf` output, never on the PTY line discipline's verbatim ECHO of the
+/// typed command line: the echoed source text has a space between the two
+/// tokens, but `%s%s` concatenates them with none.
+const ALT_SCREEN_MARKER: &str = "EMTERM_ALTUPG_ALTSCREEN_MARKER";
+
+/// The trailing alt-mode-enable toggle
+/// `crate::mux::snapshot_bytes::build_snapshot_bytes` unconditionally
+/// appends as the LAST bytes of a reattach snapshot when the captured
+/// pane's shadow parser reports the alternate screen as ACTIVE. Mirrored
+/// here as a plain byte constant since this harness is a black-box
+/// wire-protocol client with no access to that private daemon module.
+const ALT_MODE_ENABLE_TOGGLE: &[u8] = b"\x1b[?1049h";
+
+/// Re-attach `stream` to `session_id` (mirrors [`attach_and_await_pane`])
+/// and additionally capture the `SnapshotRestore` frame the daemon sends
+/// immediately after `PaneCreated` for `pane_id` when that pane's buffered
+/// history is non-empty (`send_reattach_data`). Returns the DECODED
+/// snapshot content bytes (`mux_ipc::protocol::decode_snapshot_payload`'s
+/// second element), or an empty `Vec` if no `SnapshotRestore` arrives for
+/// this pane within `timeout` after `PaneCreated` (a legitimate outcome for
+/// a pane with no buffered history -- the caller decides whether that is
+/// acceptable for its own scenario).
+///
+/// A separate helper from [`attach_and_await_pane`] rather than a
+/// modification of it, so every pre-existing scenario that calls the
+/// original stays textually untouched (AC-3).
+fn attach_and_capture_snapshot(
+    stream: &mut UnixStream,
+    session_id: u32,
+    pane_id: u32,
+    timeout: Duration,
+) -> Vec<u8> {
+    write_frame(
+        stream,
+        &MuxMessage::control(MessageType::Attach, 0, &AttachMsg { session_id }),
+    )
+    .expect("send Attach");
+
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .expect("set attach+snapshot read timeout");
+    let deadline = Instant::now() + timeout;
+    let mut pane_created_seen = false;
+    loop {
+        if Instant::now() > deadline {
+            if pane_created_seen {
+                // PaneCreated arrived but no SnapshotRestore followed within
+                // the remaining budget -- a pane with no buffered history is
+                // a legitimate reason for this (see doc above).
+                return Vec::new();
+            }
+            panic!(
+                "timed out after {timeout:?} waiting for PaneCreated for pane {pane_id} after \
+                 Attach to session {session_id}"
+            );
+        }
+        match read_frame(stream) {
+            Ok(msg) if msg.msg_type == MessageType::PaneCreated && msg.pane_id == pane_id => {
+                pane_created_seen = true;
+            }
+            Ok(msg)
+                if pane_created_seen
+                    && msg.msg_type == MessageType::SnapshotRestore
+                    && msg.pane_id == pane_id =>
+            {
+                let (_segments, content) =
+                    mux_ipc::protocol::decode_snapshot_payload(&msg.payload);
+                return content.to_vec();
+            }
+            Ok(msg) if msg.msg_type == MessageType::Error => {
+                let err: Option<ErrorMsg> = msg.decode_payload();
+                panic!("daemon returned Error attaching to session {session_id}: {err:?}");
+            }
+            Ok(_) => continue,
+            Err(e) if is_timeout(&e) => continue,
+            Err(e) => panic!(
+                "socket read error waiting for PaneCreated/SnapshotRestore after Attach: {e}"
+            ),
+        }
+    }
+}
+
+/// AC-1 / AC-2 (this feature's own task0003.md): an alt-screen pane's
+/// alternate-screen state survives a hot-upgrade + reconnect + reattach
+/// cycle, asserted against the post-restore observable contract
+/// (IMPLEMENTATION.md Shared Components) rather than any daemon-internal
+/// detail.
+///
+/// Expected to fail (at the named assertions below) until task0002 lands --
+/// see this section's header note above. Do not weaken these assertions to
+/// pass early.
+#[test]
+fn hot_upgrade_preserves_alt_screen_state_on_reattach() {
+    let runtime_dir = unique_runtime_dir("alt-screen");
+    let bin_dir = unique_bin_dir("alt-screen");
+    let daemon_bin_path = bin_dir.join("emterm-under-test");
+    copy_daemon_binary(&daemon_bin_path);
+    let child = spawn_isolated_daemon(&daemon_bin_path, &runtime_dir);
+    let _guard = DaemonGuard {
+        child,
+        runtime_dir: runtime_dir.clone(),
+        bin_dir: Some(bin_dir),
+    };
+
+    let sock_path = socket_path_for(&runtime_dir);
+    wait_for_socket(&sock_path, SOCKET_WAIT_TIMEOUT);
+    let mut stream = connect(&sock_path, SOCKET_WAIT_TIMEOUT);
+    let _welcome = handshake(&mut stream);
+
+    let pane_id = create_shell_pane(&mut stream);
+
+    // Design step 2: PRE-ALT marker on the main screen -- lands in
+    // scrollback via ordinary shell output.
+    send_pane_line(
+        &mut stream,
+        pane_id,
+        "printf '%s%s\\n' EMTERM_ALTUPG_PREALT _MARKER",
+    );
+    read_pane_until(
+        &mut stream,
+        pane_id,
+        PRE_ALT_MARKER,
+        "alt-screen scenario: pre-alt marker round trip",
+        SHELL_ROUNDTRIP_TIMEOUT,
+    );
+
+    // Design step 3: drive the pane onto the alternate screen with a REAL
+    // `ESC[?1049h` byte sequence (via `printf`'s own octal-escape
+    // interpretation of `\033`, not a literal typed escape), followed by
+    // the ALT marker. The daemon's shadow parser processes raw PTY bytes
+    // regardless of what any client renders (task0003.md Design), so this
+    // is sufficient to drive it into alt-screen mode.
+    send_pane_line(
+        &mut stream,
+        pane_id,
+        "printf '\\033[?1049h'; printf '%s%s\\n' EMTERM_ALTUPG_ALTSCREEN _MARKER",
+    );
+    read_pane_until(
+        &mut stream,
+        pane_id,
+        ALT_SCREEN_MARKER,
+        "alt-screen scenario: alt-screen marker round trip",
+        SHELL_ROUNDTRIP_TIMEOUT,
+    );
+
+    // Design step 4: trigger the hot-upgrade over the wire.
+    send_upgrade_and_await_signal(&mut stream, UPGRADE_SIGNAL_TIMEOUT);
+
+    // Design step 5: reconnect and reattach, capturing the reattach
+    // snapshot.
+    let (mut stream2, welcome2) = await_daemon_reachable_again(&sock_path, RECONNECT_TIMEOUT);
+    let session_id = first_session_id(&welcome2);
+    let snapshot =
+        attach_and_capture_snapshot(&mut stream2, session_id, pane_id, RECONNECT_TIMEOUT);
+
+    // Design step 6: assert the post-restore observable contract.
+    assert!(
+        snapshot.ends_with(ALT_MODE_ENABLE_TOGGLE),
+        "AC-2: expected the reattach snapshot to end with the alternate-screen-enable toggle \
+         {ALT_MODE_ENABLE_TOGGLE:?} -- i.e. the restored pane's shadow parser must report the \
+         alternate screen as the CURRENT screen, not fall back to a scrollback-only \
+         reconstruction; got snapshot tail: {}",
+        String::from_utf8_lossy(&snapshot[snapshot.len().saturating_sub(96)..])
+    );
+
+    let pre_alt_pos = snapshot
+        .windows(PRE_ALT_MARKER.len())
+        .position(|w| w == PRE_ALT_MARKER.as_bytes());
+    let alt_pos = snapshot
+        .windows(ALT_SCREEN_MARKER.len())
+        .position(|w| w == ALT_SCREEN_MARKER.as_bytes());
+
+    assert!(
+        pre_alt_pos.is_some(),
+        "test setup sanity: the pre-alt marker must be present in the reattach snapshot's \
+         scrollback; got: {}",
+        String::from_utf8_lossy(&snapshot)
+    );
+    assert!(
+        alt_pos.is_some(),
+        "AC-2: expected the alt-screen marker to be present in the reattach snapshot as \
+         current screen content -- its absence means the alt-screen dump was omitted \
+         entirely (the pre-alt marker's main-screen content is then all that surfaces where \
+         the TUI's screen should be); got: {}",
+        String::from_utf8_lossy(&snapshot)
+    );
+    assert!(
+        pre_alt_pos.unwrap() < alt_pos.unwrap(),
+        "AC-2: the pre-alt marker must not surface after (or in place of) the alt-screen \
+         content -- it may only appear earlier, in scrollback"
+    );
+}
