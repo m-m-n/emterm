@@ -1,0 +1,98 @@
+task_id: task0001
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests: [app::tests::set_grid_size_resizes_only_the_active_tab]
+    red_confirmed: true
+    red_reason: >-
+      assertion failed: inactive tab0's core dims changed from (80, 24) to
+      (100, 40) alongside the active tab, because the pre-fix
+      `set_grid_size` distributed the resize to every tab in a loop.
+  AC-2:
+    tests:
+      - app::tests::switch_to_tab_resizes_incoming_tab_when_its_dims_differ_from_cell_size
+      - app::tests::switch_to_tab_issues_no_resize_when_incoming_dims_already_match_cell_size
+    red_confirmed: true
+    red_reason: >-
+      switch_to_tab_resizes_incoming_tab_when_its_dims_differ_from_cell_size
+      failed (assertion `left == right` failed: left: (80, 24), right: (100,
+      40)) once AC-1's active-tab-only routing was in place but before the
+      activation reconcile existed — the incoming tab stayed at its stale
+      dims across the switch. The "already matches" companion test could
+      not be made to fail first: with no reconcile call at all (the
+      pre-AC-1 baseline), the incoming tab's dims already equalled
+      cell_size because the old code resized every tab unconditionally, so
+      the assertion passed trivially before any of this task's
+      implementation existed. Recorded here and in `unconfirmed_reds`
+      below; the AC-2 criterion is nonetheless covered by its sibling test
+      above, which the reconcile logic makes pass for the right reason.
+  AC-3:
+    tests:
+      - app::tests::close_tab_active_index_fixup_reconciles_newly_active_tab_size
+      - app::tests::pump_all_reap_active_index_fixup_reconciles_newly_active_tab_size
+    red_confirmed: true
+    red_reason: >-
+      Both failed with assertion `left == right` failed: left: (80, 24),
+      right: (100, 40) — the newly-active tab (post fix-up) stayed at its
+      stale dims because no reconcile call existed yet at either site.
+  AC-4:
+    tests:
+      - app::tests::width_change_of_active_tab_leaves_inactive_tabs_prompt_and_fold_marks_untouched
+      - app::tests::width_change_clears_absolute_row_trackers
+      - app::tests::height_only_change_keeps_absolute_row_trackers
+    red_confirmed: true
+    red_reason: >-
+      width_change_of_active_tab_leaves_inactive_tabs_prompt_and_fold_marks_untouched
+      failed (assertion `left == right` failed: left: None, right: Some(5))
+      under the pre-fix all-tabs distribution loop, which called
+      `Tab::clear_reflow_invalidated_state()` on every tab including the
+      inactive one. width_change_clears_absolute_row_trackers and
+      height_only_change_keeps_absolute_row_trackers are pre-existing tests
+      re-scoped per the task plan (prompt/fold assertions moved to the
+      sibling tabs.rs task per the D3 ownership split); they were already
+      green before and after this task's change, so they carry no fresh red
+      confirmation of their own — the fresh red for AC-4 is the new
+      untouched-inactive-tab test above.
+  AC-5:
+    tests: [app::tests::set_grid_size_leaves_inactive_mux_tab_core_dims_unchanged]
+    red_confirmed: true
+    red_reason: >-
+      assertion `left == right` failed: left: (80, 24), right: (100, 40) —
+      the inactive mux-flavored tab's core dims changed under the pre-fix
+      all-tabs distribution loop.
+  AC-6:
+    tests: [app::tests::set_grid_size_clamps_cell_size_to_agree_with_the_core]
+    red_confirmed: false
+    red_reason: >-
+      Pre-existing test from a prior task; unaffected by this task's
+      active-tab-only routing change (it exercises a single-tab app, so the
+      active tab is always tab 0). Kept passing throughout, per the task
+      plan's explicit instruction that this test "keeps passing". No fresh
+      red exists to confirm since the behavior it asserts (clamp-before-
+      record) was not altered by this task.
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Verified via the full `--lib` suite run (project test command) and
+      the `--no-default-features` check (project build command variant),
+      not a single unit test. Pre-fix, the suite was red for AC-1/AC-3/AC-4/
+      AC-5's dedicated tests (see above); post-fix, the full suite matches
+      the recorded baseline exactly (7 pre-existing tabs.rs failures,
+      unrelated to this task) and the CLI feature-gate check compiles
+      cleanly.
