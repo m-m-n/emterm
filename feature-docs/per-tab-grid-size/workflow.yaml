@@ -104,7 +104,7 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [NFR2]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/per-tab-grid-size/task0004
     provenance:
