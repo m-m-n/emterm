@@ -49,12 +49,6 @@ function makeMux(overrides: Partial<MuxSettings> = {}): MuxSettings {
     tmux_conf_imported: false,
     window_sidebar_overlay: false,
     keybinds: {},
-    statusbar: {
-      enabled: true,
-      left: "",
-      right: "",
-      commands: {},
-    },
     ...overrides,
   };
 }
