@@ -96,8 +96,8 @@ tasks:
     domains: [external-io]
     complexity: medium
     requirements: [FR5, FR6, FR7]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "designed-red until task0002 merges (IMPLEMENTATION.md D2); merge e3b5ac6"
     branch: em-workflow/mux-hot-upgrade-alt-screen/task0003
 
 review:
