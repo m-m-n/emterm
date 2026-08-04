@@ -641,8 +641,6 @@ pub struct MuxSettings {
     pub tmux_conf_imported: bool,
     #[serde(default)]
     pub keybinds: std::collections::HashMap<String, String>,
-    #[serde(default)]
-    pub statusbar: MuxStatusbarSettings,
 }
 
 // ============================================================
@@ -699,34 +697,8 @@ impl Default for MuxSettings {
             window_sidebar_overlay: true,
             tmux_conf_imported: false,
             keybinds: std::collections::HashMap::new(),
-            statusbar: MuxStatusbarSettings::default(),
         }
     }
-}
-
-fn default_mux_statusbar_interval() -> u64 {
-    5000
-}
-
-/// Mux status bar settings.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MuxStatusbarSettings {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub left: String,
-    #[serde(default)]
-    pub right: String,
-    #[serde(default)]
-    pub commands: std::collections::HashMap<String, MuxStatusbarCommand>,
-}
-
-/// A registered command for the mux status bar.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MuxStatusbarCommand {
-    pub executable: String,
-    #[serde(default = "default_mux_statusbar_interval")]
-    pub interval_ms: u64,
 }
 
 impl Default for AppSettings {
@@ -804,79 +776,27 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// FR4/FR8b (mux-status-bar-removal task0001): a `settings.json`
+    /// written by an older eMterm build may still contain the retired
+    /// `mux.statusbar` object (the removed mux status-bar settings
+    /// schema). Loading it must not fail -- the obsolete key is silently
+    /// ignored (no `MuxSettings` field consumes it anymore) rather than
+    /// rejected.
     #[test]
-    fn test_mux_statusbar_settings_default() {
-        let settings = MuxStatusbarSettings::default();
-        assert!(!settings.enabled);
-        assert_eq!(settings.left, "");
-        assert_eq!(settings.right, "");
-        assert!(settings.commands.is_empty());
-    }
-
-    #[test]
-    fn test_mux_statusbar_settings_full_config() {
-        let json = r#"{
-            "enabled": true,
-            "left": "{hostname} | {cmd:git_branch}",
-            "right": "{cwd}",
-            "commands": {
-                "git_branch": {
-                    "executable": "/usr/bin/git-branch-name",
-                    "interval_ms": 3000
-                }
-            }
-        }"#;
-        let settings: MuxStatusbarSettings = serde_json::from_str(json).unwrap();
-        assert!(settings.enabled);
-        assert_eq!(settings.left, "{hostname} | {cmd:git_branch}");
-        assert_eq!(settings.right, "{cwd}");
-        assert_eq!(settings.commands.len(), 1);
-        let cmd = settings.commands.get("git_branch").unwrap();
-        assert_eq!(cmd.executable, "/usr/bin/git-branch-name");
-        assert_eq!(cmd.interval_ms, 3000);
-    }
-
-    #[test]
-    fn test_mux_statusbar_settings_missing_fields() {
-        let json = r#"{"enabled": true}"#;
-        let settings: MuxStatusbarSettings = serde_json::from_str(json).unwrap();
-        assert!(settings.enabled);
-        assert_eq!(settings.left, "");
-        assert_eq!(settings.right, "");
-        assert!(settings.commands.is_empty());
-    }
-
-    #[test]
-    fn test_mux_statusbar_command_default_interval() {
-        let json = r#"{"executable": "/usr/bin/date"}"#;
-        let cmd: MuxStatusbarCommand = serde_json::from_str(json).unwrap();
-        assert_eq!(cmd.executable, "/usr/bin/date");
-        assert_eq!(cmd.interval_ms, 5000);
-    }
-
-    #[test]
-    fn test_mux_settings_with_statusbar() {
+    fn test_mux_settings_tolerates_stale_statusbar_key() {
         let json = r#"{
             "prefix": "ctrl+a",
             "statusbar": {
                 "enabled": true,
                 "left": "test",
                 "right": "right",
-                "commands": {}
+                "commands": {
+                    "git_branch": {"executable": "/usr/bin/git-branch-name"}
+                }
             }
         }"#;
         let settings: MuxSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.prefix, "ctrl+a");
-        assert!(settings.statusbar.enabled);
-        assert_eq!(settings.statusbar.left, "test");
-    }
-
-    #[test]
-    fn test_mux_settings_without_statusbar_uses_default() {
-        let json = r#"{"prefix": "ctrl+b"}"#;
-        let settings: MuxSettings = serde_json::from_str(json).unwrap();
-        assert!(!settings.statusbar.enabled);
-        assert_eq!(settings.statusbar.left, "");
     }
 
     // ── window_sidebar_overlay (task0001 AC-1/AC-3/AC-4/AC-5) ───────────
