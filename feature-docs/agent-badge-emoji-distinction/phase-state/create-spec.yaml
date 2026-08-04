@@ -1,15 +1,29 @@
 schema_version: 1
 feature: agent-badge-emoji-distinction
 phase: create-spec
-status: initialized
+status: completed
 generation: 1
-base_revision: c7d7fb719ab514879f3d314dfc41268c230772f4
+base_revision: 661cf8ad3fad4aea834372cbda92890d86648610
 last_input_digest: null
 active_request_id: null
 packets: {}
 answers: {}
-worker_runs: []
-artifacts: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: null
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: null
+    output_digest: null
+artifacts:
+  - path: feature-docs/agent-badge-emoji-distinction/REQUIREMENTS.md
+    sha256: null
+    produced_by: create-spec-run-0002
+  - path: feature-docs/agent-badge-emoji-distinction/SPEC.md
+    sha256: null
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
