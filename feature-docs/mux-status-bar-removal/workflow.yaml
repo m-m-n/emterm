@@ -75,7 +75,7 @@ workflow:
       Cargo dependency, a stale TS test fixture) — recorded unresolved in
       reviews/round1.yaml for a follow-up pass; none block this gate.
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
