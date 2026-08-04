@@ -37,7 +37,7 @@ workflow:
     skipped_reason: "テストの一時ファイル後始末のバグ修正であり、UI/UX・画面表示への影響が一切ないため設計ステップは不要"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: fb9b5f5f3110366995c120e914cd9e3b4dd0f4aa
