@@ -355,14 +355,14 @@ pub fn paint_agent_badge(
             // non-integer downscale on top of the cache's own Lanczos3
             // downscale would needlessly blur a 12px glyph.
             let mut draw_size = texture.size_vec2() / ppp;
-            // Safety clamp: if an unusually shaped bitmap strike still
-            // overflows the slot, scale down by an integer texel ratio
-            // rather than reintroducing a fractional per-pixel scale.
+            // Safety clamp: aspect-fit into the slot. Divide by the EXACT
+            // overflow ratio — `ceil()` would halve a bitmap that is only
+            // one texel wider than the slot (ratio ~1.08), which is the
+            // common bundled-Noto-Color-Emoji case (non-square strike).
             let overflow_ratio =
                 (draw_size.x / AGENT_BADGE_SLOT_WIDTH).max(draw_size.y / AGENT_BADGE_SLOT_WIDTH);
             if overflow_ratio > 1.0 {
-                let texel_ratio = overflow_ratio.ceil();
-                draw_size /= texel_ratio;
+                draw_size /= overflow_ratio;
             }
             // Snap the paint rect's origin to the physical-pixel grid
             // (mirrors `status_bar.rs::emit_emoji_cluster_chain`'s `snap`
