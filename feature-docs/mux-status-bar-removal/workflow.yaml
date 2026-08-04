@@ -92,7 +92,11 @@ review:
   perspectives: []
   residual_critical_high: 0
   needs_rework: false
-  status: pending
+  status: in_progress
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    codex_cross_validation: true
 
 requirements:
   FR1:
