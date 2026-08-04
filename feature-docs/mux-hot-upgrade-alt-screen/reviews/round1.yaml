@@ -1,0 +1,186 @@
+round: 1
+executed_at: "2026-08-05T00:30:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 9059f3dcc762ac06780877f3ecab3a3c172a25d0
+  head_commit: 55efe63ad3ab7dc1cc4b65a17a914425e6ec05e8
+  changed_files:
+    - crates/mux_ipc/src/handoff.rs
+    - src-tauri/src/mux/identity.rs
+    - src-tauri/src/mux/session/pane.rs
+    - src-tauri/src/mux/upgrade.rs
+    - src-tauri/tests/mux_hot_upgrade.rs
+    - test/README.md
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "codex-cli usage limit reached (retry after 2026-08-08)"}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "codex-cli usage limit reached (retry after 2026-08-08)"}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex-cli usage limit reached (retry after 2026-08-08)"}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex-cli usage limit reached (retry after 2026-08-08)"}
+findings:
+  - stable_id: e0b52df51ac31ee4
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/upgrade.rs
+    line: 436
+    line_end: 442
+    title: "復元された alt_screen=true がスクロールバックゲートを恒久的に閉じうる（refresh→exec 間の alt 離脱レース）"
+    description: >-
+      refresh_live_agent_state が exec 直前に capture_alt_state() を再読した後、exec までの間に
+      子プロセスが ESC[?1049l を出して旧 daemon の reader がそのバイトを消費すると、その状態は
+      書き出し済みの handoff document に反映されない。exec 後の新 daemon は document どおり
+      alt=true で shadow parser を復元し、?1049l バイトは二度と届かないため、
+      pty_spawn.rs の extract_main_buffer_bytes に渡る alt_before が true のまま固着する。
+      結果としてそのペインの main-buffer 出力は以後すべてスクロールバックから黙って捨てられ、
+      reattach スナップショットも alt ブランチを取り続ける。次に TUI が ?1049h/?1049l を出すまで
+      自然回復しない。本変更前は復元後の parser が常に main だったためこの固着状態は存在しなかった。
+    suggestion: >-
+      (a) 復元した alt 状態を暫定として扱い、from_restored 後の最初のライブバイト処理までは
+      スクロールバックゲートを alt で閉じない。(b) refresh_live_agent_state の直前に reader スレッドを
+      定義されたバイト境界で停止させる。(c) 最低限、無言のデータ損失を検知可能にする警告ログを入れる。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity; auto-fix gate は critical/high のみ。実機検証と併せて人間評価者の判断に委ねる"
+  - stable_id: a1fcf1e95b1a2cbd
+    severity: medium
+    category: spec
+    file: src-tauri/tests/mux_hot_upgrade.rs
+    line: 1795
+    line_end: 1812
+    title: "統合ブランチで task0002 が着地済みなのに「失敗して当然」の注記が残り、TS4/AC-3 のリグレッション検知を無効化している"
+    description: >-
+      task0003 が追加したセクションヘッダ（1795-1812 行）と 1914 行付近のテスト doc コメントが
+      「task0002 が着地するまで失敗する想定」「これを欠陥として扱ってはならない」と宣言しているが、
+      統合ブランチには task0002 が既に同居しているため前提が成立しない。将来
+      hot_upgrade_preserves_alt_screen_state_on_reattach が本物のリグレッションで落ちても
+      「既知の期待された失敗」として見送られる導線が残り、SPEC AC-3 を wire レベルで押さえる
+      唯一のシナリオの検知力が失われる。test/README.md 側は無条件の合格前提で書かれており記述が食い違う。
+    suggestion: >-
+      1795-1812 行の "## Expected to fail until task0002 lands" ブロックと 1914 行付近の
+      expected-to-fail 宣言を削除し、統合ブランチでは task0002 着地済みで本シナリオはグリーンである
+      （従って失敗は実際の FR5/FR6 リグレッションである）と記す文へ差し替える。
+      "Do not weaken these assertions to pass early." は残してよい。
+    sources: [claude:spec, claude:comprehensive]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: "medium severity; auto-fix gate は critical/high のみ"
+  - stable_id: 82ffab7ec3e1dd27
+    severity: medium
+    category: comprehensive
+    file: src-tauri/tests/mux_hot_upgrade.rs
+    line: 1795
+    line_end: 1812
+    title: "統合ブランチで陳腐化した「task0002 が入るまで失敗する想定」注記が、実際の失敗を握りつぶす指示になっている"
+    description: >-
+      spec 観点の a1fcf1e95b1a2cbd と同一サイト・同一事象を comprehensive 観点から検出したもの。
+      注記が「このテストの失敗は想定内なので defect として扱うな」という triage 指示になっており、
+      回帰検出のための唯一の end-to-end シナリオの信頼性を損なう。
+    suggestion: >-
+      同上。1795-1812 行の expected-to-fail ブロックを削除するか過去形の履歴記述へ置き換える。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "a1fcf1e95b1a2cbd と同一サイト（カテゴリが異なるため dedupe 対象外）"
+  - stable_id: 05c1498a5cf0a7f4
+    severity: medium
+    category: security
+    file: src-tauri/src/mux/identity.rs
+    line: 623
+    line_end: 633
+    title: "private-per-user-group 判定がプライマリグループ所属を検出できず、group-write 免除が他 uid の書き込みを許すことがある"
+    description: >-
+      is_private_per_user_group の条件(a)は gr_mem しか見ないが gr_mem は補助メンバのみでプライマリ
+      グループ所属を含まない。条件(b)はエントリ所有者自身のプライマリ gid しか照合せず、他アカウントが
+      同じ gid をプライマリに持つかを見ていない。RHEL 系の sync/shutdown/halt/operator が primary gid 0 を
+      持つ構成では root:root 0o775 の候補や親ディレクトリが免除を通過する。NSS 重複エントリも
+      getgrgid_r が先頭 1 件しか返さないため後続メンバが不可視になる。
+      成立時の帰結は daemon 権限での任意コード実行だが、条件を作るには root 権限が要るため即時性は低い。
+    suggestion: >-
+      (a) 免除を attrs.uid == daemon_uid のエントリに限定し root 所有には適用しない（追加 lookup 不要、
+      dev build の動機ケースには影響なし）。(b) passwd を走査して同 gid をプライマリに持つ他 uid の不在まで
+      確認する（NFR1 の列挙禁止と衝突するため設計判断が要る）。(c) 現状維持なら残存リスクを doc と SPEC に明記する。
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity; auto-fix gate は critical/high のみ。脅威モデル上の受容判断は人間評価者に委ねる"
+  - stable_id: acc59d7a43f438c6
+    severity: medium
+    category: security
+    file: src-tauri/src/mux/identity.rs
+    line: 680
+    line_end: 686
+    title: "lookup_group_by_gid が gr_mem の非 NULL を検証せず null 参照しうる"
+    description: >-
+      `let mut cursor = grp.gr_mem;` の直後に `while !(*cursor).is_null()` で無条件参照している。
+      glibc の files/sss バックエンドは成功時に必ず配列を返すが、gr_mem 自体の非 NULL 性は POSIX の
+      保証ではなく、サードパーティ NSS バックエンドが NULL を残すとこの unsafe ブロックは NULL
+      デリファレンスになる。この関数は execve ゲートの同期パス上にあるため、失敗は daemon クラッシュ
+      = 全ペイン喪失に直結する。同ファイルの他経路はすべて None を返して fail-closed に倒している。
+    suggestion: >-
+      cursor が NULL のとき None を返す早期リターンを追加する（NFR2 の fail-closed に揃える。
+      「メンバ無し」として読むと FR1 の免除がより緩くなるため、lookup 失敗と同じ扱いにする）。
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity; auto-fix gate は critical/high のみ。修正 diff は finding に添付済み"
+  - stable_id: be1c0b50a0783cc1
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/identity.rs
+    line: 494
+    line_end: 566
+    title: "検証器の公開シグネチャが属性と facts を別々の位置引数に分離し、facts が要るかの判断も呼び出し側に重複している"
+    description: >-
+      validate_candidate(candidate, candidate_facts, parent, parent_facts, daemon_uid) は対になるべき
+      EntryAttributes と Option<&GroupOwnerFacts> を独立した位置引数として並べており、candidate 用と
+      parent 用の facts を取り違えてもコンパイルが通る。さらに「どんなときに facts が必要か」の知識が
+      validate_entry と group_write_facts_if_needed の2箇所に複製されており、免除規則を広げる際に
+      取得側の更新が漏れると facts が None のまま渡って fail-closed で正当なホットアップグレードが
+      黙って拒否される。
+    suggestion: >-
+      (a) EntryAttributes に facts を持たせるか InspectedEntry 構造体を導入して対の取り違えを型で排除する。
+      (b) validate_candidate に fact プロバイダ closure を渡し、group-write ビットを見たその場で呼ぶ形にして
+      取得条件の重複を消す。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity; auto-fix gate は critical/high のみ"
+  - stable_id: 4b6aaeec42341ad1
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/session/pane.rs
+    line: 2057
+    line_end: 2071
+    title: "handoff の1フィールド追加が4層を貫く位置引数の散弾銃手術になっており、from_restored の引数列が膨張した"
+    description: >-
+      MuxPane::from_restored は既に too_many_arguments を許可した 11 引数関数で、今回 alt_screen と
+      alt_screen_dump を素の位置引数として追加し 13 引数になった。alt-screen 状態はフラグと dump が対で
+      意味を持つ1つのドメイン概念だが、capture_alt_state の戻り値タプル・HandoffPane の2フィールド・
+      snapshot_pane の分岐・refresh_live_agent_state の2代入・from_restored の2引数・V2→現行の変換の
+      6箇所にバラバラの素値として複製されており、不変条件を保証する単一の場所が無い。
+    suggestion: >-
+      AltScreenState 型（コンストラクタで flag=false なら dump 空を型保証）を pane.rs 側に置き、
+      capture_alt_state がこれを返し from_restored が1引数で受ける。復元入力側を RestoredPaneState に
+      まとめれば以後の handoff フィールド追加は2箇所で閉じる。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity; auto-fix gate は critical/high のみ"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: >-
+    critical/high の findings が 0 件のため auto-fix ループは実行されていない
+    （review-phase.md Phase R4 の candidate gate は severity ∈ {critical, high}）。
+residual_critical_high: 0
+rework_required: false
