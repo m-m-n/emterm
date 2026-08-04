@@ -73,7 +73,7 @@ tasks:
     domains: [external-io, concurrency]
     complexity: medium
     requirements: [FR1, FR4, FR5, FR6, NFR2, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/per-tab-grid-size/task0002
 
