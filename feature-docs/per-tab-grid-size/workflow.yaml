@@ -79,9 +79,12 @@ tasks:
     branch: em-workflow/per-tab-grid-size/task0002
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
+  plan:
+    floor: [comprehensive, performance, architecture, spec]
+    discretionary: []
+    codex_cross_validation: true
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
