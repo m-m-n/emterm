@@ -40,7 +40,7 @@ workflow:
     status: completed
     completed_at_commit: 46b0c6987d09f1be53fa80d0441b4e77c9df6fec
   - id: implement
-    status: completed
+    status: pending
     completed_at_commit: 55026eb002ee1cede0d05c5ed699dcd7ebfffd0e
     base_commit: 6464344ea335f9b1e3329b3af75c70e3904f9e96
   - id: review
@@ -77,6 +77,40 @@ tasks:
     status: merged
     notes: null
     branch: em-workflow/per-tab-grid-size/task0002
+  task0003:
+    title: Deferred activation reconcile against the incoming tab's display area, unified App-side resize invalidation, and observable pane Resize frames
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/app.rs
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/tabs.rs
+    skills: [backend-impl]
+    domains: [external-io, ui]
+    complexity: high
+    requirements: [FR3, FR4, FR6, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+    branch: null
+    provenance:
+      source: review
+      source_ids: [dbb7766a6212fb1a, 09f0e6096bbc36ee, a172de726b3cbc29, d39a6a9468ff892e, cfcbfae57964beb5]
+      review_round: 1
+  task0004:
+    title: Correct the task0001 test-evidence red_confirmed record
+    plan: tasks/task0004.md
+    files:
+      - test-docs/per-tab-grid-size/task0001.tests.yaml
+    skills: []
+    domains: [config-infra]
+    complexity: low
+    requirements: [NFR2]
+    status: pending
+    notes: null
+    branch: null
+    provenance:
+      source: review
+      source_ids: [c9d1e2db0ce11e59]
+      review_round: 1
 
 review:
   status: pending
@@ -113,15 +147,15 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS2]
+    tasks: [task0001, task0003]
+    tests: [TS2, TS8]
   FR4:
     title: Mux pane Resize control-frame consistency
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
-    tests: [TS4]
+    tasks: [task0001, task0002, task0003]
+    tests: [TS4, TS10]
   FR5:
     title: Wire-domain clamp preserved
     status: ok
@@ -134,30 +168,30 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
-    tests: [TS5]
+    tasks: [task0001, task0002, task0003]
+    tests: [TS5, TS9]
   NFR1:
     title: Root-cause independence from mux-specific UI
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS7]
+    tasks: [task0001, task0003]
+    tests: [TS7, TS8]
   NFR2:
     title: Existing test suite integrity
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
-    tests: [TS3, TS6]
+    tasks: [task0001, task0002, task0003, task0004]
+    tests: [TS3, TS6, TS11]
   NFR3:
     title: CLI build compatibility
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
+    tasks: [task0001, task0002, task0003]
     tests: [TS6]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework_count: 0
