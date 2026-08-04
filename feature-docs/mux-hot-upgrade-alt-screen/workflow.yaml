@@ -1,0 +1,159 @@
+schema_version: 1
+feature: mux-hot-upgrade-alt-screen
+created: 2026-08-04
+base_branch: main
+parent_branch: em-workflow/mux-hot-upgrade-alt-screen/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test mux_hot_upgrade -- --test-threads=1"
+    mux_ipc:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/mux_ipc/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/mux_ipc/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli_feature_gate:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 6ceace327776b7ad49cd90f4c6eacab57f9d485d
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      Daemon-internal bug fix (parser-state serialization across execve and a
+      file-permission predicate). No UI surface, no visual or design-token
+      involvement; the design step adds nothing.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: fb9b5f5f3110366995c120e914cd9e3b4dd0f4aa
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: Private per-user group exemption in the NFR3 path-writability check
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  FR2:
+    title: World-write rejection unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  FR3:
+    title: HandoffPane carries alt-screen state; schema version 3
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2, TS3]
+  FR4:
+    title: V2-to-V3 migration with preserved legacy behavior
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2]
+  FR5:
+    title: snapshot_pane captures with the existing main/alt split
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3, TS4]
+  FR6:
+    title: Restore replays alt-screen state into the shadow_parser
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3, TS4, TS5]
+  FR7:
+    title: Alt-state re-capture to narrow the tearing window
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3, TS4, TS5]
+  FR8:
+    title: Alt-screen dump size upper-bound policy
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3]
+  NFR1:
+    title: Bounded identity lookups
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  NFR2:
+    title: Fail-closed security posture
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  NFR3:
+    title: Backward-compatible handoff decoding
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2]
+  NFR4:
+    title: No new concepts or external dependencies
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

@@ -1,10 +1,10 @@
 schema_version: 1
 feature: mux-hot-upgrade-alt-screen
 phase: create-spec
-status: initialized
+status: completed
 generation: 1
 base_revision: fb9b5f5
-last_input_digest: null
+last_input_digest: "sha256:ee1d5001a82eab9e43cb6b6e1b8ffedf72262310c296e1782bc1f057867f28af"
 active_request_id: null
 packets: {}
 answers:
@@ -16,8 +16,22 @@ answers:
     selected_option_ids: [derive_from_task_description]
     freeform: null
     normalized_answer: "mux-hot-upgrade-alt-screen"
-worker_runs: []
-artifacts: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: "sha256:ee1d5001a82eab9e43cb6b6e1b8ffedf72262310c296e1782bc1f057867f28af"
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:9f2b1c0e-specwriter-run0002"
+    output_digest: null
+artifacts:
+  - path: feature-docs/mux-hot-upgrade-alt-screen/REQUIREMENTS.md
+    sha256: null
+    produced_by: create-spec-run-0002
+  - path: feature-docs/mux-hot-upgrade-alt-screen/SPEC.md
+    sha256: null
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
