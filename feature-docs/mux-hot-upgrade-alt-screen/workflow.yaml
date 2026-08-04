@@ -45,7 +45,8 @@ workflow:
       involvement; the design step adds nothing.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: 9a23163d6107460c2231c215e585a864036189f3
   - id: implement
     status: pending
     base_commit: fb9b5f5f3110366995c120e914cd9e3b4dd0f4aa
@@ -58,7 +59,46 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Private per-user group exemption in the path-writability check
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/mux/identity.rs
+    skills: [backend-impl]
+    domains: [auth, external-io]
+    complexity: high
+    requirements: [FR1, FR2, NFR1, NFR2]
+    status: pending
+    notes: null
+    branch: em-workflow/mux-hot-upgrade-alt-screen/task0001
+  task0002:
+    title: Carry alt-screen state across the hot-upgrade handoff
+    plan: tasks/task0002.md
+    files:
+      - crates/mux_ipc/src/handoff.rs
+      - src-tauri/src/mux/upgrade.rs
+      - src-tauri/src/mux/session/pane.rs
+    skills: [backend-impl]
+    domains: [data-persistence, api-contract, concurrency]
+    complexity: high
+    requirements: [FR3, FR4, FR5, FR6, FR7, FR8, NFR3, NFR4]
+    status: pending
+    notes: null
+    branch: em-workflow/mux-hot-upgrade-alt-screen/task0002
+  task0003:
+    title: Alt-screen hot-upgrade scenario in the integration harness
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/tests/mux_hot_upgrade.rs
+      - test/README.md
+    skills: [backend-impl]
+    domains: [external-io]
+    complexity: medium
+    requirements: [FR5, FR6, FR7]
+    status: pending
+    notes: null
+    branch: em-workflow/mux-hot-upgrade-alt-screen/task0003
 
 review:
   status: pending
@@ -74,84 +114,84 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS1]
+    tasks: [task0001]
+    tests: [TS1, TS5]
   FR2:
     title: World-write rejection unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
   FR3:
     title: HandoffPane carries alt-screen state; schema version 3
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS2, TS3]
   FR4:
     title: V2-to-V3 migration with preserved legacy behavior
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS2]
   FR5:
     title: snapshot_pane captures with the existing main/alt split
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002, task0003]
     tests: [TS3, TS4]
   FR6:
     title: Restore replays alt-screen state into the shadow_parser
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002, task0003]
     tests: [TS3, TS4, TS5]
   FR7:
     title: Alt-state re-capture to narrow the tearing window
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002, task0003]
     tests: [TS3, TS4, TS5]
   FR8:
     title: Alt-screen dump size upper-bound policy
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS3]
   NFR1:
     title: Bounded identity lookups
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
   NFR2:
     title: Fail-closed security posture
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
   NFR3:
     title: Backward-compatible handoff decoding
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS2]
   NFR4:
     title: No new concepts or external dependencies
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS3]
 
 batch:
