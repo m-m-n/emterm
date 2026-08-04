@@ -40,7 +40,8 @@ workflow:
     completed_at_commit: 690347e20bd176ab2f0ec15bd8043be35486641e
     base_commit: 7227a0ddff7986c749b35d6b5d2e91df3c07f88a
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: f06d271b761641689f584982b836a9bc2f1d3064
   - id: verify
     status: pending
     result: null
@@ -67,7 +68,7 @@ tasks:
     branch: em-workflow/agent-badge-emoji-distinction/task0001
 
 review:
-  status: in_progress
+  status: completed
   rounds_completed: 1
   plan:
     floor: [comprehensive, spec]
