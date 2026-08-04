@@ -279,8 +279,14 @@ mod tests {
 
     #[test]
     fn launch_with_propagates_spawn_error() {
+        use std::cell::RefCell;
         let payload = ViewerPayload::from_request(sample_request(), &Settings::default());
-        let spawn = |_path: &Path| -> std::io::Result<u32> {
+        // The payload file is written before spawn is invoked, so record the
+        // path here to clean it up after the assertions (test hygiene;
+        // production leaves it for the child + reboot GC — see D1/NFR3).
+        let captured: RefCell<Option<PathBuf>> = RefCell::new(None);
+        let spawn = |path: &Path| -> std::io::Result<u32> {
+            *captured.borrow_mut() = Some(path.to_path_buf());
             Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "no binary",
@@ -288,6 +294,9 @@ mod tests {
         };
         let err = launch_with(&payload, spawn).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        if let Some(path) = captured.into_inner() {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 
     #[test]
