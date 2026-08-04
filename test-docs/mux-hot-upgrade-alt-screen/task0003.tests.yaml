@@ -1,0 +1,75 @@
+task_id: task0003
+baseline_failures: []          # 4a: all 9 pre-existing mux_hot_upgrade.rs scenarios passed
+final_failures:
+  # Intentional, plan-mandated (task0003.md "Expected-to-fail status",
+  # IMPLEMENTATION.md D2): this new scenario is DESIGNED to fail in this
+  # worktree until sibling task0002 (the handoff-document alt-state carry)
+  # lands on the shared integration branch. Confirmed the failure is a
+  # single, clean, named assertion (AC-2) -- never a hang, never a
+  # structural panic (AC-4). See the implementer report's `notes` for the
+  # full rationale and precedent already present in this same file
+  # (`hot_upgrade_fires_on_binary_replacement_via_attach` /
+  # `_via_mux_start`, from a different feature's own task0003, used the
+  # identical pattern and are now green because their siblings landed).
+  - hot_upgrade_preserves_alt_screen_state_on_reattach
+acceptance_tests:
+  AC-1:
+    tests: [hot_upgrade_preserves_alt_screen_state_on_reattach]
+    red_confirmed: false
+    red_reason: >
+      Structural/convention criterion (the scenario exists and follows the
+      harness conventions: isolated XDG_RUNTIME_DIR + private binary copy
+      via unique_runtime_dir/unique_bin_dir, every wait bounded via named
+      timeout constants, cleanup on panic via DaemonGuard's Drop impl).
+      Not a behavior with a pre-implementation red state to observe;
+      verified by code review and by cargo check / cargo test compiling
+      and running the scenario to a clean, named completion (see AC-4).
+  AC-2:
+    tests: [hot_upgrade_preserves_alt_screen_state_on_reattach]
+    red_confirmed: true
+    red_reason: >
+      Ran against this worktree (task0002 not present): panicked at the
+      first named assertion -- "AC-2: expected the reattach snapshot to
+      end with the alternate-screen-enable toggle [27, 91, 63, 49, 48, 52,
+      57, 104] ... got snapshot tail: ...[?1049l" -- i.e. the restored
+      pane's shadow parser reported alt_screen=false (main-buffer
+      disable toggle), the alt-screen dump was omitted entirely, and the
+      alt-screen marker never surfaced in the reattach snapshot. Exactly
+      what the missing task0002 fix predicts per the post-restore
+      observable contract.
+  AC-3:
+    tests:
+      - hot_upgrade_preserves_shell_pid_and_marker_file
+      - hot_upgrade_logs_handoff_start_with_pane_count
+      - hot_upgrade_succeeds_with_zero_panes
+      - hot_upgrade_aborts_on_incompatible_schema_probe
+      - hot_upgrade_fires_on_binary_replacement_via_attach
+      - hot_upgrade_no_churn_when_binary_unchanged
+      - hot_upgrade_fires_on_binary_replacement_via_mux_start
+      - hot_upgrade_no_misfire_when_identity_file_absent
+      - hot_upgrade_refuses_group_world_writable_candidate_via_attach
+    red_confirmed: false
+    red_reason: >
+      Regression-guard criterion: these 9 pre-existing scenarios were
+      already green in the 4a baseline (nothing to drive red-then-green)
+      and must STAY green. Confirmed still green after adding the new
+      scenario (final_failures contains only the new scenario).
+  AC-4:
+    tests: [hot_upgrade_preserves_alt_screen_state_on_reattach]
+    red_confirmed: true
+    red_reason: >
+      Confirmed the failure is a clean, named assertion, never a hang or
+      a structural/type panic: the full 10-scenario suite completed in
+      ~23s and printed exactly one named AC-2 assertion failure with a
+      descriptive message; no bounded wait timed out first. The banner
+      comment above the scenario documents the
+      expected-to-fail-until-task0002-lands status, mirroring this file's
+      own pre-existing convention for the same situation.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Documentation-only criterion: verified by content review of
+      test/README.md's `mux_hot_upgrade.rs` section, which now names the
+      alt-screen scenario (feature-docs/mux-hot-upgrade-alt-screen) and
+      what it asserts.
