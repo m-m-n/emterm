@@ -1,0 +1,52 @@
+task_id: task0002
+# Baseline recorded via `cargo test --lib -- --test-threads=1` BEFORE any
+# implementation change. Even pinned to --test-threads=1, these tabs.rs
+# tests are non-deterministic across runs (real background-thread timing
+# races in the off-thread replay worker, plus one welcome/group-reap
+# assertion) — three baseline runs produced different subsets of this
+# union. None of them touch resize/reflow-invalidation code; all are
+# pre-existing and unrelated to this task's change.
+baseline_failures:
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+# Two post-implementation full-suite runs, each a subset of baseline_failures
+# above (different flaky members each time, as expected of the same
+# nondeterminism). Listing the union actually observed post-implementation.
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests: [tabs::tests::resize_that_changes_columns_clears_the_tabs_own_reflow_trackers]
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: a width-changing resize must clear the tab's own prompt marks; left: Some(2), right: None (observed with the self-invalidation block temporarily removed from Tab::resize)"
+  AC-2:
+    tests: [tabs::tests::resize_that_only_changes_rows_keeps_the_tabs_own_reflow_trackers]
+    red_confirmed: false
+    red_reason: "Pre-implementation Tab::resize never cleared any tracker at all, so 'a height-only resize keeps the trackers' held vacuously before this task's code existed — the test could not be driven red without implementation to begin with. It does have discriminating power against a plausible wrong implementation (an unconditional clear on every resize), verified alongside AC-1's red run: with the self-invalidation block removed entirely (baseline behavior) this test passed trivially, and it is retained as a preservation/non-regression guard rather than a red-green-proven criterion."
+  AC-3:
+    tests: [tabs::tests::resize_whose_raw_cols_clamp_back_to_the_current_cols_clears_nothing]
+    red_confirmed: false
+    red_reason: "Same as AC-2: pre-implementation Tab::resize never cleared anything, so 'clamping back to the current column count clears nothing' held vacuously before any implementation existed. Retained as a preservation/non-regression guard for the clamp-comparison logic (uses post-clamp cols, not raw caller input)."
+  AC-4:
+    tests:
+      - tabs::tests::resize_clamps_to_the_wire_domain_before_resizing_the_core
+      - tabs::tests::spawn_shell_clamps_the_initial_core_to_the_wire_domain
+    red_confirmed: false
+    red_reason: "Pre-existing tests required to pass UNMODIFIED per the task plan (not touched by this task) — they were already green before and after this task's change; there is no red state to observe by design."
+  AC-5:
+    tests: []
+    red_reason: "Verified via `cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1` (full suite: 3065-3066 passed, 6-7 failed — all within baseline_failures, none newly introduced) and `cargo check --manifest-path src-tauri/Cargo.toml --no-default-features` (CLI feature-gate compiles clean). No dedicated test; these are build/suite-level outcomes."
