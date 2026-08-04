@@ -1,0 +1,221 @@
+round: 1
+executed_at: "2026-08-05T08:30:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 6464344ea335f9b1e3329b3af75c70e3904f9e96
+  head_commit: 3f14ef601bd98341763ad2d6d317ea9189e71fd3
+  changed_files:
+    - src-tauri/src/app.rs
+    - src-tauri/src/tabs.rs
+    - test-docs/per-tab-grid-size/task0001.tests.yaml
+    - test-docs/per-tab-grid-size/task0002.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: vertex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: vertex, status: skipped, skip_reason: "model output truncated (finish_reason: length)"}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: vertex, status: completed}
+findings:
+  - stable_id: dbb7766a6212fb1a
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 1975
+    title: "活性化時の reconcile が「切り替え前のタブ用」の cell_size を使うため、mux タブ⇔ローカルタブの切替で誤サイズの余分な PTY resize が 1 回増える"
+    description: >-
+      `reconcile_active_tab_size` は `self.cell_size` を目標寸法に使うが、`cell_size`
+      はアクティブタブに依存する量である。`App::mux_sidebar_visibility()` は
+      `active_tab_mux_attached()` を見るため、persistent サイドバーの幅 inset は
+      「どのタブがアクティブか」で変わる。`window_host::render` の順序は
+      refresh_status_bar_insets(1530) → refresh_mux_sidebar_inset(1537) →
+      apply_pending_resize(1547) → egui パス内の apply_tab_event(1803, ここで
+      switch_to_tab) なので、reconcile が走る時点の `cell_size` は *出ていく側* の
+      タブ用に算出された値である。結果、mux タブ ⇔ ローカルタブの切替で incoming
+      タブは (1) 活性化時に誤幅へリサイズ、(2) 次フレームの set_grid_size で正幅へ
+      再リサイズ、と 2 回リサイズされる。mux タブなら pane Resize 制御フレームも
+      誤幅→正幅の 2 セットが daemon 側へ届く。変更前は切替時にリサイズが無く次
+      フレームで 1 回だったため、可視タブに届く SIGWINCH が 1→2 に増える回帰でも
+      ある。
+    suggestion: >-
+      reconcile の目標寸法を新アクティブタブ基準で再計算した値にする。switch_to_tab /
+      close_tab / pump_all reap では reconcile 要求フラグだけを立て、
+      `window_host::render` が refresh_status_bar_insets /
+      refresh_mux_sidebar_inset / apply_pending_resize で新アクティブタブ用の
+      cell_size を確定させた後に reconcile を実行する。FR3 の「サイズが一致して
+      いればリサイズを発行しない」性質は維持すること。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "orchestrator が window_host.rs:1530-1803 の描画順と App::mux_sidebar_visibility の active_tab_mux_attached 依存を直接確認して裏取り済み。修正は app.rs と window_host.rs の両方に跨るため単一ファイル review-editor では実施不能。rework へ回送"
+  - stable_id: 09f0e6096bbc36ee
+    severity: high
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 1964
+    title: "活性化時の reconcile が「切替前」の表示領域(cell_size)を使うため、mux↔非mux のタブ切替で incoming タブが2回リサイズされる"
+    description: >-
+      FR3 は「the current display area」と比較して resize することを要求するが、
+      実装は切替前のアクティブタブ用に算出された `self.cell_size` と比較している。
+      SPEC の US1 受け入れ条件（サイドバー Persistent ON + mux/tmux/normal の 3 タブ
+      構成）および NFR1（正しさが mux 特有 UI の有無・ON/OFF に依存しないこと）が
+      対象とする構成そのもので発生する。stable_id dbb7766a6212fb1a と同一の根本原因を
+      spec 観点から捉えたもの。
+    suggestion: >-
+      活性化時に即 Tab::resize せず、表示領域を新アクティブタブ基準で再計算してから
+      1 回だけリサイズする形に寄せる（活性化時は pending_resize を立て、実リサイズは
+      既存の set_grid_size 経路へ一本化する等）。
+    sources: [claude:spec]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "dbb7766a6212fb1a と同根。category: spec は auto-fix 対象外。rework へ回送"
+  - stable_id: 8a20b61bf25313d7
+    severity: high
+    category: performance
+    file: src-tauri/src/app.rs
+    line: 4082
+    title: "Algorithmic regression: width_changed detection now uses lock per call to reconcile_active_tab_size"
+    description: >-
+      reconcile_active_tab_size が pump_all のタブ reap 後に呼ばれることで、リサイズ
+      不要な場合でも新アクティブタブの core をロックし、クリーンアップ経路にロック
+      オーバーヘッドが乗るという指摘。
+    suggestion: "アクティブタブの列数を App 側にキャッシュして core ロックを避ける、または pump_all から呼ぶ場合の reconcile を再構成する。"
+    sources: [vertex:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      claude:performance が同一の呼び出し点を独立に精査し、pump_all の呼び出しは
+      `self.tabs.len() != before`（実際に reap が起きたときのみ）の内側で、
+      switch_to_tab は `idx == self.active` で早期 return 済み、close_tab は非頻出
+      であることを確認したうえで「core ロック 1 回 + dims 比較のみ、micro のため
+      非報告」と判定している。加えて vertex reviewer 自身が「set_grid_size の
+      width_changed 判定と pump_all の reap fix-up という別の呼び出し点を混同して
+      おり、algorithmic regression ではなく非競合 mutex の軽微な churn の話である」
+      と自己申告している。set_grid_size の O(全タブ) → O(1) という改善は成立して
+      いるため、algorithmic regression は存在しない。
+  - stable_id: 2dbedee44622985e
+    severity: medium
+    category: performance
+    file: src-tauri/src/app.rs
+    line: 1951
+    title: "Unnecessary double-locking in reconcile_active_tab_size"
+    description: >-
+      reconcile_active_tab_size が dims 読み取りで core をロックし、解放後に
+      Tab::resize が同じロックを取り直すため、タブ切替のホットパスでロック
+      チャーンが生じるという指摘。
+    suggestion: "ロックガードを Tab::resize へ渡す、または pre-locked state を受け取れるようにする。"
+    sources: [vertex:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      claude:performance が同じ二重ロックを認識したうえで「micro のため非報告」と
+      明示的に判定している。タブ切替は 1 回あたり非競合 mutex を 2 回取得するだけで、
+      提案されているロックガードの引き回しは Tab::resize の API を呼び出し側の
+      ロック状態に結合させ、IMPLEMENTATION.md が定める Tab::resize の事前条件を
+      壊す方が害が大きい。
+  - stable_id: a172de726b3cbc29
+    severity: medium
+    category: architecture
+    file: src-tauri/src/app.rs
+    line: 1975
+    title: "App 側の reflow 無効化責務が2つある resize 入口のうち片方にしか実装されていない"
+    description: >-
+      IMPLEMENTATION.md D3 は無効化責務を「Tab 所有トラッカ(prompt/fold) = Tab 自身」
+      「App 所有トラッカ(selection / pending_selection_anchor) = 幅変化 resize を App が
+      発行したとき App」と分割している。merge 後、App が幅変化 resize を発行する入口は
+      set_grid_size と reconcile_active_tab_size の 2 つになったが、App 側の clear は
+      set_grid_size にしかない。D3 の但し書き「tab switching already clears both」は
+      switch_to_tab しかカバーせず、close_tab と pump_all reap は selection /
+      pending_selection_anchor を触らずに幅変化 Tab::resize を起こしうる。
+    suggestion: >-
+      App が Tab::resize を呼ぶ場所で App 側の half も必ず履行されるよう、共通ヘルパ
+      （pre-resize cols 取得 → Tab::resize → 幅変化時の selection/anchor 破棄）を
+      切り出して set_grid_size と 3 つの activation 経路を統一する。併せて
+      IMPLEMENTATION.md D3 の但し書きを実際のカバー範囲に訂正する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium のため auto-fix 対象外。high 修正と同じ関数群に触るため rework に同梱"
+  - stable_id: d39a6a9468ff892e
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 1908
+    title: "close_tab / pump_all reap の reconcile は列数変化を伴うリフローを起こしうるのに App 側の絶対行トラッカーを落としていない"
+    description: >-
+      set_grid_size は列数変化時に selection / pending_selection_anchor を破棄するが、
+      reconcile_active_tab_size は同じ列数変化リフローを起こしうるのに破棄しない。
+      switch_to_tab は直前に両方を None にしているので実害がないが、close_tab の
+      active index 修正と pump_all の exited タブ reap にはその clear がない。helper の
+      doc comment は「呼び出し側が selection clearing を済ませた後に走ること」を前提と
+      明記しており、実装と食い違っている。a172de726b3cbc29 と同じ欠落を comprehensive
+      観点から捉えたもの。
+    suggestion: >-
+      reconcile_active_tab_size 内で resize 前後の列数を比較し、変化時に selection /
+      pending_selection_anchor を破棄する（helper が自分の副作用の後始末を持つ）か、
+      close_tab / reap 側でアクティブ index が移った場合に clear する。いずれにせよ
+      doc comment を実態に合わせる。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium のため auto-fix 対象外。a172de726b3cbc29 と同根、rework に同梱"
+  - stable_id: cfcbfae57964beb5
+    severity: medium
+    category: architecture
+    file: src-tauri/src/app.rs
+    line: 9817
+    title: "「Tab::resize が pane Resize フレーム唯一の発行点」という共有契約 (d)/D1 がコードと食い違い、AC-5 テストの推論根拠が成立していない"
+    description: >-
+      IMPLEMENTATION.md の Shared Components 契約 (d) / D1 は pane Resize 制御フレームの
+      発行点が Tab::resize 唯一であると述べるが、実際には tabs.rs:1972-1978
+      (Welcome/attach 時の seeded pane への一括 Resize) と tabs.rs:2125-2129
+      (PaneCreated 時) にも存在する。どちらもタブ自身の core dims を読むため今日は
+      漏れにならないが、「単一発行点」という前提は成立していない。この前提は新規テスト
+      set_grid_size_leaves_inactive_mux_tab_core_dims_unchanged の根拠に引用されており、
+      テストは core dims しか観測しないためフレーム送信の有無を検証できていない。
+    suggestion: >-
+      IMPLEMENTATION.md の契約 (d)/D1 を実態に合わせて発行点を列挙する形に訂正し、
+      AC-5 の検証を dims 観測ではなく送信済み MessageType::Resize の観測
+      (#[cfg(test)] フック等) に変える。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium のため auto-fix 対象外。FR4 の実効ガード欠如という指摘のため rework に同梱"
+  - stable_id: c9d1e2db0ce11e59
+    severity: medium
+    category: comprehensive
+    file: test-docs/per-tab-grid-size/task0001.tests.yaml
+    line: 30
+    title: "AC-2 の red_confirmed: true が自身の red_reason と矛盾し、存在しない unconfirmed_reds セクションを参照している"
+    description: >-
+      AC-2 は red_confirmed: true としているが、同じエントリの red_reason 本文が
+      「red にできなかった」と明記しており自己矛盾している。さらに「Recorded here and in
+      `unconfirmed_reds` below」と書いているが、このファイルに unconfirmed_reds キーは
+      存在しない。兄弟タスクの task0002.tests.yaml は同じ状況を red_confirmed: false で
+      記録しており、同一 feature 内で規約が割れている。
+    suggestion: >-
+      AC-2 を task0002 の記法に合わせて red_confirmed: false にし、red を確認できた
+      兄弟テストが判定基準を担保している旨を red_reason に残す。unconfirmed_reds への
+      宙に浮いた参照も解消する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium のため auto-fix 対象外。TDD 証跡の整合性のため rework に同梱"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: not-run
+  not_run_reason: >-
+    auto-fix 候補は severity ∈ {critical, high} かつ category != spec の条件を満たす
+    dbb7766a6212fb1a と 8a20b61bf25313d7 の 2 件。8a20b61bf25313d7 は orchestrator が
+    declined と判定したため候補から外れた。dbb7766a6212fb1a は修正が app.rs と
+    window_host.rs の 2 ファイルに跨り、review-editor は単一ファイル専用のため
+    構造的に適用不能（部分適用は誤幅リサイズを残したまま統合ブランチにコミットされる
+    ため、無修正より害が大きい）。rework へ回送した。
+residual_critical_high: 2
+rework_required: true

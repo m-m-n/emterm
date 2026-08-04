@@ -79,15 +79,19 @@ tasks:
     branch: em-workflow/per-tab-grid-size/task0002
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
   plan:
     floor: [comprehensive, performance, architecture, spec]
     discretionary: []
     codex_cross_validation: true
-  perspectives: {}
-  residual_critical_high: 0
-  needs_rework: false
+  perspectives:
+    comprehensive: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+  residual_critical_high: 2
+  needs_rework: true
 
 requirements:
   FR1:
