@@ -33,7 +33,7 @@ workflow:
     skipped_reason: null
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: 661cf8ad3fad4aea834372cbda92890d86648610
