@@ -213,6 +213,28 @@ pub(crate) enum ScrollbackRestoreOutcome {
     Failed,
 }
 
+/// Test-only: one recorded pane `Resize` control frame emission (task0003
+/// AC-6, FR4). IMPLEMENTATION.md's corrected contract (d) enumerates THREE
+/// emission sites — `Tab::resize`, mux attach/Welcome pane seeding, and
+/// `PaneCreated` handling — so a dims-only proxy cannot tell "no frame was
+/// sent" apart from "a frame was sent but happened to carry dims that
+/// matched what was already displayed" (finding cfcbfae57964beb5). Reading
+/// this log directly closes that gap. Strictly `cfg(test)` so the
+/// production build carries no observer.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ResizeFrameRecord {
+    /// The emitting tab's `Tab::stable_id`, so a test reading multiple
+    /// tabs' logs (or a shared/cloned log) can attribute each entry.
+    pub(crate) tab_stable_id: u64,
+    /// The target pane id the `Resize` frame was addressed to.
+    pub(crate) pane_id: u32,
+    /// Post-clamp dims carried by the frame (the same `(cols, rows)`
+    /// `Tab::resize` — or the seeding/PaneCreated site — actually sent).
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+}
+
 pub struct Tab {
     /// Creation-ordered stable identity. Unlike the positional index in
     /// `App::tabs`, this survives tab close / drag-reorder, so per-tab
@@ -471,6 +493,12 @@ pub struct Tab {
     /// dedup).
     #[cfg(test)]
     snapshot_decode_count: u32,
+    /// Test-only: every pane `Resize` control frame this tab has emitted,
+    /// across all three emission sites enumerated in
+    /// [`ResizeFrameRecord`]'s doc (task0003 AC-6, FR4). Strictly
+    /// `cfg(test)` so the production build carries no observer.
+    #[cfg(test)]
+    resize_frame_log: Vec<ResizeFrameRecord>,
 }
 
 impl Tab {
@@ -636,6 +664,8 @@ impl Tab {
             offthread_spawn_count: 0,
             #[cfg(test)]
             snapshot_decode_count: 0,
+            #[cfg(test)]
+            resize_frame_log: Vec::new(),
         }
     }
 
@@ -1975,6 +2005,18 @@ impl Tab {
                                         *pane_id,
                                         &ResizeMsg { cols, rows },
                                     ));
+                                    // task0003 AC-6: record this emission (mux
+                                    // attach/Welcome pane seeding site — see
+                                    // `ResizeFrameRecord`).
+                                    #[cfg(test)]
+                                    {
+                                        self.resize_frame_log.push(ResizeFrameRecord {
+                                            tab_stable_id: self.stable_id,
+                                            pane_id: *pane_id,
+                                            cols,
+                                            rows,
+                                        });
+                                    }
                                 }
                                 // Pull the active window's screen on attach — the
                                 // daemon does not push it unprompted, so without
@@ -2127,6 +2169,17 @@ impl Tab {
                     msg.pane_id,
                     &ResizeMsg { cols, rows },
                 ));
+                // task0003 AC-6: record this emission (PaneCreated site —
+                // see `ResizeFrameRecord`).
+                #[cfg(test)]
+                {
+                    self.resize_frame_log.push(ResizeFrameRecord {
+                        tab_stable_id: self.stable_id,
+                        pane_id: msg.pane_id,
+                        cols,
+                        rows,
+                    });
+                }
                 true
             }
             MessageType::SwitchWindow => {
@@ -3606,6 +3659,15 @@ impl Tab {
         self.snapshot_decode_count
     }
 
+    /// Test-only: every pane `Resize` control frame this tab has emitted so
+    /// far, across all three emission sites (task0003 AC-6, FR4 — see
+    /// [`ResizeFrameRecord`]). Cloned out (the records are `Copy`) so the
+    /// caller can inspect them without holding a borrow of the tab.
+    #[cfg(test)]
+    pub(crate) fn test_resize_frames(&self) -> Vec<ResizeFrameRecord> {
+        self.resize_frame_log.clone()
+    }
+
     /// Test-only: the whole displayed grid (all rows) as one string, for
     /// asserting that outer-transport base64 never leaks onto the screen.
     #[cfg(test)]
@@ -3726,6 +3788,23 @@ impl Tab {
                         pane_id,
                         &ResizeMsg { cols, rows },
                     ));
+                }
+                // task0003 AC-6: record every emission from this loop (the
+                // RESIZE-PATH site — see `ResizeFrameRecord`). Pushed after
+                // the loop above (not inlined into it) only to keep the
+                // production loop body — the single RESIZE-PATH emission
+                // site per IMPLEMENTATION.md contract (d) — untouched by
+                // this test-only concern; behavior is identical either way.
+                #[cfg(test)]
+                {
+                    for &pane_id in group.pane_ids() {
+                        self.resize_frame_log.push(ResizeFrameRecord {
+                            tab_stable_id: self.stable_id,
+                            pane_id,
+                            cols,
+                            rows,
+                        });
+                    }
                 }
             }
         }
