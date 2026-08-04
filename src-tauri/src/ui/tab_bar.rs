@@ -26,12 +26,15 @@
 //! drawn with `Painter::line_segment` so the visual is font-independent.
 
 use egui::scroll_area::ScrollBarVisibility;
-use egui::{Align, Color32, FontId, Layout, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2};
+use egui::{
+    Align, Color32, FontId, Image, Layout, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2,
+};
 
 use crate::agent_status::AgentState;
 use crate::agent_status_model::Aggregated;
 
 use super::TabEvent;
+use super::emoji_cache::EmojiResources;
 use super::md3;
 
 /// Fixed visual height of the tab strip in egui logical points.
@@ -89,14 +92,32 @@ const ACTIVITY_DOT_ANIM_SECS: f32 = 0.25;
 const ICON_BUTTON_RADIUS: f32 = NEW_TAB_BUTTON_SIZE / 2.0;
 
 /// Agent-status badge dot diameter (task0006, `IMPLEMENTATION.md`
-/// Conventions: "Badge: 8px dot, 6px gap before title").
+/// Conventions: "Badge: 8px dot, 6px gap before title"). Still the size
+/// of the blocked/done circle form; the badge *slot* itself is
+/// [`AGENT_BADGE_SLOT_WIDTH`] (agent-badge-emoji-distinction task0001
+/// Design 4 — the slot widened to fit the emoji forms, the dot stays 8px
+/// and centers within it).
 const AGENT_BADGE_DIAMETER: f32 = 8.0;
+/// Unified badge slot width when any badge is present (task0001 Design 4:
+/// "Unified badge slot") — the reserved layout width for ALL agent
+/// states, in both the tab bar and the mux sidebar, so a state
+/// transition between a circle form and an emoji form never shifts the
+/// title. The 8px blocked/done dot centers within this 12px slot; a
+/// working/idle emoji renders aspect-fit inside it.
+pub const AGENT_BADGE_SLOT_WIDTH: f32 = 12.0;
 /// Gap between the agent badge and whatever follows it (the activity dot,
 /// or directly the title when no activity dot is present).
 const AGENT_BADGE_GAP: f32 = 6.0;
 /// Ring stroke width for a *seen* blocked/done badge (AC-1: "seen render
 /// as ring"). `IMPLEMENTATION.md` Conventions pins 1.5px.
 const AGENT_BADGE_RING_WIDTH: f32 = 1.5;
+/// Grapheme cluster rendered for the `working` state — U+26A1 HIGH
+/// VOLTAGE SIGN. Single-codepoint, default-emoji-presentation (no VS-16),
+/// covered by the bundled Noto Color Emoji bitmap strikes (task0001
+/// Design 1).
+pub const WORKING_BADGE_EMOJI: &str = "\u{26A1}";
+/// Grapheme cluster rendered for the `idle` state — U+1F4A4 ZZZ.
+pub const IDLE_BADGE_EMOJI: &str = "\u{1F4A4}";
 
 /// Minimal projection of [`crate::tabs::Tab`] used by the tab bar.
 ///
@@ -233,20 +254,147 @@ pub fn agent_badge_filled(agg: Aggregated) -> bool {
     }
 }
 
-/// Paint one badge dot (filled or ring, per [`agent_badge_filled`]) at
-/// `center`. Thin paint-only wrapper; the fill/ring/color decision is the
-/// pure [`agent_badge_filled`] / [`agent_state_color`] pair above.
-pub fn paint_agent_badge(ui: &Ui, center: egui::Pos2, agg: Aggregated) {
-    let color = agent_state_color(agg.state);
-    let radius = AGENT_BADGE_DIAMETER / 2.0;
-    if agent_badge_filled(agg) {
-        ui.painter().circle_filled(center, radius, color);
-    } else {
-        ui.painter().circle_stroke(
-            center,
-            radius - AGENT_BADGE_RING_WIDTH / 2.0,
-            Stroke::new(AGENT_BADGE_RING_WIDTH, color),
-        );
+/// Presentation kind a badge value renders as (task0001 Design 1, AC-1):
+/// `working` / `idle` render as color emoji; `blocked` / `done` keep the
+/// existing filled/ring circle. The ONE shared decision, consumed by both
+/// the tab bar and the mux sidebar painters (NFR1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BadgePresentation {
+    /// Render `cluster` as color emoji.
+    Emoji { cluster: &'static str },
+    /// Render the existing circle form; `filled` mirrors
+    /// [`agent_badge_filled`]'s semantics.
+    Circle { filled: bool },
+}
+
+/// Choose the presentation for `agg` (task0001 Design 1, AC-1) — total
+/// over all four agent states, no side effects, callable from unit tests
+/// without any UI context (TS1).
+pub fn badge_presentation(agg: Aggregated) -> BadgePresentation {
+    match agg.state {
+        AgentState::Working => BadgePresentation::Emoji {
+            cluster: WORKING_BADGE_EMOJI,
+        },
+        AgentState::Idle => BadgePresentation::Emoji {
+            cluster: IDLE_BADGE_EMOJI,
+        },
+        AgentState::Blocked | AgentState::Done => BadgePresentation::Circle {
+            filled: agent_badge_filled(agg),
+        },
+    }
+}
+
+/// Final render mode resolved from a selected [`BadgePresentation`] plus
+/// texture availability (task0001 Design 2, AC-2, FR3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BadgeRenderMode {
+    /// Blit the emoji texture.
+    EmojiTexture,
+    /// Draw the existing circle form.
+    Circle { filled: bool },
+}
+
+/// Resolve a [`BadgePresentation`] plus whether a texture was obtainable
+/// (the cache produced one, or not — including "no emoji resources
+/// supplied", the test-context case) into the final render mode
+/// (task0001 Design 2, AC-2). Never resolves to a blank slot and never
+/// the toolkit's default text path (FR3): an `Emoji` presentation with no
+/// obtainable texture falls back to the state's existing filled-circle
+/// rendering — working / idle are always filled per [`agent_badge_filled`],
+/// so that fallback is always `filled: true`.
+pub fn resolve_badge_render_mode(
+    presentation: BadgePresentation,
+    texture_available: bool,
+) -> BadgeRenderMode {
+    match presentation {
+        BadgePresentation::Emoji { .. } if texture_available => BadgeRenderMode::EmojiTexture,
+        BadgePresentation::Emoji { .. } => BadgeRenderMode::Circle { filled: true },
+        BadgePresentation::Circle { filled } => BadgeRenderMode::Circle { filled },
+    }
+}
+
+/// Paint one badge in `slot_center`'s [`AGENT_BADGE_SLOT_WIDTH`]-wide slot
+/// (task0001 Design 4: "Unified badge slot"), choosing an untinted emoji
+/// texture blit or the fallback circle per [`badge_presentation`] /
+/// [`resolve_badge_render_mode`]. `emoji` is `None` in tests that don't
+/// stand up a font stack — that always resolves to the fallback circle
+/// (AC-2), matching the established status-bar pattern.
+pub fn paint_agent_badge(
+    ui: &Ui,
+    slot_center: egui::Pos2,
+    agg: Aggregated,
+    emoji: Option<&EmojiResources<'_>>,
+) {
+    let presentation = badge_presentation(agg);
+
+    let texture = match presentation {
+        BadgePresentation::Emoji { cluster } => emoji.and_then(|em| {
+            // Design 4 "Size": rasterize at 12 × the display's
+            // pixels-per-point, in physical px.
+            let ppp = ui.ctx().pixels_per_point();
+            let raster_px = AGENT_BADGE_SLOT_WIDTH * ppp;
+            em.cache.lock().get_or_rasterize(
+                ui.ctx(),
+                em.rasterizer,
+                em.fallback,
+                cluster,
+                raster_px,
+            )
+        }),
+        BadgePresentation::Circle { .. } => None,
+    };
+
+    match resolve_badge_render_mode(presentation, texture.is_some()) {
+        BadgeRenderMode::EmojiTexture => {
+            let texture = texture.expect("EmojiTexture mode implies a resolved texture");
+            let ppp = ui.ctx().pixels_per_point();
+            // Draw at the texture's exact integer physical size (texels /
+            // ppp) rather than a fractional aspect-fit scale: rasterization
+            // is already requested at `AGENT_BADGE_SLOT_WIDTH * ppp`, so
+            // the texture already fits the slot almost exactly. A second
+            // non-integer downscale on top of the cache's own Lanczos3
+            // downscale would needlessly blur a 12px glyph.
+            let mut draw_size = texture.size_vec2() / ppp;
+            // Safety clamp: aspect-fit into the slot. Divide by the EXACT
+            // overflow ratio — `ceil()` would halve a bitmap that is only
+            // one texel wider than the slot (ratio ~1.08), which is the
+            // common bundled-Noto-Color-Emoji case (non-square strike).
+            let overflow_ratio =
+                (draw_size.x / AGENT_BADGE_SLOT_WIDTH).max(draw_size.y / AGENT_BADGE_SLOT_WIDTH);
+            if overflow_ratio > 1.0 {
+                draw_size /= overflow_ratio;
+            }
+            // Snap the paint rect's origin to the physical-pixel grid
+            // (mirrors `status_bar.rs::emit_emoji_cluster_chain`'s `snap`
+            // closure): `draw_size` is an exact-integer physical size, so
+            // snapping the min corner lands both edges on pixel
+            // boundaries. Without this the sub-pixel offset of
+            // `slot_center` (derived from fractional layout coordinates)
+            // would blend with neighbouring texels under
+            // `TextureOptions::LINEAR`.
+            let snap = |v: f32| (v * ppp).round() / ppp;
+            let unsnapped = Rect::from_center_size(slot_center, draw_size);
+            let rect = Rect::from_min_size(
+                egui::pos2(snap(unsnapped.min.x), snap(unsnapped.min.y)),
+                draw_size,
+            );
+            // Untinted (Design 4): no color argument — the emoji's own
+            // color table is blitted as-is.
+            Image::new(&texture).paint_at(ui, rect);
+        }
+        BadgeRenderMode::Circle { filled } => {
+            let color = agent_state_color(agg.state);
+            let radius = AGENT_BADGE_DIAMETER / 2.0;
+            if filled {
+                ui.painter().circle_filled(slot_center, radius, color);
+            } else {
+                ui.painter().circle_stroke(
+                    slot_center,
+                    radius - AGENT_BADGE_RING_WIDTH / 2.0,
+                    Stroke::new(AGENT_BADGE_RING_WIDTH, color),
+                );
+            }
+        }
     }
 }
 
@@ -284,6 +432,7 @@ pub fn draw(
     items: &[TabBarItem],
     active_idx: usize,
     scroll_active_into_view: bool,
+    emoji: Option<&EmojiResources<'_>>,
 ) -> Option<TabEvent> {
     let mut event: Option<TabEvent> = None;
 
@@ -361,6 +510,7 @@ pub fn draw(
                                             active_idx,
                                             MIN_TAB_WIDTH,
                                             scroll_active_into_view,
+                                            emoji,
                                         );
                                     });
                                 });
@@ -384,6 +534,7 @@ pub fn draw(
                                 active_idx,
                                 ideal_w,
                                 scroll_active_into_view,
+                                emoji,
                             );
                         },
                     );
@@ -577,6 +728,7 @@ fn layout_tab_strip(
     active_idx: usize,
     tab_width: f32,
     scroll_active_into_view: bool,
+    emoji: Option<&EmojiResources<'_>>,
 ) -> Option<TabEvent> {
     let mut event: Option<TabEvent> = None;
     let drag_id = drag_state_id();
@@ -727,7 +879,7 @@ fn layout_tab_strip(
         // no reserved space and no layout shift for a tab that has never
         // reported a state.
         let agent_dot_space = if item.agent_badge.is_some() {
-            AGENT_BADGE_DIAMETER + AGENT_BADGE_GAP
+            AGENT_BADGE_SLOT_WIDTH + AGENT_BADGE_GAP
         } else {
             0.0
         };
@@ -749,10 +901,10 @@ fn layout_tab_strip(
 
         if let Some(badge) = item.agent_badge {
             let badge_center = egui::pos2(
-                group_left + AGENT_BADGE_DIAMETER / 2.0,
+                group_left + AGENT_BADGE_SLOT_WIDTH / 2.0,
                 label_rect.center().y,
             );
-            paint_agent_badge(ui, badge_center, badge);
+            paint_agent_badge(ui, badge_center, badge, emoji);
         }
         let after_agent_badge = group_left + agent_dot_space;
 
@@ -1070,7 +1222,7 @@ mod tests {
         input1.events.push(Event::PointerMoved(click_pos));
         let mut captured: Option<TabEvent> = None;
         let _ = ctx.run(input1, |ctx| {
-            captured = draw(ctx, items, active_idx, false);
+            captured = draw(ctx, items, active_idx, false, None);
         });
 
         let mut input2 = RawInput::default();
@@ -1090,7 +1242,7 @@ mod tests {
         });
         let mut second: Option<TabEvent> = None;
         let _ = ctx.run(input2, |ctx| {
-            second = draw(ctx, items, active_idx, false);
+            second = draw(ctx, items, active_idx, false, None);
             let _ = pos_of_first_hovered(ctx);
         });
 
@@ -1247,7 +1399,7 @@ mod tests {
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         let output = ctx.run(input, |ctx| {
-            let _ = draw(ctx, items, 0, false);
+            let _ = draw(ctx, items, 0, false, None);
         });
         collect_text_shapes_by_x(&output.shapes)
             .into_iter()
@@ -1266,8 +1418,10 @@ mod tests {
         // The `[badge][dot][gap][title]` group is centred as a unit, so
         // reserving `agent_dot_space` extra width shifts the group's
         // (and thus the title's) center by half that amount — the other
-        // half is absorbed by the group's left edge moving left.
-        let expected_shift = (AGENT_BADGE_DIAMETER + AGENT_BADGE_GAP) / 2.0;
+        // half is absorbed by the group's left edge moving left. The
+        // reserved width is the unified badge SLOT (task0001 Design 4),
+        // not the bare circle diameter.
+        let expected_shift = (AGENT_BADGE_SLOT_WIDTH + AGENT_BADGE_GAP) / 2.0;
         assert!(
             (with - without - expected_shift).abs() < 0.5,
             "badge presence should shift the title right by half its reserved space \
@@ -1301,7 +1455,7 @@ mod tests {
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(ctx, items, active_idx, false);
+            let _ = draw(ctx, items, active_idx, false, None);
         });
         pick().expect("layout hook should have captured the rect")
     }
@@ -1399,7 +1553,7 @@ mod tests {
         input.screen_rect = Some(screen_rect());
         let mut captured: Option<TabEvent> = None;
         let _ = ctx.run(input, |ctx| {
-            captured = draw(ctx, &items, 0, false);
+            captured = draw(ctx, &items, 0, false, None);
         });
         assert_eq!(captured, None);
     }
@@ -1460,7 +1614,7 @@ mod tests {
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(ctx, items, 0, false);
+            let _ = draw(ctx, items, 0, false, None);
         });
         LAST_MUX_CELLS.with(|c| c.borrow().clone())
     }
@@ -1510,7 +1664,7 @@ mod tests {
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(ctx, items, active_idx, false);
+            let _ = draw(ctx, items, active_idx, false, None);
         });
         LAST_INDICATOR_RECTS.with(|c| c.borrow().clone())
     }
@@ -1563,7 +1717,7 @@ mod tests {
         input.screen_rect = Some(screen_rect());
         LAST_SCROLL_INTO_VIEW_RECT.with(|c| c.set(None));
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(ctx, items, active_idx, true);
+            let _ = draw(ctx, items, active_idx, true, None);
         });
         LAST_SCROLL_INTO_VIEW_RECT.with(|c| c.get())
     }
@@ -1593,7 +1747,7 @@ mod tests {
         input.screen_rect = Some(screen_rect());
         LAST_SCROLL_INTO_VIEW_RECT.with(|c| c.set(None));
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(ctx, &items, 7, false);
+            let _ = draw(ctx, &items, 7, false, None);
         });
         assert_eq!(
             LAST_SCROLL_INTO_VIEW_RECT.with(|c| c.get()),
@@ -1647,6 +1801,276 @@ mod tests {
         assert_eq!(
             before, after,
             "drawing with a non-active mux parent must not mutate the active window"
+        );
+    }
+
+    // ── task0001 AC-1: shared presentation-selection decision ───────────
+
+    #[test]
+    fn badge_presentation_working_is_emoji_high_voltage() {
+        for unseen in [true, false] {
+            assert_eq!(
+                badge_presentation(Aggregated {
+                    state: AgentState::Working,
+                    unseen
+                }),
+                BadgePresentation::Emoji {
+                    cluster: WORKING_BADGE_EMOJI
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn badge_presentation_idle_is_emoji_zzz() {
+        for unseen in [true, false] {
+            assert_eq!(
+                badge_presentation(Aggregated {
+                    state: AgentState::Idle,
+                    unseen
+                }),
+                BadgePresentation::Emoji {
+                    cluster: IDLE_BADGE_EMOJI
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn badge_presentation_blocked_and_done_are_circle_preserving_filled_semantics() {
+        for state in [AgentState::Blocked, AgentState::Done] {
+            assert_eq!(
+                badge_presentation(Aggregated {
+                    state,
+                    unseen: true
+                }),
+                BadgePresentation::Circle { filled: true },
+                "{state:?} unseen must render as a filled circle"
+            );
+            assert_eq!(
+                badge_presentation(Aggregated {
+                    state,
+                    unseen: false
+                }),
+                BadgePresentation::Circle { filled: false },
+                "{state:?} seen must render as a ring circle"
+            );
+        }
+    }
+
+    // ── task0001 AC-2: fallback resolution ───────────────────────────────
+
+    #[test]
+    fn resolve_badge_render_mode_emoji_with_texture_blits_the_texture() {
+        for cluster in [WORKING_BADGE_EMOJI, IDLE_BADGE_EMOJI] {
+            assert_eq!(
+                resolve_badge_render_mode(BadgePresentation::Emoji { cluster }, true),
+                BadgeRenderMode::EmojiTexture
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_badge_render_mode_emoji_without_texture_falls_back_to_filled_circle() {
+        // Covers both reasons a texture can be unavailable: no emoji
+        // resources supplied at all, and resources supplied but the cache
+        // could not rasterize the cluster — both collapse to the same
+        // `texture_available = false` input and the same fallback.
+        for cluster in [WORKING_BADGE_EMOJI, IDLE_BADGE_EMOJI] {
+            assert_eq!(
+                resolve_badge_render_mode(BadgePresentation::Emoji { cluster }, false),
+                BadgeRenderMode::Circle { filled: true },
+                "an emoji presentation must never resolve to a blank slot"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_badge_render_mode_circle_presentation_ignores_texture_availability() {
+        // Circle presentation (blocked/done) is never routed through the
+        // emoji path, so texture availability must not change its outcome.
+        for filled in [true, false] {
+            for texture_available in [true, false] {
+                assert_eq!(
+                    resolve_badge_render_mode(
+                        BadgePresentation::Circle { filled },
+                        texture_available
+                    ),
+                    BadgeRenderMode::Circle { filled }
+                );
+            }
+        }
+    }
+
+    // ── task0001 AC-3: emoji texture blit via a stub rasterizer ─────────
+    //
+    // Standing up the REAL swash + bundled-font stack in a unit test is
+    // impractical (per the task's Test Notes) — this stub proves the
+    // paint path picks the texture branch and aspect-fits it into the
+    // slot; actual rasterization quality is a manual check (TS3).
+
+    struct StubEmojiRasterizer;
+
+    impl crate::render::font::traits::GlyphRasterizer for StubEmojiRasterizer {
+        fn shape(
+            &self,
+            _cluster: &str,
+            font: crate::render::font::traits::FontId,
+            size_px: f32,
+        ) -> Vec<crate::render::font::traits::ShapedGlyph> {
+            vec![crate::render::font::traits::ShapedGlyph {
+                font,
+                glyph_id: 1,
+                size_px,
+            }]
+        }
+
+        fn raster(
+            &self,
+            _font: crate::render::font::traits::FontId,
+            _glyph_id: u32,
+            size_px: f32,
+        ) -> Option<crate::render::font::traits::GlyphBitmap> {
+            let n = size_px.round().max(1.0) as u32;
+            Some(crate::render::font::traits::GlyphBitmap {
+                format: crate::render::font::traits::AtlasFormat::Rgba,
+                width: n,
+                height: n,
+                bearing: (0, 0),
+                advance: size_px,
+                pixels: vec![255u8; (n as usize) * (n as usize) * 4],
+            })
+        }
+
+        fn has_codepoint(&self, _font: crate::render::font::traits::FontId, _cp: u32) -> bool {
+            true
+        }
+    }
+
+    /// A fallback chain that resolves every cluster through the "emoji"
+    /// font id — pairs with [`StubEmojiRasterizer`], which covers every
+    /// codepoint.
+    fn stub_emoji_fallback() -> crate::render::font::fallback::FallbackChain {
+        use crate::render::font::traits::FontId;
+        let mut chain = crate::render::font::fallback::FallbackChain::new(FontId(1), [FontId(2)]);
+        chain.set_emoji(FontId(2));
+        chain
+    }
+
+    /// Collect the rects of every textured (image-blit) `Shape::Rect` —
+    /// egui's `Image::paint_at` emits a `RectShape` with a non-default
+    /// `fill_texture_id`, distinguishing an emoji blit from any other
+    /// filled rect the strip paints.
+    fn collect_textured_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<Rect> {
+        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<Rect>) {
+            use egui::epaint::Shape;
+            match shape {
+                Shape::Rect(r) if r.fill_texture_id != egui::TextureId::default() => {
+                    out.push(r.rect);
+                }
+                Shape::Vec(v) => {
+                    for s in v {
+                        walk(s, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for cs in shapes {
+            walk(&cs.shape, &mut out);
+        }
+        out
+    }
+
+    /// Collect the radii of every `Shape::Circle` painted this frame.
+    fn collect_circle_radii(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
+        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<f32>) {
+            use egui::epaint::Shape;
+            match shape {
+                Shape::Circle(c) => out.push(c.radius),
+                Shape::Vec(v) => {
+                    for s in v {
+                        walk(s, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for cs in shapes {
+            walk(&cs.shape, &mut out);
+        }
+        out
+    }
+
+    #[test]
+    fn ac3_working_and_idle_badges_with_emoji_resources_paint_texture_not_circle() {
+        for state in [AgentState::Working, AgentState::Idle] {
+            let items = vec![item("shell").with_agent_badge(Some(Aggregated {
+                state,
+                unseen: true,
+            }))];
+            let rasterizer = StubEmojiRasterizer;
+            let fallback = stub_emoji_fallback();
+            let cache = parking_lot::Mutex::new(crate::ui::emoji_cache::EmojiTextureCache::new());
+            let emoji = EmojiResources {
+                rasterizer: &rasterizer,
+                fallback: &fallback,
+                cache: &cache,
+            };
+            let ctx = egui::Context::default();
+            let mut input = RawInput::default();
+            input.screen_rect = Some(screen_rect());
+            let output = ctx.run(input, |ctx| {
+                let _ = draw(ctx, &items, 0, false, Some(&emoji));
+            });
+
+            let textured = collect_textured_rects(&output.shapes);
+            assert!(
+                !textured.is_empty(),
+                "{state:?}: expected a textured rect (emoji blit) for the badge"
+            );
+            for r in &textured {
+                assert!(
+                    r.width() <= AGENT_BADGE_SLOT_WIDTH + 0.01
+                        && r.height() <= AGENT_BADGE_SLOT_WIDTH + 0.01,
+                    "{state:?}: emoji blit must aspect-fit inside the \
+                     {AGENT_BADGE_SLOT_WIDTH}px slot; got {r:?}"
+                );
+            }
+
+            // Replace, not combine (Design 4): no badge-sized (4px radius)
+            // circle should also be painted for this state.
+            let radii = collect_circle_radii(&output.shapes);
+            let badge_radius = AGENT_BADGE_DIAMETER / 2.0;
+            assert!(
+                !radii.iter().any(|r| (*r - badge_radius).abs() < 0.01),
+                "{state:?}: the emoji must replace the dot entirely, not paint \
+                 alongside it; circle radii found: {radii:?}"
+            );
+        }
+    }
+
+    // ── task0001 AC-5: unified 12px badge slot ───────────────────────────
+
+    #[test]
+    fn ac5_working_to_done_transition_causes_no_title_shift() {
+        // The reserved slot width is now unified across ALL states
+        // (Design 4), so a badge state transition must never move the
+        // title even though `working` and `done` render via different
+        // presentations (emoji fallback-circle vs. native circle).
+        let working = title_text_x(&[item("shell").with_agent_badge(Some(Aggregated {
+            state: AgentState::Working,
+            unseen: true,
+        }))]);
+        let done = title_text_x(&[item("shell").with_agent_badge(Some(Aggregated {
+            state: AgentState::Done,
+            unseen: true,
+        }))]);
+        assert_eq!(
+            working, done,
+            "a working -> done badge transition must cause no title x-shift"
         );
     }
 }

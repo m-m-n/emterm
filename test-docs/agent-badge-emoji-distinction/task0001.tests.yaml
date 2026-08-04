@@ -1,0 +1,87 @@
+task_id: task0001
+baseline_failures:
+  - app::tests::pump_all_shifts_selection_by_eviction_delta
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+# Note: `tabs::tests::*` (off-thread replay worker) is documented
+# project-wide flaky behaviour under parallel `cargo test` execution
+# (unrelated to any file this task touches — this task never touches
+# src-tauri/src/tabs.rs). Confirmed non-deterministic across three
+# consecutive full-suite runs in this session: run 1 = these 25 tests
+# failing; run 2 (post-implementation) = 20 failing (19 of the 25 above
+# plus one NOT in this baseline, `ts12_resize_supersedes_and_redispatches_at_new_grid`);
+# run 3 (tabs::tests:: alone) = a THIRD different 11-test subset,
+# including `ac2_unraced_switch_engages_bypass` which appeared in neither
+# prior run. The varying membership across identical re-runs on the same
+# (my-change-including) tree is itself the evidence these are scheduling
+# races, not something this diff caused.
+final_failures: []  # this task's own suite (ui::tab_bar / ui::mux_sidebar / ui::emoji_cache / ui::status_bar): 0 failures, 113/113 passing
+acceptance_tests:
+  AC-1:
+    tests:
+      - ui::tab_bar::tests::badge_presentation_working_is_emoji_high_voltage
+      - ui::tab_bar::tests::badge_presentation_idle_is_emoji_zzz
+      - ui::tab_bar::tests::badge_presentation_blocked_and_done_are_circle_preserving_filled_semantics
+    red_confirmed: false
+    red_reason: "badge_presentation / BadgePresentation are net-new symbols added in this task (they did not exist before); the tests were written alongside the implementation in the same editing pass rather than run against pre-implementation code first, so the fail-first state was not independently observed and recorded. A run against the prior source would have failed to compile (unresolved function)."
+  AC-2:
+    tests:
+      - ui::tab_bar::tests::resolve_badge_render_mode_emoji_with_texture_blits_the_texture
+      - ui::tab_bar::tests::resolve_badge_render_mode_emoji_without_texture_falls_back_to_filled_circle
+      - ui::tab_bar::tests::resolve_badge_render_mode_circle_presentation_ignores_texture_availability
+    red_confirmed: false
+    red_reason: "resolve_badge_render_mode / BadgeRenderMode are net-new symbols; same reasoning as AC-1 — implemented and tested together, not independently confirmed red first."
+  AC-3:
+    tests:
+      - ui::tab_bar::tests::ac3_working_and_idle_badges_with_emoji_resources_paint_texture_not_circle
+    red_confirmed: false
+    red_reason: "the texture-blit branch of paint_agent_badge and the StubEmojiRasterizer test harness were added together in this session; not independently run against a pre-implementation (circle-only) paint_agent_badge to observe the expected failure (no textured Shape::Rect present)."
+  AC-4:
+    tests:
+      - ui::mux_sidebar::tests::ac4_working_and_idle_badges_with_emoji_resources_paint_texture_blit
+    red_confirmed: false
+    red_reason: "same as AC-3, mirrored in the sidebar's test module; mux_sidebar.rs's paint_row_content now calls the shared ui::tab_bar::paint_agent_badge directly (replacing the old circle-only local paint_badge), guaranteeing byte-identical geometry to the tab bar by construction rather than by a parallel reimplementation."
+  AC-5:
+    tests:
+      - ui::tab_bar::tests::agent_badge_present_shifts_title_right_when_reserving_its_space
+      - ui::tab_bar::tests::ac5_working_to_done_transition_causes_no_title_shift
+      - ui::tab_bar::tests::agent_badge_absent_matches_pre_feature_title_position_across_two_renders
+      - ui::mux_sidebar::tests::ac5_working_to_done_transition_causes_no_name_column_shift
+      - ui::mux_sidebar::tests::badge_absent_leaves_the_name_column_at_its_pre_feature_position
+    red_confirmed: false
+    red_reason: "agent_badge_present_shifts_title_right_when_reserving_its_space is a pre-existing test whose expected_shift constant was updated from (AGENT_BADGE_DIAMETER + AGENT_BADGE_GAP)/2 to (AGENT_BADGE_SLOT_WIDTH + AGENT_BADGE_GAP)/2 per the task plan's explicit Design 4 slot-width change (tdd-testing skill: update the assertion when the plan explicitly changes the behavior). The two *_transition_causes_no_*_shift tests are net-new. None were run against the pre-slot-unification code to observe the expected mismatch (14px vs 12px reservation) before updating; the two pre-existing no-shift-on-absence tests were left assertion-unchanged and continue to pass unmodified."
+  AC-6:
+    tests:
+      - ui::tab_bar::tests::agent_state_color_maps_every_variant_to_its_md3_role
+      - ui::tab_bar::tests::agent_badge_filled_blocked_and_done_follow_unseen
+      - ui::tab_bar::tests::agent_badge_filled_working_and_idle_are_always_filled_regardless_of_unseen
+      - ui::mux_sidebar::tests::ac5_no_hardcoded_color_constructors_in_module_source
+      - ui::mux_sidebar::tests::ac1_draw_rows_registers_no_interaction_region_besides_the_row_itself
+    red_confirmed: false
+    red_reason: "regression-guard AC, not a fail-first criterion: verified by running BOTH widget modules' full pre-existing test suites unmodified (assertions untouched except the one plan-mandated AC-5 update noted above) alongside the new tests — 113/113 passing in ui::tab_bar:: + ui::mux_sidebar:: + ui::emoji_cache:: + ui::status_bar:: combined, zero failures."
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "build/lint outcome, not a test: `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features` exits 0. All touched modules (ui::tab_bar, ui::mux_sidebar, ui::emoji_cache, ui::status_bar, render::mod) are already behind the `gui` feature gate, so this AC is a pure regression guard (no expected red state) — verified post-implementation."

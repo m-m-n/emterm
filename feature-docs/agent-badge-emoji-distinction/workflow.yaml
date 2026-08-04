@@ -1,0 +1,127 @@
+schema_version: 1
+feature: agent-badge-emoji-distinction
+created: 2026-08-04
+base_branch: main
+parent_branch: em-workflow/agent-badge-emoji-distinction/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths: [doc/UI-DESIGN-GUIDELINES.yaml]
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      feature_gate_check_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+    typescript:
+      language: typescript
+      test_command: "bun test"
+      typecheck_command: "bun run typecheck"
+      build_command: "bun run build:viewer && bun run build:settings"
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: cfe8785cb5f2e29288948bbfee687780f421030b
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: completed
+    completed_at_commit: d1b75225e7979cca49ab0984f54bc0f353f96ac6
+    skipped_reason: null
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 3556824bf8cbb416bf83ffa2cd6bb01b05c07adc
+  - id: implement
+    status: completed
+    completed_at_commit: 690347e20bd176ab2f0ec15bd8043be35486641e
+    base_commit: 7227a0ddff7986c749b35d6b5d2e91df3c07f88a
+  - id: review
+    status: completed
+    completed_at_commit: f06d271b761641689f584982b836a9bc2f1d3064
+  - id: verify
+    status: completed
+    completed_at_commit: 00e0f8c8d93f713e27e2faf315ae3082642d9e4e
+    result: pass
+    failed_items: []
+  - id: retrospect
+    status: completed
+    completed_at_commit: aaf813460fb201cd377ed6acde6e8ae12d51c509
+
+tasks:
+  task0001:
+    title: "Emoji badge distinction for working/idle in tab bar and sidebar"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/ui/tab_bar.rs
+      - src-tauri/src/ui/mux_sidebar.rs
+      - src-tauri/src/ui/emoji_cache.rs
+      - src-tauri/src/ui/status_bar.rs
+      - src-tauri/src/render/mod.rs
+    skills: [design-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, NFR1, NFR2]
+    status: merged
+    notes: null
+    branch: em-workflow/agent-badge-emoji-distinction/task0001
+
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, spec]
+    discretionary:
+      - perspective: performance
+        reason: "diff modifies per-frame render composition (render/mod.rs builds the EmojiResources bundle before every tab-bar draw); project has prior incidents with render-loop CPU hotspots"
+    codex_cross_validation: false
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    performance: completed
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Distinguish working / idle in the tab bar badge by a non-color-dependent means"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS3]
+  FR2:
+    title: "Reflect the same distinction in the sidebar badge"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS3]
+  FR3:
+    title: "Reuse the existing swash path for color emoji rendering"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1]
+  NFR1:
+    title: "Consistency across the mirrored implementations"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS3]
+  NFR2:
+    title: "Preserve the GUI feature gate"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS2]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
