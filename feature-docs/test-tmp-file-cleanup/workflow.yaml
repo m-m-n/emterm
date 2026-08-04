@@ -47,9 +47,20 @@ workflow:
     status: completed
     completed_at_commit: bcf5f6273bf37d95e630cd98f88a3fbc58f7c561
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: ecb13dc506cce4cc9be7a58d92dcf81d71e97cd2
+    result: pass
     failed_items: []
+    notes: |
+      TS1: rust --lib (--test-threads=1) 前後で /tmp の emterm-* 増分 0
+      TS2: --test cli_subcommands / crates term_core・app_settings・mux_ipc の --lib / bun test 前後で増分 0
+      TS3: 修正 4 サイトのテスト 33 件が全 pass、/tmp 増分 0
+      TS4: build 2 コマンド (cargo check / bun run typecheck) 成功、bun test 311/311 pass。
+           rust --lib は tabs::tests の既知フレークのみ失敗 (並列 20 件 / 単一スレッド 7 件)。
+           同一 worktree で変更前 (base 50e5d0d) に戻して単一スレッド実行した結果も
+           tabs::tests のみ 6 件失敗で、差分は tabs.rs に一切触れていないため回帰ではないと確認
+      TS5: Cargo.toml / Cargo.lock / package.json / package-lock.json に差分なし (新規依存なし)
+      TS6: 全変更ハンクが 4 ファイルの #[cfg(test)] 以降にあることを確認 (プロダクション無変更)
   - id: retrospect
     status: pending
 
