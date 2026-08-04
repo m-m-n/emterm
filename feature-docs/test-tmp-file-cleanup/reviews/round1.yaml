@@ -1,0 +1,68 @@
+round: 1
+executed_at: "2026-08-04T22:12:20+09:00"
+scope:
+  review_mode: diff
+  base_commit: 50e5d0d4fc60719d946ac9a970416739d334a0a3
+  head_commit: bcf5f6273bf37d95e630cd98f88a3fbc58f7c561
+  changed_files:
+    - src-tauri/src/mux/tmux_import.rs
+    - src-tauri/src/settings_store.rs
+    - src-tauri/src/settings_window/commands.rs
+    - src-tauri/src/viewer/launch.rs
+    - test-docs/test-tmp-file-cleanup/task0001.tests.yaml
+    - test-docs/test-tmp-file-cleanup/task0002.tests.yaml
+    - test-docs/test-tmp-file-cleanup/task0003.tests.yaml
+    - test-docs/test-tmp-file-cleanup/task0004.tests.yaml
+plan:
+  floor: [comprehensive, performance, spec]
+  discretionary: []
+  codex_cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+findings:
+  - stable_id: a2a29b279d4bd056
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/tmux_import.rs
+    line: 189
+    title: "cleanup_tmp_settings_dir が親ディレクトリを無条件に再帰削除する（/tmp 全消しの余地）"
+    description: |
+      新設ヘルパー cleanup_tmp_settings_dir は受け取ったパスの parent() を検証せず
+      remove_dir_all する。現在の 5 箇所の呼び出しは tmp_settings_path() 由来なので
+      親は /tmp/emterm-tmux-import-test-<pid>-<name>/ で安全だが、temp ルート直下の
+      パスを渡す呼び出しが 1 つ増えるだけで /tmp 配下を丸ごと再帰削除しうる。
+      let _ = でエラーを握り潰すため失敗も成功も無音。settings_store.rs の
+      インライン remove_dir_all(path.parent().unwrap()) も同じ形。
+    suggestion: |
+      ヘルパー内で親ディレクトリ名が "emterm-tmux-import-test-" で始まることを
+      確認してから remove_dir_all する（自分が作ったディレクトリ以外は消さない）。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity のため R4 auto-fix 候補ゲート（critical/high のみ）に非該当。人間の評価に委ねる"
+  - stable_id: c66d38ce5d9002d0
+    severity: medium
+    category: comprehensive
+    file: test-docs/test-tmp-file-cleanup/task0004.tests.yaml
+    line: 86
+    title: "task0004 の AC-3 / AC-4 が観測していない red を red_confirmed: true と記録している"
+    description: |
+      implementer 契約では red_confirmed: true は「実装前に失敗するのを実際に観測した」
+      ことのみを意味する。task0004 の AC-3 は red_reason 自身が実装前に条件が真だった
+      と述べており、AC-4 も red 観測なし。兄弟レコード（task0001/0002/0003）は同種の
+      構造的基準をすべて false にしており、このファイルだけ意味論がずれている。
+      AC-1（/tmp 残存ファイル数 34→35 を観測）は正当な true。
+    suggestion: |
+      task0004.tests.yaml の AC-3 / AC-4 の red_confirmed を false に修正する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity のため R4 auto-fix 候補ゲート（critical/high のみ）に非該当。人間の評価に委ねる"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
