@@ -40,7 +40,8 @@ workflow:
     status: completed
     completed_at_commit: dd5956aab637c45d9f49526c87b67e0619a616f1
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: f2dd3a40274c259eb75d0c3c8fecc9c1a19547fd
     base_commit: 50e5d0d4fc60719d946ac9a970416739d334a0a3
   - id: review
     status: pending
@@ -85,7 +86,7 @@ tasks:
     domains: [external-io]
     complexity: low
     requirements: [FR3, FR5, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/test-tmp-file-cleanup/task0003
   task0004:
