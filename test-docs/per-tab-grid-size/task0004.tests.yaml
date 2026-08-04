@@ -1,0 +1,42 @@
+task_id: task0004
+# This task edits only test-docs/per-tab-grid-size/task0001.tests.yaml (a
+# TDD-evidence record, not compiled into any build) plus this file. Per the
+# task plan's Test Notes, no cargo invocation is required or was performed;
+# both fields below are empty by construction, not because a suite ran
+# clean.
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No Rust test applies; this is a test-evidence record correction, so
+      no red/green cycle exists to confirm. Verified by direct inspection
+      of the edited task0001.tests.yaml AC-2 entry: `red_confirmed` is now
+      `false`, and the `red_reason` text no longer makes an unqualified
+      confirmed-red claim for the criterion as a whole — it states plainly
+      that the "already matches" test's red state could not be confirmed,
+      while still noting (for factual completeness, not contradiction)
+      that the sibling test in the same entry did go red.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No Rust test applies; not a red/green criterion. Verified by
+      `grep -rn "unconfirmed_reds"
+      test-docs/per-tab-grid-size/task0001.tests.yaml`, which returns no
+      match after the edit. A repo-wide grep for `unconfirmed_reds` across
+      test-docs/ was also run before editing; its only other hit is in
+      test-docs/mux-window-switch-output-hang/task0002.tests.yaml, an
+      unrelated feature's file outside this task's scope, left untouched.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No Rust test applies; not a red/green criterion. Verified by loading
+      task0001.tests.yaml with Python's `yaml.safe_load` (parses without
+      error) and by `git diff`, which shows the only changed lines are
+      inside the AC-2 entry (the `red_confirmed` value and the
+      `red_reason` block); every other entry, key ordering, and
+      formatting in the file is untouched.
