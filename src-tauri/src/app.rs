@@ -543,6 +543,18 @@ pub struct App {
     /// Debug toggle (env `EMTERM_FULL_REDRAW=1`) that permanently disables
     /// the dirty-row optimization for triage.
     force_full_redraw: bool,
+    /// D2 (FR3, task0003 rework): a one-shot request left by an activation
+    /// path (`switch_to_tab`, the close-tab active-index fix-up, the
+    /// exited-tab reap fix-up) that the now-active tab may need reconciling
+    /// against `cell_size`. NOT executed synchronously where it is set — at
+    /// that moment `cell_size` may still hold dims computed for the
+    /// OUTGOING tab (the persistent mux sidebar's width inset depends on
+    /// whether the ACTIVE tab is mux-attached). `window_host::render`
+    /// consumes it via [`Self::execute_pending_reconcile`] once insets /
+    /// any pending display-area resize have settled `cell_size` for the
+    /// INCOMING tab. Consecutive requests before that point collapse into
+    /// one (idempotent `bool`, not a queue).
+    pending_active_tab_reconcile: bool,
     /// Phase 4-G: native IME backend. The App holds a `Box<dyn ImeBackend>`
     /// so the OS-specific clients (X11 / Wayland / Windows) and the
     /// passthrough `NullBackend` share the same seam. Default-constructed
@@ -928,6 +940,7 @@ impl App {
             needs_full_redraw: true,
             scroll_active_tab_into_view: false,
             force_full_redraw,
+            pending_active_tab_reconcile: false,
             ime_backend: Box::new(NullBackend::new()),
             ime_last_cursor_cell: None,
             ime_is_null: true,
@@ -1907,11 +1920,13 @@ impl App {
         }
         self.needs_full_redraw = true;
         // D2: the active index may have just moved onto a different tab
-        // (the closed tab was the active one, or the last one); reconcile
-        // its size against `cell_size` now that it is the committed active
-        // tab. No-op when the shift only re-indexed the SAME tab (still at
-        // `cell_size` already) or landed on a tab already at size.
-        self.reconcile_active_tab_size();
+        // (the closed tab was the active one, or the last one); request a
+        // reconcile of its size against `cell_size` (see
+        // `request_active_tab_reconcile` for why this is deferred rather
+        // than executed here). No-op when the shift only re-indexed the
+        // SAME tab (still at `cell_size` already) or landed on a tab
+        // already at size.
+        self.request_active_tab_reconcile();
         false
     }
 
@@ -1957,23 +1972,49 @@ impl App {
         // buffer, so drop it as well.
         self.pending_selection_anchor = None;
         self.needs_full_redraw = true;
-        // D2: the incoming tab just became the committed active tab; bring
-        // its size in line with the current display area now, at
-        // activation time, rather than leaving it stale until some later
-        // unrelated resize trigger.
-        self.reconcile_active_tab_size();
+        // D2: the incoming tab just became the committed active tab;
+        // request that its size be brought in line with the current
+        // display area — deferred to `execute_pending_reconcile` rather
+        // than run here (see that method's doc for why: at this point in
+        // the frame `cell_size` may still describe the OUTGOING tab's
+        // display area).
+        self.request_active_tab_reconcile();
     }
 
-    /// D2 (FR3): after any path changes WHICH tab is active, bring that
-    /// tab's core dims in line with `self.cell_size`. Compares the
-    /// now-active tab's core dims against `cell_size`; on a mismatch,
-    /// resizes that tab (and ONLY that tab) via `Tab::resize`; on a match,
-    /// issues nothing — most calls are no-ops, since a tab's size only ever
-    /// drifts from `cell_size` while it sits inactive. Must run AFTER the
-    /// caller's own activation bookkeeping (scroll restore, search close,
-    /// selection clearing) so it observes the committed active tab.
-    fn reconcile_active_tab_size(&mut self) {
-        let Some(tab) = self.tabs.get_mut(self.active) else {
+    /// D2 (FR3, task0003 rework): record that the active tab may need
+    /// reconciling against `self.cell_size`. Deliberately does NOT compare
+    /// or resize here — at the moment every activation path (explicit
+    /// switch, close-tab fix-up, exited-tab reap fix-up) calls this,
+    /// `self.cell_size` can still hold dims computed for the OUTGOING tab:
+    /// the persistent mux sidebar's width inset depends on whether the
+    /// ACTIVE tab is mux-attached (`App::mux_sidebar_visibility`), so a
+    /// synchronous compare-and-resize here would size the incoming tab
+    /// against the wrong display area (round-1 findings dbb7766a6212fb1a /
+    /// 09f0e6096bbc36ee). The actual comparison happens in
+    /// [`Self::execute_pending_reconcile`], invoked by `window_host::render`
+    /// once insets for the NEW active tab have settled. Consecutive
+    /// requests before that point collapse into one.
+    fn request_active_tab_reconcile(&mut self) {
+        self.pending_active_tab_reconcile = true;
+    }
+
+    /// D2 (FR3, task0003 rework): consume a pending activation-reconcile
+    /// request (if any). Called by `window_host::render` at exactly one
+    /// point — after the status-bar insets, the mux-sidebar inset, and any
+    /// pending display-area resize have settled `self.cell_size` for the
+    /// NEW active tab — so the comparison below is against the INCOMING
+    /// tab's own settled display area, never the outgoing tab's stale one.
+    /// On a mismatch, resizes that tab (and ONLY that tab) through the App
+    /// resize application path ([`Self::apply_tab_resize`], FR6); on a
+    /// match, issues nothing and clears nothing (FR3's no-op guarantee) —
+    /// most calls are no-ops, since a tab's size only ever drifts from
+    /// `cell_size` while it sits inactive. A request with no matching
+    /// active tab (e.g. all tabs closed) is dropped silently.
+    pub fn execute_pending_reconcile(&mut self) {
+        if !std::mem::take(&mut self.pending_active_tab_reconcile) {
+            return;
+        }
+        let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
         let (cols, rows) = {
@@ -1981,7 +2022,34 @@ impl App {
             (core.cols(), core.rows())
         };
         if cols != self.cell_size.cols || rows != self.cell_size.rows {
-            tab.resize(self.cell_size.cols, self.cell_size.rows);
+            self.apply_tab_resize(self.active, self.cell_size.cols, self.cell_size.rows);
+        }
+    }
+
+    /// Design 2 (FR6, task0003 rework): the single App-side path for
+    /// issuing a `Tab::resize` on ANY origin — a display-area change
+    /// (`set_grid_size`) or an activation reconcile
+    /// (`execute_pending_reconcile`). Reads the target tab's pre-resize
+    /// column count, applies the resize (`Tab::resize` owns the clamp, the
+    /// tab's OWN reflow-invalidated trackers, and mux pane `Resize` frame
+    /// emission — contracts (a)-(e), untouched), then — if the resize
+    /// changed the tab's (post-clamp) column count — clears the App-OWNED
+    /// reflow-invalidated trackers (selection, pending selection anchor;
+    /// D3). BOTH callers issue their resize through this path, so the
+    /// App-side half of the D3 split holds on every origin regardless of
+    /// which activation path (or `set_grid_size`) triggered it — it is
+    /// never left to caller preconditions (round-1 findings
+    /// a172de726b3cbc29 / d39a6a9468ff892e).
+    fn apply_tab_resize(&mut self, idx: usize, cols: u16, rows: u16) {
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return;
+        };
+        let pre_resize_cols = tab.core.lock().cols();
+        tab.resize(cols, rows);
+        let post_resize_cols = tab.core.lock().cols();
+        if post_resize_cols != pre_resize_cols {
+            self.selection = None;
+            self.pending_selection_anchor = None;
         }
     }
 
@@ -4116,10 +4184,10 @@ impl App {
             self.needs_full_redraw = true;
             // D2: the reap may have moved the active index onto a different
             // tab (the exited tab was the active one, or the last one);
-            // reconcile its size against `cell_size` now that it is
-            // committed active. No-op when empty (nothing to reconcile) or
-            // already at size.
-            self.reconcile_active_tab_size();
+            // request a reconcile of its size against `cell_size` (deferred
+            // — see `request_active_tab_reconcile`). No-op when empty
+            // (nothing to reconcile) or already at size.
+            self.request_active_tab_reconcile();
         }
         changed
     }
@@ -4128,53 +4196,37 @@ impl App {
     /// tabs are left untouched here — their PTYs must never receive a
     /// TIOCSWINSZ behind the user's back. A tab's size is reconciled to
     /// `self.cell_size` lazily, at the moment it becomes active (see
-    /// `reconcile_active_tab_size`, called from every activation path).
+    /// `execute_pending_reconcile`, invoked by `window_host::render` after
+    /// every activation path's deferred request).
     pub fn set_grid_size(&mut self, cols: u16, rows: u16) {
         // D3'''''' (round-9 rework, review round-8 finding
         // `1e7e069001cf22dc`, AC-5): clamp HERE, before comparing against or
-        // assigning `self.cell_size` — `Tab::resize` below applies the
-        // IDENTICAL pure `clamp_dims_to_wire_domain` clamp to the active
-        // tab's own core, so computing it once up front and using the SAME
-        // clamped value for both `self.cell_size` and the active-tab resize
-        // keeps the app's own grid record from ever disagreeing with what
-        // the core it drives actually holds. Before this fix,
-        // `self.cell_size` recorded the caller's RAW request while
-        // `Tab::resize` silently narrowed the core to a smaller
-        // wire-domain size — renderer / hit-testing / `window_host::grid_size`
-        // all read `self.cell_size`, so they described a size the core
-        // itself was never actually at.
+        // assigning `self.cell_size` — `Tab::resize` (invoked below, via
+        // `apply_tab_resize`) applies the IDENTICAL pure
+        // `clamp_dims_to_wire_domain` clamp to the active tab's own core, so
+        // computing it once up front and using the SAME clamped value for
+        // both `self.cell_size` and the active-tab resize keeps the app's
+        // own grid record from ever disagreeing with what the core it
+        // drives actually holds. Before this fix, `self.cell_size` recorded
+        // the caller's RAW request while `Tab::resize` silently narrowed
+        // the core to a smaller wire-domain size — renderer / hit-testing /
+        // `window_host::grid_size` all read `self.cell_size`, so they
+        // described a size the core itself was never actually at.
         let (cols, rows) = crate::mux::session::pane::clamp_dims_to_wire_domain(cols, rows);
         if self.cell_size.cols == cols && self.cell_size.rows == rows {
             return;
         }
         self.cell_size = GridDims { cols, rows };
-        // A column-width change triggers a `term_core` reflow that rewrites
-        // the logical↔physical line mapping (a height-only change does not —
-        // `resize_same_width` keeps the wrap boundaries). Detect it from the
-        // ACTIVE tab's pre-resize column count before resizing it (N3):
-        // post-fix invariant, the active tab's dims equal the OLD
-        // `cell_size`, so its core is the authoritative read.
-        let width_changed = self
-            .tabs
-            .get(self.active)
-            .map(|tab| tab.core.lock().cols() != cols)
-            .unwrap_or(false);
-        if let Some(tab) = self.tabs.get_mut(self.active) {
-            tab.resize(cols, rows);
-        }
-        if width_changed {
-            // The reflow re-wrapped scrollback/viewport without moving the
-            // eviction counter, so `pump_all`'s eviction-delta correction
-            // cannot re-base the stored absolute rows. Drop the App-global
-            // absolute-row trackers (selection, pending anchor) here. The
-            // active tab's OWN reflow-invalidated trackers (prompt / fold
-            // marks) are cleared by the tab itself inside its own `resize`
-            // (IMPLEMENTATION.md D3) — App no longer clears them, and an
-            // inactive tab is never resized here, so its trackers are
-            // unaffected.
-            self.selection = None;
-            self.pending_selection_anchor = None;
-        }
+        // Design 2 (FR6, task0003 rework): issue the resize through the
+        // SAME App-side application path the reconcile executor uses —
+        // reads the active tab's pre-resize column count, applies
+        // `Tab::resize`, and clears the App-owned reflow-invalidated
+        // trackers (selection, pending anchor) if the resize changed the
+        // column count (N3). The active tab's OWN reflow-invalidated
+        // trackers (prompt / fold marks) are cleared by the tab itself
+        // inside its own `resize` (IMPLEMENTATION.md D3); an inactive tab
+        // is never resized here, so its trackers are unaffected.
+        self.apply_tab_resize(self.active, cols, rows);
         // A reshape rewraps scrollback / viewport, so an open search
         // overlay's cached logical-line document no longer matches the
         // buffer; flag it for rebuild on the next `execute`.
@@ -9814,10 +9866,22 @@ mod tests {
         );
     }
 
-    /// AC-5 (TS4), FR4: an inactive mux-flavored tab's core dims are
-    /// unchanged by a grid-size change — restricting `Tab::resize` to the
-    /// active tab is the ONLY emission site for pane `Resize` frames
-    /// (IMPLEMENTATION.md D1), so unresized dims prove no frame was sent.
+    /// AC-5 (TS4) / AC-6 (TS10), FR4: an inactive mux-flavored tab's core
+    /// dims are unchanged by a grid-size change, AND — read directly from
+    /// the frame observation hook rather than inferred from dims — it
+    /// records ZERO pane `Resize` frames.
+    ///
+    /// Updated (task0003 rework, NFR2, finding cfcbfae57964beb5): the
+    /// original assertion here claimed "restricting `Tab::resize` to the
+    /// active tab is the ONLY emission site for pane `Resize` frames, so
+    /// unresized dims prove no frame was sent" — that premise is FALSE
+    /// (mux attach/Welcome pane seeding and `PaneCreated` handling are
+    /// separate, non-resize-path emission sites this tab's core-dims check
+    /// cannot see), and a dims-only proxy cannot distinguish "no frame
+    /// sent" from "a frame sent that happened not to change dims" in the
+    /// first place. The frame-log assertion below observes emission
+    /// directly; the dims check is kept alongside it as a still-true,
+    /// weaker fact.
     #[test]
     fn set_grid_size_leaves_inactive_mux_tab_core_dims_unchanged() {
         let mut app = App::new();
@@ -9846,34 +9910,96 @@ mod tests {
         assert_eq!(
             before, after,
             "inactive mux tab's core dims unchanged (no Tab::resize \
-             invocation, hence no pane Resize frames)"
+             invocation reached it)"
+        );
+        assert!(
+            app.tabs[0].test_resize_frames().is_empty(),
+            "inactive mux tab records zero pane Resize frames — observed \
+             directly via the frame hook, not inferred from dims"
         );
     }
 
-    // ── per-tab-grid-size task0001: activation reconcile (D2) ───────────
+    // ── per-tab-grid-size task0001/task0003: activation reconcile (D2) ──
+
+    /// AC-1 (TS8), FR3/NFR1: reproduces the exact round-1 defect scenario —
+    /// per-tab-dependent insets mean the incoming tab's settled display
+    /// area can differ from the outgoing tab's. `cell_size` is settled
+    /// TWICE here: once while the OUTGOING tab is active (120x40, standing
+    /// in for e.g. no persistent-sidebar inset), and once for the INCOMING
+    /// tab AFTER it becomes active (90x30, standing in for a narrower
+    /// inset). Before this rework, the reconcile ran synchronously inside
+    /// `switch_to_tab` and would have resized the incoming tab to the
+    /// STILL-CURRENT 120x40 — a wrong-dims resize corrected only on the
+    /// next unrelated trigger. Confirmed to fail pre-fix: the old
+    /// `reconcile_active_tab_size` ran inline in `switch_to_tab`, so the
+    /// assertion below (dims still 80x24 immediately after `switch_to_tab`,
+    /// never 120x40) would have failed with `(120, 40)`.
+    #[test]
+    fn switch_to_tab_reconciles_to_incoming_dims_never_outgoing_when_insets_differ_per_tab() {
+        let mut app = App::new();
+        app.spawn_initial_tab(); // tab0, active = 0, at 80x24
+        app.spawn_new_tab(); // tab1, active = 1, at 80x24
+        app.set_grid_size(120, 40); // settle OUTGOING tab1's own display area
+        app.switch_to_tab(0); // request activation of tab0; must not resize synchronously
+        {
+            let core = app.tabs[0].core.lock();
+            assert_eq!(
+                (core.cols(), core.rows()),
+                (80, 24),
+                "switch_to_tab must not resize the incoming tab synchronously \
+                 against the OUTGOING tab's still-current cell_size (120x40) \
+                 — that was the round-1 defect (dbb7766a6212fb1a)"
+            );
+        }
+        // Render pass settles insets for the NEW active tab (tab0) — its own
+        // display area differs from tab1's.
+        app.set_grid_size(90, 30);
+        app.execute_pending_reconcile();
+        let core = app.tabs[0].core.lock();
+        assert_eq!(
+            (core.cols(), core.rows()),
+            (90, 30),
+            "the incoming tab reconciles to ITS OWN settled display area \
+             (90x30), never the outgoing tab's dims (120x40) — the transition \
+             observed above was 80x24 -> 90x30 directly, with no intermediate \
+             120x40 resize"
+        );
+    }
 
     /// AC-2 (TS2), FR3: activating a tab whose dims differ from the current
-    /// display area resizes it exactly at activation time.
+    /// display area resizes it once the deferred reconcile executes.
+    ///
+    /// Updated (task0003 rework, NFR2): `switch_to_tab` no longer resizes
+    /// synchronously — it only requests a reconcile (D2 request/execute
+    /// split). `execute_pending_reconcile()` now stands in for the
+    /// `window_host::render` call point that consumes the request once
+    /// insets have settled.
     #[test]
     fn switch_to_tab_resizes_incoming_tab_when_its_dims_differ_from_cell_size() {
         let mut app = App::new();
         app.spawn_initial_tab(); // tab0, active = 0, spawned at cell_size (80x24)
         app.spawn_new_tab(); // tab1, active = 1, spawned at cell_size (80x24)
         app.set_grid_size(100, 40); // resizes only the active tab1; tab0 stays 80x24
-        app.switch_to_tab(0); // activates tab0, whose dims differ from cell_size
+        app.switch_to_tab(0); // requests activation of tab0, whose dims differ from cell_size
+        app.execute_pending_reconcile(); // consumes the request (mirrors window_host::render)
 
         let core = app.tabs[0].core.lock();
         assert_eq!(
             (core.cols(), core.rows()),
             (100, 40),
             "activating a tab whose dims differ from the display area \
-             resizes it at activation time"
+             resizes it once the deferred reconcile executes"
         );
     }
 
     /// AC-2 (TS2), FR3: activating a tab whose dims already match
     /// `cell_size` issues no resize — dims stay unchanged and the incoming
-    /// tab's own trackers are left alone.
+    /// tab's own trackers are left alone. The FR3 no-op guarantee must
+    /// survive the request/execute split.
+    ///
+    /// Updated (task0003 rework, NFR2): added the `execute_pending_reconcile()`
+    /// call so the no-op assertion covers the deferred path, not just the
+    /// (now nonexistent) synchronous one.
     #[test]
     fn switch_to_tab_issues_no_resize_when_incoming_dims_already_match_cell_size() {
         let mut app = App::new();
@@ -9890,6 +10016,7 @@ mod tests {
             .register_osc133_region(5, 8, "cmd".to_string(), None);
         app.spawn_new_tab(); // tab1, active = 1 — both tabs still at cell_size
         app.switch_to_tab(0);
+        app.execute_pending_reconcile();
 
         let core = app.tabs[0].core.lock();
         assert_eq!(
@@ -9910,15 +10037,21 @@ mod tests {
         );
     }
 
-    /// AC-3 (TS2), FR3/D2: the close-tab active-index fix-up also
-    /// reconciles the newly-active tab's size.
+    /// AC-3 (TS2/TS8), FR3/D2: the close-tab active-index fix-up also
+    /// produces a reconcile request whose execution reconciles the
+    /// newly-active tab's size — identical to the explicit switch path.
+    ///
+    /// Updated (task0003 rework, NFR2): added the `execute_pending_reconcile()`
+    /// call — `close_tab` now only requests the reconcile (D2 request/execute
+    /// split); it no longer resizes synchronously.
     #[test]
     fn close_tab_active_index_fixup_reconciles_newly_active_tab_size() {
         let mut app = App::new();
         app.spawn_initial_tab(); // tab0
         app.spawn_new_tab(); // tab1, active = 1
         app.set_grid_size(100, 40); // resizes only the active tab1; tab0 stays 80x24
-        app.close_tab(1); // closes the active tab; fix-up moves active to tab0
+        app.close_tab(1); // closes the active tab; fix-up requests a reconcile for tab0
+        app.execute_pending_reconcile();
 
         assert_eq!(app.tabs.len(), 1);
         assert_eq!(app.active, 0);
@@ -9931,8 +10064,13 @@ mod tests {
         );
     }
 
-    /// AC-3 (TS2), FR3/D2: the exited-tab reap active-index fix-up also
-    /// reconciles the newly-active tab's size.
+    /// AC-3 (TS2/TS8), FR3/D2: the exited-tab reap active-index fix-up also
+    /// produces a reconcile request whose execution reconciles the
+    /// newly-active tab's size — identical to the explicit switch path.
+    ///
+    /// Updated (task0003 rework, NFR2): added the `execute_pending_reconcile()`
+    /// call — the reap fix-up now only requests the reconcile; it no longer
+    /// resizes synchronously.
     #[test]
     fn pump_all_reap_active_index_fixup_reconciles_newly_active_tab_size() {
         let mut app = App::new();
@@ -9940,7 +10078,8 @@ mod tests {
         app.spawn_new_tab(); // tab1, active = 1
         app.set_grid_size(100, 40); // resizes only the active tab1; tab0 stays 80x24
         app.tabs[1].exited = true;
-        app.pump_all(); // reap removes tab1; fix-up moves active to tab0
+        app.pump_all(); // reap removes tab1; fix-up requests a reconcile for tab0
+        app.execute_pending_reconcile();
 
         assert_eq!(app.tabs.len(), 1, "exited tab reaped");
         assert_eq!(app.active, 0);
@@ -9950,6 +10089,235 @@ mod tests {
             (100, 40),
             "reap active-index fix-up reconciles the newly-active tab's size"
         );
+    }
+
+    /// AC-4 (TS9), FR6/D3: a reconcile execution that changes the target
+    /// tab's column count clears the App-owned trackers (selection, pending
+    /// anchor) on the explicit-switch activation origin. Trackers are
+    /// seeded AFTER `switch_to_tab` (which unconditionally clears both at
+    /// the top of the function, independent of D3) so the assertion below
+    /// isolates the reconcile's OWN width-change clearing, exercised
+    /// through the shared App resize application path
+    /// (`apply_tab_resize`).
+    #[test]
+    fn switch_to_tab_reconcile_width_change_clears_selection_and_pending_anchor() {
+        let mut app = App::new();
+        app.spawn_initial_tab(); // tab0, active = 0, 80x24
+        app.spawn_new_tab(); // tab1, active = 1, 80x24
+        app.set_grid_size(100, 40); // settles cell_size to 100x40 via active tab1
+        app.switch_to_tab(0); // request only; tab0 still 80x24
+        app.selection = Some(Selection {
+            anchor: Pos { row: 0, col: 0 },
+            extent: Pos { row: 2, col: 3 },
+            mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 0 },
+        });
+        app.pending_selection_anchor = Some(Pos { row: 1, col: 1 });
+        app.execute_pending_reconcile(); // resizes tab0 80->100 cols: width change
+
+        assert!(
+            app.selection.is_none(),
+            "reconcile width-change clears the App-owned selection"
+        );
+        assert!(
+            app.pending_selection_anchor.is_none(),
+            "reconcile width-change clears the App-owned pending anchor"
+        );
+    }
+
+    /// AC-4 (TS9), FR6/D3: the close-tab activation origin also clears the
+    /// App-owned trackers via the reconcile executor's shared resize path —
+    /// not just the explicit-switch origin. Round-1 findings
+    /// a172de726b3cbc29 / d39a6a9468ff892e: this origin previously reached
+    /// a width-changing resize with NO App-side clearing at all, because
+    /// the clearing lived only in `set_grid_size`.
+    #[test]
+    fn close_tab_reconcile_width_change_clears_selection_and_pending_anchor() {
+        let mut app = App::new();
+        app.spawn_initial_tab(); // tab0
+        app.spawn_new_tab(); // tab1, active = 1
+        app.set_grid_size(100, 40); // tab0 stays 80x24; cell_size=100x40
+        app.selection = Some(Selection {
+            anchor: Pos { row: 0, col: 0 },
+            extent: Pos { row: 2, col: 3 },
+            mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 0 },
+        });
+        app.pending_selection_anchor = Some(Pos { row: 1, col: 1 });
+        app.close_tab(1); // closes the active tab; fix-up requests a reconcile for tab0
+        app.execute_pending_reconcile(); // resizes tab0 80->100 cols: width change
+
+        assert!(
+            app.selection.is_none(),
+            "close-tab reconcile width-change clears the App-owned selection"
+        );
+        assert!(
+            app.pending_selection_anchor.is_none(),
+            "close-tab reconcile width-change clears the App-owned pending anchor"
+        );
+    }
+
+    /// AC-4 (TS9), FR6/D3: the exited-tab reap activation origin also
+    /// clears the App-owned trackers via the reconcile executor (same
+    /// rationale as the close-tab case above).
+    #[test]
+    fn reap_reconcile_width_change_clears_selection_and_pending_anchor() {
+        let mut app = App::new();
+        app.spawn_initial_tab(); // tab0
+        app.spawn_new_tab(); // tab1, active = 1
+        app.set_grid_size(100, 40); // tab0 stays 80x24; cell_size=100x40
+        app.selection = Some(Selection {
+            anchor: Pos { row: 0, col: 0 },
+            extent: Pos { row: 2, col: 3 },
+            mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 0 },
+        });
+        app.pending_selection_anchor = Some(Pos { row: 1, col: 1 });
+        app.tabs[1].exited = true;
+        app.pump_all(); // reap removes tab1; fix-up requests a reconcile for tab0
+        app.execute_pending_reconcile(); // resizes tab0 80->100 cols: width change
+
+        assert!(
+            app.selection.is_none(),
+            "reap reconcile width-change clears the App-owned selection"
+        );
+        assert!(
+            app.pending_selection_anchor.is_none(),
+            "reap reconcile width-change clears the App-owned pending anchor"
+        );
+    }
+
+    /// AC-4 (TS9), FR6/D3: a HEIGHT-ONLY reconcile (no column-count change)
+    /// leaves the App-owned trackers untouched — the shared resize
+    /// application path (`apply_tab_resize`) only clears them when the
+    /// resize actually changed the column count (N3).
+    #[test]
+    fn reconcile_height_only_change_keeps_selection_and_pending_anchor() {
+        let mut app = App::new();
+        app.spawn_initial_tab(); // tab0, active = 0, 80x24
+        app.spawn_new_tab(); // tab1, active = 1, 80x24
+        app.set_grid_size(80, 40); // same width, taller — settles cell_size to 80x40
+        app.switch_to_tab(0); // request only; tab0 still 80x24
+        app.selection = Some(Selection {
+            anchor: Pos { row: 0, col: 0 },
+            extent: Pos { row: 2, col: 3 },
+            mode: SelectionMode::Character,
+            origin: Pos { row: 0, col: 0 },
+        });
+        app.pending_selection_anchor = Some(Pos { row: 1, col: 1 });
+        app.execute_pending_reconcile(); // resizes tab0 80x24 -> 80x40: height-only
+
+        assert!(
+            app.selection.is_some(),
+            "height-only reconcile keeps the App-owned selection"
+        );
+        assert!(
+            app.pending_selection_anchor.is_some(),
+            "height-only reconcile keeps the App-owned pending anchor"
+        );
+    }
+
+    /// AC-5 (TS9), FR6: `set_grid_size` and the reconcile executor issue
+    /// their resize through the SAME App-side application path
+    /// (`apply_tab_resize`) — verified by both producing IDENTICAL
+    /// width-change clearing behavior under the same seeded tracker state.
+    #[test]
+    fn set_grid_size_and_reconcile_executor_share_width_change_clearing_behavior() {
+        // Path 1: set_grid_size drives the width change directly.
+        let mut via_set_grid_size = app_with_seeded_trackers();
+        via_set_grid_size.set_grid_size(40, 24); // width 80 -> 40
+        assert!(
+            via_set_grid_size.selection.is_none(),
+            "set_grid_size width-change clears selection"
+        );
+        assert!(
+            via_set_grid_size.pending_selection_anchor.is_none(),
+            "set_grid_size width-change clears pending anchor"
+        );
+
+        // Path 2: the reconcile executor drives an equivalent width change
+        // on an activation, under an identically-seeded tracker state.
+        let mut via_reconcile = App::new();
+        via_reconcile.spawn_initial_tab(); // tab0, active = 0, 80x24
+        via_reconcile.spawn_new_tab(); // tab1, active = 1, 80x24
+        via_reconcile.set_grid_size(40, 24); // settle cell_size at the narrower width
+        via_reconcile.switch_to_tab(0); // request only; tab0 still 80x24
+        via_reconcile.selection = Some(Selection {
+            anchor: Pos { row: 1, col: 0 },
+            extent: Pos { row: 3, col: 4 },
+            mode: SelectionMode::Character,
+            origin: Pos { row: 1, col: 0 },
+        });
+        via_reconcile.pending_selection_anchor = Some(Pos { row: 2, col: 1 });
+        via_reconcile.execute_pending_reconcile(); // resizes tab0 80->40 cols: width change
+
+        assert!(
+            via_reconcile.selection.is_none(),
+            "reconcile executor width-change clears selection — identical \
+             to the set_grid_size path above"
+        );
+        assert!(
+            via_reconcile.pending_selection_anchor.is_none(),
+            "reconcile executor width-change clears pending anchor — \
+             identical to the set_grid_size path above"
+        );
+    }
+
+    /// AC-6 (TS10), FR4: via the frame observation hook, a dims-changing
+    /// mux tab activation reconcile records EXACTLY one frame SET — one
+    /// frame per pane in the tab's mux group — at the incoming tab's
+    /// post-clamp dims, and no frame is ever recorded before the reconcile
+    /// executes (i.e. none at any stale/outgoing dims).
+    #[test]
+    fn reconcile_dims_changing_mux_tab_activation_records_one_frame_set_at_incoming_dims() {
+        let mut app = App::new();
+        app.spawn_initial_tab(); // tab0: mux-flavored, will be activated
+        app.tabs[0].mux_session_name = Some("main".to_string());
+        let mut group = crate::mux::window_group::MuxWindowGroup::new();
+        group.seed(
+            vec![
+                crate::mux::window_group::MuxWindow {
+                    id: 0,
+                    name: "w0".to_string(),
+                },
+                crate::mux::window_group::MuxWindow {
+                    id: 1,
+                    name: "w1".to_string(),
+                },
+            ],
+            vec![9, 11],
+            0,
+        );
+        app.tabs[0].mux_group = Some(group);
+        app.spawn_new_tab(); // tab1, active = 1
+        app.set_grid_size(100, 40); // resizes only the active tab1; tab0 stays 80x24
+        assert!(
+            app.tabs[0].test_resize_frames().is_empty(),
+            "no frame yet: tab0 is still inactive and untouched"
+        );
+
+        app.switch_to_tab(0); // request only; must not resize/emit synchronously
+        assert!(
+            app.tabs[0].test_resize_frames().is_empty(),
+            "switch_to_tab alone must not emit a Resize frame — that would \
+             be at the OUTGOING tab's stale cell_size, the round-1 defect"
+        );
+
+        app.execute_pending_reconcile(); // resizes tab0 80->100 cols: emits one frame per pane
+        let frames = app.tabs[0].test_resize_frames();
+        assert_eq!(
+            frames.len(),
+            2,
+            "one frame per pane in the mux group == one frame SET"
+        );
+        for frame in &frames {
+            assert_eq!(
+                (frame.cols, frame.rows),
+                (100, 40),
+                "every frame in the set carries the INCOMING tab's \
+                 post-clamp dims, never a stale/outgoing value"
+            );
+        }
     }
 
     #[test]

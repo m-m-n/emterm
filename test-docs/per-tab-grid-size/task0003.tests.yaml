@@ -1,0 +1,121 @@
+task_id: task0003
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - app::tests::switch_to_tab_reconciles_to_incoming_dims_never_outgoing_when_insets_differ_per_tab
+    red_confirmed: true
+    red_reason: >-
+      Confirmed by reverting App::execute_pending_reconcile /
+      request_active_tab_reconcile / apply_tab_resize (restoring the old
+      synchronous reconcile_active_tab_size) while keeping the test: rustc
+      E0599 "no method named `execute_pending_reconcile` found for struct
+      `app::App`" at the test's `app.execute_pending_reconcile()` call
+      (src-tauri/src/app.rs:9905 in the reverted tree). The test's core
+      assertion (dims stay 80x24 immediately after switch_to_tab, never
+      120x40) also directly reproduces the round-1 defect: against the old
+      synchronous implementation this assertion would fail with (120, 40).
+  AC-2:
+    tests:
+      - app::tests::switch_to_tab_resizes_incoming_tab_when_its_dims_differ_from_cell_size
+      - app::tests::switch_to_tab_issues_no_resize_when_incoming_dims_already_match_cell_size
+    red_confirmed: true
+    red_reason: >-
+      Both pre-existing tests were updated to add an
+      `app.execute_pending_reconcile()` call after the activation, required
+      because the resize is now deferred to the executor. Confirmed red the
+      same way as AC-1: reverting the app.rs implementation produced rustc
+      E0599 "no method named `execute_pending_reconcile`" at each test's new
+      call site (src-tauri/src/app.rs:9932 and :9967 in the reverted tree).
+  AC-3:
+    tests:
+      - app::tests::close_tab_active_index_fixup_reconciles_newly_active_tab_size
+      - app::tests::pump_all_reap_active_index_fixup_reconciles_newly_active_tab_size
+    red_confirmed: true
+    red_reason: >-
+      Both pre-existing tests were updated to add an
+      `app.execute_pending_reconcile()` call after close_tab/pump_all,
+      required because both fix-up paths now only request a reconcile
+      instead of resizing synchronously. Confirmed red by reverting the
+      app.rs implementation: rustc E0599 "no method named
+      `execute_pending_reconcile`" at each test's new call site
+      (src-tauri/src/app.rs:10002 and :10030 in the reverted tree).
+  AC-4:
+    tests:
+      - app::tests::switch_to_tab_reconcile_width_change_clears_selection_and_pending_anchor
+      - app::tests::close_tab_reconcile_width_change_clears_selection_and_pending_anchor
+      - app::tests::reap_reconcile_width_change_clears_selection_and_pending_anchor
+      - app::tests::reconcile_height_only_change_keeps_selection_and_pending_anchor
+    red_confirmed: true
+    red_reason: >-
+      All four new tests call `execute_pending_reconcile()`, which did not
+      exist before this task's App-side rework. Confirmed red by reverting
+      the app.rs implementation: rustc E0599 "no method named
+      `execute_pending_reconcile`" at each test's call site
+      (src-tauri/src/app.rs:10064, :10096, :10126, :10156 in the reverted
+      tree). Pre-fix, the close-tab and reap origins additionally had NO
+      App-side tracker-clearing logic on their (then-synchronous) resize
+      path at all (round-1 findings a172de726b3cbc29 / d39a6a9468ff892e),
+      so the close-tab/reap variants of this test would also have failed
+      the selection/anchor assertions themselves even with a compiling
+      stand-in.
+  AC-5:
+    tests:
+      - app::tests::set_grid_size_and_reconcile_executor_share_width_change_clearing_behavior
+    red_confirmed: true
+    red_reason: >-
+      New test; the reconcile-executor half calls `execute_pending_reconcile()`,
+      which did not exist before this task. Confirmed red by reverting the
+      app.rs implementation: rustc E0599 "no method named
+      `execute_pending_reconcile`" at src-tauri/src/app.rs:10200 in the
+      reverted tree.
+  AC-6:
+    tests:
+      - app::tests::set_grid_size_leaves_inactive_mux_tab_core_dims_unchanged
+      - app::tests::reconcile_dims_changing_mux_tab_activation_records_one_frame_set_at_incoming_dims
+    red_confirmed: true
+    red_reason: >-
+      Both tests read tabs.rs's new frame-observation hook
+      (`Tab::test_resize_frames` / `ResizeFrameRecord`), which did not exist
+      before this task. Confirmed red two ways: (1) reverting only the
+      tabs.rs hook (struct, field, 3 emission-site instrumentation blocks,
+      accessor) while keeping the app.rs implementation produced rustc
+      E0599 "no method named `test_resize_frames` found for struct
+      `tabs::Tab`" at src-tauri/src/app.rs:9916 (the rewritten AC-5/AC-6
+      dims+frames test) and :10295/:10301/:10307 (the activation-reconcile
+      frame-set test, in the reverted tree); (2) the second test also
+      depends on `execute_pending_reconcile` (see AC-1..AC-5), independently
+      confirmed red per those entries.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Suite-wide / build-level criterion, not a single unit test: "the full
+      --lib suite passes with every updated test carrying a justification
+      comment, and the CLI --no-default-features check compiles." Verified
+      by actually running both commands after implementation (final
+      --lib run: 3079 passed, 7 failed — identical to the recorded
+      baseline, i.e. no regressions; `cargo check --no-default-features`:
+      clean, 0 warnings/errors) rather than by a red/green unit test. Every
+      updated pre-existing test (switch_to_tab_resizes_incoming_tab_when_its_dims_differ_from_cell_size,
+      switch_to_tab_issues_no_resize_when_incoming_dims_already_match_cell_size,
+      close_tab_active_index_fixup_reconciles_newly_active_tab_size,
+      pump_all_reap_active_index_fixup_reconciles_newly_active_tab_size,
+      set_grid_size_leaves_inactive_mux_tab_core_dims_unchanged) carries a
+      doc-comment "Updated (task0003 rework, NFR2): ..." explaining why the
+      assertion moved.
