@@ -27,6 +27,15 @@
 //! re-derived — so a pane mid-"command_ended" before an upgrade is still
 //! mid-"command_ended" immediately after it.
 //!
+//! mux-hot-upgrade-alt-screen task0002 (SPEC FR3-FR8) extends the same
+//! per-pane snapshot/restore pair to also carry each pane's
+//! alternate-screen state (flag + formatted-contents dump, handoff schema
+//! version 3) across the upgrade boundary via
+//! [`crate::mux::session::pane::MuxPane::capture_alt_state`] /
+//! [`crate::mux::session::pane::MuxPane::from_restored`], so a
+//! formerly-alt-screen pane's shadow parser reports the alternate screen
+//! again immediately after restore.
+//!
 //! task0006 (review rework, finding `2e6f18b4dc0a7593`) confirmed that
 //! `snapshot`'s read of the tree is atomic (taken under the
 //! `SessionManager` lock) but is NOT a cut of the live event stream: pane
@@ -344,6 +353,14 @@ pub fn remove_handoff_file(path: &Path) {
 /// `mgr` and patch those fields, in place, into the matching pane entries of
 /// `document`.
 ///
+/// mux-hot-upgrade-alt-screen task0002 (SPEC FR7) extends this same re-read
+/// to the pane's alt-screen flag + dump (via
+/// [`crate::mux::session::pane::MuxPane::capture_alt_state`], the same
+/// helper `snapshot_pane` uses): a pane that switched buffers between the
+/// original `snapshot` and this refresh pass gets its document entry
+/// updated in both directions — main->alt gains flag true + a fresh dump,
+/// alt->main returns to flag false + empty dump.
+///
 /// **Why this exists**: `snapshot` takes the `SessionManager` lock only for
 /// the duration of the tree walk, then releases it. Between that release and
 /// the caller's eventual `exec` (`prepare_upgrade`'s bounded wait for client
@@ -410,6 +427,13 @@ pub fn refresh_live_agent_state(document: &mut HandoffDocument, mgr: &SessionMan
                 };
                 let (latch_armed, latch_command_ended, latch_generation) =
                     pane.agent_status_exit_latch.lock().unwrap().state_parts();
+                // mux-hot-upgrade-alt-screen task0002 (SPEC FR7): re-capture
+                // the alt-screen flag + dump through the SAME helper
+                // `snapshot_pane` uses, so a pane that switched buffers
+                // between the original snapshot and this refresh pass gets
+                // its document entry updated in both directions (main->alt
+                // and alt->main).
+                let (alt_screen, alt_screen_dump) = pane.capture_alt_state();
 
                 pane_doc.agent_state = agent_state;
                 pane_doc.agent_name = agent_name;
@@ -417,6 +441,8 @@ pub fn refresh_live_agent_state(document: &mut HandoffDocument, mgr: &SessionMan
                 pane_doc.latch_armed = latch_armed;
                 pane_doc.latch_command_ended = latch_command_ended;
                 pane_doc.latch_generation = latch_generation;
+                pane_doc.alt_screen = alt_screen;
+                pane_doc.alt_screen_dump = alt_screen_dump;
             }
         }
     }
@@ -544,6 +570,12 @@ pub fn snapshot(
 /// contributes its master descriptor (`FD_CLOEXEC` cleared) and child pid;
 /// an exited pane contributes neither. Scrollback is captured while the
 /// pane's own scrollback lock is held (via [`ScrollbackRingBuffer::capture`]).
+///
+/// mux-hot-upgrade-alt-screen task0002 (SPEC FR5/FR8): the alt-screen flag +
+/// dump are captured via [`MuxPane::capture_alt_state`] for non-exited panes
+/// only — an exited pane has no live alternate-screen semantics to carry,
+/// and its restore path (`from_restored_exited`) builds a fresh parser
+/// anyway, so it contributes flag false + empty dump.
 fn snapshot_pane(pane: &MuxPane) -> Result<HandoffPane, SnapshotError> {
     let (master_fd, child_pid) = if pane.exited {
         (None, None)
@@ -579,6 +611,15 @@ fn snapshot_pane(pane: &MuxPane) -> Result<HandoffPane, SnapshotError> {
     let (latch_armed, latch_command_ended, latch_generation) =
         pane.agent_status_exit_latch.lock().unwrap().state_parts();
     let scrollback = pane.scrollback.lock().unwrap().capture().data;
+    // mux-hot-upgrade-alt-screen task0002 (SPEC FR5/FR8): a pane recorded
+    // exited has no live alternate-screen semantics to carry (its restore
+    // path builds a fresh shadow parser regardless) — only a non-exited
+    // pane's CURRENT shadow-parser state is captured.
+    let (alt_screen, alt_screen_dump) = if pane.exited {
+        (false, Vec::new())
+    } else {
+        pane.capture_alt_state()
+    };
 
     Ok(HandoffPane {
         id: pane.id,
@@ -596,6 +637,8 @@ fn snapshot_pane(pane: &MuxPane) -> Result<HandoffPane, SnapshotError> {
         latch_armed,
         latch_command_ended,
         latch_generation,
+        alt_screen,
+        alt_screen_dump,
     })
 }
 
@@ -783,6 +826,11 @@ fn restore_pane(
         doc.title.clone(),
         agent_status,
         doc.child_pid,
+        // mux-hot-upgrade-alt-screen task0002 (SPEC FR6): pass the
+        // document's alt-screen flag + dump through verbatim — `from_restored`
+        // replays them onto the shadow parser after the scrollback replay.
+        doc.alt_screen,
+        doc.alt_screen_dump.clone(),
     );
     // task0004: install the restored latch state BEFORE the reader thread
     // starts observing this pane's live PTY stream, so the earliest live
@@ -1212,6 +1260,205 @@ mod tests {
             .expect("restored pane must remain writable through its adopted master");
     }
 
+    /// AC-3/AC-5: a full `snapshot` -> `restore` round trip carries an
+    /// alt-screen pane's state end to end -- the restored pane's shadow
+    /// parser reports the alternate screen active with the dump's content
+    /// on it AND the replayed scrollback beneath it, mirroring the
+    /// dedicated `pane.rs`-level `from_restored` test but through the
+    /// document codec this module owns (SPEC AC-3: the next reattach's
+    /// snapshot would take the alt branch, gated on exactly the
+    /// `alternate_screen()` flag asserted below).
+    #[test]
+    fn snapshot_then_restore_round_trips_alt_screen_state() {
+        let pty_system = portable_pty::native_pty_system();
+        let size = portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = pty_system.openpty(size).unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        let wid = mgr.create_window(sid, "w".to_string()).unwrap();
+        let pid = mgr.alloc_pane_id();
+        let pane = MuxPane::new(pid, 80, 24, test_output_target(), writer, pair.master, None);
+        pane.scrollback
+            .lock()
+            .unwrap()
+            .write(b"pre-upgrade main-buffer history");
+        pane.shadow_parser.lock().unwrap().process(b"\x1b[?1049h");
+        pane.shadow_parser
+            .lock()
+            .unwrap()
+            .process(b"ROUND-TRIP-ALT-CONTENT");
+        mgr.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("mux-default.sock");
+        let listen_file = tempfile::NamedTempFile::new_in(dir.path()).expect("listen fd stand-in");
+        let listen_fd = listen_file.as_raw_fd();
+
+        let mut document = snapshot(&mgr, listen_fd, &socket_path).expect("snapshot must succeed");
+        {
+            let pane_doc = &document.sessions[0].windows[0].panes[0];
+            assert!(pane_doc.alt_screen, "sanity: snapshot must record the alt-screen state");
+            assert!(!pane_doc.alt_screen_dump.is_empty());
+        }
+        let original_fd = document.sessions[0].windows[0].panes[0]
+            .master_fd
+            .expect("live pane must record a master fd");
+        let dup_fd = unsafe { libc::dup(original_fd) };
+        assert!(dup_fd >= 0, "dup(2) failed");
+        document.sessions[0].windows[0].panes[0].master_fd = Some(dup_fd);
+
+        let (title_tx, notification_tx, agent_status_tx, pane_exit_sender) =
+            test_restore_channels();
+        let restored = restore(
+            &document,
+            &title_tx,
+            &notification_tx,
+            &agent_status_tx,
+            &pane_exit_sender,
+        );
+
+        let restored_pane = restored
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .panes
+            .get(&pid)
+            .unwrap();
+        assert!(!restored_pane.exited);
+        {
+            let parser = restored_pane.shadow_parser.lock().unwrap();
+            assert!(
+                parser.screen().alternate_screen(),
+                "AC-5: the restored pane's shadow parser must report the alternate \
+                 screen active -- exactly the flag a reattach snapshot builder \
+                 (build_snapshot_bytes) branches on to take the alt path (SPEC AC-3)"
+            );
+            let content = parser.screen().contents_formatted();
+            assert!(
+                content
+                    .windows(b"ROUND-TRIP-ALT-CONTENT".len())
+                    .any(|w| w == b"ROUND-TRIP-ALT-CONTENT"),
+                "AC-5: the restored alt screen must show the captured dump's content"
+            );
+        }
+        restored_pane
+            .shadow_parser
+            .lock()
+            .unwrap()
+            .process(b"\x1b[?1049l");
+        let main_content = restored_pane
+            .shadow_parser
+            .lock()
+            .unwrap()
+            .screen()
+            .contents_formatted();
+        assert!(
+            main_content
+                .windows(b"pre-upgrade main-buffer history".len())
+                .any(|w| w == b"pre-upgrade main-buffer history"),
+            "AC-5: the replayed scrollback must survive beneath the restored alt screen"
+        );
+    }
+
+    // ── AC-3: snapshot_pane captures alt-screen state ──────────────────────
+
+    /// AC-3: `snapshot` records an alt-screen pane's document entry with
+    /// flag true and a dump equal to the parser's formatted alt-screen
+    /// contents.
+    #[test]
+    fn snapshot_records_alt_screen_state_for_an_alt_screen_pane() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        let wid = mgr.create_window(sid, "w".to_string()).unwrap();
+        let pid = mgr.alloc_pane_id();
+        let pane = MuxPane::new_test(pid, 80, 24, test_output_target());
+        pane.shadow_parser.lock().unwrap().process(b"\x1b[?1049h");
+        pane.shadow_parser
+            .lock()
+            .unwrap()
+            .process(b"SNAPSHOT-ALT-CONTENT");
+        mgr.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("mux-default.sock");
+        let listen_file = tempfile::NamedTempFile::new_in(dir.path()).expect("listen fd stand-in");
+        let listen_fd = listen_file.as_raw_fd();
+
+        let document = snapshot(&mgr, listen_fd, &socket_path).expect("snapshot must succeed");
+        let pane_doc = &document.sessions[0].windows[0].panes[0];
+        assert!(
+            pane_doc.alt_screen,
+            "AC-3: an alt-screen pane must record flag true"
+        );
+        assert!(
+            pane_doc
+                .alt_screen_dump
+                .windows(b"SNAPSHOT-ALT-CONTENT".len())
+                .any(|w| w == b"SNAPSHOT-ALT-CONTENT"),
+            "AC-3: the dump must equal the parser's formatted alt-screen contents"
+        );
+    }
+
+    /// AC-3: `snapshot` records an exited pane's document entry with flag
+    /// false and an empty dump, even when the pane's shadow parser was left
+    /// on the alternate screen before it exited -- an exited pane has no
+    /// live alternate-screen semantics to carry.
+    #[test]
+    fn snapshot_records_no_alt_screen_state_for_an_exited_pane() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        let wid = mgr.create_window(sid, "w".to_string()).unwrap();
+        let pid = mgr.alloc_pane_id();
+        let mut pane = MuxPane::new_test(pid, 80, 24, test_output_target());
+        pane.shadow_parser.lock().unwrap().process(b"\x1b[?1049h");
+        pane.shadow_parser
+            .lock()
+            .unwrap()
+            .process(b"STALE-ALT-CONTENT-BEFORE-EXIT");
+        pane.mark_exited();
+        mgr.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(pane);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("mux-default.sock");
+        let listen_file = tempfile::NamedTempFile::new_in(dir.path()).expect("listen fd stand-in");
+        let listen_fd = listen_file.as_raw_fd();
+
+        let document = snapshot(&mgr, listen_fd, &socket_path).expect("snapshot must succeed");
+        let pane_doc = &document.sessions[0].windows[0].panes[0];
+        assert!(pane_doc.exited);
+        assert!(
+            !pane_doc.alt_screen,
+            "AC-3: an exited pane must record flag false regardless of its parser's last state"
+        );
+        assert!(
+            pane_doc.alt_screen_dump.is_empty(),
+            "AC-3: an exited pane must record an empty dump"
+        );
+    }
+
     // ── AC-6 / AC-7: exited-pane restore + unadoptable-descriptor restore,
     // rest of the tree still restores ──────────────────────────────────────
 
@@ -1258,6 +1505,12 @@ mod tests {
                             latch_armed: true,
                             latch_command_ended: true,
                             latch_generation: 5,
+                            // mux-hot-upgrade-alt-screen task0002: alt state
+                            // is irrelevant on this path — an unadoptable
+                            // descriptor restores via `build_exited_pane`,
+                            // which never reads these fields.
+                            alt_screen: false,
+                            alt_screen_dump: Vec::new(),
                         },
                         // AC-6: recorded exited — adopts no descriptor.
                         HandoffPane {
@@ -1276,6 +1529,8 @@ mod tests {
                             latch_armed: false,
                             latch_command_ended: false,
                             latch_generation: 0,
+                            alt_screen: false,
+                            alt_screen_dump: Vec::new(),
                         },
                     ],
                 }],
@@ -1946,6 +2201,130 @@ mod tests {
         );
     }
 
+    /// AC-4: a pane that enters the alternate screen AFTER the original
+    /// snapshot must have its document entry updated by
+    /// `refresh_live_agent_state` -- main->alt gains flag true + a fresh
+    /// dump.
+    #[test]
+    fn refresh_live_agent_state_pulls_in_alt_screen_entered_after_snapshot() {
+        let (mgr, sid, wid, pid) = single_live_pane_manager();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("mux-default.sock");
+        let listen_file = tempfile::NamedTempFile::new_in(dir.path()).expect("listen fd stand-in");
+        let listen_fd = listen_file.as_raw_fd();
+
+        let mut document = snapshot(&mgr, listen_fd, &socket_path).expect("snapshot must succeed");
+        {
+            let pane_doc = &document.sessions[0].windows[0].panes[0];
+            assert!(
+                !pane_doc.alt_screen,
+                "the original snapshot must record the pre-transition main-buffer state"
+            );
+            assert!(pane_doc.alt_screen_dump.is_empty());
+        }
+
+        // Simulate the pane entering the alternate screen DURING
+        // prepare_upgrade's post-snapshot window -- WITHOUT re-snapshotting.
+        {
+            let pane = mgr
+                .get_session(sid)
+                .unwrap()
+                .windows
+                .get(&wid)
+                .unwrap()
+                .panes
+                .get(&pid)
+                .unwrap();
+            pane.shadow_parser.lock().unwrap().process(b"\x1b[?1049h");
+            pane.shadow_parser
+                .lock()
+                .unwrap()
+                .process(b"POST-SNAPSHOT-ALT-CONTENT");
+        }
+
+        refresh_live_agent_state(&mut document, &mgr);
+
+        let refreshed_pane_doc = &document.sessions[0].windows[0].panes[0];
+        assert!(
+            refreshed_pane_doc.alt_screen,
+            "AC-4: refresh must pull in a main->alt transition that happened after snapshot"
+        );
+        assert!(
+            refreshed_pane_doc
+                .alt_screen_dump
+                .windows(b"POST-SNAPSHOT-ALT-CONTENT".len())
+                .any(|w| w == b"POST-SNAPSHOT-ALT-CONTENT"),
+            "AC-4: the refreshed dump must reflect the post-snapshot alt-screen content"
+        );
+    }
+
+    /// AC-4 (continued): a pane that LEAVES the alternate screen AFTER the
+    /// original snapshot must have its document entry updated in the other
+    /// direction -- alt->main returns to flag false + empty dump.
+    #[test]
+    fn refresh_live_agent_state_pulls_in_alt_screen_left_after_snapshot() {
+        let (mgr, sid, wid, pid) = single_live_pane_manager();
+        {
+            let pane = mgr
+                .get_session(sid)
+                .unwrap()
+                .windows
+                .get(&wid)
+                .unwrap()
+                .panes
+                .get(&pid)
+                .unwrap();
+            pane.shadow_parser.lock().unwrap().process(b"\x1b[?1049h");
+            pane.shadow_parser
+                .lock()
+                .unwrap()
+                .process(b"PRE-SNAPSHOT-ALT-CONTENT");
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("mux-default.sock");
+        let listen_file = tempfile::NamedTempFile::new_in(dir.path()).expect("listen fd stand-in");
+        let listen_fd = listen_file.as_raw_fd();
+
+        let mut document = snapshot(&mgr, listen_fd, &socket_path).expect("snapshot must succeed");
+        {
+            let pane_doc = &document.sessions[0].windows[0].panes[0];
+            assert!(
+                pane_doc.alt_screen,
+                "the original snapshot must record the pre-transition alt-screen state"
+            );
+            assert!(!pane_doc.alt_screen_dump.is_empty());
+        }
+
+        // Simulate the pane leaving the alternate screen DURING
+        // prepare_upgrade's post-snapshot window -- WITHOUT re-snapshotting.
+        {
+            let pane = mgr
+                .get_session(sid)
+                .unwrap()
+                .windows
+                .get(&wid)
+                .unwrap()
+                .panes
+                .get(&pid)
+                .unwrap();
+            pane.shadow_parser.lock().unwrap().process(b"\x1b[?1049l");
+        }
+
+        refresh_live_agent_state(&mut document, &mgr);
+
+        let refreshed_pane_doc = &document.sessions[0].windows[0].panes[0];
+        assert!(
+            !refreshed_pane_doc.alt_screen,
+            "AC-4: refresh must pull in an alt->main transition that happened after snapshot"
+        );
+        assert!(
+            refreshed_pane_doc.alt_screen_dump.is_empty(),
+            "AC-4: a pane back on the main buffer must have its dump cleared"
+        );
+    }
+
     /// A pane that exits (in `mgr`) after the original snapshot must be left
     /// exactly as originally recorded -- refreshing exited-pane state is a
     /// separate, pre-existing concern this function does not attempt to fix
@@ -2044,6 +2423,8 @@ mod tests {
                         latch_armed: true,
                         latch_command_ended: true,
                         latch_generation: 7,
+                        alt_screen: true,
+                        alt_screen_dump: b"stale-alt-dump".to_vec(),
                     }],
                 }],
             }],
