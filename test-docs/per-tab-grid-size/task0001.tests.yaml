@@ -27,20 +27,24 @@ acceptance_tests:
     tests:
       - app::tests::switch_to_tab_resizes_incoming_tab_when_its_dims_differ_from_cell_size
       - app::tests::switch_to_tab_issues_no_resize_when_incoming_dims_already_match_cell_size
-    red_confirmed: true
+    red_confirmed: false
     red_reason: >-
+      The red state could not be confirmed for this criterion as a whole:
       switch_to_tab_resizes_incoming_tab_when_its_dims_differ_from_cell_size
       failed (assertion `left == right` failed: left: (80, 24), right: (100,
       40)) once AC-1's active-tab-only routing was in place but before the
       activation reconcile existed — the incoming tab stayed at its stale
-      dims across the switch. The "already matches" companion test could
-      not be made to fail first: with no reconcile call at all (the
-      pre-AC-1 baseline), the incoming tab's dims already equalled
-      cell_size because the old code resized every tab unconditionally, so
-      the assertion passed trivially before any of this task's
-      implementation existed. Recorded here and in `unconfirmed_reds`
-      below; the AC-2 criterion is nonetheless covered by its sibling test
-      above, which the reconcile logic makes pass for the right reason.
+      dims across the switch, so this half is a genuine confirmed red. The
+      "already matches" companion test could not be made to fail first:
+      with no reconcile call at all (the pre-AC-1 baseline), the incoming
+      tab's dims already equalled cell_size because the old code resized
+      every tab unconditionally, so the assertion passed trivially before
+      any of this task's implementation existed. Because only one of the
+      two tests ever went red, the entry is recorded as red_confirmed:
+      false; the sibling test above did confirm red and guards the shared
+      judgment criterion (the incoming tab is resized to match cell_size
+      on activation), while the "already matches" test is retained as a
+      preservation/non-regression guard.
   AC-3:
     tests:
       - app::tests::close_tab_active_index_fixup_reconciles_newly_active_tab_size
