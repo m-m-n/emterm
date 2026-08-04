@@ -1,0 +1,30 @@
+schema_version: 1
+feature: per-tab-grid-size
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: fb9b5f5
+last_input_digest: "sha256:adec22f62415e3556e2f83fa16eefba5707c2325161ce726922749dd4e0e9d3a"
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: "sha256:adec22f62415e3556e2f83fa16eefba5707c2325161ce726922749dd4e0e9d3a"
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+    digests: {}
+    truncated: false
+last_error: null
