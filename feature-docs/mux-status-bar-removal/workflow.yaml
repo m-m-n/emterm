@@ -81,8 +81,9 @@ tasks:
     domains: [api-contract]
     complexity: low
     requirements: [FR4, NFR2]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-status-bar-removal/task0002
+    merge_commit: 6487a13f5c6657c54c95a406c0129d615fdb2e20
 
 review:
   rounds_completed: 0
