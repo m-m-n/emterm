@@ -3624,6 +3624,13 @@ impl Tab {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        // FR6 / IMPLEMENTATION.md contract (c) (task0002): capture the
+        // pre-resize column count before any effect, so the
+        // self-invalidation check below (after the clamp) compares against
+        // the tab's ACTUAL prior width — not the caller's raw, possibly
+        // out-of-domain request.
+        let pre_resize_cols = self.core.lock().cols();
+
         // D3''''' (round-8 rework, review round-7 finding `1d1b6b6297e3b6a0`):
         // clamp to the SAME wire domain `MuxPane::new`/`MuxPane::resize`
         // apply on the daemon side, BEFORE resizing this tab's own core and
@@ -3639,6 +3646,19 @@ impl Tab {
             p.resize(cols, rows);
         }
         self.core.lock().resize(cols, rows);
+
+        // FR6 / IMPLEMENTATION.md contract (c), D3 (task0002): a resize
+        // that changed this tab's (post-clamp) column count invalidates
+        // trackers whose absolute-row bookkeeping assumed the OLD width — a
+        // reflow rewraps the logical↔physical line mapping (see
+        // `clear_reflow_invalidated_state`'s own doc comment). This tab
+        // clears its OWN reflow-invalidated state; correctness must not
+        // depend on which caller triggered the resize. A height-only
+        // resize, or a raw request that clamps back to the tab's current
+        // column count, leaves the trackers untouched.
+        if cols != pre_resize_cols {
+            self.clear_reflow_invalidated_state();
+        }
 
         // FR5 / UC03: a grid resize during a pending 2nd-pass scrollback
         // restore cancels the restore — the rebuilt scrollback would be at
@@ -6164,6 +6184,116 @@ mod tests {
             "the tab's INITIAL core must already be clamped to the wire \
              domain, matching what a later Tab::resize (or MuxPane::new) \
              would accept — not the caller's raw, out-of-domain request"
+        );
+    }
+
+    // ── FR6 / IMPLEMENTATION.md contract (c), D3 (task0002):
+    // Tab::resize self-invalidation ──────────────────────────
+
+    /// AC-1 (TS5, FR6): a resize that changes the tab's column count clears
+    /// its own reflow-invalidated trackers — the prompt-mark tracker and
+    /// fold regions, both tab-owned and reachable directly here (mirroring
+    /// the seeding pattern app.rs's tests use for the same trackers).
+    /// `clear_reflow_invalidated_state`'s own doc comment explains why: a
+    /// reflow rewraps the logical↔physical line mapping, so retained
+    /// absolute-row marks would point at the wrong line after the resize.
+    #[test]
+    fn resize_that_changes_columns_clears_the_tabs_own_reflow_trackers() {
+        let mut tab = test_tab();
+        tab.backfill_prompt_marks(
+            0,
+            vec![
+                pending_kind(b'A', 2, None),
+                pending_kind(b'C', 4, None),
+                pending_kind(b'D', 9, Some(0)),
+            ],
+        );
+        assert_eq!(
+            tab.prompts.find_prev_prompt(u32::MAX),
+            Some(2),
+            "prompt mark seeded before the resize"
+        );
+        assert!(
+            tab.folds.get_region_at_line(4).is_some(),
+            "fold region seeded before the resize"
+        );
+
+        tab.resize(100, 24); // cols 80 -> 100: a width change
+
+        assert_eq!(
+            tab.prompts.find_prev_prompt(u32::MAX),
+            None,
+            "a width-changing resize must clear the tab's own prompt marks"
+        );
+        assert!(
+            tab.folds.get_region_at_line(4).is_none(),
+            "a width-changing resize must clear the tab's own fold regions"
+        );
+    }
+
+    /// AC-2 (TS5, FR6): a height-only resize (column count unchanged) keeps
+    /// the tab's prompt marks and fold regions — only a WIDTH change
+    /// invalidates the tab-owned reflow trackers.
+    #[test]
+    fn resize_that_only_changes_rows_keeps_the_tabs_own_reflow_trackers() {
+        let mut tab = test_tab();
+        tab.backfill_prompt_marks(
+            0,
+            vec![
+                pending_kind(b'A', 2, None),
+                pending_kind(b'C', 4, None),
+                pending_kind(b'D', 9, Some(0)),
+            ],
+        );
+
+        tab.resize(80, 30); // same cols (80), rows 24 -> 30: height-only
+
+        assert_eq!(
+            tab.prompts.find_prev_prompt(u32::MAX),
+            Some(2),
+            "a height-only resize must NOT clear the tab's prompt marks"
+        );
+        assert!(
+            tab.folds.get_region_at_line(4).is_some(),
+            "a height-only resize must NOT clear the tab's fold regions"
+        );
+    }
+
+    /// AC-3 (TS5, FR5, FR6): a raw resize request whose column count clamps
+    /// back to the tab's CURRENT (post-clamp) column count is not a width
+    /// change — the tab-owned trackers are left untouched. Uses the
+    /// per-axis clamp floor (`clamp_resize_dims` clamps 0 up to 1) to build
+    /// a case where the raw request (`0`) differs from the tab's current
+    /// column count in absolute terms but clamps to the SAME value.
+    #[test]
+    fn resize_whose_raw_cols_clamp_back_to_the_current_cols_clears_nothing() {
+        let mut tab = test_tab();
+        tab.resize(1, 24); // drive the tab's own column count down to 1
+        tab.backfill_prompt_marks(
+            0,
+            vec![
+                pending_kind(b'A', 2, None),
+                pending_kind(b'C', 4, None),
+                pending_kind(b'D', 9, Some(0)),
+            ],
+        );
+
+        tab.resize(0, 24); // raw cols 0 clamps to 1 == current cols
+        {
+            let core = tab.core.lock();
+            assert_eq!(core.cols(), 1, "clamp floor sanity check");
+        }
+
+        assert_eq!(
+            tab.prompts.find_prev_prompt(u32::MAX),
+            Some(2),
+            "a raw request that clamps back to the current column count \
+             must NOT clear the tab's prompt marks"
+        );
+        assert!(
+            tab.folds.get_region_at_line(4).is_some(),
+            "a raw request that clamps back to the current column count \
+             must NOT clear the tab's fold regions"
         );
     }
 
