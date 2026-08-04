@@ -39,7 +39,13 @@ use crate::protocol::AgentState;
 /// merely omitting the new ones — the version gate in
 /// [`decode_handoff_document`] is what turns that into a clean rejection
 /// instead of silent corruption.
-pub const HANDOFF_SCHEMA_VERSION: u32 = 2;
+///
+/// Bumped to 3 (mux-hot-upgrade-alt-screen task0002, SPEC FR3/FR4):
+/// [`HandoffPane`] gained two new fields carrying the pane's
+/// alternate-screen state (flag + formatted-contents dump) across a
+/// hot-upgrade boundary, for the same positional-decode reason the
+/// version-2 bump documents above.
+pub const HANDOFF_SCHEMA_VERSION: u32 = 3;
 
 /// Inclusive range of [`HandoffDocument`] schema versions this build can
 /// restore.
@@ -98,6 +104,18 @@ pub struct HandoffPane {
     pub latch_command_ended: bool,
     /// See [`Self::latch_armed`].
     pub latch_generation: u64,
+    /// True iff this pane's shadow parser was on the alternate screen at
+    /// capture time (mux-hot-upgrade-alt-screen task0002, SPEC FR3/FR4).
+    /// A version-1 or version-2-originated document always decodes this as
+    /// `false` (NFR3: those schemas predate alt-screen tracking).
+    pub alt_screen: bool,
+    /// The shadow parser's formatted alternate-screen contents at capture
+    /// time, present iff [`Self::alt_screen`] is true AND the dump did not
+    /// exceed the D1 size cap (IMPLEMENTATION.md) — an over-cap capture
+    /// keeps the flag true but stores this empty instead. Empty for a
+    /// main-buffer pane, an exited pane, or a version-1/version-2-originated
+    /// document.
+    pub alt_screen_dump: Vec<u8>,
 }
 
 /// Version-1 shape of [`HandoffPane`] (pre-task0004): identical to the
@@ -124,9 +142,9 @@ struct HandoffPaneV1 {
     scrollback: Vec<u8>,
 }
 
-impl From<HandoffPaneV1> for HandoffPane {
+impl From<HandoffPaneV1> for HandoffPaneV2 {
     fn from(v1: HandoffPaneV1) -> Self {
-        HandoffPane {
+        HandoffPaneV2 {
             id: v1.id,
             cols: v1.cols,
             rows: v1.rows,
@@ -148,7 +166,7 @@ impl From<HandoffPaneV1> for HandoffPane {
     }
 }
 
-/// Version-1 shape of [`HandoffWindow`]: identical to the current struct,
+/// Version-1 shape of [`HandoffWindow`]: identical to [`HandoffWindowV2`],
 /// but its panes are [`HandoffPaneV1`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HandoffWindowV1 {
@@ -159,19 +177,19 @@ struct HandoffWindowV1 {
     panes: Vec<HandoffPaneV1>,
 }
 
-impl From<HandoffWindowV1> for HandoffWindow {
+impl From<HandoffWindowV1> for HandoffWindowV2 {
     fn from(v1: HandoffWindowV1) -> Self {
-        HandoffWindow {
+        HandoffWindowV2 {
             id: v1.id,
             name: v1.name,
             active_pane_id: v1.active_pane_id,
             next_pane_id: v1.next_pane_id,
-            panes: v1.panes.into_iter().map(HandoffPane::from).collect(),
+            panes: v1.panes.into_iter().map(HandoffPaneV2::from).collect(),
         }
     }
 }
 
-/// Version-1 shape of [`HandoffSession`]: identical to the current struct,
+/// Version-1 shape of [`HandoffSession`]: identical to [`HandoffSessionV2`],
 /// but its windows are [`HandoffWindowV1`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HandoffSessionV1 {
@@ -183,20 +201,20 @@ struct HandoffSessionV1 {
     windows: Vec<HandoffWindowV1>,
 }
 
-impl From<HandoffSessionV1> for HandoffSession {
+impl From<HandoffSessionV1> for HandoffSessionV2 {
     fn from(v1: HandoffSessionV1) -> Self {
-        HandoffSession {
+        HandoffSessionV2 {
             id: v1.id,
             name: v1.name,
             window_order: v1.window_order,
             active_window_id: v1.active_window_id,
             next_window_id: v1.next_window_id,
-            windows: v1.windows.into_iter().map(HandoffWindow::from).collect(),
+            windows: v1.windows.into_iter().map(HandoffWindowV2::from).collect(),
         }
     }
 }
 
-/// Version-1 shape of [`HandoffDocument`]: identical to the current struct,
+/// Version-1 shape of [`HandoffDocument`]: identical to [`HandoffDocumentV2`],
 /// but its sessions are [`HandoffSessionV1`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HandoffDocumentV1 {
@@ -208,15 +226,141 @@ struct HandoffDocumentV1 {
     sessions: Vec<HandoffSessionV1>,
 }
 
-impl From<HandoffDocumentV1> for HandoffDocument {
+impl From<HandoffDocumentV1> for HandoffDocumentV2 {
     fn from(v1: HandoffDocumentV1) -> Self {
-        HandoffDocument {
-            schema_version: HANDOFF_SCHEMA_VERSION,
+        HandoffDocumentV2 {
+            schema_version: 2,
             incarnation: v1.incarnation,
             listen_fd: v1.listen_fd,
             next_session_id: v1.next_session_id,
             next_pane_id: v1.next_pane_id,
-            sessions: v1.sessions.into_iter().map(HandoffSession::from).collect(),
+            sessions: v1.sessions.into_iter().map(HandoffSessionV2::from).collect(),
+        }
+    }
+}
+
+/// Version-2 shape of [`HandoffPane`] (pre-task0002, mux-hot-upgrade-alt-screen):
+/// identical to the current struct minus the two alt-screen fields.
+///
+/// Kept only so [`decode_handoff_document`] can read a schema-version-2
+/// document written by a pre-task0002 daemon during hot-upgrade and upgrade
+/// it into the current [`HandoffPane`] with the alt-screen fields defaulted
+/// to `false` / empty (no alt-screen state was ever recorded under the old
+/// schema).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffPaneV2 {
+    id: u32,
+    cols: u16,
+    rows: u16,
+    cwd: Option<String>,
+    title: Option<String>,
+    agent_state: Option<AgentState>,
+    agent_name: Option<String>,
+    agent_revision: u64,
+    exited: bool,
+    child_pid: Option<u32>,
+    master_fd: Option<i32>,
+    scrollback: Vec<u8>,
+    latch_armed: bool,
+    latch_command_ended: bool,
+    latch_generation: u64,
+}
+
+impl From<HandoffPaneV2> for HandoffPane {
+    fn from(v2: HandoffPaneV2) -> Self {
+        HandoffPane {
+            id: v2.id,
+            cols: v2.cols,
+            rows: v2.rows,
+            cwd: v2.cwd,
+            title: v2.title,
+            agent_state: v2.agent_state,
+            agent_name: v2.agent_name,
+            agent_revision: v2.agent_revision,
+            exited: v2.exited,
+            child_pid: v2.child_pid,
+            master_fd: v2.master_fd,
+            scrollback: v2.scrollback,
+            latch_armed: v2.latch_armed,
+            latch_command_ended: v2.latch_command_ended,
+            latch_generation: v2.latch_generation,
+            // A version-2 document predates alt-screen tracking (task0002):
+            // treat every pane as main-buffer with no dump.
+            alt_screen: false,
+            alt_screen_dump: Vec::new(),
+        }
+    }
+}
+
+/// Version-2 shape of [`HandoffWindow`]: identical to the current struct,
+/// but its panes are [`HandoffPaneV2`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffWindowV2 {
+    id: u32,
+    name: String,
+    active_pane_id: Option<u32>,
+    next_pane_id: u32,
+    panes: Vec<HandoffPaneV2>,
+}
+
+impl From<HandoffWindowV2> for HandoffWindow {
+    fn from(v2: HandoffWindowV2) -> Self {
+        HandoffWindow {
+            id: v2.id,
+            name: v2.name,
+            active_pane_id: v2.active_pane_id,
+            next_pane_id: v2.next_pane_id,
+            panes: v2.panes.into_iter().map(HandoffPane::from).collect(),
+        }
+    }
+}
+
+/// Version-2 shape of [`HandoffSession`]: identical to the current struct,
+/// but its windows are [`HandoffWindowV2`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffSessionV2 {
+    id: u32,
+    name: String,
+    window_order: Vec<u32>,
+    active_window_id: Option<u32>,
+    next_window_id: u32,
+    windows: Vec<HandoffWindowV2>,
+}
+
+impl From<HandoffSessionV2> for HandoffSession {
+    fn from(v2: HandoffSessionV2) -> Self {
+        HandoffSession {
+            id: v2.id,
+            name: v2.name,
+            window_order: v2.window_order,
+            active_window_id: v2.active_window_id,
+            next_window_id: v2.next_window_id,
+            windows: v2.windows.into_iter().map(HandoffWindow::from).collect(),
+        }
+    }
+}
+
+/// Version-2 shape of [`HandoffDocument`]: identical to the current struct,
+/// but its sessions are [`HandoffSessionV2`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffDocumentV2 {
+    schema_version: u32,
+    incarnation: String,
+    listen_fd: i32,
+    next_session_id: u32,
+    next_pane_id: u32,
+    sessions: Vec<HandoffSessionV2>,
+}
+
+impl From<HandoffDocumentV2> for HandoffDocument {
+    fn from(v2: HandoffDocumentV2) -> Self {
+        HandoffDocument {
+            schema_version: HANDOFF_SCHEMA_VERSION,
+            incarnation: v2.incarnation,
+            listen_fd: v2.listen_fd,
+            next_session_id: v2.next_session_id,
+            next_pane_id: v2.next_pane_id,
+            sessions: v2.sessions.into_iter().map(HandoffSession::from).collect(),
         }
     }
 }
@@ -326,6 +470,11 @@ pub fn encode_handoff_document(doc: &HandoffDocument) -> Vec<u8> {
 /// the complete document decoded; any failure at that point (truncated or
 /// corrupted bytes) is reported as [`HandoffDecodeError::Malformed`],
 /// distinguishable from a version mismatch.
+///
+/// Dispatch per version: version 1 decodes through the full chain
+/// (`HandoffDocumentV1` -> `HandoffDocumentV2` -> current); version 2
+/// decodes through the `HandoffDocumentV2` -> current conversion; version
+/// [`HANDOFF_SCHEMA_VERSION`] decodes directly.
 pub fn decode_handoff_document(bytes: &[u8]) -> Result<HandoffDocument, HandoffDecodeError> {
     let version: u32 = bincode::deserialize(bytes).map_err(|_| HandoffDecodeError::Malformed)?;
     if !SUPPORTED_HANDOFF_SCHEMA_VERSIONS.contains(&version) {
@@ -337,7 +486,13 @@ pub fn decode_handoff_document(bytes: &[u8]) -> Result<HandoffDocument, HandoffD
     if version == 1 {
         let doc_v1: HandoffDocumentV1 =
             bincode::deserialize(bytes).map_err(|_| HandoffDecodeError::Malformed)?;
-        return Ok(HandoffDocument::from(doc_v1));
+        let doc_v2: HandoffDocumentV2 = doc_v1.into();
+        return Ok(HandoffDocument::from(doc_v2));
+    }
+    if version == 2 {
+        let doc_v2: HandoffDocumentV2 =
+            bincode::deserialize(bytes).map_err(|_| HandoffDecodeError::Malformed)?;
+        return Ok(HandoffDocument::from(doc_v2));
     }
     bincode::deserialize(bytes).map_err(|_| HandoffDecodeError::Malformed)
 }
@@ -368,6 +523,13 @@ mod tests {
             latch_armed: true,
             latch_command_ended: true,
             latch_generation: 3,
+            // task0002 (mux-hot-upgrade-alt-screen): an alt-screen pane
+            // whose dump carries the same "arbitrary bytes" shape as
+            // scrollback above (embedded zero byte, non-UTF-8 sequence), so
+            // AC-1's round-trip actually exercises the byte-for-byte
+            // preservation the criterion names.
+            alt_screen: true,
+            alt_screen_dump: vec![0x1b, b'[', b'2', b'J', 0x00, 0xff, 0xfe, b'a', b'l', b't'],
         }
     }
 
@@ -472,6 +634,10 @@ mod tests {
             latch_armed: false,
             latch_command_ended: false,
             latch_generation: 0,
+            // AC-3: an exited pane has no live alternate-screen semantics
+            // to carry.
+            alt_screen: false,
+            alt_screen_dump: Vec::new(),
         };
         let doc = HandoffDocument {
             schema_version: HANDOFF_SCHEMA_VERSION,
@@ -600,6 +766,111 @@ mod tests {
         assert!(!pane.latch_armed);
         assert!(!pane.latch_command_ended);
         assert_eq!(pane.latch_generation, 0);
+        // AC-2: a version-1 document (which predates alt-screen tracking
+        // too) decodes with the same alt defaults as a version-2 document —
+        // flag false, dump empty — through the full V1 -> V2 -> current
+        // chain.
+        assert!(!pane.alt_screen);
+        assert!(pane.alt_screen_dump.is_empty());
+    }
+
+    /// AC-2: a version-2-shaped document (written by a pre-task0002 daemon,
+    /// before alt-screen tracking existed) decodes into the current
+    /// [`HandoffPane`] shape with the alt-screen flag false, the dump empty,
+    /// and every other field (including the version-2 latch fields)
+    /// preserved — mirroring the existing V1 test's hand-build-encode-decode
+    /// pattern (Test Notes).
+    #[test]
+    fn test_decode_handoff_document_upgrades_v2_document_with_no_alt_screen_state() {
+        let pane_v2 = HandoffPaneV2 {
+            id: 7,
+            cols: 100,
+            rows: 40,
+            cwd: Some("/home/user/project".to_string()),
+            title: Some("zsh".to_string()),
+            agent_state: Some(AgentState::Working),
+            agent_name: Some("claude".to_string()),
+            agent_revision: 5,
+            exited: false,
+            child_pid: Some(4242),
+            master_fd: Some(11),
+            scrollback: vec![0x1b, b'[', b'2', b'J', 0x00, 0xff, 0xfe, b'o', b'k'],
+            latch_armed: true,
+            latch_command_ended: true,
+            latch_generation: 3,
+        };
+        let doc_v2 = HandoffDocumentV2 {
+            schema_version: 2,
+            incarnation: "b2c3d4e5".to_string(),
+            listen_fd: 3,
+            next_session_id: 2,
+            next_pane_id: 8,
+            sessions: vec![HandoffSessionV2 {
+                id: 1,
+                name: "main".to_string(),
+                window_order: vec![1],
+                active_window_id: Some(1),
+                next_window_id: 2,
+                windows: vec![HandoffWindowV2 {
+                    id: 1,
+                    name: "shell".to_string(),
+                    active_pane_id: Some(7),
+                    next_pane_id: 8,
+                    panes: vec![pane_v2],
+                }],
+            }],
+        };
+        let encoded = bincode::serialize(&doc_v2).expect("v2 document serialization");
+
+        let decoded = decode_handoff_document(&encoded).expect("v2 document should decode");
+
+        assert_eq!(decoded.schema_version, HANDOFF_SCHEMA_VERSION);
+        assert_eq!(decoded.incarnation, "b2c3d4e5");
+        let pane = &decoded.sessions[0].windows[0].panes[0];
+        assert_eq!(pane.id, 7);
+        assert_eq!((pane.cols, pane.rows), (100, 40));
+        assert_eq!(pane.child_pid, Some(4242));
+        // Every other field is preserved verbatim from the V2 document.
+        assert!(pane.latch_armed);
+        assert!(pane.latch_command_ended);
+        assert_eq!(pane.latch_generation, 3);
+        assert_eq!(
+            pane.scrollback,
+            vec![0x1b, b'[', b'2', b'J', 0x00, 0xff, 0xfe, b'o', b'k']
+        );
+        // AC-2: alt-screen state defaults to flag false, dump empty — a V2
+        // document never recorded any.
+        assert!(!pane.alt_screen);
+        assert!(pane.alt_screen_dump.is_empty());
+    }
+
+    /// AC-1: `HANDOFF_SCHEMA_VERSION` is 3 and `SUPPORTED_HANDOFF_SCHEMA_VERSIONS`
+    /// advertises 1..=3.
+    #[test]
+    fn test_handoff_schema_version_is_3_with_supported_range_1_to_3() {
+        assert_eq!(HANDOFF_SCHEMA_VERSION, 3);
+        assert_eq!(SUPPORTED_HANDOFF_SCHEMA_VERSIONS, 1..=3);
+    }
+
+    /// AC-1 (continued): the round-trip in
+    /// `test_handoff_document_round_trips_with_full_tree` already proves the
+    /// alt flag and dump (including non-UTF-8 bytes and an embedded zero
+    /// byte, via `sample_pane`) survive encode -> decode byte-for-byte as
+    /// part of the full document equality check; this test isolates that
+    /// assertion on the alt-screen fields specifically.
+    #[test]
+    fn test_alt_screen_flag_and_dump_round_trip_byte_for_byte() {
+        let doc = sample_document();
+        let encoded = encode_handoff_document(&doc);
+        let decoded = decode_handoff_document(&encoded).expect("decode should succeed");
+        let pane = &decoded.sessions[0].windows[0].panes[0];
+        assert!(pane.alt_screen);
+        assert_eq!(
+            pane.alt_screen_dump,
+            vec![0x1b, b'[', b'2', b'J', 0x00, 0xff, 0xfe, b'a', b'l', b't'],
+            "the alt-screen dump must round-trip byte-for-byte, including \
+             non-UTF-8 bytes and an embedded zero byte"
+        );
     }
 
     /// Locks in the encoding assumption `decode_handoff_document` depends
