@@ -1,0 +1,19 @@
+feature: mux-status-bar-removal
+collected_at: "2026-08-04T10:28:00+09:00"
+session_ids: [ca9834cf-344c-4c00-aa5e-984e72c9d649]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - src-tauri/src/mux/apc.rs
+        - src-tauri/src/mux/ipc/codec.rs
+        - src-tauri/src/status_bar/view_model.rs
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - "Task0001 planned as a single 'atomic' Rust-wide removal task (high complexity, 15 predicted files) still needed 3 unpredicted files (mux/apc.rs, mux/ipc/codec.rs, status_bar/view_model.rs) once compile errors and AC-1's symbol search forced touching test/doc-comment call sites the plan didn't foresee. Files-prediction misses cluster around 'symbol removal ripples into every test/doc-comment referencing the old type', not just its direct callers."
+  - "Review round 1 (5 non-codex perspectives + codex cross-validation attempted on all 4 codex-supported perspectives) found 0 critical/high but 6 medium findings, half of them documentation/dead-code drift (doc/SPECIFICATION.md SSOT not updated, a helper left with 0 callers, an unused Cargo dependency, a stale TS test fixture) that a pure code-removal task's own acceptance criteria (AC-1 grep) did not catch because they don't match the four searched symbol names. A removal-feature checklist item — 'grep the removed type names AND scan doc/SPECIFICATION.md's own section for the removed feature AND check for now-unused dependencies/helpers' — would likely have caught these before review."
+  - "All 4 codex cross-validation dispatches (security/performance/architecture/spec) were skipped in this round due to codex-cli usage limit (resets 2026-08-08); the round proceeded on Claude-only perspectives per protocol (codex skip is a non-failure). No corrective action needed, just a visibility note for the human evaluator."
