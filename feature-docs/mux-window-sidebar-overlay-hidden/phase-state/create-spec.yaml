@@ -1,0 +1,31 @@
+schema_version: 1
+feature: mux-window-sidebar-overlay-hidden
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 68ea5fcfb43f12243643f5b8d00492922a7b215b
+last_input_digest: sha256:fb3939172fec7612b87db6ca3e1f96ea26a9a790b46aa7dfaf883f3ae8757694
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: sha256:fb3939172fec7612b87db6ca3e1f96ea26a9a790b46aa7dfaf883f3ae8757694
+    output_digest: null
+  - request_id: create-spec-run-0001-specwrite
+    status: completed
+    input_digest: sha256:fb3939172fec7612b87db6ca3e1f96ea26a9a790b46aa7dfaf883f3ae8757694
+    output_digest: null
+artifacts:
+  - path: feature-docs/mux-window-sidebar-overlay-hidden/REQUIREMENTS.md
+    sha256: null
+    produced_by: create-spec-run-0001-specwrite
+  - path: feature-docs/mux-window-sidebar-overlay-hidden/SPEC.md
+    sha256: null
+    produced_by: create-spec-run-0001-specwrite
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
