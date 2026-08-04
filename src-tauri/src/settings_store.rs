@@ -124,6 +124,8 @@ mod tests {
         assert_eq!(v["font_size"], json!(15.0));
         assert_eq!(v["profiles"][0]["name"], json!("p1"));
         assert_eq!(v["ssh_command_path"], json!("/usr/bin/ssh"));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -137,6 +139,8 @@ mod tests {
 
         let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(v["padding"], json!(8));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -152,6 +156,8 @@ mod tests {
         assert_eq!(v["padding"], json!(4));
         let bak = path.with_extension("json.bak");
         assert_eq!(std::fs::read(&bak).unwrap(), b"{ not json !!");
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -240,6 +246,8 @@ mod tests {
         assert!(!loaded.fold_enabled);
         assert!(!loaded.clipboard_read_osc52);
         assert_eq!(loaded.clipboard_max_size_osc52, 5 * 1024 * 1024);
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -280,6 +288,8 @@ mod tests {
 
             let loaded = Settings::load_from(&path);
             assert_eq!(loaded.shift_enter_behavior, expected);
+
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
         }
     }
 
