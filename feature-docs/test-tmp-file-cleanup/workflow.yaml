@@ -73,7 +73,7 @@ tasks:
     domains: [external-io]
     complexity: low
     requirements: [FR2, FR5, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/test-tmp-file-cleanup/task0002
   task0003:
