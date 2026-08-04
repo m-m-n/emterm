@@ -1,0 +1,200 @@
+task_id: task0001
+baseline_failures:
+  # All in tabs::tests: the off-thread replay worker family (fixed-duration
+  # timeout races against a background swap/scrollback-restore worker
+  # thread) plus welcome_without_windows_leaves_group_none. Confirmed
+  # unrelated to this task's code paths (mux status-bar removal never
+  # touches pending_switch / dispatch_offthread_replay / the Welcome
+  # handler's group-seed logic). A sibling task in this same repository
+  # (mux-daemon-binary-update-detect/task0001) independently documented
+  # the identical flaky family, including
+  # ts13_offthread_swap_installs_pending_scrollback_restore (which did not
+  # happen to fail in THIS task's one-shot Step 4a capture but reliably
+  # reappeared in every post-implementation run below) -- corroborating
+  # that the family predates this task and is captured under project
+  # commands' default (parallel) `cargo test --lib`, never touched by this
+  # task's edits.
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts12_resize_supersedes_and_redispatches_at_new_grid
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  # Every post-implementation run of the exact project_commands.test string
+  # (`cargo test --manifest-path src-tauri/Cargo.toml --lib`, default
+  # parallel threading) produced a DIFFERENT specific failure set (18, then
+  # 21 items across two consecutive runs with no code change in between --
+  # pure scheduling-timing variance), always drawn from the same
+  # off-thread-replay-worker / welcome_without_windows_leaves_group_none
+  # family. `--test-threads=1` (used only as a diagnostic to remove the
+  # race, NOT as the reported command) stabilized to an IDENTICAL 7-name
+  # set across 3 consecutive runs: ts10_resize_cancels_pending_restore_
+  # without_respawn, ts11_restore_worker_panic_returns_failed_and_clears_
+  # state, ts13_offthread_swap_installs_pending_scrollback_restore,
+  # ts7_offthread_swap_then_restored_scrollback_matches_reference,
+  # ts8_new_offthread_switch_supersedes_in_flight_restore,
+  # ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates,
+  # welcome_without_windows_leaves_group_none -- 6 of 7 are verbatim in
+  # baseline_failures above; the 7th (ts13) is the identical panic
+  # ("off-thread replay worker did not complete in time" at the same
+  # tabs.rs source line) in code this task never touches, and is
+  # independently documented as pre-existing flaky in a sibling task's
+  # tests.yaml (see baseline_failures comment). No test outside this
+  # family, and no test in any file this task modified or added, failed in
+  # any run. Listed empty per the subset rule: nothing this task caused is
+  # new.
+  []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Verified by repository-wide grep, not a unit test. Before this task:
+      `MuxStatusbarSettings`, `StatusUpdateMsg`, `mux_status_state`, and
+      `StatusBarEngine` had dozens of hits across crates/app_settings,
+      crates/mux_ipc, and src-tauri/src (confirmed by reading each site
+      before editing). After: `grep -rn` for all four returns zero hits
+      anywhere in the tree, and `src-tauri/src/mux/ipc/statusbar.rs` no
+      longer exists (`git rm`'d). The stricter IMPLEMENTATION.md
+      Conventions rule (StatusUpdate / RequestStatusUpdate / StatusUpdateMsg
+      confined to crates/mux_ipc/src/protocol.rs's reserved-opcode
+      documentation) is also satisfied -- every remaining mention of those
+      three names lives inside protocol.rs's own reservation narrative
+      (the MessageType enum comment, from_u8's note, and the tests that
+      pin the reservation); every mention outside protocol.rs (in tabs.rs,
+      connection.rs, apc.rs, settings.rs, app_settings/settings.rs,
+      view_model.rs) was reworded to describe the removed feature without
+      naming the retired identifiers.
+  AC-2:
+    tests:
+      - status_bar::runtime::tests::build_view_model_osc_row_reflects_dispatcher_state_only
+      - status_bar::runtime::tests::build_view_model_osc_row_is_stable_across_repeated_calls
+      - window_host::tests::status_bar_panel_height_unchanged_by_mux_attach_state
+      - window_host::tests::status_bar_panel_height_stays_zero_when_no_general_content_regardless_of_mux
+    red_confirmed: true
+    red_reason: >-
+      Compile-level red (Test Notes' explicitly endorsed form for this AC):
+      `build_view_model`'s signature was changed from 3 args
+      (settings, mux_session_name, mux_status) to 1 arg (settings) as part
+      of the same edit that removed the mux branch; mid-edit, before every
+      call site was updated, `cargo test --lib --no-run` failed with
+      "this method takes 1 argument but 3 arguments were supplied" against
+      the pre-existing tests still using the old 3-arg form -- empirically
+      observed, not inferred. The new tests above were written directly
+      against the reduced 1-arg signature and could not have compiled
+      before that signature change landed.
+  AC-3:
+    tests:
+      - mux::apc::tests::retired_status_update_opcode_apc_payload_is_ignored
+      - tabs::tests::retired_status_update_opcode_is_ignored_by_gui_receive_path
+      - mux::ipc::codec::tests::test_codec_retired_status_bar_opcodes_are_discarded_not_fatal
+      - protocol::tests::test_apc_from_apc_retired_status_bar_opcodes_are_non_fatal
+    red_confirmed: true
+    red_reason: >-
+      Red observed via the tests these replace, run as part of the Step 4a
+      baseline BEFORE any edits: mux_ipc's `test_status_update_msg_via_mux_
+      message` and `test_request_status_update_message_type` passed
+      (109/109 green), empirically proving opcode 0x16/0x17 decoded to
+      `Some(MessageType::StatusUpdate/RequestStatusUpdate)` before removal
+      -- the opposite of what the new tolerance tests assert. Likewise
+      tabs.rs/app.rs's `on_mux_message_status_update_caches_payload_on_tab`
+      passed in the Step 4a baseline (mutating `tab.mux_status_state`),
+      empirically proving a 0x16 frame reached and mutated tab state before
+      removal -- the opposite of the replacement test's "no tab-state
+      mutation" assertion. Per the task plan's own Test Notes ("AC-3's
+      tolerance tests fail before removal ... making them natural red-first
+      tests"), this before/after contrast is the intended red-green
+      evidence for a removal-shaped criterion, since the new tests use a
+      typed API (`MuxMessage`) that can no longer construct a message with
+      the retired opcode at all.
+  AC-4:
+    tests:
+      - settings::tests::test_mux_settings_tolerates_stale_statusbar_key
+      - settings::tests::loader_tolerates_stale_mux_statusbar_key
+    red_confirmed: false
+    red_reason: >-
+      Per the task plan's Test Notes: "AC-4's tolerance tests may pass
+      pre-removal too (the key currently deserializes into a real field);
+      they are regression anchors, not red-first tests -- keep them
+      anyway." Confirmed: both loaders already tolerated an unrecognized
+      JSON key before this task (serde's default unknown-field handling,
+      no `deny_unknown_fields` anywhere in either loader) and continue to
+      after the `mux.statusbar` field/struct removal -- the field's
+      removal is what makes the key "obsolete" rather than "consumed," not
+      a change in tolerance behavior itself.
+  AC-5:
+    tests:
+      - mux::ipc::pty_spawn::tests::test_detect_osc7_with_esc_st
+      - mux::ipc::pty_spawn::tests::test_detect_osc7_with_bel_st
+      - mux::ipc::pty_spawn::tests::test_detect_osc7_embedded_in_data
+      - mux::ipc::pty_spawn::tests::test_detect_osc7_no_pattern
+      - mux::ipc::pty_spawn::tests::test_detect_osc7_no_st
+      - mux::ipc::pty_spawn::tests::test_detect_osc7_url_encoded_path
+      - mux::ipc::pty_spawn::tests::test_detect_osc7_empty_hostname
+      - mux::ipc::pty_spawn::tests::test_url_decode_no_encoding
+      - mux::ipc::pty_spawn::tests::test_url_decode_space
+      - mux::ipc::pty_spawn::tests::test_url_decode_multiple
+      - mux::ipc::pty_spawn::tests::test_url_decode_multibyte_utf8
+      - "mux_hot_upgrade (integration, 9 tests, --test-threads=1)"
+    red_confirmed: true
+    red_reason: >-
+      Compile-level red for the relocation itself: `detect_osc7_cwd` /
+      `url_decode` and their unit tests did not exist in pty_spawn.rs
+      before this edit (confirmed by reading the file first) -- the
+      relocated tests could not have compiled there beforehand. The
+      underlying assertions/behavior were carried over byte-for-byte
+      (verbatim move, per IMPLEMENTATION.md D3) and passed on the first
+      run after the move with no logic changes needed, matching the
+      contract "signature, inputs and outputs unchanged." mux_hot_upgrade
+      is a regression check (Pane.cwd persistence across hot-upgrade) with
+      no new behavior to prove red-first; it was green in the Step 4a
+      baseline and stayed green (9/9) after the relocation, confirming no
+      regression from moving the OSC 7 detector out from under the deleted
+      engine.
+  AC-6:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Verified by diff, not a test: `git diff --stat` against the task
+      branch's base shows zero changes to
+      src-tauri/src/status_bar/osc_dispatcher.rs or src-tauri/src/callbacks.rs
+      (absent from the changed-files list entirely). The existing
+      OSC-777-dispatcher-sourced tests in ui/status_bar.rs
+      (osc_row_from_dispatcher_renders_without_mux_badge) and runtime.rs
+      (build_view_model_osc_row_reflects_dispatcher_state_only and
+      siblings) remain green in the same full-suite run used for AC-7,
+      confirming the general status bar's behavior is unchanged.
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Verified by build/test commands, not a single test: default `cargo
+      check` (gui feature), `--no-default-features` `cargo check`, and the
+      `--lib` suites for src-tauri (3055+ passing, only the pre-existing
+      tabs.rs flaky family failing -- see final_failures), crates/app_settings
+      (23/23 passing, was 28/28 before removing 5 obsolete
+      MuxStatusbarSettings/MuxStatusbarCommand tests and adding 1 stale-
+      tolerance test), and crates/mux_ipc (105/105 passing, was 109/109
+      before removing 5 StatusUpdateMsg-specific tests and adding 1 new
+      retired-opcode test) are all green. Before this task, several of
+      these suites failed to even compile once the removal was mid-flight
+      (observed directly during the coordinated edit); after, all are
+      green.
+notes: >-
+  detect_osc7_cwd/url_decode relocated to pty_spawn.rs as private (non-pub)
+  functions -- their only external caller (statusbar.rs) no longer exists,
+  so no other module needs qualified access, matching IMPLEMENTATION.md D3
+  ("no module-roster registration risk").

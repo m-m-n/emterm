@@ -212,8 +212,6 @@ pub struct MuxSettings {
     /// chords (`"Ctrl+D"`) are first-class — matching the WebView's
     /// `matchActionBinding`.
     pub keybinds: std::collections::HashMap<String, crate::mux::prefix::PrefixChord>,
-    /// Mux status-bar content (`mux.statusbar.*`).
-    pub statusbar: MuxStatusbarSettings,
 }
 
 impl Default for MuxSettings {
@@ -228,31 +226,8 @@ impl Default for MuxSettings {
             tab_always_expand: false,
             window_sidebar_overlay: true,
             keybinds,
-            statusbar: MuxStatusbarSettings::default(),
         }
     }
-}
-
-/// Mux status-bar content (`mux.statusbar.*`). Port of
-/// `crates/app_settings::MuxStatusbarSettings` (the subset rendered natively).
-///
-/// `commands` registers `{cmd:<name>}` template variables consumable
-/// from `mux.statusbar.left` / `right`. In the WebView build these run
-/// in the mux daemon; native-poc is in-process and shares the app-level
-/// [`CommandProvider`], so [`App::with_settings`] merges them into
-/// [`StatusBarSettings::custom_commands`] before the runtime starts.
-/// On a name collision the app side wins and the mux entry is dropped
-/// with a warn-log.
-///
-/// [`App::with_settings`]: crate::app::App::with_settings
-/// [`CommandProvider`]: crate::status_bar::providers::CommandProvider
-/// [`StatusBarSettings::custom_commands`]: crate::settings::StatusBarSettings::custom_commands
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct MuxStatusbarSettings {
-    pub enabled: bool,
-    pub left: String,
-    pub right: String,
-    pub commands: std::collections::HashMap<String, CustomCommand>,
 }
 
 /// Parse a `mux.keybinds` follow-up spec into a [`PrefixChord`]. Accepts
@@ -1360,6 +1335,12 @@ struct RawUserColorScheme {
     ansi_colors: Vec<String>,
 }
 
+/// `statusbar` (the retired `mux.statusbar.*` object, formerly
+/// deserialized into `RawMuxStatusbar`) is deliberately NOT a field here
+/// (mux-status-bar-removal task0001, FR4/FR8b): with no field to name it,
+/// serde's default unknown-field handling (no `deny_unknown_fields`
+/// anywhere in this loader) leaves a stale `settings.json` still carrying
+/// that key loading successfully, silently ignoring it.
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(default)]
 struct RawMux {
@@ -1367,18 +1348,6 @@ struct RawMux {
     tab_always_expand: Option<bool>,
     window_sidebar_overlay: Option<bool>,
     keybinds: Option<std::collections::HashMap<String, String>>,
-    statusbar: Option<RawMuxStatusbar>,
-}
-
-/// Deserialize side of `mux.statusbar.*`. Mirrors the subset of
-/// `crates/app_settings::MuxStatusbarSettings` the native build renders.
-#[derive(Debug, Default, serde::Deserialize)]
-#[serde(default)]
-struct RawMuxStatusbar {
-    enabled: Option<bool>,
-    left: Option<String>,
-    right: Option<String>,
-    commands: Option<std::collections::HashMap<String, RawCustomCommand>>,
 }
 
 /// Deserialize side of the nested `"keybinds"` block. Mirrors
@@ -1541,39 +1510,9 @@ impl RawSettings {
                     }
                 }
             }
-            if let Some(sb) = mux.statusbar {
-                if let Some(v) = sb.enabled {
-                    dst.mux.statusbar.enabled = v;
-                }
-                if let Some(v) = sb.left {
-                    dst.mux.statusbar.left = v;
-                }
-                if let Some(v) = sb.right {
-                    dst.mux.statusbar.right = v;
-                }
-                if let Some(v) = sb.commands {
-                    dst.mux.statusbar.commands = v
-                        .into_iter()
-                        .map(|(k, c)| {
-                            (
-                                k,
-                                CustomCommand {
-                                    executable: c.executable,
-                                    // SPEC mux-statusbar §FR1: `interval_ms`
-                                    // default is 5000 ms (different from the
-                                    // app-side `statusbar_custom_commands`
-                                    // default of 1000 ms). §FR3's "clamp to
-                                    // ≥ 1000 ms" is enforced downstream by
-                                    // `CommandProvider::MIN_INTERVAL`, which
-                                    // both the app and mux command pools
-                                    // share, so no extra clamp here.
-                                    interval_ms: c.interval_ms.unwrap_or(5000),
-                                },
-                            )
-                        })
-                        .collect();
-                }
-            }
+            // `mux.statusbar.*` (retired, mux-status-bar-removal task0001)
+            // is deliberately not merged here — see `RawMux`'s doc comment
+            // for the FR4/FR8b tolerance contract.
         }
 
         // keybinds (nested, snake_case). Blank / whitespace-only specs
@@ -2157,8 +2096,7 @@ mod tests {
         assert_eq!(s.mux_prefix_key, "Ctrl+A");
     }
 
-    // ── TS-4: mux settings loader (tab_always_expand / keybinds /
-    //          statusbar.*) ──────────────────────────────────────────────────
+    // ── TS-4: mux settings loader (tab_always_expand / keybinds) ─────────
 
     #[test]
     fn default_mux_settings_match_webview() {
@@ -2172,7 +2110,6 @@ mod tests {
         assert_eq!(s.mux.keybinds.get("prev-window"), Some(&chord("Ctrl+P")));
         assert_eq!(s.mux.keybinds.get("rename-window"), Some(&chord("Ctrl+R")));
         assert_eq!(s.mux.keybinds.get("move-window"), Some(&chord("Ctrl+T")));
-        assert!(!s.mux.statusbar.enabled);
     }
 
     #[test]
@@ -2284,21 +2221,22 @@ mod tests {
         assert!(!s.mux.keybinds.contains_key("paste"));
     }
 
+    /// FR4/FR8b (mux-status-bar-removal task0001, TS3): a `settings.json`
+    /// written by an older eMterm build may still contain the retired
+    /// `mux.statusbar` object (the removed mux status-bar settings
+    /// schema). Loading it must not fail -- `RawMux` no longer names the
+    /// key, so it is silently ignored, exactly like any other
+    /// unrecognized JSON field.
     #[test]
-    fn loader_mux_statusbar_fields() {
-        let s =
-            load_json(r#"{"mux": {"statusbar": {"enabled": true, "left": "L", "right": "R"}}}"#);
-        assert!(s.mux.statusbar.enabled);
-        assert_eq!(s.mux.statusbar.left, "L");
-        assert_eq!(s.mux.statusbar.right, "R");
-    }
-
-    #[test]
-    fn loader_mux_statusbar_commands_explicit_interval_kept() {
+    fn loader_tolerates_stale_mux_statusbar_key() {
         let s = load_json(
             r#"{
                 "mux": {
+                    "prefix": "Ctrl+A",
                     "statusbar": {
+                        "enabled": true,
+                        "left": "L",
+                        "right": "R",
                         "commands": {
                             "branch": {"executable": "/usr/bin/git-branch", "interval_ms": 7500}
                         }
@@ -2306,35 +2244,7 @@ mod tests {
                 }
             }"#,
         );
-        let cmd = s.mux.statusbar.commands.get("branch").unwrap();
-        assert_eq!(cmd.executable, "/usr/bin/git-branch");
-        assert_eq!(cmd.interval_ms, 7500);
-    }
-
-    #[test]
-    fn loader_mux_statusbar_commands_default_interval_when_omitted() {
-        // SPEC mux-statusbar §FR1: mux statusbar commands default to
-        // 5000 ms (separate from `statusbar_custom_commands` which
-        // defaults to 1000 ms).
-        let s = load_json(
-            r#"{
-                "mux": {
-                    "statusbar": {
-                        "commands": {
-                            "branch": {"executable": "/usr/bin/git-branch"}
-                        }
-                    }
-                }
-            }"#,
-        );
-        let cmd = s.mux.statusbar.commands.get("branch").unwrap();
-        assert_eq!(cmd.interval_ms, 5000);
-    }
-
-    #[test]
-    fn default_mux_statusbar_commands_is_empty() {
-        let s = Settings::new();
-        assert!(s.mux.statusbar.commands.is_empty());
+        assert_eq!(s.mux_prefix_key, "Ctrl+A");
     }
 
     // ── Notification settings ───────────────────────────────────────────

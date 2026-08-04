@@ -8,10 +8,8 @@
 //!    when its resolved content is empty.
 //! 2. **App Line 2** — second template row, auto-hidden when both
 //!    sides are empty (FR12).
-//! 3. **OSC row** — mux daemon's `StatusUpdateMsg` if the active tab
-//!    is attached, otherwise the OSC 777;statusbar dispatcher's
-//!    layer state. Auto-hidden when empty unless `show` was
-//!    requested.
+//! 3. **OSC row** — the OSC 777;statusbar dispatcher's layer state.
+//!    Auto-hidden when empty unless `show` was requested.
 //!
 //! The widget is pure over [`StatusBarViewModel`]; the render
 //! pipeline projects the active tab + runtime state into the view
@@ -866,28 +864,11 @@ mod tests {
         );
     }
 
-    // TS-25: OSC row populated from mux state renders the daemon's
-    // left/right text without any session badge.
+    // OSC row hidden when there is no content (mux-status-bar-removal
+    // task0001: formerly "TS-26 ... and no mux session" — the OSC row
+    // has no mux-conditional path left to test).
     #[test]
-    fn mux_session_renders_osc_text_without_badge() {
-        let mut vm = StatusBarViewModel::default();
-        vm.enabled = true;
-        vm.app_line1.left = vec![make_text_run("L1")];
-        vm.osc = OscRow {
-            left: "1:shell 2:nvim*".to_string(),
-            right: "host01".to_string(),
-            forced_visible: Some(true),
-        };
-        let shapes = run_one_frame(&vm);
-        let text = collected_text(&shapes);
-        assert!(!text.contains("[mux:"), "session badge painted: {text:?}");
-        assert!(text.contains("1:shell"), "window list missing: {text:?}");
-        assert!(text.contains("host01"), "right segment missing: {text:?}");
-    }
-
-    // TS-26: OSC row hidden when no content and no mux session.
-    #[test]
-    fn osc_row_hidden_when_empty_and_no_mux() {
+    fn osc_row_hidden_when_empty() {
         let mut vm = StatusBarViewModel::default();
         vm.enabled = true;
         vm.app_line1.left = vec![make_text_run("only_app_row")];
@@ -898,8 +879,10 @@ mod tests {
         assert!(!text.contains("[mux:"));
     }
 
-    // OSC row sourced from the dispatcher (no mux) shows even
-    // without a session badge.
+    // OSC row sourced from the dispatcher shows even without a session
+    // badge (mux-status-bar-removal task0001: formerly "TS-25 ...
+    // populated from mux state" — the OSC row is now always
+    // dispatcher-sourced, so this is the only remaining scenario).
     #[test]
     fn osc_row_from_dispatcher_renders_without_mux_badge() {
         let mut vm = StatusBarViewModel::default();

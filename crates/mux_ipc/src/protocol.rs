@@ -445,8 +445,12 @@ pub enum MessageType {
     SwitchWindow = 0x13,
     RenameWindow = 0x14,
     DestroyWindow = 0x15,
-    StatusUpdate = 0x16,
-    RequestStatusUpdate = 0x17,
+    // 0x16 / 0x17 were `StatusUpdate` / `RequestStatusUpdate` (the mux
+    // status-bar daemon→GUI push and its GUI→daemon request), removed by
+    // mux-status-bar-removal task0001. RESERVED — never reassign these
+    // values, so a stale peer still emitting either opcode decodes as a
+    // benign unknown-type frame (discarded, at most a warn log) rather
+    // than colliding with a new message.
     Shutdown = 0x18,
     RequestPaneSnapshot = 0x19,
     MoveWindow = 0x1A,
@@ -510,8 +514,7 @@ impl MessageType {
             0x13 => Some(Self::SwitchWindow),
             0x14 => Some(Self::RenameWindow),
             0x15 => Some(Self::DestroyWindow),
-            0x16 => Some(Self::StatusUpdate),
-            0x17 => Some(Self::RequestStatusUpdate),
+            // 0x16 / 0x17: reserved, see the `MessageType` enum comment.
             0x18 => Some(Self::Shutdown),
             0x19 => Some(Self::RequestPaneSnapshot),
             0x1A => Some(Self::MoveWindow),
@@ -632,13 +635,6 @@ pub struct ErrorMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachMsg {
     pub session_id: u32,
-}
-
-/// Status update pushed from daemon to GUI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StatusUpdateMsg {
-    pub left: String,
-    pub right: String,
 }
 
 /// Rename window request.
@@ -1046,8 +1042,11 @@ mod tests {
     #[test]
     fn test_message_type_round_trip() {
         for i in 0x01..=0x1Cu8 {
-            if i == 0x11 {
-                // 0x11 (SplitPane) was removed -- must return None
+            if i == 0x11 || i == 0x16 || i == 0x17 {
+                // 0x11 (SplitPane) was removed; 0x16/0x17 (StatusUpdate /
+                // RequestStatusUpdate) were removed by
+                // mux-status-bar-removal task0001 -- all three must
+                // return None (reserved, never reassigned).
                 continue;
             }
             let mt = MessageType::from_u8(i).unwrap();
@@ -1055,6 +1054,8 @@ mod tests {
         }
         assert!(MessageType::from_u8(0x00).is_none());
         assert!(MessageType::from_u8(0x11).is_none());
+        assert!(MessageType::from_u8(0x16).is_none());
+        assert!(MessageType::from_u8(0x17).is_none());
         assert_eq!(MessageType::from_u8(0x1B), Some(MessageType::SetVisibility));
         assert_eq!(MessageType::from_u8(0x1C), Some(MessageType::Notify));
         // 0x1D..=0x24 (previously unused) now hold the task0002 agent-status
@@ -1181,72 +1182,12 @@ mod tests {
     }
 
     #[test]
-    fn test_request_status_update_message_type() {
-        assert_eq!(
-            MessageType::from_u8(0x17),
-            Some(MessageType::RequestStatusUpdate)
-        );
-        assert_eq!(MessageType::RequestStatusUpdate as u8, 0x17);
-    }
-
-    #[test]
     fn test_request_pane_snapshot_message_type() {
         assert_eq!(
             MessageType::from_u8(0x19),
             Some(MessageType::RequestPaneSnapshot)
         );
         assert_eq!(MessageType::RequestPaneSnapshot as u8, 0x19);
-    }
-
-    #[test]
-    fn test_status_update_msg_round_trip() {
-        let msg = StatusUpdateMsg {
-            left: "hello left".to_string(),
-            right: "hello right".to_string(),
-        };
-        let bytes = bincode::serialize(&msg).unwrap();
-        let decoded: StatusUpdateMsg = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.left, "hello left");
-        assert_eq!(decoded.right, "hello right");
-    }
-
-    #[test]
-    fn test_status_update_msg_empty_strings() {
-        let msg = StatusUpdateMsg {
-            left: String::new(),
-            right: String::new(),
-        };
-        let bytes = bincode::serialize(&msg).unwrap();
-        let decoded: StatusUpdateMsg = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.left, "");
-        assert_eq!(decoded.right, "");
-    }
-
-    #[test]
-    fn test_status_update_msg_unicode() {
-        let msg = StatusUpdateMsg {
-            left: "ステータス".to_string(),
-            right: "右側 🎉".to_string(),
-        };
-        let bytes = bincode::serialize(&msg).unwrap();
-        let decoded: StatusUpdateMsg = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.left, "ステータス");
-        assert_eq!(decoded.right, "右側 🎉");
-    }
-
-    #[test]
-    fn test_status_update_msg_via_mux_message() {
-        let status = StatusUpdateMsg {
-            left: "left content".to_string(),
-            right: "right content".to_string(),
-        };
-        let msg = MuxMessage::control(MessageType::StatusUpdate, 0, &status);
-        let body = msg.to_frame_body();
-        let parsed = MuxMessage::from_frame_body(&body).unwrap();
-        assert_eq!(parsed.msg_type, MessageType::StatusUpdate);
-        let decoded: StatusUpdateMsg = parsed.decode_payload().unwrap();
-        assert_eq!(decoded.left, "left content");
-        assert_eq!(decoded.right, "right content");
     }
 
     #[test]
@@ -1432,8 +1373,10 @@ mod tests {
     #[test]
     fn test_apc_round_trip_all_message_types() {
         for i in 0x01..=0x1Cu8 {
-            if i == 0x11 {
-                // 0x11 (SplitPane) was removed
+            if i == 0x11 || i == 0x16 || i == 0x17 {
+                // 0x11 (SplitPane) was removed; 0x16/0x17 (StatusUpdate /
+                // RequestStatusUpdate) were removed by
+                // mux-status-bar-removal task0001.
                 continue;
             }
             let mt = MessageType::from_u8(i).unwrap();
@@ -1497,6 +1440,24 @@ mod tests {
         // emterm-mux; with empty base64 => empty bytes => invalid frame body
         let err = MuxMessage::from_apc("emterm-mux;").unwrap_err();
         assert_eq!(err, ApcDecodeError::InvalidFrameBody);
+    }
+
+    /// AC-3 (mux-status-bar-removal task0001): a raw frame carrying either
+    /// retired opcode (0x16 / 0x17 -- former `StatusUpdate` /
+    /// `RequestStatusUpdate`, reserved-not-reused) decodes as a benign
+    /// `InvalidFrameBody` error, the same non-fatal outcome as any other
+    /// unrecognized message type -- never a panic, and never naming the
+    /// retired types, so this test stays valid regardless of whether the
+    /// types still exist anywhere in the tree.
+    #[test]
+    fn test_apc_from_apc_retired_status_bar_opcodes_are_non_fatal() {
+        use base64::Engine;
+        for retired_opcode in [0x16u8, 0x17u8] {
+            let encoded = BASE64.encode([retired_opcode, 0, 0, 0, 0]);
+            let input = format!("emterm-mux;{}", encoded);
+            let err = MuxMessage::from_apc(&input).unwrap_err();
+            assert_eq!(err, ApcDecodeError::InvalidFrameBody);
+        }
     }
 
     // ---- OSC encode/decode tests ----
@@ -1759,12 +1720,14 @@ mod tests {
         // The bridge's StdinApcParser strips the EMUX; prefix and \r
         // terminator, then prepends APC_PREFIX before calling from_apc.
         // Mirror that shape here so a wire-format drift between encoder and
-        // parser fails this test.
-        let payload = StatusUpdateMsg {
-            left: "left 🦀".to_string(),
-            right: "right ✨".to_string(),
+        // parser fails this test. Uses `NotifyMsg` (a string-payload control
+        // message, like the former `StatusUpdateMsg` this test used before
+        // mux-status-bar-removal task0001) purely as a payload shape --
+        // nothing about this test is specific to notifications.
+        let payload = NotifyMsg {
+            message: "left 🦀 right ✨".to_string(),
         };
-        let msg = MuxMessage::control(MessageType::StatusUpdate, 11, &payload);
+        let msg = MuxMessage::control(MessageType::Notify, 11, &payload);
 
         let pt = msg.to_plaintext();
         let body = pt
@@ -1774,11 +1737,10 @@ mod tests {
         let with_apc_prefix = format!("{}{}", APC_PREFIX, body);
         let decoded = MuxMessage::from_apc(&with_apc_prefix).expect("decoded");
 
-        assert_eq!(decoded.msg_type, MessageType::StatusUpdate);
+        assert_eq!(decoded.msg_type, MessageType::Notify);
         assert_eq!(decoded.pane_id, 11);
-        let back: StatusUpdateMsg = decoded.decode_payload().unwrap();
-        assert_eq!(back.left, "left 🦀");
-        assert_eq!(back.right, "right ✨");
+        let back: NotifyMsg = decoded.decode_payload().unwrap();
+        assert_eq!(back.message, "left 🦀 right ✨");
     }
 
     #[test]
@@ -2193,11 +2155,12 @@ mod tests {
 
     /// AC-3: neither new discriminant collides with any existing value the
     /// enumeration already maps, nor with the retired `0x11` (removed
-    /// `SplitPane`).
+    /// `SplitPane`) or `0x16`/`0x17` (removed `StatusUpdate` /
+    /// `RequestStatusUpdate`, mux-status-bar-removal task0001).
     #[test]
     fn test_upgrade_message_type_bytes_do_not_collide_with_existing_or_retired() {
         for i in 0x01u8..=0x24u8 {
-            if i == 0x11 {
+            if i == 0x11 || i == 0x16 || i == 0x17 {
                 assert!(MessageType::from_u8(i).is_none());
                 continue;
             }
