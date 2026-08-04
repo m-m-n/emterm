@@ -40,7 +40,8 @@ workflow:
     status: completed
     completed_at_commit: 46b0c6987d09f1be53fa80d0441b4e77c9df6fec
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 55026eb002ee1cede0d05c5ed699dcd7ebfffd0e
     base_commit: 6464344ea335f9b1e3329b3af75c70e3904f9e96
   - id: review
     status: pending
@@ -61,7 +62,7 @@ tasks:
     domains: [external-io, ui]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/per-tab-grid-size/task0001
   task0002:
