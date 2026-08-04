@@ -43,7 +43,37 @@ workflow:
     status: completed
     completed_at_commit: fe0af50c9ed5a85b8b308fafc93885f461a6908c
   - id: verify
-    status: in_progress
+    status: completed
+    result: pass
+    failed_items: []
+    notes: |
+      build (default + --no-default-features): pass.
+      TS bundle build (viewer + settings): pass.
+      unit tests --lib (parallel, default threads): 3034/3055 pass, 21
+      failed; re-run --test-threads=1: 3048/3055 pass, 7 failed, all in
+      tabs::tests off-thread-swap-replay-worker family (ts7/ts8/ts9/ts10/
+      ts11/ts13, welcome_without_windows_leaves_group_none) — identical
+      failing set to the one recorded in the mux-window-sidebar-overlay-
+      hidden feature's own verify notes (pre-existing, unrelated; this
+      feature never touches tabs.rs's off-thread replay worker logic, only
+      its mux_status_state field and StatusUpdate opcode handling). The
+      remaining 14 parallel-only failures (incl. tmux_sockets::tests::
+      enumerate_orders_by_socket_then_session_and_skips_blank_lines, a file
+      this feature never touches) did not reproduce under
+      --test-threads=1, confirming parallel-execution flakiness rather
+      than a regression.
+      integration test mux_hot_upgrade --test-threads=1: 9/9 pass (TS5).
+      bun test: 311/311 pass (TS6). bun run typecheck: pass.
+      AC-1 symbol hygiene (MuxStatusbarSettings/StatusUpdateMsg/
+      mux_status_state/StatusBarEngine): 0 hits outside one historical
+      comment in crates/mux_ipc/src/protocol.rs:1724 ("the former
+      `StatusUpdateMsg`"), which the AC's own exception permits.
+      TS7 (manual, mux/tmux/plain 3-tab XTWINOPS-leak scenario): not run
+      in this automated session — requires the user to reproduce manually.
+      Review round 1 found 0 critical/high and 6 medium residual findings
+      (doc/SPECIFICATION.md SSOT drift, a dead-code helper, an unused
+      Cargo dependency, a stale TS test fixture) — recorded unresolved in
+      reviews/round1.yaml for a follow-up pass; none block this gate.
   - id: retrospect
     status: pending
 
