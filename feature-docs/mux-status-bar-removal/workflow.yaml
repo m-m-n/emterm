@@ -69,7 +69,8 @@ tasks:
     domains: [api-contract, concurrency, data-persistence, input-handling, ui]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR2, NFR3]
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-status-bar-removal/task0001
   task0002:
     title: "Remove mux statusbar settings from the TypeScript mirror"
     plan: tasks/task0002.md
@@ -80,7 +81,8 @@ tasks:
     domains: [api-contract]
     complexity: low
     requirements: [FR4, NFR2]
-    status: pending
+    status: in_progress
+    branch: em-workflow/mux-status-bar-removal/task0002
 
 review:
   rounds_completed: 0
