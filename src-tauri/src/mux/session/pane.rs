@@ -1505,6 +1505,37 @@ const PRODUCER_SEGMENT_CELL_BUDGET: u32 = {
     capped as u32
 };
 
+/// Control sequence that switches a `vt100` shadow parser onto the
+/// alternate screen (DECSET 1049), fed ahead of a restored alt-screen
+/// dump by [`MuxPane::from_restored`] (mux-hot-upgrade-alt-screen
+/// task0002, SPEC FR6).
+const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
+
+/// Enforce the D1 alt-screen dump size cap (IMPLEMENTATION.md,
+/// mux-hot-upgrade-alt-screen): a `dump` whose length exceeds
+/// `mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD` (16 MiB minus the frame
+/// header — the largest a dump could ever be delivered to a client through
+/// the reattach snapshot anyway) is replaced with an empty one; a dump at
+/// or under the cap is returned untouched. `pane_id` is only used for the
+/// warn-level log line the D1 policy requires (AC-7) — this function does
+/// not touch the pane itself, which is what keeps the cap DECISION (as
+/// opposed to the shadow-parser read that produces `dump`) unit-testable
+/// against a synthetic byte vector, without allocating a real 16 MiB
+/// screen (task plan Test Notes AC-7).
+fn cap_alt_screen_dump(pane_id: PaneId, dump: Vec<u8>) -> Vec<u8> {
+    if dump.len() <= mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD {
+        return dump;
+    }
+    log::warn!(
+        "upgrade snapshot: pane {} alt-screen dump ({} bytes) exceeds the D1 cap \
+         ({} bytes); storing an empty dump with the alt-screen flag preserved true",
+        pane_id,
+        dump.len(),
+        mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD,
+    );
+    Vec::new()
+}
+
 impl MuxPane {
     /// Create a new pane (PTY spawn handled by caller).
     ///
@@ -1955,6 +1986,49 @@ impl MuxPane {
         }
     }
 
+    /// Capture this pane's alternate-screen state for the hot-upgrade
+    /// handoff document (mux-hot-upgrade-alt-screen task0002, SPEC FR5/FR7/
+    /// FR8): `(alt_screen, dump)`, where `dump` is the shadow parser's
+    /// formatted alternate-screen contents when `alt_screen` is true, empty
+    /// otherwise.
+    ///
+    /// Implements the SAME main/alt split `build_snapshot_bytes` already
+    /// uses (`crate::mux::snapshot_bytes`): under the shadow-parser lock,
+    /// read whether the parser is on the alternate screen, and only take
+    /// the (expensive) `contents_formatted()` dump when it is. This is the
+    /// ONE helper both `snapshot_pane` (initial capture) and
+    /// `refresh_live_agent_state` (task0006 re-capture) call, so the split
+    /// logic never forks between the two call sites.
+    ///
+    /// The D1 size cap (IMPLEMENTATION.md) is enforced here: a dump whose
+    /// length exceeds `mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD` is
+    /// replaced with an empty one — the flag stays true (restore still
+    /// enters the alternate screen, just blank — IMPLEMENTATION.md D1) — and
+    /// a warn-level log line names the pane id and the oversize length
+    /// (AC-7).
+    ///
+    /// Callers are responsible for the "exited pane contributes flag false"
+    /// rule (task plan Design "Capture"): this method reports the shadow
+    /// parser's CURRENT state regardless of `self.exited`, since an exited
+    /// pane's parser reflects whatever it last observed, which is not the
+    /// contract callers want for an exited pane's document entry.
+    pub fn capture_alt_state(&self) -> (bool, Vec<u8>) {
+        let (alt_screen, dump) = {
+            let parser = lock_shadow_parser(&self.shadow_parser);
+            let alt = parser.screen().alternate_screen();
+            let dump = if alt {
+                parser.screen().contents_formatted()
+            } else {
+                Vec::new()
+            };
+            (alt, dump)
+        };
+        if !alt_screen {
+            return (false, Vec::new());
+        }
+        (true, cap_alt_screen_dump(self.id, dump))
+    }
+
     /// Construct a live pane around an adopted master, for restore from a
     /// handoff document (task0003 AC-1/AC-3/AC-4/AC-5). Builds on
     /// [`Self::new_with_process_id`] / [`Self::new`] for every field their
@@ -1966,6 +2040,18 @@ impl MuxPane {
     /// (IMPLEMENTATION.md D8) rather than expecting serialised parser
     /// state — mirroring the panic-recovery convention `pty_reader_loop`
     /// already uses for live output.
+    ///
+    /// `alt_screen` / `alt_screen_dump` (mux-hot-upgrade-alt-screen
+    /// task0002, SPEC FR6): after the scrollback replay above, when
+    /// `alt_screen` is true, the alternate-screen-enter control sequence
+    /// (`ESC [?1049h`) followed by `alt_screen_dump` is fed into the SAME
+    /// shadow parser under the SAME panic guard as the scrollback replay —
+    /// so a formerly-alt-screen pane's parser reports the alternate screen
+    /// as active again, with the dump's content on it and the replayed
+    /// scrollback beneath. `alt_screen == false` feeds nothing extra:
+    /// byte-identical to the pre-task0002 behavior. `alt_screen == true`
+    /// with an empty `alt_screen_dump` (the D1 overflow shape) still enters
+    /// the alternate screen, just blank.
     #[cfg(unix)]
     #[allow(clippy::too_many_arguments)]
     pub fn from_restored(
@@ -1980,6 +2066,8 @@ impl MuxPane {
         title: Option<String>,
         agent_status: AgentStatus,
         restored_child_pid: Option<u32>,
+        alt_screen: bool,
+        alt_screen_dump: Vec<u8>,
     ) -> Self {
         let pane = match restored_child_pid {
             Some(pid) => {
@@ -2007,6 +2095,26 @@ impl MuxPane {
                      restored scrollback; parser reset",
                     id,
                     replay_bytes.len()
+                );
+            }
+        }
+
+        if alt_screen {
+            let mut parser = lock_shadow_parser(&pane.shadow_parser);
+            let (parser_rows, parser_cols) = parser.screen().size();
+            let mut alt_bytes = Vec::with_capacity(ALT_SCREEN_ENTER.len() + alt_screen_dump.len());
+            alt_bytes.extend_from_slice(ALT_SCREEN_ENTER);
+            alt_bytes.extend_from_slice(&alt_screen_dump);
+            let processed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                parser.process(&alt_bytes);
+            }));
+            if processed.is_err() {
+                *parser = new_shadow_parser(parser_rows, parser_cols);
+                log::error!(
+                    "pane {}: shadow parser panicked while replaying {} bytes of \
+                     restored alt-screen state; parser reset",
+                    id,
+                    alt_bytes.len()
                 );
             }
         }
@@ -4181,6 +4289,8 @@ mod tests {
             Some("zsh".to_string()),
             agent_status,
             Some(4242),
+            false,
+            Vec::new(),
         );
 
         assert_eq!(pane.id, 9);
@@ -4205,6 +4315,197 @@ mod tests {
         assert_eq!(
             pane.scrollback.lock().unwrap().read_all(),
             b"restored scrollback bytes"
+        );
+        // AC-6: flag false must behave byte-identically to today — no
+        // extra alt-screen-enter sequence is fed, so the parser must never
+        // report the alternate screen as active.
+        assert!(
+            !pane.shadow_parser.lock().unwrap().screen().alternate_screen(),
+            "AC-6: from_restored with alt_screen=false must not activate the alternate screen"
+        );
+    }
+
+    /// AC-5: `from_restored` with `alt_screen=true` feeds the
+    /// alternate-screen-enter sequence plus the dump into the shadow parser
+    /// AFTER the scrollback replay, so the parser reports the alternate
+    /// screen active with the dump's content visible, while the replayed
+    /// scrollback survives underneath on the main buffer (revealed by
+    /// leaving the alt screen).
+    #[cfg(unix)]
+    #[test]
+    fn from_restored_with_alt_screen_true_replays_dump_with_scrollback_beneath() {
+        let pair = open_test_pty_pair();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+        let mut scrollback = ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY);
+        scrollback.write(b"pre-alt scrollback line");
+
+        let pane = MuxPane::from_restored(
+            3,
+            80,
+            24,
+            target,
+            writer,
+            pair.master,
+            scrollback,
+            None,
+            None,
+            AgentStatus::default(),
+            None,
+            true,
+            b"ALT-DUMP-CONTENT".to_vec(),
+        );
+
+        {
+            let parser = pane.shadow_parser.lock().unwrap();
+            assert!(
+                parser.screen().alternate_screen(),
+                "AC-5: restore with alt_screen=true must report the alternate screen active"
+            );
+            let content = parser.screen().contents_formatted();
+            assert!(
+                content
+                    .windows(b"ALT-DUMP-CONTENT".len())
+                    .any(|w| w == b"ALT-DUMP-CONTENT"),
+                "AC-5: the dump's content must be visible on the alt screen"
+            );
+        }
+
+        // Leaving the alt screen (as a live reattach eventually would, or a
+        // program exiting its TUI) must reveal the scrollback-replayed main
+        // buffer beneath it, proving the two replays targeted separate
+        // buffers exactly like a live pane's real ESC[?1049h/l pair would.
+        pane.shadow_parser.lock().unwrap().process(b"\x1b[?1049l");
+        let main_screen = pane.shadow_parser.lock().unwrap();
+        assert!(!main_screen.screen().alternate_screen());
+        let main_content = main_screen.screen().contents_formatted();
+        assert!(
+            main_content
+                .windows(b"pre-alt scrollback line".len())
+                .any(|w| w == b"pre-alt scrollback line"),
+            "AC-5: the replayed scrollback must still be present on the main screen \
+             beneath the alt overlay"
+        );
+    }
+
+    /// AC-6 (continued): `alt_screen=true` with an EMPTY dump (the D1
+    /// overflow shape) must still activate the alternate screen — just with
+    /// blank contents, since only the dump content degrades, never the
+    /// mode flag.
+    #[cfg(unix)]
+    #[test]
+    fn from_restored_with_alt_screen_true_and_empty_dump_yields_blank_active_alt_screen() {
+        let pair = open_test_pty_pair();
+        let writer = pair.master.take_writer().unwrap();
+        let target = make_output_target();
+
+        let pane = MuxPane::from_restored(
+            4,
+            80,
+            24,
+            target,
+            writer,
+            pair.master,
+            ScrollbackRingBuffer::new(DEFAULT_SCROLLBACK_CAPACITY),
+            None,
+            None,
+            AgentStatus::default(),
+            None,
+            true,
+            Vec::new(),
+        );
+
+        let parser = pane.shadow_parser.lock().unwrap();
+        assert!(
+            parser.screen().alternate_screen(),
+            "AC-6: alt_screen=true with an empty dump must still activate the alternate screen"
+        );
+        assert!(
+            parser.screen().contents().trim().is_empty(),
+            "AC-6: an empty dump must yield a blank alternate screen"
+        );
+    }
+
+    /// AC-3: `capture_alt_state` on a main-buffer pane (shadow parser never
+    /// entered the alternate screen) records flag false and an empty dump.
+    #[test]
+    fn capture_alt_state_on_main_buffer_pane_returns_false_and_empty_dump() {
+        let target = make_output_target();
+        let pane = MuxPane::new_test(1, 80, 24, target);
+        pane.shadow_parser
+            .lock()
+            .unwrap()
+            .process(b"plain main-buffer content");
+
+        let (alt, dump) = pane.capture_alt_state();
+
+        assert!(!alt, "AC-3: a main-buffer pane must record flag false");
+        assert!(
+            dump.is_empty(),
+            "AC-3: a main-buffer pane must record an empty dump"
+        );
+    }
+
+    /// AC-3: `capture_alt_state` on an alt-screen pane records flag true and
+    /// a dump equal to the parser's formatted alt-screen contents.
+    #[test]
+    fn capture_alt_state_on_alt_screen_pane_returns_true_and_the_formatted_alt_contents() {
+        let target = make_output_target();
+        let pane = MuxPane::new_test(2, 80, 24, target);
+        pane.shadow_parser.lock().unwrap().process(b"\x1b[?1049h");
+        pane.shadow_parser
+            .lock()
+            .unwrap()
+            .process(b"ALT-SCREEN-CONTENT");
+
+        let (alt, dump) = pane.capture_alt_state();
+
+        assert!(alt, "AC-3: an alt-screen pane must record flag true");
+        assert!(
+            dump.windows(b"ALT-SCREEN-CONTENT".len())
+                .any(|w| w == b"ALT-SCREEN-CONTENT"),
+            "AC-3: the dump must contain the alt-screen content"
+        );
+        let expected = pane
+            .shadow_parser
+            .lock()
+            .unwrap()
+            .screen()
+            .contents_formatted();
+        assert_eq!(
+            dump, expected,
+            "AC-3: the dump must equal the parser's formatted alt-screen contents"
+        );
+    }
+
+    /// AC-7: a dump AT the D1 cap (`MAX_SNAPSHOT_FRAME_PAYLOAD`) is stored
+    /// untouched. Exercises the real boundary (task plan Test Notes AC-7):
+    /// `cap_alt_screen_dump` takes a plain byte vector, so testing at the
+    /// real cap needs no vt100 screen at an unreasonable size — just an
+    /// allocation.
+    #[test]
+    fn cap_alt_screen_dump_returns_the_dump_untouched_at_the_cap() {
+        let dump = vec![0xABu8; mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD];
+        let result = cap_alt_screen_dump(1, dump.clone());
+        assert_eq!(result, dump, "AC-7: a dump at the cap must be stored untouched");
+    }
+
+    /// AC-7 (continued): a dump exceeding the D1 cap by a single byte is
+    /// replaced with an empty one (flag preservation is the caller's
+    /// concern — `capture_alt_state` keeps `alt_screen=true` regardless of
+    /// this function's outcome). The "warn-level log line naming the pane
+    /// id and the oversize length" half of AC-7 is verified by inspection
+    /// of the `log::warn!` call in `cap_alt_screen_dump` itself (matching
+    /// this project's established convention for asserting on log output —
+    /// see `mux::upgrade::tests::restore_handles_exited_and_unadoptable_panes_while_the_rest_of_the_tree_still_restores`
+    /// for the equivalent precedent).
+    #[test]
+    fn cap_alt_screen_dump_returns_empty_when_the_dump_exceeds_the_cap() {
+        let dump = vec![0xABu8; mux_ipc::protocol::MAX_SNAPSHOT_FRAME_PAYLOAD + 1];
+        let result = cap_alt_screen_dump(42, dump);
+        assert!(
+            result.is_empty(),
+            "AC-7: a dump exceeding the D1 cap must be replaced with an empty one"
         );
     }
 
@@ -4236,6 +4537,8 @@ mod tests {
             None,
             AgentStatus::default(),
             None,
+            false,
+            Vec::new(),
         );
 
         pane.write_input(b"restored-write\n").unwrap();
