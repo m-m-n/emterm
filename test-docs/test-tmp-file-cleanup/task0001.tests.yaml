@@ -1,0 +1,88 @@
+task_id: task0001
+
+# The default project test command (`cargo test --lib`, no thread-count
+# flag) runs tabs.rs off-thread-replay tests in parallel, which are a
+# documented pre-existing flake (see Notes in this task's invocation and
+# VERIFICATION.md risk table) whose exact failing subset varies between
+# runs under host load. Per that guidance, baseline/final below are taken
+# from a `--test-threads=1` re-run, which reproduced an IDENTICAL failing
+# set before and after the settings_store.rs change (verified twice).
+# A concurrent multi-threaded run also transiently failed
+# tmux_sockets::tests::enumerate_orders_by_socket_then_session_and_skips_blank_lines
+# (external-subprocess + timeout based, unrelated file, never touched by
+# this task); it passed both in isolation and in the single-threaded
+# full-suite re-run, confirming it was host-load noise from sibling
+# worktrees' concurrent test runs, not a regression from this change.
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+acceptance_tests:
+  AC-1:
+    tests:
+      - settings_store::tests::save_patch_preserves_unknown_keys
+      - settings_store::tests::save_patch_creates_missing_file
+      - settings_store::tests::save_patch_backs_up_corrupt_file
+      - settings_store::tests::app_settings_save_round_trips_through_native_loader
+      - settings_store::tests::shift_enter_behavior_round_trips_through_native_loader
+    red_confirmed: true
+    red_reason: >
+      Before the fix: ran `save_patch_preserves_unknown_keys` alone (cargo
+      test --lib settings_store::tests::save_patch_preserves_unknown_keys),
+      test passed, then `find /tmp -maxdepth 1 -type d -name
+      'emterm-settings-store-test-*'` showed
+      /tmp/emterm-settings-store-test-<pid>-preserve still present (the
+      helper-created directory was never removed). After adding
+      `std::fs::remove_dir_all(path.parent().unwrap())` as the final line
+      of each test's success path (and inside the loop for the variant
+      test), re-ran the same isolated command and diffed the /tmp listing
+      before/after: zero new directories remained for any of the 5 tests
+      (including all 4 shift-enter-behavior variant dirs).
+  AC-2:
+    tests:
+      - settings_store::tests::save_patch_preserves_unknown_keys
+      - settings_store::tests::save_patch_creates_missing_file
+      - settings_store::tests::save_patch_backs_up_corrupt_file
+      - settings_store::tests::app_settings_save_round_trips_through_native_loader
+      - settings_store::tests::shift_enter_behavior_round_trips_through_native_loader
+      - settings_store::tests::clamp_for_save_enforces_webview_ranges
+    red_confirmed: false
+    red_reason: >
+      Non-regression criterion: all 6 settings_store tests already passed
+      before this change (this task adds cleanup only, no assertion
+      changed), so there is no meaningful red phase for "existing
+      assertions unchanged and tests still pass" — it is verified by
+      re-running the full settings_store::tests:: module after the change
+      (6 passed, 0 failed) and by `git diff` showing no assertion lines
+      touched, only trailing `remove_dir_all` calls added.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Structural/mechanical criterion, not testable via red-green.
+      Verified via `git diff -- src-tauri/src/settings_store.rs`: every
+      added line sits inside `mod tests` (cfg(test)) after existing
+      assertions; `save_patch_to` and `clamp_for_save` (the production
+      functions) are byte-for-byte unchanged. `cargo check
+      --manifest-path src-tauri/Cargo.toml` passes.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Structural/mechanical criterion. Verified via `git status --short`
+      (only src-tauri/src/settings_store.rs modified) and `git diff
+      --stat -- src-tauri/Cargo.toml Cargo.lock src-tauri/Cargo.lock`
+      (empty diff) — no new dependency was added.
