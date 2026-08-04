@@ -37,7 +37,8 @@ workflow:
     skipped_reason: "テストの一時ファイル後始末のバグ修正であり、UI/UX・画面表示への影響が一切ないため設計ステップは不要"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: dd5956aab637c45d9f49526c87b67e0619a616f1
   - id: implement
     status: pending
     base_commit: fb9b5f5f3110366995c120e914cd9e3b4dd0f4aa
@@ -50,7 +51,55 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "settings_store.rs テスト一時ディレクトリの事後削除"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/settings_store.rs
+    skills: []
+    domains: [external-io]
+    complexity: low
+    requirements: [FR1, FR5, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+    branch: null
+  task0002:
+    title: "settings_window/commands.rs roundtrip テストの一時ディレクトリ事後削除"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/settings_window/commands.rs
+    skills: []
+    domains: [external-io]
+    complexity: low
+    requirements: [FR2, FR5, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+    branch: null
+  task0003:
+    title: "mux/tmux_import.rs テスト一時ディレクトリの事後削除"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/mux/tmux_import.rs
+    skills: []
+    domains: [external-io]
+    complexity: low
+    requirements: [FR3, FR5, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+    branch: null
+  task0004:
+    title: "viewer/launch.rs spawn エラーテストのペイロード事後削除"
+    plan: tasks/task0004.md
+    files:
+      - src-tauri/src/viewer/launch.rs
+    skills: []
+    domains: [external-io]
+    complexity: low
+    requirements: [FR4, FR5, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -66,57 +115,57 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS3, TS4]
   FR2:
     title: "settings_window/commands.rs の roundtrip テストの一時ディレクトリ削除"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS1, TS3, TS4]
   FR3:
     title: "mux/tmux_import.rs テストの一時ディレクトリ削除"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS1, TS3, TS4]
   FR4:
     title: "viewer/launch.rs の spawn エラーテストのペイロード削除"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0004]
+    tests: [TS1, TS3, TS4]
   FR5:
     title: "スイート全体の正常終了時の残留ゼロ"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002, task0003, task0004]
+    tests: [TS1, TS2, TS4]
   NFR1:
     title: "途中終了時の後始末漏れは許容"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002, task0003, task0004]
     tests: []
   NFR2:
     title: "新規依存を追加しない（既存 tempfile = \"3\" は利用可）"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002, task0003, task0004]
+    tests: [TS5]
   NFR3:
     title: "プロダクションの /tmp 書き込み挙動は変更しない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002, task0003, task0004]
+    tests: [TS6]
 
 batch:
   review_rework_count: 0
