@@ -61,7 +61,7 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR1, FR2, FR3, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
     branch: em-workflow/agent-badge-emoji-distinction/task0001
 
