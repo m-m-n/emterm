@@ -1,0 +1,122 @@
+schema_version: 1
+feature: mux-window-sidebar-overlay-hidden
+created: 2026-08-03
+base_branch: main
+parent_branch: em-workflow/mux-window-sidebar-overlay-hidden/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      feature_gate_check_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_integration_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test cli_subcommands"
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 68ea5fcfb43f12243643f5b8d00492922a7b215b
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Internal state-machine bug fix in existing pump logic (one boolean assignment plus tests). No new UI surface, no visual/layout/token change; the overlay sidebar's appearance is untouched. No design-system candidates exist in this project's resolved inputs."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: b8a9886ee80df5010be337c01e3e24f22445d75b
+  - id: implement
+    status: completed
+    base_commit: 7b8e87785596dba6fbcd125657956892e9002803
+    completed_at_commit: d66000e81313f5a7020fd8cca0687ad3f6888e8d
+  - id: review
+    status: completed
+    completed_at_commit: c273e5607c67905d7d2b2548392e7212b9766fbd
+  - id: verify
+    status: completed
+    result: pass
+    failed_items: []
+    notes: |
+      build (default + --no-default-features): pass.
+      unit tests (--lib --test-threads=1): 3073/3080 pass; 7 failures all in
+      tabs::tests (off-thread swap replay worker subsystem: ts7/ts8/ts9/ts10/
+      ts11/ts13, welcome_without_windows_leaves_group_none), identical to the
+      implementer's own recorded baseline_failures captured before this
+      feature's changes — confirmed pre-existing/unrelated (this feature
+      touches only app.rs pump logic, never tabs.rs).
+      TS1 (task0001 attach-transition unit tests incl. the review-added
+      pristine-startup regression test): pass.
+      TS2 (ac7_* detach-guard/overlay regression group, 8 tests): pass.
+      integration test --test cli_subcommands (26 tests): pass.
+      TS4 (manual init-mux startup + reattach verification): not run in this
+      automated session — requires the user to launch emterm via
+      ~/bin/init-mux and observe the sidebar. Recorded as an outstanding
+      manual verification item for the user.
+  - id: retrospect
+    status: completed
+
+tasks:
+  task0001:
+    title: "Open overlay sidebar on mux attach transition"
+    plan: tasks/task0001.md
+    files: [src-tauri/src/app.rs]
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: low
+    requirements: [FR1, FR2, FR3, NFR1, NFR2]
+    status: merged
+    branch: em-workflow/mux-window-sidebar-overlay-hidden/task0001
+    merge_commit: d66000e81313f5a7020fd8cca0687ad3f6888e8d
+
+review:
+  rounds_completed: 1
+  perspectives: [comprehensive, spec]
+  residual_critical_high: 0
+  needs_rework: false
+  status: completed
+
+requirements:
+  FR1:
+    title: "Re-open overlay sidebar on mux attach transition"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS2]
+  FR2:
+    title: "Sidebar visible from startup under init-mux"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS4]
+  FR3:
+    title: "Reattach restores open state"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS4]
+  NFR1:
+    title: "Change confinement"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS2, TS3]
+  NFR2:
+    title: "No settings-schema change"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS3]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

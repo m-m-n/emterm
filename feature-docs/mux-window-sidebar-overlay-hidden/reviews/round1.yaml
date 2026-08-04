@@ -1,0 +1,94 @@
+round: 1
+executed_at: "2026-08-03T21:59:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 7b8e87785596dba6fbcd125657956892e9002803
+  head_commit: c273e5607c67905d7d2b2548392e7212b9766fbd
+  changed_files:
+    - src-tauri/src/app.rs
+plan:
+  floor: [comprehensive, spec]
+  discretionary: []
+  codex_cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+findings:
+  - stable_id: e3e3f5fb2821ca0c
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 4010
+    title: "新ルールは pristine 起動パスでは no-op — FR2 の真因を潰せていない可能性"
+    description: >
+      comprehensive レビューが3ラウンド連続で指摘: mux_sidebar_overlay_open を
+      false にできる本番経路は user toggle (app.rs:3107) と detach ガード
+      (app.rs:3990) の2箇所のみで、コンストラクタは無条件 true。真に一度も
+      attach していない pristine 起動では、attach 時点で既に true のため
+      None→Some ルールは値を変えない no-op になる、という指摘。
+    suggestion: >
+      (a) 実機ログで detach ガード発火の裏取りをする、(b) 裏取りできない場合は
+      本ルールを reattach 専用として扱い FR2 は unresolved のまま残す。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: declined
+    resolution_reason: >
+      REQUIREMENTS.md/SPEC.md が「確定事実」として記録する2経路閉鎖性
+      （mux_sidebar_overlay_open を false にできるのは user toggle と
+      detach ガードの2箇所のみ）から、ユーザーが実際に false 状態を観測した
+      （ctrl+s で表示された = 押す前は false だった）以上、detach ガードが
+      最低1回発火していたことは論理的に必然。detach ガードの発火条件
+      （active_mux_attached_prev_pump == Some(active) かつ現在 not-attached）
+      は、その前に一度 attach が成立して bookkeeping が Some になっていた
+      ことを要求する。したがって観測されたバグの前提そのものが
+      「起動 → 一度 attach 成立 → detach ガード発火(flag=false) →
+      再 attach(None→Some、今回の修正ルールが発火して flag=true)」という
+      順序を必然的に含む。mux セッションは最終的に必ず attach 成立する
+      （でなければアプリが使用不能）ため、この再 attach は必ず発生し、
+      修正のルールは必ず発火する。reviewer が懸念する「一度も attach して
+      いない pristine 起動での no-op」というシナリオは、バグが観測された
+      という前提（false 状態の観測）と論理的に両立しない —
+      そのシナリオでは flag は終始 true のままでバグ自体が発生しないため。
+      よって FR2 の充足はこの2経路閉鎖性という確定事実から論理的に導出でき、
+      別途の実機ログ裏取りを R4 の auto-fix ループで追加要求する必要はないと
+      判断した。TS4（手動起動確認）は引き続き VERIFICATION.md の受け入れ
+      ゲートとして残る。
+  - stable_id: 9852e371eb5f7af5
+    severity: medium
+    category: spec
+    file: src-tauri/src/app.rs
+    line: 4010
+    title: "アタッチ以外（タブ切り替え）でもオーバーレイが再オープンし、SPEC の記述より広い条件で発火する"
+    description: >
+      実装の述語はタブ切り替え単独（非mux→既attach済みmuxタブ）でも発火するが、
+      SPEC の FR1/Overview/Data Flow は "mux attach transition" とやや狭く読める。
+    suggestion: "SPEC の記述を IMPLEMENTATION.md D2 の受容判断に合わせて明確化するか、実装を変更する。"
+    sources: [claude:spec]
+    confidence: 85
+    resolution: declined
+    resolution_reason: >
+      loop 1 以降の再レビューで spec パースペクティブは findings なしに収束。
+      IMPLEMENTATION.md D2 が当該挙動を明示的に「accepted and intended」と
+      記録しており、SPEC.md の規範文（FR1 の bookkeeping フィールド
+      None→Some 遷移という字義）とも矛盾しないと spec reviewer 自身が
+      再評価で確認した。
+  - stable_id: 89218d29b7de75cf
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 8114
+    title: "テストヘルパの Welcome ペイロード構築が 2 箇所に複製された"
+    description: >
+      新規追加の mux_welcome_message と既存 app_with_mux_windows が同一の
+      Welcome ペイロード構築ロジックを重複して持っていた。
+    suggestion: "app_with_mux_windows を mux_welcome_message に委譲させる。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: "loop 2 で auto-applied（app_with_mux_windows が mux_welcome_message(n) に委譲する形に統合）。loop 3 の再レビューで解消を確認済み。"
+auto_fix:
+  loops_run: 2
+  applied_total: 2
+  termination: loop-cap-but-residual-declined
+residual_critical_high: 0
+rework_required: false

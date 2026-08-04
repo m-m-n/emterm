@@ -409,18 +409,25 @@ pub struct App {
     /// (`mux.window_sidebar_overlay` placement mode). Toggled by
     /// `PrefixAction::ToggleWindowSidebar` in `dispatch_mux_action` — a
     /// strict no-op while overlay mode is off (FR4). Reset to `false` in
-    /// `pump_all` when the focused tab's mux group tears down. Rendering
-    /// input only; this field does not drive any drawing itself (task0005).
+    /// `pump_all` when the focused tab's mux group tears down, and set to
+    /// `true` in `pump_all` on the not-attached -> attached transition
+    /// (task0001 FR1/FR2/FR3 — covers startup attach and any later
+    /// reattach, including after an explicit close). Rendering input only;
+    /// this field does not drive any drawing itself (task0005).
     mux_sidebar_overlay_open: bool,
-    /// Bookkeeping for the reset above: `Some(tab_index)` when `tab_index`
-    /// was the active tab AND was mux-attached as of the end of the
-    /// previous `pump_all` call; `None` otherwise. A
+    /// Bookkeeping for the reset/reopen above: `Some(tab_index)` when
+    /// `tab_index` was the active tab AND was mux-attached as of the end of
+    /// the previous `pump_all` call; `None` otherwise. A
     /// same-tab `Some -> not-attached` transition is a genuine teardown
-    /// (Detach confirmed / last window's PtyExited emptied the group); a
-    /// changed `self.active` between calls is just a tab switch and must
-    /// NOT reset the flag (the overlay's visibility already gates on
+    /// (Detach confirmed / last window's PtyExited emptied the group) and
+    /// resets the overlay-open flag; a `None -> attached` transition is a
+    /// fresh attach or reattach and opens it (task0001). A changed
+    /// `self.active` between calls is just a tab switch and must NOT reset
+    /// the flag on its own (the overlay's visibility already gates on
     /// "active tab is mux-attached" separately — see the Shared Components
-    /// contract in IMPLEMENTATION.md).
+    /// contract in IMPLEMENTATION.md) — though switching onto an
+    /// already-attached tab does satisfy the `None -> attached` reopen rule
+    /// above when this field held no value, per IMPLEMENTATION.md D2.
     active_mux_attached_prev_pump: Option<usize>,
     /// task0002 FR3: whether the pointer is currently inside the overlay
     /// card's rect. Fed by `window_host`'s `PointerMoved` handler, using
@@ -3940,6 +3947,26 @@ impl App {
             .is_some_and(|t| t.mux_group.is_some());
         if self.active_mux_attached_prev_pump == Some(self.active) && !active_mux_attached_now {
             self.mux_sidebar_overlay_open = false;
+        }
+        // task0001 FR1/FR2/FR3: open the overlay flag on the
+        // not-attached -> attached transition (bookkeeping field held no
+        // value at the end of the previous pump, AND the active tab is
+        // mux-attached now). Restores the AC-7 "default open" guarantee at
+        // startup and on reattach, since the runtime flag only starts open
+        // at construction — a later attach (the common case: the mux
+        // daemon connection completes asynchronously after `App::new`)
+        // would otherwise leave a stale `false` from an earlier detach.
+        // Unconditional, no gate on `window_sidebar_overlay` (mirrors the
+        // detach guard above): in persistent mode the flag drives no
+        // rendering, so the assignment is inert there. Read BEFORE the
+        // bookkeeping reassignment below, mirroring the detach guard.
+        // Reattach after an explicit close re-opens the sidebar (FR3,
+        // accepted) and switching the active tab onto an already-attached
+        // mux tab also satisfies this transition and reopens the sidebar —
+        // both accepted per IMPLEMENTATION.md D2 (the single-slot
+        // bookkeeping cannot distinguish the two cases).
+        if self.active_mux_attached_prev_pump.is_none() && active_mux_attached_now {
+            self.mux_sidebar_overlay_open = true;
         }
         self.active_mux_attached_prev_pump = active_mux_attached_now.then_some(self.active);
         for (sanitized_title, kind) in pending_notifications {
@@ -7774,29 +7801,7 @@ mod tests {
     fn app_with_mux_windows(n: usize) -> App {
         let mut app = App::new();
         app.spawn_initial_tab();
-        let windows: Vec<WindowInfo> = (0..n)
-            .map(|i| WindowInfo {
-                id: i as u32,
-                name: format!("w{i}"),
-                active_pane_id: 100 + i as u32,
-            })
-            .collect();
-        let welcome = MuxMessage::control(
-            MessageType::Welcome,
-            0,
-            &WelcomeMsg::Accepted {
-                server_version: 1,
-                sessions: vec![SessionInfo {
-                    id: 1,
-                    name: "main".to_string(),
-                    window_count: n as u32,
-                    pane_count: n as u32,
-                    active_window_index: 0,
-                    windows,
-                }],
-            },
-        );
-        app.on_mux_message(0, welcome);
+        app.on_mux_message(0, mux_welcome_message(n));
         app
     }
 
@@ -8018,6 +8023,179 @@ mod tests {
         assert!(
             app.mux_sidebar_overlay_open(),
             "flag persists across a mere tab switch"
+        );
+    }
+
+    // ── task0001: overlay reopens on the not-attached→attached transition ──
+
+    /// Build a `Welcome` message seeding `n` mux windows (same payload
+    /// shape as `app_with_mux_windows`), for delivery to an app that
+    /// already exists — attach/reattach tests need to construct the app
+    /// first and deliver the attach as a separate step.
+    fn mux_welcome_message(n: usize) -> MuxMessage {
+        let windows: Vec<WindowInfo> = (0..n)
+            .map(|i| WindowInfo {
+                id: i as u32,
+                name: format!("w{i}"),
+                active_pane_id: 100 + i as u32,
+            })
+            .collect();
+        MuxMessage::control(
+            MessageType::Welcome,
+            0,
+            &WelcomeMsg::Accepted {
+                server_version: 1,
+                sessions: vec![SessionInfo {
+                    id: 1,
+                    name: "main".to_string(),
+                    window_count: n as u32,
+                    pane_count: n as u32,
+                    active_window_index: 0,
+                    windows,
+                }],
+            },
+        )
+    }
+
+    #[test]
+    fn ac1_overlay_reopens_on_the_not_attached_to_attached_transition() {
+        // AC-1: plain (non-mux) tab, overlay mode forced on, flag forced
+        // closed, pumped once to establish the not-attached baseline; a
+        // real Welcome attach delivered and pumped must reopen the flag.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        with_overlay_mode(&mut app, true);
+        app.mux_sidebar_overlay_open = false;
+        app.pump_all();
+        assert!(
+            !app.mux_sidebar_overlay_open(),
+            "not-attached baseline: flag stays closed"
+        );
+
+        app.on_mux_message(0, mux_welcome_message(1));
+        app.pump_all();
+
+        assert!(
+            app.mux_sidebar_overlay_open(),
+            "AC-1: not-attached -> attached transition reopens the overlay"
+        );
+    }
+
+    #[test]
+    fn ac2_overlay_reopens_on_reattach_after_an_explicit_close() {
+        // AC-2 (FR3, accepted per IMPLEMENTATION.md D2): attach, explicit
+        // close via the toggle action, a Detached reply (flag stays
+        // closed), then a second attach reopens the flag.
+        let mut app = app_with_mux_windows(1);
+        with_overlay_mode(&mut app, true);
+        app.pump_all();
+        assert!(app.mux_sidebar_overlay_open());
+
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar),
+            MuxActionOutcome::None
+        );
+        assert!(!app.mux_sidebar_overlay_open(), "explicitly closed");
+
+        app.on_mux_message(
+            0,
+            MuxMessage {
+                msg_type: MessageType::Detached,
+                pane_id: 0,
+                payload: Vec::new(),
+            },
+        );
+        app.pump_all();
+        assert!(
+            !app.mux_sidebar_overlay_open(),
+            "detach does not reopen an already-closed flag"
+        );
+
+        app.on_mux_message(0, mux_welcome_message(1));
+        app.pump_all();
+
+        assert!(
+            app.mux_sidebar_overlay_open(),
+            "AC-2: reattach after an explicit close reopens the overlay"
+        );
+    }
+
+    #[test]
+    fn ac1_pristine_startup_reopens_overlay_via_transient_detach_without_manual_flag_reset() {
+        // Reproduces the pristine-startup path the task's root-cause
+        // diagnosis describes (a transient detach fires during the startup
+        // sequence, closing the flag via the existing detach guard, before
+        // the real attach completes) end-to-end via `on_mux_message` +
+        // `pump_all` — the production path. Unlike
+        // `ac1_overlay_reopens_on_the_not_attached_to_attached_transition`,
+        // this does NOT force `mux_sidebar_overlay_open = false` by direct
+        // field assignment; the flag starts open at construction (AC-7) and
+        // every transition below is driven through real mux messages.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        with_overlay_mode(&mut app, true);
+        assert!(app.mux_sidebar_overlay_open(), "AC-7: open by construction");
+
+        // The initial attach completing during startup.
+        app.on_mux_message(0, mux_welcome_message(1));
+        app.pump_all();
+        assert!(app.mux_sidebar_overlay_open());
+
+        // A transient detach fires during startup (per this task's
+        // root-cause diagnosis), tearing the mux group down and closing the
+        // flag via the existing detach guard.
+        app.on_mux_message(
+            0,
+            MuxMessage {
+                msg_type: MessageType::Detached,
+                pane_id: 0,
+                payload: Vec::new(),
+            },
+        );
+        app.pump_all();
+        assert!(
+            !app.mux_sidebar_overlay_open(),
+            "the transient detach closes the flag via the detach guard"
+        );
+
+        // The real attach completes.
+        app.on_mux_message(0, mux_welcome_message(1));
+        app.pump_all();
+
+        assert!(
+            app.mux_sidebar_overlay_open(),
+            "pristine startup (attach -> transient detach -> re-attach) \
+             reopens the overlay without any manual flag reset"
+        );
+    }
+
+    #[test]
+    fn ac3_overlay_stays_closed_across_further_pumps_while_continuously_attached() {
+        // AC-3 (FR1 negative): the bookkeeping already records the active
+        // tab as attached; an explicit close followed by further pumps
+        // must NOT reopen the flag — the rule fires only on the
+        // not-attached -> attached transition, never on a steady attached
+        // state.
+        let mut app = app_with_mux_windows(1);
+        with_overlay_mode(&mut app, true);
+        app.pump_all();
+        assert!(app.mux_sidebar_overlay_open());
+
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::ToggleWindowSidebar),
+            MuxActionOutcome::None
+        );
+        assert!(!app.mux_sidebar_overlay_open());
+
+        app.pump_all();
+        assert!(
+            !app.mux_sidebar_overlay_open(),
+            "AC-3: steady attached state does not reopen the flag"
+        );
+        app.pump_all();
+        assert!(
+            !app.mux_sidebar_overlay_open(),
+            "AC-3: repeated pumps stay closed"
         );
     }
 
