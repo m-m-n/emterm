@@ -1,0 +1,49 @@
+task_id: task0002
+baseline_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts12_resize_supersedes_and_redispatches_at_new_grid
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests: [settings_window::commands::tests::app_settings_full_roundtrip_through_patch_save]
+    red_confirmed: true
+    red_reason: "Manually verified before the fix: running the test in isolation (cargo test ... app_settings_full_roundtrip_through_patch_save -- --test-threads=1) left /tmp/emterm-settings-window-test-<pid>/ behind even though the test passed. Recorded before/after directory listings; the pre-fix listing showed the new PID-tagged dir persisting, the post-fix listing showed no new dir (diff empty)."
+  AC-2:
+    tests: [settings_window::commands::tests::app_settings_full_roundtrip_through_patch_save, settings_window::commands::tests (all 13 tests in the module)]
+    red_confirmed: false
+    red_reason: "AC-2 is a non-regression criterion (existing assertions unchanged, module continues to pass) rather than new behavior to red-green; there is no red state to observe for 'assertions stay the same and still pass'. Verified by running the full settings_window::commands test module post-fix: 13 passed, 0 failed."
+  AC-3:
+    tests: []
+    red_reason: "Structural/diff-scope criterion, not a runtime test. Verified via `git diff`: the only change is a single `let _ = std::fs::remove_dir_all(&dir);` line appended after the last assertion inside app_settings_full_roundtrip_through_patch_save; no sibling test or production code touched."
+    red_confirmed: false
+  AC-4:
+    tests: []
+    red_reason: "Manifest/lockfile criterion, not a runtime test. Verified via `git status`: only src-tauri/src/settings_window/commands.rs is modified; Cargo.toml/Cargo.lock are untouched (no new dependency)."
+    red_confirmed: false
