@@ -1,0 +1,47 @@
+task_id: task0002
+baseline_failures: []          # bun test: 311 pass / 0 fail; bun run typecheck: clean
+final_failures: []             # bun test: 311 pass / 0 fail; bun run typecheck: clean
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Repository-wide grep for `MuxStatusbarSettings` across
+      src-tauri/web-shared/ returned hits (types.ts lines defining the
+      interface and referencing it in MuxSettings.statusbar) before the
+      edit; after removing the interfaces and the `statusbar` field from
+      MuxSettings, the same grep returns no hits. Verified outcome is a
+      grep check, not a unit test, per the task plan's Test Notes.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      `bun run typecheck` was already green before this task started: the
+      removed types (MuxStatusbarSettings/MuxStatusbarCommand) were only
+      referenced from types.ts itself and from *.test.ts files, and
+      tsconfig.json excludes **/*.test.ts from the tsc project, so no
+      typecheck-visible consumer existed to go red. This is a pure schema
+      removal with no observable typecheck-outcome change; verified by
+      confirming `bun run typecheck` stays clean after the edit (no new
+      errors) and by AC-1's grep confirming the definitions are gone.
+  AC-3:
+    tests: [mux-section.test.ts (all tests in "renderMuxSection() — window sidebar overlay toggle" and "renderMuxSection() — i18n keys")]
+    red_confirmed: false
+    red_reason: >-
+      `bun test` does not type-check (Bun strips TypeScript types before
+      running), so the pre-edit fixture carrying an extra `statusbar`
+      field never caused a runtime test failure, and removing that field
+      likewise does not change pass/fail status — bun test was 311
+      pass/0 fail both before and after. The criterion (fixtures updated
+      to conform to the trimmed MuxSettings type) is a structural
+      alignment verified by the source diff and by AC-1's grep, not by a
+      test that can be driven red first.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Preservation boundary, verified by `git diff --stat` showing only
+      src-tauri/web-shared/settings/types.ts and
+      src-tauri/web-shared/settings/sections/mux-section.test.ts changed
+      — no diff in status-bar-section.ts or mux-section.ts. Not a
+      red/green test by nature (a negative/absence check).
