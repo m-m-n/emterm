@@ -52,7 +52,7 @@ workflow:
     completed_at_commit: f75147fbd4cea506800c01628b70f7de5c86f9aa
     base_commit: 9059f3dcc762ac06780877f3ecab3a3c172a25d0
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -102,9 +102,12 @@ tasks:
     branch: em-workflow/mux-hot-upgrade-alt-screen/task0003
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    codex_cross_validation: true
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
