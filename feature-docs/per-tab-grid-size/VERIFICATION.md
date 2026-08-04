@@ -8,7 +8,8 @@
 
 This documents the INTEGRATED verification run by the verify phase.
 Task-level acceptance criteria live in `tasks/task0001.md` /
-`tasks/task0002.md`.
+`tasks/task0002.md`, and — for review round 1 rework — `tasks/task0003.md` /
+`tasks/task0004.md`.
 
 ## Build Verification
 
@@ -25,8 +26,8 @@ Task-level acceptance criteria live in `tasks/task0001.md` /
   (Rust tests for this project live under `--lib`; the tabs.rs replay tests
   are non-deterministic in parallel, hence `--test-threads=1`.)
 - Coverage target: no numeric coverage tooling is configured for this
-  project; the coverage criterion is full scenario coverage — TS1-TS6
-  automated, TS7 manual.
+  project; the coverage criterion is full scenario coverage — TS1-TS6 and
+  TS8-TS10 automated, TS7 and TS11 manual.
 
 ### Test Scenarios from SPEC.md
 
@@ -39,6 +40,10 @@ Task-level acceptance criteria live in `tasks/task0001.md` /
 | TS5 | Per-tab reflow invalidation (app.rs + tabs.rs) | Width-changing resize clears the resized tab's prompt/fold marks (tab side) and the app selection/pending anchor (app side); height-only change and untouched tabs keep all trackers | Unit |
 | TS6 | Full regression | The complete `--lib` suite passes with the command above | Integration |
 | TS7 | 3-tab leak reproduction (2026-08-03 scenario) | No XTWINOPS response fragment (`;R;Ct` form, e.g. `;51;171t816;1368t`) appears in the tmux shell | Manual |
+| TS8 | Activation reconcile targets the incoming tab's display area (app.rs; rework round 1) | With per-tab-dependent insets (incoming tab's settled display area differing from the outgoing tab's), activation — via explicit switch, close-tab fix-up, or exited-tab reap — resizes the incoming tab exactly once, to the INCOMING tab's settled dims; no resize at outgoing-tab dims is ever issued; a matching-size activation issues nothing | Unit |
+| TS9 | Reconcile-path App-tracker invalidation (app.rs; rework round 1) | A reconcile execution that changes the target tab's column count clears the App selection and pending selection anchor on all three activation origins; a height-only reconcile keeps both; `set_grid_size` and the reconcile share one application path with identical clearing behavior | Unit |
+| TS10 | Direct pane `Resize` frame observation (app.rs + tabs.rs test hook; rework round 1) | Recorded frames: zero for an inactive mux-flavored tab across a grid-size change; exactly one frame set (one per pane, incoming tab's post-clamp dims) for a dims-changing mux tab activation reconcile; never a frame set at outgoing-tab dims | Unit |
+| TS11 | Test-evidence record consistency (test-docs; rework round 1) | Every `test-docs/per-tab-grid-size/*.tests.yaml` entry's `red_confirmed` flag agrees with its own `red_reason` narrative, and no entry references a section that does not exist in its file | Manual |
 
 ## Code Quality Verification
 
@@ -67,13 +72,13 @@ Task-level acceptance criteria live in `tasks/task0001.md` /
 |-------------|-------|--------------|
 | FR1 | task0001, task0002 | TS1 |
 | FR2 | task0001 | TS1, TS7 |
-| FR3 | task0001 | TS2 |
-| FR4 | task0001, task0002 | TS4 |
+| FR3 | task0001, task0003 | TS2, TS8 |
+| FR4 | task0001, task0002, task0003 | TS4, TS10 |
 | FR5 | task0001, task0002 | TS3 |
-| FR6 | task0001, task0002 | TS5 |
-| NFR1 | task0001 | TS7 |
-| NFR2 | task0001, task0002 | TS3, TS6 |
-| NFR3 | task0001, task0002 | TS6 + CLI build check |
+| FR6 | task0001, task0002, task0003 | TS5, TS9 |
+| NFR1 | task0001, task0003 | TS7, TS8 |
+| NFR2 | task0001, task0002, task0003, task0004 | TS3, TS6, TS11 |
+| NFR3 | task0001, task0002, task0003 | TS6 + CLI build check |
 
 ## E2E Testing
 
@@ -93,6 +98,13 @@ end-to-end leak criterion is verified manually as TS7 below.
      appears in the tmux-hosted shell, and hidden tabs come back at their
      own size, reconciled only at activation.
 
+- [ ] **TS11 — Test-evidence record consistency**: read every
+  `test-docs/per-tab-grid-size/*.tests.yaml`; confirm each entry's
+  `red_confirmed` flag agrees with its own `red_reason` narrative (an entry
+  whose red state could not be produced records `red_confirmed: false`), and
+  that no entry references a section absent from its file (e.g. a dangling
+  `unconfirmed_reds` pointer).
+
 (The design step was skipped for this feature — there is no mockup
 comparison item.)
 
@@ -107,6 +119,6 @@ in-process state only).
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build | 2 (GUI check, CLI check) | 2 | 0 | 0 |
-| Unit / regression tests | TS1-TS6 | 6 | 0 | 0 |
-| Manual scenario | TS7 | 0 | 0 | 1 |
-| Total | 9 | 8 | 0 | 1 |
+| Unit / regression tests | TS1-TS6, TS8-TS10 | 9 | 0 | 0 |
+| Manual scenarios | TS7, TS11 | 0 | 0 | 2 |
+| Total | 13 | 11 | 0 | 2 |
