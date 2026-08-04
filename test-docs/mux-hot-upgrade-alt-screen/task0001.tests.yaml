@@ -1,0 +1,149 @@
+task_id: task0001
+
+# NOTE on baseline/final_failures: this repo's `tabs::tests::*` off-thread
+# replay-worker suite is documented as non-deterministic under this project's
+# own test-execution conventions (project memory:
+# "tabs.rs replay テストは並列で非決定的に落ちる"). Confirmed independently
+# here: 4 full `cargo test --lib` runs (1 pre-implementation baseline + 3
+# post-implementation) each failed a DIFFERENT ~20-test subset of the same
+# `tabs::tests::*` pool, every failure panicking at one of exactly two sites
+# ("off-thread replay worker did not complete in time" at tabs.rs:3476, or
+# the `tab.mux_group.is_none()` assertion at tabs.rs:4895). This task's diff
+# touches ONLY src-tauri/src/mux/identity.rs (`git diff --stat` confirms);
+# `mux::identity::tests::*` (50 tests) was green in every run with zero
+# flakiness. baseline_failures below is the literal run recorded in step 4a;
+# final_failures is the literal final run. The set difference between them is
+# membership churn within the same pre-existing flaky tabs.rs cluster, not a
+# regression caused by this task -- see the implementer's report `notes` for
+# the full run-by-run evidence.
+
+baseline_failures:
+  - tabs::tests::ac2_unraced_switch_engages_bypass
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+final_failures:
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts12_resize_supersedes_and_redispatches_at_new_grid
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::identity::tests::validate_candidate_accepts_group_writable_candidate_in_a_private_per_user_group
+      - mux::identity::tests::validate_candidate_accepts_group_writable_parent_in_a_private_per_user_group
+    red_confirmed: true
+    red_reason: >-
+      Before implementation, both tests failed to compile:
+      E0061 "this function takes 3 arguments but 5 arguments were supplied"
+      (validate_candidate's new candidate_facts/parent_facts parameters did
+      not exist yet) and E0560 "struct EntryAttributes has no field gid"
+      (the gid field did not exist yet).
+
+  AC-2:
+    tests:
+      - mux::identity::tests::validate_candidate_refuses_group_writable_candidate_with_an_extra_group_member
+      - mux::identity::tests::validate_candidate_refuses_group_writable_candidate_with_mismatched_primary_gid
+      - mux::identity::tests::validate_candidate_refuses_group_writable_candidate_with_mismatched_group_name
+      - mux::identity::tests::validate_candidate_refuses_group_writable_candidate_when_facts_are_unavailable
+      - mux::identity::tests::validate_candidate_refuses_world_writable_candidate_even_with_conforming_group_facts
+    red_confirmed: true
+    red_reason: >-
+      Same compile failures as AC-1 (E0061 wrong arg count on
+      validate_candidate, E0560 missing gid field, plus E0422/E0425
+      "cannot find struct/type GroupOwnerFacts in this scope" for the
+      owner_facts() test helper) -- these tests could not even build before
+      the FR1/FR2 rule split and GroupOwnerFacts type were implemented.
+
+  AC-3:
+    tests:
+      - mux::identity::tests::validate_candidate_accepts_owner_owned_regular_file_in_conforming_parent
+      - mux::identity::tests::validate_candidate_accepts_root_owned_candidate_and_parent
+      - mux::identity::tests::validate_candidate_refuses_symlink_candidate
+      - mux::identity::tests::validate_candidate_refuses_non_regular_candidate
+      - mux::identity::tests::validate_candidate_refuses_directory_candidate
+      - mux::identity::tests::validate_candidate_refuses_group_writable_candidate_without_facts
+      - mux::identity::tests::validate_candidate_refuses_world_writable_candidate
+      - mux::identity::tests::validate_candidate_refuses_foreign_owner_candidate
+      - mux::identity::tests::validate_candidate_refuses_symlink_parent
+      - mux::identity::tests::validate_candidate_refuses_non_directory_parent
+      - mux::identity::tests::validate_candidate_refuses_group_writable_parent_without_facts
+      - mux::identity::tests::validate_candidate_refuses_world_writable_parent
+      - mux::identity::tests::validate_candidate_refuses_foreign_owner_parent
+      - mux::identity::tests::validate_candidate_path_accepts_a_conforming_real_file
+      - mux::identity::tests::validate_candidate_path_refuses_a_symlink_at_the_candidate_path
+      - mux::identity::tests::validate_candidate_path_refuses_a_world_writable_real_file
+      - mux::identity::tests::validate_candidate_path_reports_a_failure_to_inspect_a_missing_candidate
+    red_confirmed: false
+    red_reason: >-
+      These tests pre-existed this task (task0004's original
+      validate_candidate table) and already passed against the OLD 3-arg
+      signature before this task started. This task adapted their call
+      sites to the new 5-arg validate_candidate(candidate, candidate_facts,
+      parent, parent_facts, daemon_uid) signature and updated two refusal
+      messages (the single old "group or world write" wording split into
+      distinct "world write" / "group write" reasons) in the SAME edit as
+      the production change, rather than red-green per assertion -- the
+      accept/reject OUTCOME each test pins is a preservation of behavior
+      that pre-existed this task, not new behavior, so there was nothing to
+      observe red for at the outcome level. All 17 pass against the final
+      implementation with the updated signature/messages.
+
+  AC-4:
+    tests:
+      - mux::identity::tests::is_private_per_user_group_accepts_when_all_three_conditions_hold
+      - mux::identity::tests::is_private_per_user_group_accepts_a_member_list_naming_only_the_owner
+      - mux::identity::tests::is_private_per_user_group_rejects_an_extra_member_name
+      - mux::identity::tests::is_private_per_user_group_rejects_when_primary_gid_differs
+      - mux::identity::tests::is_private_per_user_group_rejects_when_group_name_differs_from_owner_name
+      - mux::identity::tests::is_private_per_user_group_rejects_when_facts_are_unavailable
+      - mux::identity::tests::capture_group_owner_facts_resolves_the_current_process_identity
+    red_confirmed: true
+    red_reason: >-
+      Before implementation these failed to compile: E0422/E0425 "cannot
+      find struct/type GroupOwnerFacts in this scope" and E0425 "cannot
+      find function is_private_per_user_group / capture_group_owner_facts
+      in this scope". The pure-predicate table above covers every FR1
+      (a/b/c) and NFR2 (facts-unavailable) branch. The other half of AC-4
+      -- "the fact-capture path performs at most one group lookup and one
+      user lookup per entry decision and contains no passwd-database
+      enumeration" -- is a structural property (capture_group_owner_facts
+      calls lookup_group_by_gid and lookup_user_by_uid exactly once each;
+      neither function nor anything else in the file calls
+      getgrent/getpwent) verified by code inspection rather than by a
+      dedicated failing-then-passing test, since "count of syscalls made"
+      is not something the unit-test harness observes.
