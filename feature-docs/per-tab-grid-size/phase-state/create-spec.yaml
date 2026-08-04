@@ -1,19 +1,29 @@
 schema_version: 1
 feature: per-tab-grid-size
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: fb9b5f5
 last_input_digest: "sha256:adec22f62415e3556e2f83fa16eefba5707c2325161ce726922749dd4e0e9d3a"
-active_request_id: create-spec-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: completed
     input_digest: "sha256:adec22f62415e3556e2f83fa16eefba5707c2325161ce726922749dd4e0e9d3a"
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:8e579d9c6ca7dce607328a27f41768459577cf0a5224d1c95896fc2d94bd57d8"
+    output_digest: null
+artifacts:
+  - path: feature-docs/per-tab-grid-size/REQUIREMENTS.md
+    sha256: null
+    produced_by: create-spec-run-0002
+  - path: feature-docs/per-tab-grid-size/SPEC.md
+    sha256: null
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
