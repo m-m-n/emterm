@@ -68,14 +68,17 @@ tasks:
 
 review:
   status: in_progress
-  rounds_completed: 0
+  rounds_completed: 1
   plan:
     floor: [comprehensive, spec]
     discretionary:
       - perspective: performance
         reason: "diff modifies per-frame render composition (render/mod.rs builds the EmojiResources bundle before every tab-bar draw); project has prior incidents with render-loop CPU hotspots"
     codex_cross_validation: false
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    performance: completed
   residual_critical_high: 0
   needs_rework: false
 
