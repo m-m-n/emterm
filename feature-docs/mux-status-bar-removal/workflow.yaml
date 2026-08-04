@@ -36,8 +36,9 @@ workflow:
     status: completed
     completed_at_commit: e2ffd33861969cee87289ea5341a5b13d7e79010
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 81b5467ba3532d04d6984fc3d47f970a1ed72fb7
+    completed_at_commit: fe0af50c9ed5a85b8b308fafc93885f461a6908c
   - id: review
     status: pending
   - id: verify
@@ -69,8 +70,9 @@ tasks:
     domains: [api-contract, concurrency, data-persistence, input-handling, ui]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-status-bar-removal/task0001
+    merge_commit: fe0af50c9ed5a85b8b308fafc93885f461a6908c
   task0002:
     title: "Remove mux statusbar settings from the TypeScript mirror"
     plan: tasks/task0002.md
