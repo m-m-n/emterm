@@ -348,15 +348,36 @@ pub fn paint_agent_badge(
         BadgeRenderMode::EmojiTexture => {
             let texture = texture.expect("EmojiTexture mode implies a resolved texture");
             let ppp = ui.ctx().pixels_per_point();
-            let tex_size = texture.size_vec2() / ppp;
-            // Aspect-fit inside the AGENT_BADGE_SLOT_WIDTH square box (the
-            // cache's supersample + downscale keeps the texture close to
-            // square already, since it scales both axes by the same
-            // factor — this guards a non-square source regardless).
-            let scale =
-                (AGENT_BADGE_SLOT_WIDTH / tex_size.x).min(AGENT_BADGE_SLOT_WIDTH / tex_size.y);
-            let draw_size = tex_size * scale;
-            let rect = Rect::from_center_size(slot_center, draw_size);
+            // Draw at the texture's exact integer physical size (texels /
+            // ppp) rather than a fractional aspect-fit scale: rasterization
+            // is already requested at `AGENT_BADGE_SLOT_WIDTH * ppp`, so
+            // the texture already fits the slot almost exactly. A second
+            // non-integer downscale on top of the cache's own Lanczos3
+            // downscale would needlessly blur a 12px glyph.
+            let mut draw_size = texture.size_vec2() / ppp;
+            // Safety clamp: if an unusually shaped bitmap strike still
+            // overflows the slot, scale down by an integer texel ratio
+            // rather than reintroducing a fractional per-pixel scale.
+            let overflow_ratio =
+                (draw_size.x / AGENT_BADGE_SLOT_WIDTH).max(draw_size.y / AGENT_BADGE_SLOT_WIDTH);
+            if overflow_ratio > 1.0 {
+                let texel_ratio = overflow_ratio.ceil();
+                draw_size /= texel_ratio;
+            }
+            // Snap the paint rect's origin to the physical-pixel grid
+            // (mirrors `status_bar.rs::emit_emoji_cluster_chain`'s `snap`
+            // closure): `draw_size` is an exact-integer physical size, so
+            // snapping the min corner lands both edges on pixel
+            // boundaries. Without this the sub-pixel offset of
+            // `slot_center` (derived from fractional layout coordinates)
+            // would blend with neighbouring texels under
+            // `TextureOptions::LINEAR`.
+            let snap = |v: f32| (v * ppp).round() / ppp;
+            let unsnapped = Rect::from_center_size(slot_center, draw_size);
+            let rect = Rect::from_min_size(
+                egui::pos2(snap(unsnapped.min.x), snap(unsnapped.min.y)),
+                draw_size,
+            );
             // Untinted (Design 4): no color argument — the emoji's own
             // color table is blitted as-is.
             Image::new(&texture).paint_at(ui, rect);
