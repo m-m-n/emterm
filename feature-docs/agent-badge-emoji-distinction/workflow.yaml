@@ -1,0 +1,97 @@
+schema_version: 1
+feature: agent-badge-emoji-distinction
+created: 2026-08-04
+base_branch: main
+parent_branch: em-workflow/agent-badge-emoji-distinction/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths: [doc/UI-DESIGN-GUIDELINES.yaml]
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      feature_gate_check_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+    typescript:
+      language: typescript
+      test_command: "bun test"
+      typecheck_command: "bun run typecheck"
+      build_command: "bun run build:viewer && bun run build:settings"
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: cfe8785cb5f2e29288948bbfee687780f421030b
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: pending
+    skipped_reason: null
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: 661cf8ad3fad4aea834372cbda92890d86648610
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Distinguish working / idle in the tab bar badge by a non-color-dependent means"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS3]
+  FR2:
+    title: "Reflect the same distinction in the sidebar badge"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS3]
+  FR3:
+    title: "Reuse the existing swash path for color emoji rendering"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  NFR1:
+    title: "Consistency across the mirrored implementations"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3]
+  NFR2:
+    title: "Preserve the GUI feature gate"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
