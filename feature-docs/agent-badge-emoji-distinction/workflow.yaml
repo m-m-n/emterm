@@ -33,7 +33,8 @@ workflow:
     skipped_reason: null
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: 3556824bf8cbb416bf83ffa2cd6bb01b05c07adc
   - id: implement
     status: pending
     base_commit: 661cf8ad3fad4aea834372cbda92890d86648610
@@ -46,7 +47,23 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Emoji badge distinction for working/idle in tab bar and sidebar"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/ui/tab_bar.rs
+      - src-tauri/src/ui/mux_sidebar.rs
+      - src-tauri/src/ui/emoji_cache.rs
+      - src-tauri/src/ui/status_bar.rs
+      - src-tauri/src/render/mod.rs
+    skills: [design-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, NFR1, NFR2]
+    status: pending
+    notes: null
+    branch: em-workflow/agent-badge-emoji-distinction/task0001
 
 review:
   status: pending
@@ -62,35 +79,35 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS3]
   FR2:
     title: "Reflect the same distinction in the sidebar badge"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS3]
   FR3:
     title: "Reuse the existing swash path for color emoji rendering"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
   NFR1:
     title: "Consistency across the mirrored implementations"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3]
   NFR2:
     title: "Preserve the GUI feature gate"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS2]
 
 batch:
