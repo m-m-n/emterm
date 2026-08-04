@@ -1,0 +1,176 @@
+round: 1
+executed_at: "2026-08-04T10:37:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 81b5467ba3532d04d6984fc3d47f970a1ed72fb7
+  head_commit: fe0af50c9ed5a85b8b308fafc93885f461a6908c
+  changed_files:
+    - crates/app_settings/src/settings.rs
+    - crates/mux_ipc/src/protocol.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/mux/apc.rs
+    - src-tauri/src/mux/ipc/codec.rs
+    - src-tauri/src/mux/ipc/connection.rs
+    - src-tauri/src/mux/ipc/mod.rs
+    - src-tauri/src/mux/ipc/pty_spawn.rs
+    - src-tauri/src/mux/ipc/statusbar.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/src/status_bar/runtime.rs
+    - src-tauri/src/status_bar/view_model.rs
+    - src-tauri/src/tabs.rs
+    - src-tauri/src/ui/status_bar.rs
+    - src-tauri/src/window_host.rs
+    - src-tauri/src/windows_exec.rs
+    - src-tauri/web-shared/settings/sections/mux-section.test.ts
+    - src-tauri/web-shared/settings/types.ts
+    - test-docs/mux-status-bar-removal/task0001.tests.yaml
+    - test-docs/mux-status-bar-removal/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  codex_cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "codex-cli usage limit reached (resets 2026-08-08)"}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "codex-cli usage limit reached (resets 2026-08-08)"}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex-cli usage limit reached (resets 2026-08-08)"}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "codex-cli usage limit reached (resets 2026-08-08)"}
+findings:
+  - stable_id: 05cb245a252d7e1c
+    severity: medium
+    category: architecture
+    file: doc/SPECIFICATION.md
+    line: 1359
+    title: "SSOTドキュメント(doc/SPECIFICATION.md)が削除済みのmux status barを現役仕様として記述したまま"
+    description: >-
+      削除したmux status barはSPEC/コード両面から一貫して除去されたが、正本ドキュメント
+      doc/SPECIFICATION.md の「Mux Status Bar」節(L1359〜)が mux.statusbar 設定スキーマ・
+      テンプレート・StatusUpdate送出を現役機能として記述したまま。設定ローダはFR4/FR8bにより
+      未知キーを警告なく無視するため、記述通りに設定したユーザーは無音で機能しない状態になる。
+      L1061のメッセージ型一覧もStatusUpdateを有効な型として列挙したまま。
+    suggestion: >-
+      doc/SPECIFICATION.md の「Mux Status Bar」節(L1359〜L1390)を削除し、L1061の
+      メッセージ型一覧からStatusUpdateを除去する。汎用ステータスバー(OSC 777;statusbar)の
+      節は本diffで存置対象のためそのまま残す。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium severity (R4 auto-fix only targets critical/high); doc-only fix, batch mode has no rework offer for medium residuals — recorded for a follow-up docs pass"
+  - stable_id: a84b25d470c6da4d
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/pty_spawn.rs
+    line: 1246
+    title: "OSC7 cwd検出をリロケートしたが、消費者が消滅して自己完結の死んだデータ経路になっている"
+    description: >-
+      detect_osc7_cwd/url_decodeはstatusbar.rsからpty_spawn.rsへ移設されたが、統合ツリー内で
+      Pane.cwdの機能的な読み手はmux/upgrade.rs:587(hot-upgrade handoff文書への直列化)のみで、
+      表示・利用する消費者が残っていない。デーモンの出力ホットパスにOSC7スキャンとロック書き込みが
+      根拠循環のまま残る。
+    suggestion: >-
+      (a) 消費者が本当に無いならdetect_osc7_cwd/url_decodeとcwd書き込み経路を削除する。
+      (b) 将来の消費者を意図するなら、移設コメントに具体的な予定消費者を明記する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity, architectural judgment call (retain vs remove) better suited to human/follow-up review than auto-fix"
+  - stable_id: 74d514e32b7e8141
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/status_bar/osc_dispatcher.rs
+    line: 77
+    title: "reset_forced_visibleが呼び出し元ゼロの死にコードとして残り、docコメントも失効している"
+    description: >-
+      mux切断falling-edge処理の削除に伴いOscStatusBarDispatcher::reset_forced_visibleの呼び出し元が
+      ツリー全体で0になった。pub fnのためdead_code警告は出ない。直上のdocコメントは
+      「mux disconnectで呼ばれる」と、もう存在しない挙動を現行仕様として説明している。
+    suggestion: >-
+      (a) reset_forced_visibleを削除する(OSC 777のset/clear/show/hideだけで状態遷移は閉じる)。
+      (b) 将来のOSC拡張用に残すなら、docコメントから失効した記述を外し呼び出し元が無いことを明記する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity; dead-code cleanup judgment call, not auto-fix eligible"
+  - stable_id: b22dd47b577750eb
+    severity: medium
+    category: comprehensive
+    file: doc/SPECIFICATION.md
+    line: 1359
+    title: "SPECIFICATION.mdの「Mux Status Bar」節が削除済み機能を現行仕様として記載したまま(SSOTドリフト)"
+    description: >-
+      architecture観点の指摘と同一箇所。mux.statusbar設定スキーマ・テンプレート・StatusUpdate送信・
+      「Auto-clears OSC layer when exiting mux mode」がSPECIFICATION.mdに現行機能として残存。
+      設定は黙って無視されるためfail-silentなドキュメントドリフトになっている。
+    suggestion: >-
+      doc/SPECIFICATION.mdの「Mux Status Bar」節(L1359見出し〜L1391直前)を削除する。
+      OSC7によるpane cwd追跡はFR7で存続するため、残したい場合はMux本体の節へ1行で移す。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium severity, same site as architecture finding 05cb245a252d7e1c (cross-perspective agreement); doc-only fix deferred to follow-up"
+  - stable_id: 5163df043876ec2e
+    severity: medium
+    category: spec
+    file: src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+    line: 48
+    title: "TSミラーに退役済みmux.statusbarフィクスチャが残存 (FR4 / AC-1未達)"
+    description: >-
+      SPEC FR4/AC-1が求める「全ミラーからのmux.statusbar削除」がterminal-behavior-section.test.tsの
+      makeMux()ヘルパーには適用されておらず、退役済みstatusbarフィールドを返したまま。tsconfig.jsonが
+      *.test.tsをtypecheck対象外にし、Bunの型剥がしのためNFR2のゲート(typecheck/bun test)いずれも
+      この不整合を検出できない。task0002実装者自身がこの箇所を「out of scope, pre-existing drift」と
+      報告済み(task0002.tests.yaml)。
+    suggestion: |-
+      --- a/src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+      +++ b/src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+      @@ -44,12 +44,6 @@
+           prefix: "",
+           tab_always_expand: false,
+           tmux_conf_imported: false,
+           keybinds: {},
+      -    statusbar: {
+      -      enabled: true,
+      -      left: "",
+      -      right: "",
+      -      commands: {},
+      -    },
+         };
+       }
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "medium severity — R4 auto-fix candidate gate is severity ∈ {critical, high} only; not eligible. Diff suggestion is ready for a follow-up pass."
+  - stable_id: ae0450e59578b754
+    severity: medium
+    category: spec
+    file: src-tauri/Cargo.toml
+    line: 179
+    title: "削除済みエンジンの支援依存hostnameが[dependencies]に残置 (FR2)"
+    description: >-
+      SPEC FR2が削除を求めたStatusBarEngineの唯一の依存先だったhostnameクレートが
+      src-tauri/Cargo.tomlの[dependencies]に無条件で残置。ツリー全体でhostname::/use hostnameの
+      参照はゼロ。cargoは未使用依存をエラーにしないためNFR1/NFR2のビルドチェックでは検出されず、
+      --no-default-featuresのCLIビルドにも不要なクレートが載り続ける。
+    suggestion: |-
+      --- a/src-tauri/Cargo.toml
+      +++ b/src-tauri/Cargo.toml
+      @@ -176,5 +176,4 @@
+       futures = "0.3"
+       chrono = "0.4"
+       anyhow = "1"
+      -hostname = "0.4"
+       vt100 = "0.16"
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: "medium severity — R4 auto-fix candidate gate is severity ∈ {critical, high} only; not eligible. Diff suggestion is ready for a follow-up pass."
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

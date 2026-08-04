@@ -40,7 +40,8 @@ workflow:
     base_commit: 81b5467ba3532d04d6984fc3d47f970a1ed72fb7
     completed_at_commit: fe0af50c9ed5a85b8b308fafc93885f461a6908c
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: fe0af50c9ed5a85b8b308fafc93885f461a6908c
   - id: verify
     status: pending
   - id: retrospect
@@ -88,11 +89,11 @@ tasks:
     merge_commit: 6487a13f5c6657c54c95a406c0129d615fdb2e20
 
 review:
-  rounds_completed: 0
-  perspectives: []
+  rounds_completed: 1
+  perspectives: [comprehensive, security, performance, architecture, spec]
   residual_critical_high: 0
   needs_rework: false
-  status: in_progress
+  status: completed
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
