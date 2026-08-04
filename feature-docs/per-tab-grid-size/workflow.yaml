@@ -40,7 +40,7 @@ workflow:
     status: completed
     completed_at_commit: 46b0c6987d09f1be53fa80d0441b4e77c9df6fec
   - id: implement
-    status: pending
+    status: in_progress
     completed_at_commit: 55026eb002ee1cede0d05c5ed699dcd7ebfffd0e
     base_commit: 6464344ea335f9b1e3329b3af75c70e3904f9e96
   - id: review
@@ -88,9 +88,9 @@ tasks:
     domains: [external-io, ui]
     complexity: high
     requirements: [FR3, FR4, FR6, NFR1, NFR2, NFR3]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/per-tab-grid-size/task0003
     provenance:
       source: review
       source_ids: [dbb7766a6212fb1a, 09f0e6096bbc36ee, a172de726b3cbc29, d39a6a9468ff892e, cfcbfae57964beb5]
@@ -104,9 +104,9 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [NFR2]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/per-tab-grid-size/task0004
     provenance:
       source: review
       source_ids: [c9d1e2db0ce11e59]
