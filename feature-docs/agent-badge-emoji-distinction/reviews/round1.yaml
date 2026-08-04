@@ -1,0 +1,121 @@
+round: 1
+executed_at: "2026-08-04T12:37:20+09:00"
+scope:
+  review_mode: diff
+  base_commit: 7227a0ddff7986c749b35d6b5d2e91df3c07f88a
+  head_commit: e5c9f32d902491df3f1140b9a4d89f62fe4e507d
+  changed_files:
+    - src-tauri/src/render/mod.rs
+    - src-tauri/src/ui/emoji_cache.rs
+    - src-tauri/src/ui/mux_sidebar.rs
+    - src-tauri/src/ui/status_bar.rs
+    - src-tauri/src/ui/tab_bar.rs
+    - test-docs/agent-badge-emoji-distinction/task0001.tests.yaml
+plan:
+  floor: [comprehensive, spec]
+  discretionary:
+    - perspective: performance
+      reason: "diff modifies per-frame render composition (render/mod.rs builds the EmojiResources bundle before every tab-bar draw); project has prior incidents with render-loop CPU hotspots"
+  codex_cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+findings:
+  - stable_id: 3139c8ebd8049dd8
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/ui/tab_bar.rs
+    line: 348
+    title: "バッジ絵文字の blit がピクセルグリッドに揃わず、二重リサンプルでぼやける（status_bar が明示的に潰した不具合クラスの再導入）"
+    description: >
+      paint_agent_badge の EmojiTexture 分岐が draw_size = tex_size * scale
+      という非整数サイズで Rect::from_center_size(slot_center, draw_size) を
+      物理ピクセルグリッドへスナップせずに描画していた。status_bar.rs の
+      emit_emoji_cluster_chain は同じテクスチャ経路で既にこの不具合クラスを
+      修正済み（snap クロージャ + 整数物理サイズ描画）で、新経路はその両方を
+      落としていた。
+    suggestion: "status_bar と同じ整合規則（整数物理サイズ描画 + 原点スナップ）をバッジ経路にも適用する。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (commit 56ca9d7): texture.size_vec2()/ppp を整数物理サイズとして使い、(v*ppp).round()/ppp で原点スナップ"
+  - stable_id: 0872df1561ee7e42
+    severity: medium
+    category: comprehensive
+    file: test-docs/agent-badge-emoji-distinction/task0001.tests.yaml
+    line: 40
+    title: "`final_failures: []` が実測と食い違い、baseline に無い失敗テストを機械可読フィールドから隠している"
+    description: >
+      final_failures がコメントでタスク自身のスイートにスコープを狭められて
+      おり、baseline_failures のフルスイート母集団と一致しない。実装後の
+      run 2 で観測された ts12_resize_supersedes_and_redispatches_at_new_grid
+      の失敗が baseline にも final にも現れず、新規失敗ゼロと誤読される。
+    suggestion: >
+      final_failures をフルスイート基準に揃えて実測失敗を列挙するか、
+      final_failures_scope のような明示フィールドでスコープを分離する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: e8f3fcacbb52b449
+    severity: medium
+    category: spec
+    file: src-tauri/src/ui/tab_bar.rs
+    line: 305
+    title: "絵文字テクスチャ取得失敗時のフォールバックが working / idle を色のみの区別に戻す"
+    description: >
+      resolve_badge_render_mode はテクスチャ非取得時に working / idle の
+      両方を Circle { filled: true } に解決し、色のみで区別する状態
+      （SPEC Overview が問題視した M-1 所見の状態）に退化する。SPEC FR1 の
+      無条件要求と衝突するが、通常経路（同梱 Noto Color Emoji）では発生
+      しない縮退経路。
+    suggestion: >
+      フォールバックでも working/idle を形状などで区別するか、テクスチャ
+      取得失敗を log::warn! で記録して診断可能にする。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: null
+  - stable_id: 9be8b5862fc1e3d4
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/ui/tab_bar.rs
+    line: 363
+    title: "auto-fix の overflow clamp が ceil() のため、1テクセルはみ出しただけでバッジが約半分のサイズになる"
+    description: >
+      loop 1 の修正で入った overflow clamp が overflow_ratio.ceil() で
+      除算していたため、非正方ビットマップ（bundled Noto Color Emoji の
+      常用パス）でバッジがおよそ半分に縮小されるリグレッションを新規に
+      作り込んでいた。
+    suggestion: "overflow_ratio.ceil() ではなく overflow_ratio そのもので除算する。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: fixed
+    resolution_reason: "auto-applied loop 2 (commit e5c9f32): texel_ratio = overflow_ratio.ceil() を廃し draw_size /= overflow_ratio に変更"
+  - stable_id: 8bcf04b959ccbf29
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/ui/tab_bar.rs
+    line: 362
+    title: "aspect-fit クランプが直下コメントのピクセルグリッド前提を壊す（バッジがぼける）"
+    description: >
+      loop 2 の修正後、overflow クランプを通ると draw_size が非整数物理
+      サイズになり、直後のコメントが主張する「整数物理サイズなので原点
+      スナップで両端がグリッドに乗る」「二段目の非整数ダウンスケールは
+      しない」という前提が非正方ストライクという常用パスで成立しなくなる。
+      結果としてクランプ経路のバッジは端数スケール＋片側オフグリッドで
+      描かれる。
+    suggestion: >
+      クランプ後に物理px整数へ丸めるか、コメントをクランプ経路の実態
+      （端数スケール・min側のみスナップ）に合わせて書き直す。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: null
+auto_fix:
+  loops_run: 2
+  applied_total: 2
+  termination: clean
+residual_critical_high: 0
+rework_required: false
