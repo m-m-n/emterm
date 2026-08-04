@@ -1553,6 +1553,15 @@ impl WindowHost {
             self.surface_dirty = false;
         }
 
+        // task0003 rework (D2, activation-reconcile request/execute split):
+        // consume any pending activation-reconcile request now that the
+        // status-bar insets, the mux-sidebar inset, and any pending
+        // display-area resize have all settled `App::cell_size` for the
+        // active tab this frame. This is the ONLY call point — running it
+        // any earlier (or inside the activation path itself) would compare
+        // against dims still describing the OUTGOING tab.
+        app.execute_pending_reconcile();
+
         // Phase 0: lazy first-frame configure + recovery from Lost/Outdated.
         // `surface_dirty` is true on construction (deferred configure) and
         // whenever a previous frame returned `Lost` / `Outdated`. We
