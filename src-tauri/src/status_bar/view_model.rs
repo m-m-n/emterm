@@ -39,14 +39,15 @@ impl OscRow {
     /// `true` when the row should appear given the auto-hide rule
     /// (FR12).
     ///
-    /// Mux attachment alone does NOT render the row. The daemon
-    /// signals "I'm pushing OSC content" by setting
-    /// `forced_visible = Some(true)` (in `runtime::build_osc_row` when
-    /// a `StatusUpdateMsg` arrives); until then both sides are empty
-    /// and the row stays hidden — empty content (the daemon explicitly
-    /// pushed `left = ""` / `right = ""`) and absent content (no
-    /// `StatusUpdateMsg` yet) are distinguished by `forced_visible`,
-    /// not by `has_mux_session`.
+    /// The row is driven entirely by the OSC `777;statusbar` dispatcher
+    /// (mux-status-bar-removal task0001: mux attach state is not an
+    /// input at all — see `runtime::build_osc_row`). The dispatcher
+    /// signals "content was explicitly set" by setting
+    /// `forced_visible = Some(true)`; until then both sides are empty
+    /// and the row stays hidden — empty content (the writer explicitly
+    /// set `left = ""` / `right = ""`) and absent content (nothing set
+    /// yet) are distinguished by `forced_visible`, not by content
+    /// alone.
     pub fn should_render(&self) -> bool {
         if self.forced_visible == Some(false) {
             return false;
@@ -95,17 +96,6 @@ mod tests {
             ..Default::default()
         };
         assert!(row.should_render());
-    }
-
-    /// Mux attachment alone must NOT render the row — distinguishes
-    /// "daemon explicitly pushed empty content" (forced_visible Some(true))
-    /// from "no StatusUpdateMsg received yet" (both sides empty,
-    /// forced_visible None). Without this rule a freshly-attached tab
-    /// shows an empty OSC band before the daemon's first push.
-    #[test]
-    fn osc_row_hides_when_only_mux_attached_with_no_content() {
-        let row = OscRow::default();
-        assert!(!row.should_render());
     }
 
     #[test]

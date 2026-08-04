@@ -1,10 +1,8 @@
 //! Windows-only helpers for resolving and spawning user-configured
-//! executables (status-bar custom commands, mux statusbar commands).
+//! executables (status-bar custom commands).
 //!
-//! Lifted out of `status_bar::providers::worker` so the mux IPC layer
-//! and the status-bar provider layer can both depend on a shared
-//! platform module rather than the status-bar layer (mux currently
-//! reaching across subsystems into a sibling).
+//! Lifted out of `status_bar::providers::worker` into its own platform
+//! module so callers don't reach across subsystems into a sibling.
 //!
 //! `cfg(any(windows, test))`: unit tests for the resolver/shebang
 //! parser need to compile on Linux CI; the real spawn-time use of

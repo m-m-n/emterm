@@ -3,8 +3,7 @@
 //! Owns the [`TemplateEngine`], all four built-in providers, and the
 //! OSC `777;statusbar` dispatcher. Per-frame
 //! [`StatusBarRuntime::build_view_model`] projects current settings
-//! plus the active tab's mux state into a
-//! [`StatusBarViewModel`].
+//! into a [`StatusBarViewModel`].
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -65,14 +64,6 @@ pub struct StatusBarRuntime {
     /// Per-frame resolve cache keyed by (template, version-tuple).
     /// Interior mutability so `build_view_model` stays `&self`.
     run_cache: Mutex<RunCache>,
-    /// Previous frame's "mux attached" state. SPEC US5 / FR11 require
-    /// the OSC layer to be cleared when the active tab transitions
-    /// from "in a mux session" to "not in a mux session" (mux
-    /// disconnect). We observe `mux_session_name: Some → None`
-    /// between frames and trigger a `dispatcher.handle(&["clear"])`
-    /// on the falling edge so any stale OSC 777 state from before
-    /// the mux session no longer surfaces.
-    prev_mux_attached: Mutex<bool>,
     /// Held so the Drop chain runs (worker join). The provider's
     /// `VariableProvider` impl is exercised via the engine.
     #[allow(dead_code)]
@@ -141,7 +132,6 @@ impl StatusBarRuntime {
             engine,
             dispatcher,
             run_cache: Mutex::new(RunCache::default()),
-            prev_mux_attached: Mutex::new(false),
             time_provider: time,
             cwd_provider: cwd,
             git_provider: git,
@@ -168,55 +158,22 @@ impl StatusBarRuntime {
     /// Inputs:
     /// - `settings`: current status-bar settings (templates,
     ///   position, font_size, …)
-    /// - `mux_session_name`: `Some(name)` when the active tab is in a
-    ///   mux session, used to detect the mux-disconnect falling edge
-    /// - `mux_status`: `Some(StatusUpdateMsg)` when the daemon has
-    ///   pushed status state for the active tab — wins over the OSC
-    ///   `777;statusbar` layer
     ///
-    /// SPEC US5: App Line 1/2 render the app's client-side templates
-    /// concurrently with the mux-daemon-supplied OSC row. The mux
-    /// session does NOT override or clear App Line 1/2.
-    pub fn build_view_model(
-        &self,
-        settings: &StatusBarSettings,
-        mux_session_name: Option<&str>,
-        mux_status: Option<&mux_ipc::protocol::StatusUpdateMsg>,
-    ) -> StatusBarViewModel {
+    /// The OSC row is fed only by the OSC `777;statusbar` dispatcher
+    /// (mux-status-bar-removal task0001, FR1/FR6): mux attach/detach
+    /// is not an input to this method or to [`build_osc_row`] — status
+    /// bar content and row count are functions of `settings` and the
+    /// dispatcher's own state only.
+    pub fn build_view_model(&self, settings: &StatusBarSettings) -> StatusBarViewModel {
         if !settings.enabled {
             return StatusBarViewModel::default();
         }
 
-        // SPEC US5 / FR11: clear the OSC layer on mux disconnect.
-        // We detect the `Some → None` falling edge of
-        // `mux_session_name` between frames and flush the
-        // dispatcher's state so any leftover OSC 777 content (or
-        // mux-daemon residue) doesn't leak into the post-disconnect
-        // display. Tracked here (in the runtime) rather than in the
-        // tab layer so the rule lives next to the OSC dispatcher it
-        // affects.
-        let attached_now = mux_session_name.is_some();
-        let mut prev = self.prev_mux_attached.lock();
-        if *prev && !attached_now {
-            // Falling edge: reset both sides + auto-hide marker.
-            self.dispatcher.handle(&["clear"]);
-            // Drop forced_visible so the auto-hide rule (FR12) can
-            // hide the row when both sides are empty after the
-            // disconnect.
-            self.dispatcher.reset_forced_visible();
-        }
-        *prev = attached_now;
-        drop(prev);
-
-        // OSC row: mux daemon wins. When no mux state is available,
-        // fall back to the OSC 777 dispatcher's layer state.
-        let osc = build_osc_row(&self.dispatcher.state_handle(), mux_status);
+        let osc = build_osc_row(&self.dispatcher.state_handle());
 
         // App rows: resolve each side through the engine + html
         // pipeline, with the (template, version-tuple) cache in
-        // front to short-circuit identical frames (NFR1). Mux
-        // attachment does NOT alter these — SPEC US5 requires the
-        // local templates to keep rendering alongside the OSC row.
+        // front to short-circuit identical frames (NFR1).
         let mut cache = self.run_cache.lock();
         let app_line1 = AppRow {
             left: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line1_left),
@@ -264,20 +221,7 @@ fn cap_osc_section(s: String) -> String {
     }
 }
 
-fn build_osc_row(
-    layer: &Arc<Mutex<OscLayerState>>,
-    mux_status: Option<&mux_ipc::protocol::StatusUpdateMsg>,
-) -> OscRow {
-    if let Some(mux) = mux_status {
-        return OscRow {
-            left: cap_osc_section(mux.left.clone()),
-            right: cap_osc_section(mux.right.clone()),
-            // Daemon-supplied state always renders; setting
-            // `forced_visible = Some(true)` keeps the auto-hide rule
-            // out of the way.
-            forced_visible: Some(true),
-        };
-    }
+fn build_osc_row(layer: &Arc<Mutex<OscLayerState>>) -> OscRow {
     let state = layer.lock().clone();
     OscRow {
         left: cap_osc_section(state.left),
@@ -335,7 +279,6 @@ fn build_cache_key(engine: &TemplateEngine, template: &str) -> RunCacheKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mux_ipc::protocol::StatusUpdateMsg;
 
     fn settings_with(left1: &str, right1: &str) -> StatusBarSettings {
         let mut s = StatusBarSettings::default();
@@ -379,7 +322,7 @@ mod tests {
             right: huge,
             forced_visible: Some(true),
         }));
-        let row = build_osc_row(&layer, None);
+        let row = build_osc_row(&layer);
         assert_eq!(row.left.chars().count(), OSC_SECTION_CHAR_CAP);
         assert_eq!(row.right.chars().count(), OSC_SECTION_CHAR_CAP);
     }
@@ -393,7 +336,7 @@ mod tests {
         );
         let mut s = StatusBarSettings::default();
         s.enabled = false;
-        let vm = rt.build_view_model(&s, None, None);
+        let vm = rt.build_view_model(&s);
         assert!(!vm.enabled);
     }
 
@@ -401,7 +344,7 @@ mod tests {
     fn build_view_model_app_line1_resolves_time_template() {
         let s = settings_with("{time}", "");
         let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
-        let vm = rt.build_view_model(&s, None, None);
+        let vm = rt.build_view_model(&s);
         assert!(vm.enabled);
         // {time} provider returns "HH:mm:ss"; the run-list is one
         // non-empty text run.
@@ -413,178 +356,54 @@ mod tests {
     fn build_view_model_empty_template_yields_empty_runs() {
         let s = settings_with("", "");
         let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
-        let vm = rt.build_view_model(&s, None, None);
+        let vm = rt.build_view_model(&s);
         assert!(vm.app_line1.left.is_empty());
         assert!(vm.app_line1.right.is_empty());
     }
 
+    /// AC-2/TS1 (mux-status-bar-removal task0001): `build_view_model`
+    /// takes no mux-status input at all -- the OSC row reflects only the
+    /// OSC `777;statusbar` dispatcher's state.
     #[test]
-    fn build_view_model_mux_status_populates_osc_row() {
+    fn build_view_model_osc_row_reflects_dispatcher_state_only() {
         let s = settings_with("", "");
         let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
-        let status = StatusUpdateMsg {
-            left: "1:shell".to_string(),
-            right: "host01".to_string(),
-        };
-        let vm = rt.build_view_model(&s, Some("main"), Some(&status));
-        assert_eq!(vm.osc.left, "1:shell");
-        assert_eq!(vm.osc.right, "host01");
-        assert_eq!(vm.osc.forced_visible, Some(true));
-    }
-
-    #[test]
-    fn build_view_model_falls_back_to_dispatcher_when_no_mux() {
-        let s = settings_with("", "");
-        let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
-        // Write to the dispatcher; no mux state.
         let dispatch = rt.dispatcher();
         crate::status_bar::osc_dispatcher::try_dispatch_statusbar(
             &dispatch,
             "statusbar;set;left;hello",
         );
-        let vm = rt.build_view_model(&s, None, None);
+        let vm = rt.build_view_model(&s);
         assert_eq!(vm.osc.left, "hello");
         assert_eq!(vm.osc.forced_visible, Some(true));
     }
 
-    /// SPEC US5 / FR11 regression: when the active tab transitions
-    /// from "in a mux session" to "not in a mux session" (mux
-    /// disconnect), the OSC layer MUST be cleared on the next
-    /// `build_view_model` call. The previous implementation relied on
-    /// "absence of mux state" alone, which left stale OSC 777 content
-    /// (or daemon residue still cached in the dispatcher) visible
-    /// after the falling edge.
+    /// AC-2/TS1: repeated `build_view_model` calls with unchanged
+    /// dispatcher state produce an unchanged OSC row -- there is no
+    /// hidden mux-attach-state input that could make two frames differ
+    /// with identical dispatcher content (this is the row-count /
+    /// content invariant AC-2 requires: mux attach/detach is not an
+    /// input).
     #[test]
-    fn mux_disconnect_clears_osc_layer() {
+    fn build_view_model_osc_row_is_stable_across_repeated_calls() {
         let s = settings_with("", "");
         let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
-
-        // Pre-seed the dispatcher as if some OSC 777 writer (or a
-        // stale mux frame) had left content on screen.
-        let dispatch = rt.dispatcher();
-        crate::status_bar::osc_dispatcher::try_dispatch_statusbar(
-            &dispatch,
-            "statusbar;set;left;stale",
-        );
-        crate::status_bar::osc_dispatcher::try_dispatch_statusbar(
-            &dispatch,
-            "statusbar;set;right;stale-right",
-        );
-        assert_eq!(dispatch.snapshot().left, "stale");
-
-        // Frame 1: mux attached. Daemon supplies the OSC row content;
-        // the dispatcher's leftover state is ignored (mux wins).
-        let status = mux_ipc::protocol::StatusUpdateMsg {
-            left: "mux-left".to_string(),
-            right: "mux-right".to_string(),
-        };
-        let vm_attached = rt.build_view_model(&s, Some("main"), Some(&status));
-        assert_eq!(vm_attached.osc.left, "mux-left");
-        assert_eq!(vm_attached.osc.right, "mux-right");
-
-        // Frame 2: mux drops (mux_session_name → None, mux_status →
-        // None). The runtime MUST clear the OSC dispatcher state on
-        // this falling edge so the post-disconnect view doesn't fall
-        // back to the stale `stale` / `stale-right` content from
-        // before mux was attached.
-        let vm_detached = rt.build_view_model(&s, None, None);
-        assert!(
-            vm_detached.osc.left.is_empty(),
-            "OSC left must be cleared on mux disconnect, got {:?}",
-            vm_detached.osc.left
-        );
-        assert!(
-            vm_detached.osc.right.is_empty(),
-            "OSC right must be cleared on mux disconnect, got {:?}",
-            vm_detached.osc.right
-        );
-        // forced_visible reset to None so the FR12 auto-hide rule can
-        // suppress the now-empty row.
-        assert_eq!(vm_detached.osc.forced_visible, None);
-    }
-
-    /// A new OSC 777 `set` issued AFTER the disconnect must still
-    /// surface — the clear only flushes pre-disconnect state, it does
-    /// not permanently suppress the OSC route.
-    #[test]
-    fn mux_disconnect_does_not_block_subsequent_osc_writes() {
-        let s = settings_with("", "");
-        let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
-
-        // Attach → detach.
-        let status = mux_ipc::protocol::StatusUpdateMsg {
-            left: "x".to_string(),
-            right: String::new(),
-        };
-        rt.build_view_model(&s, Some("main"), Some(&status));
-        rt.build_view_model(&s, None, None);
-
-        // Now a fresh OSC 777 set arrives.
         crate::status_bar::osc_dispatcher::try_dispatch_statusbar(
             &rt.dispatcher(),
-            "statusbar;set;left;fresh",
+            "statusbar;set;left;steady",
         );
-        let vm = rt.build_view_model(&s, None, None);
-        assert_eq!(vm.osc.left, "fresh");
-    }
-
-    #[test]
-    fn build_view_model_mux_wins_over_dispatcher() {
-        let s = settings_with("", "");
-        let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
-        let dispatch = rt.dispatcher();
-        crate::status_bar::osc_dispatcher::try_dispatch_statusbar(
-            &dispatch,
-            "statusbar;set;left;dispatched",
-        );
-        let status = StatusUpdateMsg {
-            left: "mux-left".to_string(),
-            right: String::new(),
-        };
-        let vm = rt.build_view_model(&s, Some("main"), Some(&status));
-        // Mux wins.
-        assert_eq!(vm.osc.left, "mux-left");
+        let vm1 = rt.build_view_model(&s);
+        let vm2 = rt.build_view_model(&s);
+        assert_eq!(vm1.osc, vm2.osc);
+        assert_eq!(vm1.osc.left, "steady");
     }
 
     #[test]
     fn build_view_model_app_line2_empty_means_no_runs() {
         let s = settings_with("{time}", "");
         let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
-        let vm = rt.build_view_model(&s, None, None);
+        let vm = rt.build_view_model(&s);
         assert!(!vm.app_line2.has_content());
-    }
-
-    /// SPEC US5 regression: when the active tab is mux-attached, App Line
-    /// 1/2 MUST keep rendering the app's own templates. A prior implementation
-    /// short-circuited both rows on mux attach (clearing them entirely or
-    /// overwriting line 1 with `mux.statusbar.left/right`), which silently
-    /// broke the local app status-bar the moment the user attached to a mux
-    /// session.
-    #[test]
-    fn mux_attach_does_not_clear_app_rows() {
-        let mut s = settings_with("{time}", "");
-        s.app_line2_left = "app2".to_string();
-        let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
-        let status = StatusUpdateMsg {
-            left: "mux-left".to_string(),
-            right: "mux-right".to_string(),
-        };
-        let vm = rt.build_view_model(&s, Some("main"), Some(&status));
-
-        // App Line 1 left ({time}) resolves to a non-empty run.
-        assert!(
-            !vm.app_line1.left.is_empty(),
-            "App Line 1 left must keep resolving its template while mux-attached"
-        );
-        assert_eq!(vm.app_line1.left[0].text.len(), 8); // HH:mm:ss
-        // App Line 2 left (literal "app2") survives.
-        assert!(
-            vm.app_line2.has_content(),
-            "App Line 2 must keep its app-side template while mux-attached"
-        );
-        // And the mux daemon's row content lands on the OSC row, not App.
-        assert_eq!(vm.osc.left, "mux-left");
-        assert_eq!(vm.osc.right, "mux-right");
     }
 
     // ── Phase F: run-list LRU cache ────────────────────────────
@@ -647,8 +466,8 @@ mod tests {
         // primed.
         let s = settings_with("{time}", "");
         let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
-        let vm1 = rt.build_view_model(&s, None, None);
-        let vm2 = rt.build_view_model(&s, None, None);
+        let vm1 = rt.build_view_model(&s);
+        let vm2 = rt.build_view_model(&s);
         // Both frames render at least one run for `{time}`.
         assert!(!vm1.app_line1.left.is_empty());
         assert!(!vm2.app_line1.left.is_empty());

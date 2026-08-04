@@ -1000,7 +1000,7 @@ pub(in crate::mux) fn pty_reader_loop(
                 }
 
                 // Detect OSC 7 (cwd reporting) and cache the path
-                if let Some(cwd) = crate::mux::ipc::statusbar::detect_osc7_cwd(data) {
+                if let Some(cwd) = detect_osc7_cwd(data) {
                     *pane_cwd.lock().unwrap() = Some(cwd);
                 }
 
@@ -1234,6 +1234,85 @@ fn forward_agent_status_items(
             }
         }
     }
+}
+
+/// Detect OSC 7 sequence in PTY output bytes and extract the CWD path.
+///
+/// OSC 7 format: ESC ] 7 ; file://hostname/path ST
+/// ST can be: ESC \ (0x1B 0x5C) or BEL (0x07)
+///
+/// Returns the extracted path on success, or None.
+///
+/// Relocated from the (now-deleted) mux status-bar engine module
+/// (mux-status-bar-removal task0001, IMPLEMENTATION.md D3): `Pane.cwd`
+/// persists across daemon hot-upgrade and pane restoration, so this
+/// detector belongs with its sole call site (the PTY reader loop above)
+/// rather than a status-bar-only module. Behavior and unit tests are
+/// unchanged by the move.
+fn detect_osc7_cwd(data: &[u8]) -> Option<String> {
+    // Look for ESC ] 7 ; pattern
+    let pattern = b"\x1b]7;";
+    let pos = data.windows(pattern.len()).position(|w| w == pattern)?;
+    let start = pos + pattern.len();
+
+    // Find the ST terminator (ESC \ or BEL)
+    let rest = &data[start..];
+    let end = rest.iter().enumerate().find_map(|(i, &b)| {
+        if b == 0x07 {
+            Some(i)
+        } else if b == 0x1b && rest.get(i + 1) == Some(&0x5c) {
+            Some(i)
+        } else {
+            None
+        }
+    })?;
+
+    let uri = std::str::from_utf8(&rest[..end]).ok()?;
+
+    // Strip file://hostname/ prefix to get the path
+    if let Some(after_scheme) = uri.strip_prefix("file://") {
+        // Find the first / after the hostname
+        if let Some(slash_pos) = after_scheme.find('/') {
+            let path = &after_scheme[slash_pos..];
+            // URL-decode the path
+            let decoded = url_decode(path);
+            return Some(decoded);
+        }
+    }
+
+    None
+}
+
+/// Simple percent-decoding for file paths (handles %XX sequences).
+/// Collects decoded bytes into a Vec<u8> to correctly handle multi-byte UTF-8.
+///
+/// Relocated alongside [`detect_osc7_cwd`] (mux-status-bar-removal
+/// task0001, IMPLEMENTATION.md D3).
+fn url_decode(s: &str) -> String {
+    let mut bytes = Vec::with_capacity(s.len());
+    let mut iter = s.bytes();
+    while let Some(b) = iter.next() {
+        if b == b'%' {
+            let hi = iter.next();
+            let lo = iter.next();
+            if let (Some(h), Some(l)) = (hi, lo) {
+                let hex = [h, l];
+                if let Ok(s) = std::str::from_utf8(&hex) {
+                    if let Ok(val) = u8::from_str_radix(s, 16) {
+                        bytes.push(val);
+                        continue;
+                    }
+                }
+                // Invalid hex - output as-is
+                bytes.push(b'%');
+                bytes.push(h);
+                bytes.push(l);
+            }
+        } else {
+            bytes.push(b);
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[cfg(test)]
@@ -3189,6 +3268,78 @@ mod tests {
             "EOF signal chunk must carry empty data"
         );
         reader_thread.join().unwrap();
+    }
+
+    // ── OSC 7 cwd detection (relocated from the deleted mux status-bar
+    //    engine module; mux-status-bar-removal task0001, IMPLEMENTATION.md
+    //    D3, AC-5). Behavior and assertions are unchanged from before the
+    //    move. ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_detect_osc7_with_esc_st() {
+        let data = b"\x1b]7;file://myhost/home/user\x1b\\";
+        assert_eq!(detect_osc7_cwd(data), Some("/home/user".to_string()));
+    }
+
+    #[test]
+    fn test_detect_osc7_with_bel_st() {
+        let data = b"\x1b]7;file://myhost/home/user\x07";
+        assert_eq!(detect_osc7_cwd(data), Some("/home/user".to_string()));
+    }
+
+    #[test]
+    fn test_detect_osc7_embedded_in_data() {
+        let data = b"some output\x1b]7;file://host/tmp\x1b\\more data";
+        assert_eq!(detect_osc7_cwd(data), Some("/tmp".to_string()));
+    }
+
+    #[test]
+    fn test_detect_osc7_no_pattern() {
+        let data = b"normal pty output without osc7";
+        assert_eq!(detect_osc7_cwd(data), None);
+    }
+
+    #[test]
+    fn test_detect_osc7_no_st() {
+        let data = b"\x1b]7;file://host/home/user";
+        assert_eq!(detect_osc7_cwd(data), None);
+    }
+
+    #[test]
+    fn test_detect_osc7_url_encoded_path() {
+        let data = b"\x1b]7;file://host/home/my%20folder\x1b\\";
+        assert_eq!(detect_osc7_cwd(data), Some("/home/my folder".to_string()));
+    }
+
+    #[test]
+    fn test_detect_osc7_empty_hostname() {
+        let data = b"\x1b]7;file:///home/user\x1b\\";
+        assert_eq!(detect_osc7_cwd(data), Some("/home/user".to_string()));
+    }
+
+    // ---- URL Decode Tests ----
+
+    #[test]
+    fn test_url_decode_no_encoding() {
+        assert_eq!(url_decode("/home/user"), "/home/user");
+    }
+
+    #[test]
+    fn test_url_decode_space() {
+        assert_eq!(url_decode("/home/my%20folder"), "/home/my folder");
+    }
+
+    #[test]
+    fn test_url_decode_multiple() {
+        assert_eq!(url_decode("/a%20b%2Fc"), "/a b/c");
+    }
+
+    #[test]
+    fn test_url_decode_multibyte_utf8() {
+        assert_eq!(
+            url_decode("/home/user/%E4%B8%AD%E6%96%87"),
+            "/home/user/中文"
+        );
     }
 
     // ── End-to-end child reap (task0001 AC-1/AC-7; TS-7, TS-8, TS-9) ──────

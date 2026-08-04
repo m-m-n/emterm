@@ -20,8 +20,8 @@ use crate::pty::{ExitReason, PtyEvent, PtySession};
 use crate::render::theme::Theme;
 use crate::settings::Settings;
 use mux_ipc::protocol::{
-    DecodedSnapshotPayload, MessageType, MuxMessage, RenameWindowMsg, ResizeMsg, StatusUpdateMsg,
-    WelcomeMsg, decode_snapshot_payload_typed,
+    DecodedSnapshotPayload, MessageType, MuxMessage, RenameWindowMsg, ResizeMsg, WelcomeMsg,
+    decode_snapshot_payload_typed,
 };
 use term_core::terminal_core::ReplaySegment;
 
@@ -258,10 +258,6 @@ pub struct Tab {
     /// from the daemon's `Welcome::Accepted.sessions[active]` arriving
     /// as an APC frame inside the PTY output.
     pub mux_session_name: Option<String>,
-    /// Phase 4-C: most recent status-update payload received from the
-    /// daemon. Phase 4-D's status-bar widget (`ui::status_bar`) reads
-    /// this through `App::status_bar_state()`.
-    pub mux_status_state: Option<StatusUpdateMsg>,
     /// mux window-tab group state for a mux-attached tab. Holds the ordered
     /// window list (parallel `windows` / `pane_ids`), active index, and
     /// compact/expanded flag. `None` until the tab attaches to a mux session
@@ -605,7 +601,6 @@ impl Tab {
             image_proc: ImageProcessor::new(),
             pending_image_events: Vec::new(),
             mux_session_name: None,
-            mux_status_state: None,
             mux_group: None,
             preedit_state: crate::ime::preedit::State::default(),
             bell_pending: false,
@@ -1859,16 +1854,13 @@ impl Tab {
                 // single-slot response buffer.
                 self.apply_active_pane_output(&msg.payload)
             }
-            MessageType::StatusUpdate => match msg.decode_payload::<StatusUpdateMsg>() {
-                Some(payload) => {
-                    self.mux_status_state = Some(payload);
-                    true
-                }
-                None => {
-                    log::warn!("mux apc: malformed StatusUpdate payload");
-                    false
-                }
-            },
+            // The former mux status-bar daemon push (opcode 0x16, see
+            // `mux_ipc::protocol`'s reserved-opcode comment) was retired
+            // by mux-status-bar-removal task0001; that opcode no longer
+            // decodes into a `MuxMessage` at all (see
+            // `mux_ipc::protocol::MessageType::from_u8`), so it falls
+            // through to the wildcard arm below like any other
+            // unrecognized message type.
             MessageType::AgentStatusUpdate => {
                 // Daemon → GUI unsolicited push (task0005 AC-2). Applying it
                 // to `App::agent_status` needs `&mut App`, which this method
@@ -2003,9 +1995,9 @@ impl Tab {
                                 // alive": with no seeded pane, `mux_group` stays
                                 // `None`, `active_pane_id()` is `None`, and every
                                 // keystroke gets dropped in `write_input` while
-                                // the daemon's StatusUpdate stream (which does
-                                // not consult `active_pane_id`) keeps the status
-                                // bar updating.
+                                // the (historical, now-removed) mux status-bar
+                                // daemon push kept the status bar updating
+                                // regardless.
                                 //
                                 // Pre-install an empty group so the daemon's
                                 // subsequent `PaneCreated` reply can land — the
@@ -2297,13 +2289,12 @@ impl Tab {
             }
             MessageType::Detached => {
                 // The daemon confirmed our `Detach`: exit mux mode. Clear the
-                // window group (the tab reverts to a plain tab), the session
-                // name (status-bar mux badge clears), and the cached status
-                // state. Port of the WebView `onDetached → exitMuxMode`.
+                // window group (the tab reverts to a plain tab) and the
+                // session name (status-bar mux badge clears). Port of the
+                // WebView `onDetached → exitMuxMode`.
                 log::info!("mux apc: detached from session for tab {:?}", self.title);
                 self.mux_group = None;
                 self.mux_session_name = None;
-                self.mux_status_state = None;
                 // Restore pre-mux routing: the next pump parses the PTS stream
                 // with `self.core` again (the bridge process exits and hands the
                 // PTY back to the shell). Drop any partial outer frame the
@@ -6779,6 +6770,58 @@ mod tests {
             "no snapshot pending: PtyOutput must reach core directly"
         );
         tab
+    }
+
+    /// AC-3/TS2 (mux-status-bar-removal task0001, FR1/FR8a): a raw frame
+    /// carrying the retired opcode 0x16 (see `mux_ipc::protocol`'s
+    /// reserved-opcode comment for what it used to mean, reserved and
+    /// never reused) arriving on the GUI's mux receive path is ignored
+    /// with at most a warn log — no error, no disconnect, no tab-state
+    /// mutation. Constructed as a raw wire frame (`[type=0x16][pane_id:
+    /// u32 LE][empty payload]`, wrapped exactly as the daemon/bridge
+    /// write it: `ESC _ emterm-mux;<base64> ESC \`) rather than through
+    /// the typed `MuxMessage` API, which can no longer name the retired
+    /// type — this keeps the test valid regardless of whether that type
+    /// still exists anywhere in the tree. Replaces (former app.rs
+    /// TS-mux-msg-2) `on_mux_message_status_update_caches_payload_on_tab`.
+    #[test]
+    fn retired_status_update_opcode_is_ignored_by_gui_receive_path() {
+        let mut tab = mux_tab_active_pane(10);
+        let before_session = tab.mux_session_name.clone();
+        let before_pane_ids = tab.mux_group.as_ref().map(|g| g.pane_ids().to_vec());
+        let before_active_pane = tab.mux_group.as_ref().and_then(|g| g.active_pane_id());
+
+        let retired_frame_body: Vec<u8> = vec![0x16, 0, 0, 0, 0]; // [type][pane_id LE]
+        let mut raw = vec![0x1b, b'_'];
+        raw.extend_from_slice(format!("emterm-mux;{}", b64(&retired_frame_body)).as_bytes());
+        raw.extend_from_slice(&[0x1b, b'\\']);
+
+        // Must not panic.
+        tab.test_process_combined(raw);
+
+        assert_eq!(
+            tab.mux_session_name, before_session,
+            "mux session must be undisturbed by a retired-opcode frame"
+        );
+        assert_eq!(
+            tab.mux_group.as_ref().map(|g| g.pane_ids().to_vec()),
+            before_pane_ids,
+            "mux window group must be undisturbed"
+        );
+        assert_eq!(
+            tab.mux_group.as_ref().and_then(|g| g.active_pane_id()),
+            before_active_pane,
+            "active pane must be undisturbed"
+        );
+
+        // Connection stays up: ordinary traffic immediately afterward still
+        // applies normally.
+        let follow_up = pty_output_apc(10, b"still alive");
+        let changed = tab.test_process_combined(follow_up);
+        assert!(
+            changed,
+            "tab must keep processing ordinary frames after a retired-opcode frame"
+        );
     }
 
     /// The batched (coalesce) behavior: K active-pane `PtyOutput` frames

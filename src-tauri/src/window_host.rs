@@ -1236,17 +1236,26 @@ impl WindowHost {
     /// toast event to wake the loop (findings 02546e5e10deb500 /
     /// 5b1878c41d3e02d6-perf-P2).
     fn refresh_status_bar_insets(&mut self, app: &App) {
+        // FR5 (mux-status-bar-removal task0001): `vm` — and therefore
+        // `height`, the bottom inset, and the grid-size candidate computed
+        // below — is a pure function of `app.settings.statusbar` and the
+        // OSC `777;statusbar` dispatcher's own state. `App::status_bar_view_model`
+        // takes no mux-attach input at all, so attaching/detaching a mux
+        // session cannot change the row count or grid size this method
+        // derives (see `status_bar/runtime.rs::build_view_model`).
         let vm = app.status_bar_view_model();
         let height = crate::ui::status_bar::panel_height_logical(&vm);
         // The status bar is fixed at the bottom; reserve its height there.
         let (top, bot) = (0.0, height);
 
-        // A fresh mux attach/reattach reopens the settling window:
-        // `mux_session_name` transitioning from absent to present is the
-        // same `first_welcome` moment `Tab::apply_mux_message` uses to
-        // seed the mux group and push its own one-time Resize (AC-4,
-        // untouched by this change — that seed does not go through
-        // `ResizeSettler` at all).
+        // A fresh mux attach/reattach reopens the settling window (unrelated
+        // to the status-bar row count above): `mux_session_name` transitioning
+        // from absent to present is the same `first_welcome` moment
+        // `Tab::apply_mux_message` uses to seed the mux group and push its
+        // own one-time Resize — that seed does not go through
+        // `ResizeSettler` at all, so this reset only affects how quickly a
+        // SEPARATE, unrelated settle (e.g. a concurrent window resize)
+        // converges around the same moment.
         let mux_attached = app.active_tab().is_some_and(|t| t.mux_session_name.is_some());
         if mux_attached && !self.mux_was_attached {
             self.resize_settler.reset();
@@ -4908,6 +4917,113 @@ mod tests {
                  sidebar inset"
             );
         }
+    }
+
+    // ── AC-2/TS4 (mux-status-bar-removal task0001, FR5/FR6): status-bar
+    // row count / inset driven only by general status-bar visibility, not
+    // by mux attach state. `refresh_status_bar_insets` feeds
+    // `panel_height_logical(&app.status_bar_view_model())` into
+    // `grid_size_for_bot_inset`'s `bot_inset_logical` argument — proving
+    // that height (and therefore the inset / grid-size CANDIDATE) is
+    // unaffected by mux attach is the direct input-level pin for the
+    // grid-height invariant. ─────────────────────────────────────────
+
+    /// Build a tab attached to a single-window mux session, mirroring
+    /// `tabs.rs`'s own `mux_tab_active_pane` test helper (duplicated here
+    /// rather than shared across modules — both are private `#[cfg(test)]`
+    /// helpers).
+    fn attach_active_tab_to_mux_session(app: &mut App) {
+        use mux_ipc::protocol::{MessageType, MuxMessage, SessionInfo, WelcomeMsg, WindowInfo};
+        let windows = vec![WindowInfo {
+            id: 1,
+            name: "win".to_string(),
+            active_pane_id: 10,
+        }];
+        let session = SessionInfo {
+            id: 1,
+            name: "main".to_string(),
+            window_count: windows.len() as u32,
+            pane_count: windows.len() as u32,
+            active_window_index: 0,
+            windows,
+        };
+        let welcome = MuxMessage::control(
+            MessageType::Welcome,
+            0,
+            &WelcomeMsg::Accepted {
+                server_version: 1,
+                sessions: vec![session],
+            },
+        );
+        app.on_mux_message(0, welcome);
+    }
+
+    /// AC-2/TS4: with the general status bar showing content (App Line 1
+    /// non-empty), attaching the active tab to a mux session must not
+    /// change `panel_height_logical` — the exact value
+    /// `refresh_status_bar_insets` feeds as the grid-size candidate's
+    /// bottom inset.
+    #[test]
+    fn status_bar_panel_height_unchanged_by_mux_attach_state() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        assert!(
+            app.active_tab().unwrap().mux_session_name.is_none(),
+            "precondition: tab starts unattached"
+        );
+        let height_before = crate::ui::status_bar::panel_height_logical(
+            &app.status_bar_view_model(),
+        );
+
+        attach_active_tab_to_mux_session(&mut app);
+        assert!(
+            app.active_tab().unwrap().mux_session_name.is_some(),
+            "precondition: tab is now mux-attached"
+        );
+        let height_after = crate::ui::status_bar::panel_height_logical(
+            &app.status_bar_view_model(),
+        );
+
+        assert_eq!(
+            height_before, height_after,
+            "status-bar panel height (-> bottom inset -> grid-size candidate) \
+             must be identical with and without mux attach"
+        );
+    }
+
+    /// AC-2/TS4 counterpart: the same invariant holds when the general
+    /// status bar has NO content at all (fully auto-hidden) — mux attach
+    /// must not be able to force a row to appear that general status-bar
+    /// state alone would keep hidden.
+    #[test]
+    fn status_bar_panel_height_stays_zero_when_no_general_content_regardless_of_mux() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        // `app.settings` is an `Arc<Settings>` — clone-and-flip to mutate,
+        // mirroring the pattern `app.rs`'s test module uses for the same
+        // purpose (its `with_setting` helper is private to that module).
+        app.settings = std::sync::Arc::new({
+            let mut s = (*app.settings).clone();
+            s.statusbar.app_line1_left.clear();
+            s.statusbar.app_line1_right.clear();
+            s.statusbar.app_line2_left.clear();
+            s.statusbar.app_line2_right.clear();
+            s
+        });
+
+        let height_before = crate::ui::status_bar::panel_height_logical(
+            &app.status_bar_view_model(),
+        );
+        assert_eq!(height_before, 0.0, "precondition: no visible rows yet");
+
+        attach_active_tab_to_mux_session(&mut app);
+        let height_after = crate::ui::status_bar::panel_height_logical(
+            &app.status_bar_view_model(),
+        );
+        assert_eq!(
+            height_after, 0.0,
+            "mux attach alone must not surface a status-bar row"
+        );
     }
 
     // ── ResizeSettler (mux-tab-switch-replay-latency task0002, FR6;
