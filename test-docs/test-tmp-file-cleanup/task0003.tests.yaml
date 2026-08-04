@@ -1,0 +1,99 @@
+task_id: task0003
+baseline_failures:
+  # tabs.rs off-thread replay flake, pre-existing and unrelated to
+  # mux/tmux_import.rs (see Notes in the task invocation and
+  # doc/tasks/test-tmp-file-cleanup IMPLEMENTATION.md Risk Assessment).
+  # Union of the failures observed across a parallel (default threads) and
+  # a --test-threads=1 baseline run; the flaky set varies run to run.
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  # --test-threads=1 full-suite re-run after implementation: identical set
+  # to the --test-threads=1 baseline slice (7 of the 19 union members).
+  # Strict subset of baseline_failures.
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::tmux_import::tests::missing_file_creates_settings_with_latch_only
+      - mux::tmux_import::tests::latch_skips_second_run
+      - mux::tmux_import::tests::applies_conversion_and_sets_latch
+      - mux::tmux_import::tests::preserves_unrelated_keys
+      - mux::tmux_import::tests::keybinds_replaces_non_object_value
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, running `cargo test --lib mux::tmux_import::tests::`
+      left /tmp/emterm-tmux-import-test-698110-{missing,latch,apply,preserve,
+      keybinds_nonobject}/ on disk after all 6 tests passed (verified with
+      `find /tmp -maxdepth 1 -name 'emterm-tmux-import-test-*'` immediately
+      after the run). After adding `cleanup_tmp_settings_dir` calls at the
+      end of each of the 5 tests, re-running the same command (and each of
+      the 5 tests individually via `--exact`) left no new
+      emterm-tmux-import-test-<this-run's-pid>-* directories under /tmp.
+  AC-2:
+    tests:
+      - mux::tmux_import::tests::missing_file_creates_settings_with_latch_only
+      - mux::tmux_import::tests::latch_skips_second_run
+      - mux::tmux_import::tests::applies_conversion_and_sets_latch
+      - mux::tmux_import::tests::preserves_unrelated_keys
+      - mux::tmux_import::tests::keybinds_replaces_non_object_value
+      - mux::tmux_import::tests::auto_import_tmux_conf_skips_oversized_file
+    red_confirmed: false
+    red_reason: >-
+      This criterion asserts invariance (no existing assertion changed, all
+      tests keep passing), not new behavior — there is no red state to
+      observe for it. `git diff` confirms every existing assertion line is
+      untouched (only `cleanup_tmp_settings_dir(&path);` lines were added
+      after existing assertions), and `cargo test --lib
+      mux::tmux_import::tests::` passes all 6 tests before and after the
+      change.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a test — verified by `git diff -- src-tauri/src/mux/tmux_import.rs`
+      showing zero lines touched inside
+      `auto_import_tmux_conf_skips_oversized_file` (per the task plan's
+      explicit prohibition on modifying that test).
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a test — verified by `git diff --stat` (single file changed) and
+      reading the diff hunks: every added line falls at or after line 181,
+      inside `mod tests { ... }` (which opens at line 170), and no
+      production function's signature or body changed. `cargo check
+      --manifest-path src-tauri/Cargo.toml` also passes, confirming the
+      production build is unaffected.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a test — verified by `git status` / `git diff --name-only`
+      showing only `src-tauri/src/mux/tmux_import.rs` changed; no
+      Cargo.toml or Cargo.lock modification, so no new dependency was
+      introduced.
