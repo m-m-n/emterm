@@ -240,6 +240,17 @@ pub fn draw_terminal(
     let icon = app_icon::texture_id(ctx);
     let title_event = crate::ui::title_bar::draw(ctx, "eMterm", window_maximized, icon);
 
+    // agent-badge-emoji-distinction task0001 Design 3: the emoji-resource
+    // bundle (glyph-rasterizer handle + font fallback chain + emoji
+    // texture cache handle) is built once per frame BEFORE the tab-bar
+    // draw so the tab bar, both mux-sidebar variants, and the status bar
+    // all consume the SAME handles this frame.
+    let emoji_resources = crate::ui::emoji_cache::EmojiResources {
+        rasterizer: app.font_rasterizer.as_ref(),
+        fallback: &app.font_fallback,
+        cache: &app.emoji_texture_cache,
+    };
+
     // Phase 4-B: real tab bar widget. We build a lightweight view-
     // model from the live tabs vector once per frame.
     let items: Vec<crate::ui::tab_bar::TabBarItem> = app
@@ -285,7 +296,13 @@ pub fn draw_terminal(
         // `draw_terminal` holds `&App` (immutable). The strip consumes it for
         // one frame; `window_host` clears it post-frame where `&mut App` is
         // available.
-        crate::ui::tab_bar::draw(ctx, &items, app.active, app.scroll_active_tab_into_view())
+        crate::ui::tab_bar::draw(
+            ctx,
+            &items,
+            app.active,
+            app.scroll_active_tab_into_view(),
+            Some(&emoji_resources),
+        )
     };
 
     // task0005 FR2/FR4/FR5: the mux window-sidebar. `mux_sidebar_visibility`
@@ -329,6 +346,7 @@ pub fn draw_terminal(
             crate::ui::mux_sidebar::Placement::Persistent,
             sidebar_width,
             mux_sidebar_opacity,
+            Some(&emoji_resources),
         );
         if let Some(window) = outcome.switch_to_window {
             if tab_event.is_none() {
@@ -345,11 +363,6 @@ pub fn draw_terminal(
     // takes the remaining rect). The widget itself decides top vs
     // bottom from settings.
     let status_vm = app.status_bar_view_model();
-    let emoji_resources = crate::ui::status_bar::EmojiResources {
-        rasterizer: app.font_rasterizer.as_ref(),
-        fallback: &app.font_fallback,
-        cache: &app.emoji_texture_cache,
-    };
     crate::ui::status_bar::draw(ctx, &status_vm, Some(&emoji_resources));
 
     let mut scroll_to = None;
@@ -420,6 +433,7 @@ pub fn draw_terminal(
             crate::ui::mux_sidebar::Placement::Overlay,
             sidebar_width,
             mux_sidebar_opacity,
+            Some(&emoji_resources),
         );
         if let Some(window) = outcome.switch_to_window {
             if tab_event.is_none() {

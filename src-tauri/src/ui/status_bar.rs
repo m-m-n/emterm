@@ -18,25 +18,11 @@
 //! model once per frame.
 
 use egui::{Align, Color32, FontFamily, FontId, Image, Layout, Margin, RichText};
-use parking_lot::Mutex;
 
 use crate::html::{CssColor, RichTextRun};
-use crate::render::font::fallback::FallbackChain;
-use crate::render::font::traits::GlyphRasterizer;
 use crate::status_bar::{AppRow, OscRow, StatusBarViewModel};
-use crate::ui::emoji_cache::{EmojiTextureCache, TextSegment, split_segments};
+use crate::ui::emoji_cache::{EmojiResources, TextSegment, split_segments};
 use crate::ui::md3;
-
-/// External handles the status-bar widget needs to render color
-/// emoji. The widget itself stays oblivious to wgpu / swash; it just
-/// asks the cache for a `TextureHandle` per emoji cluster.
-///
-/// Tests pass `None` so they don't need to stand up a real font stack.
-pub struct EmojiResources<'a> {
-    pub rasterizer: &'a dyn GlyphRasterizer,
-    pub fallback: &'a FallbackChain,
-    pub cache: &'a Mutex<EmojiTextureCache>,
-}
 
 /// Per-row visual height in egui logical points. Three rows render
 /// stacked; the panel height multiplies this by the number of

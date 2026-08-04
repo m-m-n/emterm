@@ -37,8 +37,9 @@ use egui::{Color32, FontId, Pos2, Rect, Rounding, ScrollArea, Sense, Stroke, Ui,
 
 use crate::agent_status_model::Aggregated;
 
+use super::emoji_cache::EmojiResources;
 use super::md3;
-use super::tab_bar::{agent_badge_filled, agent_state_color};
+use super::tab_bar::{AGENT_BADGE_SLOT_WIDTH, paint_agent_badge};
 
 // ── width formula (Shared Components: "Sidebar width function") ─────────
 
@@ -241,16 +242,10 @@ const NUMBER_COLUMN_WIDTH: f32 = 20.0;
 /// edge only; the overlay variant paints no separator — AC-3).
 const SEPARATOR_WIDTH: f32 = 1.0;
 
-// ── agent-status badge (task0006) ───────────────────────────────────────
+// ── agent-status badge (task0006; slot unified in task0001) ─────────────
 
-/// Badge dot diameter — matches `ui::tab_bar`'s `AGENT_BADGE_DIAMETER`
-/// (`IMPLEMENTATION.md` Conventions: "8px dot, 6px gap before title").
-const BADGE_DIAMETER: f32 = 8.0;
-/// Gap between the badge and the name that follows it.
+/// Gap between the badge slot and the name that follows it.
 const BADGE_GAP: f32 = 6.0;
-/// Ring stroke width for a *seen* blocked/done badge — matches
-/// `ui::tab_bar`'s `AGENT_BADGE_RING_WIDTH`.
-const BADGE_RING_WIDTH: f32 = 1.5;
 
 // ── overlay floating-card geometry (task0007) ───────────────────────────
 
@@ -285,10 +280,11 @@ pub fn draw(
     placement: Placement,
     width: f32,
     opacity: f32,
+    emoji: Option<&EmojiResources<'_>>,
 ) -> SidebarOutcome {
     match placement {
-        Placement::Persistent => draw_persistent(ctx, entries, width),
-        Placement::Overlay => draw_overlay(ctx, entries, width, opacity),
+        Placement::Persistent => draw_persistent(ctx, entries, width, emoji),
+        Placement::Overlay => draw_overlay(ctx, entries, width, opacity, emoji),
     }
 }
 
@@ -298,7 +294,12 @@ pub fn draw(
 /// `Frame` itself (mirrors `tab_bar`'s convention) so `ui.max_rect()`
 /// inside the closure is the panel's full (pre-padding) rect; the 12/8 px
 /// panel padding is then applied manually before laying out rows.
-fn draw_persistent(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) -> SidebarOutcome {
+fn draw_persistent(
+    ctx: &egui::Context,
+    entries: &[SidebarEntry],
+    width: f32,
+    emoji: Option<&EmojiResources<'_>>,
+) -> SidebarOutcome {
     let mut outcome = SidebarOutcome::default();
     let frame = egui::Frame::none()
         .fill(md3::surface_container_low())
@@ -320,7 +321,7 @@ fn draw_persistent(ctx: &egui::Context, entries: &[SidebarEntry], width: f32) ->
             let content_rect =
                 panel_rect.shrink2(Vec2::new(PANEL_PAD_HORIZONTAL, PANEL_PAD_VERTICAL));
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(content_rect), |ui| {
-                outcome = draw_rows(ui, entries);
+                outcome = draw_rows(ui, entries, emoji);
             });
         });
     outcome
@@ -343,6 +344,7 @@ fn draw_overlay(
     entries: &[SidebarEntry],
     width: f32,
     opacity: f32,
+    emoji: Option<&EmojiResources<'_>>,
 ) -> SidebarOutcome {
     let mut outcome = SidebarOutcome::default();
     // Use the remaining central-panel area (post title-bar / tab-bar /
@@ -439,7 +441,7 @@ fn draw_overlay(
                 prepared.content_ui.allocate_new_ui(
                     egui::UiBuilder::new().max_rect(content_rect),
                     |ui| {
-                        outcome = draw_rows(ui, entries);
+                        outcome = draw_rows(ui, entries, emoji);
                     },
                 );
 
@@ -473,7 +475,11 @@ fn draw_overlay(
 /// panel's content area by the caller). Rows never shrink (AC-4); overflow
 /// scrolls vertically — an empty list draws nothing (bare panel, no
 /// placeholder text).
-fn draw_rows(ui: &mut Ui, entries: &[SidebarEntry]) -> SidebarOutcome {
+fn draw_rows(
+    ui: &mut Ui,
+    entries: &[SidebarEntry],
+    emoji: Option<&EmojiResources<'_>>,
+) -> SidebarOutcome {
     let mut outcome = SidebarOutcome::default();
     #[cfg(test)]
     tests::LAST_ROW_RECTS.with(|c| c.borrow_mut().clear());
@@ -497,7 +503,7 @@ fn draw_rows(ui: &mut Ui, entries: &[SidebarEntry]) -> SidebarOutcome {
                     ui.painter()
                         .rect_filled(rect, Rounding::same(ROW_HEIGHT / 2.0), bg);
                 }
-                paint_row_content(ui, rect, entry, fg);
+                paint_row_content(ui, rect, entry, fg, emoji);
 
                 if resp.clicked() && outcome.switch_to_window.is_none() {
                     outcome.switch_to_window = Some(entry.window_index);
@@ -530,10 +536,18 @@ fn row_colors(entry: &SidebarEntry, hovered: bool) -> (Option<Color32>, Color32)
 
 /// Paint the `[number] [badge] name` content of one row: the number
 /// right-aligned in a fixed narrow column, an optional agent-status badge
-/// dot (task0006 AC-1/AC-2 — reserves space only when present), then the
-/// name ellipsized to the remaining width, which ends at the row's own
-/// right padding.
-fn paint_row_content(ui: &Ui, rect: Rect, entry: &SidebarEntry, color: Color32) {
+/// (task0006 AC-1/AC-2 — reserves space only when present; task0001
+/// widens the reserved slot to [`AGENT_BADGE_SLOT_WIDTH`] and adds the
+/// emoji-capable painting shared with `ui::tab_bar`), then the name
+/// ellipsized to the remaining width, which ends at the row's own right
+/// padding.
+fn paint_row_content(
+    ui: &Ui,
+    rect: Rect,
+    entry: &SidebarEntry,
+    color: Color32,
+    emoji: Option<&EmojiResources<'_>>,
+) {
     let number_font = FontId::proportional(NUMBER_FONT_SIZE);
     let name_font = FontId::proportional(NAME_FONT_SIZE);
 
@@ -549,9 +563,13 @@ fn paint_row_content(ui: &Ui, rect: Rect, entry: &SidebarEntry, color: Color32) 
 
     let mut name_left = number_col_right + NUMBER_NAME_GAP;
     if let Some(badge) = entry.badge {
-        let badge_center = egui::pos2(name_left + BADGE_DIAMETER / 2.0, rect.center().y);
-        paint_badge(ui, badge_center, badge);
-        name_left += BADGE_DIAMETER + BADGE_GAP;
+        let badge_center = egui::pos2(name_left + AGENT_BADGE_SLOT_WIDTH / 2.0, rect.center().y);
+        // task0001 AC-4: the identical shared painter the tab bar uses —
+        // same glyph, box size, slot width, gap, and fallback rule
+        // (NFR1), consuming the ONE decision function pair from
+        // `ui::tab_bar` rather than a parallel reimplementation.
+        paint_agent_badge(ui, badge_center, badge, emoji);
+        name_left += AGENT_BADGE_SLOT_WIDTH + BADGE_GAP;
     }
 
     let name_right = rect.right() - ROW_HORIZONTAL_PAD;
@@ -559,24 +577,6 @@ fn paint_row_content(ui: &Ui, rect: Rect, entry: &SidebarEntry, color: Color32) 
     let name_galley = ui.fonts(|f| layout_ellipsized(f, &entry.name, &name_font, color, max_w));
     let name_pos = egui::pos2(name_left, rect.center().y - name_galley.size().y / 2.0);
     ui.painter().galley(name_pos, name_galley, color);
-}
-
-/// Paint one agent-status badge dot at `center` (filled or ring, per
-/// [`agent_badge_filled`]) — task0006 AC-1, mirrors
-/// `ui::tab_bar::paint_agent_badge` but sized off this module's own
-/// [`BADGE_DIAMETER`] / [`BADGE_RING_WIDTH`] constants.
-fn paint_badge(ui: &Ui, center: Pos2, badge: Aggregated) {
-    let color = agent_state_color(badge.state);
-    let radius = BADGE_DIAMETER / 2.0;
-    if agent_badge_filled(badge) {
-        ui.painter().circle_filled(center, radius, color);
-    } else {
-        ui.painter().circle_stroke(
-            center,
-            radius - BADGE_RING_WIDTH / 2.0,
-            Stroke::new(BADGE_RING_WIDTH, color),
-        );
-    }
 }
 
 /// Lay out `text` in `font_id` / `color`, ellipsizing with `…` when it
@@ -692,14 +692,14 @@ mod tests {
         let mut priming = RawInput::default();
         priming.screen_rect = Some(screen_rect());
         let _ = ctx.run(priming, |ctx| {
-            let _ = draw(ctx, items, placement, MIN_WIDTH, 1.0);
+            let _ = draw(ctx, items, placement, MIN_WIDTH, 1.0, None);
         });
 
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         LAST_ROW_RECTS.with(|c| c.borrow_mut().clear());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(ctx, items, placement, MIN_WIDTH, 1.0);
+            let _ = draw(ctx, items, placement, MIN_WIDTH, 1.0, None);
         });
         LAST_ROW_RECTS.with(|c| c.borrow().clone())
     }
@@ -727,7 +727,7 @@ mod tests {
             priming.screen_rect = Some(screen_rect());
             priming.events.push(Event::PointerMoved(click_pos));
             let _ = ctx.run(priming, |ctx| {
-                let _ = draw(ctx, items, placement, MIN_WIDTH, 1.0);
+                let _ = draw(ctx, items, placement, MIN_WIDTH, 1.0, None);
             });
         }
 
@@ -748,7 +748,7 @@ mod tests {
         });
         let mut captured = SidebarOutcome::default();
         let _ = ctx.run(input, |ctx| {
-            captured = draw(ctx, items, placement, MIN_WIDTH, 1.0);
+            captured = draw(ctx, items, placement, MIN_WIDTH, 1.0, None);
         });
         captured
     }
@@ -868,13 +868,7 @@ mod tests {
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(
-                ctx,
-                items,
-                Placement::Overlay,
-                width,
-                1.0,
-            );
+            let _ = draw(ctx, items, Placement::Overlay, width, 1.0, None);
         });
         LAST_OVERLAY_CARD
             .with(|c| *c.borrow())
@@ -895,13 +889,7 @@ mod tests {
         input.screen_rect = Some(screen_rect());
         LAST_ROW_RECTS.with(|c| c.borrow_mut().clear());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(
-                ctx,
-                items,
-                Placement::Overlay,
-                width,
-                1.0,
-            );
+            let _ = draw(ctx, items, Placement::Overlay, width, 1.0, None);
         });
         let card = LAST_OVERLAY_CARD
             .with(|c| *c.borrow())
@@ -1095,24 +1083,12 @@ mod tests {
             let mut priming = RawInput::default();
             priming.screen_rect = Some(screen_rect());
             let _ = ctx.run(priming, |ctx| {
-                let _ = draw(
-                    ctx,
-                    items,
-                    Placement::Overlay,
-                    MIN_WIDTH,
-                    opacity,
-                );
+                let _ = draw(ctx, items, Placement::Overlay, MIN_WIDTH, opacity, None);
             });
             let mut input = RawInput::default();
             input.screen_rect = Some(screen_rect());
             ctx.run(input, |ctx| {
-                let _ = draw(
-                    ctx,
-                    items,
-                    Placement::Overlay,
-                    MIN_WIDTH,
-                    opacity,
-                );
+                let _ = draw(ctx, items, Placement::Overlay, MIN_WIDTH, opacity, None);
             })
         }
 
@@ -1152,26 +1128,14 @@ mod tests {
         let mut input_full = RawInput::default();
         input_full.screen_rect = Some(screen_rect());
         let output_full = ctx_full.run(input_full, |ctx| {
-            let _ = draw(
-                ctx,
-                &items,
-                Placement::Persistent,
-                MIN_WIDTH,
-                1.0,
-            );
+            let _ = draw(ctx, &items, Placement::Persistent, MIN_WIDTH, 1.0, None);
         });
 
         let ctx_zero = egui::Context::default();
         let mut input_zero = RawInput::default();
         input_zero.screen_rect = Some(screen_rect());
         let output_zero = ctx_zero.run(input_zero, |ctx| {
-            let _ = draw(
-                ctx,
-                &items,
-                Placement::Persistent,
-                MIN_WIDTH,
-                0.0,
-            );
+            let _ = draw(ctx, &items, Placement::Persistent, MIN_WIDTH, 0.0, None);
         });
 
         assert_eq!(
@@ -1203,26 +1167,14 @@ mod tests {
         let mut input1 = RawInput::default();
         input1.screen_rect = Some(screen1);
         let _ = ctx.run(input1, |ctx| {
-            let _ = draw(
-                ctx,
-                items,
-                Placement::Overlay,
-                width1,
-                1.0,
-            );
+            let _ = draw(ctx, items, Placement::Overlay, width1, 1.0, None);
         });
 
         let mut input2 = RawInput::default();
         input2.screen_rect = Some(screen2);
         LAST_ROW_RECTS.with(|c| c.borrow_mut().clear());
         let _ = ctx.run(input2, |ctx| {
-            let _ = draw(
-                ctx,
-                items,
-                Placement::Overlay,
-                width2,
-                1.0,
-            );
+            let _ = draw(ctx, items, Placement::Overlay, width2, 1.0, None);
         });
         LAST_OVERLAY_CARD
             .with(|c| *c.borrow())
@@ -1414,13 +1366,7 @@ mod tests {
         input.screen_rect = Some(screen_rect());
         let mut captured = SidebarOutcome::default();
         let _ = ctx.run(input, |ctx| {
-            captured = draw(
-                ctx,
-                &items,
-                Placement::Persistent,
-                MIN_WIDTH,
-                1.0,
-            );
+            captured = draw(ctx, &items, Placement::Persistent, MIN_WIDTH, 1.0, None);
         });
         assert_eq!(captured, SidebarOutcome::default());
     }
@@ -1482,13 +1428,7 @@ mod tests {
         input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 150.0)));
         LAST_ROW_RECTS.with(|c| c.borrow_mut().clear());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(
-                ctx,
-                &items,
-                Placement::Persistent,
-                MIN_WIDTH,
-                1.0,
-            );
+            let _ = draw(ctx, &items, Placement::Persistent, MIN_WIDTH, 1.0, None);
         });
         let rects = LAST_ROW_RECTS.with(|c| c.borrow().clone());
         assert_eq!(
@@ -1656,13 +1596,7 @@ mod tests {
                     show_tab_bar,
                 ))
                 .show(ctx, |_| {});
-            let _ = draw(
-                ctx,
-                &items,
-                Placement::Persistent,
-                width,
-                1.0,
-            );
+            let _ = draw(ctx, &items, Placement::Persistent, width, 1.0, None);
             egui::TopBottomPanel::bottom("t0010-statusbar")
                 .exact_height(40.0)
                 .show(ctx, |_| {});
@@ -1717,13 +1651,7 @@ mod tests {
                 .exact_height(bottom_chrome)
                 .show(ctx, |_| {});
             egui::CentralPanel::default().show(ctx, |_| {});
-            let _ = draw(
-                ctx,
-                &items,
-                Placement::Overlay,
-                width,
-                1.0,
-            );
+            let _ = draw(ctx, &items, Placement::Overlay, width, 1.0, None);
         });
 
         let card = LAST_OVERLAY_CARD
@@ -1797,13 +1725,7 @@ mod tests {
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         let output = ctx.run(input, |ctx| {
-            let _ = draw(
-                ctx,
-                items,
-                Placement::Persistent,
-                MIN_WIDTH,
-                1.0,
-            );
+            let _ = draw(ctx, items, Placement::Persistent, MIN_WIDTH, 1.0, None);
         });
         let mut shapes = Vec::new();
         for cs in &output.shapes {
@@ -1860,10 +1782,7 @@ mod tests {
             .find("fn draw_rows(")
             .expect("draw_rows present in source");
         let body = &src[start..];
-        let end = body[1..]
-            .find("\nfn ")
-            .map(|i| i + 1)
-            .unwrap_or(body.len());
+        let end = body[1..].find("\nfn ").map(|i| i + 1).unwrap_or(body.len());
         let draw_rows_src = &body[..end];
         assert!(
             !draw_rows_src.contains("ui.interact("),
@@ -1883,7 +1802,9 @@ mod tests {
         // `SidebarOutcome` has exactly this one field. Catches a
         // copy-pane-id field left behind by an incomplete removal at
         // compile time (rather than a runtime assertion).
-        let SidebarOutcome { switch_to_window: _ } = SidebarOutcome::default();
+        let SidebarOutcome {
+            switch_to_window: _,
+        } = SidebarOutcome::default();
     }
 
     #[test]
@@ -1903,6 +1824,155 @@ mod tests {
             Some(0),
             "a click at the former copy-icon position must switch windows \
              once the copy affordance is removed"
+        );
+    }
+
+    // ── task0001 AC-4: identical shared painter, unified badge slot ─────
+
+    // Standing up the REAL swash + bundled-font stack in a unit test is
+    // impractical (per the task's Test Notes) — this stub mirrors the one
+    // in `ui::tab_bar`'s test module so both widgets' AC-3/AC-4 tests
+    // exercise the same texture-blit code path via `paint_agent_badge`.
+    struct StubEmojiRasterizer;
+
+    impl crate::render::font::traits::GlyphRasterizer for StubEmojiRasterizer {
+        fn shape(
+            &self,
+            _cluster: &str,
+            font: crate::render::font::traits::FontId,
+            size_px: f32,
+        ) -> Vec<crate::render::font::traits::ShapedGlyph> {
+            vec![crate::render::font::traits::ShapedGlyph {
+                font,
+                glyph_id: 1,
+                size_px,
+            }]
+        }
+
+        fn raster(
+            &self,
+            _font: crate::render::font::traits::FontId,
+            _glyph_id: u32,
+            size_px: f32,
+        ) -> Option<crate::render::font::traits::GlyphBitmap> {
+            let n = size_px.round().max(1.0) as u32;
+            Some(crate::render::font::traits::GlyphBitmap {
+                format: crate::render::font::traits::AtlasFormat::Rgba,
+                width: n,
+                height: n,
+                bearing: (0, 0),
+                advance: size_px,
+                pixels: vec![255u8; (n as usize) * (n as usize) * 4],
+            })
+        }
+
+        fn has_codepoint(&self, _font: crate::render::font::traits::FontId, _cp: u32) -> bool {
+            true
+        }
+    }
+
+    fn stub_emoji_fallback() -> crate::render::font::fallback::FallbackChain {
+        use crate::render::font::traits::FontId;
+        let mut chain = crate::render::font::fallback::FallbackChain::new(FontId(1), [FontId(2)]);
+        chain.set_emoji(FontId(2));
+        chain
+    }
+
+    /// Collect the rects of every textured (image-blit) `Shape::Rect` —
+    /// mirrors `ui::tab_bar::tests::collect_textured_rects`.
+    fn collect_textured_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<Rect> {
+        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<Rect>) {
+            use egui::epaint::Shape;
+            match shape {
+                Shape::Rect(r) if r.fill_texture_id != egui::TextureId::default() => {
+                    out.push(r.rect);
+                }
+                Shape::Vec(v) => {
+                    for s in v {
+                        walk(s, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for cs in shapes {
+            walk(&cs.shape, &mut out);
+        }
+        out
+    }
+
+    #[test]
+    fn ac4_working_and_idle_badges_with_emoji_resources_paint_texture_blit() {
+        for state in [
+            crate::agent_status::AgentState::Working,
+            crate::agent_status::AgentState::Idle,
+        ] {
+            let mut items = entries(1, 0);
+            items[0].badge = Some(Aggregated {
+                state,
+                unseen: true,
+            });
+            let rasterizer = StubEmojiRasterizer;
+            let fallback = stub_emoji_fallback();
+            let cache = parking_lot::Mutex::new(crate::ui::emoji_cache::EmojiTextureCache::new());
+            let emoji = EmojiResources {
+                rasterizer: &rasterizer,
+                fallback: &fallback,
+                cache: &cache,
+            };
+            let ctx = egui::Context::default();
+            let mut input = RawInput::default();
+            input.screen_rect = Some(screen_rect());
+            let output = ctx.run(input, |ctx| {
+                let _ = draw(
+                    ctx,
+                    &items,
+                    Placement::Persistent,
+                    MIN_WIDTH,
+                    1.0,
+                    Some(&emoji),
+                );
+            });
+
+            let textured = collect_textured_rects(&output.shapes);
+            assert!(
+                !textured.is_empty(),
+                "{state:?}: expected a textured rect (emoji blit) for the badge"
+            );
+            for r in &textured {
+                assert!(
+                    r.width() <= AGENT_BADGE_SLOT_WIDTH + 0.01
+                        && r.height() <= AGENT_BADGE_SLOT_WIDTH + 0.01,
+                    "{state:?}: emoji blit must aspect-fit inside the identical \
+                     {AGENT_BADGE_SLOT_WIDTH}px slot the tab bar uses; got {r:?}"
+                );
+            }
+        }
+    }
+
+    // ── task0001 AC-5: unified 12px badge slot ───────────────────────────
+
+    #[test]
+    fn ac5_working_to_done_transition_causes_no_name_column_shift() {
+        // The reserved slot width is unified across ALL states (Design
+        // 4), so a badge state transition must never move the name
+        // column even though `working` and `done` render via different
+        // presentations (emoji fallback-circle vs. native circle).
+        let mut working = entries(1, 0);
+        working[0].badge = Some(Aggregated {
+            state: crate::agent_status::AgentState::Working,
+            unseen: true,
+        });
+        let mut done = entries(1, 0);
+        done[0].badge = Some(Aggregated {
+            state: crate::agent_status::AgentState::Done,
+            unseen: true,
+        });
+        assert_eq!(
+            name_text_x(&working),
+            name_text_x(&done),
+            "a working -> done badge transition must cause no name-column x-shift"
         );
     }
 }
