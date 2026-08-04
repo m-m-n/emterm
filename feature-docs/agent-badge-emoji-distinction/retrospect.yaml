@@ -1,0 +1,25 @@
+feature: agent-badge-emoji-distinction
+collected_at: "2026-08-04T12:43:00+09:00"
+session_ids: [094b713c-d9c6-461b-91de-f3227ea56cd6]
+signals:
+  review_critical_high:
+    - stable_id: 3139c8ebd8049dd8
+      category: comprehensive
+      file: src-tauri/src/ui/tab_bar.rs
+      title: "バッジ絵文字の blit がピクセルグリッドに揃わず、二重リサンプルでぼやける"
+      resolution: fixed
+    - stable_id: 9be8b5862fc1e3d4
+      category: comprehensive
+      file: src-tauri/src/ui/tab_bar.rs
+      title: "auto-fix の overflow clamp が ceil() のため、1テクセルはみ出しただけでバッジが約半分のサイズになる"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "diff modifies per-frame render composition (render/mod.rs builds the EmojiResources bundle before every tab-bar draw); project has prior incidents with render-loop CPU hotspots"
+  declined_findings: []
+lessons_candidates:
+  - "review round 1 loop 2 で auto-fix 自体が新規の high regression（overflow clamp の ceil() バグ）を作り込み、それを再レビューで検出・修正した。auto-fix ループの再レビューは「元の finding が直ったか」だけでなく「fix 自体が新しい bug を持ち込んでいないか」を見る価値がある一例。"
+  - "task0001 implementer は TDD の red-then-green を厳密には踏まず（生成コードとテストを同一パスで書いた）、その旨を notes に正直に自己申告した。テストの中身自体は実際の描画結果（Shape::Rect の有無等）をアサートしており、代替として妥当だった。"
