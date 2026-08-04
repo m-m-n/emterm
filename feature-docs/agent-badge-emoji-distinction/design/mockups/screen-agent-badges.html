@@ -1,0 +1,307 @@
+<!doctype html>
+<!--
+  Design mockup: agent state badges (tab bar + mux sidebar)
+  Feature: agent-badge-emoji-distinction
+
+  This file is a design spec, NOT implementation. Its markup/CSS is never
+  copied into product code. The native app renders these badges via egui
+  painters + the swash EmojiTextureCache path; browser emoji rendering here
+  only approximates the bundled Noto Color Emoji output.
+
+  Token values below mirror doc/UI-DESIGN-GUIDELINES.yaml color roles as
+  resolved by the app's baseline (dark) palette in src-tauri/src/ui/md3.rs.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>agent-badge-emoji-distinction — badge states</title>
+    <style>
+      :root {
+        /* doc/UI-DESIGN-GUIDELINES.yaml color roles (baseline dark values from ui/md3.rs) */
+        --color-primary: #d0bcff;
+        --color-on-secondary-container: #e8def8;
+        --color-surface-container: #211f26;
+        --color-surface-container-high: #2b2930;
+        --color-on-surface: #e6e0e9;
+        --color-on-surface-variant: #cac4d0;
+        --color-outline-variant: #49454f;
+        --color-on-error-container: #f9dedc;
+        /* feature-local geometry (decision: DESIGN.md) */
+        --badge-slot: 12px; /* unified badge slot, = tokens.typography.label-small font-size */
+        --badge-emoji-size: 12px; /* emoji box, aspect-fit */
+        --badge-dot: 8px; /* unchanged circle diameter for blocked/done */
+        --badge-ring: 1.5px; /* unchanged ring stroke for seen blocked/done */
+        --badge-gap: 6px; /* unchanged gap before the title */
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #141218;
+        color: var(--color-on-surface);
+        font-family: "Roboto", "Noto Sans", sans-serif;
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 400;
+      }
+      h2 {
+        font-size: 16px;
+        font-weight: 500;
+        margin: 36px 0 8px;
+      }
+      p.note {
+        font-size: 13px;
+        color: var(--color-on-surface-variant);
+        max-width: 720px;
+      }
+      section {
+        margin-bottom: 24px;
+      }
+
+      /* ── tab bar strip (components.tabs: 48px bar, surface-container) ── */
+      .tab-bar {
+        display: flex;
+        height: 48px;
+        background: var(--color-surface-container);
+        border-bottom: 1px solid var(--color-outline-variant);
+        width: 640px;
+      }
+      .tab {
+        flex: 1 1 0;
+        min-width: 120px;
+        max-width: 300px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--badge-gap);
+        font-size: 14px;
+        font-weight: 500;
+        letter-spacing: 0.1px;
+        color: var(--color-on-surface-variant);
+        position: relative;
+      }
+      .tab.active {
+        color: var(--color-primary);
+      }
+      .tab.active::after {
+        content: "";
+        position: absolute;
+        left: 16px;
+        right: 16px;
+        bottom: 0;
+        height: 3px;
+        border-radius: 3px 3px 0 0;
+        background: var(--color-primary);
+      }
+
+      /* ── sidebar rows (mux_sidebar: 40px rows, surface-container-high card) ── */
+      .sidebar {
+        width: 260px;
+        background: var(--color-surface-container-high);
+        border-radius: 12px; /* corner-medium */
+        padding: 8px 0;
+      }
+      .sidebar-row {
+        display: flex;
+        align-items: center;
+        height: 40px;
+        padding: 0 12px;
+        font-size: 14px;
+        color: var(--color-on-surface);
+      }
+      .sidebar-row .num {
+        width: 16px;
+        text-align: right;
+        font-size: 12px;
+        color: var(--color-on-surface-variant);
+        margin-right: 8px;
+      }
+
+      /* ── badge primitives ── */
+      .badge-slot {
+        width: var(--badge-slot);
+        height: var(--badge-slot);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+        margin-right: var(--badge-gap);
+      }
+      .tab .badge-slot {
+        margin-right: 0;
+      } /* gap comes from flex gap in tabs */
+      .badge-emoji {
+        font-size: var(--badge-emoji-size);
+        line-height: 1;
+      }
+      .badge-dot {
+        width: var(--badge-dot);
+        height: var(--badge-dot);
+        border-radius: 9999px;
+      }
+      .badge-dot.filled-blocked {
+        background: var(--color-on-error-container);
+      }
+      .badge-dot.ring-blocked {
+        border: var(--badge-ring) solid var(--color-on-error-container);
+        box-sizing: border-box;
+      }
+      .badge-dot.filled-done {
+        background: var(--color-on-secondary-container);
+      }
+      .badge-dot.ring-done {
+        border: var(--badge-ring) solid var(--color-on-secondary-container);
+        box-sizing: border-box;
+      }
+      /* rejected current presentation, shown for comparison only */
+      .badge-dot.old-working {
+        background: var(--color-primary);
+      }
+      .badge-dot.old-idle {
+        background: var(--color-on-surface-variant);
+      }
+
+      table.compare {
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      table.compare td,
+      table.compare th {
+        border: 1px solid var(--color-outline-variant);
+        padding: 8px 16px;
+        text-align: center;
+      }
+      table.compare th {
+        color: var(--color-on-surface-variant);
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Agent state badges — working / idle emoji distinction</h1>
+    <p class="note">
+      Decision (DESIGN.md): working and idle replace their filled dot with a
+      color emoji — working = &#x26A1; (U+26A1), idle = &#x1F4A4; (U+1F4A4) —
+      drawn aspect-fit in a 12px slot. Blocked / done keep the current 8px
+      filled-dot / ring presentation, centered in the same 12px slot. In the app
+      the emoji is rasterized by the swash EmojiTextureCache path (bundled Noto
+      Color Emoji); this page uses the browser's emoji font as an approximation.
+    </p>
+
+    <section data-state="working">
+      <h2>State: working</h2>
+      <div class="tab-bar">
+        <div class="tab active">
+          <span class="badge-slot"
+            ><span class="badge-emoji">&#x26A1;</span></span
+          >mux: build
+        </div>
+        <div class="tab">shell</div>
+      </div>
+      <br />
+      <div class="sidebar">
+        <div class="sidebar-row">
+          <span class="num">1</span
+          ><span class="badge-slot"
+            ><span class="badge-emoji">&#x26A1;</span></span
+          >claude-code
+        </div>
+        <div class="sidebar-row"><span class="num">2</span>logs</div>
+      </div>
+    </section>
+
+    <section data-state="idle">
+      <h2>State: idle</h2>
+      <div class="tab-bar">
+        <div class="tab active">
+          <span class="badge-slot"
+            ><span class="badge-emoji">&#x1F4A4;</span></span
+          >mux: build
+        </div>
+        <div class="tab">shell</div>
+      </div>
+      <br />
+      <div class="sidebar">
+        <div class="sidebar-row">
+          <span class="num">1</span
+          ><span class="badge-slot"
+            ><span class="badge-emoji">&#x1F4A4;</span></span
+          >claude-code
+        </div>
+        <div class="sidebar-row"><span class="num">2</span>logs</div>
+      </div>
+    </section>
+
+    <section data-state="other-states-unchanged">
+      <h2>Other states (blocked / done) — presentation unchanged</h2>
+      <p class="note">
+        Filled dot when unseen, 1.5px ring when seen — exactly the current
+        rendering, now centered inside the unified 12px slot so titles do not
+        shift when a pane transitions between states.
+      </p>
+      <div class="sidebar">
+        <div class="sidebar-row">
+          <span class="num">1</span
+          ><span class="badge-slot"
+            ><span class="badge-dot filled-blocked"></span></span
+          >blocked (unseen)
+        </div>
+        <div class="sidebar-row">
+          <span class="num">2</span
+          ><span class="badge-slot"
+            ><span class="badge-dot ring-blocked"></span></span
+          >blocked (seen)
+        </div>
+        <div class="sidebar-row">
+          <span class="num">3</span
+          ><span class="badge-slot"
+            ><span class="badge-dot filled-done"></span></span
+          >done (unseen)
+        </div>
+        <div class="sidebar-row">
+          <span class="num">4</span
+          ><span class="badge-slot"
+            ><span class="badge-dot ring-done"></span></span
+          >done (seen)
+        </div>
+      </div>
+    </section>
+
+    <section data-state="before-after">
+      <h2>Why: current vs proposed, at actual size</h2>
+      <table class="compare">
+        <tr>
+          <th></th>
+          <th>working</th>
+          <th>idle</th>
+        </tr>
+        <tr>
+          <td>current (rejected)</td>
+          <td>
+            <span class="badge-slot"
+              ><span class="badge-dot old-working"></span
+            ></span>
+          </td>
+          <td>
+            <span class="badge-slot"
+              ><span class="badge-dot old-idle"></span
+            ></span>
+          </td>
+        </tr>
+        <tr>
+          <td>proposed</td>
+          <td>
+            <span class="badge-slot"
+              ><span class="badge-emoji">&#x26A1;</span></span
+            >
+          </td>
+          <td>
+            <span class="badge-slot"
+              ><span class="badge-emoji">&#x1F4A4;</span></span
+            >
+          </td>
+        </tr>
+      </table>
+    </section>
+  </body>
+</html>
