@@ -55,9 +55,18 @@ workflow:
     status: completed
     completed_at_commit: 7c7086138bac9f324dabfd878fb1cb873aa58348
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 410a2bdee5891f056d6b9738009d138ac816f769
+    result: pass
     failed_items: []
+    notes: >-
+      Build 3/3 green (main / mux_ipc / CLI feature gate). Unit: mux_ipc 108/108;
+      src-tauri --lib 3087 passed with 7 tabs::tests failures that reproduce
+      IDENTICALLY at base_commit 9059f3d (baseline worktree run) — pre-existing
+      flakiness in the off-thread replay suite, disjoint from every file this
+      feature touches. Integration TS4 10/10 green including
+      hot_upgrade_preserves_alt_screen_state_on_reattach. TS5 (MT-1 AC-2 /
+      MT-2 AC-5) is user-performed manual verification and remains outstanding.
   - id: retrospect
     status: pending
 
