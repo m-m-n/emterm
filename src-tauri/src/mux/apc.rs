@@ -97,7 +97,6 @@ mod tests {
     use super::*;
     use mux_ipc::protocol::{
         CreateWindowPayload, MessageType, MoveWindowMsg, MuxMessage, RenameWindowMsg,
-        StatusUpdateMsg,
     };
 
     /// Strip the `ESC _` / `ESC \` framing the way `term_core`'s `on_apc`
@@ -262,26 +261,23 @@ mod tests {
 
     // ── TS-apc-1: happy path round-trip ──────────────────────────────────
 
+    /// AC-3 (mux-status-bar-removal task0001, FR8a): a raw APC payload
+    /// carrying the retired opcode 0x16 (see `mux_ipc::protocol`'s
+    /// reserved-opcode comment for what it used to mean, reserved and
+    /// never reused) reaching this module's `try_decode_emterm_mux` --
+    /// the actual GUI receive-path entry point for inbound mux frames --
+    /// is ignored (`None`), the same non-fatal outcome as any other
+    /// unrecognized message type. Built as a raw byte frame (not through
+    /// the typed `MuxMessage` API, which can no longer name the retired
+    /// type) so this test stays valid regardless of whether that type
+    /// still exists anywhere in the tree.
     #[test]
-    fn decodes_status_update_apc_payload() {
-        let status = StatusUpdateMsg {
-            left: "[default] *win1 win2".to_string(),
-            right: "12:34:56".to_string(),
-        };
-        let msg = MuxMessage::control(MessageType::StatusUpdate, 0, &status);
-        let apc = msg.to_apc();
-        // Strip the ESC _ and ESC \ surroundings to match what term_core
-        // hands `on_apc`.
-        let payload = apc
-            .strip_prefix("\x1b_")
-            .and_then(|s| s.strip_suffix("\x1b\\"))
-            .expect("apc framing");
-
-        let decoded = try_decode_emterm_mux(payload.as_bytes()).expect("decoded");
-        assert_eq!(decoded.msg_type, MessageType::StatusUpdate);
-        let parsed: StatusUpdateMsg = decoded.decode_payload().expect("status payload");
-        assert_eq!(parsed.left, status.left);
-        assert_eq!(parsed.right, status.right);
+    fn retired_status_update_opcode_apc_payload_is_ignored() {
+        use base64::Engine as _;
+        let frame_body: Vec<u8> = vec![0x16, 0, 0, 0, 0]; // [type][pane_id: u32 LE]
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&frame_body);
+        let payload = format!("emterm-mux;{encoded}");
+        assert!(try_decode_emterm_mux(payload.as_bytes()).is_none());
     }
 
     #[test]

@@ -851,40 +851,8 @@ impl App {
             Arc::new(move || cwd_for_source.lock().clone());
         // Hand the providers a clone of the global `wake` so each
         // owns its own refresh-redraw seam (SPEC.md Notes section).
-        //
-        // `mux.statusbar.commands` registers `{cmd:<name>}` consumers
-        // for the mux templates. The WebView build runs those in the
-        // mux daemon; native-poc is in-process and shares the same
-        // CommandProvider with `statusbar.custom_commands`, so we merge
-        // the mux entries here before spinning up workers. On a name
-        // collision the app side wins (the mux entry is dropped with a
-        // warn-log) so a `settings.json` typo can never silently
-        // replace an app-defined command.
-        //
-        // SPEC mux-statusbar §FR1: "When `enabled` is `false`, daemon
-        // skips all command execution, timer setup, and StatusUpdate
-        // sending." We honour the same contract here by gating the merge
-        // on `mux.statusbar.enabled` — when disabled, mux-only commands
-        // never enter the shared CommandProvider, so a user keeping the
-        // default `enabled=false` while pre-staging entries for a future
-        // toggle does not see them silently start running via the app
-        // statusbar's `{cmd:<name>}` templates.
-        let mut runtime_statusbar = settings.statusbar.clone();
-        if settings.mux.statusbar.enabled {
-            for (name, cmd) in &settings.mux.statusbar.commands {
-                if runtime_statusbar.custom_commands.contains_key(name) {
-                    log::warn!(
-                        "settings.mux.statusbar.commands.{name}: name collides with statusbar.custom_commands; mux entry dropped"
-                    );
-                    continue;
-                }
-                runtime_statusbar
-                    .custom_commands
-                    .insert(name.clone(), cmd.clone());
-            }
-        }
         let status_bar_runtime = StatusBarRuntime::new(
-            &runtime_statusbar,
+            &settings.statusbar,
             cwd_source,
             crate::wakeup::shared_wake_fn(),
         );
@@ -2450,11 +2418,14 @@ impl App {
 
     /// Build a per-frame view model for the status-bar widget. The
     /// runtime owns the template engine, providers, and OSC
-    /// dispatcher; this method just snapshots the active tab's mux
-    /// state into the runtime and refreshes the shared cwd cell.
+    /// dispatcher; this method refreshes the shared cwd cell the
+    /// providers read through.
     ///
     /// The render pipeline calls this once per frame and hands the
-    /// result to [`crate::ui::status_bar::draw`].
+    /// result to [`crate::ui::status_bar::draw`]. Mux attach state is
+    /// not an input (mux-status-bar-removal task0001, FR1/FR5): the
+    /// view model is a pure function of settings and the OSC
+    /// `777;statusbar` dispatcher's own state.
     pub fn status_bar_view_model(&self) -> crate::status_bar::StatusBarViewModel {
         // Refresh the cwd snapshot the providers read through their
         // `CwdSource` closure. The lock is held only for the duration
@@ -2464,21 +2435,8 @@ impl App {
             .and_then(|t| t.cb_state.lock().cwd.clone());
         *self.active_cwd.lock() = active_cwd_value;
 
-        let (mux_session_name, mux_status) = match self.active_tab() {
-            Some(t) => (t.mux_session_name.as_deref(), t.mux_status_state.as_ref()),
-            None => (None, None),
-        };
-
-        // SPEC US5: App Line 1/2 keep rendering the app's own templates
-        // while the mux daemon's StatusUpdate populates the OSC row.
-        // `mux.statusbar.*` is consumed by the daemon (and the GUI's
-        // `CommandProvider` merge at startup); the runtime does not need
-        // it on the per-frame path.
-        self.status_bar_runtime.build_view_model(
-            &self.settings.statusbar,
-            mux_session_name,
-            mux_status,
-        )
+        self.status_bar_runtime
+            .build_view_model(&self.settings.statusbar)
     }
 
     /// Build the current status-bar view model and compare it against
@@ -7505,28 +7463,13 @@ mod tests {
         assert_eq!(row0, "AFTER");
     }
 
-    /// TS-mux-msg-2: `App::on_mux_message` updates `mux_status_state`
-    /// on the target tab when handed a `StatusUpdate`.
-    #[test]
-    fn on_mux_message_status_update_caches_payload_on_tab() {
-        use mux_ipc::protocol::{MessageType, MuxMessage, StatusUpdateMsg};
-
-        let mut app = App::new();
-        app.spawn_initial_tab();
-
-        let payload = StatusUpdateMsg {
-            left: "[default] *win1 win2".to_string(),
-            right: "12:34".to_string(),
-        };
-        let msg = MuxMessage::control(MessageType::StatusUpdate, 0, &payload);
-        let changed = app.on_mux_message(0, msg);
-        assert!(changed);
-
-        let tab = app.active_tab().unwrap();
-        let cached = tab.mux_status_state.as_ref().expect("status cached");
-        assert_eq!(cached.left, payload.left);
-        assert_eq!(cached.right, payload.right);
-    }
+    // TS-mux-msg-2 (`on_mux_message_status_update_caches_payload_on_tab`)
+    // is replaced by `tabs.rs`'s
+    // `retired_status_update_opcode_is_ignored_by_gui_receive_path`
+    // (AC-3/TS2, mux-status-bar-removal task0001): the retired opcode
+    // can no longer be named through the typed `MuxMessage` API, so its
+    // tolerance is exercised as a raw byte frame at the GUI receive
+    // boundary instead of through `App::on_mux_message`.
 
     /// `App::on_mux_message` with an out-of-range tab index is a no-op
     /// (logs a warning) and never panics.

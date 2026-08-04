@@ -23,7 +23,6 @@ use super::handlers::{
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
-use super::statusbar::{StatusBarEngine, execute_command};
 use crate::mux::daemon::{SharedUpgradeAckSlot, UpgradeSignal, UpgradeSignalSender};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
@@ -366,59 +365,6 @@ pub async fn handle_connection<S>(
     // message after its output stream is ready. This eliminates the timing
     // dependency where reattach data could arrive before the client is listening.
 
-    // Status bar engine setup
-    let active_pane_id: super::statusbar::SharedActivePaneId =
-        Arc::new(std::sync::Mutex::new(None));
-    let pane_cwd_map: super::statusbar::SharedPaneCwdMap =
-        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let mut statusbar_engine = StatusBarEngine::new(active_pane_id.clone(), pane_cwd_map.clone());
-
-    // Send initial error message if settings failed to load
-    if let Some(err_msg) = statusbar_engine.initial_error_update() {
-        let _ = framed.send(err_msg).await;
-    }
-
-    // Set up status bar timers only if enabled and templates contain variables
-    let statusbar_enabled = statusbar_engine.is_enabled();
-    let mut render_interval = if statusbar_enabled && statusbar_engine.has_template_variables() {
-        Some(statusbar_engine.render_interval())
-    } else {
-        None
-    };
-    let command_intervals = if statusbar_enabled {
-        statusbar_engine.command_intervals()
-    } else {
-        Vec::new()
-    };
-
-    // Create per-command timers using mpsc channel for aggregation.
-    // Each command timer runs as a separate task, sending its name when it fires.
-    let (cmd_tick_tx, mut cmd_tick_rx) = mpsc::channel::<String>(16);
-    for (name, dur) in command_intervals {
-        // Trigger immediate first execution so status bar populates without waiting
-        let _ = cmd_tick_tx.try_send(name.clone());
-        let tx = cmd_tick_tx.clone();
-        let cmd_name = name.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(dur);
-            interval.tick().await; // skip first immediate tick (already sent above)
-            loop {
-                interval.tick().await;
-                if tx.send(cmd_name.clone()).await.is_err() {
-                    break;
-                }
-            }
-        });
-    }
-    drop(cmd_tick_tx); // Drop the original sender; spawned tasks hold clones
-
-    // Channel for receiving command execution results from spawned tasks
-    let (cmd_result_tx, mut cmd_result_rx) = mpsc::channel::<(String, Option<String>)>(16);
-
-    // Per-command JoinHandle for single-flight control: skip if previous execution is still running
-    let mut cmd_handles: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
-        std::collections::HashMap::new();
-
     // Kick channel: set by handle_attach. Fires with Ok(()) when another
     // client attaches to the same session and evicts us. Drop-without-send
     // (Err) is treated as a no-op so that cleanly switching sessions does
@@ -455,16 +401,6 @@ pub async fn handle_connection<S>(
 
     // Message + output loop using select! to handle both directions concurrently
     loop {
-        // Build a future for the render timer (if enabled)
-        let render_tick = async {
-            if let Some(ref mut interval) = render_interval {
-                interval.tick().await;
-            } else {
-                // Never resolves if disabled
-                std::future::pending::<()>().await;
-            }
-        };
-
         // Kick future: resolves when our kick_rx fires. `Ok(())` means
         // another client attached to this session and evicted us. `Err(_)`
         // means the Sender was dropped — in practice this occurs when the
@@ -559,13 +495,6 @@ pub async fn handle_connection<S>(
                 took_client_arm = true;
                 match msg {
                     Some(Ok(msg)) => {
-                        // Track active pane from PtyInput and SwitchWindow messages
-                        if msg.msg_type == MessageType::PtyInput
-                            || msg.msg_type == MessageType::SwitchWindow
-                        {
-                            *active_pane_id.lock().unwrap() = Some(msg.pane_id);
-                        }
-
                         if let Err(should_break) = route_message(
                             msg,
                             &session_manager,
@@ -573,8 +502,6 @@ pub async fn handle_connection<S>(
                             &pane_output_tx,
                             &mut active_session_id,
                             &shutdown_tx,
-                            &mut statusbar_engine,
-                            &pane_cwd_map,
                             &title_tx,
                             &notification_tx,
                             &agent_status_tx,
@@ -752,11 +679,8 @@ pub async fn handle_connection<S>(
                     // both delivers the exit chunk and fails the client write, so
                     // a success-gated reap would skip cleanup and leave a session
                     // that never auto-shuts-down / can't be `mux kill`ed. Mirror
-                    // the explicit `DestroyPane` cleanup fully — including dropping
-                    // the pane's cwd entry from the status-bar map so it can't
-                    // resolve a stale cwd for a dead pane.
+                    // the explicit `DestroyPane` cleanup fully.
                     for pane_id in exited_panes {
-                        pane_cwd_map.lock().unwrap().remove(&pane_id);
                         handle_destroy_pane(pane_id, &session_manager, &shutdown_tx).await;
                     }
                     if send_err || flush_failed {
@@ -800,70 +724,25 @@ pub async fn handle_connection<S>(
                     );
                 }
             }
-            _ = render_tick => {
-                if let Some(update_msg) = statusbar_engine.render() {
-                    if framed.send(update_msg).await.is_err() {
-                        break;
-                    }
-                }
-            }
-            Some(cmd_name) = cmd_tick_rx.recv() => {
-                // Single-flight: skip if previous execution is still running
-                if let Some(handle) = cmd_handles.get(&cmd_name) {
-                    if !handle.is_finished() {
-                        log::debug!("Skipping command '{}': previous execution still running", cmd_name);
-                        continue;
-                    }
-                }
-                if let Some(executable) = statusbar_engine.get_command_executable(&cmd_name) {
-                    let tx = cmd_result_tx.clone();
-                    let cwd = statusbar_engine.active_cwd();
-                    let name = cmd_name.clone();
-                    let handle = tokio::spawn(async move {
-                        let result = execute_command(&executable, &cwd).await;
-                        let _ = tx.send((name, result)).await;
-                    });
-                    cmd_handles.insert(cmd_name, handle);
-                }
-            }
-            Some((name, output)) = cmd_result_rx.recv() => {
-                statusbar_engine.update_command_cache(&name, output);
-            }
             notification = notify_rx.recv() => {
                 match notification {
                     Ok(msg) => {
                         // Forward cross-client notification (e.g., CLI SwitchWindow) to GUI
                         log::info!("Forwarding notification to GUI: {:?} pane={}", msg.msg_type, msg.pane_id);
-                        if msg.msg_type == MessageType::SwitchWindow {
-                            *active_pane_id.lock().unwrap() = Some(msg.pane_id);
-                            if statusbar_engine.is_enabled() {
-                                // Send SwitchWindow + status bar update as a batch
-                                if framed.feed(msg).await.is_err() {
-                                    break;
-                                }
-                                let update_msg = statusbar_engine.force_render();
-                                if framed.send(update_msg).await.is_err() {
-                                    break;
-                                }
-                            } else if framed.send(msg).await.is_err() {
-                                break;
-                            }
-                        } else {
-                            // AC-7 (Design "Announcement delivery"): once an
-                            // `Upgrading` frame is actually written to THIS
-                            // socket, acknowledge it so `prepare_upgrade` can
-                            // observe delivery (not merely queueing) before
-                            // the runtime is torn down. Every other message
-                            // type never touches the slot.
-                            let is_upgrading = msg.msg_type == MessageType::Upgrading;
-                            if framed.send(msg).await.is_err() {
-                                break;
-                            }
-                            if is_upgrading {
-                                let ack_tx = upgrade_ack_slot.lock().unwrap().clone();
-                                if let Some(ack_tx) = ack_tx {
-                                    let _ = ack_tx.try_send(());
-                                }
+                        // AC-7 (Design "Announcement delivery"): once an
+                        // `Upgrading` frame is actually written to THIS
+                        // socket, acknowledge it so `prepare_upgrade` can
+                        // observe delivery (not merely queueing) before
+                        // the runtime is torn down. Every other message
+                        // type never touches the slot.
+                        let is_upgrading = msg.msg_type == MessageType::Upgrading;
+                        if framed.send(msg).await.is_err() {
+                            break;
+                        }
+                        if is_upgrading {
+                            let ack_tx = upgrade_ack_slot.lock().unwrap().clone();
+                            if let Some(ack_tx) = ack_tx {
+                                let _ = ack_tx.try_send(());
                             }
                         }
                     }
@@ -906,14 +785,6 @@ pub async fn handle_connection<S>(
         // connection.rs:820, review round 4) so the increment/reset
         // arithmetic is unit-testable deterministically, mirroring
         // `allow_client_message_arm`'s own extraction rationale.
-        //
-        // Note: the `continue;` in the `cmd_tick_rx.recv()` arm's
-        // single-flight skip (above, in this same `select!`) bypasses this
-        // bookkeeping entirely for that iteration — a known, low-risk gap
-        // (it can only make the guard trigger sooner than the documented
-        // "every other outcome resets it" rule states, never later, so it
-        // does not weaken the starvation guarantee) left unaddressed here
-        // as out of this rework's scope.
         consecutive_client_msgs_while_deferred = next_client_msg_starvation_count(
             took_client_arm,
             has_pending_output,
@@ -1280,8 +1151,6 @@ async fn route_message<S>(
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: &mut u32,
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
-    statusbar_engine: &mut StatusBarEngine,
-    pane_cwd_map: &super::statusbar::SharedPaneCwdMap,
     title_tx: &TitleChangeSender,
     notification_tx: &NotificationSender,
     agent_status_tx: &AgentStatusReportSender,
@@ -1317,8 +1186,6 @@ where
                 pane_exit_sender,
             )
             .await?;
-            // Register pane cwd Arcs for newly created panes
-            register_session_pane_cwds(session_manager, *active_session_id, pane_cwd_map).await;
         }
         MessageType::Attach => {
             handle_attach(
@@ -1332,15 +1199,6 @@ where
                 visible_state,
             )
             .await?;
-            // Register pane cwd Arcs for all panes in the new session
-            register_session_pane_cwds(session_manager, *active_session_id, pane_cwd_map).await;
-            // Send status bar content immediately after attach
-            if statusbar_engine.is_enabled() {
-                let update_msg = statusbar_engine.force_render();
-                if framed.send(update_msg).await.is_err() {
-                    return Err(false);
-                }
-            }
         }
         MessageType::Detach => {
             log::info!("Client requested detach");
@@ -1349,18 +1207,10 @@ where
             return Err(true);
         }
         MessageType::DestroyPane => {
-            pane_cwd_map.lock().unwrap().remove(&msg.pane_id);
             handle_destroy_pane(msg.pane_id, session_manager, shutdown_tx).await;
         }
         MessageType::SwitchWindow => {
             handle_switch_window(msg.pane_id, session_manager).await;
-            // Force status bar re-render with new pane's cwd
-            if statusbar_engine.is_enabled() {
-                let update_msg = statusbar_engine.force_render();
-                if framed.send(update_msg).await.is_err() {
-                    return Err(false);
-                }
-            }
         }
         MessageType::RenameWindow => {
             handle_rename_window(msg, session_manager).await;
@@ -1374,12 +1224,13 @@ where
         MessageType::Resize => {
             handle_resize(msg, session_manager).await;
         }
-        MessageType::RequestStatusUpdate => {
-            let update_msg = statusbar_engine.force_render();
-            if framed.send(update_msg).await.is_err() {
-                return Err(false);
-            }
-        }
+        // The former mux status-bar GUI→daemon request (opcode 0x17, see
+        // `mux_ipc::protocol`'s reserved-opcode comment) was retired by
+        // mux-status-bar-removal task0001; that opcode no longer decodes
+        // into a `MuxMessage` at all (`MuxCodec::decode` discards it with
+        // a warn log before this match ever runs — see `codec.rs`), so it
+        // falls through to the wildcard arm below like any other
+        // unrecognized message type.
         MessageType::RequestPaneSnapshot => {
             // WARN-level entry log so release builds capture whether the
             // request even reached the daemon. The reply is logged inside
@@ -1486,24 +1337,6 @@ fn merge_consecutive_chunks(chunks: Vec<PtyOutputChunk>) -> Vec<PtyOutputChunk> 
         }
     }
     merged
-}
-
-/// Register pane cwd Arcs from session_manager into pane_cwd_map.
-/// Called once per pane creation / reattach (very rare), not per output chunk.
-async fn register_session_pane_cwds(
-    session_manager: &Arc<Mutex<SessionManager>>,
-    session_id: u32,
-    pane_cwd_map: &super::statusbar::SharedPaneCwdMap,
-) {
-    let mgr = session_manager.lock().await;
-    if let Some(session) = mgr.get_session(session_id) {
-        let mut map = pane_cwd_map.lock().unwrap();
-        for window in session.windows.values() {
-            for pane in window.panes.values() {
-                map.entry(pane.id).or_insert_with(|| pane.cwd.clone());
-            }
-        }
-    }
 }
 
 #[cfg(test)]

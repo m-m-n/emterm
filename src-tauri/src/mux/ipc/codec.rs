@@ -148,6 +148,37 @@ mod tests {
         assert_eq!(decoded.payload, vec![0xBB]);
     }
 
+    /// AC-3 (mux-status-bar-removal task0001, FR8a): the daemon's receive
+    /// path (this codec) tolerates a raw frame carrying either retired
+    /// opcode (0x16 / 0x17 -- reserved, never reused) exactly like any
+    /// other unrecognized message type: discarded with at most a warn
+    /// log, connection stays up, decoding continues with the next valid
+    /// frame. Built as raw bytes (not through the typed `MuxMessage` API,
+    /// which can no longer name the retired types) so this test stays
+    /// valid regardless of whether those types still exist anywhere in
+    /// the tree.
+    #[test]
+    fn test_codec_retired_status_bar_opcodes_are_discarded_not_fatal() {
+        let mut codec = MuxCodec::new();
+        let mut buf = BytesMut::new();
+
+        for retired_type in [0x16u8, 0x17u8] {
+            let body: Vec<u8> = vec![retired_type, 0x00, 0x00, 0x00, 0x00];
+            buf.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            buf.extend_from_slice(&body);
+        }
+
+        // Then a valid PtyOutput frame immediately after both.
+        codec
+            .encode(MuxMessage::pty_output(9, vec![0xEE]), &mut buf)
+            .unwrap();
+
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(decoded.msg_type, MessageType::PtyOutput);
+        assert_eq!(decoded.pane_id, 9);
+        assert_eq!(decoded.payload, vec![0xEE]);
+    }
+
     #[test]
     fn test_codec_short_frame_is_discarded_not_fatal() {
         let mut codec = MuxCodec::new();
