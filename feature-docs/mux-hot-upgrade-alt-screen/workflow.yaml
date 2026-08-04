@@ -69,8 +69,8 @@ tasks:
     domains: [auth, external-io]
     complexity: high
     requirements: [FR1, FR2, NFR1, NFR2]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "merge 547344c; tabs::tests flakiness pre-existing baseline, mux::identity tests green"
     branch: em-workflow/mux-hot-upgrade-alt-screen/task0001
   task0002:
     title: Carry alt-screen state across the hot-upgrade handoff
