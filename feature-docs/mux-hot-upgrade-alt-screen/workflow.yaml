@@ -69,7 +69,7 @@ tasks:
     domains: [auth, external-io]
     complexity: high
     requirements: [FR1, FR2, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
     branch: em-workflow/mux-hot-upgrade-alt-screen/task0001
   task0002:
@@ -83,7 +83,7 @@ tasks:
     domains: [data-persistence, api-contract, concurrency]
     complexity: high
     requirements: [FR3, FR4, FR5, FR6, FR7, FR8, NFR3, NFR4]
-    status: pending
+    status: in_progress
     notes: null
     branch: em-workflow/mux-hot-upgrade-alt-screen/task0002
   task0003:
@@ -96,7 +96,7 @@ tasks:
     domains: [external-io]
     complexity: medium
     requirements: [FR5, FR6, FR7]
-    status: pending
+    status: in_progress
     notes: null
     branch: em-workflow/mux-hot-upgrade-alt-screen/task0003
 
