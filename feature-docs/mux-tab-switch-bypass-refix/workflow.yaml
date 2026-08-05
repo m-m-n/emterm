@@ -1,0 +1,148 @@
+schema_version: 1
+feature: mux-tab-switch-bypass-refix
+created: 2026-08-05
+base_branch: main
+parent_branch: em-workflow/mux-tab-switch-bypass-refix/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    rust_app:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    term_core:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path crates/term_core/Cargo.toml --check"
+      e2e_test_command: ""
+    term_core_bench:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --release --manifest-path crates/term_core/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --release --manifest-path crates/term_core/Cargo.toml --lib -- --ignored --nocapture"
+      format_command: ""
+      e2e_test_command: ""
+    cli_feature_gate:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: "bunx biome check ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 275f7a497cad6ec55f4006996c15738241633f1c
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Internal performance/correctness bugfix in the Rust terminal core and window host. No new UI surface, no visual or interaction design change — the status-bar inset fix restores already-specified rendering behavior. No design-system tokens are consumed or produced."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Real measured marker-cluster shape (26-segment MIDDLE) engages the split and meets the latency goal"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS2, TS7]
+  FR2:
+    title: "Regression bench reproduces the SPEC-cited 26-segment cluster"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS6]
+  FR3:
+    title: "ResizeSettler self-wake is rate-limited"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS4]
+  FR4:
+    title: "Status-bar inset application is not gated on a derived grid-size change"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5]
+  FR5:
+    title: "D8 empty-MIDDLE auto-fix confirmed correct under fresh review"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3]
+  FR6:
+    title: "Prior feature's acceptance criteria hold as non-regression"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5, TS7]
+  NFR1:
+    title: "No double 2nd-pass non-bypass cost"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS6]
+  NFR2:
+    title: "Bounded render-loop CPU during the settle window"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS4]
+  NFR3:
+    title: "Existing test and bench guards stay green"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS6]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
