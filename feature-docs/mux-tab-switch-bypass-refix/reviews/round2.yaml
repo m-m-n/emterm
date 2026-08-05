@@ -1,0 +1,299 @@
+round: 2
+executed_at: "2026-08-05T22:05:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: f9579f9b24b5243b52a330fe9804a21ad39550e1
+  head_commit: 6e088b0f10ba7b1ae3671021010cb46828b7672e
+  changed_files:
+    - crates/term_core/src/bench.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/window_host.rs
+    - test-docs/mux-tab-switch-bypass-refix/task0001.tests.yaml
+    - test-docs/mux-tab-switch-bypass-refix/task0002.tests.yaml
+    - test-docs/mux-tab-switch-bypass-refix/task0003.tests.yaml
+    - test-docs/mux-tab-switch-bypass-refix/task0004.tests.yaml
+    - test-docs/mux-tab-switch-bypass-refix/task0005.tests.yaml
+    - test-docs/mux-tab-switch-bypass-refix/task0006.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "rate_limited", note: "carried over from round 1; the usage limit had not reset"}
+  - {perspective: performance, source: vertex, status: skipped, skip_reason: "rate_limited"}
+  - {perspective: architecture, source: vertex, status: skipped, skip_reason: "rate_limited"}
+  - {perspective: spec, source: vertex, status: skipped, skip_reason: "rate_limited"}
+
+round1_resolutions:
+  note: >-
+    Round 1's eight unresolved findings were routed to rework tasks
+    task0004 / task0005 / task0006, which all merged before this round. The
+    round-2 verdicts below are the reviewers' own re-judgements.
+  resolved:
+    - stable_id: a1a06ed541045dd5
+      severity: high
+      category: spec
+      by_task: task0004
+      verdict: >-
+        Resolved. The spec reviewer confirms FR1/FR2 and NFR1 now hold together:
+        the measured shape (31 segments, k = 27, 26-segment MIDDLE) folds with
+        h = 1 and so takes the 62 tier, which is backed by
+        middle_is_row_bounded's same-width verification over exactly the slice
+        replayed as MIDDLE, giving row-delta-bounded resize_same_width cost; the
+        h == 0 degradation path is back at the pre-feature 24, so the raise no
+        longer loosens a gate whose prefix was not made cheap.
+    - stable_id: 77da6aceb73b1a72
+      severity: medium
+      category: performance
+      by_task: task0004
+      verdict: >-
+        Resolved. The performance reviewer confirms the tiering removes the
+        unbounded-reflow-count concern, and that the existing
+        segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap
+        already measures the same-width path at 950 KiB / 62 segments (~164 ms),
+        so no new bench was required for the 62 tier.
+    - stable_id: 474e01ad8c29e7f0
+      severity: medium
+      category: architecture
+      by_task: task0004
+      verdict: >-
+        Resolved. For the h > 0 tier the largest reachable MIDDLE is provably
+        MAX_SEGMENTS(64) - mandatory HEAD(1) - mandatory SUFFIX(1) = 62, so the
+        existing value was already the correct top-end alignment; the pin's
+        MAX_SEGMENTS - 2 derivation now states that.
+    - stable_id: 96f7205be52fece8
+      severity: medium
+      category: architecture
+      by_task: task0004
+      verdict: >-
+        Resolved. The cost-policy value and the transport-derived value are now
+        separate constants; only the transport-derived one carries a pin, and
+        that pin is an equality assertion rather than an asymmetric bound.
+    - stable_id: 1adb07864f11618f
+      severity: medium
+      category: comprehensive
+      by_task: task0004
+      verdict: >-
+        Resolved by the same split — the segment-count gate is no longer welded
+        to the wire cap, and BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD is
+        explicitly unpinned as a cost-policy value.
+    - stable_id: 0029db1c89ab226f
+      severity: medium
+      category: architecture
+      by_task: task0005
+      verdict: >-
+        Resolved. grid_size() now reads status_bar_bot_inset_settled_logical
+        only, so a non-settler pending_resize can no longer consume a transient
+        inset.
+    - stable_id: 5b2f22c5a14f7364
+      severity: medium
+      category: comprehensive
+      by_task: task0005
+      verdict: >-
+        Resolved as a defect; the comprehensive reviewer confirms
+        resolve_grid_bot_inset is called after observe, so the settled and
+        immediate values re-converge on every closed-mode render. Test coverage
+        of the wiring is raised separately as 23e465f3bb1b79f6 below.
+    - stable_id: 869ddd643c123a44
+      severity: medium
+      category: comprehensive
+      by_task: task0006
+      verdict: >-
+        Resolved. The unreachable f32::EPSILON tolerance was replaced with an
+        exact != comparison and two non-vacuous tests; the implementer verified
+        genuine red-first by reverting the predicate to its epsilon body.
+
+findings:
+  - stable_id: dd25355006caa680
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/terminal_core.rs
+    line: 1266
+    title: "二段ゲートの分岐条件 `h > 0` が「MIDDLE は同一カラム幅検証済み」という不変条件の暗黙の代理になっている"
+    description: >-
+      The constant split itself is sound, but the branch that selects 62 depends
+      on an invariant established about fifty lines earlier (candidate_safe's
+      composition of leading_uniform_run_len and middle_is_row_bounded) and
+      carried only in a doc comment — h is a plain usize, so nothing in the type
+      or the return value links the two. That coupling has already broken once:
+      D10 applied the same "it is same-width" argument to the h == 0 path, which
+      is what round 1's a1a06ed541045dd5 / 77da6aceb73b1a72 reported. Since
+      candidate_safe has been rewritten in every round of this feature
+      (D7/D8/D9/D10/D11), adding one fold rule that tolerates a column change
+      would silently invalidate the 62 tier's cost rationale without any test
+      failing — the existing boundary tests only build shapes that satisfy the
+      current rules.
+    suggestion: >-
+      Return the fold decision as a value the gate matches on (e.g. an enum
+      distinguishing a same-width-verified MIDDLE from an unverified one), so a
+      change that drops or weakens middle_is_row_bounded can no longer produce
+      the variant that selects 62. Minimally, add a debug_assert before the
+      branch pinning the invariant at runtime.
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: >-
+      batch mode: rework cap reached (batch.review_rework_count == 1). Below the
+      auto-fix severity gate as well, so no auto-fix loop ran for it.
+
+  - stable_id: 296b5bdf8ec5073d
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 1266
+    title: "Tier predicate `h > 0` is a proxy for \"same-width MIDDLE\" and over-narrows a common, safe shape back to 24"
+    description: >-
+      Same site as dd25355006caa680, reported from the comprehensive perspective
+      with the opposite failure direction traced. The tiering is sound in the
+      safe direction — h > 0 does imply the MIDDLE is same-width — but the
+      converse does not hold: h also degrades to 0 when the leading run sits
+      below the caller's target rows, or when a MIDDLE segment's row count
+      exceeds the leading run's own. The latter is the ordinary shape of a
+      resize storm whose largest row count is not recorded first (e.g. rows
+      [30, 30, 24, 40, 24, 30, ...]), and every segment in it is same-width. Such
+      a snapshot with 25-62 MIDDLE segments is routed to the 24 bound and falls
+      back to the whole non-bypass drain (~800-1000 ms for 2 MiB) even though its
+      cost profile is exactly the one 62 is justified for. Correctness is not at
+      risk either way — with h == 0 the split reduces to the pre-D7 recipe, which
+      does not depend on same-width.
+    suggestion: >-
+      Key the tier on the property the cost argument actually needs — whether
+      every segment in segments[h..k] is at target_cols — rather than on fold
+      success, and retarget the boundary tests accordingly; or, if the
+      conservatism is deliberate, record the excluded shape class in
+      BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD's doc so it is a decision rather
+      than an unnoticed side effect of the rework.
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: deferred
+    resolution_reason: >-
+      batch mode: rework cap reached (batch.review_rework_count == 1). Below the
+      auto-fix severity gate as well.
+
+  - stable_id: 23e465f3bb1b79f6
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/window_host.rs
+    line: 1469
+    title: "The five new task0005 tests do not pin the defect site — reverting `grid_size()` to the immediate inset leaves them all green"
+    description: >-
+      The defect round 1 reported lives in one line: which field grid_size()
+      passes to grid_size_for_bot_inset. All five new tests exercise only the
+      extracted pure helper resolve_grid_bot_inset plus ResizeSettler, with a
+      locally-defined stand-in; none touches WindowHost, grid_size,
+      refresh_status_bar_insets, or apply_pending_resize. Reverting line 1469 to
+      status_bar_bot_inset_logical — or moving the resolve_grid_bot_inset call
+      before observe — reintroduces the defect with the whole new test set still
+      passing. The helper is well covered; the wiring that decides whether the
+      helper matters has none.
+    suggestion: >-
+      Add a source-scan guard in the style this file already uses for a
+      comparable one-line wiring invariant (cell_metrics_px_origin_x_has_no_sidebar_term):
+      assert grid_size()'s body names the settled field and not the immediate one,
+      and that in refresh_status_bar_insets the resolve_grid_bot_inset call
+      appears after the resize_settler.observe call. Soften the five tests' doc
+      comments to claim what they actually pin.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: >-
+      batch mode: rework cap reached (batch.review_rework_count == 1). Below the
+      auto-fix severity gate as well.
+
+  - stable_id: 78f8d71fa0a7052d
+    severity: medium
+    category: architecture
+    file: src-tauri/src/window_host.rs
+    line: 313
+    title: "ResizeSettler の窓ライフサイクルに従属する状態が settler の外に散っている（task0005 で対象が1つ増えた）"
+    description: >-
+      State whose meaning is scoped to the settler's open settling window lives
+      on WindowHost instead, kept consistent by convention across several call
+      sites: last_resize_settle_wake must be cleared in the same breath as
+      resize_settler.reset(), the initial pair is set in a third place, and
+      PocApp::about_to_wait / can_create_surfaces read and mutate both fields
+      directly. task0005 added a third such dependant value
+      (status_bar_bot_inset_settled_logical). Concretely: if a future change adds
+      another reset() call site — on detach, scale change, or a switch to a
+      different mux tab, all plausible — forgetting the paired clear would not be
+      caught by the type system or any test. The consequence is bounded (the
+      first self-wake after reopening is delayed by up to one interval), but the
+      convention now guards three values instead of one.
+    suggestion: >-
+      Move the window-scoped state into ResizeSettler — e.g. a self_wake_due
+      method owning its own last-wake timestamp, cleared by new()/reset() — or at
+      minimum introduce a single reopen-the-settling-window method on WindowHost
+      so any future call site automatically carries the associated resets.
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: >-
+      batch mode: rework cap reached (batch.review_rework_count == 1). Below the
+      auto-fix severity gate as well. First raised in round 1 by the same
+      perspective and not routed to a rework task then; recorded here so it stays
+      visible.
+
+  - stable_id: c978baad37423891
+    severity: medium
+    category: spec
+    file: src-tauri/src/window_host.rs
+    line: 5991
+    title: "TS4/US2 の「RESIZE_SETTLE_MAX_DURATION 以内に決着」がレート制限ケイデンスで実際にはピン留めされていない"
+    description: >-
+      SPEC US2's acceptance criterion and TS4 both require that an idle window
+      still reaches the settler's decision within RESIZE_SETTLE_MAX_DURATION. The
+      only test covering that bound under the new rate-limited cadence asserts
+      a runaway-loop guard of RESIZE_SETTLE_MAX_DURATION * 2 (2 s), not the 1 s
+      the criterion states. Current behavior does satisfy the criterion (the
+      settler decides after two observes, at 0 ms and 64 ms), but
+      RESIZE_SETTLE_SELF_WAKE_INTERVAL is an alias of RESIZE_SETTLE_QUIET_DURATION,
+      so raising the latter to e.g. 600 ms would push the idle-window decision to
+      1.2 s and break the criterion with this test still green. The FR3/NFR2
+      implementation itself is sound; this is a verification-strength gap.
+    suggestion: >-
+      Add the criterion's own bound as an assertion after the loop
+      (elapsed <= RESIZE_SETTLE_MAX_DURATION), leaving the existing guard as a
+      runaway-loop backstop. The reviewer supplied a ready diff.
+    sources: [claude:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: >-
+      batch mode: rework cap reached (batch.review_rework_count == 1). category
+      == spec is excluded from the auto-fix candidate gate in any case.
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  detail: >-
+    No auto-fix loop ran this round: the candidate gate admits only
+    critical/high non-spec findings, and this round produced none.
+
+residual_critical_high: 0
+rework_required: false
+
+notes:
+  - >-
+    Both of round 1's high findings are resolved. The spec high
+    (a1a06ed541045dd5) was the gating item and the spec reviewer re-judged it
+    resolved on the merits, not by acceptance.
+  - >-
+    Cross-model validation could not run this round: codex was still over its
+    usage limit and vertex returned HTTP 429 throughout, so every perspective is
+    claude-only. Confidence scores below reflect that (claude-only 60, spec
+    claude-only 70, comprehensive 65, +15 where two perspectives flag the same
+    site).
+  - >-
+    All five findings are medium and all are marked deferred because batch
+    mode's review-rework cap of 1 was consumed by round 1. They are recorded in
+    full here for the human evaluator; none blocks the completion gate, which
+    keys on residual_critical_high == 0.
+  - >-
+    Two of them (dd25355006caa680 / 296b5bdf8ec5073d) are the same site seen from
+    two directions and would be settled by one change: keying the tier on
+    "every MIDDLE segment is at target_cols" instead of on fold success.
