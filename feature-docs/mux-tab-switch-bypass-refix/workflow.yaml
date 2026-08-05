@@ -160,18 +160,18 @@ tasks:
       review_round: 1
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
     cross_validation: true
   perspectives:
-    comprehensive: completed
-    security: completed
-    performance: completed
-    architecture: completed
-    spec: completed
+    comprehensive: pending
+    security: pending
+    performance: pending
+    architecture: pending
+    spec: pending
   residual_critical_high: 1
   needs_rework: true
 
