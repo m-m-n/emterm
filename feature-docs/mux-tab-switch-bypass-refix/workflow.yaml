@@ -65,9 +65,18 @@ workflow:
     status: completed
     completed_at_commit: 98338d332e20319c49384bbaaa7102bdb3d8365d
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 582776d2f5277ba0796398901b5b9fa81135870f
+    result: pass
     failed_items: []
+    summary:
+      builds: "4/4 green (rust_app, term_core, cli_feature_gate, web typecheck)"
+      tests: "term_core --lib 764 pass / 0 fail; web bun test 311 pass / 0 fail; rust_app --lib 3079 pass / 7 fail — the 7 are the chronically flaky tabs.rs off-thread tests and reproduce IDENTICALLY on main (baseline verified this run), so they are not feature regressions"
+      benches: "term_core_bench release suite 13/13 pass, including the new measured_26_segment_middle_cluster bench at 28.08 ms vs a 26.23 ms segment-free reference (tens-of-ms goal met) and the pre-existing snapshot_replay_bench_2mib_seq guard"
+      format: "cargo fmt --check reports drift in 17 src-tauri files + crates/term_core/src/terminal_core.rs, and bunx biome check reports 2 errors — ALL identical to the main baseline measured this run (same file set, no feature-introduced drift). The project does not enforce rustfmt repo-wide"
+      scenarios: "TS1-TS6 and TS8-TS11 all verified by named passing tests/benches; TS7 is a manual real-machine check that remains open"
+      manual_open:
+        - "TS7 (MT-1 carry-over): on a real machine, restart the client, reattach to a mux daemon with a heavy pane, and confirm the switch displays in the tens-of-ms order. Not automatable without live GUI + daemon orchestration" 
   - id: retrospect
     status: pending
 
