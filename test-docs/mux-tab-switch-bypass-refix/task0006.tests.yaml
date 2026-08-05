@@ -1,0 +1,95 @@
+task_id: task0006
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::status_bar_insets_changed_true_for_minimal_representable_difference
+      - window_host::tests::status_bar_insets_changed_true_for_minimal_step_at_real_inset_magnitude
+    red_confirmed: true
+    red_reason: >-
+      status_bar_insets_changed_true_for_minimal_representable_difference
+      failed against the pre-fix epsilon predicate: "assertion failed:
+      status_bar_insets_changed(0.0, current_bot, 0.0, candidate_bot)"
+      (window_host.rs:5671 at the time of the run) — a one-bit-step
+      perturbation from 0.0 has |diff| far below f32::EPSILON, so the old
+      `> f32::EPSILON` predicate reported "unchanged". Verified by
+      temporarily reverting the predicate to its pre-fix body, re-running
+      `cargo test ... status_bar_insets_changed`, observing the failure,
+      then restoring the exact-comparison fix and re-running to green.
+      Both new tests assert_ne! on the raw bit patterns before calling the
+      predicate, so every perturbation is provably non-identical to its
+      baseline (AC-1's own-construction requirement) — the vacuous
+      `40.0 + f32::EPSILON / 2.0` case (which rounded back to exactly
+      40.0) is removed, not just supplemented.
+  AC-2:
+    tests:
+      - window_host::tests::status_bar_insets_changed_true_for_minimal_representable_difference
+      - window_host::tests::status_bar_insets_changed_false_when_identical
+    red_confirmed: true
+    red_reason: >-
+      Exact-comparison route chosen (see notes). The minimal-representable-
+      difference test pins "any representable difference reports changed"
+      and was red against the pre-fix epsilon predicate (see AC-1's
+      red_reason) — a case a plain-inequality/exact-comparison predicate
+      would NOT have failed, which is exactly what makes it non-vacuous
+      for this route. status_bar_insets_changed_false_when_identical
+      (pre-existing, unmodified) pins "identical values report unchanged"
+      and was already green before this task (identical inputs were never
+      the vacuous case) — carried forward per AC-4, not re-confirmed red
+      here.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Doc-comment criterion, not test-observable. Verified by inspection:
+      status_bar_insets_changed's doc comment (window_host.rs) now states
+      the exact-comparison semantics, explains why the retired
+      f32::EPSILON tolerance was dead weight at real inset magnitudes
+      (one ULP at magnitude ~40 already exceeds f32::EPSILON), and cites
+      finding `869ddd643c123a44` by name per IMPLEMENTATION.md D-C. No
+      cargo test exercises doc-comment text, so this AC has no automated
+      red/green cycle.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Non-regression criterion (NFR3), not a new red test. Verified by
+      running the full window_host.rs-relevant suite before and after:
+      status_bar_insets_changed_false_when_identical,
+      status_bar_insets_changed_true_when_bot_inset_differs,
+      status_bar_insets_changed_true_when_top_inset_differs, and all
+      ResizeSettler / self-wake tests kept their original assertions
+      unchanged and stayed green throughout. `git diff` on window_host.rs
+      shows status_bar_insets_changed_false_when_identical was touched
+      zero times (still appears exactly once) and the only test-module
+      edit is the replacement of the single vacuous
+      status_bar_insets_changed_false_within_epsilon case with the two
+      AC-1/AC-2 tests above.
+notes: >-
+  Route chosen: exact-comparison (task plan's second resolution route).
+  Rationale recorded in the code doc comment and mirrored here: at real
+  inset magnitudes (tens of logical px) one ULP already exceeds
+  f32::EPSILON, so the representable-tolerance route had no magnitude at
+  which BOTH a within-tolerance nonzero perturbation existed AND that
+  magnitude was representative of actual inset values — the epsilon band
+  was reachable only near zero, which is not where insets live. Switching
+  to `current_top != candidate_top || current_bot != candidate_bot` makes
+  the predicate's real-world behavior (already exact in practice) match
+  its stated contract. Baseline/final failures are the 7 tabs.rs
+  off-thread worker tests, chronically flaky on this host per the task
+  assignment notes; unrelated to this change and unmodified.

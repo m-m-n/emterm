@@ -1,0 +1,257 @@
+schema_version: 1
+feature: mux-tab-switch-bypass-refix
+created: 2026-08-05
+base_branch: main
+parent_branch: em-workflow/mux-tab-switch-bypass-refix/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    rust_app:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    term_core:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path crates/term_core/Cargo.toml --check"
+      e2e_test_command: ""
+    term_core_bench:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --release --manifest-path crates/term_core/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --release --manifest-path crates/term_core/Cargo.toml --lib -- --ignored --nocapture"
+      format_command: ""
+      e2e_test_command: ""
+    cli_feature_gate:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: "bunx biome check ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 275f7a497cad6ec55f4006996c15738241633f1c
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Internal performance/correctness bugfix in the Rust terminal core and window host. No new UI surface, no visual or interaction design change — the status-bar inset fix restores already-specified rendering behavior. No design-system tokens are consumed or produced."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 7c08013adffa27b253405ea4e9c5f7a70e2dfd65
+  - id: implement
+    status: completed
+    completed_at_commit: ff8d9b95eae2d9c9344a0e15a79e6c1ba73e5409
+    base_commit: f9579f9b24b5243b52a330fe9804a21ad39550e1
+  - id: review
+    status: completed
+    completed_at_commit: 98338d332e20319c49384bbaaa7102bdb3d8365d
+  - id: verify
+    status: completed
+    completed_at_commit: 582776d2f5277ba0796398901b5b9fa81135870f
+    result: pass
+    failed_items: []
+    summary:
+      builds: "4/4 green (rust_app, term_core, cli_feature_gate, web typecheck)"
+      tests: "term_core --lib 764 pass / 0 fail; web bun test 311 pass / 0 fail; rust_app --lib 3079 pass / 7 fail — the 7 are the chronically flaky tabs.rs off-thread tests and reproduce IDENTICALLY on main (baseline verified this run), so they are not feature regressions"
+      benches: "term_core_bench release suite 13/13 pass, including the new measured_26_segment_middle_cluster bench at 28.08 ms vs a 26.23 ms segment-free reference (tens-of-ms goal met) and the pre-existing snapshot_replay_bench_2mib_seq guard"
+      format: "cargo fmt --check reports drift in 17 src-tauri files + crates/term_core/src/terminal_core.rs, and bunx biome check reports 2 errors — ALL identical to the main baseline measured this run (same file set, no feature-introduced drift). The project does not enforce rustfmt repo-wide"
+      scenarios: "TS1-TS6 and TS8-TS11 all verified by named passing tests/benches; TS7 is a manual real-machine check that remains open"
+      manual_open:
+        - "TS7 (MT-1 carry-over): on a real machine, restart the client, reattach to a mux daemon with a heavy pane, and confirm the switch displays in the tens-of-ms order. Not automatable without live GUI + daemon orchestration" 
+  - id: retrospect
+    status: completed
+    completed_at_commit: d7b2356c2c8cfb8146d18e07bf4a19a4c40db89d
+
+tasks:
+  task0001:
+    title: "Bypass split gate admits the measured 26-segment MIDDLE with NFR1 guards intact"
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/bench.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: high
+    requirements: [FR1, FR2, FR6, NFR1, NFR3]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0001
+  task0002:
+    title: "Rate-limited ResizeSettler self-wake and settler-independent status-bar inset application"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/window_host.rs
+    skills: [frontend-impl]
+    domains: [ui, concurrency]
+    complexity: high
+    requirements: [FR3, FR4, FR6, NFR2, NFR3]
+    status: merged
+    notes: "deviation: added next_resize_settle_wake_deadline wired into control_flow_for + about_to_wait (same file, within expected_files) so the rate-limited self-wake still fires on a fully idle window"
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0002
+  task0003:
+    title: "Regression-pin the D8 empty-MIDDLE (h == k) auto-fix"
+    plan: tasks/task0003.md
+    files:
+      - crates/term_core/src/terminal_core.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: low
+    requirements: [FR5, NFR3]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0003
+
+  task0004:
+    title: "Segment-bound gate: h == 0 cost justification, top-end alignment, and pin purpose"
+    plan: tasks/task0004.md
+    files:
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/bench.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: high
+    requirements: [FR1, FR6, NFR1, NFR3]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0004
+    provenance:
+      source: review
+      source_ids: [a1a06ed541045dd5, 77da6aceb73b1a72, 474e01ad8c29e7f0, 96f7205be52fece8, 1adb07864f11618f]
+      review_round: 1
+  task0005:
+    title: "apply_pending_resize consumes only settler-forwarded grid sizes"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/src/window_host.rs
+    skills: [frontend-impl]
+    domains: [ui, concurrency]
+    complexity: high
+    requirements: [FR4, FR6, NFR3]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0005
+    provenance:
+      source: review
+      source_ids: [0029db1c89ab226f, 5b2f22c5a14f7364]
+      review_round: 1
+  task0006:
+    title: "Make the inset-change predicate's tolerance pin representable"
+    plan: tasks/task0006.md
+    files:
+      - src-tauri/src/window_host.rs
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: low
+    requirements: [FR4, NFR3]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0006
+    provenance:
+      source: review
+      source_ids: [869ddd643c123a44]
+      review_round: 1
+
+review:
+  status: completed
+  rounds_completed: 2
+  completed_at_commit: 0c5148d9251c56c38195fb16322a491f9bf0f796
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Real measured marker-cluster shape (26-segment MIDDLE) engages the split and meets the latency goal"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0004]
+    tests: [TS1, TS2, TS7, TS8]
+  FR2:
+    title: "Regression bench reproduces the SPEC-cited 26-segment cluster"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS6]
+  FR3:
+    title: "ResizeSettler self-wake is rate-limited"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS4]
+  FR4:
+    title: "Status-bar inset application is not gated on a derived grid-size change"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002, task0005, task0006]
+    tests: [TS5, TS10, TS11]
+  FR5:
+    title: "D8 empty-MIDDLE auto-fix confirmed correct under fresh review"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0003]
+    tests: [TS3]
+  FR6:
+    title: "Prior feature's acceptance criteria hold as non-regression"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002, task0004, task0005]
+    tests: [TS5, TS7, TS6, TS10]
+  NFR1:
+    title: "No double 2nd-pass non-bypass cost"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0004]
+    tests: [TS6, TS8]
+  NFR2:
+    title: "Bounded render-loop CPU during the settle window"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS4]
+  NFR3:
+    title: "Existing test and bench guards stay green"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002, task0003, task0004, task0005, task0006]
+    tests: [TS6, TS9]
+
+batch:
+  review_rework_count: 1
+  verify_rework_count: 0

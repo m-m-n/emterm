@@ -1,0 +1,98 @@
+task_id: task0001
+baseline_failures: []          # crates/term_core --lib: 758 passed, 0 failed, 12 ignored
+final_failures: []             # crates/term_core --lib: 759 passed, 0 failed, 13 ignored
+acceptance_tests:
+  AC-1:
+    tests: [terminal_core::tests::measured_26_segment_middle_cluster_engages_the_split_and_matches_reference]
+    red_confirmed: true
+    red_reason: >-
+      Ran against the pre-fix gate (BYPASS_PREFIX_MAX_SEGMENTS == 24) before
+      touching any implementation code: "assertion failed at
+      terminal_core.rs:4531: AC-1: the split must engage (scrollback_populated
+      == false) for the SPEC-measured 26-segment MIDDLE shape (31 total
+      segments, k = 27) — got scrollback_populated == true (middle_segment_count
+      26 exceeds the gate's bound)". middle_segment_count (26) exceeded the
+      pre-fix bound (24) so bypass_split stayed false and the whole non-bypass
+      drain ran.
+  AC-2:
+    tests: [terminal_core::tests::measured_26_segment_middle_cluster_engages_the_split_and_matches_reference]
+    red_confirmed: true
+    red_reason: >-
+      Same test function as AC-1 (a single test covers both criteria, per the
+      file's existing precedent for this shape family). Pre-fix, the AC-1
+      assertion (split must engage) panicked first, so the AC-2 equivalence
+      assertions below it (grid_fingerprint / evicted_total match against
+      build_scrollback_only_from_snapshot) never ran — direct evidence the
+      shape never took the bypass path pre-fix, which is exactly what AC-2's
+      equivalence claim depends on being exercised.
+  AC-3:
+    tests:
+      - terminal_core::tests::prefix_at_the_segment_count_bound_with_a_dominating_suffix_engages_the_split_no_head
+      - terminal_core::tests::prefix_with_too_many_segments_does_not_engage_the_split_regardless_of_byte_length
+    red_confirmed: false
+    red_reason: >-
+      These are pre-existing (prior feature) tests that reference the bound
+      symbolically via BYPASS_PREFIX_MAX_SEGMENTS rather than a hardcoded
+      literal; they were already green in the 4a baseline run (at the OLD
+      boundary, 24 engages / 25 rejects) and remain green after the constant
+      changed to 62 (retargeting automatically to 62 engages / 63 rejects) —
+      only their doc comments were edited, not their bodies, so there is no
+      red phase to observe for this task's diff. The both-sides-at-the-new-
+      boundary intent (AC-3 / Design point 2) is verified by both tests
+      passing against the new value, confirmed via the full --lib run after
+      the change (759 passed, 0 failed).
+  AC-4:
+    tests: [bench::benches::measured_26_segment_middle_cluster_bench_2mib_matches_bypass_engaged_cost]
+    red_confirmed: true
+    red_reason: >-
+      Wrote the bench after the fix was already in place, so confirmed red
+      separately by temporarily reverting BYPASS_PREFIX_MAX_SEGMENTS to 24
+      and re-running only this bench in release mode: "measured 26-segment
+      MIDDLE shape 349.944259ms is not close to segment-free 18.536751ms
+      (bound 75.610253ms) — the split is not engaging for this shape".
+      Reverted the constant back to 62 immediately after and re-ran the
+      debug suite + this bench to reconfirm green (19.230538ms vs the same
+      bound style) before proceeding.
+  AC-5:
+    tests:
+      - bench::benches::snapshot_replay_bench_2mib_seq
+      - bench::benches::marker_cluster_tail_bench_2mib_matches_bypass_engaged_cost
+      - bench::benches::large_prefix_small_suffix_bench_does_not_engage_the_split
+      - bench::benches::daemon_cap_prefix_with_small_suffix_bench_does_not_engage_the_split
+      - bench::benches::ordinary_switch_bench_950kib_matches_segment_free_cost
+    red_confirmed: false
+    red_reason: >-
+      Non-regression guard, not a new-behavior criterion — these tests/benches
+      were already green pre-diff (4a baseline) and remain green post-diff
+      with no assertion changes: full --lib run 759 passed/0 failed/13
+      ignored (was 758/0/12 pre-diff, +1 for the new AC-1/AC-2 unit test), and
+      the release `--ignored --nocapture` run 13 passed/0 failed (all named
+      AC-5 benches plus the new AC-4 bench and pre-existing unrelated
+      benches). No red phase applies since AC-5 asserts absence of
+      regression.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not exercised by a test authored in this task — the h == k empty-MIDDLE
+      degradation postcondition is task0003's regression pin to own (D-A,
+      IMPLEMENTATION.md). Verified by inspection instead: this task's diff
+      does not touch the `candidate_h < k` guard or any code in the
+      `h`/`head_rows` computation (confirmed via `git diff` — only doc
+      comments, the BYPASS_PREFIX_MAX_SEGMENTS constant, and new/updated
+      tests were added; the guard's own lines are unchanged).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a test-verifiable outcome — a doc-comment convention check.
+      Verified by inspection: the BYPASS_PREFIX_MAX_SEGMENTS constant's doc
+      comment (D10 amendment) and the inline comment added immediately above
+      the `bypass_split` computation both cite review finding
+      `b6a60c440da70e79` and the cost rationale (every MIDDLE segment
+      transition is a same-width resize per `middle_is_row_bounded`;
+      `resize_same_width`'s round-10 fix bounds that cost to the row-count
+      delta rather than accumulated scrollback size, so the raised count
+      does not reintroduce the per-segment cost this bound exists to guard
+      against; BYPASS_PREFIX_MAX_BYTES and the suffix-dominance check remain
+      the independent guards against a genuinely expensive MIDDLE/prefix).

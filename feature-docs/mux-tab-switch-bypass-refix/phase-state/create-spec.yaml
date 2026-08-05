@@ -1,0 +1,43 @@
+schema_version: 1
+feature: mux-tab-switch-bypass-refix
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 64d9cb4ce7fba4669381b7bc66bbf53a39d42804
+last_input_digest: sha256:f10c9266527e7f042743382ab9b847578614a02813aead00f914e28db36e7ed9
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: sha256:357834bb0f77194ad192994ea5d58aeee99eb42deb5e408697f500c2f01e17e8
+    output_digest: sha256:analyst-run-0001-payload
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:f10c9266527e7f042743382ab9b847578614a02813aead00f914e28db36e7ed9
+    output_digest: sha256:spec-writer-run-0002-payload
+artifacts:
+  - path: feature-docs/mux-tab-switch-bypass-refix/REQUIREMENTS.md
+    sha256: sha256:1838fd3a98a209c4df422c11131e7776aab9a90997ead047b98a150f4300b3de
+    produced_by: create-spec-run-0002
+  - path: feature-docs/mux-tab-switch-bypass-refix/SPEC.md
+    sha256: sha256:ed6b2a9bb789e00c9c9175c4d94e41f7b0d501e2c9f1ee076da2ebb2721bf6d7
+    produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/src/ui/md3.rs: sha256:8165557d9c2a3ea1a64c2d952de2e932b61b3514f03b52c03b9bc810e8acdc7b
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
+    truncated: false
+last_error: null
