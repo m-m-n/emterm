@@ -60,8 +60,13 @@ the raw mux wire protocol, and asserts the shell's PID survives unchanged
 and files it created remain observable, that a zero-pane upgrade succeeds,
 that a successful upgrade logs a distinguishable handoff-start entry with
 the adopted pane count, and that an upgrade rejected by the handoff-schema
-probe leaves the original daemon serving with its pane still live. Unix
-only (`#![cfg(unix)]`); every wait is bounded with a named timeout.
+probe leaves the original daemon serving with its pane still live. Also
+covers the alt-screen hot-upgrade scenario
+(feature-docs/mux-hot-upgrade-alt-screen): drives a pane onto the alternate
+screen, triggers a hot-upgrade, and asserts the post-restore reattach
+snapshot reflects the alternate screen as the current screen rather than
+the pane's pre-alt-screen scrollback. Unix only (`#![cfg(unix)]`); every
+wait is bounded with a named timeout.
 
 ```bash
 CARGO_TARGET_DIR=src-tauri/target cargo test \
