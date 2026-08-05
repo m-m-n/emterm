@@ -46,9 +46,45 @@ workflow:
   - id: review
     status: pending
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    executed_at: "2026-08-05T09:35:00+09:00"
+    commands_run:
+      - {command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml", result: pass}
+      - {command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features", result: pass}
+      - {command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1", result: "3079 passed / 7 failed (all pre-existing, see known_preexisting_failures)"}
+    scenarios:
+      TS1: {result: pass, evidence: "app::tests::set_grid_size_resizes_only_the_active_tab, set_grid_size_leaves_inactive_mux_tab_core_dims_unchanged"}
+      TS2: {result: pass, evidence: "app::tests::switch_to_tab_resizes_incoming_tab_when_its_dims_differ_from_cell_size, switch_to_tab_issues_no_resize_when_incoming_dims_already_match_cell_size, close_tab_active_index_fixup_reconciles_newly_active_tab_size, pump_all_reap_active_index_fixup_reconciles_newly_active_tab_size"}
+      TS3: {result: pass, evidence: "tabs::tests::resize_clamps_to_the_wire_domain_before_resizing_the_core, app::tests::set_grid_size_clamps_cell_size_to_agree_with_the_core"}
+      TS4: {result: pass, evidence: "app::tests::set_grid_size_leaves_inactive_mux_tab_core_dims_unchanged, reconcile_dims_changing_mux_tab_activation_records_one_frame_set_at_incoming_dims"}
+      TS5: {result: pass, evidence: "tabs::tests::resize_that_changes_columns_clears_the_tabs_own_reflow_trackers, resize_that_only_changes_rows_keeps_the_tabs_own_reflow_trackers, app::tests::width_change_of_active_tab_leaves_inactive_tabs_prompt_and_fold_marks_untouched"}
+      TS6: {result: qualified_pass, evidence: "3079 passed / 7 failed; every failure reproduced identically at the pre-implementation baseline commit 6464344 (main + docs only), so none is a regression from this feature"}
+      TS7: {result: not_executed, evidence: "manual scenario — requires a GUI session with a real tmux and the 2026-08-03 3-tab mux/tmux/normal setup. Batch mode cannot run it; the human evaluator must confirm the original leak is gone"}
+      TS8: {result: pass, evidence: "app::tests::switch_to_tab_reconciles_to_incoming_dims_never_outgoing_when_insets_differ_per_tab (see review round 2 finding 212e3e2a251aaffa on this test's weakness)"}
+      TS9: {result: pass, evidence: "app::tests::switch_to_tab_reconcile_width_change_clears_selection_and_pending_anchor, close_tab_reconcile_width_change_clears_selection_and_pending_anchor, reap_reconcile_width_change_clears_selection_and_pending_anchor, set_grid_size_and_reconcile_executor_share_width_change_clearing_behavior"}
+      TS10: {result: pass, evidence: "app::tests::reconcile_dims_changing_mux_tab_activation_records_one_frame_set_at_incoming_dims (Tab::test_resize_frames hook)"}
+      TS11: {result: pass, evidence: "all four test-docs/per-tab-grid-size/*.tests.yaml parse as YAML; no red_confirmed value contradicts its red_reason; no dangling unconfirmed_reds reference remains"}
+    known_preexisting_failures:
+      note: >-
+        These 7 tests fail deterministically (not intermittently) both on this
+        branch and at the pre-implementation baseline commit
+        6464344ea335f9b1e3329b3af75c70e3904f9e96, which is main plus this
+        feature's documents only. The orchestrator verified this by creating a
+        throwaway worktree at that commit and running the same seven test names
+        there: identical 0 passed / 7 failed. They are therefore pre-existing
+        failures on main, outside this feature's scope. NOTE: both implementers
+        characterized them as "flaky"; that characterization is wrong — they are
+        deterministic. Worth a separate task.
+      tests:
+        - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+        - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+        - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+        - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+        - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+        - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+        - tabs::tests::welcome_without_windows_leaves_group_none
   - id: retrospect
     status: pending
 
