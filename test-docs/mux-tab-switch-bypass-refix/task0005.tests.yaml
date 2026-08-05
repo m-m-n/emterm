@@ -1,0 +1,112 @@
+task_id: task0005
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::grid_bot_inset_ignores_a_transient_write_during_a_freshly_reopened_settle
+    red_confirmed: true
+    red_reason: >-
+      Ran with resolve_grid_bot_inset temporarily reverted to the
+      pre-task0005 behavior (unconditionally return `transient`, matching
+      the old code's direct read of `status_bar_bot_inset_logical`):
+      "assertion `left == right` failed: the settled inset must not move
+      while the settling window is open / left: 40.0 / right: 0.0".
+  AC-2:
+    tests:
+      - window_host::tests::grid_bot_inset_ignores_a_transient_write_when_a_compositor_resize_triggers_apply
+    red_confirmed: true
+    red_reason: >-
+      Same reverted-to-transient run: "assertion `left == right` failed:
+      AC-2: the compositor-triggered apply must use the settled bot inset,
+      not the transient write (8), even though the window WIDTH component
+      legitimately reflects the new size / left: (166, 42) / right: (166,
+      50)".
+  AC-3:
+    tests:
+      - window_host::tests::grid_bot_inset_settled_value_reproduces_the_settlers_last_forwarded_size
+    red_confirmed: true
+    red_reason: >-
+      The transient-reversion mutant above does not fail this test (an
+      always-transient settled value happens to still track
+      last_forwarded when the window is never left open). Ran instead
+      with resolve_grid_bot_inset temporarily changed to unconditionally
+      return `previously_settled` (never advances) to isolate the
+      "must eventually track the settler's decision" half of the
+      contract: "assertion `left == right` failed: AC-3: the size
+      derived from the settled inset must equal exactly what the settler
+      recorded as last_forwarded / left: (120, 50) / right: (120, 38)".
+  AC-4:
+    tests:
+      - window_host::tests::grid_bot_inset_tracks_transient_when_settler_closed_even_on_a_noop_candidate
+    red_confirmed: true
+    red_reason: >-
+      Same always-previously-settled mutant as AC-3: "assertion `left ==
+      right` failed / left: 0.0 / right: 2.0" — the settled inset never
+      advanced to the current value even though the settler was closed
+      (not withholding judgment).
+  AC-5:
+    tests:
+      - window_host::tests::grid_bot_inset_keeps_pace_with_further_genuine_changes_after_closing
+    red_confirmed: true
+    red_reason: >-
+      Same always-previously-settled mutant: "assertion `left == right`
+      failed: settled inset must track each new genuine value / left: 0.0
+      / right: 6.0" — a later, otherwise-idle-window resize never moved
+      the settled inset once the window had closed the first time.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Non-regression criterion, not a new-behavior criterion — there is
+      no red state to observe. Verified by running the full existing
+      ResizeSettler::*, status_bar_insets_changed_*, and
+      resize_settle_self_wake_due_* test set unchanged and green both
+      before and after this task's changes, with zero assertion edits to
+      any of them (only new tests were appended).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Doc-comment-only criterion (no executable outcome). Verified by
+      inspection: 0029db1c89ab226f / 5b2f22c5a14f7364 are cited in the
+      status_bar_bot_inset_logical / status_bar_bot_inset_settled_logical
+      field docs, apply_pending_resize's doc comment,
+      refresh_status_bar_insets's doc comment, grid_size's doc comment,
+      and resolve_grid_bot_inset's doc comment — all of which state the
+      sharpened D-D boundary: drawing/pointer-routing insets stay
+      immediate; grid computation and the Resize broadcast consume only
+      the settler-forwarded (settled) inset value.
+notes: >-
+  The task plan's mechanism choice (of the two suggested in its Design
+  section) was "keep drawing insets immediate; have grid computation read
+  a separate settled value updated only when the settler forwards" —
+  implemented as a new `status_bar_bot_inset_settled_logical` field plus
+  the pure, unit-tested `resolve_grid_bot_inset` free function that decides
+  when it advances. All ACs are tested at this pure-function level (no real
+  WindowHost is constructed anywhere in this file's test module — it holds
+  live wgpu/window resources and no test double exists), consistent with
+  the task plan's Test Notes and the file's existing ResizeSettler /
+  status_bar_insets_changed / resize_settle_self_wake_due test precedent.
+  baseline_failures / final_failures list the full known chronic-flaky
+  tabs.rs set (per the task assignment's explicit note); across four
+  separate full-suite runs during this task the observed failing subset
+  varied between 5 and 7 of these same 7 names, never anything outside
+  this set, and window_host.rs's own test count went from 3075 baseline
+  passes to 3078 (the +5 tests this task added minus the +2 tabs.rs
+  entries that showed up on the later runs — no window_host.rs test ever
+  failed in any run).

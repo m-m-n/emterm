@@ -1,0 +1,56 @@
+task_id: task0002
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::resize_settle_self_wake_due_false_when_not_awaiting
+      - window_host::tests::resize_settle_self_wake_due_true_on_first_wake
+      - window_host::tests::resize_settle_self_wake_due_false_within_interval
+      - window_host::tests::resize_settle_self_wake_due_true_after_interval
+    red_confirmed: true
+    red_reason: "E0425 cannot find function `resize_settle_self_wake_due` in this scope (function did not exist yet)"
+  AC-2:
+    tests:
+      - window_host::tests::resize_settle_self_wake_drives_settler_to_settlement_at_the_rate_limited_cadence
+    red_confirmed: true
+    red_reason: "E0425 cannot find function `resize_settle_self_wake_due` in this scope (test drives the loop via the not-yet-existing predicate)"
+  AC-3:
+    tests:
+      - window_host::tests::resize_settle_self_wake_due_false_within_interval
+      - window_host::tests::resize_settle_self_wake_due_true_after_interval
+    red_confirmed: true
+    red_reason: "E0425 cannot find function `resize_settle_self_wake_due` in this scope (same predicate as AC-1; these two cases assert the minimum-interval enforcement specifically)"
+  AC-4:
+    tests:
+      - window_host::tests::status_bar_insets_changed_true_when_bot_inset_differs
+      - window_host::tests::status_bar_insets_changed_true_when_top_inset_differs
+    red_confirmed: true
+    red_reason: "E0425 cannot find function `status_bar_insets_changed` in this scope (function did not exist yet)"
+  AC-5:
+    tests:
+      - window_host::tests::status_bar_insets_changed_false_when_identical
+      - window_host::tests::status_bar_insets_changed_false_within_epsilon
+    red_confirmed: true
+    red_reason: "E0425 cannot find function `status_bar_insets_changed` in this scope (function did not exist yet). The `pending_resize` non-mutation half of this AC is not covered by a dedicated runtime test — WindowHost cannot be constructed in this file's unit tests (it holds real wgpu/window resources and no test double exists here, confirmed by inspecting the existing test module). It is satisfied structurally instead: refresh_status_bar_insets's inset-application block (gated by status_bar_insets_changed) and its pending_resize assignment (gated by ResizeSettler::observe(..).is_some()) are two independent if-blocks that share no state, so an inset-only change cannot reach the pending_resize assignment. See report notes."
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: "Non-regression criterion, not a new-behavior criterion — there is no red state to observe. Verified by running the full existing ResizeSettler::* and toast_redraw_due_* test set (14 tests) unchanged and green both before and after this task's changes, with zero assertion edits (confirmed via diff)."
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "Doc-comment-only criterion (no executable outcome). Verified by inspection: 81507f39e384b34e is cited in RESIZE_SETTLE_SELF_WAKE_INTERVAL, resize_settle_self_wake_due, next_resize_settle_wake_deadline, last_resize_settle_wake's field doc, and refresh_status_bar_insets's doc comment; a82206113b8160fd / aba5ebbdf9a9addb are cited in status_bar_insets_changed and refresh_status_bar_insets's doc comment, which also states the D-D boundary (insets applied on value change; pending_resize/reshape gated on the settler's forwarded decision only)."
