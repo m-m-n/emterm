@@ -1,11 +1,11 @@
 schema_version: 1
 feature: tmux-startup-query-response-leak
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: ac611c9d5c515a598a4b7508b40b844a68382f01
 last_input_digest: sha256:34494aba22973295ebbb898e25900b4a38e6517d96e754f46f3f7ed9932883ec
-active_request_id: create-spec-run-0001
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -72,7 +72,21 @@ worker_runs:
     status: needs_user_input
     input_digest: sha256:34494aba22973295ebbb898e25900b4a38e6517d96e754f46f3f7ed9932883ec
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:34494aba22973295ebbb898e25900b4a38e6517d96e754f46f3f7ed9932883ec
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:34494aba22973295ebbb898e25900b4a38e6517d96e754f46f3f7ed9932883ec
+    output_digest: null
+artifacts:
+  - path: feature-docs/tmux-startup-query-response-leak/REQUIREMENTS.md
+    sha256: sha256:09bcd64422efcd405dee78f65de22398f6c3154aa296984d32f728b19542c58c
+    produced_by: create-spec-run-0003
+  - path: feature-docs/tmux-startup-query-response-leak/SPEC.md
+    sha256: sha256:b2e15149a7fa6cfd409afc6879180400efa5fec993696d54298759f8571d826d
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
