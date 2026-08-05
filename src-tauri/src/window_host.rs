@@ -286,6 +286,18 @@ pub struct WindowHost {
     /// detect the `None` → `Some` `mux_session_name` transition (a fresh
     /// attach or reattach) and reopen `resize_settler`'s settling window.
     mux_was_attached: bool,
+    /// Last time a resize-settle self-wake actually requested a redraw
+    /// (mux-tab-switch-bypass-refix task0002 Change 1, finding
+    /// `81507f39e384b34e`). Rate-limits
+    /// [`Self::refresh_status_bar_insets`]'s awaiting-decision wake and
+    /// `PocApp::about_to_wait`'s `WaitUntil`-driven follow-up to
+    /// [`RESIZE_SETTLE_SELF_WAKE_INTERVAL`], mirroring `last_toast_redraw`'s
+    /// role for `toast_redraw_due`. `None` means no self-wake has fired yet
+    /// in the currently-open settling window, so the first one fires
+    /// immediately. Reset to `None` alongside `resize_settler.reset()` so a
+    /// fresh settling window's first wake is never delayed by a stale
+    /// timestamp from a previously-closed one.
+    last_resize_settle_wake: Option<Instant>,
     current_mods: Modifiers,
     /// Last cursor position in physical pixels (updated on `PointerMoved`).
     cursor_pos: PhysicalPosition<f64>,
@@ -572,6 +584,7 @@ impl WindowHost {
             mux_sidebar_inset_logical: 0.0,
             resize_settler: ResizeSettler::new(),
             mux_was_attached: false,
+            last_resize_settle_wake: None,
             current_mods: Modifiers::NONE,
             cursor_pos: PhysicalPosition::new(0.0, 0.0),
             dragging: false,
@@ -1229,12 +1242,40 @@ impl WindowHost {
     /// side of a 2-state oscillation happened to match the still-applied
     /// value, biasing quiescence detection (finding 02546e5e10deb500-c).
     /// `ResizeSettler` itself now decides whether a candidate is a no-op
-    /// repeat. While the settler is still debouncing
-    /// ([`ResizeSettler::awaiting_decision`]), this requests another
-    /// redraw so a fully idle window does not strand a pending settle
-    /// indefinitely, waiting on an unrelated ime/pty/search/blink/bell/
-    /// toast event to wake the loop (findings 02546e5e10deb500 /
-    /// 5b1878c41d3e02d6-perf-P2).
+    /// repeat.
+    ///
+    /// mux-tab-switch-bypass-refix task0002 D-D: the drawing insets
+    /// (below) and the PTY reshape trigger (`pending_resize`) are two
+    /// separate concerns from here on. Change 2 (findings
+    /// `a82206113b8160fd` / `aba5ebbdf9a9addb`) applies
+    /// `status_bar_*_inset_logical` whenever the VALUES themselves change
+    /// ([`status_bar_insets_changed`]), independent of whether
+    /// `ResizeSettler::observe` forwards a grid-size decision this frame —
+    /// a status-bar height change whose derived `(cols, rows)` candidate
+    /// happens to be unchanged (cell height above `ROW_HEIGHT` at larger
+    /// font sizes, or row clamping) previously left the insets stale
+    /// forever, permanently mis-routing mux-sidebar pointer input which
+    /// reads the same fields. No extra repaint is requested for this: the
+    /// height change that drives a new inset value always changes
+    /// `App::status_bar_view_model`, which `render()`'s `should_skip_frame`
+    /// check already treats as a mandatory-paint signal via
+    /// `status_bar_changed`, so the fresh inset lands in the very frame
+    /// that computed it. `pending_resize` stays tied to the settler's
+    /// forwarded decision only (unchanged from before this task), so an
+    /// inset-only change never re-triggers FR6's reshape-storm guard.
+    ///
+    /// Change 1 (finding `81507f39e384b34e`): while the settler is still
+    /// debouncing ([`ResizeSettler::awaiting_decision`]), this requests
+    /// another redraw so a fully idle window does not strand a pending
+    /// settle indefinitely (findings 02546e5e10deb500 /
+    /// 5b1878c41d3e02d6-perf-P2) — but now rate-limited via
+    /// [`resize_settle_self_wake_due`] instead of firing unconditionally
+    /// on every frame; see that function's doc comment and
+    /// [`RESIZE_SETTLE_SELF_WAKE_INTERVAL`] for why an unconditional wake
+    /// spins the render loop at full speed, and
+    /// [`next_resize_settle_wake_deadline`] / `PocApp::about_to_wait` for
+    /// how the rate-limited wake still keeps arriving with zero other
+    /// activity in the window.
     fn refresh_status_bar_insets(&mut self, app: &App) {
         // FR5 (mux-status-bar-removal task0001): `vm` — and therefore
         // `height`, the bottom inset, and the grid-size candidate computed
@@ -1259,15 +1300,36 @@ impl WindowHost {
         let mux_attached = app.active_tab().is_some_and(|t| t.mux_session_name.is_some());
         if mux_attached && !self.mux_was_attached {
             self.resize_settler.reset();
+            // A fresh settling window's first self-wake must fire
+            // immediately, not be delayed by a stale timestamp left over
+            // from a previously-closed window (see `last_resize_settle_
+            // wake`'s doc comment).
+            self.last_resize_settle_wake = None;
         }
         self.mux_was_attached = mux_attached;
 
-        let candidate = self.grid_size_for_bot_inset(app, bot);
-        if self.resize_settler.observe(candidate, Instant::now()).is_some() {
+        // Change 2: apply the inset values independent of the settler
+        // below (D-D) — see this method's doc comment.
+        if status_bar_insets_changed(
+            self.status_bar_top_inset_logical,
+            self.status_bar_bot_inset_logical,
+            top,
+            bot,
+        ) {
             self.status_bar_top_inset_logical = top;
             self.status_bar_bot_inset_logical = bot;
+        }
+
+        let candidate = self.grid_size_for_bot_inset(app, bot);
+        let now = Instant::now();
+        if self.resize_settler.observe(candidate, now).is_some() {
             self.pending_resize = true;
-        } else if self.resize_settler.awaiting_decision() {
+        } else if resize_settle_self_wake_due(
+            self.resize_settler.awaiting_decision(),
+            self.last_resize_settle_wake,
+            now,
+        ) {
+            self.last_resize_settle_wake = Some(now);
             self.window().request_redraw();
         }
     }
@@ -2481,6 +2543,81 @@ fn toast_redraw_due(toast_pending: bool, last_redraw: Option<Instant>, now: Inst
         })
 }
 
+/// Minimum real wall-clock interval between resize-settle self-wake-driven
+/// redraw requests (mux-tab-switch-bypass-refix task0002 Change 1, finding
+/// `81507f39e384b34e`). The unconditional per-frame wake this replaces
+/// re-enters `RedrawRequested` immediately (never reaching the `WaitUntil`
+/// timer — see `last_toast_redraw`'s doc comment for the same mechanism),
+/// spinning the render loop at full speed for up to
+/// `RESIZE_SETTLE_MAX_DURATION` on every startup/reattach/tab-switch.
+/// Set equal to [`RESIZE_SETTLE_QUIET_DURATION`] (64 ms): any interval at
+/// or below the quiescence window bounds the wake rate far below a
+/// display's full frame rate (NFR2) while still letting the settler
+/// observe a stable candidate long enough to detect quiescence well
+/// within `RESIZE_SETTLE_MAX_DURATION`.
+const RESIZE_SETTLE_SELF_WAKE_INTERVAL: Duration = RESIZE_SETTLE_QUIET_DURATION;
+
+/// Whether the render loop should request another redraw on behalf of an
+/// open [`ResizeSettler`] settling window this turn: the window is still
+/// awaiting a decision AND at least [`RESIZE_SETTLE_SELF_WAKE_INTERVAL`]
+/// has elapsed since the last self-wake-driven request (`None` = no
+/// self-wake has fired yet in this window, so the first one fires
+/// immediately). Mirrors [`toast_redraw_due`]'s form exactly — plain
+/// values in, plain bool out — so it is directly unit-testable. Consulted
+/// from both [`WindowHost::refresh_status_bar_insets`] (the fast path,
+/// when render() is already running) and `PocApp::about_to_wait` (the
+/// fallback path, when [`next_resize_settle_wake_deadline`]'s `WaitUntil`
+/// is what re-enters the loop with no other activity at all) — both read
+/// the same `last_resize_settle_wake` state, so whichever runs first for a
+/// given tick naturally gates the other out.
+fn resize_settle_self_wake_due(
+    awaiting_decision: bool,
+    last_self_wake: Option<Instant>,
+    now: Instant,
+) -> bool {
+    awaiting_decision
+        && last_self_wake
+            .is_none_or(|last| now.duration_since(last) >= RESIZE_SETTLE_SELF_WAKE_INTERVAL)
+}
+
+/// When `about_to_wait` should next re-check
+/// [`resize_settle_self_wake_due`], for `control_flow_for`'s `WaitUntil`
+/// scheduling — mirrors `App::next_toast_deadline`'s role for the toast
+/// poll cadence. Folding this into the event loop's `WaitUntil` deadline
+/// is what guarantees the resize-settle self-wake keeps arriving even on a
+/// fully idle window (no ime/pty/search/blink/bell/toast activity ever
+/// feeding the loop): an unconditional `request_redraw()` call bypasses
+/// `WaitUntil` entirely (see `RESIZE_SETTLE_SELF_WAKE_INTERVAL`'s doc
+/// comment), so without this deadline a rate-limited gate alone would
+/// strand a pending settle exactly like round-1's findings
+/// `02546e5e10deb500` / `5b1878c41d3e02d6-perf-P2` — which this must not
+/// reintroduce. `None` when the settling window is already closed (nothing
+/// to wake for).
+fn next_resize_settle_wake_deadline(awaiting_decision: bool, now: Instant) -> Option<Instant> {
+    awaiting_decision.then(|| now + RESIZE_SETTLE_SELF_WAKE_INTERVAL)
+}
+
+/// Whether the cached status-bar drawing insets need to be (re)applied
+/// this frame: the candidate top/bot values differ from what's currently
+/// cached by more than `f32::EPSILON` (mirrors
+/// [`WindowHost::refresh_mux_sidebar_inset`]'s own epsilon-style change
+/// check for its inset). Change 2 (mux-tab-switch-bypass-refix task0002,
+/// findings `a82206113b8160fd` / `aba5ebbdf9a9addb`): extracted as a pure
+/// function — plain values in, plain bool out — so the fix (apply insets
+/// on value change, independent of `ResizeSettler`'s grid-size decision)
+/// is directly unit-testable. D-D (IMPLEMENTATION.md): applying the
+/// insets here is deliberately independent of `pending_resize`, which
+/// stays gated on the settler's forwarded decision only.
+fn status_bar_insets_changed(
+    current_top: f32,
+    current_bot: f32,
+    candidate_top: f32,
+    candidate_bot: f32,
+) -> bool {
+    (current_top - candidate_top).abs() > f32::EPSILON
+        || (current_bot - candidate_bot).abs() > f32::EPSILON
+}
+
 /// Whether `events` contains at least one egui event that must veto the
 /// idle-skip decision above. `egui::Event::PointerMoved` is deliberately
 /// excluded: `PointerMoved` pushes one unconditionally on every mouse
@@ -2627,16 +2764,33 @@ fn next_wait_deadline(
 /// Compute the winit `ControlFlow` for this turn from the App's pending
 /// timed-work deadlines (task0004 D4). Thin wiring around
 /// [`next_wait_deadline`] (the unit-tested pure decision) — used by both
-/// `PocApp::resumed`'s initial control flow and `PocApp::about_to_wait`'s
-/// end-of-turn rearm so the two follow the same rule.
-fn control_flow_for(app: &App) -> ControlFlow {
+/// `PocApp::can_create_surfaces`'s initial control flow and
+/// `PocApp::about_to_wait`'s end-of-turn rearm so the two follow the same
+/// rule.
+///
+/// `resize_settle_deadline` (mux-tab-switch-bypass-refix task0002 Change
+/// 1) is folded in alongside `next_wait_deadline`'s four App-owned
+/// concerns rather than added as a fifth parameter to that function: the
+/// resize-settle self-wake state (`ResizeSettler::awaiting_decision`)
+/// lives on `WindowHost`, not `App`, so the caller computes it via
+/// [`next_resize_settle_wake_deadline`] and passes the result straight
+/// through. This is what lets `about_to_wait` re-enter at the self-wake
+/// cadence even when every other concern (blink/bell/toast/mux-sidebar-dim)
+/// is quiescent — see [`resize_settle_self_wake_due`]'s doc comment for why
+/// this deadline, not just a rate-limited gate, is required.
+fn control_flow_for(app: &App, resize_settle_deadline: Option<Instant>) -> ControlFlow {
     let now = Instant::now();
-    match next_wait_deadline(
+    let app_deadline = next_wait_deadline(
         app.next_blink_deadline(),
         app.next_bell_deadline(),
         app.next_toast_deadline(),
         app.next_mux_sidebar_dim_deadline(now),
-    ) {
+    );
+    match [app_deadline, resize_settle_deadline]
+        .into_iter()
+        .flatten()
+        .min()
+    {
         Some(deadline) => ControlFlow::WaitUntil(deadline),
         None => ControlFlow::Wait,
     }
@@ -3406,8 +3560,18 @@ impl ApplicationHandler for PocApp {
         host.window().request_redraw();
         // task0004 D4: the initial control flow follows the same
         // pending-timed-work rule `about_to_wait` uses below, rather than
-        // unconditionally rearming a 16 ms `WaitUntil`.
-        event_loop.set_control_flow(control_flow_for(&self.app));
+        // unconditionally rearming a 16 ms `WaitUntil`. `ResizeSettler::new`
+        // opens its settling window immediately, so this also arms the
+        // resize-settle self-wake deadline from construction (mux-tab-
+        // switch-bypass-refix task0002) — both places computing
+        // `ControlFlow` agree on the same rule.
+        event_loop.set_control_flow(control_flow_for(
+            &self.app,
+            next_resize_settle_wake_deadline(
+                host.resize_settler.awaiting_decision(),
+                Instant::now(),
+            ),
+        ));
         self.host = Some(host);
     }
 
@@ -4517,6 +4681,24 @@ impl ApplicationHandler for PocApp {
         // `App::resolve_mux_sidebar_opacity`, once the redraw this
         // requests actually runs — this check is read-only.
         let mux_sidebar_dim_due = self.app.mux_sidebar_dim_due(Instant::now());
+        // mux-tab-switch-bypass-refix task0002 Change 1 (finding
+        // `81507f39e384b34e`): the fallback path for the resize-settle
+        // self-wake — `refresh_status_bar_insets` (inside `render()`)
+        // handles the fast path when a render is already happening; this
+        // is what fires the wake when NOTHING else does (the exact
+        // fully-idle-window case findings 02546e5e10deb500 /
+        // 5b1878c41d3e02d6-perf-P2 describe), reached via the
+        // `next_resize_settle_wake_deadline`-armed `WaitUntil` below. Both
+        // sites read/write the same `last_resize_settle_wake`, so whichever
+        // runs first for a given tick gates the other out.
+        let resize_settle_wake_due = resize_settle_self_wake_due(
+            host.resize_settler.awaiting_decision(),
+            host.last_resize_settle_wake,
+            Instant::now(),
+        );
+        if resize_settle_wake_due {
+            host.last_resize_settle_wake = Some(Instant::now());
+        }
         if ime_changed
             || pty_changed
             || search_changed
@@ -4524,6 +4706,7 @@ impl ApplicationHandler for PocApp {
             || bell_due
             || toast_due
             || mux_sidebar_dim_due
+            || resize_settle_wake_due
         {
             host.window().request_redraw();
         }
@@ -4565,7 +4748,13 @@ impl ApplicationHandler for PocApp {
         // loop explicitly (PTY reader threads / mux off-thread workers via
         // `crate::wakeup::wake()`, IME/input via winit's native wake, this
         // turn's own blink/bell/toast deadlines via `control_flow_for`).
-        event_loop.set_control_flow(control_flow_for(&self.app));
+        event_loop.set_control_flow(control_flow_for(
+            &self.app,
+            next_resize_settle_wake_deadline(
+                host.resize_settler.awaiting_decision(),
+                Instant::now(),
+            ),
+        ));
     }
 
     /// Phase E (TS-32): winit `EventLoopProxy::wake_up()` calls land
@@ -5310,6 +5499,158 @@ mod tests {
             !settler.awaiting_decision(),
             "once settled, no further self-driven redraw should be requested"
         );
+    }
+
+    // ── mux-tab-switch-bypass-refix task0002 Change 1: rate-limited
+    // resize-settle self-wake (finding 81507f39e384b34e) ────────────────
+
+    /// AC-1: not awaiting a decision at all → never wake, regardless of
+    /// `last_self_wake`.
+    #[test]
+    fn resize_settle_self_wake_due_false_when_not_awaiting() {
+        let now = Instant::now();
+        assert!(!resize_settle_self_wake_due(false, None, now));
+        assert!(!resize_settle_self_wake_due(false, Some(now), now));
+    }
+
+    /// AC-1: awaiting a decision with no prior self-wake in this window
+    /// (`None`) → the first wake fires immediately.
+    #[test]
+    fn resize_settle_self_wake_due_true_on_first_wake() {
+        assert!(resize_settle_self_wake_due(true, None, Instant::now()));
+    }
+
+    /// AC-1/AC-3: awaiting a decision, but less than
+    /// `RESIZE_SETTLE_SELF_WAKE_INTERVAL` has elapsed since the last
+    /// self-wake-driven request → no further wake yet (the rate limit).
+    #[test]
+    fn resize_settle_self_wake_due_false_within_interval() {
+        let now = Instant::now();
+        let last = now - (RESIZE_SETTLE_SELF_WAKE_INTERVAL / 2);
+        assert!(!resize_settle_self_wake_due(true, Some(last), now));
+    }
+
+    /// AC-1/AC-3: once `RESIZE_SETTLE_SELF_WAKE_INTERVAL` has elapsed since
+    /// the last self-wake-driven request, the next one fires — this is
+    /// what bounds the wake rate to a modest cadence (NFR2) instead of the
+    /// unconditional per-frame request that used to spin the render loop.
+    #[test]
+    fn resize_settle_self_wake_due_true_after_interval() {
+        let now = Instant::now();
+        let last = now - RESIZE_SETTLE_SELF_WAKE_INTERVAL;
+        assert!(resize_settle_self_wake_due(true, Some(last), now));
+    }
+
+    /// Supporting `next_resize_settle_wake_deadline` (feeds
+    /// `control_flow_for`'s `WaitUntil` so `about_to_wait` re-enters at the
+    /// self-wake cadence even with zero external activity): closed window
+    /// → no deadline to arm.
+    #[test]
+    fn next_resize_settle_wake_deadline_none_when_not_awaiting() {
+        assert_eq!(
+            next_resize_settle_wake_deadline(false, Instant::now()),
+            None
+        );
+    }
+
+    /// Open window → the deadline is exactly one self-wake interval out
+    /// from `now`, regardless of `last_self_wake` (mirrors
+    /// `App::next_toast_deadline`, which similarly ignores its own gate's
+    /// last-fired timestamp).
+    #[test]
+    fn next_resize_settle_wake_deadline_some_one_interval_out_when_awaiting() {
+        let now = Instant::now();
+        assert_eq!(
+            next_resize_settle_wake_deadline(true, now),
+            Some(now + RESIZE_SETTLE_SELF_WAKE_INTERVAL)
+        );
+    }
+
+    /// AC-2 (mirrors `resize_settler_self_drives_to_settlement_without_
+    /// any_external_wake`): simulates a fully idle window (no ime/pty/
+    /// search/blink/bell/toast activity) where `ResizeSettler::observe` is
+    /// driven ONLY at the rate-limited self-wake cadence — i.e. the exact
+    /// call pattern `resize_settle_self_wake_due` now permits in
+    /// production — rather than on every simulated millisecond. The
+    /// settler must still reach its decision within
+    /// `RESIZE_SETTLE_MAX_DURATION`, proving the rate limit does not
+    /// starve quiescence detection (regression guard: findings
+    /// 02546e5e10deb500 / 5b1878c41d3e02d6-perf-P2 must not return).
+    #[test]
+    fn resize_settle_self_wake_drives_settler_to_settlement_at_the_rate_limited_cadence() {
+        let mut settler = ResizeSettler::new();
+        let candidate = (100, 30);
+        let base = Instant::now();
+        let mut t = base;
+        let mut last_self_wake: Option<Instant> = None;
+        let result = loop {
+            let result = settler.observe(candidate, t);
+            if result.is_some() {
+                break result;
+            }
+            let awaiting = settler.awaiting_decision();
+            assert!(
+                awaiting,
+                "AC-2: while a candidate is still pending, the settler \
+                 must report awaiting_decision() == true"
+            );
+            assert!(
+                resize_settle_self_wake_due(awaiting, last_self_wake, t),
+                "AC-2: the self-wake predicate must keep permitting a wake \
+                 at each rate-limited tick, or the loop below would spin \
+                 forever without ever calling `observe` again"
+            );
+            last_self_wake = Some(t);
+            assert!(
+                t.duration_since(base) < RESIZE_SETTLE_MAX_DURATION * 2,
+                "AC-2: settling must complete within a bounded amount of \
+                 simulated wall-clock time even when observed only at the \
+                 rate-limited self-wake cadence"
+            );
+            t += RESIZE_SETTLE_SELF_WAKE_INTERVAL;
+        };
+        assert_eq!(result, Some(candidate));
+        assert!(!settler.awaiting_decision());
+    }
+
+    // ── mux-tab-switch-bypass-refix task0002 Change 2: settler-independent
+    // inset application (findings a82206113b8160fd / aba5ebbdf9a9addb)
+    // ────────────────────────────────────────────────────────────────
+
+    /// AC-5: identical current/candidate insets → unchanged (no-op).
+    #[test]
+    fn status_bar_insets_changed_false_when_identical() {
+        assert!(!status_bar_insets_changed(0.0, 40.0, 0.0, 40.0));
+    }
+
+    /// AC-4: the bottom inset alone differing (the status-bar-height-
+    /// change case whose derived grid-size candidate does not move) must
+    /// still be reported as changed — this is the defect-(a) fix: the new
+    /// inset value must apply even when `ResizeSettler` never forwards a
+    /// grid-size decision for it.
+    #[test]
+    fn status_bar_insets_changed_true_when_bot_inset_differs() {
+        assert!(status_bar_insets_changed(0.0, 40.0, 0.0, 44.0));
+    }
+
+    /// The top inset differing alone must also be reported as changed
+    /// (symmetric with the bottom inset check).
+    #[test]
+    fn status_bar_insets_changed_true_when_top_inset_differs() {
+        assert!(status_bar_insets_changed(0.0, 40.0, 2.0, 40.0));
+    }
+
+    /// A difference at or below `f32::EPSILON` is treated as unchanged —
+    /// mirrors `refresh_mux_sidebar_inset`'s own epsilon-style comparison,
+    /// avoiding float-noise churn.
+    #[test]
+    fn status_bar_insets_changed_false_within_epsilon() {
+        assert!(!status_bar_insets_changed(
+            40.0,
+            0.0,
+            40.0 + f32::EPSILON / 2.0,
+            0.0
+        ));
     }
 
     // ── task0002 AC-5: should_skip_frame pure decision ───────────────
