@@ -46,7 +46,8 @@ workflow:
       create-spec.design-step in batch mode.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: be1d644e6ff8f99b6ded4ed68a396c597cf33d46
   - id: implement
     status: pending
     base_commit: dd730bcb66fbefe135e6dbc7e79a1501215c9365
@@ -59,7 +60,26 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Root-cause and fix the tmux-startup device-query response leak
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/csi_device.rs
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/snapshot.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/mux/scrollback_filter.rs
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/mux/snapshot_bytes.rs
+    skills: [backend-impl]
+    domains: [input-handling, concurrency, external-io]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -75,77 +95,76 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS4]
   FR2:
     title: Query responses still delivered to the querying application
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3, TS4]
   FR3:
     title: Automated regression coverage
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   FR4:
     title: Runtime contexts covered
-    status: tbd
+    status: assumed
     tbd_reason: >
-      Batch policy `unresolved: record_tbd` (Codex consultation unavailable —
-      usage limit). Tentative position: `both` (plain eMterm tab AND mux pane).
-      To be resolved by create-plan's `create-plan.tbd-resolution` assume gate.
+      Resolved by batch gate create-plan.tbd-resolution (assume): `both` — the
+      fix and verification cover BOTH a plain eMterm tab running tmux AND a
+      tmux inside a mux pane.
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2]
   FR5:
     title: Query-response set in scope
-    status: tbd
+    status: assumed
     tbd_reason: >
-      Batch policy `unresolved: record_tbd` (Codex unavailable). Tentative
-      position: `generalize` — the response set defined by
-      mux-snapshot-device-query-strip (DA1 / DA2 / DSR / CPR /
-      XTWINOPS 14,16,18 / DECRPM). To be resolved by create-plan's assume gate.
+      Resolved by batch gate create-plan.tbd-resolution (assume): `generalize`
+      — in-scope set is the mux-snapshot-device-query-strip taxonomy
+      (DA1 / DA2 / DSR / CPR / XTWINOPS 14,16,18 / DECRPM).
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   FR6:
     title: No regression of the tab-switch leak fix
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS7]
   NFR1:
     title: No output-pipeline latency regression
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   NFR2:
     title: Feature-gate integrity
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS6]
   NFR3:
     title: No behavior change for non-tmux workloads
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   NFR4:
     title: Snapshot-replay strip not regressed
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS7]
 
 batch:
