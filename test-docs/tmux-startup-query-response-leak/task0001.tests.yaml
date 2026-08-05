@@ -1,0 +1,102 @@
+task_id: task0001
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests: [tabs::tests::process_combined_delivers_da2_response_exactly_once]
+    red_confirmed: true
+    red_reason: >-
+      assertion `left == right` failed: DA2 response must reach the querying
+      PTY's inbound side exactly once ...; got 2 occurrences within
+      [[27, 91, 62, 54, 53, 59, 49, 59, 48, 99], [27, 91, 62, 54, 53, 59, 49,
+      59, 48, 99]] (left: 2, right: 1) — the query-encoded and callback-queued
+      delivery channels both wrote the identical DA2 reply.
+  AC-2:
+    tests: [tabs::tests::plain_tab_every_response_type_delivered_exactly_once_and_absent_from_grid]
+    red_confirmed: true
+    red_reason: >-
+      Failed on the first case (DA1): "expected exactly one delivery of
+      [27, 91, 63, 54, 53, 59, 49, 59, 52, 59, 50, 50, 99], got 2 within
+      [[...], [...]]" (left: 2, right: 1) — same double-delivery root cause,
+      reproduced for the generalized response-type table.
+  AC-3:
+    tests:
+      - tabs::tests::mux_pane_every_response_type_delivered_exactly_once_and_absent_from_grid
+      - tabs::tests::apply_queued_live_output_delivers_device_response_exactly_once
+      - tabs::tests::reset_frame_for_replay_produces_no_outbound_device_response_write
+    red_confirmed: true
+    red_reason: >-
+      mux_pane_every_response_type_...: failed on DA1 (mux pane) with "got 2
+      within [[1,0,0,0], [80,0,24,0], [], [resp], [resp]]" (left: 2, right:
+      1) — required routing the query through process_combined's real mux
+      branch plus a second, empty process_combined call to surface the
+      one-pump-later stale device_responses drain; calling
+      apply_mux_message directly (an earlier draft of this test) did not
+      exercise that drain and passed even pre-fix.
+      apply_queued_live_output_delivers_device_response_exactly_once: failed
+      with "got 2 within [[1,0,0,0], [80,0,24,0], [], [resp], [resp]]" (left:
+      2, right: 1) for the same reason.
+      reset_frame_for_replay_produces_no_outbound_device_response_write:
+      NOT red pre-fix — see unconfirmed_reds; this test's own write-back
+      site (reset_frame_for_replay) already discarded response_buffer via
+      take_response() before this task (commit 4380805), and the test never
+      calls process_combined afterward, so the removed callback path was
+      never observed writing anything for THIS specific scenario. Kept as a
+      permanent regression guard for the invariant it names.
+  AC-4:
+    tests:
+      - tabs::tests::plain_tab_query_lookalike_text_reaches_grid_unchanged
+      - tabs::tests::plain_tab_ordinary_output_without_queries_matches_direct_core_parse
+    red_confirmed: false
+    red_reason: >-
+      Negative/non-regression tests by design (NFR3 pass-through guarantee)
+      — they assert behavior the fix does not change (lookalike text and
+      query-free output were never touched by the duplicate-delivery bug or
+      its fix), so they passed both before and after the fix. Included to
+      pin the invariant, not to reproduce a defect.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Whole-suite regression gate, not a single test: `cargo test --lib`
+      (both crates) run to completion with final_failures a subset of
+      baseline_failures, including the pre-existing per-tab-grid-size and
+      mux-snapshot-device-query-strip suites (verified green explicitly via
+      `-- device_query`, matching build_snapshot_bytes_funnel_strips_da1_device_query,
+      strip_keeps_unterminated_csi_device_query,
+      c_device_query_frame_breaks_coalesce_run,
+      payload_has_device_query_detects_response_producing_finals).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build-gate criterion, not a test: `cargo check --manifest-path
+      src-tauri/Cargo.toml` and `cargo check --manifest-path
+      src-tauri/Cargo.toml --no-default-features` both ran clean post-fix.
+      No GUI-only code was added; the fix touches only already-gui-agnostic
+      files.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Reasoning-based criterion, not a test: the fix is a pure deletion (the
+      redundant NativeCallbackState::device_responses field, its push in
+      on_device_response, and its drain+write loop in process_combined) plus
+      doc-only comments; it adds no new per-byte branch, and the existing
+      payload_has_device_query / pty_output_batch_eligible gates are
+      unchanged. scrollback_filter.rs was not touched, so its #[ignore] 2 MiB
+      bench threshold is not implicated.

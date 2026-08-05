@@ -54,8 +54,19 @@ impl TerminalCore {
     /// position queries during line redraws, never receives an answer, and
     /// recomputes the redraw against a stale cursor — manifesting as
     /// backspace erasing far more characters than the one the user pressed.
-    /// The WebView build keeps reading via `get_response_bytes` so this is an
-    /// additive API.
+    ///
+    /// This is the SOLE intended PTY delivery route for a synthesized
+    /// response (tmux-startup-query-response-leak task0001): the embedder's
+    /// three write-back sites poll this after every parse and are the only
+    /// callers that may forward the bytes onward. A second, callback-based
+    /// delivery path (`fire_device_response_callback` /
+    /// `TerminalCallbacks::on_device_response`, still fired alongside this
+    /// buffer write for every response — see `csi_dispatch.rs`) exists for
+    /// hosts that prefer a push model; the native embedder's callback
+    /// implementation is a documented no-op specifically so this method
+    /// remains the only channel that reaches a PTY — a second live consumer
+    /// would reintroduce exactly-once-delivery violations (a query's
+    /// application receiving its own reply more than once).
     pub fn take_response(&mut self) -> Vec<u8> {
         let len = self.response_len as usize;
         if len == 0 {

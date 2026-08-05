@@ -238,9 +238,6 @@ pub struct NativeCallbackState {
     /// to the `NotificationSink`. Buffering here keeps the callback fast
     /// (no D-Bus round-trip inside `process_pty_data`).
     pub pending_notifications: Vec<(String, String)>,
-    /// Device responses the terminal asked us to send back to the shell.
-    /// `Tab::pump` drains this and feeds it into the PTY writer.
-    pub device_responses: Vec<Vec<u8>>,
     /// Pending APC (Kitty Graphics) payloads buffered by `on_apc`. Drained
     /// by `Tab::pump` after locking `TerminalCore` so the cursor row/col
     /// can be snapshotted and passed to `term_images::ImageProcessor`.
@@ -626,9 +623,30 @@ impl TerminalCallbacks for NativeCallbacks {
         log::debug!("BEL");
     }
 
-    fn on_device_response(&self, data: &[u8]) {
-        self.state.lock().device_responses.push(data.to_vec());
-    }
+    /// Intentionally a no-op (tmux-startup-query-response-leak task0001).
+    ///
+    /// `term_core` fires this callback AND writes the identical bytes into
+    /// its own single-slot `response_buffer` for every synthesized DSR /
+    /// DA / XTWINOPS / DECRPM reply (see
+    /// `crates/term_core/src/csi_dispatch.rs`'s device-response arms,
+    /// each of which calls both `write_response` and
+    /// `fire_device_response_callback`). `Tab`'s three write-back sites
+    /// (`process_outer_via_core`, `apply_active_pane_output`,
+    /// `apply_queued_live_output`) already poll `TerminalCore::
+    /// take_response()` after every parse and deliver the result via the
+    /// mux-aware `write_device_response` — that is the sole intended PTY
+    /// delivery route (see `take_response`'s doc). This callback used to
+    /// ALSO queue the bytes here (`NativeCallbackState::device_responses`,
+    /// drained once per pump in `Tab::process_combined` and written raw,
+    /// bypassing mux routing) — a second, redundant delivery of the same
+    /// reply that violated exactly-once delivery: in the plain-tab
+    /// context the querying application (e.g. tmux) received the reply
+    /// twice, and having already consumed the first copy for capability
+    /// negotiation, forwarded the second as ordinary input, which echoed
+    /// onto the screen. Left as a no-op rather than removed from the
+    /// trait so the callback surface does not need to change for a
+    /// native-only fix.
+    fn on_device_response(&self, _data: &[u8]) {}
 
     fn on_reset(&self) {
         self.handle_reset();
