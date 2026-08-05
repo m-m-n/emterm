@@ -146,7 +146,7 @@ tasks:
       source_ids: [8bebc1e532a1b597]
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
