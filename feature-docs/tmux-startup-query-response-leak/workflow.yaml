@@ -49,7 +49,8 @@ workflow:
     status: completed
     completed_at_commit: be1d644e6ff8f99b6ded4ed68a396c597cf33d46
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: aa58eef14feaf230af9430a528be0dfeff323659
     base_commit: 382f7e98cb5bc3d81f5a34cb194b50d68e43d22e
   - id: review
     status: pending
@@ -77,8 +78,12 @@ tasks:
     domains: [input-handling, concurrency, external-io]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: >
+      Merged at aa58eef14feaf230af9430a528be0dfeff323659, 0 conflict retries,
+      tests pass. Deviation: also touched src-tauri/src/callbacks.rs (not in
+      the planner's predicted files) — that file holds the other half of the
+      duplicate-delivery mechanism.
     branch: em-workflow/tmux-startup-query-response-leak/task0001
 
 review:
