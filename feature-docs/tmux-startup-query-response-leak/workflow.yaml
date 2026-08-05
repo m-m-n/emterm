@@ -88,7 +88,8 @@ workflow:
       on-screen observation) and remain unperformed — they are the human
       evaluator's step, tracked as unchecked boxes in VERIFICATION.md.
   - id: retrospect
-    status: in_progress
+    status: completed
+    completed_at_commit: b9c612481eed9e2c2719c3374cda83000bd3d399
 
 tasks:
   task0001:

@@ -1,0 +1,118 @@
+feature: tmux-startup-query-response-leak
+collected_at: "2026-08-06T07:21:39+09:00"
+session_ids: [dda22b66-fb2d-4683-ab68-e532d1558208]
+signals:
+  review_critical_high:
+    - stable_id: 9ef6b54302b083b3
+      category: comprehensive
+      file: src-tauri/src/tabs.rs
+      title: 複数デバイスクエリが1チャンクに来ると最後の1件以外の応答が完全に消える
+      resolution: unresolved  # round 1; addressed by rework task0002
+    - stable_id: c6092a0fdcb3b4a5
+      category: spec
+      file: src-tauri/src/tabs.rs
+      title: コールバック経路の削除で、1回のパースに複数クエリが含まれると最後の応答しか届かない
+      resolution: unresolved  # round 1; addressed by rework task0002
+    - stable_id: 49bc2b33fa3b053c
+      category: architecture
+      file: src-tauri/src/tabs.rs
+      title: 単一スロット response_buffer を唯一の配送経路に昇格させた設計上の欠陥
+      resolution: unresolved  # round 1; addressed by rework task0002
+    - stable_id: 408711af83db8147
+      category: performance
+      file: src-tauri/src/tabs.rs
+      title: "Performance regression in test builds: mutex lock and clone per write"
+      resolution: declined
+    - stable_id: 53150406ab0d281a
+      category: performance
+      file: src-tauri/src/tabs.rs
+      title: Test-only mutex lock added to send_control's hot path
+      resolution: declined
+    - stable_id: 4a1c9e07b5d2f836
+      category: spec
+      file: src-tauri/src/tabs.rs
+      title: >
+        Missing device response discard in apply_offthread_swap violates
+        exactly-once delivery guarantee
+      resolution: declined  # round 2
+
+  conflict_reworks: []
+  # All three tasks merged with 0 conflict retries.
+
+  file_prediction_misses:
+    - task: task0001
+      files: [src-tauri/src/callbacks.rs]
+      # Holds the other half of the duplicate-delivery mechanism the task removed.
+    - task: task0002
+      files:
+        - crates/term_core/src/apc_handler.rs
+        - crates/term_core/src/esc_handler.rs
+      # Forced by the trait/field changes: 9 mechanical assertion updates for the
+      # renamed field, plus removal of a now-invalid test-double impl.
+
+  verification_failures: []
+  # verify result: pass. The 5 residual `--lib` failures under
+  # `--test-threads=1` are a strict subset of the main-branch baseline's 7
+  # measured the same way, so they are not this feature's failures. TS1/TS2/TS3
+  # are manual-only by design and remain unperformed (human evaluator's step).
+
+  discretionary_perspectives: []
+  # Both rounds ran the mechanical floor only
+  # ([comprehensive, security, performance, architecture, spec]); no Layer-2
+  # additions were warranted (the diff touches no dependency manifests, so the
+  # mandatory `license` check did not fire).
+
+  declined_findings:
+    - stable_id: 408711af83db8147
+      category: performance
+      resolution_reason: >
+        前提がリポジトリで成立しない。outbound_write_log のフィールド宣言・
+        初期化・push は全て #[cfg(test)] 配下でリリースビルドに残らない。
+    - stable_id: 53150406ab0d281a
+      category: performance
+      resolution_reason: >
+        408711af83db8147 と同一理由（#[cfg(test)] 限定・本番ビルドに不在・
+        当該クレートを測るベンチターゲット不在・適用すると回帰テストが壊れる）。
+    - stable_id: 862f5339e92b8451
+      category: performance
+      resolution_reason: >
+        指摘者自身が実質的な影響なしと明記しており、#[cfg(test)] 限定で
+        本番ビルドに不在。
+    - stable_id: 4a1c9e07b5d2f836
+      category: spec
+      resolution_reason: >
+        Verified false positive. `*live = new_core;` と
+        `let _ = live.take_response();` は同一の MutexGuard 保持ブロック内の
+        連続文で、指摘が要求する中間状態は他スレッドから観測不能。報告した
+        vertex reviewer 自身も前提が弱いと out-of-band で注記していた。
+
+lessons_candidates:
+  - >
+    Cross-model reviewer availability was fragile this round: the codex
+    provider returned `rate_limited` for security and the R2b vertex fallback
+    then hit a 600 s read timeout, so the security perspective ran
+    Claude-only despite `cross_validation: true`. Worth noting whether a
+    second fallback tier (or a retry) is wanted when every provider in a
+    perspective's chain fails for transient reasons.
+  - >
+    Two of the three declined findings across both rounds came from reviewers
+    treating `#[cfg(test)]`-gated instrumentation as production hot-path code.
+    A `reviewer:performance` entry in feature-docs/LESSONS.md recording this
+    false-positive pattern would suppress the re-litigation cost.
+  - >
+    Round 2's four surviving medium findings converge on one theme: the
+    "take_response is the sole PTY delivery route" invariant introduced by
+    task0002 is enforced by doc prose only. Concretely — an unbounded
+    `response_queue` with no byte cap (security + performance flagged the same
+    site), a parse site (`resume_native_pty`) with no paired drain, two `pub`
+    non-draining peek accessors, and `reset()` clearing the queue mid-chunk so
+    an RIS after a query drops the reply entirely (FR2 exactly-once becomes
+    zero times). None met the critical/high auto-fix gate, so all are carried
+    to the human evaluator; the RIS one is the only claimed live defect.
+  - >
+    The integration worktree could not build until the gitignored bundled
+    fonts were copied in from the main working tree (build.rs hard-fails on a
+    missing assets/fonts/Noto-COLRv1.ttf). Every fresh em-workflow worktree in
+    this project will hit this. Worth either a worktree-setup step that runs
+    `bash scripts/fetch-fonts.sh`, or symlinking assets/fonts from the main
+    tree at worktree creation.
