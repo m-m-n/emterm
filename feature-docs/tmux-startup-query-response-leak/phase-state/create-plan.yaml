@@ -1,20 +1,33 @@
 schema_version: 1
 feature: tmux-startup-query-response-leak
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
 base_revision: 3e325229a95ec8580c87b7a409d775c649d05a28
 last_input_digest: sha256:193b2822bb01415612b5181590f52edfbec6886f346d474cbb1d2f7663de5b0e
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-plan-run-0001
-    status: dispatched
+    status: completed
     input_digest: sha256:193b2822bb01415612b5181590f52edfbec6886f346d474cbb1d2f7663de5b0e
     output_digest: null
-artifacts: []
-patches: []
+artifacts:
+  - path: feature-docs/tmux-startup-query-response-leak/IMPLEMENTATION.md
+    sha256: sha256:386f23b01237d348e9688f7160c4c9be17f56e7630d5c3ecf2e69129f6149f16
+    produced_by: create-plan-run-0001
+  - path: feature-docs/tmux-startup-query-response-leak/VERIFICATION.md
+    sha256: sha256:0a30c112e629ddc6a114124940030ac0a9754b0063944ca47c8f1f1d6510d566
+    produced_by: create-plan-run-0001
+  - path: feature-docs/tmux-startup-query-response-leak/tasks/task0001.md
+    sha256: sha256:3bae62025b8348f7571d2c36e9107e85dd07bddfe613d152e763275218ce824f
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: create-plan-p0001
+    status: applied
+    base_input_digest: sha256:193b2822bb01415612b5181590f52edfbec6886f346d474cbb1d2f7663de5b0e
+    base_workflow_blob: 16f2c855bff4c2921e866601f384b60f6f67e3fc
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
