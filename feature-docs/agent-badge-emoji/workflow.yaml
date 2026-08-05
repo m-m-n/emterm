@@ -38,7 +38,7 @@ workflow:
     skipped_reason: "視覚的成果物はタスク記述で完全に確定している（状態 × unseen/seen ごとの絵文字コードポイントが表で指定済み）。レイアウトは既存の統一バッジスロット（AGENT_BADGE_SLOT_WIDTH=12px）をそのまま使い、新規のレイアウト・トークン・コンポーネント設計判断が存在しない。"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: 6a95d08b6405b827f420dd8a10b820b5434aa8b8
