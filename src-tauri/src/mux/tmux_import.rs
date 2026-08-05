@@ -181,6 +181,17 @@ mod tests {
         dir.join("settings.json")
     }
 
+    /// Best-effort removal of the directory a [`tmp_settings_path`] call
+    /// created (its parent). Callers invoke this as the final step of a
+    /// test's success path, after all assertions, so a passing run leaves
+    /// no residue under `std::env::temp_dir()`. Failure to remove does not
+    /// fail the test (NFR1 does not cover cleanup on panic/kill paths).
+    fn cleanup_tmp_settings_dir(path: &Path) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
     fn read_json(path: &Path) -> Value {
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
     }
@@ -211,6 +222,7 @@ mod tests {
         assert_eq!(v["mux"]["tmux_conf_imported"], json!(true));
         // No conversion → no other mux keys should appear.
         assert!(v["mux"].get("prefix").is_none());
+        cleanup_tmp_settings_dir(&path);
     }
 
     #[test]
@@ -224,6 +236,7 @@ mod tests {
 
         let v = read_json(&path);
         assert!(v["mux"].get("prefix").is_none());
+        cleanup_tmp_settings_dir(&path);
     }
 
     #[test]
@@ -243,6 +256,7 @@ mod tests {
         assert_eq!(v["mux"]["prefix"], json!("Ctrl+A"));
         assert_eq!(v["mux"]["keybinds"]["new-window"], json!("c"));
         assert_eq!(v["mux"]["keybinds"]["detach"], json!("d"));
+        cleanup_tmp_settings_dir(&path);
     }
 
     #[test]
@@ -276,6 +290,7 @@ mod tests {
         assert_eq!(v["mux"]["keybinds"]["existing"], json!("z"));
         assert_eq!(v["mux"]["keybinds"]["detach"], json!("d"));
         assert_eq!(v["mux"]["tmux_conf_imported"], json!(true));
+        cleanup_tmp_settings_dir(&path);
     }
 
     #[test]
@@ -289,6 +304,7 @@ mod tests {
         import_tmux_conf_into(&path, loader_with(vec![("keybind.new-window", "c")]));
         let v = read_json(&path);
         assert_eq!(v["mux"]["keybinds"]["new-window"], json!("c"));
+        cleanup_tmp_settings_dir(&path);
     }
 
     #[test]

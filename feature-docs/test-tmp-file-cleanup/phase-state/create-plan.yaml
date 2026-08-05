@@ -1,0 +1,25 @@
+schema_version: 1
+feature: test-tmp-file-cleanup
+phase: create-plan
+status: completed
+generation: 1
+base_revision: ddf3df61cb80bdb53eb56e13cc2e2203b5086940
+last_input_digest: "sha256:b7cf67852b550193c5af47662de1d9f2a9e364b05cce7d41b59783c97a31a8b4"
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: completed
+    input_digest: "sha256:b7cf67852b550193c5af47662de1d9f2a9e364b05cce7d41b59783c97a31a8b4"
+    output_digest: null
+artifacts: []
+patches:
+  - patch_id: test-tmp-file-cleanup-p0001
+    status: applied
+    base_input_digest: "sha256:b7cf67852b550193c5af47662de1d9f2a9e364b05cce7d41b59783c97a31a8b4"
+    base_workflow_blob: 4c5206b05d639b5182103896b3e2f2fba5932069
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

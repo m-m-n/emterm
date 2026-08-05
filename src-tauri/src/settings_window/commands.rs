@@ -500,6 +500,8 @@ mod tests {
         // And the file parses back into the schema.
         let back: AppSettings = serde_json::from_value(v).unwrap();
         assert_eq!(back.font_size, settings.font_size);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Loading a settings file that carries the legacy `font_family`
