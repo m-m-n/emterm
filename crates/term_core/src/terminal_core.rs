@@ -2210,6 +2210,36 @@ const BYPASS_PREFIX_MAX_BYTES: usize = 64 * 1024;
 /// independent of this one.
 const BYPASS_PREFIX_MAX_SEGMENTS: usize = 62;
 
+/// Test-time pin: `BYPASS_PREFIX_MAX_SEGMENTS` (and the daemon's own
+/// `MAX_DIM_MARKERS`, whose value it mirrors as a literal per the doc above)
+/// must never exceed `mux_ipc::protocol::MAX_SEGMENTS`, the wire-level cap on
+/// segments in one snapshot. This is the invariant the doc comment states in
+/// prose ("this gate never rejects a shape the daemon itself could not have
+/// produced"); a doc-comment-only convention already let the two drift once
+/// (round-7 -> round-8, `24` vs `62`, review finding `b6a60c440da70e79`).
+/// `term_core` still holds no *runtime* dependency on `mux_ipc` (NFR5) — this
+/// check runs only under `#[cfg(test)]`, via the existing dev-dependency
+/// (mirrors the `mux_apc_extractor.rs` precedent for `MUX_OSC_PARAM` /
+/// `APC_PREFIX`) — but it turns a silent literal drift into a failing test
+/// instead of a silently-too-strict gate.
+#[cfg(test)]
+mod bypass_prefix_max_segments_pin {
+    use super::BYPASS_PREFIX_MAX_SEGMENTS;
+
+    #[test]
+    fn bypass_prefix_max_segments_never_exceeds_wire_cap() {
+        assert!(
+            BYPASS_PREFIX_MAX_SEGMENTS <= mux_ipc::protocol::MAX_SEGMENTS,
+            "BYPASS_PREFIX_MAX_SEGMENTS ({BYPASS_PREFIX_MAX_SEGMENTS}) exceeds \
+             mux_ipc::protocol::MAX_SEGMENTS ({}) — a daemon snapshot could carry \
+             more segments than this gate would ever admit, silently rejecting a \
+             legal shape. Raise BYPASS_PREFIX_MAX_SEGMENTS in lockstep with any \
+             future change to the daemon's segment cap.",
+            mux_ipc::protocol::MAX_SEGMENTS
+        );
+    }
+}
+
 /// Defensive upper bound on a resize's `cols` field. Replay dimensions are
 /// fed directly into `TerminalCore::resize`, which allocates
 /// `(scrollback_capacity + rows) * cols` cells — an unbounded value here
