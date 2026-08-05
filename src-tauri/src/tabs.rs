@@ -499,6 +499,19 @@ pub struct Tab {
     /// `cfg(test)` so the production build carries no observer.
     #[cfg(test)]
     resize_frame_log: Vec<ResizeFrameRecord>,
+    /// Test-only (tmux-startup-query-response-leak task0001): every payload
+    /// actually handed to this tab's outbound channel by [`Self::write`]
+    /// (plain-tab raw PTY write) or [`Self::send_control`] (mux `PtyInput`
+    /// frame — the pre-encode payload is recorded, not the APC-wrapped
+    /// wire bytes), regardless of whether `self.pty` is populated. This is
+    /// the byte-level sink a synthesized device response ultimately reaches
+    /// on its way to the querying application, whichever of the two
+    /// delivery routes carried it — the seam this task's I1 (exactly-once)
+    /// regression tests read from. `Mutex` because both methods take
+    /// `&self`. Strictly `cfg(test)` so the production build carries no
+    /// observer.
+    #[cfg(test)]
+    outbound_write_log: Mutex<Vec<Vec<u8>>>,
 }
 
 impl Tab {
@@ -666,6 +679,8 @@ impl Tab {
             snapshot_decode_count: 0,
             #[cfg(test)]
             resize_frame_log: Vec::new(),
+            #[cfg(test)]
+            outbound_write_log: Mutex::new(Vec::new()),
         }
     }
 
@@ -2679,8 +2694,21 @@ impl Tab {
                 self.bell_pending = true;
             }
 
-            // Send any device responses (e.g., DA1) back to the shell.
-            let responses: Vec<Vec<u8>> = std::mem::take(&mut s.device_responses);
+            // Device responses (DA1/DA2/DSR/XTWINOPS/DECRPM) are NOT
+            // drained/written here (tmux-startup-query-response-leak
+            // task0001). They are already delivered exactly once by
+            // whichever write-back site (`process_outer_via_core`,
+            // `apply_active_pane_output`, `apply_queued_live_output`) just
+            // parsed the bytes that produced them, via `take_response()` /
+            // `write_device_response` — the sole intended PTY delivery
+            // route. A second delivery used to happen here, sourced from
+            // `NativeCallbackState::device_responses`
+            // (`NativeCallbacks::on_device_response` is now a documented
+            // no-op) and written raw via `Tab::write`, bypassing mux
+            // routing entirely; that redundant channel caused the query's
+            // application (e.g. tmux) to see the reply twice and forward
+            // the stray second copy to the shell as ordinary input, which
+            // echoed onto the screen.
             // Drain buffered image-protocol payloads so we can decode them
             // outside the lock (the decoder needs cursor coords from `core`
             // — see comment in `drain_and_decode_images` below).
@@ -2707,12 +2735,6 @@ impl Tab {
             drop(s);
             if theme_changed {
                 self.core.lock().mark_all_dirty();
-                changed = true;
-            }
-            if !responses.is_empty() {
-                for r in responses {
-                    self.write(r);
-                }
                 changed = true;
             }
             // Split the APC stream: payloads addressed to the `emterm-mux;`
@@ -3309,6 +3331,8 @@ impl Tab {
     }
 
     pub fn write(&self, bytes: Vec<u8>) {
+        #[cfg(test)]
+        self.outbound_write_log.lock().push(bytes.clone());
         if let Some(p) = &self.pty {
             p.write(bytes);
         }
@@ -3405,6 +3429,8 @@ impl Tab {
     /// Port of the WebView `MuxClient.sendControl` (`writeDirect`). Returns
     /// `false` when the tab has no live PTY (the message is dropped).
     pub fn send_control(&self, msg: &MuxMessage) -> bool {
+        #[cfg(test)]
+        self.outbound_write_log.lock().push(msg.payload.clone());
         let bytes = crate::mux::apc::encode_emterm_mux(msg);
         match &self.pty {
             Some(p) => {
@@ -3666,6 +3692,15 @@ impl Tab {
     #[cfg(test)]
     pub(crate) fn test_resize_frames(&self) -> Vec<ResizeFrameRecord> {
         self.resize_frame_log.clone()
+    }
+
+    /// Test-only (tmux-startup-query-response-leak task0001): every payload
+    /// recorded by [`Self::write`] / [`Self::send_control`] so far — see
+    /// [`Self::outbound_write_log`]'s doc for what "payload" means in each
+    /// case.
+    #[cfg(test)]
+    pub(crate) fn test_outbound_writes(&self) -> Vec<Vec<u8>> {
+        self.outbound_write_log.lock().clone()
     }
 
     /// Test-only: the whole displayed grid (all rows) as one string, for
@@ -6424,6 +6459,245 @@ mod tests {
              leak as PtyInput on the next live take_response and corrupt the \
              user's prompt on the first keystroke after a window switch"
         );
+    }
+
+    // ── tmux-startup-query-response-leak (task0001) ───────────────────────
+    //
+    // Root cause: `term_core` fires every synthesized device response
+    // through TWO independent channels for the SAME event —
+    // (1) the single-slot `response_buffer`, polled via `take_response()`
+    //     at each of `tabs.rs`'s three write-back sites
+    //     (`process_outer_via_core`, `apply_active_pane_output`,
+    //     `apply_queued_live_output`) and delivered via
+    //     `write_device_response` (mux-aware routing); and
+    // (2) `fire_device_response_callback()` → `NativeCallbacks::
+    //     on_device_response` → (pre-fix) `NativeCallbackState::
+    //     device_responses`, drained once per pump by `process_combined`
+    //     and written RAW via `Tab::write` — unconditionally, bypassing
+    //     `write_device_response`'s mux routing entirely.
+    // `crates/term_core/src/csi_dispatch.rs` fires both from the same CSI
+    // dispatch arm (e.g. `(Some(b'>'), b'c') => { ...; if len > 0 {
+    // self.fire_device_response_callback(); } }`), so a single query
+    // produces one write via each channel. In the plain-tab context (tmux
+    // running directly inside an eMterm tab — the reported symptom),
+    // `process_outer_via_core` delivers the reply once via `take_response`/
+    // `write_device_response`; the SAME pump's `process_combined` then
+    // drained the callback queue and wrote the IDENTICAL bytes a second
+    // time. tmux consumes the first copy for capability negotiation but has
+    // already moved past the query window when the redundant second copy
+    // arrives, so it forwards those bytes to the shell as ordinary input,
+    // which echoes them onto the screen — the observed leak. The fix
+    // removes the second (callback-based) channel entirely; the
+    // `take_response()`-based channel, already wired into all three
+    // write-back sites and mux-aware, remains the sole delivery route
+    // (matching IMPLEMENTATION.md's documented `take_response` contract).
+
+    /// AC-1: reproduces the leak mechanism at byte level. Pre-fix, a single
+    /// DA2 query delivered through the plain-tab pump path
+    /// (`process_combined` → `process_outer_via_core`, no mux session)
+    /// reaches the outbound channel TWICE — once via `write_device_response`
+    /// (the `take_response()` channel) and once more via the redundant
+    /// `NativeCallbackState::device_responses` drain in `process_combined`.
+    /// Post-fix, exactly one copy reaches the outbound channel.
+    #[test]
+    fn process_combined_delivers_da2_response_exactly_once() {
+        let mut tab = test_tab();
+        tab.process_combined(b"\x1b[>0c".to_vec()); // Secondary DA (DA2) query
+        let writes = tab.test_outbound_writes();
+        let matches = writes
+            .iter()
+            .filter(|w| w.as_slice() == b"\x1b[>65;1;0c")
+            .count();
+        assert_eq!(
+            matches, 1,
+            "DA2 response must reach the querying PTY's inbound side exactly \
+             once (root cause: term_core fires both the take_response() \
+             poll channel and the on_device_response callback channel for \
+             the same synthesized reply); got {matches} occurrences within \
+             {writes:?}"
+        );
+    }
+
+    /// The 8 in-scope response types (FR5 `generalize` resolution): each
+    /// query byte sequence paired with the exact reply `term_core` (fresh
+    /// 80x24 tab, cursor at 0,0, default 8x16 cell metrics) synthesizes for
+    /// it — see `crates/term_core/src/csi_device.rs`'s inline tests for the
+    /// same byte-for-byte expectations.
+    fn device_response_cases() -> Vec<(&'static str, &'static [u8], &'static [u8])> {
+        vec![
+            ("DA1", b"\x1b[c", b"\x1b[?65;1;4;22c"),
+            ("DA2", b"\x1b[>0c", b"\x1b[>65;1;0c"),
+            ("DSR status", b"\x1b[5n", b"\x1b[0n"),
+            ("CPR", b"\x1b[6n", b"\x1b[1;1R"),
+            (
+                "XTWINOPS 14 (text area px)",
+                b"\x1b[14t",
+                b"\x1b[4;384;640t",
+            ),
+            ("XTWINOPS 16 (cell size)", b"\x1b[16t", b"\x1b[6;16;8t"),
+            (
+                "XTWINOPS 18 (text area chars)",
+                b"\x1b[18t",
+                b"\x1b[8;24;80t",
+            ),
+            ("DECRPM (mode 2026)", b"\x1b[?2026$p", b"\x1b[?2026;2$y"),
+        ]
+    }
+
+    /// AC-2: on the plain-tab path (`process_combined`, no mux session),
+    /// every in-scope response type is delivered to the querying PTY's
+    /// inbound side exactly once, and the query/response bytes never
+    /// render into the grid.
+    #[test]
+    fn plain_tab_every_response_type_delivered_exactly_once_and_absent_from_grid() {
+        for (name, query, expected) in device_response_cases() {
+            let mut tab = test_tab();
+            tab.core.lock().set_cursor(0, 0);
+            tab.process_combined(query.to_vec());
+            let writes = tab.test_outbound_writes();
+            let matches = writes.iter().filter(|w| w.as_slice() == expected).count();
+            assert_eq!(
+                matches, 1,
+                "{name}: expected exactly one delivery of {expected:?}, got \
+                 {matches} within {writes:?}"
+            );
+            let (rows, _, _) = displayed_fingerprint(&tab);
+            assert!(
+                rows.iter().all(|r| r.is_empty()),
+                "{name}: query/response bytes must not render into the \
+                 grid, got {rows:?}"
+            );
+        }
+    }
+
+    /// AC-3: the same delivery/visibility assertions hold on the mux-pane
+    /// path — a device query arriving as a per-frame `PtyOutput` over the
+    /// REAL pump entry point (`process_combined`'s mux-transport branch,
+    /// not `apply_mux_message` called directly) is delivered to the active
+    /// pane exactly once (as a `PtyInput` frame via `send_control`, not a
+    /// raw write) and never renders into the grid.
+    ///
+    /// The second, empty `process_combined` call matters: in mux mode the
+    /// (pre-fix) `NativeCallbackState::device_responses` drain runs BEFORE
+    /// the frame-apply loop that parses mux inner content, so a callback
+    /// push from THIS pump's query is only observed and (wrongly, via a
+    /// raw unrouted `Tab::write`) delivered on the NEXT pump — going
+    /// straight through `apply_mux_message` alone (as the earlier revision
+    /// of this test did) never exercises that drain and would pass even
+    /// pre-fix, silently missing the mux-context half of the bug.
+    #[test]
+    fn mux_pane_every_response_type_delivered_exactly_once_and_absent_from_grid() {
+        for (name, query, expected) in device_response_cases() {
+            let mut tab = test_tab();
+            tab.apply_mux_message(welcome_msg(&[(1, "a", 10)], 0));
+            tab.core.lock().set_cursor(0, 0);
+            tab.process_combined(pty_output_apc(10, query));
+            tab.process_combined(Vec::new());
+            let writes = tab.test_outbound_writes();
+            let matches = writes.iter().filter(|w| w.as_slice() == expected).count();
+            assert_eq!(
+                matches, 1,
+                "{name} (mux pane): expected exactly one delivery of \
+                 {expected:?}, got {matches} within {writes:?}"
+            );
+            let (rows, _, _) = displayed_fingerprint(&tab);
+            assert!(
+                rows.iter().all(|r| r.is_empty()),
+                "{name} (mux pane): query/response bytes must not render \
+                 into the grid, got {rows:?}"
+            );
+        }
+    }
+
+    /// AC-3: a device query arriving inside a pending-switch's queued live
+    /// output (`apply_queued_live_output`, the mux off-thread-switch replay
+    /// path) is delivered to the active pane exactly once. The trailing
+    /// empty `process_combined` call drains any stale
+    /// `NativeCallbackState::device_responses` entry the callback fired
+    /// during `apply_queued_live_output`'s own `process_pty_data_fully`
+    /// call would (pre-fix) leave queued for the next pump — see the mux
+    /// per-frame test's doc for why a caller that never reaches
+    /// `process_combined` cannot observe that half of the bug.
+    #[test]
+    fn apply_queued_live_output_delivers_device_response_exactly_once() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10)], 0));
+        tab.apply_queued_live_output(vec![b"\x1b[c".to_vec()]); // DA1 query
+        tab.process_combined(Vec::new());
+        let writes = tab.test_outbound_writes();
+        let matches = writes
+            .iter()
+            .filter(|w| w.as_slice() == b"\x1b[?65;1;4;22c")
+            .count();
+        assert_eq!(
+            matches, 1,
+            "DA1 response queued via apply_queued_live_output must reach \
+             the active pane exactly once, got {matches} within {writes:?}"
+        );
+    }
+
+    /// AC-3: a device query embedded in snapshot/reattach replay bytes
+    /// (`reset_frame_for_replay`) must produce NO outbound write at all —
+    /// the originating program is long gone. Complements
+    /// `reset_frame_for_replay_discards_historic_device_responses` (which
+    /// asserts the `response_buffer` half of this invariant); this asserts
+    /// the outbound side stays silent too, which the callback-based
+    /// duplicate-delivery channel this task removes would otherwise have
+    /// broken (it drained independently of `reset_frame_for_replay`'s
+    /// `take_response()` discard).
+    #[test]
+    fn reset_frame_for_replay_produces_no_outbound_device_response_write() {
+        let mut tab = test_tab();
+        let mut snapshot = Vec::new();
+        snapshot.extend_from_slice(b"row one\r\n");
+        snapshot.extend_from_slice(b"\x1b[c"); // DA1 query baked into snapshot
+        let _ = tab.reset_frame_for_replay(&snapshot, &[]);
+        assert!(
+            tab.test_outbound_writes().is_empty(),
+            "a historic query baked into snapshot bytes must not produce \
+             ANY outbound write — the originating program is long gone"
+        );
+    }
+
+    /// AC-4 / NFR3: a byte sequence that merely resembles a device query or
+    /// its response, embedded in ordinary printable output (no leading ESC,
+    /// so it never dispatches as a query), reaches the grid unchanged and
+    /// synthesizes no response.
+    #[test]
+    fn plain_tab_query_lookalike_text_reaches_grid_unchanged() {
+        let mut tab = test_tab();
+        let payload = b">65;1;0c literal, not a query\r\nnext line".to_vec();
+        tab.process_combined(payload);
+        let (rows, _, _) = displayed_fingerprint(&tab);
+        assert!(rows[0].starts_with(">65;1;0c literal, not a query"));
+        assert!(rows[1].starts_with("next line"));
+        assert!(
+            tab.test_outbound_writes().is_empty(),
+            "lookalike text must not synthesize any device response"
+        );
+    }
+
+    /// AC-4 / NFR3: ordinary output containing no device queries renders
+    /// byte-identically whether it goes through the pump path
+    /// (`process_combined`) or a direct core parse, and produces no
+    /// outbound write.
+    #[test]
+    fn plain_tab_ordinary_output_without_queries_matches_direct_core_parse() {
+        let mut tab = test_tab();
+        let payload = b"hello world\r\nsecond line\r\n".to_vec();
+        tab.process_combined(payload.clone());
+        let (via_pump, _, _) = displayed_fingerprint(&tab);
+
+        let reference = test_tab();
+        reference.core.lock().process_pty_data_fully(&payload);
+        let (direct, _, _) = displayed_fingerprint(&reference);
+
+        assert_eq!(
+            via_pump, direct,
+            "ordinary output must be byte-identical whether it goes \
+             through process_combined or a direct core parse"
+        );
+        assert!(tab.test_outbound_writes().is_empty());
     }
 
     /// TS-5 / FR3: an off-thread snapshot parse + queued live output applied
