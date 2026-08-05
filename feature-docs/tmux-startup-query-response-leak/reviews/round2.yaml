@@ -1,0 +1,344 @@
+round: 2
+executed_at: "2026-08-06T07:00:18+09:00"
+scope:
+  review_mode: diff
+  base_commit: 382f7e98cb5bc3d81f5a34cb194b50d68e43d22e
+  head_commit: 2c0cd5a29409ef37968e60f02e977ad8bf222f90
+  changed_files:
+    - crates/term_core/src/apc_handler.rs
+    - crates/term_core/src/callbacks.rs
+    - crates/term_core/src/csi_device.rs
+    - crates/term_core/src/csi_dispatch.rs
+    - crates/term_core/src/esc_handler.rs
+    - crates/term_core/src/snapshot.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/tabs.rs
+    - test-docs/tmux-startup-query-response-leak/task0001.tests.yaml
+    - test-docs/tmux-startup-query-response-leak/task0002.tests.yaml
+    - test-docs/tmux-startup-query-response-leak/task0003.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "rate_limited"}
+  - {perspective: security, source: vertex, status: skipped, skip_reason: "read_timeout"}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: vertex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: vertex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: vertex, status: completed}
+
+findings:
+  - stable_id: 4a1c9e07b5d2f836
+    severity: critical
+    category: spec
+    file: src-tauri/src/tabs.rs
+    line: 1232
+    line_end: 1249
+    title: >
+      Missing device response discard in apply_offthread_swap violates
+      exactly-once delivery guarantee
+    description: >
+      Vertex spec reviewer claimed the D5 discard in apply_offthread_swap runs
+      AFTER the worker-built core is installed (`*live = new_core;` then
+      `let _ = live.take_response();`), so a leak could occur "if any code path
+      accesses the response between the assignment and the discard".
+    suggestion: >
+      Move the discard before installing the worker-built core:
+      `let _ = new_core.take_response(); *live = new_core;`.
+    sources: [vertex:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >
+      Verified false positive by the orchestrator against tabs.rs:1241-1277.
+      Both statements execute inside a single block that holds one
+      `MutexGuard` (`let mut live = self.core.lock();`) continuously from
+      before the assignment until after the discard and the pending-resize
+      apply. No other thread or code path can observe the intermediate state
+      the finding requires. The reporting reviewer itself flagged the premise
+      as weak in an out-of-band note. The site is additionally a documented
+      no-op today because `build_from_snapshot_inner` already drains before
+      returning `SnapshotReplay`; it is kept as an explicit call-site
+      assertion of the invariant.
+
+  - stable_id: 7b3e5c81a90d4f2e
+    severity: medium
+    category: security
+    file: crates/term_core/src/csi_device.rs
+    line: 178
+    line_end: 180
+    title: >
+      Unbounded device-response store allows amplification from untrusted
+      terminal output, pressuring shell stdin and dropping key input
+    description: >
+      task0002 replaced the fixed `response_buffer: [u8; 64]` (single slot,
+      max 64 bytes per parse) with an unbounded `response_queue: Vec<u8>`;
+      `write_response` appends with no cap. The bytes are driven by PTY output,
+      i.e. untrusted attacker-controllable data under the standard terminal
+      threat model (cat of a malicious file, curl output, output from a
+      compromised SSH host). DA1 amplifies 3 bytes of query into 13 bytes of
+      reply (~4.3x). With `COALESCE_CAP = 1 MiB` per `process_pty_data_fully`,
+      one frame can yield ~4.5 MiB returned as a single `Vec<u8>` from
+      `take_response()` and handed to `Tab::write` -> `PtyHandle::write`;
+      the mux path adds another ~1.33x via APC/base64. The PTY input channel
+      is `bounded::<Vec<u8>>(256)` — bounded by message COUNT, not bytes — and
+      `writer_loop` uses a blocking `write_all`, so real keystrokes arriving
+      while the writer is blocked are silently dropped via failed `try_send`.
+      No arbitrary bytes or newlines reach the shell, so this is availability
+      only, not command injection. No production parse site currently skips
+      the drain, so accumulation is bounded to one parse.
+    suggestion: >
+      Add a pending-byte cap in `write_response` and drop the excess rather
+      than amplifying it, e.g.
+      `const MAX_PENDING_RESPONSE_BYTES: usize = 4096;` and return 0 when
+      `self.response_queue.len() + data.len()` would exceed it. Legitimate
+      traffic is a handful of replies per chunk (~70 bytes for the 7-response
+      AC-1 case), so the ordering guarantee is unaffected. A one-shot
+      `log::warn!` on hitting the cap aids investigation.
+    sources: [claude:security]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: >
+      Medium severity — outside the auto-fix candidate gate (critical/high
+      only). Not blocking review completion.
+
+  - stable_id: 2f8d61b4c07a9e53
+    severity: medium
+    category: performance
+    file: crates/term_core/src/csi_device.rs
+    line: 177
+    line_end: 180
+    title: >
+      Removing the response_queue cap lets the PTY input queue grow to
+      hundreds of MB under sustained device-query floods
+    description: >
+      Same root cause as the security finding at this site, scored from the
+      resource-consumption angle. The pending store went from a fixed 64-byte
+      bound to O(parse chunk size). The plain-tab path
+      (`Tab::pump` -> `process_combined` -> `process_outer_via_core`) does not
+      gate on `payload_has_device_query`, so it feeds up to 1 MiB + 16 KiB per
+      call regardless of content, producing ~4.5 MB `Vec` allocations
+      (including doubling reallocation and memcpy). Because `input_tx` is
+      bounded by message count (256) and `writer_loop` blocks on `write_all`,
+      up to ~1.1 GB can accumulate before `try_send` starts failing, versus a
+      16 KB ceiling before this change. Trigger requires a producer that emits
+      device queries without reading stdin; normal loads (tmux startup,
+      PSReadLine CPR) stay in the KB range.
+    suggestion: >
+      Restore a byte cap on the pending store — preferred: a soft limit in
+      `write_response` (e.g. 64 KiB), which preserves task0002's multi-query
+      ordering property for realistic bursts. Alternative: bound
+      `PtySession::input_tx` by bytes instead of message count, which touches
+      the whole PTY backpressure design. Either way, update the
+      `response_queue` doc in `terminal_core.rs`, which currently justifies
+      the bound by deferring to the embedder's coalesce cap.
+    sources: [claude:performance]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: >
+      Medium severity — outside the auto-fix candidate gate. Same underlying
+      fix as the security finding at this site.
+
+  - stable_id: 9c4a2e6d13b785f0
+    severity: medium
+    category: spec
+    file: crates/term_core/src/terminal_core.rs
+    line: 1706
+    title: >
+      RIS mid-chunk silently drops already-synthesized device responses
+      (FR2 exactly-once becomes zero times)
+    description: >
+      `TerminalCore::reset()` — the sole RIS (`ESC c`) implementation path via
+      `esc_handler.rs esc_full_reset()` — calls `self.response_queue.clear()`.
+      Since task0002, synthesized replies are only handed to the PTY by the
+      post-parse `take_response()` poll, so a chunk containing `ESC [ c`
+      (or `ESC [ 5n` / `ESC [ 18t` / `ESC [ ?2026$p`) followed by `ESC c`
+      loses the earlier reply entirely — delivered zero times, violating
+      SPEC FR2 "delivered exactly once". Before task0001/task0002 the plain-tab
+      path fired `on_device_response` at dispatch time, stashing a copy in
+      `NativeCallbackState::device_responses` ahead of the RIS, so the reply
+      survived. Real terminals (xterm et al.) write the reply to the pty at
+      dispatch time and do not retract it on RIS. The mux path is unaffected.
+      Also touches NFR3 (non-tmux sessions behave exactly as before).
+    suggestion: >
+      Drop the `self.response_queue.clear();` line from `reset()` to match
+      real-terminal semantics. Replay/snapshot discard does not depend on this
+      side effect — it is already explicit at
+      `tabs.rs::reset_frame_for_replay` (`let _ = c.take_response();`),
+      `TerminalCore::build_from_snapshot_inner`, and
+      `tabs.rs::apply_offthread_swap`. Add regression tests: in `csi_device.rs`
+      assert `process_pty_data_fully(b"\x1b[c\x1bc")` still yields the DA1
+      reply from `take_response()`, and in `tabs.rs` assert
+      `process_combined(b"\x1b[c\x1bc")` puts the DA1 reply in
+      `test_outbound_writes()` exactly once.
+    sources: [claude:spec]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >
+      Medium severity — outside the auto-fix candidate gate (critical/high
+      only) and category spec is excluded from auto-fix by protocol. The RIS
+      clear site was confirmed present at terminal_core.rs:1706. Carried to
+      the human evaluator as the most substantive residual item.
+
+  - stable_id: 6e1b83f2a5c04d97
+    severity: medium
+    category: architecture
+    file: src-tauri/src/tabs.rs
+    line: 830
+    line_end: 831
+    title: >
+      resume_native_pty parses without a paired take_response — the one site
+      not satisfying the sole-delivery-route contract
+    description: >
+      task0002's `take_response` doc declares the contract that the embedder's
+      write-back sites drain after every parse, making it the sole PTY
+      delivery route. Of the production parse sites, `process_outer_via_core`,
+      `apply_active_pane_output` and `apply_queued_live_output` drain and
+      deliver; `reset_frame_for_replay` and `apply_offthread_swap` drain and
+      discard. `Tab::resume_native_pty`'s `c.process_pty_data_fully(&drained)`
+      is the only one that neither delivers nor discards, so replies generated
+      from ring-buffer device queries linger in `response_queue` and are
+      delivered late by an unrelated later live parse — precisely the
+      out-of-context delivery this feature removed. The function is currently
+      `#[allow(dead_code)]` with zero callers, so there is no live defect, but
+      its doc states it is retained for a future "freeze native output while
+      mux renders" use, where re-enabling would silently break the invariant.
+    suggestion: >
+      Pair the parse with a drain: either (a) deliver, mirroring
+      `apply_active_pane_output` (`let device_response = c.take_response();
+      drop(c); if !device_response.is_empty() {
+      self.write_device_response(device_response); }`), or (b) discard with a
+      rationale comment, mirroring `reset_frame_for_replay` /
+      `apply_offthread_swap` (`let _ = c.take_response();`). Consider also
+      enforcing the contract in term_core itself rather than in doc prose —
+      e.g. a cap on `response_queue` with a `log::warn!` on overflow, or a
+      debug assertion that catches a missed drain.
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >
+      Medium severity — outside the auto-fix candidate gate. Dead code today
+      (`#[allow(dead_code)]`, zero callers), so no live defect.
+
+  - stable_id: 5d09a7c4e2b16f38
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/csi_device.rs
+    line: 38
+    line_end: 50
+    title: >
+      get_response_len / get_response_bytes kept their signatures while their
+      meaning changed, leaving pub non-draining read paths with no production
+      callers
+    description: >
+      task0002 changed `get_response_len` from "length of the most recent
+      reply" to "total bytes since the last drain" and `get_response_bytes`
+      from "the most recent reply" to "all replies concatenated since the last
+      drain", but both stayed `pub` with identical signatures (`u32` /
+      `Vec<u8>`), so code written against the old semantics compiles fine and
+      silently receives different data — which actually happened in-tree for
+      `test_xtwinops_cell_size_after_buffer_switch_defaults`. `get_response_ptr`
+      was deleted in the same change for having no production callers plus raw
+      pointer risk; grep shows these two likewise have zero production callers
+      (only tests, in both crates). The result is that the documented
+      "take_response is the single delivery channel" invariant is enforced by
+      prose alone while two pub non-destructive readers of the same bytes stay
+      exposed — the same shape as the exactly-once violation that needed two
+      rework rounds in round 1.
+    suggestion: >
+      term_core is a workspace-internal crate with no external consumers, so
+      narrow both to `pub(crate)` (or `#[cfg(test)]` to match actual usage) and
+      let visibility enforce "only take_response's return value reaches the
+      PTY". If visibility cannot be reduced, at minimum add
+      `#[doc(hidden)]` + `#[deprecated(note = "use take_response; this peek
+      does not drain")]` so old-semantics callers surface at build time.
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >
+      Medium severity — outside the auto-fix candidate gate. API-hygiene
+      hardening, no live defect.
+
+  - stable_id: 8a37f0d5c9e2b641
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/tabs.rs
+    line: 514
+    title: >
+      outbound_write_log does not distinguish delivery route, so the mux tests
+      do not actually verify PtyInput-frame delivery
+    description: >
+      task0001's `outbound_write_log: Mutex<Vec<Vec<u8>>>` records only payload
+      bytes, with no marker for whether an entry came from `Tab::write` (raw
+      PTY write) or `Tab::send_control` (mux `PtyInput` frame) — `send_control`
+      pushes `msg.payload` pre-encoding and `write` pushes raw bytes, so for
+      device responses the two are byte-identical in the log. Consequently the
+      doc comments on
+      `mux_pane_every_response_type_delivered_exactly_once_and_absent_from_grid`
+      (tabs.rs:6662) and
+      `mux_pane_multi_query_chunk_delivers_all_responses_in_order_exactly_once`
+      (tabs.rs:6691) claim delivery "as a PtyInput frame via send_control, not
+      a raw write", but the assertion only counts occurrences. If
+      `write_device_response`'s mux branch regressed into a single raw
+      `Tab::write` — the exact leak class this feature fixed — the count stays
+      1 and the tests stay green. The "exactly once" half of the invariant is
+      guarded; the "via mux routing" half is not. No live defect; this is a
+      regression-detection coverage gap.
+    suggestion: >
+      Make `outbound_write_log` route-aware: define
+      `enum OutboundRoute { Raw, Control(MessageType) }` under `#[cfg(test)]`
+      and change the field to `Mutex<Vec<(OutboundRoute, Vec<u8>)>>`, pushing
+      `(Raw, bytes.clone())` from `Tab::write` and
+      `(Control(msg.msg_type), msg.payload.clone())` from `Tab::send_control`.
+      Keep `test_outbound_writes()` payload-only and add
+      `test_outbound_writes_routed()` to minimize churn. Then require
+      `matches!(route, OutboundRoute::Control(MessageType::PtyInput))` in the
+      mux tests and `OutboundRoute::Raw` in the plain-tab tests, so both a
+      swap-to-raw-write and a wrong-conversion-to-PtyInput turn the tests red.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: >
+      Medium severity — outside the auto-fix candidate gate. Test-coverage
+      hardening, no live defect.
+
+  - stable_id: 3b6c40e9f81a27d5
+    severity: medium
+    category: spec
+    file: crates/term_core/src/csi_dispatch.rs
+    line: 127
+    line_end: 136
+    title: >
+      Device status report handling no longer validates response length,
+      potentially masking regressions
+    description: >
+      Vertex spec reviewer noted that the previous
+      `if len > 0 { self.fire_device_response_callback(); }` guard is gone and
+      `handle_device_status_report` is now called without checking that a
+      reply was produced, which could mask a future regression returning 0 for
+      a valid query.
+    suggestion: >
+      Restore a debug assertion, or at least a comment stating that
+      `handle_device_status_report` should always produce a non-zero length
+      for valid queries (5, 6, ...).
+    sources: [vertex:spec]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: >
+      Medium severity — outside the auto-fix candidate gate. The removal was
+      intentional and is documented in the adjacent comment block at
+      csi_dispatch.rs:129-138 (the callback channel was removed by task0002
+      because a second live consumer reintroduces exactly-once violations);
+      the length check existed only to gate that now-deleted callback.
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
