@@ -44,9 +44,11 @@ workflow:
     completed_at_commit: a561f9b5b19f6d14394331ee95441935fcccb66a
     base_commit: 6464344ea335f9b1e3329b3af75c70e3904f9e96
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 6e7b005294d46e619df9646826d2fe68c68ef05c
   - id: verify
     status: completed
+    completed_at_commit: 779702666b43d542f849a2343a7f0c0325cf5984
     result: pass
     failed_items: []
     executed_at: "2026-08-05T09:35:00+09:00"
@@ -87,6 +89,7 @@ workflow:
         - tabs::tests::welcome_without_windows_leaves_group_none
   - id: retrospect
     status: completed
+    completed_at_commit: 0645b993cc8d39219091a75825de29e4375e1255
 
 tasks:
   task0001:
