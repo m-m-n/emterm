@@ -46,7 +46,7 @@ workflow:
       create-spec.design-step in batch mode.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: dd730bcb66fbefe135e6dbc7e79a1501215c9365
