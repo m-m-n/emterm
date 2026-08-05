@@ -258,12 +258,25 @@ pub struct WindowHost {
     /// `alacritty/src/display/mod.rs:739` (defer-to-render).
     pending_resize: bool,
     /// Cached status-bar panel insets in egui logical points, refreshed
-    /// each frame from `App::status_bar_view_model`. Subtracted from the
-    /// usable grid area in [`grid_size`] (and added to `origin_y` when
-    /// the panel sits on top) so the terminal's bottom/top row never
-    /// renders behind the status-bar panel.
+    /// each frame from `App::status_bar_view_model`. Drawing / pointer-
+    /// routing values ONLY (task0005 D-D sharpening, findings
+    /// `0029db1c89ab226f` / `5b2f22c5a14f7364`) — [`Self::grid_size`]
+    /// must NOT read `status_bar_bot_inset_logical` directly; it reads
+    /// [`Self::status_bar_bot_inset_settled_logical`] below instead, so a
+    /// transient (not-yet-settled) height written here can never reach
+    /// the PTY grid computation or the group-wide `Resize` broadcast.
     status_bar_top_inset_logical: f32,
     status_bar_bot_inset_logical: f32,
+    /// task0005 (findings `0029db1c89ab226f` / `5b2f22c5a14f7364`): the
+    /// bottom inset value [`Self::grid_size`] actually consumes,
+    /// decoupled from `status_bar_bot_inset_logical` above. Advanced by
+    /// [`resolve_grid_bot_inset`] — see that function's doc comment for
+    /// the exact update rule and why it closes the defect (a
+    /// non-settler `pending_resize` source, e.g. the mux-sidebar inset
+    /// refresh or a compositor `Resized` / `ScaleFactorChanged`, could
+    /// otherwise apply a size derived from a not-yet-settled status-bar
+    /// height during the settling window).
+    status_bar_bot_inset_settled_logical: f32,
     /// Cached persistent mux-sidebar horizontal grid inset in egui logical
     /// points (task0005 D2), refreshed each frame from
     /// [`App::mux_sidebar_visibility`] via [`Self::refresh_mux_sidebar_inset`].
@@ -581,6 +594,7 @@ impl WindowHost {
             pending_resize: false,
             status_bar_top_inset_logical: 0.0,
             status_bar_bot_inset_logical: 0.0,
+            status_bar_bot_inset_settled_logical: 0.0,
             mux_sidebar_inset_logical: 0.0,
             resize_settler: ResizeSettler::new(),
             mux_was_attached: false,
@@ -1209,6 +1223,17 @@ impl WindowHost {
     /// produces a single configure + PTY resize cycle aligned with the
     /// frame boundary. Zero-sized windows (Windows minimize, Wayland hidden)
     /// just clear the flag without reconfiguring.
+    ///
+    /// task0005 (findings `0029db1c89ab226f` / `5b2f22c5a14f7364`):
+    /// `pending_resize` can be set by sources OTHER than
+    /// [`ResizeSettler`]'s own forwarded decision — the mux-sidebar inset
+    /// refresh, or a compositor `Resized` / `ScaleFactorChanged` — so this
+    /// method must not assume the status-bar height has settled just
+    /// because it is running. [`Self::grid_size`] enforces that: it reads
+    /// [`Self::status_bar_bot_inset_settled_logical`], never the immediate
+    /// `status_bar_bot_inset_logical`, so whichever source triggered this
+    /// call, the size actually applied and broadcast is always derived
+    /// from a settler-forwarded inset.
     fn apply_pending_resize(&mut self, app: &mut App) {
         if !self.pending_resize {
             return;
@@ -1276,6 +1301,27 @@ impl WindowHost {
     /// [`next_resize_settle_wake_deadline`] / `PocApp::about_to_wait` for
     /// how the rate-limited wake still keeps arriving with zero other
     /// activity in the window.
+    ///
+    /// task0005 round-1 rework (findings `0029db1c89ab226f` /
+    /// `5b2f22c5a14f7364`): D-D above split WHICH EVENTS set
+    /// `pending_resize` from the settler, but left `grid_size()` reading
+    /// `status_bar_bot_inset_logical` — the same field this method now
+    /// writes immediately, every render, regardless of settler state. The
+    /// traced firing order this closes: a fresh mux attach/reattach
+    /// resets the settler (above) and this method writes the transient,
+    /// first-frame status-bar height into `status_bar_bot_inset_logical`
+    /// in the SAME call; `refresh_mux_sidebar_inset` (called next, in
+    /// `render`) then raises `pending_resize` on its own, unrelated
+    /// inset change; `apply_pending_resize` (called after that) used to
+    /// compute the PTY grid from whatever inset was currently sitting in
+    /// `status_bar_bot_inset_logical` — the just-written transient value,
+    /// not anything the settler had judged stable. Sharpening the D-D
+    /// boundary: drawing and pointer-routing insets stay immediate
+    /// (unchanged, right above); grid computation and the `Resize`
+    /// broadcast now consume ONLY [`Self::status_bar_bot_inset_settled_
+    /// logical`], advanced below via [`resolve_grid_bot_inset`] exactly
+    /// when the settler is not withholding judgment — never on a bare
+    /// `pending_resize` flip from a non-settler source.
     fn refresh_status_bar_insets(&mut self, app: &App) {
         // FR5 (mux-status-bar-removal task0001): `vm` — and therefore
         // `height`, the bottom inset, and the grid-size candidate computed
@@ -1322,7 +1368,18 @@ impl WindowHost {
 
         let candidate = self.grid_size_for_bot_inset(app, bot);
         let now = Instant::now();
-        if self.resize_settler.observe(candidate, now).is_some() {
+        let forwarded = self.resize_settler.observe(candidate, now).is_some();
+        // task0005 (findings `0029db1c89ab226f` / `5b2f22c5a14f7364`): the
+        // settled bot inset [`Self::grid_size`] consumes only ever tracks
+        // `bot` when the settler is not mid-settle, evaluated AFTER this
+        // render's `observe` call above — see `resolve_grid_bot_inset`'s
+        // doc comment for the exact rule.
+        self.status_bar_bot_inset_settled_logical = resolve_grid_bot_inset(
+            self.status_bar_bot_inset_settled_logical,
+            bot,
+            self.resize_settler.awaiting_decision(),
+        );
+        if forwarded {
             self.pending_resize = true;
         } else if resize_settle_self_wake_due(
             self.resize_settler.awaiting_decision(),
@@ -1400,8 +1457,16 @@ impl WindowHost {
     /// Compute grid (cols, rows) from the current window pixel size,
     /// using the real cell metrics so the PTY size agrees with the
     /// number of cells the renderer actually paints.
+    ///
+    /// task0005 (findings `0029db1c89ab226f` / `5b2f22c5a14f7364`): reads
+    /// [`Self::status_bar_bot_inset_settled_logical`], NOT the immediate
+    /// `status_bar_bot_inset_logical` — grid computation (and, through
+    /// [`Self::apply_pending_resize`], the group-wide `Resize` broadcast)
+    /// must consume only a settler-forwarded inset value, so a transient
+    /// height mid-settle can never reach the PTYs regardless of which
+    /// source raised `pending_resize` this frame.
     pub fn grid_size(&self, app: &App) -> (u16, u16) {
-        self.grid_size_for_bot_inset(app, self.status_bar_bot_inset_logical)
+        self.grid_size_for_bot_inset(app, self.status_bar_bot_inset_settled_logical)
     }
 
     /// Pure grid-size computation, factored out of [`Self::grid_size`]
@@ -1410,8 +1475,9 @@ impl WindowHost {
     /// size for a not-yet-applied `status_bar_bot_inset_logical` value —
     /// feeding it to [`ResizeSettler`] — without first mutating
     /// `self.status_bar_bot_inset_logical`. `grid_size` itself passes the
-    /// already-applied inset through unchanged, so its behavior is
-    /// identical to before this refactor.
+    /// settled inset through unchanged (task0005), so its behavior is
+    /// identical to before this refactor except for WHICH inset field
+    /// that is.
     fn grid_size_for_bot_inset(&self, app: &App, bot_inset_logical: f32) -> (u16, u16) {
         let w = self.surface_config.width.max(1) as f64;
         let h = self.surface_config.height.max(1) as f64;
@@ -3055,6 +3121,53 @@ impl ResizeSettler {
     /// 02546e5e10deb500 / 5b1878c41d3e02d6-perf-P2).
     fn awaiting_decision(&self) -> bool {
         self.window_opened_at.is_some()
+    }
+}
+
+/// Resolve the bottom inset value [`WindowHost::grid_size`] may consume
+/// after THIS render's [`ResizeSettler::observe`] call (task0005 round-1
+/// rework, findings `0029db1c89ab226f` / `5b2f22c5a14f7364`): grid
+/// computation, and the group-wide `Resize` broadcast it feeds through
+/// [`WindowHost::apply_pending_resize`], must consume only a
+/// settler-forwarded inset value — never the transient one
+/// `WindowHost::refresh_status_bar_insets` writes immediately into
+/// `status_bar_bot_inset_logical` for drawing / pointer-routing (Change
+/// 2, D-D, mux-tab-switch-bypass-refix task0002).
+///
+/// `settler_awaiting_decision` is [`ResizeSettler::awaiting_decision`]
+/// evaluated immediately AFTER `observe` runs this render:
+///
+/// - `true` — the settling window is still open: either genuinely
+///   mid-storm (candidate not yet held stable), or freshly reopened by
+///   `ResizeSettler::reset` on a mux attach/reattach. `previously_settled`
+///   is returned unchanged, so [`WindowHost::apply_pending_resize`] can
+///   never pick up `transient` this frame — regardless of WHICH source
+///   (the settler itself, the mux-sidebar inset refresh, or a compositor
+///   `Resized` / `ScaleFactorChanged`) is what raised `pending_resize`.
+///   This is what closes the traced firing order: a fresh attach resets
+///   the settler and writes a transient inset in the same call, a
+///   sidebar-driven `pending_resize` follows, and without this gate the
+///   apply that comes after would have used the transient value.
+/// - `false` — the settler is not withholding judgment: either it just
+///   forwarded `transient` this render (closing the window on exactly the
+///   value that produced the forwarded candidate — this is what keeps
+///   [`ResizeSettler::last_forwarded`] and the size
+///   `apply_pending_resize` actually computes in agreement, no
+///   divergence), or the window was already closed from a prior render
+///   (the steady-state case: every render's `bot` IS the current,
+///   non-transient inset, so tracking it here with no lag avoids stale
+///   lock-in across a run of inset changes whose derived grid-size
+///   candidate happens not to move — the FR4 case `status_bar_insets_
+///   changed` alone already applies for drawing).
+fn resolve_grid_bot_inset(
+    previously_settled: f32,
+    transient: f32,
+    settler_awaiting_decision: bool,
+) -> f32 {
+    if settler_awaiting_decision {
+        previously_settled
+    } else {
+        transient
     }
 }
 
@@ -5499,6 +5612,271 @@ mod tests {
             !settler.awaiting_decision(),
             "once settled, no further self-driven redraw should be requested"
         );
+    }
+
+    // ── task0005 round-1 rework: `resolve_grid_bot_inset` — grid
+    // computation consumes only settler-forwarded inset values (findings
+    // `0029db1c89ab226f` / `5b2f22c5a14f7364`) ──────────────────────────
+
+    /// task0005 AC-1: reproduces the traced mux-attach/reattach firing
+    /// order — `refresh_status_bar_insets` resets the settler and writes
+    /// the transient inset, then a sidebar-driven `pending_resize` (a
+    /// source entirely independent of the settler, mirroring
+    /// `refresh_mux_sidebar_inset`) fires, then `apply_pending_resize`
+    /// would compute the grid size — and proves that size is NOT derived
+    /// from the transient, not-yet-settled inset: it equals the
+    /// settler's last-forwarded size. Against the pre-task0005 code
+    /// (`grid_size()` reading `status_bar_bot_inset_logical` directly,
+    /// with no settled/transient split at all) this scenario computed
+    /// `size_for(transient_bot) = (120, 0)` instead of `(120, 40)` — the
+    /// exact defect these findings report.
+    #[test]
+    fn grid_bot_inset_ignores_a_transient_write_during_a_freshly_reopened_settle() {
+        // Stand-in for `WindowHost::grid_size_for_bot_inset`: a grid size
+        // is simply a pure, monotonic function of the bot inset — the
+        // actual geometry is untouched by this task and already covered
+        // elsewhere; only WHICH inset value reaches it is under test.
+        fn size_for(bot_inset_logical: f32) -> (u16, u16) {
+            (120, 40 - bot_inset_logical as u16)
+        }
+
+        let applied_bot = 0.0_f32; // no status bar, before mux attach
+        let mut settled_bot = applied_bot;
+        let mut settler = ResizeSettler {
+            window_opened_at: None, // closed: already settled pre-attach
+            candidate: None,
+            stable_since: None,
+            last_forwarded: Some(size_for(applied_bot)),
+        };
+
+        // 1. Mux attach: `refresh_status_bar_insets` resets the settler...
+        settler.reset();
+        // ...and writes the transient inset immediately (Change 2, D-D) —
+        // the status bar's first-frame height, not yet judged stable.
+        let transient_bot = 40.0_f32;
+        let candidate = size_for(transient_bot);
+        let now = Instant::now();
+        let forwarded = settler.observe(candidate, now);
+        assert_eq!(
+            forwarded, None,
+            "precondition: a freshly reopened window has not settled yet"
+        );
+        settled_bot =
+            resolve_grid_bot_inset(settled_bot, transient_bot, settler.awaiting_decision());
+        assert_eq!(
+            settled_bot, applied_bot,
+            "the settled inset must not move while the settling window is open"
+        );
+
+        // 2. A sidebar-driven `pending_resize` fires — independent of the
+        //    settler entirely (mirrors `refresh_mux_sidebar_inset`).
+        let pending_resize = true;
+
+        // 3. `apply_pending_resize` would compute the grid size from the
+        //    settled inset, not the transient one.
+        assert!(pending_resize);
+        let applied_size = size_for(settled_bot);
+        assert_eq!(
+            applied_size,
+            size_for(applied_bot),
+            "AC-1: the size apply_pending_resize would broadcast must not \
+             be derived from the transient inset ({transient_bot}); it \
+             must equal the settler's last-forwarded size"
+        );
+        assert_ne!(
+            applied_size, candidate,
+            "sanity: the transient candidate really would have differed"
+        );
+    }
+
+    /// task0005 AC-2: a compositor-sourced `pending_resize` (`Resized` /
+    /// `ScaleFactorChanged`) arriving while the settling window is still
+    /// open must also compute its grid size from the settled inset, not
+    /// the transient one — the fix is not scoped to the mux-sidebar
+    /// trigger alone. The window WIDTH component legitimately reflects
+    /// the real compositor resize (unrelated to the inset); only the
+    /// bot-inset-derived ROWS component must stay pinned to the settled
+    /// value while the settler has not yet judged it stable.
+    #[test]
+    fn grid_bot_inset_ignores_a_transient_write_when_a_compositor_resize_triggers_apply() {
+        fn size_for(window_width: u16, bot_inset_logical: f32) -> (u16, u16) {
+            (window_width / 6, 50 - bot_inset_logical as u16)
+        }
+
+        let applied_bot = 0.0_f32;
+        let old_width = 800u16;
+        let mut settled_bot = applied_bot;
+        let base = Instant::now();
+        let mut settler = ResizeSettler {
+            window_opened_at: Some(base), // mid-settle (e.g. just reopened by attach)
+            candidate: Some(size_for(old_width, applied_bot)),
+            stable_since: Some(base),
+            last_forwarded: Some(size_for(old_width, applied_bot)),
+        };
+
+        // The status-bar height changes mid-settle (transient, immediate
+        // per D-D)...
+        let transient_bot = 8.0_f32;
+        let now = base + Duration::from_millis(1);
+        let forwarded = settler.observe(size_for(old_width, transient_bot), now);
+        assert_eq!(
+            forwarded, None,
+            "precondition: still mid-settle, not stable long enough yet"
+        );
+        settled_bot =
+            resolve_grid_bot_inset(settled_bot, transient_bot, settler.awaiting_decision());
+
+        // ...and, independently, a compositor `Resized` event changes the
+        // window width and sets `pending_resize` directly — it never
+        // touches the settler at all.
+        let new_width = 1000u16;
+        let pending_resize = true;
+        assert!(pending_resize);
+
+        let applied_size = size_for(new_width, settled_bot);
+        assert_eq!(
+            applied_size,
+            size_for(new_width, applied_bot),
+            "AC-2: the compositor-triggered apply must use the settled \
+             bot inset, not the transient write ({transient_bot}), even \
+             though the window WIDTH component legitimately reflects the \
+             new size"
+        );
+    }
+
+    /// task0005 AC-3: across a sequence of settle-then-apply cycles, the
+    /// settled inset this task introduces must reproduce exactly the
+    /// size `ResizeSettler` recorded as `last_forwarded` — no divergence
+    /// between what the settler believes it forwarded and what would
+    /// actually be applied/broadcast.
+    #[test]
+    fn grid_bot_inset_settled_value_reproduces_the_settlers_last_forwarded_size() {
+        fn size_for(bot_inset_logical: f32) -> (u16, u16) {
+            (120, 50 - bot_inset_logical as u16)
+        }
+
+        let mut settler = ResizeSettler::new();
+        let mut settled_bot = 0.0_f32;
+        let mut t = Instant::now();
+
+        for &bot in &[0.0_f32, 12.0, 24.0] {
+            let mut iterations = 0;
+            loop {
+                let candidate = size_for(bot);
+                let forwarded = settler.observe(candidate, t);
+                settled_bot = resolve_grid_bot_inset(settled_bot, bot, settler.awaiting_decision());
+                t += Duration::from_millis(4);
+                if let Some(size) = forwarded {
+                    assert_eq!(
+                        size_for(settled_bot),
+                        size,
+                        "AC-3: the size derived from the settled inset must \
+                         equal exactly what the settler recorded as \
+                         last_forwarded"
+                    );
+                    assert_eq!(settler.last_forwarded, Some(size));
+                    break;
+                }
+                iterations += 1;
+                assert!(iterations < 1000, "settle loop should have converged");
+            }
+        }
+    }
+
+    /// task0005 AC-4 (FR4 non-regression): a status-bar height change
+    /// whose derived grid-size candidate does not move (cell-height
+    /// rounding / row clamping) must not set `pending_resize` — unchanged
+    /// from before this task — and the settled-inset tracking this task
+    /// introduces must still advance to the new value once the settler is
+    /// not withholding judgment, so a LATER genuine resize is computed
+    /// from the current inset rather than one left stale by the no-op
+    /// change.
+    #[test]
+    fn grid_bot_inset_tracks_transient_when_settler_closed_even_on_a_noop_candidate() {
+        fn size_for(bot_inset_logical: f32) -> (u16, u16) {
+            // Deliberately coarse: several nearby inset values floor to
+            // the same row count, mirroring the real cell-height
+            // rounding / row-clamping AC-4 describes.
+            (120, 50 - (bot_inset_logical / 10.0).floor() as u16)
+        }
+
+        let mut settler = ResizeSettler::new();
+        let mut settled_bot = 0.0_f32;
+        let mut t = Instant::now();
+        // Settle on bot = 2.0 first.
+        loop {
+            let forwarded = settler.observe(size_for(2.0), t);
+            settled_bot = resolve_grid_bot_inset(settled_bot, 2.0, settler.awaiting_decision());
+            t += Duration::from_millis(4);
+            if forwarded.is_some() {
+                break;
+            }
+        }
+        assert_eq!(settled_bot, 2.0);
+
+        // A small height change to bot = 4.0: same candidate (still
+        // floors to the same row count), settler is closed, so `observe`
+        // reports no genuine change...
+        let candidate = size_for(4.0);
+        assert_eq!(
+            candidate,
+            size_for(2.0),
+            "precondition: candidate unchanged"
+        );
+        let forwarded = settler.observe(candidate, t);
+        assert_eq!(
+            forwarded, None,
+            "AC-4: an unchanged derived candidate must not set pending_resize"
+        );
+        settled_bot = resolve_grid_bot_inset(settled_bot, 4.0, settler.awaiting_decision());
+        assert_eq!(
+            settled_bot, 4.0,
+            "AC-4: the settled inset must still track the current value \
+             with no stale lock-in, even though the derived candidate did \
+             not move"
+        );
+    }
+
+    /// task0005 AC-5 (no stale lock-in): once the settler has forwarded
+    /// and closed, the settled inset this task introduces keeps pace with
+    /// every further genuine change on an otherwise idle window — it is
+    /// never pinned to the value at the moment of the first forward.
+    #[test]
+    fn grid_bot_inset_keeps_pace_with_further_genuine_changes_after_closing() {
+        fn size_for(bot_inset_logical: f32) -> (u16, u16) {
+            (120, 50 - bot_inset_logical as u16)
+        }
+        let mut settler = ResizeSettler::new();
+        let mut settled_bot = 0.0_f32;
+        let mut t = Instant::now();
+        loop {
+            let forwarded = settler.observe(size_for(0.0), t);
+            settled_bot = resolve_grid_bot_inset(settled_bot, 0.0, settler.awaiting_decision());
+            t += Duration::from_millis(4);
+            if forwarded.is_some() {
+                break;
+            }
+        }
+        assert_eq!(settled_bot, 0.0);
+
+        // Idle window, later: each genuine status-bar height change must
+        // forward and settle immediately (closed-mode behavior, unrelated
+        // to this task), and the settled inset must follow every one.
+        for &bot in &[6.0_f32, 14.0, 3.0] {
+            let forwarded = settler.observe(size_for(bot), t);
+            assert_eq!(
+                forwarded,
+                Some(size_for(bot)),
+                "no stale lock-in: a genuine post-settle change must \
+                 forward immediately"
+            );
+            settled_bot = resolve_grid_bot_inset(settled_bot, bot, settler.awaiting_decision());
+            assert_eq!(
+                settled_bot, bot,
+                "settled inset must track each new genuine value"
+            );
+            t += Duration::from_millis(4);
+        }
     }
 
     // ── mux-tab-switch-bypass-refix task0002 Change 1: rate-limited
