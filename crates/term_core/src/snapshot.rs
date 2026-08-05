@@ -314,8 +314,13 @@ impl TerminalCore {
             kitty_placeholder_active: false,
             scroll_region_top: snapshot.scroll_region_top,
             scroll_region_bottom: snapshot.scroll_region_bottom,
-            response_buffer: [0u8; 64],
-            response_len: 0,
+            // task0002 D5: a snapshot-rebuilt core always starts with an
+            // empty pending device-response store, regardless of what the
+            // serialized snapshot's originating core had queued (the field
+            // is intentionally not part of `TerminalSnapshot`/
+            // `TerminalSnapshotV1` — see `snapshot::tests::
+            // test_restore_from_bytes_starts_with_empty_pending_response_store`).
+            response_queue: Vec::new(),
             cell_width_px: 0,
             cell_height_px: 0,
             scroll_event: None,
@@ -448,8 +453,13 @@ impl TerminalCore {
             kitty_placeholder_active: false,
             scroll_region_top: snapshot.scroll_region_top,
             scroll_region_bottom: snapshot.scroll_region_bottom,
-            response_buffer: [0u8; 64],
-            response_len: 0,
+            // task0002 D5: a snapshot-rebuilt core always starts with an
+            // empty pending device-response store, regardless of what the
+            // serialized snapshot's originating core had queued (the field
+            // is intentionally not part of `TerminalSnapshot`/
+            // `TerminalSnapshotV1` — see `snapshot::tests::
+            // test_restore_from_bytes_starts_with_empty_pending_response_store`).
+            response_queue: Vec::new(),
             cell_width_px: 0,
             cell_height_px: 0,
             scroll_event: None,
@@ -536,6 +546,34 @@ mod tests {
         assert_eq!(restored.cursor.col, 0);
         assert_eq!(restored.cursor.row, 0);
         assert!(restored.cursor.visible);
+    }
+
+    /// AC-6 (tmux-startup-query-response-leak task0002, D5): a
+    /// snapshot-rebuilt core starts with an empty pending device-response
+    /// store, even when the pre-snapshot core had one or more responses
+    /// queued (and never drained them via `take_response` before
+    /// snapshotting). Residual bytes here would otherwise leak as stale
+    /// `PtyInput` to a live shell on the first `take_response` poll after
+    /// a restore.
+    #[test]
+    fn test_restore_from_bytes_starts_with_empty_pending_response_store() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.process_pty_data_fully(b"\x1b[c"); // DA1 query queues a reply
+        assert!(
+            core.get_response_len() > 0,
+            "sanity: DA1 query must have queued a pending response"
+        );
+
+        let bytes = core.snapshot_to_bytes();
+        let restored = TerminalCore::restore_from_bytes(&bytes).expect("restore should succeed");
+
+        assert_eq!(
+            restored.get_response_len(),
+            0,
+            "a snapshot-rebuilt core must start with an empty pending \
+             device-response store regardless of what the pre-snapshot \
+             core had queued"
+        );
     }
 
     #[test]

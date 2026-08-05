@@ -398,8 +398,19 @@ pub struct TerminalCore {
     pub(crate) scroll_region_top: u16,
     pub(crate) scroll_region_bottom: u16,
     // Sprint 4: Device response buffer
-    pub(crate) response_buffer: [u8; 64],
-    pub(crate) response_len: u8,
+    /// Ordered pending device-response store (tmux-startup-query-response-leak
+    /// task0002, review-round-1 rework, D5). [`Self::write_response`]
+    /// APPENDS to this — never overwrites — so a single parse pass that
+    /// dispatches N device queries (DA1/DA2/DSR/XTWINOPS/DECRPM)
+    /// accumulates all N replies, concatenated in synthesis order.
+    /// [`Self::take_response`] drains and clears it; a drain whose result
+    /// is discarded (the snapshot/replay paths) removes everything
+    /// pending. A plain growable `Vec<u8>` replaces the pre-task0002
+    /// fixed 64-byte single slot: growth is bounded only by the input
+    /// that produced it (the existing 1 MiB / 12 ms parse-chunk coalesce
+    /// bound in `tabs.rs`), not by a fixed capacity, so no in-scope
+    /// response is ever silently dropped.
+    pub(crate) response_queue: Vec<u8>,
     // Cell size in pixels (for CSI 14t/16t responses)
     pub(crate) cell_width_px: u16,
     pub(crate) cell_height_px: u16,
@@ -539,9 +550,8 @@ impl TerminalCore {
             kitty_placeholder_active: false,
             scroll_region_top: 0,
             scroll_region_bottom: rows.saturating_sub(1),
-            // Sprint 4
-            response_buffer: [0u8; 64],
-            response_len: 0,
+            // Sprint 4 (task0002 D5: ordered append-only store, see field doc)
+            response_queue: Vec::new(),
             cell_width_px: 8,
             cell_height_px: 16,
             // Scroll event
@@ -1693,8 +1703,7 @@ impl TerminalCore {
         self.scroll_region_top = 0;
         self.scroll_region_bottom = self.rows.saturating_sub(1);
         // Sprint 4
-        self.response_buffer = [0u8; 64];
-        self.response_len = 0;
+        self.response_queue.clear();
         // Sprint 6
         self.parser.reset();
         self.mode_actions.clear();
@@ -5748,7 +5757,6 @@ mod tests {
             fn on_apc(&self, _data: &[u8]) {}
             fn on_dcs(&self, _data: &[u8]) {}
             fn on_bell(&self) {}
-            fn on_device_response(&self, _data: &[u8]) {}
             fn on_reset(&self) {
                 self.0.fetch_add(1, Ordering::SeqCst);
             }
@@ -6106,6 +6114,12 @@ mod tests {
         assert!(len > 0);
         let bytes = core.get_response_bytes();
         assert_eq!(&bytes, b"\x1b[6;16;8t");
+        // task0002 D5: `get_response_bytes` now peeks the ORDERED pending
+        // store (everything since the last drain), not a single
+        // overwritten slot — drain here so the second query below starts
+        // from an empty store, matching how the real write-back sites use
+        // `take_response` between parses.
+        core.take_response();
 
         // After setting cell size, CSI 16t should return the new values
         core.set_cell_size_px(10, 20);

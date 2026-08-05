@@ -1,0 +1,131 @@
+task_id: task0002
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  # Every post-implementation run reproduced a SUBSET of the baseline set
+  # above (never a new/different test) — known off-thread-worker-timing
+  # flake unrelated to this task, pre-existing in this worktree's parent
+  # branch. Runs observed: {ts11,ts13,ts7,ts8,welcome_without_windows} (x2)
+  # and {ts11,ts13,ts7,ts9,welcome_without_windows} (x1), always size <= 7
+  # and always ⊆ baseline_failures.
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - csi_device::tests::take_response_after_multi_query_chunk_returns_all_in_order
+    red_confirmed: true
+    red_reason: >-
+      Pre-fix (single-slot response_buffer, overwrite-on-write): drained
+      result equaled only the LAST response
+      (`\x1b[8;24;80t`, XTWINOPS 18), left=[27,91,56,59,50,52,59,56,48,116]
+      vs right=<all 7 responses concatenated>. Matches the
+      orchestrator-verified byte-level probe exactly.
+  AC-2:
+    tests:
+      - tabs::tests::plain_tab_multi_query_chunk_delivers_all_responses_in_order_exactly_once
+    red_confirmed: true
+    red_reason: >-
+      Verified by temporarily reintroducing single-slot overwrite semantics
+      in `write_response` (clear-then-append) and re-running: assertion
+      failed, `left: 0, right: 1` — zero outbound writes matched the
+      5-response concatenation; only the trailing XTWINOPS18 reply was
+      present among the outbound writes. Reverted immediately after
+      confirming red; suite re-run green afterward.
+  AC-3:
+    tests:
+      - tabs::tests::mux_pane_multi_query_chunk_delivers_all_responses_in_order_exactly_once
+    red_confirmed: true
+    red_reason: >-
+      Same single-slot-overwrite temporary revert as AC-2: assertion
+      failed, `left: 0, right: 1` — zero outbound PtyInput writes matched
+      the 5-response concatenation; only the trailing XTWINOPS18 reply
+      reached the active pane. Reverted immediately after confirming red.
+  AC-4:
+    tests:
+      - tabs::tests::plain_tab_every_response_type_delivered_exactly_once_and_absent_from_grid
+      - tabs::tests::mux_pane_every_response_type_delivered_exactly_once_and_absent_from_grid
+      - tabs::tests::process_combined_delivers_da2_response_exactly_once
+      - tabs::tests::apply_queued_live_output_delivers_device_response_exactly_once
+      - tabs::tests::reset_frame_for_replay_produces_no_outbound_device_response_write
+      - tabs::tests::plain_tab_query_lookalike_text_reaches_grid_unchanged
+      - terminal_core::tests::test_xtwinops_cell_size_after_buffer_switch_defaults
+    red_confirmed: false
+    red_reason: >-
+      Regression-floor criterion (stays green, not red->green). All seven
+      listed tests were green before this task and remained green after.
+      Six are unmodified task0001 TS4 tests. The seventh
+      (test_xtwinops_cell_size_after_buffer_switch_defaults) is a
+      pre-existing term_core-internal test whose two-query-without-drain
+      assertion relied on the old single-slot overwrite; under the new
+      queue semantics `get_response_bytes()` legitimately returns BOTH
+      pending responses concatenated, so the test was updated (added a
+      `core.take_response()` drain between the two queries) with an inline
+      justification comment per AC-4's escape clause, matching the D5
+      accessor-redocumentation decision — not a weakened assertion.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Structural absence property (no on_device_response method on
+      TerminalCallbacks, no fire_device_response_callback, no dispatch
+      call sites), not expressible as a single runtime red/green test —
+      Rust's compiler enforces it at build time (a residual call to the
+      removed method/trait item is a compile error, not a test failure).
+      Verified by: (1) grep audit across crates/term_core and src-tauri/
+      confirming zero remaining `on_device_response` /
+      `fire_device_response_callback` references outside historical/
+      explanatory doc comments; (2) `cargo check`/`cargo test` green for
+      both crates after removing the trait method, the fire helper, all 5
+      csi_dispatch.rs call sites, and every implementor (term_core's
+      Recorder/Forward/Fwd test doubles, esc_handler.rs's ResetRecorder,
+      terminal_core.rs's Recorder, src-tauri's NativeCallbacks, tabs.rs's
+      RecorderCallbacks); (3) callbacks.rs trait doc and csi_device.rs
+      take_response doc rewritten to state the single-channel contract.
+  AC-6:
+    tests:
+      - snapshot::tests::test_restore_from_bytes_starts_with_empty_pending_response_store
+      - terminal_core::tests::test_build_from_snapshot_drains_device_response_buffer
+      - tabs::tests::reset_frame_for_replay_discards_historic_device_responses
+    red_confirmed: false
+    red_reason: >-
+      The invariant already held pre-task0002: both from_snapshot and
+      from_snapshot_v1 hard-coded an empty response store at construction
+      regardless of the pre-snapshot core's pending state, and
+      take_response already cleared its (then single-slot) content on any
+      drain call — so a single take_response() after replay already
+      returned to zero under the old code too. This is a structural
+      regression guard for a property that pre-dates this task, not a
+      fix; the new snapshot.rs test makes that guarantee explicit and the
+      two existing discard tests are asserted to stay green (verified:
+      full suite green modulo the pre-declared baseline flakes).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build-gate + reasoning criterion (TS6), not a single failing test.
+      `cargo test --manifest-path src-tauri/Cargo.toml --lib` (765/765
+      term_core, 3131-3132/3138 src-tauri modulo the pre-declared flaky
+      baseline) and `cargo check --manifest-path src-tauri/Cargo.toml
+      --no-default-features` both pass. Hot-path reasoning: every changed
+      call site (write_response, take_response, the 5 csi_dispatch.rs
+      device-response arms, fire_device_response_callback removal) lives
+      exclusively inside the existing per-QUERY handler functions, which
+      only run when the parser recognizes a specific device-query CSI
+      final byte (`n`/`c`/`t`/`p` with the right intermediates) — never on
+      the print/grapheme path that processes ordinary output bytes.
+      Removing the `if len > 0 { fire_device_response_callback() }`
+      checks is a net REMOVAL of per-query work (no callback dispatch),
+      and the append-only Vec<u8> vs. fixed [u8;64] change only affects
+      cost inside write_response itself (still O(response length), a few
+      bytes). Non-query traffic touches none of these paths, so it gains
+      no per-byte work.

@@ -334,7 +334,6 @@ mod tests {
             fn on_apc(&self, _data: &[u8]) {}
             fn on_dcs(&self, _data: &[u8]) {}
             fn on_bell(&self) {}
-            fn on_device_response(&self, _data: &[u8]) {}
             fn on_reset(&self) {
                 self.0.fetch_add(1, Ordering::SeqCst);
             }
