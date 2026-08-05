@@ -1239,6 +1239,14 @@ impl TerminalCore {
         };
         let middle_len = split_at - head_len;
         let middle_segment_count = k - h;
+        // D10 (mux-tab-switch-bypass-refix task0001, review finding
+        // `b6a60c440da70e79`): the actually measured bug shape's MIDDLE is
+        // 26 segments, one past the round-8 gate's then-current bound (24)
+        // — see `BYPASS_PREFIX_MAX_SEGMENTS`'s doc for why that bound had
+        // silently drifted stale (the daemon-side cap it mirrors moved to
+        // 62 in a later round without this gate following) and why
+        // realigning it to the daemon's CURRENT cap does not reintroduce
+        // the cost this bound exists to bound (NFR1).
         let bypass_split = bypass
             && k > 0
             && middle_segment_count <= BYPASS_PREFIX_MAX_SEGMENTS
@@ -2143,7 +2151,8 @@ const BYPASS_SUFFIX_MIN_BYTES: usize = 4096;
 /// byte-identical to the original check.
 const BYPASS_PREFIX_MAX_BYTES: usize = 64 * 1024;
 
-/// Maximum number of segments the PREFIX may contain for
+/// Maximum number of segments the MIDDLE (`segments[h..k]`, per
+/// [`leading_uniform_run_len`]) may contain for
 /// `build_from_snapshot_inner`'s D1''' prefix/suffix split to be worth
 /// engaging (D5''''', round-8 rework, review round-7 finding
 /// `a4f4e36fef377d05`).
@@ -2152,18 +2161,54 @@ const BYPASS_PREFIX_MAX_BYTES: usize = 64 * 1024;
 /// prefix built from many small segments still pays one full,
 /// content-preserving reflow PER SEGMENT (`replay_segments`'s per-segment
 /// resize), regardless of how few total bytes those segments cover — a
-/// resize storm packs up to the daemon's own `MAX_DIM_MARKERS` (24, kept as
+/// resize storm packs up to the daemon's own `MAX_DIM_MARKERS` (62, kept as
 /// a literal here — `term_core` has no dependency on the mux daemon crate;
 /// see `mux_ipc::protocol::MAX_SEGMENTS`'s doc for the same duplication) worth
 /// of segments into a comparatively small byte span. Bounding segment COUNT
 /// independent of byte length keeps that shape from silently slipping
 /// through the byte-only gate.
 ///
-/// D7 amendment (task0001): checked against `middle_segment_count`
-/// (`k - h`, per [`leading_uniform_run_len`]), not the raw `k` — when there
-/// is no rescuable HEAD (`h == 0`), `middle_segment_count == k` and this is
+/// D7 amendment (task0001, prior feature `mux-tab-switch-replay-latency`):
+/// checked against `middle_segment_count` (`k - h`, per
+/// [`leading_uniform_run_len`]), not the raw `k` — when there is no
+/// rescuable HEAD (`h == 0`), `middle_segment_count == k` and this is
 /// byte-identical to the original check.
-const BYPASS_PREFIX_MAX_SEGMENTS: usize = 24;
+///
+/// D10 (mux-tab-switch-bypass-refix task0001, review finding
+/// `b6a60c440da70e79`): raised from 24 to 62. `MAX_DIM_MARKERS` (the
+/// daemon-side cap this bound duplicates as a literal, above) was
+/// independently raised from 24 to 62 in a later round (see
+/// `bench.rs::DAEMON_SEGMENT_CAP`'s doc) without updating THIS gate, so it
+/// silently drifted stale at the daemon's PRIOR cap — the actually measured
+/// bug shape (a 26-segment MIDDLE, comfortably under the daemon's CURRENT
+/// 62-marker cap) was rejected by a bound calibrated to a cap the daemon no
+/// longer enforces. Realigning the two restores the intended invariant
+/// (this gate never rejects a shape the daemon itself could not have
+/// produced) and, as a direct consequence, admits the measured shape.
+///
+/// Why the raised count still stays cheap (the rationale this bound was
+/// introduced for: "each MIDDLE segment pays one reflow regardless of its
+/// byte size"): every MIDDLE segment transition is a SAME-WIDTH resize by
+/// construction — `middle_is_row_bounded` (this gate's companion safety
+/// check, run against `segments[h..k]`) requires `cols == target_cols` for
+/// every one of them; a column change degrades the whole HEAD fold instead
+/// (`h` falls back to `0`) rather than reaching this gate with a
+/// column-changing MIDDLE. `TerminalCore::resize_same_width` (`reflow.rs`,
+/// D1, round-10 rework, `mux-render-corruption` task0010) bounds a
+/// same-width resize's cost to the ROW-COUNT DELTA between the two
+/// dimensions, not the size of scrollback accumulated so far — the
+/// per-segment cost this bound exists to cap was, at the time of the
+/// original 24-segment cap, dominated by an O(accumulated-content) reflow
+/// that round-10 eliminated for exactly this same-width shape (see
+/// `bench.rs::segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap`'s
+/// doc for the re-measured numbers: tens to ~164 ms across the 24-62
+/// segment range post-round-10, vs. seconds pre-round-10).
+/// [`BYPASS_PREFIX_MAX_BYTES`] and the suffix-dominance check (`suffix_len
+/// >= middle_len`, NFR1, IMPLEMENTATION.md D-B) still bound the MIDDLE's
+/// total byte cost regardless of how many segments it is split across, so
+/// a genuinely expensive MIDDLE/prefix is rejected by those gates
+/// independent of this one.
+const BYPASS_PREFIX_MAX_SEGMENTS: usize = 62;
 
 /// Defensive upper bound on a resize's `cols` field. Replay dimensions are
 /// fed directly into `TerminalCore::resize`, which allocates
@@ -4367,6 +4412,195 @@ mod tests {
         );
     }
 
+    /// AC-1/AC-2 (mux-tab-switch-bypass-refix task0001, D10, review finding
+    /// `b6a60c440da70e79`): reproduces the SPEC-cited measured bug shape's
+    /// TOPOLOGY — 31 total replay segments (1 HEAD + 26 MIDDLE + 4
+    /// stable-target TAIL), `k = 27` (`stable_target_suffix_start` lands
+    /// right after the MIDDLE cluster), `middle_segment_count = 26` after
+    /// head fold — with adjacent MIDDLE dims always differing and both
+    /// values sitting AT-OR-ABOVE the settled target (the D8 direction: a
+    /// `visible_row_count` 0→1 transition SHRINKS the grid, so pre-settling
+    /// dims sit at the LARGER size). Mirrors
+    /// `head_plus_marker_cluster_above_target_engages_the_split_and_matches_reference`
+    /// above, but at the SPEC's own cluster size (26) instead of the
+    /// generic `BYPASS_PREFIX_MAX_SEGMENTS` boundary, and with the SPEC's
+    /// own 31-segment/`k=27` total shape (4 TAIL segments, not 1).
+    ///
+    /// Like that pre-existing test, this deterministic (non-timing) unit
+    /// test keeps its HEAD just over `BYPASS_PREFIX_MAX_BYTES` (64 KiB)
+    /// rather than the SPEC's full ~2 MiB scale — this file already gates
+    /// genuinely 2 MiB-scale payloads behind `#[ignore]` (e.g.
+    /// `measure_reparse_cost_2mib` below) to keep the default `cargo test
+    /// --lib` run fast. The ~2 MiB fidelity and the latency-ceiling
+    /// assertion live in the new release bench this task adds to
+    /// `bench.rs`,
+    /// `measured_26_segment_middle_cluster_bench_2mib_matches_bypass_engaged_cost`
+    /// (AC-4).
+    ///
+    /// AC-1: confirmed to fail against the pre-fix gate
+    /// (`BYPASS_PREFIX_MAX_SEGMENTS == 24`) — `middle_segment_count` (26)
+    /// exceeds it, so `bypass_split` is `false` and `scrollback_populated`
+    /// comes back `true` (whole-drain fallback) instead of the `false` this
+    /// test asserts. Observed failure before this task's fix: `assertion
+    /// failed: !bypass_replay.scrollback_populated`.
+    ///
+    /// AC-2: equivalence-checked against
+    /// `build_scrollback_only_from_snapshot` — viewport/cursor parity via
+    /// `grid_fingerprint`, matching `evicted_total`, and the discriminating
+    /// `scrollback_populated` signal — following the same pattern as
+    /// `head_plus_marker_cluster_engages_the_split_and_matches_reference`.
+    #[test]
+    fn measured_26_segment_middle_cluster_engages_the_split_and_matches_reference() {
+        let cols: u16 = 80;
+        let target_rows: u16 = 24;
+        let head_rows: u16 = 30;
+
+        // HEAD: a single large segment already at `head_rows` (the
+        // pre-settling size) — well over `BYPASS_PREFIX_MAX_BYTES` (64 KiB)
+        // on its own, matching the measured shape's HEAD-dominant payload.
+        let head_filler = b"head history line padded out a bit for size\r\n";
+        let mut payload: Vec<u8> = Vec::new();
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: head_rows,
+        }];
+        while payload.len() <= 96 * 1024 {
+            payload.extend_from_slice(head_filler);
+        }
+        let head_len = payload.len();
+        assert!(
+            head_len > 64 * 1024,
+            "test prerequisite: HEAD alone must exceed BYPASS_PREFIX_MAX_BYTES"
+        );
+
+        // MIDDLE: the SPEC-measured 26-segment cluster — adjacent dims
+        // always differ, oscillating between `target_rows` and `head_rows`
+        // (both at-or-above the settled target), ending on `head_rows` (an
+        // even count, matching the above-target companion test's parity
+        // note above) so the drop to `target_rows` happens at the k
+        // boundary, not inside the cluster.
+        const MEASURED_MIDDLE_SEGMENT_COUNT: usize = 26;
+        let cluster_filler = b"x\r\n";
+        for i in 0..MEASURED_MIDDLE_SEGMENT_COUNT {
+            segments.push(ReplaySegment {
+                offset: payload.len() as u32,
+                cols,
+                rows: if i % 2 == 0 { target_rows } else { head_rows },
+            });
+            payload.extend_from_slice(cluster_filler);
+        }
+        assert_eq!(
+            MEASURED_MIDDLE_SEGMENT_COUNT % 2,
+            0,
+            "test prerequisite: an even cluster length ends on the odd \
+             index (head_rows), not the target"
+        );
+        let middle_len = payload.len() - head_len;
+        assert!(
+            middle_len <= 64 * 1024,
+            "test prerequisite: the cluster's OWN content must clear \
+             BYPASS_PREFIX_MAX_BYTES for the fold to have anything to rescue"
+        );
+
+        // TAIL: 4 segments at the target dims (31 total segments, matching
+        // the SPEC's own count), together well over BYPASS_SUFFIX_MIN_BYTES
+        // and dominating the MIDDLE (but not the raw head+cluster prefix).
+        let middle_end = payload.len();
+        for _ in 0..4 {
+            segments.push(ReplaySegment {
+                offset: payload.len() as u32,
+                cols,
+                rows: target_rows,
+            });
+            let seg_start = payload.len();
+            while payload.len() - seg_start < 1152 {
+                payload.extend_from_slice(head_filler);
+            }
+        }
+        let suffix_len = payload.len() - middle_end;
+        assert_eq!(
+            segments.len(),
+            31,
+            "test prerequisite: 1 HEAD + 26 MIDDLE + 4 TAIL = 31 total \
+             segments, matching the SPEC-measured shape"
+        );
+        assert!(
+            suffix_len >= 4096,
+            "test prerequisite: suffix must clear BYPASS_SUFFIX_MIN_BYTES"
+        );
+        assert!(
+            suffix_len >= middle_len,
+            "test prerequisite: suffix must dominate the MIDDLE"
+        );
+        assert!(
+            suffix_len < head_len + middle_len,
+            "test prerequisite: suffix must NOT dominate the raw \
+             head+cluster prefix (the pre-D7 gate's dominance check must \
+             still fail here)"
+        );
+
+        // Test prerequisite: k must land at 27 and middle_segment_count at
+        // 26 — the shape's own defining numbers, not merely "the split
+        // engaged for some other reason".
+        assert_eq!(
+            stable_target_suffix_start(cols, target_rows, &segments),
+            27,
+            "test prerequisite: k must be 27, matching the SPEC-measured shape"
+        );
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let scrollback_lines = 10_000u32;
+        let bypass_replay = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            scrollback_lines,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("bypass-path build not cancelled");
+        let reference = TerminalCore::build_scrollback_only_from_snapshot(
+            cols,
+            target_rows,
+            scrollback_lines,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("reference build not cancelled");
+
+        // AC-1: the split must engage despite the raw head+cluster prefix
+        // failing every pre-D7 threshold, for the SPEC-measured 26-segment
+        // MIDDLE shape (31 total segments, k = 27).
+        assert!(
+            !bypass_replay.scrollback_populated,
+            "AC-1: the split must engage (scrollback_populated == false) for \
+             the SPEC-measured 26-segment MIDDLE shape (31 total segments, \
+             k = 27) — got scrollback_populated == true (middle_segment_count \
+             26 exceeds the gate's bound)"
+        );
+        assert!(
+            reference.scrollback_populated,
+            "test prerequisite: the fully synchronous reference always \
+             populates scrollback"
+        );
+
+        // AC-2: viewport + cursor equivalence with the fully synchronous
+        // reference, and matching evicted_total.
+        assert_eq!(
+            grid_fingerprint(&bypass_replay.core),
+            grid_fingerprint(&reference.core),
+            "AC-2: the head/middle/tail split's viewport + cursor must match \
+             the fully synchronous reference for the measured 26-segment \
+             MIDDLE shape"
+        );
+        assert_eq!(
+            bypass_replay.evicted_total, reference.evicted_total,
+            "AC-2: the split must preserve evicted_total byte-identically"
+        );
+    }
+
     /// AC-2 (task0004, review round-1 rework finding `6a02ed7e1b606588`):
     /// reproduces the finding's own example — a small target HEAD, a small
     /// column-change MIDDLE, and a large target TAIL — a shape that engaged
@@ -4485,11 +4719,14 @@ mod tests {
 
     /// AC-5 (task0001, D7): confirms the pre-existing "ordinary" (no HEAD)
     /// segment-count boundary behavior is unchanged by D7 — a prefix with
-    /// EXACTLY `BYPASS_PREFIX_MAX_SEGMENTS` (24) segments, small in bytes,
+    /// EXACTLY `BYPASS_PREFIX_MAX_SEGMENTS` segments, small in bytes,
     /// paired with a dominating suffix, still engages the split (companion
     /// to the pre-existing
     /// `prefix_with_too_many_segments_does_not_engage_the_split_regardless_of_byte_length`,
-    /// which pins the "25 segments rejects" side of the same boundary).
+    /// which pins the "one past the bound rejects" side of the same
+    /// boundary). Both tests reference the bound symbolically, so
+    /// AC-3/D10 (mux-tab-switch-bypass-refix task0001) retargeted them to
+    /// the new bound (62, was 24) without editing either test body.
     /// Distinguishes itself from
     /// `head_plus_marker_cluster_engages_the_split_and_matches_reference`
     /// above: `h == 0` here (the first segment does not open at the
