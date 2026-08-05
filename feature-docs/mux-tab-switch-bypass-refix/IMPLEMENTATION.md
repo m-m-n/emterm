@@ -40,6 +40,7 @@ own beyond each task's own file set.
 |-----------|----------------|------------------------------|---------------|
 | Bypass split gate (the `h` / `middle_segment_count` / `bypass_split` computation in `TerminalCore::build_from_snapshot_inner`, with `leading_uniform_run_len` and the gate constants) | Decide whether a snapshot replay engages the HEAD/MIDDLE/SUFFIX split or falls back to a full non-bypass drain | Precondition: `segments` reflect the scrollback's recorded resize markers in offset order. Postcondition: the decision stays a pure function of its inputs, and the caller-visible meaning of `bypass_engaged` true/false (viewport/cursor parity, `scrollback_populated` semantics) is unchanged. task0001 may change WHICH shapes engage; it must not change what engagement implies downstream | task0001 (owns every code change), task0003 (tests against it without modifying it) |
 | Empty-MIDDLE degradation contract (`h == k` shapes) | When folding the HEAD would leave an empty MIDDLE, the fold is abandoned (pre-D7 path) so the final resize-to-target step always runs | Postcondition (pinned): for an input whose entire pre-suffix region is one uniform run (`h == k` candidate), the built core comes out at the caller-requested `(cols, rows)` and `scrollback_populated` matches a reference non-bypass build of the same payload/segments | task0003 (owns the regression pin), task0001 (must preserve this postcondition while changing the segment-count treatment) |
+| Status-bar inset-change predicate (the pure inset-values-changed decision in `window_host.rs`) | Decide whether newly computed drawing-inset values differ from the stored ones enough to apply them | Precondition: called with the stored and the newly computed top/bottom inset values. Postcondition: pure function of its inputs; a "changed" verdict leads to drawing-inset application only, never to `pending_resize` (D-D). Its shape — stored and candidate inset values in, bool out — is stable; only its tolerance semantics may change, and only by its owner | task0006 (owner: tolerance semantics and tests), task0005 (consumer: must not modify the predicate or its tests) |
 
 ## Conventions
 
@@ -101,6 +102,25 @@ This split is what resolves FR4 without regressing the prior feature's FR6
 in its task plan; it is recorded here because task0001's latency goal is
 measured in exactly the attach/switch window whose CPU behavior task0002
 changes (NFR2), and reviewers need the boundary stated once.
+
+### D-E: single-file split for the round-1 review rework (task0004–task0006)
+
+Added by the round-1 review rework. task0005 and task0006 both modify
+`src-tauri/src/window_host.rs` in parallel: task0005 owns the inset/grid
+state-flow change (which inset value grid computation and
+`apply_pending_resize` consume, and its regression tests); task0006 owns
+the status-bar inset-change predicate's tolerance semantics and its
+tests, and modifies nothing else. The predicate contract in Shared
+Components is the seam between them — neither task changes the other's
+side, and any merge conflict is test-module append-level, resolved via
+the implementer's parent-side-adoption protocol. task0004 is the only
+round-1 rework task touching `crates/term_core`, so the existing Shared
+Components contracts (bypass split gate; empty-MIDDLE degradation)
+continue to bind it unchanged: it may change WHICH shapes engage and the
+gate's constants/pins, never what engagement implies downstream nor the
+`h == k` postcondition. D-D is sharpened, not changed, by task0005:
+drawing and pointer-routing insets are immediate; grid computation and
+the `Resize` broadcast consume only settler-forwarded values.
 
 ## Risk Assessment
 
