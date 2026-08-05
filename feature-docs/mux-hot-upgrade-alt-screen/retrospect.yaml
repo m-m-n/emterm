@@ -1,0 +1,40 @@
+feature: mux-hot-upgrade-alt-screen
+collected_at: "2026-08-05T01:20:00+09:00"
+session_ids: [d944ec3c-5fcf-4c20-9b30-eb3fd66fd7d0]
+signals:
+  review_critical_high: []       # round1 に critical/high は 0 件
+  conflict_reworks: []           # 3 タスクとも conflict_retries: 0
+  file_prediction_misses: []     # 3 タスクとも deviations: []
+  verification_failures: []      # verify result: pass
+  discretionary_perspectives: [] # Layer-2 追加なし（floor 5 観点のみ）
+  declined_findings: []          # declined は 0 件（medium 7 件はすべて unresolved）
+lessons_candidates:
+  - >-
+    新規 worktree では gitignored の src-tauri/assets/fonts/ が空で build.rs が
+    panic するため、implementer 3 本とも独自に回避策を打った（2 本は main tree からの
+    コピー、1 本は scripts/fetch-fonts.sh の実行）。verify フェーズでも同じ壁に当たった。
+    worktree 作成直後に fetch-fonts を走らせる、あるいはタスクプロンプトで前提として
+    明示すると、毎回の再発見が消える。
+  - >-
+    codex クロスバリデーションが 4 観点すべて usage limit でスキップされた
+    （2026-08-08 まで rate limited）。codex_cross_validation が true で全 codex が
+    skip したとき、レビュー強度が想定より落ちたことを round 記録以外でも
+    可視化する手段があるとよい。
+  - >-
+    task0003（統合テスト）は task0002 未着地を前提に「失敗して当然」の注記を
+    ソースへ書き込んだが、統合ブランチでは前提が成立せず spec と comprehensive の
+    両観点から指摘された。並列タスクで「兄弟タスク待ちの expected-to-fail」を
+    ソースコメントに残す運用は、統合後に必ず陳腐化する。計画側で「注記は
+    tests.yaml など worktree ローカルの記録に置き、ソースには残さない」と
+    決めておくと再発しない。
+  - >-
+    tabs::tests の非決定的失敗について、implementer 2 本がそれぞれ独立に
+    ベースライン取得へ多くのターンを費やし、verify でも同じ切り分けを再実行した。
+    プロジェクト側に既知 flaky テストの一覧があれば三重の再調査を避けられる。
+    なお MEMORY.md の「--test-threads=1 で安定」という記述は今回の実測と食い違い、
+    単一スレッドでも 7 件が落ちた（base_commit でも同一 7 件のため feature 起因ではない）。
+  - >-
+    implementer 3 本のうち task0002 は TDD の red 先行を守れなかったと自己申告した
+    （schema フィールド追加と関数シグネチャ変更が全構築サイトを同時に壊すため）。
+    unconfirmed_reds に理由が記録されているので、この型の変更で TDD をどう回すかは
+    tdd-testing スキル側で指針を持つ価値がある。

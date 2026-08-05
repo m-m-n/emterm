@@ -21,7 +21,7 @@
 //! primitives it depends on (`O_NOFOLLOW`, `libc::mode_t` permissions) have
 //! no Windows equivalent, matching the `upgrade` / `inherited_pty` precedent.
 
-use std::ffi::OsStr;
+use std::ffi::{CStr, OsStr};
 use std::fs::OpenOptions;
 use std::io::{self, Write as _};
 use std::os::unix::ffi::OsStrExt as _;
@@ -399,6 +399,10 @@ fn kind_description(kind: EntryKind) -> &'static str {
 pub struct EntryAttributes {
     pub kind: EntryKind,
     pub uid: u32,
+    /// The entry's owning group id (task0001, mux-hot-upgrade-alt-screen,
+    /// FR1) -- captured by the same non-following stat that already
+    /// provides `uid` and `mode`; no extra syscall.
+    pub gid: u32,
     pub mode: u32,
 }
 
@@ -431,10 +435,18 @@ impl EntryRole {
 /// in order: the entry must be the expected kind (regular file for the
 /// candidate, directory for its parent -- a symlink at either is refused
 /// under this same check, never followed); its owner must be the daemon's
-/// own effective uid or root; and neither the group-write nor world-write
-/// permission bit may be set. Returns a human-readable reason naming the
-/// FIRST failed rule.
-fn validate_entry(attrs: EntryAttributes, role: EntryRole, daemon_uid: u32) -> Result<(), String> {
+/// own effective uid or root; the world-write permission bit must be unset
+/// (FR2, unconditional -- refuses regardless of any group facts); and the
+/// group-write permission bit must be unset UNLESS the entry's owning group
+/// is the entry owner's own private per-user group (FR1, checked by
+/// [`is_private_per_user_group`] against `facts`). Returns a human-readable
+/// reason naming the FIRST failed rule.
+fn validate_entry(
+    attrs: EntryAttributes,
+    facts: Option<&GroupOwnerFacts>,
+    role: EntryRole,
+    daemon_uid: u32,
+) -> Result<(), String> {
     let expected = role.expected_kind();
     if attrs.kind != expected {
         return Err(format!(
@@ -452,10 +464,17 @@ fn validate_entry(attrs: EntryAttributes, role: EntryRole, daemon_uid: u32) -> R
             daemon_uid,
         ));
     }
-    let write_bits = attrs.mode & (libc::S_IWGRP | libc::S_IWOTH) as u32;
-    if write_bits != 0 {
+    if attrs.mode & libc::S_IWOTH as u32 != 0 {
         return Err(format!(
-            "{} permission bits {:o} allow group or world write",
+            "{} permission bits {:o} allow world write",
+            role.label(),
+            attrs.mode & 0o777,
+        ));
+    }
+    if attrs.mode & libc::S_IWGRP as u32 != 0 && !is_private_per_user_group(facts, attrs.gid) {
+        return Err(format!(
+            "{} permission bits {:o} allow group write, and its owning group is not the \
+             owner's private per-user group",
             role.label(),
             attrs.mode & 0o777,
         ));
@@ -466,16 +485,21 @@ fn validate_entry(attrs: EntryAttributes, role: EntryRole, daemon_uid: u32) -> R
 /// Pure decision over captured attributes of the candidate AND its parent
 /// directory (Design "Candidate validation", NFR3): ALL rules must hold for
 /// BOTH entries. Table-testable without privileged fixtures -- callers
-/// parameterize `daemon_uid` and both [`EntryAttributes`] directly (a
-/// foreign-uid or root-owner row is simply a value, never a file actually
-/// created on disk).
+/// parameterize `daemon_uid`, both [`EntryAttributes`], and both optional
+/// [`GroupOwnerFacts`] directly (a foreign-uid, root-owner, or non-private
+/// group row is simply a value, never a file or a real user/group actually
+/// created on the system). `candidate_facts` / `parent_facts` are consulted
+/// ONLY when the corresponding entry's group-write bit is set (FR1); pass
+/// `None` when it is not needed or could not be captured (NFR2 fail-closed).
 pub fn validate_candidate(
     candidate: EntryAttributes,
+    candidate_facts: Option<&GroupOwnerFacts>,
     parent: EntryAttributes,
+    parent_facts: Option<&GroupOwnerFacts>,
     daemon_uid: u32,
 ) -> Result<(), String> {
-    validate_entry(candidate, EntryRole::Candidate, daemon_uid)?;
-    validate_entry(parent, EntryRole::ParentDirectory, daemon_uid)?;
+    validate_entry(candidate, candidate_facts, EntryRole::Candidate, daemon_uid)?;
+    validate_entry(parent, parent_facts, EntryRole::ParentDirectory, daemon_uid)?;
     Ok(())
 }
 
@@ -496,6 +520,7 @@ fn capture_entry(path: &Path) -> io::Result<EntryAttributes> {
     Ok(EntryAttributes {
         kind,
         uid: meta.uid(),
+        gid: meta.gid(),
         mode: meta.mode(),
     })
 }
@@ -505,7 +530,10 @@ fn capture_entry(path: &Path) -> io::Result<EntryAttributes> {
 /// neither read ever follows a symlink at the inspected path -- then applies
 /// [`validate_candidate`]. An I/O failure capturing either entry is itself a
 /// refusal (a candidate that cannot even be stat-ed is certainly not
-/// verified-safe to exec).
+/// verified-safe to exec). [`GroupOwnerFacts`] are fetched per entry ONLY
+/// when that entry's group-write bit is set (task0001, mux-hot-upgrade-alt-
+/// screen, NFR1: at most one group lookup and one user lookup per entry
+/// decision).
 pub fn validate_candidate_path(candidate: &Path, daemon_uid: u32) -> Result<(), String> {
     let candidate_attrs = capture_entry(candidate)
         .map_err(|e| format!("failed to inspect upgrade candidate {candidate:?}: {e}"))?;
@@ -515,7 +543,27 @@ pub fn validate_candidate_path(candidate: &Path, daemon_uid: u32) -> Result<(), 
     let parent_attrs = capture_entry(parent).map_err(|e| {
         format!("failed to inspect upgrade candidate's parent directory {parent:?}: {e}")
     })?;
-    validate_candidate(candidate_attrs, parent_attrs, daemon_uid)
+    let candidate_facts = group_write_facts_if_needed(candidate_attrs);
+    let parent_facts = group_write_facts_if_needed(parent_attrs);
+    validate_candidate(
+        candidate_attrs,
+        candidate_facts.as_ref(),
+        parent_attrs,
+        parent_facts.as_ref(),
+        daemon_uid,
+    )
+}
+
+/// Fetch [`GroupOwnerFacts`] for `attrs` only when its group-write bit is
+/// set -- the world-write rule never consults facts (FR2 is unconditional)
+/// and an entry with neither write bit set needs none either, so this keeps
+/// [`validate_candidate_path`] at NFR1's "at most one lookup" bound.
+fn group_write_facts_if_needed(attrs: EntryAttributes) -> Option<GroupOwnerFacts> {
+    if attrs.mode & libc::S_IWGRP as u32 != 0 {
+        capture_group_owner_facts(attrs.gid, attrs.uid)
+    } else {
+        None
+    }
 }
 
 /// The daemon's own effective uid, used by [`validate_candidate_path`]'s
@@ -525,6 +573,184 @@ pub fn effective_uid() -> u32 {
     // SAFETY: `geteuid(2)` takes no arguments, touches no memory this
     // process controls, and cannot fail.
     unsafe { libc::geteuid() }
+}
+
+// ============================================================================
+// task0001 (mux-hot-upgrade-alt-screen, FR1/FR2/NFR1/NFR2): private
+// per-user-group exemption in `validate_entry`'s group-write rule -- a
+// umask 002 dev build's 0o775 binary/parent must still pass NFR3 when, and
+// only when, the entry's owning group is the entry owner's own private
+// per-user group. Two layers, matching the file's existing pattern above: a
+// pure predicate ([`is_private_per_user_group`], table-testable over
+// synthesized [`GroupOwnerFacts`]) and a thin capture wrapper
+// ([`capture_group_owner_facts`]) that performs exactly one reentrant
+// group-by-id lookup and one reentrant user-by-id lookup -- never
+// `getpwent`/`getgrent` (no passwd- or group-database enumeration).
+// ============================================================================
+
+/// Identity facts about an entry's owning group and its owner, consulted
+/// only by the group-write branch of [`validate_entry`] (FR1). Captured by
+/// [`capture_group_owner_facts`]; absent (`None` at the call site) whenever
+/// any needed fact could not be obtained -- [`is_private_per_user_group`]
+/// then rejects (NFR2 fail-closed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupOwnerFacts {
+    /// The entry's owning group's name (`getgrgid`'s `gr_name`).
+    pub group_name: String,
+    /// The entry's owning group's member list (`getgrgid`'s `gr_mem`) --
+    /// per `/etc/group` semantics this does NOT include primary-group
+    /// membership, only explicitly-listed supplementary members.
+    pub group_members: Vec<String>,
+    /// The entry owner's user name (`getpwuid`'s `pw_name`).
+    pub owner_user_name: String,
+    /// The entry owner's primary group id (`getpwuid`'s `pw_gid`).
+    pub owner_primary_gid: u32,
+}
+
+/// Private per-user-group predicate (Design "Private per-user-group
+/// predicate", FR1): accepts the group-write bit only when `facts` is
+/// present AND all three conditions hold against `entry_gid` (the entry's
+/// own owning group id -- the same id `facts.group_name`/`group_members`
+/// were looked up by):
+///
+/// (a) the group's member list contains no name other than the owner's user
+///     name (an empty member list satisfies this);
+/// (b) the owner's primary group id equals `entry_gid`;
+/// (c) the group's name equals the owner's user name.
+///
+/// `facts` is `None` (a fact could not be obtained) -> rejects (NFR2
+/// fail-closed).
+fn is_private_per_user_group(facts: Option<&GroupOwnerFacts>, entry_gid: u32) -> bool {
+    let Some(facts) = facts else {
+        return false;
+    };
+    let no_extra_members = facts
+        .group_members
+        .iter()
+        .all(|member| *member == facts.owner_user_name);
+    let primary_group_matches = facts.owner_primary_gid == entry_gid;
+    let name_matches = facts.group_name == facts.owner_user_name;
+    no_extra_members && primary_group_matches && name_matches
+}
+
+/// Grow-and-retry buffer cap for the reentrant lookups below (NSS backends,
+/// e.g. LDAP/SSSD, can return very large records). A lookup that still
+/// overflows this cap is treated the same as any other lookup failure
+/// (`None`, NFR2 fail-closed) -- never panics and never loops unbounded.
+const IDENTITY_LOOKUP_MAX_BUF_LEN: usize = 1 << 20; // 1 MiB
+
+/// Look up a group's name and member list by gid via the REENTRANT
+/// `getgrgid_r` (never the non-reentrant `getgrgid`, which returns a
+/// pointer into a static buffer that is unsafe to share across the daemon's
+/// threads). `None` on "no such group" or any lookup failure, including a
+/// record too large for [`IDENTITY_LOOKUP_MAX_BUF_LEN`].
+fn lookup_group_by_gid(gid: u32) -> Option<(String, Vec<String>)> {
+    let mut buf_len: usize = 1024;
+    loop {
+        let mut buf: Vec<libc::c_char> = vec![0; buf_len];
+        // SAFETY: `zeroed()` is a valid bit pattern for `libc::group` (a
+        // plain-old-data struct of pointers and integers); every field is
+        // fully overwritten by `getgrgid_r` on success before being read.
+        let mut grp: libc::group = unsafe { std::mem::zeroed() };
+        let mut result: *mut libc::group = std::ptr::null_mut();
+        // SAFETY: `buf` is valid for `buf_len` bytes and outlives this
+        // call; `grp` and `result` are valid out-params for its duration.
+        let ret = unsafe {
+            libc::getgrgid_r(
+                gid as libc::gid_t,
+                &mut grp,
+                buf.as_mut_ptr(),
+                buf_len,
+                &mut result,
+            )
+        };
+        if ret == 0 {
+            if result.is_null() {
+                return None;
+            }
+            // SAFETY: a successful call with a non-null `result` guarantees
+            // `grp.gr_name` and every pointer up to the first NULL entry of
+            // `grp.gr_mem` are NUL-terminated strings living inside `buf`,
+            // valid until `buf` is dropped at the end of this function.
+            let name = unsafe { CStr::from_ptr(grp.gr_name) }
+                .to_str()
+                .ok()?
+                .to_string();
+            let mut members = Vec::new();
+            let mut cursor = grp.gr_mem;
+            unsafe {
+                while !(*cursor).is_null() {
+                    members.push(CStr::from_ptr(*cursor).to_str().ok()?.to_string());
+                    cursor = cursor.add(1);
+                }
+            }
+            return Some((name, members));
+        }
+        if ret == libc::ERANGE && buf_len < IDENTITY_LOOKUP_MAX_BUF_LEN {
+            buf_len *= 2;
+            continue;
+        }
+        return None;
+    }
+}
+
+/// Look up a user's name and primary group id by uid via the REENTRANT
+/// `getpwuid_r` (never the non-reentrant `getpwuid`, for the same reason as
+/// [`lookup_group_by_gid`]). `None` on "no such user" or any lookup
+/// failure, including a record too large for [`IDENTITY_LOOKUP_MAX_BUF_LEN`].
+fn lookup_user_by_uid(uid: u32) -> Option<(String, u32)> {
+    let mut buf_len: usize = 1024;
+    loop {
+        let mut buf: Vec<libc::c_char> = vec![0; buf_len];
+        // SAFETY: same contract as `lookup_group_by_gid`'s `zeroed()` call,
+        // for `libc::passwd`.
+        let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        // SAFETY: same contract as `lookup_group_by_gid`'s `getgrgid_r` call.
+        let ret = unsafe {
+            libc::getpwuid_r(
+                uid as libc::uid_t,
+                &mut pwd,
+                buf.as_mut_ptr(),
+                buf_len,
+                &mut result,
+            )
+        };
+        if ret == 0 {
+            if result.is_null() {
+                return None;
+            }
+            // SAFETY: a successful call with a non-null `result` guarantees
+            // `pwd.pw_name` is a NUL-terminated string living inside `buf`,
+            // valid until `buf` is dropped at the end of this function.
+            let name = unsafe { CStr::from_ptr(pwd.pw_name) }
+                .to_str()
+                .ok()?
+                .to_string();
+            return Some((name, pwd.pw_gid as u32));
+        }
+        if ret == libc::ERANGE && buf_len < IDENTITY_LOOKUP_MAX_BUF_LEN {
+            buf_len *= 2;
+            continue;
+        }
+        return None;
+    }
+}
+
+/// Capture wrapper (Design "Fact-capture path", NFR1): exactly one
+/// group-by-id lookup and one user-by-id lookup, never a passwd- or
+/// group-database enumeration (no `getpwent`/`getgrent`). `None` if either
+/// lookup fails -- the group-write branch of [`validate_entry`] then treats
+/// the group-write bit as refused (NFR2 fail-closed).
+fn capture_group_owner_facts(entry_gid: u32, entry_uid: u32) -> Option<GroupOwnerFacts> {
+    let (group_name, group_members) = lookup_group_by_gid(entry_gid)?;
+    let (owner_user_name, owner_primary_gid) = lookup_user_by_uid(entry_uid)?;
+    Some(GroupOwnerFacts {
+        group_name,
+        group_members,
+        owner_user_name,
+        owner_primary_gid,
+    })
 }
 
 /// Capture `path`'s current `(device, inode)` WITHOUT following a symlink at
@@ -827,7 +1053,11 @@ mod tests {
     const FOREIGN_UID: u32 = 2000;
 
     fn attrs(kind: EntryKind, uid: u32, mode: u32) -> EntryAttributes {
-        EntryAttributes { kind, uid, mode }
+        // `gid` defaults to 0 -- irrelevant to every row below since none of
+        // these rows exercise the group-write FR1 exemption (see the
+        // task0001 (mux-hot-upgrade-alt-screen) block further down for the
+        // gid-sensitive rows).
+        EntryAttributes { kind, uid, gid: 0, mode }
     }
 
     fn conforming_candidate() -> EntryAttributes {
@@ -841,7 +1071,14 @@ mod tests {
     #[test]
     fn validate_candidate_accepts_owner_owned_regular_file_in_conforming_parent() {
         assert!(
-            validate_candidate(conforming_candidate(), conforming_parent(), DAEMON_UID).is_ok()
+            validate_candidate(
+                conforming_candidate(),
+                None,
+                conforming_parent(),
+                None,
+                DAEMON_UID,
+            )
+            .is_ok()
         );
     }
 
@@ -850,7 +1087,7 @@ mod tests {
         let candidate = attrs(EntryKind::RegularFile, ROOT_UID, 0o644);
         let parent = attrs(EntryKind::Directory, ROOT_UID, 0o755);
         assert!(
-            validate_candidate(candidate, parent, DAEMON_UID).is_ok(),
+            validate_candidate(candidate, None, parent, None, DAEMON_UID).is_ok(),
             "a root-owned candidate and parent must be accepted even though the daemon's own \
              uid differs"
         );
@@ -859,7 +1096,7 @@ mod tests {
     #[test]
     fn validate_candidate_refuses_symlink_candidate() {
         let candidate = attrs(EntryKind::Symlink, DAEMON_UID, 0o777);
-        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
+        let err = validate_candidate(candidate, None, conforming_parent(), None, DAEMON_UID)
             .expect_err("a symlink candidate must be refused");
         assert!(
             err.contains("upgrade candidate") && err.contains("symlink"),
@@ -870,7 +1107,7 @@ mod tests {
     #[test]
     fn validate_candidate_refuses_non_regular_candidate() {
         let candidate = attrs(EntryKind::Other, DAEMON_UID, 0o644);
-        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
+        let err = validate_candidate(candidate, None, conforming_parent(), None, DAEMON_UID)
             .expect_err("a special-file candidate must be refused");
         assert!(err.contains("special file"), "{err}");
     }
@@ -878,18 +1115,18 @@ mod tests {
     #[test]
     fn validate_candidate_refuses_directory_candidate() {
         let candidate = attrs(EntryKind::Directory, DAEMON_UID, 0o755);
-        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
+        let err = validate_candidate(candidate, None, conforming_parent(), None, DAEMON_UID)
             .expect_err("a directory candidate must be refused");
         assert!(err.contains("a regular file"), "{err}");
     }
 
     #[test]
-    fn validate_candidate_refuses_group_writable_candidate() {
+    fn validate_candidate_refuses_group_writable_candidate_without_facts() {
         let candidate = attrs(EntryKind::RegularFile, DAEMON_UID, 0o664);
-        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
-            .expect_err("a group-writable candidate must be refused");
+        let err = validate_candidate(candidate, None, conforming_parent(), None, DAEMON_UID)
+            .expect_err("a group-writable candidate without exemption facts must be refused");
         assert!(
-            err.contains("upgrade candidate") && err.contains("group or world write"),
+            err.contains("upgrade candidate") && err.contains("group write"),
             "{err}"
         );
     }
@@ -897,10 +1134,10 @@ mod tests {
     #[test]
     fn validate_candidate_refuses_world_writable_candidate() {
         let candidate = attrs(EntryKind::RegularFile, DAEMON_UID, 0o646);
-        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
+        let err = validate_candidate(candidate, None, conforming_parent(), None, DAEMON_UID)
             .expect_err("a world-writable candidate must be refused");
         assert!(
-            err.contains("upgrade candidate") && err.contains("group or world write"),
+            err.contains("upgrade candidate") && err.contains("world write"),
             "{err}"
         );
     }
@@ -908,7 +1145,7 @@ mod tests {
     #[test]
     fn validate_candidate_refuses_foreign_owner_candidate() {
         let candidate = attrs(EntryKind::RegularFile, FOREIGN_UID, 0o644);
-        let err = validate_candidate(candidate, conforming_parent(), DAEMON_UID)
+        let err = validate_candidate(candidate, None, conforming_parent(), None, DAEMON_UID)
             .expect_err("a candidate owned by neither the daemon's uid nor root must be refused");
         assert!(
             err.contains("upgrade candidate") && err.contains("uid"),
@@ -921,7 +1158,7 @@ mod tests {
     #[test]
     fn validate_candidate_refuses_symlink_parent() {
         let parent = attrs(EntryKind::Symlink, DAEMON_UID, 0o777);
-        let err = validate_candidate(conforming_candidate(), parent, DAEMON_UID)
+        let err = validate_candidate(conforming_candidate(), None, parent, None, DAEMON_UID)
             .expect_err("a symlink parent directory must be refused");
         assert!(
             err.contains("parent directory") && err.contains("symlink"),
@@ -932,7 +1169,7 @@ mod tests {
     #[test]
     fn validate_candidate_refuses_non_directory_parent() {
         let parent = attrs(EntryKind::RegularFile, DAEMON_UID, 0o644);
-        let err = validate_candidate(conforming_candidate(), parent, DAEMON_UID)
+        let err = validate_candidate(conforming_candidate(), None, parent, None, DAEMON_UID)
             .expect_err("a non-directory parent must be refused");
         assert!(
             err.contains("parent directory") && err.contains("a directory"),
@@ -941,12 +1178,12 @@ mod tests {
     }
 
     #[test]
-    fn validate_candidate_refuses_group_writable_parent() {
+    fn validate_candidate_refuses_group_writable_parent_without_facts() {
         let parent = attrs(EntryKind::Directory, DAEMON_UID, 0o775);
-        let err = validate_candidate(conforming_candidate(), parent, DAEMON_UID)
-            .expect_err("a group-writable parent must be refused");
+        let err = validate_candidate(conforming_candidate(), None, parent, None, DAEMON_UID)
+            .expect_err("a group-writable parent without exemption facts must be refused");
         assert!(
-            err.contains("parent directory") && err.contains("group or world write"),
+            err.contains("parent directory") && err.contains("group write"),
             "{err}"
         );
     }
@@ -954,10 +1191,10 @@ mod tests {
     #[test]
     fn validate_candidate_refuses_world_writable_parent() {
         let parent = attrs(EntryKind::Directory, DAEMON_UID, 0o757);
-        let err = validate_candidate(conforming_candidate(), parent, DAEMON_UID)
+        let err = validate_candidate(conforming_candidate(), None, parent, None, DAEMON_UID)
             .expect_err("a world-writable parent must be refused");
         assert!(
-            err.contains("parent directory") && err.contains("group or world write"),
+            err.contains("parent directory") && err.contains("world write"),
             "{err}"
         );
     }
@@ -965,7 +1202,7 @@ mod tests {
     #[test]
     fn validate_candidate_refuses_foreign_owner_parent() {
         let parent = attrs(EntryKind::Directory, FOREIGN_UID, 0o755);
-        let err = validate_candidate(conforming_candidate(), parent, DAEMON_UID)
+        let err = validate_candidate(conforming_candidate(), None, parent, None, DAEMON_UID)
             .expect_err("a parent owned by neither the daemon's uid nor root must be refused");
         assert!(
             err.contains("parent directory") && err.contains("uid"),
@@ -1015,7 +1252,7 @@ mod tests {
 
         let err = validate_candidate_path(candidate.path(), effective_uid())
             .expect_err("a world-writable real file must be refused");
-        assert!(err.contains("group or world write"), "{err}");
+        assert!(err.contains("world write"), "{err}");
     }
 
     #[test]
@@ -1040,5 +1277,213 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let file = tempfile::NamedTempFile::new_in(dir.path()).expect("file");
         assert!(capture_dev_ino(file.path()).is_some());
+    }
+
+    // ── task0001 (mux-hot-upgrade-alt-screen) AC-4: `is_private_per_user_group`'s
+    // full FR1/NFR2 decision table (pure predicate, no privileged fixtures) ───
+
+    fn owner_facts(
+        group_name: &str,
+        group_members: &[&str],
+        owner_user_name: &str,
+        owner_primary_gid: u32,
+    ) -> GroupOwnerFacts {
+        GroupOwnerFacts {
+            group_name: group_name.to_string(),
+            group_members: group_members.iter().map(|m| m.to_string()).collect(),
+            owner_user_name: owner_user_name.to_string(),
+            owner_primary_gid,
+        }
+    }
+
+    const PRIVATE_GROUP_GID: u32 = 1000;
+
+    #[test]
+    fn is_private_per_user_group_accepts_when_all_three_conditions_hold() {
+        let facts = owner_facts("daemonuser", &[], "daemonuser", PRIVATE_GROUP_GID);
+        assert!(is_private_per_user_group(Some(&facts), PRIVATE_GROUP_GID));
+    }
+
+    #[test]
+    fn is_private_per_user_group_accepts_a_member_list_naming_only_the_owner() {
+        let facts = owner_facts("daemonuser", &["daemonuser"], "daemonuser", PRIVATE_GROUP_GID);
+        assert!(is_private_per_user_group(Some(&facts), PRIVATE_GROUP_GID));
+    }
+
+    #[test]
+    fn is_private_per_user_group_rejects_an_extra_member_name() {
+        let facts = owner_facts(
+            "daemonuser",
+            &["daemonuser", "someoneelse"],
+            "daemonuser",
+            PRIVATE_GROUP_GID,
+        );
+        assert!(!is_private_per_user_group(Some(&facts), PRIVATE_GROUP_GID));
+    }
+
+    #[test]
+    fn is_private_per_user_group_rejects_when_primary_gid_differs() {
+        // e.g. gid 100 "users" as the owner's primary group.
+        let facts = owner_facts("daemonuser", &[], "daemonuser", 100);
+        assert!(!is_private_per_user_group(Some(&facts), PRIVATE_GROUP_GID));
+    }
+
+    #[test]
+    fn is_private_per_user_group_rejects_when_group_name_differs_from_owner_name() {
+        let facts = owner_facts("staff", &[], "daemonuser", PRIVATE_GROUP_GID);
+        assert!(!is_private_per_user_group(Some(&facts), PRIVATE_GROUP_GID));
+    }
+
+    #[test]
+    fn is_private_per_user_group_rejects_when_facts_are_unavailable() {
+        assert!(!is_private_per_user_group(None, PRIVATE_GROUP_GID));
+    }
+
+    // ── AC-1: a 0o775 entry whose owning group satisfies FR1 is accepted,
+    // in both the candidate and parent-directory roles ─────────────────────
+
+    #[test]
+    fn validate_candidate_accepts_group_writable_candidate_in_a_private_per_user_group() {
+        let candidate = EntryAttributes {
+            kind: EntryKind::RegularFile,
+            uid: DAEMON_UID,
+            gid: PRIVATE_GROUP_GID,
+            mode: 0o775,
+        };
+        let candidate_facts = owner_facts("daemonuser", &[], "daemonuser", PRIVATE_GROUP_GID);
+        assert!(
+            validate_candidate(
+                candidate,
+                Some(&candidate_facts),
+                conforming_parent(),
+                None,
+                DAEMON_UID,
+            )
+            .is_ok(),
+            "a 0o775 candidate in the owner's private per-user group must be accepted"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_accepts_group_writable_parent_in_a_private_per_user_group() {
+        let parent = EntryAttributes {
+            kind: EntryKind::Directory,
+            uid: DAEMON_UID,
+            gid: PRIVATE_GROUP_GID,
+            mode: 0o775,
+        };
+        let parent_facts = owner_facts("daemonuser", &[], "daemonuser", PRIVATE_GROUP_GID);
+        assert!(
+            validate_candidate(
+                conforming_candidate(),
+                None,
+                parent,
+                Some(&parent_facts),
+                DAEMON_UID,
+            )
+            .is_ok(),
+            "a 0o775 parent directory in the owner's private per-user group must be accepted"
+        );
+    }
+
+    // ── AC-2: each refusal scenario pinned by its own test ─────────────────
+
+    fn group_writable_candidate(gid: u32) -> EntryAttributes {
+        EntryAttributes {
+            kind: EntryKind::RegularFile,
+            uid: DAEMON_UID,
+            gid,
+            mode: 0o775,
+        }
+    }
+
+    #[test]
+    fn validate_candidate_refuses_group_writable_candidate_with_an_extra_group_member() {
+        let candidate = group_writable_candidate(PRIVATE_GROUP_GID);
+        let facts = owner_facts(
+            "daemonuser",
+            &["daemonuser", "someoneelse"],
+            "daemonuser",
+            PRIVATE_GROUP_GID,
+        );
+        let err =
+            validate_candidate(candidate, Some(&facts), conforming_parent(), None, DAEMON_UID)
+                .expect_err("an extra member in the owning group must be refused");
+        assert!(
+            err.contains("upgrade candidate") && err.contains("group write"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_group_writable_candidate_with_mismatched_primary_gid() {
+        let candidate = group_writable_candidate(PRIVATE_GROUP_GID);
+        // The owner's primary group is gid 100 "users", not this entry's
+        // owning group -- condition (b) fails even though (a) and (c) hold.
+        let facts = owner_facts("daemonuser", &[], "daemonuser", 100);
+        let err =
+            validate_candidate(candidate, Some(&facts), conforming_parent(), None, DAEMON_UID)
+                .expect_err("a primary-gid mismatch must be refused");
+        assert!(
+            err.contains("upgrade candidate") && err.contains("group write"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_group_writable_candidate_with_mismatched_group_name() {
+        let candidate = group_writable_candidate(PRIVATE_GROUP_GID);
+        let facts = owner_facts("staff", &[], "daemonuser", PRIVATE_GROUP_GID);
+        let err =
+            validate_candidate(candidate, Some(&facts), conforming_parent(), None, DAEMON_UID)
+                .expect_err("a group-name mismatch must be refused");
+        assert!(
+            err.contains("upgrade candidate") && err.contains("group write"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_group_writable_candidate_when_facts_are_unavailable() {
+        let candidate = group_writable_candidate(PRIVATE_GROUP_GID);
+        let err = validate_candidate(candidate, None, conforming_parent(), None, DAEMON_UID)
+            .expect_err("unavailable identity facts must fail closed");
+        assert!(
+            err.contains("upgrade candidate") && err.contains("group write"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_candidate_refuses_world_writable_candidate_even_with_conforming_group_facts() {
+        // Both write bits set; group facts alone would satisfy FR1, but the
+        // world-write bit refuses unconditionally (FR2) and must be the
+        // reported reason.
+        let mut candidate = group_writable_candidate(PRIVATE_GROUP_GID);
+        candidate.mode = 0o776;
+        let facts = owner_facts("daemonuser", &[], "daemonuser", PRIVATE_GROUP_GID);
+        let err =
+            validate_candidate(candidate, Some(&facts), conforming_parent(), None, DAEMON_UID)
+                .expect_err("world-write must refuse regardless of group facts");
+        assert!(
+            err.contains("upgrade candidate") && err.contains("world write"),
+            "{err}"
+        );
+    }
+
+    // ── the capture wrapper: real reentrant lookups against the current
+    // process's own identity (no privileged fixtures needed -- self-lookup
+    // always resolves) ──────────────────────────────────────────────────────
+
+    #[test]
+    fn capture_group_owner_facts_resolves_the_current_process_identity() {
+        let uid = effective_uid();
+        // SAFETY: `getegid(2)` takes no arguments and cannot fail.
+        let gid = unsafe { libc::getegid() };
+        let facts = capture_group_owner_facts(gid, uid);
+        assert!(
+            facts.is_some(),
+            "looking up the current process's own uid/gid must succeed"
+        );
     }
 }

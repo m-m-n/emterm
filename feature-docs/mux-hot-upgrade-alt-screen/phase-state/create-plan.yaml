@@ -1,0 +1,25 @@
+schema_version: 1
+feature: mux-hot-upgrade-alt-screen
+phase: create-plan
+status: completed
+generation: 1
+base_revision: 350b1d7a7a2624244d586cd2eae6bab668c6a09c
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: completed
+    input_digest: null
+    output_digest: null
+artifacts: []
+patches:
+  - patch_id: mux-hot-upgrade-alt-screen-p0001
+    status: applied
+    base_input_digest: "sha256:planner-run0001-mux-hot-upgrade-alt-screen"
+    base_workflow_blob: null
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
