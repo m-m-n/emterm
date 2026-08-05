@@ -1,16 +1,75 @@
 schema_version: 1
 feature: tmux-startup-query-response-leak
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
-base_revision: dd730bc
+base_revision: ac611c9d5c515a598a4b7508b40b844a68382f01
 last_input_digest: sha256:34494aba22973295ebbb898e25900b4a38e6517d96e754f46f3f7ed9932883ec
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-08-05T22:10:00+09:00"
+    questions:
+      - question_id: scope.tmux-runtime-context
+        status: answered
+      - question_id: scope.query-response-set
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  scope.tmux-runtime-context:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-05T22:10:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: []
+    freeform: null
+    normalized_answer: "TBD"
+    resolution_note: >
+      gate create-spec.requirement-clarification -> action codex_consultation.
+      Codex CLI was present but returned a usage-limit error on invocation
+      (functionally unavailable), so the consultation could not reach a
+      decision. Policy `unresolved: record_tbd` applied. The analyst's
+      tentative position was option_id `both` (cover plain tab AND mux pane);
+      that position is carried into SPEC FR4 as the tbd_reason so
+      create-plan's `create-plan.tbd-resolution: assume` gate can resolve it.
+  scope.query-response-set:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-05T22:10:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: []
+    freeform: null
+    normalized_answer: "TBD"
+    resolution_note: >
+      gate create-spec.requirement-clarification -> action codex_consultation.
+      Codex unavailable (usage limit), policy `unresolved: record_tbd`
+      applied. Analyst's tentative position was option_id `generalize`
+      (target the DA1/DA2/DSR/CPR/XTWINOPS 14,16,18/DECRPM response set
+      defined by mux-snapshot-device-query-strip); carried into SPEC FR5 as
+      the tbd_reason.
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-05T22:10:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [skip]
+    freeform: null
+    normalized_answer: "design step: skipped"
+    resolution_note: >
+      gate create-spec.design-step -> policy option_id `decide_autonomously`.
+      The worker's packet offered option_ids `skip` / `include` rather than
+      `decide_autonomously`, so the policy option id is not literally present
+      in the packet. `decide_autonomously` denotes "do not ask; follow the
+      analyst's own recommendation", and the analyst marked `skip` as
+      `recommended: true` (internal Rust escape-response routing fix, no
+      visual/design-token surface; same call as the per-tab-grid-size
+      precedent). Resolved to `skip`. Deviation from question-resolution.md
+      step 6's literal option-id match is recorded here and in the run report.
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:34494aba22973295ebbb898e25900b4a38e6517d96e754f46f3f7ed9932883ec
     output_digest: null
 artifacts: []
