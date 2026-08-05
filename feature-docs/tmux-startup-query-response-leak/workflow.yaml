@@ -87,15 +87,20 @@ tasks:
     branch: em-workflow/tmux-startup-query-response-leak/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
     cross_validation: true
-  perspectives: {}
-  residual_critical_high: 0
-  needs_rework: false
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+  residual_critical_high: 3
+  needs_rework: true
 
 requirements:
   FR1:

@@ -1,0 +1,295 @@
+round: 1
+executed_at: "2026-08-05T23:55:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 382f7e98cb5bc3d81f5a34cb194b50d68e43d22e
+  head_commit: d303f639e0c9e63bf206d3e512669a09276bb24b
+  changed_files:
+    - crates/term_core/src/csi_device.rs
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/tabs.rs
+    - test-docs/tmux-startup-query-response-leak/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "rate_limited"}
+  - {perspective: security, source: vertex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: vertex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: vertex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: vertex, status: skipped, skip_reason: "vertex_error: HTTP 429 RESOURCE_EXHAUSTED"}
+
+findings:
+  - stable_id: 9ef6b54302b083b3
+    severity: critical
+    category: comprehensive
+    file: src-tauri/src/tabs.rs
+    line: 2697
+    title: >
+      複数デバイスクエリが1チャンクに来ると最後の1件以外の応答が完全に消える
+      （本修正による退行）
+    description: >
+      term_core の応答バッファは単一スロットで、write_response
+      (crates/term_core/src/csi_device.rs:177-182) は追記ではなく上書き。
+      process_pty_data_fully はチャンク全体を回し切るだけで途中で応答を吸い
+      出さないため、1回の parse に複数クエリが含まれると take_response() は
+      最後の1件しか返さない。修正前はコールバック経路
+      (fire_device_response_callback -> NativeCallbackState::device_responses
+      -> process_combined の drain) が応答ごとに1件ずつ積んで全件を配送して
+      いたため、本修正は「全件配送 + 最後の1件だけ二重配送」を「最後の1件
+      だけ配送、それ以外は無配送」に置き換えている。Tab::pump は 12ms /
+      1MiB まで PTY チャンクを coalesce するので、tmux 起動時のクエリ
+      バーストというまさに本タスクの対象シナリオで確定的に発生する。
+      追加された回帰テストは全ケースが 1 タブ 1 クエリのためこの経路を
+      カバーしていない。
+    suggestion: >
+      (a) 推奨: term_core 側の応答保持を単一スロットからキュー/追記バッファ
+      に変える。write_response を追記にし、take_response() が保留中の全応答を
+      発生順に返す。(b) 代替: コールバック経路を「収集」として残し、3つの
+      write-back サイトが take_response() の代わりにそのキューを drain して
+      write_device_response で配送する。いずれの場合も「1回の
+      process_combined に複数クエリのバーストを渡し、各応答がちょうど1回ずつ
+      outbound に現れる」回帰テストを追加すること。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: >
+      R4 でこのサイトは conflict 分類（同一 same_site に 3 件、prose 処方が
+      相互に発散）となり、batch policy review.auto-fix-conflict によりサイト
+      ごとスキップ。加えて推奨処方 (a) は crates/term_core にまたがるため
+      単一ファイル契約の review-editor では実装できない。R5 の自動リワークへ
+      回した。
+
+  - stable_id: c6092a0fdcb3b4a5
+    severity: critical
+    category: spec
+    file: src-tauri/src/tabs.rs
+    line: 2697
+    title: >
+      コールバック経路の削除で、1回のパースに複数クエリが含まれると最後の
+      応答以外が破棄される（FR2 違反）
+    description: >
+      SPEC FR2「each response is still delivered exactly once」および US1 AC
+      「demonstrating its queries were answered, not dropped」に反する。
+      同一の機序を仕様準拠観点から指摘したもの。FR4 の解決スコープ
+      （plain tab と mux pane の両方）双方に影響する。mux 側の
+      payload_has_device_query / pty_output_batch_eligible ゲートは
+      フレーム間の coalesce を止めるだけで、1フレーム内の複数クエリにも
+      plain-tab 経路にも効かない。
+    suggestion: >
+      term_core 側の応答キュー化、またはコールバック経路を唯一の配送路として
+      復活させる（3つの write-back サイトの take_response() 書き戻しを止め、
+      drain 側を mux 対応の write_device_response に通す）。回帰テストとして
+      1回の process_combined に複数クエリをまとめて投入し、全応答がちょうど
+      1回ずつ現れることを plain tab / mux pane の両経路で assert すること。
+    sources: [claude:spec]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: >
+      R4 の候補ゲートは category != spec を要求するため auto-fix 対象外。
+      R5 の自動リワークへ回した。
+
+  - stable_id: 49bc2b33fa3b053c
+    severity: high
+    category: architecture
+    file: src-tauri/src/tabs.rs
+    line: 2697
+    title: >
+      単一スロット response_buffer を唯一の配送経路に昇格させたため、
+      1 チャンク内に複数クエリがあると最後の応答以外が失われる
+    description: >
+      アーキテクチャ上の要点は、単一スロット・上書き前提のバッファ契約を
+      変えないまま、それを唯一の SSOT 配送経路に昇格させ、per-event 忠実度を
+      持つ側のチャンネルを削除したこと。csi_device.rs の新しい doc が主張する
+      「SOLE intended PTY delivery route」を、バッファ側の契約が満たせていない。
+    suggestion: >
+      (a) term_core 側をキュー化する（推奨）。(b) 呼び出し側でクエリ境界ごとに
+      分割する（全経路のホットパスにスキャンが入るため (a) より侵襲的）。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: >
+      R4 conflict 分類でサイトごとスキップ。R5 の自動リワークへ回した。
+
+  - stable_id: 8bebc1e532a1b597
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/tabs.rs
+    line: 1249
+    title: >
+      off-thread swap 経路に replay 応答の破棄がなく、take_response 単独
+      経路化で唯一の防壁が片肺になる
+    description: >
+      同期 replay 経路 reset_frame_for_replay は take_response() で replay 中の
+      応答を明示的に捨てているが、off-thread 経路 apply_offthread_swap は
+      ワーカー製コアをそのまま差し替えるだけでこの破棄を行わない。この穴自体は
+      本 diff より前から存在するが、本 diff が take_response() を「唯一の PTY
+      配送経路」と宣言し同期経路の不変条件をテストで固定したため、
+      ドキュメントとコードの乖離が残る。daemon 側のスナップショット strip で
+      実発火は緩和されている。
+    suggestion: >
+      apply_offthread_swap のコア差し替え直後に reset_frame_for_replay と同じ
+      `let _ = live.take_response();` を追加し、off-thread 版の不変条件テストを
+      追加する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: >
+      severity medium のため R4 の auto-fix 候補ゲート（critical/high）に
+      該当せず。R5 のリワーク入力に同梱した。
+
+  - stable_id: 1133c5337fb5458c
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/csi_device.rs
+    line: 58
+    title: >
+      TerminalCallbacks::on_device_response が「生きているが実装してはいけない」
+      拡張点として残り、trait の doc が新しい不変条件と矛盾している
+    description: >
+      trait 側 doc は今も「Response bytes the terminal wants to send back to the
+      application」と書いて実装者に送り返しを指示している一方、本 diff が
+      csi_device.rs に追加した doc は「このコールバックを PTY に到達させては
+      ならない」と宣言している。実装者が最初に読むのは trait メソッドの doc の
+      ため、新しいホストが trait doc どおりに実装すると二重配送バグが復活する。
+    suggestion: >
+      (a) on_device_response と fire_device_response_callback、csi_dispatch.rs の
+      5箇所の発火を削除する。(b) 残すなら on_reset と同様にデフォルト no-op を
+      与え、trait 側 doc を「観測専用。ここから PTY へ書き戻してはならない」に
+      書き換える。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >
+      severity medium のため auto-fix 候補ゲート外。R5 のリワーク入力に同梱した。
+
+  - stable_id: b3b78df745f37e0d
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/csi_device.rs
+    line: 54
+    title: Single-slot response_buffer creates overwrite risk for rapid back-to-back queries
+    description: >
+      take_response() を SOLE delivery route と宣言した一方、response_buffer は
+      単一スロットで、1 parse バッチ内の連続クエリでは前の応答が上書きされる。
+      型レベルの保証もオーバーフロー検出も、上書き時のエラー通知も無い。
+    suggestion: >
+      契約を明示的に文書化するか、オーバーフロー検出付きのマルチスロット
+      リングバッファを検討する。
+    sources: [vertex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: >
+      severity medium のため auto-fix 候補ゲート外。上位の critical 2 件と
+      同一の根本原因なので、R5 のリワーク入力に同梱した。
+
+  - stable_id: fc006b4380d032ae
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/csi_dispatch.rs
+    line: null
+    title: Redundant dual-channel dispatch remains in term_core after fix
+    description: >
+      term_core は応答ごとに write_response() と fire_device_response_callback()
+      の両方を発火し続けるが、後者は本番実装が no-op になったため到達先が
+      すべて no-op になった。dead dispatch であり、dual-channel 設計だけが
+      残る紛らわしい状態。
+    suggestion: >
+      csi_dispatch.rs の fire_device_response_callback() 呼び出しを削除するか、
+      意図的な技術的負債として TODO で文書化する。
+    sources: [vertex:architecture]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: >
+      R3 rule 7 適用: file が changed_files に含まれないため confidence を 50 に
+      制限し category を comprehensive に強制した。severity medium のため
+      auto-fix 候補ゲート外。R5 のリワーク入力に同梱した。
+
+  - stable_id: 408711af83db8147
+    severity: high
+    category: performance
+    file: src-tauri/src/tabs.rs
+    line: 3309
+    title: "Performance regression in test builds: mutex lock and clone per write"
+    description: >
+      テストビルドで Tab::write が書き込みごとに mutex を取得し bytes 全体を
+      clone するため、cargo test 由来のレイテンシ計測を歪めうる、という指摘。
+    suggestion: >
+      長さ/ハッシュのみを記録する、Arc<[u8]> を使う、あるいはレイテンシ
+      感応テストで無効化できるようゲートする。
+    sources: [vertex:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >
+      前提が本リポジトリでは成立しないためオーケストレーターが却下。実機確認済み:
+      (1) フィールド宣言 (tabs.rs:513-514)、Tab::new の初期化 (682-683)、
+      Tab::write の push (3334-3335)、Tab::send_control の push (3432-3433) は
+      すべて #[cfg(test)] 配下で、リリース/本番ビルドには一切残らない —
+      NFR1 のホットパス保証には影響しない。(2) 「テストビルドは性能計測・
+      プロファイリングに使われる」という前提も本リポジトリでは成立しない:
+      Cargo.toml に [[bench]] ターゲットは存在せず、唯一のベンチ harness
+      (crates/term_core/src/bench.rs) は term_core クレート側にあり、
+      src-tauri の Tab::write を測る経路は無い。(3) 提案どおり「長さ/ハッシュ
+      のみ」に変えると、応答バイト列そのものを assert している exactly-once
+      回帰テスト群が成立しなくなるため、適用は有害。vertex 自身のサマリも
+      「none of it reaches the production/release build」と述べており、
+      severity high は誤りと判断した。
+
+  - stable_id: 53150406ab0d281a
+    severity: high
+    category: performance
+    file: src-tauri/src/tabs.rs
+    line: 3405
+    title: Test-only mutex lock added to send_control's hot path
+    description: >
+      テストビルドで Tab::send_control が payload 記録のために mutex を取得する、
+      という指摘。
+    suggestion: ロックフリーまたは遅延確保の観測バッファ、あるいはサンプリング記録。
+    sources: [vertex:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >
+      408711af83db8147 と同一の理由で却下（#[cfg(test)] 限定・本番ビルドに
+      不在・当該クレートを測るベンチターゲット不在・適用すると回帰テストが
+      成立しなくなる）。
+  - stable_id: 862f5339e92b8451
+    severity: medium
+    category: performance
+    file: src-tauri/src/tabs.rs
+    line: 682
+    title: Added allocation overhead in Tab::new (test builds)
+    description: >
+      #[cfg(test)] 限定の outbound_write_log フィールドが Tab::new で初期化
+      される、という指摘。vertex 自身が「初期容量ゼロでヒープ確保は起きない、
+      完全性のためのフラグ」と注記している。
+    suggestion: 影響は低く、記録のみ。
+    sources: [vertex:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >
+      指摘者自身が実質的な影響なしと明記しており、#[cfg(test)] 限定で本番
+      ビルドに不在。対応不要と判断した。
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: conflict-skipped
+  note: >
+    R4 は 1 ループも実行していない。critical/high 非 spec 候補 4 件の内訳:
+    (1) 9ef6b54302b083b3 / 49bc2b33fa3b053c は同一 same_site (tabs.rs:2697,
+    line_bucket 539) にあり、処方が prose かつ相互に発散（term_core の
+    キュー化 / コールバック経路の復活 / 呼び出し側分割）するため R4 の
+    conflict 分類に該当し、batch policy review.auto-fix-conflict により
+    サイトごとスキップした。加えていずれの処方も crates/term_core への変更を
+    含むため、単一ファイル契約の review-editor では scope violation になり
+    実装できない。(2) c6092a0fdcb3b4a5 は category == spec のため候補ゲート外。
+    (3) 408711af83db8147 / 53150406ab0d281a は上記のとおり declined。
+
+residual_critical_high: 3
+rework_required: true
