@@ -80,9 +80,9 @@ tasks:
     domains: [input-handling]
     complexity: high
     requirements: [FR1, FR2, FR6, NFR1, NFR3]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0001
   task0002:
     title: "Rate-limited ResizeSettler self-wake and settler-independent status-bar inset application"
     plan: tasks/task0002.md
@@ -92,9 +92,9 @@ tasks:
     domains: [ui, concurrency]
     complexity: high
     requirements: [FR3, FR4, FR6, NFR2, NFR3]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0002
   task0003:
     title: "Regression-pin the D8 empty-MIDDLE (h == k) auto-fix"
     plan: tasks/task0003.md
@@ -104,9 +104,9 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: [FR5, NFR3]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0003
 
 review:
   status: pending
