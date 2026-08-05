@@ -1,14 +1,18 @@
 schema_version: 1
 feature: mux-tab-switch-bypass-refix
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: fb9b5f5f3110366995c120e914cd9e3b4dd0f4aa
-last_input_digest: null
-active_request_id: null
+base_revision: 64d9cb4ce7fba4669381b7bc66bbf53a39d42804
+last_input_digest: sha256:357834bb0f77194ad192994ea5d58aeee99eb42deb5e408697f500c2f01e17e8
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:357834bb0f77194ad192994ea5d58aeee99eb42deb5e408697f500c2f01e17e8
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
