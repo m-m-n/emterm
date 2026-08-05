@@ -1,0 +1,127 @@
+task_id: task0004
+baseline_failures: []          # crates/term_core --lib: 762 passed, 0 failed, 13 ignored
+final_failures: []             # crates/term_core --lib: 764 passed, 0 failed, 13 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - terminal_core::tests::h_zero_column_changing_middle_at_the_unfolded_bound_engages_the_split
+      - terminal_core::tests::h_zero_column_changing_middle_one_past_the_unfolded_bound_does_not_engage_the_split
+    red_confirmed: true
+    red_reason: >-
+      Wrote both tests against the D11 two-tier gate change (segment_bound
+      tiered by h > 0 / h == 0). Before restoring the tiering, temporarily
+      hardcoded `segment_bound = BYPASS_PREFIX_MAX_SEGMENTS` (the pre-D11,
+      untiered 62-everywhere behavior) and re-ran just these two tests:
+      "...one_past_the_unfolded_bound_does_not_engage_the_split" panicked —
+      "AC-1/AC-3: a MIDDLE with BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD + 1
+      column-changing segments (h == 0 tier), one past its own bound, must
+      NOT engage the split even with a dominating suffix —
+      scrollback_populated must be true, not false" — because at 25
+      column-changing segments the untiered 62 bound admitted the split,
+      exactly the unguarded Defect A worst case (`a1a06ed541045dd5` /
+      `77da6aceb73b1a72`). "...at_the_unfolded_bound_engages_the_split"
+      passed even pre-fix (24 segments was always under 62 too) — it is the
+      "at bound" side of the pair, not on its own evidence of the fix, but
+      paired with the one-past test it demonstrates both sides of the new,
+      tightened h == 0 boundary. Restored the tiering immediately after and
+      re-ran both (green).
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-verifiable directly — a doc-comment-truthfulness criterion.
+      Verified by inspection: the false universal claim ("every MIDDLE
+      segment transition is a SAME-WIDTH resize by construction ... a
+      column change ... rather than reaching this gate with a
+      column-changing MIDDLE") is now scoped explicitly to the `h > 0` tier
+      in BYPASS_PREFIX_MAX_SEGMENTS's doc, and the corrected h == 0
+      behavior it previously misdescribed is what AC-1's tests exercise.
+      BYPASS_PREFIX_MAX_BYTES's doc gained a "D11 cross-reference" paragraph
+      stating it and the two segment-count constants form one cost budget
+      that must be re-measured together.
+  AC-3:
+    tests:
+      - terminal_core::tests::prefix_at_the_segment_count_bound_with_a_dominating_suffix_engages_the_split_no_head
+      - terminal_core::tests::prefix_with_too_many_segments_does_not_engage_the_split_regardless_of_byte_length
+      - terminal_core::tests::h_zero_column_changing_middle_at_the_unfolded_bound_engages_the_split
+      - terminal_core::tests::h_zero_column_changing_middle_one_past_the_unfolded_bound_does_not_engage_the_split
+      - terminal_core::tests::head_plus_marker_cluster_engages_the_split_and_matches_reference
+      - terminal_core::tests::head_plus_marker_cluster_one_past_the_fold_succeeded_bound_does_not_engage_the_split
+    red_confirmed: true
+    red_reason: >-
+      Core h == 0 tier boundary genuinely observed red: the two pre-existing
+      (prior-task) tests `prefix_at_the_segment_count_bound_...` /
+      `prefix_with_too_many_segments_...` reference the bound symbolically
+      at 62/63 segments; after introducing D11's tiering but BEFORE
+      retargeting their segment counts to
+      BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD, the "at bound" test failed:
+      "thread ... panicked at terminal_core.rs:4968: a prefix with EXACTLY
+      BYPASS_PREFIX_MAX_SEGMENTS segments (no HEAD), a tiny byte length, and
+      a dominating suffix must still engage the split — scrollback_populated
+      must be false, not true" (62 > the new 24 bound). Retargeted both
+      tests' segment counts to the new constant to fix (760 passed / 1
+      failed -> all green). The two new column-changing tests are the same
+      pair documented under AC-1 above (also red-confirmed there).
+      EXCEPTION: `head_plus_marker_cluster_engages_the_split_and_matches_reference`
+      is pre-existing/unaffected (still h > 0, still 62, no change), and
+      the new `..._one_past_the_fold_succeeded_bound_does_not_engage_the_split`
+      test — added to close a genuine AC-3 coverage gap (no prior test
+      pinned "h > 0, 63 segments rejects") — passed even under the pre-D11
+      untiered code (confirmed by the same temporary-hardcode check used for
+      AC-1: 63 > 62 already rejected before this task, unrelated to D11's
+      tiering). That one test is NOT red-confirmed; see the report's
+      unconfirmed_reds.
+  AC-4:
+    tests: [terminal_core::bypass_prefix_max_segments_pin::bypass_prefix_max_segments_matches_the_fold_succeeded_ceiling]
+    red_confirmed: true
+    red_reason: >-
+      Temporarily set BYPASS_PREFIX_MAX_SEGMENTS to 24 (simulating a silent
+      revert without a matching decision) and ran only this test: "thread
+      ... panicked at terminal_core.rs:2375: assertion `left == right`
+      failed: BYPASS_PREFIX_MAX_SEGMENTS (24) must equal
+      mux_ipc::protocol::MAX_SEGMENTS (64) minus
+      MANDATORY_HEAD_AND_SUFFIX_SEGMENTS (2) = 62 ... If this fired because
+      BYPASS_PREFIX_MAX_SEGMENTS fell below 62: that is the round-7/
+      round-8 regression ... left: 24, right: 62". Confirms drift is still
+      caught and the message correctly diagnoses a fallen-below case without
+      conflating it with a deliberate h == 0 cost-policy change (that
+      constant, BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD, carries no such
+      pin at all — verified by inspection that it is not `use`d in the pin
+      module). Restored to 62 immediately after; full --lib suite reconfirmed
+      green (764 passed, 0 failed, 13 ignored).
+  AC-5:
+    tests:
+      - bench::benches::snapshot_replay_bench_2mib_seq
+      - bench::benches::marker_cluster_tail_bench_2mib_matches_bypass_engaged_cost
+      - bench::benches::large_prefix_small_suffix_bench_does_not_engage_the_split
+      - bench::benches::daemon_cap_prefix_with_small_suffix_bench_does_not_engage_the_split
+      - bench::benches::ordinary_switch_bench_950kib_matches_segment_free_cost
+      - terminal_core::tests::measured_26_segment_middle_cluster_engages_the_split_and_matches_reference
+      - bench::benches::measured_26_segment_middle_cluster_bench_2mib_matches_bypass_engaged_cost
+      - terminal_core::tests::column_change_middle_degrades_head_fold_but_still_engages_the_split
+      - terminal_core::tests::head_plus_marker_cluster_above_target_engages_the_split_and_matches_reference
+    red_confirmed: false
+    red_reason: >-
+      Non-regression guard, not a new-behavior criterion — no assertions in
+      any of these tests/benches were changed by this task. Verified green
+      both via the debug --lib run (764 passed, 0 failed, 13 ignored) and
+      the release `--ignored --nocapture` run (13 passed, 0 failed,
+      including all 5 named AC-5 benches plus the pre-existing unrelated
+      benches). Structural analysis (recorded in the implementer's own
+      review) confirms none of the D9-rescue / 26-segment-cluster shapes
+      cross into the new h == 0 tier's tighter bound: they are all h > 0
+      (fold-succeeded) shapes using the unchanged 62 bound, or are rejected
+      by the byte-bound/suffix-dominance gates regardless of segment tier.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a test-verifiable outcome — a doc-comment finding-ID citation
+      convention check. Verified by inspection: `grep -c` for each of the
+      five finding IDs (a1a06ed541045dd5, 77da6aceb73b1a72,
+      474e01ad8c29e7f0, 96f7205be52fece8, 1adb07864f11618f) against
+      terminal_core.rs returns 12, 12, 7, 6, 6 occurrences respectively,
+      all inside doc comments on the changed gate condition
+      (`segment_bound` computation), both constants
+      (BYPASS_PREFIX_MAX_SEGMENTS, BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD),
+      and the pin module.
