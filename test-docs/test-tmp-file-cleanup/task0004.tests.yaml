@@ -1,0 +1,102 @@
+task_id: task0004
+# Baseline is the UNION of tabs::tests off-thread/replay-family failures
+# observed across three independent runs before/around this change
+# (default parallel --lib run, tabs::-only --test-threads=1 run, and a
+# full --test-threads=1 run). This family is a known pre-existing flake
+# unrelated to viewer/launch.rs (see project memory
+# project_test_execution_notes.md and IMPLEMENTATION.md Risk Assessment).
+# The exact failing subset varies run-to-run under resource contention;
+# the module (tabs.rs, off-thread swap/coalesce/mux_group machinery) does
+# not.
+baseline_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_offthread_swap_plus_live_equals_contiguous_parse
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+# Final run: default `--lib` (parallel), same command as project_commands.test,
+# executed after the implementation. Every entry is a member of
+# baseline_failures above; no viewer::launch test appears here or in any
+# run performed for this task.
+final_failures:
+  - tabs::tests::ac1_offthread_swap_transplants_the_preswap_callbacks_instance
+  - tabs::tests::ac2_offthread_swap_preserves_osc_9999_app_param_registration
+  - tabs::tests::ac3_duplicate_same_pane_snapshot_coalesces_before_spawning_again
+  - tabs::tests::ac3_offthread_swap_preserves_premux_welcome_osc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_offthread_swap_preserves_premux_welcome_apc_form_reaching_apply_mux_message
+  - tabs::tests::ac4_switch_to_different_pane_is_not_coalesced
+  - tabs::tests::ac5_late_repeat_switch_to_same_pane_is_not_dropped
+  - tabs::tests::ac5_offthread_swap_transplanted_callbacks_apply_title_change
+  - tabs::tests::ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic
+  - tabs::tests::swap_replaces_outgoing_content
+  - tabs::tests::t6_ac3_coalesced_snapshot_live_output_neither_lost_nor_duplicated
+  - tabs::tests::t6_ac4_resize_driven_case_preserves_live_queue_exactly_once
+  - tabs::tests::t6_ac5_chained_coalesce_across_resize_and_two_snapshots_attributes_live_output_correctly
+  - tabs::tests::t6_ac8_large_payload_coalesce_clears_queue_without_poll_time_comparison
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts5_queued_live_output_applied_in_order
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_no_residual_rows_after_offthread_swap_to_shorter_pane
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Not a Rust assertion (per task plan Test Notes, verified externally
+      like VERIFICATION.md TS3): ran
+      `viewer::launch::tests::launch_with_propagates_spawn_error` in
+      isolation before the fix and counted /tmp/emterm-viewer-*.json
+      before/after (34 -> 35, +1 residual file left behind). After adding
+      the path-capture + best-effort remove_file cleanup, the same
+      isolated run left the count unchanged (36 -> 36, +0).
+  AC-2:
+    tests:
+      - viewer::launch::tests::launch_with_propagates_spawn_error
+    red_confirmed: false
+    red_reason: >-
+      Regression-only criterion (existing error-kind assertions must stay
+      unchanged and green) - it was already green before this task's
+      change and is expected to stay green, not go red. Confirmed via
+      `cargo test --lib viewer::launch::` (8/8 pass) after implementation.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Verified by diff position, not a test. Before the fix, `git diff`
+      showed no changes (nothing implemented yet = the criterion's
+      "confined to cfg(test)" claim was vacuously true only because there
+      was no diff at all); after implementing, `git diff --stat` shows
+      exactly one file (src-tauri/src/viewer/launch.rs, +10/-1) and `git
+      diff -- src-tauri/src/viewer/launch.rs` shows the entire hunk is
+      inside `mod tests { ... }`, with no change to `launch_with`,
+      `write_payload`, or `temp_payload_path`.
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Verified by manifest/lockfile diff, not a test. `git status` /
+      `git diff` show no changes to Cargo.toml or Cargo.lock in this
+      task's commits (only src-tauri/src/viewer/launch.rs changed).

@@ -1,0 +1,38 @@
+feature: test-tmp-file-cleanup
+collected_at: "2026-08-04T22:24:37+09:00"
+session_ids: [a94ef9c2-e47b-4c1e-bbc8-97d556d4f524.jsonl]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  medium_findings_unresolved:
+    - stable_id: a2a29b279d4bd056
+      category: comprehensive
+      file: src-tauri/src/mux/tmux_import.rs
+      title: "cleanup_tmp_settings_dir が親ディレクトリを無条件に再帰削除する"
+      resolution: unresolved
+    - stable_id: c66d38ce5d9002d0
+      category: comprehensive
+      file: test-docs/test-tmp-file-cleanup/task0004.tests.yaml
+      title: "task0004 の AC-3 / AC-4 が観測していない red を red_confirmed: true と記録している"
+      resolution: unresolved
+lessons_candidates:
+  - note: |
+      task worktree にはビルド必須の同梱フォント (src-tauri/assets/fonts/*.ttf,*.otf) が無い。
+      これらは gitignore 対象で src-tauri/build.rs のアセットチェックが panic するため、
+      4 タスク中 3 タスクの implementer が独自に対処した (task0002 は scripts/fetch-fonts.sh
+      でネットワーク取得、task0003/task0004 はメインツリーからコピー)。integration worktree
+      での verify でも同じ手当てが必要だった。worktree 作成時の共通ブートストラップ手順に
+      できると 3 回分の重複調査を省ける。
+  - note: |
+      tabs::tests の off-thread replay フレークは --test-threads=1 でも解消しない
+      (並列 20 件 / 単一スレッド 7 件、実行ごとに部分集合が変動)。「--test-threads=1 で安定」
+      という既存の理解は正確ではなく、失敗集合の変動する既知フレーク群として扱うのが実態に近い。
+      各 implementer がベースライン比較でこれを個別に再確認しており、コストが重複している。
+  - note: |
+      medium severity の findings は R4 auto-fix の候補ゲート (critical/high のみ) に
+      かからないため、修正されずに unresolved のまま完了する。今回 2 件とも妥当な指摘だったので、
+      batch 実行では人間の評価面 (レポート/Notion コメント) に必ず載せる運用が要になる。
