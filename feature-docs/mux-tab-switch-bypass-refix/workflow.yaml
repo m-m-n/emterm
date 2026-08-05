@@ -58,7 +58,7 @@ workflow:
     status: completed
     completed_at_commit: 7c08013adffa27b253405ea4e9c5f7a70e2dfd65
   - id: implement
-    status: pending
+    status: in_progress
     base_commit: f9579f9b24b5243b52a330fe9804a21ad39550e1
   - id: review
     status: pending
@@ -118,9 +118,9 @@ tasks:
     domains: [input-handling]
     complexity: high
     requirements: [FR1, FR6, NFR1, NFR3]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0004
     provenance:
       source: review
       source_ids: [a1a06ed541045dd5, 77da6aceb73b1a72, 474e01ad8c29e7f0, 96f7205be52fece8, 1adb07864f11618f]
@@ -134,9 +134,9 @@ tasks:
     domains: [ui, concurrency]
     complexity: high
     requirements: [FR4, FR6, NFR3]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0005
     provenance:
       source: review
       source_ids: [0029db1c89ab226f, 5b2f22c5a14f7364]
@@ -150,9 +150,9 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR4, NFR3]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mux-tab-switch-bypass-refix/task0006
     provenance:
       source: review
       source_ids: [869ddd643c123a44]
