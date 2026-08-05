@@ -1,0 +1,49 @@
+task_id: task0003
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [terminal_core::tests::whole_prefix_uniform_head_run_degrades_empty_middle_fold_and_matches_reference]
+    red_confirmed: true
+    red_reason: >-
+      With the candidate_h < k guard temporarily disabled (locally, not
+      committed) the built core's rows assertion failed:
+      "assertion `left == right` failed: AC-1: ... left: 30 right: 24" —
+      the core stayed at the HEAD run's R (30) instead of resizing back to
+      the caller's target (24), reproducing the round-2 finding
+      5c6ae6b507b6f638 exactly.
+  AC-2:
+    tests: [terminal_core::tests::whole_prefix_uniform_head_run_degrades_empty_middle_fold_and_matches_reference]
+    red_confirmed: true
+    red_reason: >-
+      Same test, same guard-disabled run: the AC-1 rows assertion failed
+      first (test aborts on first failing assertion), so AC-2's
+      scrollback_populated comparison was not reached in that run. To
+      confirm AC-2 independently, the assertion order was temporarily
+      reordered (AC-2 before AC-1, locally, not committed) with the guard
+      still disabled: the AC-2 assertion also failed on its own:
+      "assertion `left == right` failed: AC-2: ... left: false right: true".
+      Both probes reverted before finalizing; both AC-1 and AC-2 are pinned
+      by the same fixture/test.
+  AC-3:
+    tests: []
+    red_reason: >-
+      Documentation-only criterion (doc comment content), not independently
+      red/green-able as a test outcome. Verified by inspection: the doc
+      comment on
+      whole_prefix_uniform_head_run_degrades_empty_middle_fold_and_matches_reference
+      cites 5c6ae6b507b6f638, describes the empty-MIDDLE degradation
+      contract being pinned, and states the pre-auto-fix failure it guards
+      against (requested (80,24), got (80,30), scrollback_populated false
+      vs reference's true).
+  AC-4:
+    tests: []
+    red_reason: >-
+      Verified via `git diff --stat` against the task branch's starting
+      commit: only crates/term_core/src/terminal_core.rs changed, and the
+      diff is additive-only (124 insertions, 0 deletions), confined to the
+      #[cfg(test)] mod tests block. Non-test code (the candidate_h < k gate
+      and everything else in the file) is byte-identical to the branch's
+      starting point. Full crates/term_core --lib suite: 759 passed, 0
+      failed, 12 ignored (baseline was 758 passed, 0 failed, 12 ignored;
+      the +1 is this new test).

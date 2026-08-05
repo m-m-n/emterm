@@ -4641,6 +4641,130 @@ mod tests {
         );
     }
 
+    /// Regression pin (task0003, prior-feature review round-2 critical
+    /// `5c6ae6b507b6f638`): the empty-MIDDLE degradation contract
+    /// (IMPLEMENTATION.md `Empty-MIDDLE degradation contract`) for the
+    /// `h == k` shape — the ENTIRE pre-suffix region is a single uniform
+    /// run at `(target_cols, R)` with `R` strictly above the caller's
+    /// target `rows`, so `leading_uniform_run_len` reports a candidate `h`
+    /// covering the whole region (`candidate_h == k`). Folding that
+    /// candidate in would leave an empty MIDDLE — `replay_segments` early-
+    /// returns for empty `segments` WITHOUT its final "resize back to the
+    /// caller's target" hop — so `candidate_h < k` must reject the fold and
+    /// degrade `h` to `0` (the pre-D7 whole-prefix path). The region is
+    /// sized well over `BYPASS_PREFIX_MAX_BYTES` (64 KiB) so that, once
+    /// degraded, it also fails the ordinary (no-HEAD) split gates on its
+    /// own merits and falls all the way back to the fully synchronous
+    /// whole-drain replay — the same replay the reference build performs.
+    ///
+    /// Confirmed to fail pre-fix (before the `candidate_h < k` guard
+    /// existed): with the guard removed, `candidate_safe` accepts `h == k`
+    /// here (`candidate_h > 0`, `candidate_rows(R=30) >= rows(24)`, and
+    /// `middle_is_row_bounded` vacuously holds over the empty
+    /// `segments[candidate_h..k]` slice) regardless of the region's own
+    /// byte length — folding an empty MIDDLE in skips the
+    /// `BYPASS_PREFIX_MAX_BYTES` check entirely (it is evaluated against
+    /// `middle_len`, which is `0` for `h == k`). The HEAD then replays
+    /// under bypass at `head_rows == 30` and the core is never resized
+    /// back down — the round-2 finding's own empirically-confirmed
+    /// failure: requested `(80, 24)`, got `(80, 30)`, with
+    /// `scrollback_populated` coming back `false` (the split wrongly
+    /// reports itself engaged) instead of matching the reference build's
+    /// `true`. This test built that exact shape against the pre-fix guard
+    /// (locally, not committed) and observed precisely that divergence
+    /// before confirming the guard below prevents it.
+    #[test]
+    fn whole_prefix_uniform_head_run_degrades_empty_middle_fold_and_matches_reference() {
+        let cols: u16 = 80;
+        let target_rows: u16 = 24;
+        let head_run_rows: u16 = 30; // R, strictly above target_rows
+
+        // Pre-suffix region: a SINGLE segment (k == 1), uniform at
+        // (cols, head_run_rows) — trivially a "single uniform run" whose
+        // leading_uniform_run_len candidate covers the whole region
+        // (candidate_h == k == 1). Sized well over BYPASS_PREFIX_MAX_BYTES
+        // (64 KiB) so the degraded (h == 0) path's own gate rejects it too.
+        let head_filler = b"head history line padded out a bit for size\r\n";
+        let mut payload: Vec<u8> = Vec::new();
+        let mut segments = vec![ReplaySegment {
+            offset: 0,
+            cols,
+            rows: head_run_rows,
+        }];
+        while payload.len() <= 96 * 1024 {
+            payload.extend_from_slice(head_filler);
+        }
+        let head_len = payload.len();
+        assert!(
+            head_len > 64 * 1024,
+            "test prerequisite: the pre-suffix region must exceed \
+             BYPASS_PREFIX_MAX_BYTES so the degraded path also rejects it"
+        );
+
+        // Qualifying stable target-dims suffix, just over
+        // BYPASS_SUFFIX_MIN_BYTES.
+        segments.push(ReplaySegment {
+            offset: payload.len() as u32,
+            cols,
+            rows: target_rows,
+        });
+        let tail_filler = b"tail history line padded out a bit for size\r\n";
+        while payload.len() - head_len < 4096 + 512 {
+            payload.extend_from_slice(tail_filler);
+        }
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let scrollback_lines = 10_000u32;
+        let bypass_replay = TerminalCore::build_from_snapshot(
+            cols,
+            target_rows,
+            scrollback_lines,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("bypass-path build not cancelled");
+        let reference = TerminalCore::build_scrollback_only_from_snapshot(
+            cols,
+            target_rows,
+            scrollback_lines,
+            &payload,
+            &segments,
+            &never,
+        )
+        .expect("reference build not cancelled");
+
+        // AC-1: the built core must land at the CALLER-requested (cols,
+        // rows) — not at the HEAD run's R.
+        assert_eq!(
+            bypass_replay.core.cols(),
+            cols,
+            "AC-1: the degraded empty-MIDDLE fold must still resize back to \
+             the caller's target column count"
+        );
+        assert_eq!(
+            bypass_replay.core.rows(),
+            target_rows,
+            "AC-1: the degraded empty-MIDDLE fold must still resize back to \
+             the caller's target row count, not stay at the HEAD run's R \
+             (the round-2 finding's failure: requested (80, 24), got \
+             (80, 30))"
+        );
+
+        // AC-2: scrollback_populated must match the reference non-bypass
+        // build of the identical payload/segments.
+        assert_eq!(
+            bypass_replay.scrollback_populated, reference.scrollback_populated,
+            "AC-2: scrollback_populated must match the reference build's \
+             value for this shape"
+        );
+        assert!(
+            reference.scrollback_populated,
+            "test prerequisite: the fully synchronous reference always \
+             populates scrollback"
+        );
+    }
+
     // ── Grid construction ────────────────────────────────
 
     #[test]
