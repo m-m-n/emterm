@@ -78,7 +78,8 @@ workflow:
       manual_open:
         - "TS7 (MT-1 carry-over): on a real machine, restart the client, reattach to a mux daemon with a heavy pane, and confirm the switch displays in the tens-of-ms order. Not automatable without live GUI + daemon orchestration" 
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: d7b2356c2c8cfb8146d18e07bf4a19a4c40db89d
 
 tasks:
   task0001:

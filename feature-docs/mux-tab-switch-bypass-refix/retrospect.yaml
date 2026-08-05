@@ -1,0 +1,150 @@
+feature: mux-tab-switch-bypass-refix
+collected_at: "2026-08-05T21:05:00+09:00"
+session_ids: [f8baa9e3-4e7f-47c2-b4cf-d5986c00d12d.jsonl]
+
+signals:
+  review_critical_high:
+    - stable_id: 143121d2652cbc62
+      category: architecture
+      file: crates/term_core/src/terminal_core.rs
+      title: "Duplicated constant creates hidden cross-crate contract with no synchronization mechanism"
+      round: 1
+      resolution: fixed
+      note: >-
+        Auto-fixed across two loops. Loop 1's pin had its inequality in the
+        harmless direction and did not catch the drift it named; loop 2 added the
+        lower bound and the orchestrator verified empirically that reverting the
+        constant to 24 now fails.
+    - stable_id: a1a06ed541045dd5
+      category: spec
+      file: crates/term_core/src/terminal_core.rs
+      title: "NFR1 の根拠（MIDDLE は常に same-width）が h == 0 縮退経路で成立せず、24→62 の緩和が正当化されていない"
+      round: 1
+      resolution: fixed_via_rework
+      note: >-
+        Routed to task0004, which split the gate into two tiers (62 when the fold
+        succeeded, 24 on the h == 0 path). Re-judged resolved on the merits by
+        the spec reviewer in round 2.
+
+  conflict_reworks: []
+
+  file_prediction_misses:
+    - task: task0002
+      files: ["src-tauri/src/window_host.rs"]
+      note: >-
+        Not a file miss — the change stayed inside the predicted file — but the
+        implementer reported a scope deviation: the plan named
+        refresh_status_bar_insets plus a new predicate as the change site, and a
+        gate-only design there would have bypassed ControlFlow::WaitUntil and
+        stranded the settle on a fully idle window. It added
+        next_resize_settle_wake_deadline wired into control_flow_for and
+        about_to_wait to keep the rate-limited wake reachable.
+    - task: task0004
+      files: ["crates/term_core/src/bench.rs"]
+      note: >-
+        Predicted file left untouched. Route (a) (two-tier gate) does not need a
+        release bench — that was route (c)'s job — so the bench.rs entry in
+        `files` went unused. Under-use of a predicted file, not a deviation
+        outside scope.
+    - task: task0005
+      files: ["src-tauri/assets/fonts/*"]
+      note: >-
+        Environment friction, reported by task0005 and task0006 independently:
+        a fresh task worktree has no bundled font assets (gitignored, fetched by
+        `make fetch-fonts`), and build.rs panics without them, so each
+        implementer had to copy them from the main worktree before it could
+        build at all. The verify phase hit the same thing in the integration
+        worktree.
+
+  verification_failures: []
+
+  discretionary_perspectives: []
+
+  declined_findings: []
+
+  deferred_findings:
+    - stable_id: dd25355006caa680
+      severity: medium
+      category: architecture
+      file: crates/term_core/src/terminal_core.rs
+      round: 2
+      reason: "batch mode: rework cap reached"
+      title: "二段ゲートの分岐条件 `h > 0` が「MIDDLE は同一カラム幅検証済み」という不変条件の暗黙の代理になっている"
+    - stable_id: 296b5bdf8ec5073d
+      severity: medium
+      category: comprehensive
+      file: crates/term_core/src/terminal_core.rs
+      round: 2
+      reason: "batch mode: rework cap reached"
+      title: "Tier predicate `h > 0` is a proxy for same-width MIDDLE and over-narrows a common, safe shape back to 24"
+    - stable_id: 23e465f3bb1b79f6
+      severity: medium
+      category: comprehensive
+      file: src-tauri/src/window_host.rs
+      round: 2
+      reason: "batch mode: rework cap reached"
+      title: "The five new task0005 tests do not pin the defect site"
+    - stable_id: 78f8d71fa0a7052d
+      severity: medium
+      category: architecture
+      file: src-tauri/src/window_host.rs
+      round: 2
+      reason: "batch mode: rework cap reached"
+      title: "ResizeSettler の窓ライフサイクルに従属する状態が settler の外に散っている"
+    - stable_id: c978baad37423891
+      severity: medium
+      category: spec
+      file: src-tauri/src/window_host.rs
+      round: 2
+      reason: "batch mode: rework cap reached"
+      title: "TS4/US2 の RESIZE_SETTLE_MAX_DURATION 以内に決着がレート制限ケイデンスで実際にはピン留めされていない"
+
+  provider_availability:
+    - provider: codex
+      outcome: rate_limited
+      note: >-
+        Hit its usage limit on its only round-1 dispatch (security) and had not
+        reset by round 2, so it contributed nothing to either round.
+    - provider: vertex
+      outcome: partially_available
+      note: >-
+        Round 1: three of four dispatches succeeded (security fallback,
+        architecture, spec); performance returned HTTP 429 twice, including a
+        retry with no other Vertex requests in flight. Round 2: 429 throughout.
+        Launching four Vertex reviewers in one message triggered concurrency
+        throttling — serializing them would likely have helped.
+
+lessons_candidates:
+  - >-
+    An auto-fix that lands and passes its own tests can still be wrong in the
+    direction that matters. Loop 1's cross-crate pin asserted `gate <= wire_cap`,
+    which is true both before and after the exact regression it was named for;
+    only the re-review caught it. The cheap check that would have caught it at
+    write time is the one the orchestrator ran after loop 2: revert the constant
+    to its buggy value and confirm the new test actually fails.
+  - >-
+    Two reviewers describing "the same defect" can be describing opposite failure
+    directions. Round 2's architecture and comprehensive findings at
+    terminal_core.rs:1266 share a site and a root cause, but one says the tier
+    predicate is too permissive in principle and the other says it is too narrow
+    in practice. Mechanical same-site dedupe would have merged them and lost half
+    the information.
+  - >-
+    Task worktrees do not inherit gitignored build prerequisites. Three separate
+    agents independently discovered that `src-tauri/assets/fonts/` is empty in a
+    fresh worktree and that build.rs panics without it. A worktree-setup step
+    that seeds gitignored build inputs (or a `make fetch-fonts` call in the
+    implementer's preflight) would remove a recurring per-task cost.
+  - >-
+    A format gate that fails identically on the base branch carries no signal.
+    `cargo fmt --check` reports drift in 17 files on `main`, so the feature's own
+    run of it can only be interpreted by differencing against a baseline. Either
+    the gate should be scoped to changed files, or the workflow should record
+    the baseline once per feature rather than re-deriving it at verify time.
+  - >-
+    Batch mode's single rework round was spent well but was clearly the binding
+    constraint: round 2 produced five medium findings that all had concrete,
+    accepted fixes and were deferred purely on the cap. Two of them
+    (dd25355006caa680 / 296b5bdf8ec5073d) would be settled by one change — keying
+    the tier on "every MIDDLE segment is at target_cols" instead of on fold
+    success.
