@@ -29,7 +29,7 @@ All commands below are the exact strings configured in `workflow.yaml`
 - `term_core_bench` (release benches, `#[ignore]`d):
   `CARGO_TARGET_DIR=src-tauri/target cargo test --release --manifest-path crates/term_core/Cargo.toml --lib -- --ignored --nocapture`
 - `web`: `bun test` (regression gate only)
-- Coverage target: every Acceptance Criterion across task0001–task0003 has
+- Coverage target: every Acceptance Criterion across task0001–task0006 has
   a corresponding automated test (fixed enumerable AC set; no percentage
   target — this is a bug-fix feature).
 
@@ -49,6 +49,18 @@ noise, not a feature regression.
 | TS5 | Status-bar height change with unchanged derived grid size | New inset values applied; nothing-changed frames leave insets untouched and never set `pending_resize` (no reshape storm) | Unit (`rust_app` `window_host`) |
 | TS6 | Release bench suite | New 26-segment-shape bench asserts its ceiling relative to segment-free cost; `snapshot_replay_bench_2mib_seq`, `marker_cluster_tail_bench_2mib_matches_bypass_engaged_cost`, `large_prefix_small_suffix_bench_does_not_engage_the_split`, `daemon_cap_prefix_with_small_suffix_bench_does_not_engage_the_split`, `ordinary_switch_bench_950kib_matches_segment_free_cost` all stay green | Bench (release, `term_core_bench` command) |
 | TS7 | Real-machine reattach + heavy-pane switch (carried over from the prior feature's MT-1) | Display appears in the tens-of-ms order | Manual |
+
+### Rework Scenarios (review round 1)
+
+Added by the round-1 review rework (tasks task0004–task0006); IDs continue
+the TS sequence.
+
+| ID | Scenario | Expected Result | Test Type |
+|----|----------|-----------------|-----------|
+| TS8 | `h == 0` (fold-degraded) column-changing MIDDLE at the admitted segment count | The shape's replay cost is demonstrably bounded: a unit test pins a tightened/conditional gate at both sides of the `h == 0` bound, and/or a release bench packs the MIDDLE to the `BYPASS_PREFIX_MAX_BYTES` limit with a dominating suffix and asserts a ceiling relative to bypass-engaged cost; the gate's doc rationale matches the demonstrated behavior (no same-width-by-construction claim) | Unit (`term_core`) and/or Bench (release, `term_core_bench` command) |
+| TS9 | Segment-bound constant purpose and cross-crate pin coherence | Reverting the gate bound to 24 without a matching daemon-cap decision still fails a test (drift caught); the pin (or its dedicated daemon-cap mirror) no longer misdiagnoses a deliberate cost-policy change as the round-7/round-8 regression; the segment-count condition's declared purpose matches what its tests enforce (or its removal is covered by the byte-bound + suffix-dominance guards) | Unit (`term_core`, test-time pin) |
+| TS10 | Non-settler `pending_resize` during the settling window (mux-attach firing order: settler reset + transient inset write → sidebar inset change raises `pending_resize` → `apply_pending_resize`; also compositor `Resized` / scale change) | The applied/broadcast grid size is never computed from a not-yet-settled status-bar inset — it equals the settler's last forwarded size or the resize defers until the settler forwards; the settler-recorded and actually-applied sizes stay equal; no stale lock-in after settlement | Unit (`rust_app` `window_host`) |
+| TS11 | Inset-change predicate tolerance at representable magnitudes | The pinned tolerance is actually reachable: either a representable within-tolerance nonzero perturbation is asserted unchanged (a case a plain-inequality predicate would fail) plus a past-tolerance case asserted changed, or the predicate is an exact comparison with the epsilon claim removed from the doc; no test perturbation rounds back to its baseline | Unit (`rust_app` `window_host`) |
 
 ## Code Quality Verification
 
@@ -74,15 +86,15 @@ noise, not a feature regression.
 
 | Requirement | Tasks | Verification |
 |-------------|-------|--------------|
-| FR1 | task0001 | TS1, TS2, TS7 |
+| FR1 | task0001, task0004 | TS1, TS2, TS7, TS8 |
 | FR2 | task0001 | TS6 |
 | FR3 | task0002 | TS4 |
-| FR4 | task0002 | TS5 |
+| FR4 | task0002, task0005, task0006 | TS5, TS10, TS11 |
 | FR5 | task0003 | TS3 |
-| FR6 | task0001, task0002 | TS5, TS6, TS7 |
-| NFR1 | task0001 | TS6 |
+| FR6 | task0001, task0002, task0004, task0005 | TS5, TS6, TS7, TS10 |
+| NFR1 | task0001, task0004 | TS6, TS8 |
 | NFR2 | task0002 | TS4 |
-| NFR3 | task0001, task0002, task0003 | TS6 (benches) + the `rust_app` / `term_core` `--lib` commands |
+| NFR3 | task0001, task0002, task0003, task0004, task0005, task0006 | TS6 (benches), TS9 + the `rust_app` / `term_core` `--lib` commands |
 
 ## E2E Testing
 
@@ -122,6 +134,6 @@ applies.)
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build | 5 commands | Yes | - | - |
-| Test scenarios | 7 (TS1–TS7) | TS1–TS6 | - | TS7 |
+| Test scenarios | 11 (TS1–TS11) | TS1–TS6, TS8–TS11 | - | TS7 |
 | Code quality | 3 format commands | Yes | - | - |
 | Success criteria | 5 (SC-1–SC-5) | SC-1–SC-3 (automated portions) | - | SC-4/SC-5 via review phase; TS7 manual |
