@@ -56,9 +56,37 @@ workflow:
     status: completed
     completed_at_commit: 009fd36222a571c1b660f402490ed3f5db1c7b2e
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 0eb8988381076daf77b66f050ae12a425035e99a
+    result: pass
     failed_items: []
+    notes: >
+      Build gates: `cargo check` (default features) exit 0 after copying the
+      gitignored bundled fonts from the main working tree into this worktree
+      (build.rs hard-fails without assets/fonts/Noto-COLRv1.ttf; environment
+      prerequisite, not a code defect). TS6 `--no-default-features` check
+      exit 0. Format: `cargo fmt --check` exits 1 with 118 drift hunks across
+      17 files, byte-for-byte identical to the main working tree's baseline
+      (118 total, 5 in tabs.rs in both) — no NEW drift, which is the criterion
+      VERIFICATION.md states. Tests: term_core `--lib` 765 passed / 0 failed.
+      src-tauri `--lib` in parallel showed 23 failures (known tabs.rs replay
+      flakiness); the VERIFICATION.md-prescribed deflake re-run
+      (`-- --test-threads=1`) gives 3134 passed / 5 failed, and those 5
+      (ts10_resize_cancels_pending_restore_without_respawn,
+      ts13_offthread_swap_installs_pending_scrollback_restore,
+      ts8_new_offthread_switch_supersedes_in_flight_restore,
+      ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates,
+      welcome_without_windows_leaves_group_none) are a strict SUBSET of the
+      main-branch baseline's 7 failures measured the same way — zero new
+      failures (TS7 satisfied). All feature-specific tests pass: TS4
+      (plain_tab/mux_pane_every_response_type_delivered_exactly_once_and_absent_from_grid),
+      TS5 (plain_tab_query_lookalike_text_reaches_grid_unchanged), TS8
+      (plain_tab/mux_pane_multi_query_chunk_delivers_all_responses_in_order_exactly_once),
+      TS9 (apply_offthread_swap_discards_replay_generated_device_response,
+      query_arriving_live_after_offthread_swap_is_delivered_exactly_once).
+      TS1 / TS2 / TS3 are manual-only by design (release build + human
+      on-screen observation) and remain unperformed — they are the human
+      evaluator's step, tracked as unchecked boxes in VERIFICATION.md.
   - id: retrospect
     status: pending
 
