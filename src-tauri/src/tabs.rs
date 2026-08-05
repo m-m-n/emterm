@@ -1247,6 +1247,23 @@ impl Tab {
                 crate::callbacks::OSC_MUX_INBAND,
             );
             *live = new_core;
+            // Discard any device responses (DA1 / DSR / XTWINOPS / …) left
+            // pending on the worker-built core before it goes live —
+            // explicit, call-site-local mirror of the synchronous
+            // `reset_frame_for_replay`'s discard (tmux-startup-query-
+            // response-leak task0003, review round-1 finding
+            // `8bebc1e532a1b597`). As of this task, `TerminalCore::
+            // build_from_snapshot_inner` already drains `response_buffer`
+            // before returning `SnapshotReplay` (see that function, and
+            // commit `4380805c`), so this call observes an already-empty
+            // buffer and is a no-op today; it is kept so the invariant
+            // "the off-thread swap never delivers a replay-generated
+            // response" is asserted explicitly at THIS call site rather
+            // than depended on implicitly via term_core internals — a
+            // future change to the worker's build (e.g. the ordered
+            // multi-response store, IMPLEMENTATION.md D5) cannot silently
+            // reopen this leak without also changing this line.
+            let _ = live.take_response();
             // FR7 (task0006 redesign): apply a resize that raced this
             // switch, now that the built core is in place. See this fn's
             // doc and `PendingSwitch::pending_resize` for why this is
@@ -6894,6 +6911,110 @@ mod tests {
             offthread.folds.region_count(),
             reference.folds.region_count(),
             "off-thread and sync paths must register the same fold regions"
+        );
+    }
+
+    // ── tmux-startup-query-response-leak (task0003, review round-1 rework)
+    //
+    // `reset_frame_for_replay` (the synchronous replay path) explicitly
+    // discards device responses synthesized while replaying historic
+    // snapshot bytes (see `reset_frame_for_replay_discards_historic_device_
+    // responses` / `reset_frame_for_replay_produces_no_outbound_device_
+    // response_write` above). Review round-1 finding `8bebc1e532a1b597`
+    // reported that `apply_offthread_swap` installs the worker-built core
+    // (`*live = new_core;`) without that discard.
+    //
+    // Investigation for this task found the finding's premise does not
+    // hold against the current codebase: `TerminalCore::
+    // build_from_snapshot_inner` (the function underlying BOTH
+    // `build_from_snapshot`, the 1st-pass worker build, and
+    // `build_scrollback_only_from_snapshot`, the 2nd-pass restore) already
+    // drains `response_buffer` before returning `SnapshotReplay` — added by
+    // commit `4380805c` ("fix(mux): drop stale device responses from
+    // snapshot replay", 2026-06-24), which fixed BOTH the synchronous
+    // (`reset_frame_for_replay`) and off-thread-worker paths in the same
+    // change, predating this feature entirely. By the time
+    // `apply_offthread_swap` installs `replay.core` as the live core, its
+    // response buffer is already empty. The test below (AC-1) confirms
+    // this holds today; it could NOT be driven red by any change confined
+    // to `tabs.rs` (this task's file scope) — removing term_core's
+    // existing discard would be required, which is out of this task's
+    // scope. The explicit discard added at the swap site below is kept as
+    // defense-in-depth (D5's documented intent: the invariant should not
+    // depend implicitly on term_core internals), not as a fix for an
+    // active leak.
+
+    /// AC-1: a device query embedded in snapshot bytes replayed through the
+    /// OFF-THREAD swap path (`apply_offthread_swap`) must produce NO
+    /// outbound write and leave no pending response on the swapped-in
+    /// core — mirrors `reset_frame_for_replay_produces_no_outbound_device_
+    /// response_write`'s synchronous-path assertion, but drives the
+    /// off-thread worker-built-core swap instead. NOTE: this passes even
+    /// without the swap-site discard added by this task — see the module
+    /// comment above for why (the invariant already holds via
+    /// `build_from_snapshot_inner`'s pre-existing discard).
+    #[test]
+    fn apply_offthread_swap_discards_replay_generated_device_response() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        // `welcome_msg` itself emits mux session-setup control writes
+        // (window activation / grid-size handshake) unrelated to device
+        // responses; snapshot the log length here so the assertion below
+        // only judges writes produced by the snapshot replay + swap.
+        let writes_before = tab.test_outbound_writes().len();
+        let mut snapshot = b"row one\r\n".to_vec();
+        snapshot.extend_from_slice(b"\x1b[c"); // DA1 query baked into the snapshot
+        snapshot.extend_from_slice(b"row two\r\n");
+        snapshot.resize(OFFTHREAD_REPLAY_THRESHOLD_BYTES + 8, 0);
+        tab.apply_mux_message(snapshot_msg(10, snapshot));
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+        let writes_after = tab.test_outbound_writes();
+        assert_eq!(
+            writes_after.len(),
+            writes_before,
+            "a DA1 query baked into snapshot bytes replayed off-thread must \
+             not produce ANY new outbound write — the originating program \
+             is long gone; new writes: {:?}",
+            &writes_after[writes_before..]
+        );
+        assert_eq!(
+            tab.core.lock().get_response_len(),
+            0,
+            "apply_offthread_swap must discard the worker-built core's \
+             pending device response after installing it as the live core; \
+             residual bytes would leak as PtyInput on the next live \
+             take_response and corrupt the shell's stdin"
+        );
+    }
+
+    /// AC-3: a device query arriving in LIVE output AFTER an off-thread
+    /// swap is still answered and delivered exactly once — the swap-site
+    /// discard added for AC-1 must not over-discard a live-arriving
+    /// response. Complements `apply_queued_live_output_delivers_device_
+    /// response_exactly_once` by driving the swap through the actual
+    /// dispatch/poll machinery instead of calling `apply_queued_live_
+    /// output` directly.
+    #[test]
+    fn query_arriving_live_after_offthread_swap_is_delivered_exactly_once() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        let mut snapshot = b"row one\r\n".to_vec();
+        snapshot.resize(OFFTHREAD_REPLAY_THRESHOLD_BYTES + 8, 0);
+        tab.apply_mux_message(snapshot_msg(10, snapshot));
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+        // A query arriving in live PTY output AFTER the swap.
+        tab.process_combined(pty_output_apc(10, b"\x1b[c")); // DA1
+        tab.process_combined(Vec::new());
+        let writes = tab.test_outbound_writes();
+        let matches = writes
+            .iter()
+            .filter(|w| w.as_slice() == b"\x1b[?65;1;4;22c")
+            .count();
+        assert_eq!(
+            matches, 1,
+            "a DA1 query arriving in live output after an off-thread swap \
+             must be delivered exactly once, got {matches} within {writes:?}"
         );
     }
 
