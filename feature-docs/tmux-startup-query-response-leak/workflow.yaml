@@ -116,8 +116,19 @@ tasks:
     domains: [concurrency, external-io]
     complexity: high
     requirements: [FR1, FR2, FR3]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: >
+      Merged at 8b9abcd5cf1a3a38554dcb8623b0ff22d3ea94f7, 0 conflict retries,
+      tests pass. Implementer reports finding 8bebc1e532a1b597 is a false
+      positive against the current codebase: term_core's
+      build_from_snapshot_inner already drains the response buffer before
+      returning SnapshotReplay (commit 4380805c, 2026-06-24), which covered
+      BOTH the synchronous and off-thread paths. The swap-site discard was
+      implemented anyway per the task plan / IMPLEMENTATION.md D5 as
+      defense-in-depth, asserting the invariant explicitly at the tabs.rs
+      call site instead of depending on term_core internals — relevant given
+      task0002's concurrent take_response rework. AC-1 could not be
+      red-confirmed for this reason.
     branch: em-workflow/tmux-startup-query-response-leak/task0003
     provenance:
       source: review
