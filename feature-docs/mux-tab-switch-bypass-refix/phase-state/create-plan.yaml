@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-tab-switch-bypass-refix
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 5b72c75de88ca34dab2b93e2743b1288bb9f6b6c
 last_input_digest: sha256:d9320a3ab9105d0b41f94a3f155b26f4ad3ea87c17dad9ae261d2a64234d6a11
@@ -31,7 +31,7 @@ artifacts:
     produced_by: create-plan-run-0001
 patches:
   - patch_id: mux-tab-switch-bypass-refix-p0001
-    status: validated
+    status: applied
     base_input_digest: sha256:565d8b814c19f93ad80a74400959e4339394e6f2e67ee3f160b41bbc206f8c22
     base_workflow_blob: 74b966c9cea9e2f2bc4c618ebfe5afb96af7b576
 progress_fingerprint: null

@@ -55,7 +55,8 @@ workflow:
     skipped_reason: "Internal performance/correctness bugfix in the Rust terminal core and window host. No new UI surface, no visual or interaction design change — the status-bar inset fix restores already-specified rendering behavior. No design-system tokens are consumed or produced."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: 7c08013adffa27b253405ea4e9c5f7a70e2dfd65
   - id: implement
     status: pending
     base_commit: null
@@ -68,7 +69,44 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Bypass split gate admits the measured 26-segment MIDDLE with NFR1 guards intact"
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/bench.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: high
+    requirements: [FR1, FR2, FR6, NFR1, NFR3]
+    status: pending
+    notes: null
+    branch: null
+  task0002:
+    title: "Rate-limited ResizeSettler self-wake and settler-independent status-bar inset application"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/window_host.rs
+    skills: [frontend-impl]
+    domains: [ui, concurrency]
+    complexity: high
+    requirements: [FR3, FR4, FR6, NFR2, NFR3]
+    status: pending
+    notes: null
+    branch: null
+  task0003:
+    title: "Regression-pin the D8 empty-MIDDLE (h == k) auto-fix"
+    plan: tasks/task0003.md
+    files:
+      - crates/term_core/src/terminal_core.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: low
+    requirements: [FR5, NFR3]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -84,63 +122,63 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2, TS7]
   FR2:
     title: "Regression bench reproduces the SPEC-cited 26-segment cluster"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS6]
   FR3:
     title: "ResizeSettler self-wake is rate-limited"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS4]
   FR4:
     title: "Status-bar inset application is not gated on a derived grid-size change"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS5]
   FR5:
     title: "D8 empty-MIDDLE auto-fix confirmed correct under fresh review"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0003]
     tests: [TS3]
   FR6:
     title: "Prior feature's acceptance criteria hold as non-regression"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS5, TS7]
+    tasks: [task0001, task0002]
+    tests: [TS5, TS7, TS6]
   NFR1:
     title: "No double 2nd-pass non-bypass cost"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS6]
   NFR2:
     title: "Bounded render-loop CPU during the settle window"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS4]
   NFR3:
     title: "Existing test and bench guards stay green"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002, task0003]
     tests: [TS6]
 
 batch:
