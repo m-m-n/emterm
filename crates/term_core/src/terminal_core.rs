@@ -2222,9 +2222,31 @@ const BYPASS_PREFIX_MAX_SEGMENTS: usize = 62;
 /// (mirrors the `mux_apc_extractor.rs` precedent for `MUX_OSC_PARAM` /
 /// `APC_PREFIX`) — but it turns a silent literal drift into a failing test
 /// instead of a silently-too-strict gate.
+///
+/// The regression this exists to catch is directional: the daemon-side cap
+/// (`MAX_DIM_MARKERS`, mirrored above as the literal `62`) moves UP while
+/// this gate is left behind, so the gate silently rejects shapes the daemon
+/// can legally produce. An upper-bound-only check (`<= MAX_SEGMENTS`) never
+/// fires for that direction — it stays green even if this gate regresses
+/// all the way back down to its old value of `24`. So this pin also asserts
+/// a lower bound: `BYPASS_PREFIX_MAX_SEGMENTS` must stay within
+/// `WIRE_CAP_SLACK` (2) of `mux_ipc::protocol::MAX_SEGMENTS`. That slack of
+/// 2 is the deliberate allowance for the two synthesized segments a daemon
+/// snapshot can carry beyond the raw dim-marker count — a synthesized head
+/// segment (cap eviction) and an alt-screen tail dump (see
+/// `MAX_DAEMON_SNAPSHOT_SEGMENTS` in `src-tauri/src/mux/session/pane.rs`,
+/// which is `MAX_DIM_MARKERS + 2` and exactly saturates
+/// `mux_ipc::protocol::MAX_SEGMENTS`). Any smaller value here is drift, not
+/// a deliberate margin.
 #[cfg(test)]
 mod bypass_prefix_max_segments_pin {
     use super::BYPASS_PREFIX_MAX_SEGMENTS;
+
+    /// Deliberate allowance below the wire cap: the two synthesized
+    /// segments (head segment from cap eviction, alt-screen tail dump) a
+    /// daemon snapshot can carry beyond the raw dim-marker count. See the
+    /// module doc above.
+    const WIRE_CAP_SLACK: usize = 2;
 
     #[test]
     fn bypass_prefix_max_segments_never_exceeds_wire_cap() {
@@ -2235,6 +2257,21 @@ mod bypass_prefix_max_segments_pin {
              more segments than this gate would ever admit, silently rejecting a \
              legal shape. Raise BYPASS_PREFIX_MAX_SEGMENTS in lockstep with any \
              future change to the daemon's segment cap.",
+            mux_ipc::protocol::MAX_SEGMENTS
+        );
+    }
+
+    #[test]
+    fn bypass_prefix_max_segments_stays_within_wire_cap_slack() {
+        assert!(
+            BYPASS_PREFIX_MAX_SEGMENTS + WIRE_CAP_SLACK >= mux_ipc::protocol::MAX_SEGMENTS,
+            "BYPASS_PREFIX_MAX_SEGMENTS ({BYPASS_PREFIX_MAX_SEGMENTS}) has fallen more \
+             than WIRE_CAP_SLACK ({WIRE_CAP_SLACK}) below mux_ipc::protocol::MAX_SEGMENTS \
+             ({}) — this is exactly the round-7/round-8 regression (gate left behind at \
+             an old, smaller value while the daemon's segment cap moved up), and it means \
+             this gate now silently rejects legal daemon snapshot shapes and falls back to \
+             the slow whole-scrollback drain. Raise BYPASS_PREFIX_MAX_SEGMENTS to track \
+             mux_ipc::protocol::MAX_SEGMENTS minus WIRE_CAP_SLACK.",
             mux_ipc::protocol::MAX_SEGMENTS
         );
     }
