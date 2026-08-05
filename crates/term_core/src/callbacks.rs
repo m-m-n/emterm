@@ -18,6 +18,17 @@ use crate::terminal_core::TerminalCore;
 /// holding `&self` (no interior mutability required for the wasm wrapper
 /// which simply forwards to `js_sys::Function::callN`).
 ///
+/// Device responses (DSR / DA / XTWINOPS / DECRPM replies) are
+/// deliberately NOT part of this trait (tmux-startup-query-response-leak
+/// task0002, review-round-1 rework, D5 — an `on_device_response` method
+/// existed here through task0001 and was removed). `TerminalCore` holds
+/// exactly one delivery channel for those: the ordered pending-response
+/// store drained via [`TerminalCore::take_response`]. A second,
+/// callback-based channel for the same bytes would let a host observe —
+/// and a careless one deliver — a query's reply more than once, which is
+/// exactly the leak task0001 fixed; task0002 removes the redundant
+/// channel outright instead of leaving it as a documented no-op.
+///
 /// `Send` is required so a `TerminalCore` — which stores an
 /// `Option<Box<dyn TerminalCallbacks>>` — is itself `Send` and can be
 /// constructed on a worker thread and moved to the main thread (the
@@ -41,10 +52,6 @@ pub trait TerminalCallbacks: Send {
 
     /// BEL (0x07).
     fn on_bell(&self);
-
-    /// Response bytes the terminal wants to send back to the application
-    /// (e.g., CSI device-response queries). `data` is the response payload.
-    fn on_device_response(&self, data: &[u8]);
 
     /// A full terminal reset (RIS, `ESC c`) just ran (cursor-settings-fix
     /// FR4). `term_core` clears its own cursor shape/blink overrides
@@ -96,13 +103,6 @@ impl TerminalCore {
         }
     }
 
-    pub(crate) fn fire_device_response_callback(&self) {
-        if let Some(cb) = self.callbacks.as_deref() {
-            let data = &self.response_buffer[..self.response_len as usize];
-            cb.on_device_response(data);
-        }
-    }
-
     /// Fired from [`TerminalCore::reset`] — see [`TerminalCallbacks::on_reset`].
     pub(crate) fn fire_reset_callback(&self) {
         if let Some(cb) = self.callbacks.as_deref() {
@@ -127,7 +127,6 @@ mod tests {
         apc: Mutex<Vec<Vec<u8>>>,
         dcs: Mutex<Vec<Vec<u8>>>,
         bell: Mutex<usize>,
-        device: Mutex<Vec<Vec<u8>>>,
         reset: Mutex<usize>,
     }
 
@@ -146,9 +145,6 @@ mod tests {
         }
         fn on_bell(&self) {
             *self.bell.lock().unwrap() += 1;
-        }
-        fn on_device_response(&self, data: &[u8]) {
-            self.device.lock().unwrap().push(data.to_vec());
         }
         fn on_reset(&self) {
             *self.reset.lock().unwrap() += 1;
@@ -177,12 +173,6 @@ mod tests {
     fn test_fire_bell_callback_none_does_not_panic() {
         let core = TerminalCore::new(80, 24, 0);
         core.fire_bell_callback();
-    }
-
-    #[test]
-    fn test_fire_device_response_callback_none_does_not_panic() {
-        let core = TerminalCore::new(80, 24, 0);
-        core.fire_device_response_callback();
     }
 
     #[test]
@@ -215,9 +205,6 @@ mod tests {
             fn on_bell(&self) {
                 self.0.on_bell()
             }
-            fn on_device_response(&self, d: &[u8]) {
-                self.0.on_device_response(d)
-            }
         }
         core.callbacks = Some(Box::new(Forward(recorder.clone())));
         core.fire_osc_callback(2, "hello");
@@ -243,9 +230,6 @@ mod tests {
             }
             fn on_bell(&self) {
                 self.0.on_bell()
-            }
-            fn on_device_response(&self, d: &[u8]) {
-                self.0.on_device_response(d)
             }
             fn on_reset(&self) {
                 self.0.on_reset()

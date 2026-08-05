@@ -30,23 +30,29 @@ impl TerminalCore {
         self.write_response(b"\x1b[>65;1;0c")
     }
 
-    /// Get pointer to response buffer in linear memory.
-    pub fn get_response_ptr(&self) -> *const u8 {
-        self.response_buffer.as_ptr()
-    }
-
-    /// Get length of last device response.
+    /// Total bytes currently pending in the ordered response store
+    /// (task0002 D5, review-round-1 rework): the SUM of every response
+    /// synthesized since the previous [`Self::take_response`] drain, not
+    /// merely the most recently synthesized single response. Zero means
+    /// nothing is pending.
     pub fn get_response_len(&self) -> u32 {
-        self.response_len as u32
+        self.response_queue.len() as u32
     }
 
-    /// Get response buffer contents as a byte vector.
-    /// Convenient alternative to ptr/len for TS integration.
+    /// Peek at the ordered pending-response store WITHOUT draining it
+    /// (task0002 D5): returns every response synthesized since the
+    /// previous [`Self::take_response`] drain, concatenated in synthesis
+    /// order. Non-destructive counterpart to `take_response` — a caller
+    /// that needs the exactly-once PTY delivery guarantee must drain via
+    /// `take_response`, not read this.
     pub fn get_response_bytes(&self) -> Vec<u8> {
-        self.response_buffer[..self.response_len as usize].to_vec()
+        self.response_queue.clone()
     }
 
-    /// Take the pending device response and clear the buffer.
+    /// Drain and return every pending device response, concatenated in
+    /// synthesis order, clearing the store (task0002 D5: a drain whose
+    /// result is discarded — e.g. the snapshot/replay paths — removes
+    /// everything pending). A second call immediately after returns empty.
     ///
     /// The native-poc embedder calls this after every `process_pty_data_fully`
     /// to forward DSR / DA / XTWINOPS replies back into the PTY's input side.
@@ -55,27 +61,16 @@ impl TerminalCore {
     /// recomputes the redraw against a stale cursor — manifesting as
     /// backspace erasing far more characters than the one the user pressed.
     ///
-    /// This is the SOLE intended PTY delivery route for a synthesized
-    /// response (tmux-startup-query-response-leak task0001): the embedder's
-    /// three write-back sites poll this after every parse and are the only
-    /// callers that may forward the bytes onward. A second, callback-based
-    /// delivery path (`fire_device_response_callback` /
-    /// `TerminalCallbacks::on_device_response`, still fired alongside this
-    /// buffer write for every response — see `csi_dispatch.rs`) exists for
-    /// hosts that prefer a push model; the native embedder's callback
-    /// implementation is a documented no-op specifically so this method
-    /// remains the only channel that reaches a PTY — a second live consumer
-    /// would reintroduce exactly-once-delivery violations (a query's
-    /// application receiving its own reply more than once).
+    /// This is the SOLE PTY delivery route for a synthesized response
+    /// (tmux-startup-query-response-leak task0001 / task0002): the
+    /// embedder's three write-back sites poll this after every parse and
+    /// are the only callers that may forward the bytes onward. `term_core`
+    /// fires no competing callback for device responses — a second live
+    /// consumer would reintroduce exactly-once-delivery violations (a
+    /// query's application receiving its own reply more than once, the
+    /// original task0001 bug).
     pub fn take_response(&mut self) -> Vec<u8> {
-        let len = self.response_len as usize;
-        if len == 0 {
-            return Vec::new();
-        }
-        let out = self.response_buffer[..len].to_vec();
-        self.response_buffer[..len].fill(0);
-        self.response_len = 0;
-        out
+        std::mem::take(&mut self.response_queue)
     }
 }
 
@@ -173,12 +168,15 @@ impl TerminalCore {
         self.write_response(&buf[..pos])
     }
 
-    /// Write bytes to response buffer. Returns length.
+    /// Append bytes to the ordered pending-response store (task0002 D5:
+    /// APPENDS, never overwrites — see [`TerminalCore::response_queue`]).
+    /// Returns the number of bytes just appended by THIS call (the
+    /// individual response's length), not the store's new total —
+    /// matching the per-call contract every `handle_*` caller and its
+    /// tests rely on.
     fn write_response(&mut self, data: &[u8]) -> u8 {
-        let len = data.len().min(self.response_buffer.len());
-        self.response_buffer[..len].copy_from_slice(&data[..len]);
-        self.response_len = len as u8;
-        len as u8
+        self.response_queue.extend_from_slice(data);
+        data.len().min(u8::MAX as usize) as u8
     }
 
     /// Format cursor position report into response buffer.
@@ -343,13 +341,19 @@ mod tests {
         assert_eq!(&bytes, b"\x1b[>65;1;0c");
     }
 
+    /// `get_response_len` under queue semantics (task0002 D5): total
+    /// pending bytes, not "did the last call produce a response".
+    /// `get_response_ptr` (the raw-pointer WebView-era accessor this test
+    /// used to also exercise) is removed — task0002 audit found no
+    /// production caller (the crate deliberately ships no wasm-bindgen
+    /// surface), and a raw pointer into a store that can now grow/
+    /// reallocate on every subsequent query is a latent hazard under the
+    /// new append-only representation.
     #[test]
-    fn test_response_ptr_len() {
+    fn test_response_len_reflects_pending_queue() {
         let mut core = TerminalCore::new(80, 24, 0);
         core.handle_primary_device_attributes();
-        let ptr = core.get_response_ptr();
         let len = core.get_response_len();
-        assert!(!ptr.is_null());
         assert!(len > 0);
     }
 
@@ -466,5 +470,46 @@ mod tests {
         core.set_cell_size_px(10, 20);
         assert_eq!(core.get_cell_width_px(), 10);
         assert_eq!(core.get_cell_height_px(), 20);
+    }
+
+    // ── Ordered multi-response drain (tmux-startup-query-response-leak
+    // task0002, review-round-1 rework, D5) ──────────────────────────────
+    //
+    // AC-1: five (here seven) distinct in-scope queries fed in ONE parse
+    // call must all survive a single subsequent drain, concatenated in
+    // synthesis order, with a second drain returning empty. Pre-fix, the
+    // single-slot `response_buffer` is overwritten by each `write_response`
+    // call, so only the LAST query's reply (XTWINOPS 18) survives — this
+    // test fails against that code (orchestrator-verified byte-level
+    // probe: `TerminalCore::new(80, 24, 1000)` then
+    // `process_pty_data_fully(b"\x1b[c\x1b[>0c\x1b[14t\x1b[16t\x1b[18t")`
+    // yields only `ESC[8;24;80t` from `take_response`).
+    #[test]
+    fn take_response_after_multi_query_chunk_returns_all_in_order() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // DA1, DA2, DSR status, CPR, XTWINOPS 14/16/18 in ONE parse call.
+        core.process_pty_data_fully(b"\x1b[c\x1b[>0c\x1b[5n\x1b[6n\x1b[14t\x1b[16t\x1b[18t");
+
+        let drained = core.take_response();
+        let expected: Vec<u8> = [
+            &b"\x1b[?65;1;4;22c"[..], // DA1
+            &b"\x1b[>65;1;0c"[..],    // DA2
+            &b"\x1b[0n"[..],          // DSR status
+            &b"\x1b[1;1R"[..],        // CPR
+            &b"\x1b[4;384;640t"[..],  // XTWINOPS 14
+            &b"\x1b[6;16;8t"[..],     // XTWINOPS 16
+            &b"\x1b[8;24;80t"[..],    // XTWINOPS 18
+        ]
+        .concat();
+        assert_eq!(
+            drained, expected,
+            "a single drain after a multi-query chunk must return every \
+             response, concatenated in synthesis order"
+        );
+
+        assert!(
+            core.take_response().is_empty(),
+            "a second drain immediately after must return empty"
+        );
     }
 }

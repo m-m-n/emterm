@@ -98,7 +98,7 @@ mod tests {
         let payload = b"Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA";
         assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::QueryHandled);
         // No response generated (handled by PTY reader thread)
-        assert_eq!(core.response_len, 0);
+        assert!(core.response_queue.is_empty());
     }
 
     #[test]
@@ -106,7 +106,7 @@ mod tests {
         let mut core = TerminalCore::new(80, 24, 0);
         let payload = b"Ga=q;AAAA";
         assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::QueryHandled);
-        assert_eq!(core.response_len, 0);
+        assert!(core.response_queue.is_empty());
     }
 
     #[test]
@@ -114,7 +114,7 @@ mod tests {
         let mut core = TerminalCore::new(80, 24, 0);
         let payload = b"Ga=q";
         assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::QueryHandled);
-        assert_eq!(core.response_len, 0);
+        assert!(core.response_queue.is_empty());
     }
 
     // ── Non-query final chunk tests ──────────────────────
@@ -125,7 +125,7 @@ mod tests {
         let payload = b"Ga=T,i=42,f=100;iVBORw0KGgo=";
         assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::FinalChunk);
         // No response generated (handled by PTY reader thread)
-        assert_eq!(core.response_len, 0);
+        assert!(core.response_queue.is_empty());
     }
 
     #[test]
@@ -133,7 +133,7 @@ mod tests {
         let mut core = TerminalCore::new(80, 24, 0);
         let payload = b"Gi=99,f=100;iVBORw0KGgo=";
         assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::FinalChunk);
-        assert_eq!(core.response_len, 0);
+        assert!(core.response_queue.is_empty());
     }
 
     #[test]
@@ -141,7 +141,7 @@ mod tests {
         let mut core = TerminalCore::new(80, 24, 0);
         let payload = b"Ga=T,i=42,p=7,f=100;iVBORw0KGgo=";
         assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::FinalChunk);
-        assert_eq!(core.response_len, 0);
+        assert!(core.response_queue.is_empty());
     }
 
     #[test]
@@ -150,7 +150,7 @@ mod tests {
         // q=1 doesn't affect classification (only response generation)
         let payload = b"Ga=T,i=42,q=1;iVBORw0KGgo=";
         assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::FinalChunk);
-        assert_eq!(core.response_len, 0);
+        assert!(core.response_queue.is_empty());
     }
 
     // ── Continuation chunk tests ─────────────────────────
@@ -160,7 +160,7 @@ mod tests {
         let mut core = TerminalCore::new(80, 24, 0);
         let payload = b"Ga=T,i=42,m=1;iVBORw0KGgo=";
         assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::MoreChunks);
-        assert_eq!(core.response_len, 0);
+        assert!(core.response_queue.is_empty());
     }
 
     #[test]
@@ -168,7 +168,7 @@ mod tests {
         let mut core = TerminalCore::new(80, 24, 0);
         let payload = b"Ga=T,i=42,m=0;iVBORw0KGgo=";
         assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::FinalChunk);
-        assert_eq!(core.response_len, 0);
+        assert!(core.response_queue.is_empty());
     }
 
     // ── Non-Kitty APC tests ─────────────────────────────

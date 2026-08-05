@@ -127,26 +127,25 @@ impl TerminalCore {
             }
 
             // Device status
+            //
+            // Each `handle_*` call below appends its synthesized reply to
+            // the ordered pending-response store (task0002 D5); the
+            // embedder drains ALL of them via `TerminalCore::take_response`
+            // after the parse. `term_core` fires no competing callback for
+            // device responses — that channel (`fire_device_response_callback`
+            // / `TerminalCallbacks::on_device_response`) was removed
+            // (tmux-startup-query-response-leak task0002): a second live
+            // consumer would reintroduce exactly-once-delivery violations.
             (None, b'n') => {
-                let len =
-                    self.handle_device_status_report(ParamParser::get_first_or_zero(params) as u8);
-                if len > 0 {
-                    self.fire_device_response_callback();
-                }
+                self.handle_device_status_report(ParamParser::get_first_or_zero(params) as u8);
             }
 
             // Device attributes
             (None, b'c') | (Some(b'?'), b'c') => {
-                let len = self.handle_primary_device_attributes();
-                if len > 0 {
-                    self.fire_device_response_callback();
-                }
+                self.handle_primary_device_attributes();
             }
             (Some(b'>'), b'c') => {
-                let len = self.handle_secondary_device_attributes();
-                if len > 0 {
-                    self.fire_device_response_callback();
-                }
+                self.handle_secondary_device_attributes();
             }
             (Some(b'='), b'c') => {
                 // TertiaryDeviceAttributes - currently ignored
@@ -155,14 +154,17 @@ impl TerminalCore {
             // XTWINOPS (window operations / size reports)
             (None, b't') => {
                 let ps = ParamParser::get_first_or_zero(params);
-                let len = match ps {
-                    14 => self.handle_xtwinops_text_area_px(),
-                    16 => self.handle_xtwinops_cell_size(),
-                    18 => self.handle_xtwinops_text_area_chars(),
-                    _ => 0,
-                };
-                if len > 0 {
-                    self.fire_device_response_callback();
+                match ps {
+                    14 => {
+                        self.handle_xtwinops_text_area_px();
+                    }
+                    16 => {
+                        self.handle_xtwinops_cell_size();
+                    }
+                    18 => {
+                        self.handle_xtwinops_text_area_chars();
+                    }
+                    _ => {}
                 }
             }
 
@@ -170,10 +172,7 @@ impl TerminalCore {
             // intermediates: [b'?', b'$'], final: b'p'
             (Some(b'?'), b'p') if intermediates.get(1) == Some(&b'$') => {
                 let mode = ParamParser::get_first_or_zero(params);
-                let len = self.handle_decrpm(mode);
-                if len > 0 {
-                    self.fire_device_response_callback();
-                }
+                self.handle_decrpm(mode);
             }
 
             _ => { /* Unknown CSI - ignore */ }
@@ -285,14 +284,14 @@ mod tests {
     fn test_csi_internal_device_attributes() {
         let mut core = TerminalCore::new(80, 24, 0);
         core.handle_csi_internal(&[], &[], b'c'); // DA1
-        assert!(core.response_len > 0);
+        assert!(!core.response_queue.is_empty());
     }
 
     #[test]
     fn test_csi_internal_tertiary_device_attributes_ignored() {
         let mut core = TerminalCore::new(80, 24, 0);
         core.handle_csi_internal(&[], &[b'='], b'c'); // DA3 - ignored
-        assert_eq!(core.response_len, 0);
+        assert!(core.response_queue.is_empty());
     }
 
     #[test]
@@ -308,7 +307,7 @@ mod tests {
         let mut core = TerminalCore::new(80, 24, 0);
         // CSI ? 2026 $ p
         core.handle_csi_internal(&[2026], &[b'?', b'$'], b'p');
-        assert!(core.response_len > 0);
+        assert!(!core.response_queue.is_empty());
         let bytes = core.get_response_bytes();
         assert_eq!(&bytes, b"\x1b[?2026;2$y"); // reset
     }
@@ -318,7 +317,7 @@ mod tests {
         let mut core = TerminalCore::new(80, 24, 0);
         // CSI ? 2026 p (without $) - should not match DECRPM
         core.handle_csi_internal(&[2026], &[b'?'], b'p');
-        assert_eq!(core.response_len, 0); // No response
+        assert!(core.response_queue.is_empty()); // No response
     }
 
     #[test]

@@ -2696,19 +2696,22 @@ impl Tab {
 
             // Device responses (DA1/DA2/DSR/XTWINOPS/DECRPM) are NOT
             // drained/written here (tmux-startup-query-response-leak
-            // task0001). They are already delivered exactly once by
-            // whichever write-back site (`process_outer_via_core`,
-            // `apply_active_pane_output`, `apply_queued_live_output`) just
-            // parsed the bytes that produced them, via `take_response()` /
-            // `write_device_response` — the sole intended PTY delivery
-            // route. A second delivery used to happen here, sourced from
-            // `NativeCallbackState::device_responses`
-            // (`NativeCallbacks::on_device_response` is now a documented
-            // no-op) and written raw via `Tab::write`, bypassing mux
-            // routing entirely; that redundant channel caused the query's
-            // application (e.g. tmux) to see the reply twice and forward
-            // the stray second copy to the shell as ordinary input, which
-            // echoed onto the screen.
+            // task0001/task0002). They are already delivered exactly once
+            // — in synthesis order, ALL of them from the pump's parse, per
+            // task0002's ordered-drain contract — by whichever write-back
+            // site (`process_outer_via_core`, `apply_active_pane_output`,
+            // `apply_queued_live_output`) just parsed the bytes that
+            // produced them, via `take_response()` / `write_device_response`
+            // — the SOLE PTY delivery route. A second delivery used to
+            // happen here, sourced from `NativeCallbackState::
+            // device_responses` (fed by `NativeCallbacks::
+            // on_device_response`, a documented no-op after task0001) and
+            // written raw via `Tab::write`, bypassing mux routing entirely;
+            // that redundant channel caused the query's application (e.g.
+            // tmux) to see the reply twice and forward the stray second
+            // copy to the shell as ordinary input, which echoed onto the
+            // screen. task0002 removed the channel outright — `on_device_
+            // response` no longer exists on `TerminalCallbacks` at all.
             // Drain buffered image-protocol payloads so we can decode them
             // outside the lock (the decoder needs cursor coords from `core`
             // — see comment in `drain_and_decode_images` below).
@@ -3870,9 +3873,9 @@ impl Tab {
 }
 
 /// True when `payload` contains a complete CSI device query that `term_core`
-/// answers by writing into its response buffer. The set is kept in lockstep
-/// with the response-firing arms of `crates/term_core/src/csi_dispatch.rs`
-/// (`fire_device_response_callback`): final byte `n` (DSR), `c` (Device
+/// answers by appending to its ordered pending-response store (task0002 D5).
+/// The set is kept in lockstep with the response-synthesizing arms of
+/// `crates/term_core/src/csi_dispatch.rs`: final byte `n` (DSR), `c` (Device
 /// Attributes), `t` (XTWINOPS size reports), or `p` (DECRPM `CSI ? Ps $ p`).
 /// Detection is intentionally conservative — it matches on the final byte
 /// alone, so a few non-response sequences sharing those finals (e.g. DA3
@@ -3881,12 +3884,17 @@ impl Tab {
 /// its own instead of coalescing it; correctness is unaffected.
 ///
 /// Used by [`Tab::pty_output_batch_eligible`] to keep query-bearing
-/// `PtyOutput` frames OUT of the coalesce accumulator: `term_core`'s
-/// single-slot response buffer is overwrite-only and is not drained between
-/// chunks of one parse, so concatenating several query frames into one parse
-/// would keep only the LAST reply. Parsing such a frame on its own (the
-/// per-frame path) preserves the reply, matching the pre-coalesce behavior
-/// byte-for-byte.
+/// `PtyOutput` frames OUT of the coalesce accumulator. This is now a
+/// LATENCY/isolation choice rather than a correctness requirement:
+/// `term_core`'s ordered pending-response store (task0002 D5) no longer
+/// loses replies when several query frames are concatenated into one parse
+/// — `take_response` drains every reply, in order, regardless of how many
+/// queries a single `process_pty_data_fully` call answered. Parsing a
+/// query-bearing frame on its own keeps its reply from waiting behind an
+/// unrelated coalesce run and matches the pre-coalesce per-frame timing
+/// byte-for-byte; task0002 leaves this gate's behavior unchanged (out of
+/// scope — see that task's plan), only its rationale no longer includes
+/// "or a reply is lost".
 ///
 /// A CSI starts at `ESC [` (`0x1b 0x5b`); parameter bytes are `0x30..=0x3f`,
 /// intermediate bytes `0x20..=0x2f`, and the final byte is `0x40..=0x7e`. A C0
@@ -6570,6 +6578,54 @@ mod tests {
         }
     }
 
+    /// AC-2: five distinct in-scope queries fed as ONE combined buffer
+    /// through `process_combined`'s pre-mux branch (`process_outer_via_core`,
+    /// a single `process_pty_data_fully` + `take_response` call) must all
+    /// reach the querying PTY's inbound side, in query order, and never
+    /// render into the grid. Pre-task0002 (single-slot `response_buffer`),
+    /// this delivers only the LAST query's reply.
+    #[test]
+    fn plain_tab_multi_query_chunk_delivers_all_responses_in_order_exactly_once() {
+        let mut tab = test_tab();
+        tab.core.lock().set_cursor(0, 0);
+        let combined: Vec<u8> = [
+            &b"\x1b[c"[..],   // DA1
+            &b"\x1b[>0c"[..], // DA2
+            &b"\x1b[5n"[..],  // DSR status
+            &b"\x1b[14t"[..], // XTWINOPS 14
+            &b"\x1b[18t"[..], // XTWINOPS 18
+        ]
+        .concat();
+
+        tab.process_combined(combined);
+
+        let expected: Vec<u8> = [
+            &b"\x1b[?65;1;4;22c"[..], // DA1
+            &b"\x1b[>65;1;0c"[..],    // DA2
+            &b"\x1b[0n"[..],          // DSR status
+            &b"\x1b[4;384;640t"[..],  // XTWINOPS 14
+            &b"\x1b[8;24;80t"[..],    // XTWINOPS 18
+        ]
+        .concat();
+        let writes = tab.test_outbound_writes();
+        let matches = writes
+            .iter()
+            .filter(|w| w.as_slice() == expected.as_slice())
+            .count();
+        assert_eq!(
+            matches, 1,
+            "one combined chunk with 5 queries must produce exactly one \
+             outbound write containing all 5 replies concatenated in \
+             synthesis order, got {matches} within {writes:?}"
+        );
+
+        let (rows, _, _) = displayed_fingerprint(&tab);
+        assert!(
+            rows.iter().all(|r| r.is_empty()),
+            "multi-query chunk bytes must not render into the grid, got {rows:?}"
+        );
+    }
+
     /// AC-3: the same delivery/visibility assertions hold on the mux-pane
     /// path — a device query arriving as a per-frame `PtyOutput` over the
     /// REAL pump entry point (`process_combined`'s mux-transport branch,
@@ -6607,6 +6663,56 @@ mod tests {
                  into the grid, got {rows:?}"
             );
         }
+    }
+
+    /// AC-3: five distinct in-scope queries embedded in ONE mux `PtyOutput`
+    /// frame's inner payload (`apply_active_pane_output`, a single
+    /// `process_pty_data_fully` + `take_response` call) must all reach the
+    /// active pane, as a single `PtyInput` frame containing all 5 replies
+    /// concatenated in query order, and never render into the grid.
+    #[test]
+    fn mux_pane_multi_query_chunk_delivers_all_responses_in_order_exactly_once() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10)], 0));
+        tab.core.lock().set_cursor(0, 0);
+        let combined_inner: Vec<u8> = [
+            &b"\x1b[c"[..],   // DA1
+            &b"\x1b[>0c"[..], // DA2
+            &b"\x1b[5n"[..],  // DSR status
+            &b"\x1b[14t"[..], // XTWINOPS 14
+            &b"\x1b[18t"[..], // XTWINOPS 18
+        ]
+        .concat();
+
+        tab.process_combined(pty_output_apc(10, &combined_inner));
+        tab.process_combined(Vec::new());
+
+        let expected: Vec<u8> = [
+            &b"\x1b[?65;1;4;22c"[..], // DA1
+            &b"\x1b[>65;1;0c"[..],    // DA2
+            &b"\x1b[0n"[..],          // DSR status
+            &b"\x1b[4;384;640t"[..],  // XTWINOPS 14
+            &b"\x1b[8;24;80t"[..],    // XTWINOPS 18
+        ]
+        .concat();
+        let writes = tab.test_outbound_writes();
+        let matches = writes
+            .iter()
+            .filter(|w| w.as_slice() == expected.as_slice())
+            .count();
+        assert_eq!(
+            matches, 1,
+            "one mux PtyOutput frame with 5 queries must produce exactly \
+             one outbound PtyInput write containing all 5 replies \
+             concatenated in synthesis order, got {matches} within {writes:?}"
+        );
+
+        let (rows, _, _) = displayed_fingerprint(&tab);
+        assert!(
+            rows.iter().all(|r| r.is_empty()),
+            "multi-query chunk bytes must not render into the grid (mux \
+             pane), got {rows:?}"
+        );
     }
 
     /// AC-3: a device query arriving inside a pending-switch's queued live
@@ -7902,7 +8008,6 @@ mod tests {
         fn on_apc(&self, _data: &[u8]) {}
         fn on_dcs(&self, _data: &[u8]) {}
         fn on_bell(&self) {}
-        fn on_device_response(&self, _data: &[u8]) {}
     }
 
     /// AC-1 (SPEC TS-1): after `apply_offthread_swap`, the live core's
