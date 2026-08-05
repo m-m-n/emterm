@@ -2599,23 +2599,31 @@ fn next_resize_settle_wake_deadline(awaiting_decision: bool, now: Instant) -> Op
 
 /// Whether the cached status-bar drawing insets need to be (re)applied
 /// this frame: the candidate top/bot values differ from what's currently
-/// cached by more than `f32::EPSILON` (mirrors
-/// [`WindowHost::refresh_mux_sidebar_inset`]'s own epsilon-style change
-/// check for its inset). Change 2 (mux-tab-switch-bypass-refix task0002,
-/// findings `a82206113b8160fd` / `aba5ebbdf9a9addb`): extracted as a pure
-/// function — plain values in, plain bool out — so the fix (apply insets
-/// on value change, independent of `ResizeSettler`'s grid-size decision)
-/// is directly unit-testable. D-D (IMPLEMENTATION.md): applying the
-/// insets here is deliberately independent of `pending_resize`, which
-/// stays gated on the settler's forwarded decision only.
+/// cached at all (exact comparison). Change 2 (mux-tab-switch-bypass-refix
+/// task0002, findings `a82206113b8160fd` / `aba5ebbdf9a9addb`): extracted
+/// as a pure function — plain values in, plain bool out — so the fix
+/// (apply insets on value change, independent of `ResizeSettler`'s
+/// grid-size decision) is directly unit-testable. D-D (IMPLEMENTATION.md):
+/// applying the insets here is deliberately independent of
+/// `pending_resize`, which stays gated on the settler's forwarded decision
+/// only.
+///
+/// task0006 (finding `869ddd643c123a44`): an earlier version used an
+/// absolute `f32::EPSILON` tolerance intended to avoid float-noise churn,
+/// mirroring [`WindowHost::refresh_mux_sidebar_inset`]'s own epsilon-style
+/// check for its inset. That tolerance was dead weight: at real inset
+/// magnitudes (tens of logical px) one ULP already exceeds
+/// `f32::EPSILON`, so no representable perturbation ever fell inside the
+/// band and the comparison was already exact in practice. This makes the
+/// exactness explicit instead of carrying a threshold that never
+/// triggers.
 fn status_bar_insets_changed(
     current_top: f32,
     current_bot: f32,
     candidate_top: f32,
     candidate_bot: f32,
 ) -> bool {
-    (current_top - candidate_top).abs() > f32::EPSILON
-        || (current_bot - candidate_bot).abs() > f32::EPSILON
+    current_top != candidate_top || current_bot != candidate_bot
 }
 
 /// Whether `events` contains at least one egui event that must veto the
@@ -5640,15 +5648,48 @@ mod tests {
         assert!(status_bar_insets_changed(0.0, 40.0, 2.0, 40.0));
     }
 
-    /// A difference at or below `f32::EPSILON` is treated as unchanged —
-    /// mirrors `refresh_mux_sidebar_inset`'s own epsilon-style comparison,
-    /// avoiding float-noise churn.
+    /// AC-1/AC-2 (task0006, finding `869ddd643c123a44`): the smallest
+    /// possible non-zero perturbation — one bit-step away from the stored
+    /// value — is still representable and must be reported as "changed".
+    /// This replaces the former `..._false_within_epsilon` case, whose
+    /// `40.0 + f32::EPSILON / 2.0` perturbation rounded back to exactly
+    /// `40.0` in f32 and therefore pinned nothing (it duplicated
+    /// `..._false_when_identical`). The `assert_ne!` on the raw bits
+    /// proves this perturbation is real before the predicate is even
+    /// called, guarding against a repeat of that defect.
     #[test]
-    fn status_bar_insets_changed_false_within_epsilon() {
-        assert!(!status_bar_insets_changed(
-            40.0,
+    fn status_bar_insets_changed_true_for_minimal_representable_difference() {
+        let current_bot = 0.0_f32;
+        let candidate_bot = f32::from_bits(current_bot.to_bits() + 1);
+        assert_ne!(
+            current_bot.to_bits(),
+            candidate_bot.to_bits(),
+            "perturbation must be a real, bit-distinct value or this test \
+             proves nothing about the predicate"
+        );
+        assert!(status_bar_insets_changed(
             0.0,
-            40.0 + f32::EPSILON / 2.0,
+            current_bot,
+            0.0,
+            candidate_bot
+        ));
+    }
+
+    /// AC-3: the same pin at a magnitude representative of a real
+    /// status-bar inset (tens of logical px) — the exact site of the
+    /// former vacuous test. Even here, where the retired epsilon
+    /// threshold was already smaller than one ULP and thus unreachable,
+    /// the smallest representable step away from the stored value is
+    /// reported as "changed".
+    #[test]
+    fn status_bar_insets_changed_true_for_minimal_step_at_real_inset_magnitude() {
+        let current_top = 40.0_f32;
+        let candidate_top = f32::from_bits(current_top.to_bits() + 1);
+        assert_ne!(current_top.to_bits(), candidate_top.to_bits());
+        assert!(status_bar_insets_changed(
+            current_top,
+            0.0,
+            candidate_top,
             0.0
         ));
     }
