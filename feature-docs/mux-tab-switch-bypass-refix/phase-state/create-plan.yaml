@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-tab-switch-bypass-refix
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 5b72c75de88ca34dab2b93e2743b1288bb9f6b6c
+last_input_digest: sha256:d9320a3ab9105d0b41f94a3f155b26f4ad3ea87c17dad9ae261d2a64234d6a11
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:d9320a3ab9105d0b41f94a3f155b26f4ad3ea87c17dad9ae261d2a64234d6a11
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

@@ -55,7 +55,7 @@ workflow:
     skipped_reason: "Internal performance/correctness bugfix in the Rust terminal core and window host. No new UI surface, no visual or interaction design change — the status-bar inset fix restores already-specified rendering behavior. No design-system tokens are consumed or produced."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: null
