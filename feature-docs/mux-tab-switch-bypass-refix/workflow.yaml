@@ -58,8 +58,7 @@ workflow:
     status: completed
     completed_at_commit: 7c08013adffa27b253405ea4e9c5f7a70e2dfd65
   - id: implement
-    status: completed
-    completed_at_commit: ddced81839d0b1eb4b234eaa4086b40773c14c8f
+    status: pending
     base_commit: f9579f9b24b5243b52a330fe9804a21ad39550e1
   - id: review
     status: pending
@@ -109,6 +108,56 @@ tasks:
     notes: null
     branch: em-workflow/mux-tab-switch-bypass-refix/task0003
 
+  task0004:
+    title: "Segment-bound gate: h == 0 cost justification, top-end alignment, and pin purpose"
+    plan: tasks/task0004.md
+    files:
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/bench.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: high
+    requirements: [FR1, FR6, NFR1, NFR3]
+    status: pending
+    notes: null
+    branch: null
+    provenance:
+      source: review
+      source_ids: [a1a06ed541045dd5, 77da6aceb73b1a72, 474e01ad8c29e7f0, 96f7205be52fece8, 1adb07864f11618f]
+      review_round: 1
+  task0005:
+    title: "apply_pending_resize consumes only settler-forwarded grid sizes"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/src/window_host.rs
+    skills: [frontend-impl]
+    domains: [ui, concurrency]
+    complexity: high
+    requirements: [FR4, FR6, NFR3]
+    status: pending
+    notes: null
+    branch: null
+    provenance:
+      source: review
+      source_ids: [0029db1c89ab226f, 5b2f22c5a14f7364]
+      review_round: 1
+  task0006:
+    title: "Make the inset-change predicate's tolerance pin representable"
+    plan: tasks/task0006.md
+    files:
+      - src-tauri/src/window_host.rs
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: low
+    requirements: [FR4, NFR3]
+    status: pending
+    notes: null
+    branch: null
+    provenance:
+      source: review
+      source_ids: [869ddd643c123a44]
+      review_round: 1
+
 review:
   status: pending
   rounds_completed: 1
@@ -131,8 +180,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS1, TS2, TS7]
+    tasks: [task0001, task0004]
+    tests: [TS1, TS2, TS7, TS8]
   FR2:
     title: "Regression bench reproduces the SPEC-cited 26-segment cluster"
     status: ok
@@ -152,8 +201,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0002]
-    tests: [TS5]
+    tasks: [task0002, task0005, task0006]
+    tests: [TS5, TS10, TS11]
   FR5:
     title: "D8 empty-MIDDLE auto-fix confirmed correct under fresh review"
     status: ok
@@ -166,15 +215,15 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
-    tests: [TS5, TS7, TS6]
+    tasks: [task0001, task0002, task0004, task0005]
+    tests: [TS5, TS7, TS6, TS10]
   NFR1:
     title: "No double 2nd-pass non-bypass cost"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS6]
+    tasks: [task0001, task0004]
+    tests: [TS6, TS8]
   NFR2:
     title: "Bounded render-loop CPU during the settle window"
     status: ok
@@ -187,9 +236,9 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002, task0003]
-    tests: [TS6]
+    tasks: [task0001, task0002, task0003, task0004, task0005, task0006]
+    tests: [TS6, TS9]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework_count: 0
