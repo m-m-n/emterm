@@ -86,7 +86,7 @@ workflow:
         - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
         - tabs::tests::welcome_without_windows_leaves_group_none
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:

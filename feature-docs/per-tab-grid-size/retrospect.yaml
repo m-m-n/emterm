@@ -1,0 +1,71 @@
+feature: per-tab-grid-size
+collected_at: "2026-08-05T09:40:00+09:00"
+session_ids: [f68e7063-7da6-42dc-809a-23b61bf13c70]
+signals:
+  review_critical_high:
+    - stable_id: dbb7766a6212fb1a
+      category: comprehensive
+      file: src-tauri/src/app.rs
+      title: "活性化時の reconcile が「切り替え前のタブ用」の cell_size を使うため、mux タブ⇔ローカルタブの切替で誤サイズの余分な PTY resize が 1 回増える"
+      resolution: fixed
+    - stable_id: 09f0e6096bbc36ee
+      category: spec
+      file: src-tauri/src/app.rs
+      title: "活性化時の reconcile が「切替前」の表示領域(cell_size)を使うため、mux↔非mux のタブ切替で incoming タブが2回リサイズされる"
+      resolution: fixed
+    - stable_id: 8a20b61bf25313d7
+      category: performance
+      file: src-tauri/src/app.rs
+      title: "Algorithmic regression: width_changed detection now uses lock per call to reconcile_active_tab_size"
+      resolution: declined
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures:
+    - scenario: TS6
+      note: >-
+        --lib スイートで 7 件失敗。ただし全件が実装前 baseline (6464344 = main + 本 feature の
+        ドキュメントのみ) でも同一に失敗することを、その commit の使い捨て worktree で実行して
+        確認済み。本 feature 由来の回帰ではない。
+    - scenario: TS7
+      note: >-
+        未実行。GUI セッション + 実 tmux + 2026-08-03 の 3 タブ構成が必要な手動シナリオで、
+        batch モードでは実行できない。元のバグが消えたことの実機確認は人間の評価者に残っている。
+  discretionary_perspectives: []
+  declined_findings:
+    - stable_id: 8a20b61bf25313d7
+      category: performance
+      resolution_reason: >-
+        claude:performance が同一箇所を独立に精査して micro と判定しており、vertex reviewer 自身も
+        別の呼び出し点を混同していたと自己申告していた。algorithmic regression は存在しない。
+    - stable_id: 2dbedee44622985e
+      category: performance
+      resolution_reason: >-
+        同じ二重ロックを claude:performance が「micro のため非報告」と明示判定。提案されていた
+        ロックガードの引き回しは Tab::resize の事前条件を壊すため害の方が大きい。
+lessons_candidates:
+  - id: preexisting-failures-mislabeled-as-flaky
+    note: >-
+      3 人の implementer がいずれも tabs.rs の 7 件の失敗を「flaky / 並列実行由来の非決定性」と
+      報告したが、verify で同じテストを 2 回単独実行したところ決定的に失敗し、実装前 baseline でも
+      同一に失敗した。既存の失敗を「flaky」と分類すると baseline との差分照合が形骸化する。
+      implementer には「baseline failure を flaky と呼ぶ前に 2 回走らせて決定性を確かめる」旨を
+      求めるとよさそう。なおこの 7 件は main に元からある実バグの可能性があり、別タスク候補。
+  - id: single-file-editor-cannot-fix-cross-file-findings
+    note: >-
+      review round 1 の high は修正が app.rs と window_host.rs に跨り、review-editor が単一ファイル
+      専用のため R4 の auto-fix が構造的に適用不能だった。batch の needs-judgment 既定
+      (Apply as-is) をそのまま踏むと部分適用が統合ブランチにコミットされる恐れがあり、
+      orchestrator 判断で rework に回した。finding に「修正が跨るファイル数」の見積もりがあると
+      auto-fix 可否を機械的に判定できる。
+  - id: worktree-missing-gitignored-build-assets
+    note: >-
+      新規 worktree には gitignored の src-tauri/assets/fonts/ が無く、GUI feature のビルドが
+      build_rs.font_missing で失敗する。3 タスク中 3 タスク + verify が同じ壁に当たり、各自が
+      scripts/fetch-fonts.sh を実行して回避した。implement フェーズの worktree 作成直後に
+      一度だけ流すか、タスクプロンプトに定型で載せると重複が消える。
+  - id: cross-model-reviewer-availability
+    note: >-
+      round 1 で vertex/architecture が出力打ち切り (finish_reason: length)、round 2 で codex が
+      利用上限、vertex/spec が HTTP 429 (同時リクエスト過多) を返した。vertex を複数同時に
+      投げたことが 429 の一因の可能性がある。cross-model の fan-out はプロバイダ単位で
+      直列化する余地がある。
