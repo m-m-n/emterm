@@ -1,0 +1,33 @@
+schema_version: 1
+feature: tmux-startup-query-response-leak
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: dd730bc
+last_input_digest: sha256:34494aba22973295ebbb898e25900b4a38e6517d96e754f46f3f7ed9932883ec
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:34494aba22973295ebbb898e25900b4a38e6517d96e754f46f3f7ed9932883ec
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:pending
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/src/ui/md3.rs: sha256:8165557d9c2a3ea1a64c2d952de2e932b61b3514f03b52c03b9bc810e8acdc7b
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
+    truncated: false
+last_error: null
