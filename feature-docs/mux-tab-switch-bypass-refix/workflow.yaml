@@ -93,7 +93,7 @@ tasks:
     complexity: high
     requirements: [FR3, FR4, FR6, NFR2, NFR3]
     status: merged
-    notes: \"deviation: added next_resize_settle_wake_deadline wired into control_flow_for + about_to_wait (same file, within expected_files) so the rate-limited self-wake still fires on a fully idle window\"
+    notes: "deviation: added next_resize_settle_wake_deadline wired into control_flow_for + about_to_wait (same file, within expected_files) so the rate-limited self-wake still fires on a fully idle window"
     branch: em-workflow/mux-tab-switch-bypass-refix/task0002
   task0003:
     title: "Regression-pin the D8 empty-MIDDLE (h == k) auto-fix"
