@@ -49,8 +49,7 @@ workflow:
     status: completed
     completed_at_commit: be1d644e6ff8f99b6ded4ed68a396c597cf33d46
   - id: implement
-    status: completed
-    completed_at_commit: aa58eef14feaf230af9430a528be0dfeff323659
+    status: pending
     base_commit: 382f7e98cb5bc3d81f5a34cb194b50d68e43d22e
   - id: review
     status: pending
@@ -86,6 +85,45 @@ tasks:
       duplicate-delivery mechanism.
     branch: em-workflow/tmux-startup-query-response-leak/task0001
 
+  task0002:
+    title: Ordered multi-response drain — deliver every device-query response in a multi-query chunk exactly once
+    plan: tasks/task0002.md
+    files:
+      - crates/term_core/src/csi_device.rs
+      - crates/term_core/src/terminal_core.rs
+      - crates/term_core/src/csi_dispatch.rs
+      - crates/term_core/src/callbacks.rs
+      - crates/term_core/src/snapshot.rs
+      - src-tauri/src/callbacks.rs
+      - src-tauri/src/tabs.rs
+    skills: [backend-impl]
+    domains: [input-handling, api-contract, external-io, concurrency]
+    complexity: high
+    requirements: [FR2, FR3, FR4, FR5]
+    status: pending
+    notes: null
+    branch: null
+    provenance:
+      source: review
+      review_round: 1
+      source_ids: [9ef6b54302b083b3, c6092a0fdcb3b4a5, 49bc2b33fa3b053c, 1133c5337fb5458c, b3b78df745f37e0d, fc006b4380d032ae]
+  task0003:
+    title: Discard replay-generated device responses in the off-thread core-swap path
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/tabs.rs
+    skills: [backend-impl]
+    domains: [concurrency, external-io]
+    complexity: high
+    requirements: [FR1, FR2, FR3]
+    status: pending
+    notes: null
+    branch: null
+    provenance:
+      source: review
+      review_round: 1
+      source_ids: [8bebc1e532a1b597]
+
 review:
   status: pending
   rounds_completed: 1
@@ -108,22 +146,22 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS1, TS4]
+    tasks: [task0001, task0003]
+    tests: [TS1, TS4, TS9]
   FR2:
     title: Query responses still delivered to the querying application
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS3, TS4]
+    tasks: [task0001, task0002, task0003]
+    tests: [TS3, TS4, TS8, TS9]
   FR3:
     title: Automated regression coverage
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS4]
+    tasks: [task0001, task0002, task0003]
+    tests: [TS4, TS8, TS9]
   FR4:
     title: Runtime contexts covered
     status: assumed
@@ -132,8 +170,8 @@ requirements:
       fix and verification cover BOTH a plain eMterm tab running tmux AND a
       tmux inside a mux pane.
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS1, TS2]
+    tasks: [task0001, task0002]
+    tests: [TS1, TS2, TS8]
   FR5:
     title: Query-response set in scope
     status: assumed
@@ -142,8 +180,8 @@ requirements:
       — in-scope set is the mux-snapshot-device-query-strip taxonomy
       (DA1 / DA2 / DSR / CPR / XTWINOPS 14,16,18 / DECRPM).
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS4]
+    tasks: [task0001, task0002]
+    tests: [TS4, TS8]
   FR6:
     title: No regression of the tab-switch leak fix
     status: ok
@@ -181,5 +219,5 @@ requirements:
     tests: [TS7]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework_count: 0
