@@ -100,9 +100,9 @@ tasks:
     domains: [input-handling, api-contract, external-io, concurrency]
     complexity: high
     requirements: [FR2, FR3, FR4, FR5]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/tmux-startup-query-response-leak/task0002
     provenance:
       source: review
       review_round: 1
@@ -116,9 +116,9 @@ tasks:
     domains: [concurrency, external-io]
     complexity: high
     requirements: [FR1, FR2, FR3]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/tmux-startup-query-response-leak/task0003
     provenance:
       source: review
       review_round: 1
