@@ -1,0 +1,146 @@
+round: 2
+executed_at: "2026-08-05T09:20:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 6464344ea335f9b1e3329b3af75c70e3904f9e96
+  head_commit: fa9b1c38013f73bfbb24de3af539bc336e5f9226
+  changed_files:
+    - src-tauri/src/app.rs
+    - src-tauri/src/tabs.rs
+    - src-tauri/src/window_host.rs
+    - test-docs/per-tab-grid-size/task0001.tests.yaml
+    - test-docs/per-tab-grid-size/task0002.tests.yaml
+    - test-docs/per-tab-grid-size/task0003.tests.yaml
+    - test-docs/per-tab-grid-size/task0004.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: vertex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: vertex, status: skipped, skip_reason: "HTTP 429 concurrent-request throttling; retried once, same result"}
+  - {perspective: architecture, source: codex, status: skipped, skip_reason: "codex usage limit exceeded (retry after 2026-08-08)"}
+chain_deviations:
+  - perspective: architecture
+    note: >-
+      reviewers.yaml の architecture チェーンは [vertex, codex] で第1候補は vertex だが、
+      round 1 で vertex が出力打ち切り (finish_reason: length) となったため round 2 は
+      codex を先に試した。codex は利用上限で skip したため、チェーン本来の第1候補である
+      vertex に戻して再実行し、completed を得た。最終的にチェーン順どおりの結果に収束
+      している。
+round1_resolution_updates:
+  - {stable_id: dbb7766a6212fb1a, resolution: fixed, note: "task0003 の request/execute 分割で解消。round 2 の comprehensive / spec / architecture が独立に確認"}
+  - {stable_id: 09f0e6096bbc36ee, resolution: fixed, note: "同上。round 2 spec が FR3 の成立を明示的に確認"}
+  - {stable_id: a172de726b3cbc29, resolution: fixed, note: "App::apply_tab_resize への集約で解消。round 2 architecture が production の tab.resize( 呼び出しが app.rs:2048 の1箇所のみであることを確認"}
+  - {stable_id: d39a6a9468ff892e, resolution: fixed, note: "同上。apply_tab_resize が幅変化時に selection / pending_selection_anchor を破棄する"}
+  - {stable_id: cfcbfae57964beb5, resolution: fixed, note: "IMPLEMENTATION.md 契約 (d) を実発行点3箇所に訂正し、#[cfg(test)] のフレーム観測フックを追加。round 2 architecture が tabs.rs の ResizeMsg 送出3箇所と一致することを確認"}
+  - {stable_id: c9d1e2db0ce11e59, resolution: fixed, note: "task0004 が AC-2 を red_confirmed: false に訂正し、宙に浮いた unconfirmed_reds 参照を除去"}
+findings:
+  - stable_id: 25f95cc4b7b5ac28
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/window_host.rs
+    line: 1812
+    title: "タブバー経由のアクティブ化は reconcile が1フレーム遅れ、切替直後の1フレームが旧サイズで描画される"
+    description: >-
+      `execute_pending_reconcile()` の唯一の呼び出し点は render 冒頭
+      (window_host.rs:1563) だが、マウス由来のアクティブ化（タブバークリック / タブの × /
+      mux サイドバー行クリック → TabEvent::Switch / Close / MuxSwitch）は egui パスの後、
+      同一 render の 1812 行で適用される。つまり request がセットされるのは executor が
+      走った後で、消費は次フレームになる。このフレームは 1812 行以降も続行し、グリッド
+      パスは切り替わった新アクティブタブを stale な core dims で描画して present する。
+      旧実装では全タブが常に cell_size に揃っていたためこの経路も正しいサイズで描けて
+      いた。結果、ウィンドウリサイズ後にタブバーからタブを切り替えると 1 フレームだけ
+      旧グリッドサイズで描かれ、次フレームで広がる（視認できるちらつき）。mux タブでは
+      Resize 制御フレームの送出も 1 フレーム遅れる。キーボード切替はこの経路を通らない
+      ため、症状はマウス操作時のみ。
+    suggestion: >-
+      (a) apply_tab_event の適用直後（1826 の request_redraw の前）に
+      refresh_mux_sidebar_inset → apply_pending_resize → execute_pending_reconcile を
+      もう一度回す（surface acquire は 1950 行なので呼び出し順を壊さない）。または
+      (b) タブ切替/クローズを実際に適用したフレームは present せず早期 return して次
+      フレームに委ねる。いずれにせよ消費点を「アクティブ index が動き得る最後の地点の
+      直後」に置く意図をコメントで明示すること。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: >-
+      severity medium のため auto-fix 候補外（候補ゲートは critical/high）。
+      batch の rework 上限（review_rework_count: 1）に到達済みのため 2 回目の rework は
+      行わない。residual_critical_high は 0 なので完了ゲートは満たしている。
+      フォローアップタスクとして人間の評価者に申し送る。
+  - stable_id: 212e3e2a251aaffa
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 9956
+    title: "round-1 欠陥の回帰テスト AC-1 が executor をまったく検証していない"
+    description: >-
+      `switch_to_tab_reconciles_to_incoming_dims_never_outgoing_when_insets_differ_per_tab`
+      は switch_to_tab(0) の後に set_grid_size(90, 30) を「render パスが新アクティブタブ
+      向けに inset を settle させる」代役として呼ぶが、switch_to_tab(0) により
+      self.active == 0 なのでこの set_grid_size 自体が apply_tab_resize(0, 90, 30) で
+      tab0 をリサイズしてしまう。続く execute_pending_reconcile() は dims 一致で no-op に
+      なり、最終アサーション (90, 30) は executor の実装に一切依存しない。executor を
+      空にしてもテストは緑のままで、名前が主張する性質を検出できない。task0003.tests.yaml
+      の AC-1 が記録する red は rustc E0599（メソッド不在によるコンパイルエラー）であり、
+      振る舞い上の red ではない。switch 直後に 80x24 のままであることを見る前半の
+      アサーションだけが有効。
+    suggestion: >-
+      executor が実際に仕事をする形に組み替える。例えば tab1 がアクティブなうちに
+      cell_size を 90x30 に settle させ、switch 後は set_grid_size を挟まず
+      execute_pending_reconcile() だけを呼んで tab0 が 80x24 → 90x30 に変わることを見る。
+      「120x40 を経由しない」ことは Tab::test_resize_frames() でフレーム列を直接検査すると
+      最終値ではなく遷移そのものを押さえられる。あわせて task0003.tests.yaml の AC-1 の
+      red_reason を実際の red 根拠に合わせて更新すること。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: >-
+      severity medium のため auto-fix 候補外。rework 上限到達済み。FR3 の回帰ガードが
+      弱いという指摘であり、実装そのものの欠陥ではない（round 2 の spec / architecture は
+      実装側の FR3 成立を独立に確認している）。フォローアップタスクとして申し送る。
+  - stable_id: 909c73880ad73e78
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 4195
+    title: "同一 mux セッションに複数タブが attach していると、daemon 側 pane サイズがアクティブタブにのみ追随して非アクティブ側の core と食い違う"
+    description: >-
+      set_grid_size が全タブループをやめた結果、Tab::resize から送られる pane Resize
+      制御フレームもアクティブタブ由来のものだけになった。daemon 側の pane はクライアント
+      単位ではなくセッション単位の実体であり（mux/ipc/connection.rs:1224 の handle_resize は
+      session_manager の pane を直接リサイズする）、Tab::apply_mux_message は Welcome を
+      受けた各タブが独立に mux_session_name を持てる。したがって 2 枚のタブが同じ
+      セッションに attach していると、片方をアクティブにした時点で共有 pane の PTY が
+      そのタブの dims にリサイズされ、非アクティブ側のタブの core は古い dims のまま
+      新 dims 前提で折り返された出力を受け取り続ける。旧実装では全タブが常に同一の
+      cell_size だったためこの乖離は起き得なかった。
+    suggestion: >-
+      (a) 同一 mux_session_name に attach しているタブが他にも存在する場合だけ従来どおり
+      全タブ同一サイズに揃える tmux 的ポリシーを入れる、(b) daemon 側から全クライアントへ
+      resize 通知を配り非アクティブ側の core を追随させる、(c) 同一セッションへの重複
+      attach を禁止/警告し SPEC.md に但し書きを明記する、のいずれか。採用方針を
+      SPEC/IMPLEMENTATION に残し、2 タブ同一セッションのケースをテストで固定すること。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: >-
+      severity medium のため auto-fix 候補外。rework 上限到達済み。加えてレビュアー自身が
+      「前提条件（同一セッションへの複数タブ attach）が実際に到達可能かは調査予算内で
+      daemon 側の pane 共有までしか確認できていない」と明記しており、到達可能性の確定が
+      未了。SPEC の但し書きで済むか実装対応が要るかは方針判断を伴うため、人間の評価者への
+      申し送りが適切。フォローアップタスク候補として最優先。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  not_run_reason: >-
+    critical/high の findings が 0 件のため auto-fix 候補が存在しない（候補ゲートは
+    severity ∈ {critical, high}）。medium 3 件はいずれもゲート外。
+residual_critical_high: 0
+rework_required: false

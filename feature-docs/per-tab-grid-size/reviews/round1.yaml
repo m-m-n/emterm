@@ -51,8 +51,8 @@ findings:
       いればリサイズを発行しない」性質は維持すること。
     sources: [claude:comprehensive]
     confidence: 65
-    resolution: unresolved
-    resolution_reason: "orchestrator が window_host.rs:1530-1803 の描画順と App::mux_sidebar_visibility の active_tab_mux_attached 依存を直接確認して裏取り済み。修正は app.rs と window_host.rs の両方に跨るため単一ファイル review-editor では実施不能。rework へ回送"
+    resolution: fixed
+    resolution_reason: "task0003 の request/execute 分割で解消。round 2 で再確認済み（reviews/round2.yaml 参照）"
   - stable_id: 09f0e6096bbc36ee
     severity: high
     category: spec
@@ -72,8 +72,8 @@ findings:
       既存の set_grid_size 経路へ一本化する等）。
     sources: [claude:spec]
     confidence: 60
-    resolution: unresolved
-    resolution_reason: "dbb7766a6212fb1a と同根。category: spec は auto-fix 対象外。rework へ回送"
+    resolution: fixed
+    resolution_reason: "task0003 で解消。round 2 spec が FR3 の成立を確認"
   - stable_id: 8a20b61bf25313d7
     severity: high
     category: performance
@@ -139,8 +139,8 @@ findings:
       IMPLEMENTATION.md D3 の但し書きを実際のカバー範囲に訂正する。
     sources: [claude:architecture]
     confidence: 60
-    resolution: unresolved
-    resolution_reason: "medium のため auto-fix 対象外。high 修正と同じ関数群に触るため rework に同梱"
+    resolution: fixed
+    resolution_reason: "task0003 の App::apply_tab_resize 集約で解消。round 2 architecture が確認"
   - stable_id: d39a6a9468ff892e
     severity: medium
     category: comprehensive
@@ -162,8 +162,8 @@ findings:
       doc comment を実態に合わせる。
     sources: [claude:comprehensive]
     confidence: 65
-    resolution: unresolved
-    resolution_reason: "medium のため auto-fix 対象外。a172de726b3cbc29 と同根、rework に同梱"
+    resolution: fixed
+    resolution_reason: "task0003 で解消。apply_tab_resize が幅変化時に App 所有トラッカーを破棄"
   - stable_id: cfcbfae57964beb5
     severity: medium
     category: architecture
@@ -184,8 +184,8 @@ findings:
       (#[cfg(test)] フック等) に変える。
     sources: [claude:architecture]
     confidence: 60
-    resolution: unresolved
-    resolution_reason: "medium のため auto-fix 対象外。FR4 の実効ガード欠如という指摘のため rework に同梱"
+    resolution: fixed
+    resolution_reason: "task0003 が契約 (d) を実発行点3箇所に訂正し #[cfg(test)] 観測フックを追加。round 2 architecture が確認"
   - stable_id: c9d1e2db0ce11e59
     severity: medium
     category: comprehensive
@@ -204,8 +204,8 @@ findings:
       宙に浮いた参照も解消する。
     sources: [claude:comprehensive]
     confidence: 65
-    resolution: unresolved
-    resolution_reason: "medium のため auto-fix 対象外。TDD 証跡の整合性のため rework に同梱"
+    resolution: fixed
+    resolution_reason: "task0004 が AC-2 を訂正"
 auto_fix:
   loops_run: 0
   applied_total: 0
