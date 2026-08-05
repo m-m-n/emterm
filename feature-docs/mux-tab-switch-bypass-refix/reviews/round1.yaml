@@ -1,0 +1,358 @@
+round: 1
+executed_at: "2026-08-05T20:15:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: f9579f9b24b5243b52a330fe9804a21ad39550e1
+  head_commit: 23f26ffca7c315d2edb47fe61b4668c6cccf7816
+  changed_files:
+    - crates/term_core/src/bench.rs
+    - crates/term_core/src/terminal_core.rs
+    - src-tauri/src/window_host.rs
+    - test-docs/mux-tab-switch-bypass-refix/task0001.tests.yaml
+    - test-docs/mux-tab-switch-bypass-refix/task0002.tests.yaml
+    - test-docs/mux-tab-switch-bypass-refix/task0003.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "rate_limited"}
+  - {perspective: security, source: vertex, status: completed, note: "Phase R2b fallback after the codex rate limit"}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: vertex, status: skipped, skip_reason: "rate_limited", note: "HTTP 429 on two consecutive dispatches; chain's next provider (codex) was itself rate-limited, so this perspective has no cross-model result"}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: vertex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: vertex, status: completed}
+
+findings:
+  - stable_id: 143121d2652cbc62
+    severity: high
+    category: architecture
+    file: crates/term_core/src/terminal_core.rs
+    line: 2151
+    title: "Duplicated constant creates hidden cross-crate contract with no synchronization mechanism"
+    description: >-
+      BYPASS_PREFIX_MAX_SEGMENTS is a literal that must mirror the daemon-side
+      MAX_DIM_MARKERS / mux_ipc::protocol::MAX_SEGMENTS living in other crates.
+      The feature's own bug was caused by exactly this duplication drifting
+      (daemon cap moved 24 -> 62 while this gate stayed at 24), and updating the
+      value alone leaves the hidden contract unenforced.
+    suggestion: >-
+      Introduce a shared constant both crates can depend on, or add a
+      build-time / test-time assertion pinning the two values.
+    sources: [vertex:architecture]
+    confidence: 50
+    resolution: fixed
+    resolution_reason: >-
+      Auto-fixed across loops 1 and 2. Loop 1 added a #[cfg(test)] pin against
+      mux_ipc::protocol::MAX_SEGMENTS via term_core's existing dev-dependency,
+      but with the inequality in the harmless direction. Loop 2 added the
+      lower-bound assertion (BYPASS_PREFIX_MAX_SEGMENTS + WIRE_CAP_SLACK >=
+      MAX_SEGMENTS). The orchestrator empirically verified the pin now FAILS
+      when the constant is reverted to 24 and passes at 62. The architecture
+      re-review confirms this finding resolved.
+
+  - stable_id: c5f0ef3d64e87346
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 2211
+    title: "再アラインの基準が MAX_DIM_MARKERS(62) で、daemon が実際に出せる最大セグメント数(64)に 2 足りない"
+    description: >-
+      The realign target is the daemon's dim-marker record cap (62), not the
+      number of segments a snapshot can actually carry
+      (MAX_DAEMON_SNAPSHOT_SEGMENTS = MAX_DIM_MARKERS + 2 = 64, saturating the
+      wire cap). A saturated pane emitting 63-64 segments would still be
+      rejected by this gate.
+    suggestion: >-
+      Align the bound to the snapshot cap rather than the record cap, or weaken
+      the doc's stated invariant to what actually holds.
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: >-
+      The comprehensive re-review after loop 2 declared this finding resolved by
+      the added lower-bound pin. Its residual substance (62 vs 64) is carried
+      forward as 474e01ad8c29e7f0 and 1adb07864f11618f, which stay unresolved.
+
+  - stable_id: a1a06ed541045dd5
+    severity: high
+    category: spec
+    file: crates/term_core/src/terminal_core.rs
+    line: 2191
+    title: "NFR1 の根拠（MIDDLE は常に same-width）が h == 0 縮退経路で成立せず、24→62 の緩和が正当化されていない"
+    description: >-
+      SPEC NFR1 and the Optimization Constraint forbid loosening gates without
+      making the prefix side cheap to replay. The sole stated justification for
+      raising BYPASS_PREFIX_MAX_SEGMENTS 24 -> 62 is the doc claim that every
+      MIDDLE segment transition is a same-width resize by construction, because
+      middle_is_row_bounded requires cols == target_cols and a column change
+      degrades the HEAD fold instead of reaching this gate. That last clause is
+      false: middle_is_row_bounded is evaluated only inside candidate_safe, and
+      when it fails h falls back to 0, at which point MIDDLE == segments[0..k]
+      — column-changing segments included — and reaches the gate unchecked.
+      Those segments take resize_full_reflow (O(accumulated content)), not the
+      row-delta-bounded resize_same_width path, so the round-10 evidence the doc
+      cites does not apply. The worst case therefore loosens from 24 to 62 full
+      reflows over a <= 64 KiB MIDDLE, and the split's prefix cost is paid twice
+      (2nd-pass worker). No bench covers the column-changing shape: both the
+      pre-existing segment_bounded_replay_bench_950kib_stays_bounded_at_the_daemon_cap
+      and this feature's new measured_26_segment_middle_cluster_* fixtures hold
+      cols fixed.
+    suggestion: >-
+      (a) Make the raised bound conditional on the fold having succeeded — 62
+      when h > 0 (middle_is_row_bounded already verified same-width), the old 24
+      on the h == 0 degradation path; or (b) add an explicit column-uniformity
+      check to bypass_split so column-changing MIDDLEs never engage (verify FR6
+      non-regression, since D9 deliberately rescues that shape today); or (c)
+      keep 62 everywhere but add a release bench for the h == 0 column-changing
+      shape (62 segments, MIDDLE packed to the BYPASS_PREFIX_MAX_BYTES limit,
+      dominating suffix) asserting a ceiling relative to bypass-engaged cost, and
+      replace the incorrect same-width-by-construction rationale with the
+      measured numbers. In every case the doc sentence "a column change degrades
+      the whole HEAD fold instead ... rather than reaching this gate with a
+      column-changing MIDDLE" must be corrected — it states the opposite of what
+      the code does.
+    sources: [claude:spec]
+    confidence: 70
+    resolution: unresolved
+    resolution_reason: >-
+      category == spec is excluded from the auto-fix candidate gate by protocol,
+      and the finding calls for either a gate redesign or a new bench — neither
+      is a single-file editor change. Routed to rework.
+
+  - stable_id: 77da6aceb73b1a72
+    severity: medium
+    category: performance
+    file: crates/term_core/src/terminal_core.rs
+    line: 2191
+    title: "62 への引き上げの費用根拠が h == 0 の degradation 経路をカバーしていない（column 変更 MIDDLE で full reflow が最大 62 回）"
+    description: >-
+      Independent corroboration of a1a06ed541045dd5 from the performance
+      perspective: the same-width-by-construction premise holds only when
+      h > 0. On the h == 0 degradation path the column-changing MIDDLE reaches
+      the gate and takes up to 62 full reflows instead of 24. The absolute cost
+      stays bounded by BYPASS_PREFIX_MAX_BYTES (64 KiB) and the suffix-dominance
+      condition, so the raise is still a net win over the ~800-1000 ms whole
+      drain — the defect is that the stated rationale does not match the code,
+      and a future reader loosening BYPASS_PREFIX_MAX_BYTES on the strength of
+      that rationale would release a superlinear cost.
+    suggestion: >-
+      Same two-tier gate or added bench as a1a06ed541045dd5, plus a
+      cross-reference on BYPASS_PREFIX_MAX_BYTES's own doc noting that it and
+      BYPASS_PREFIX_MAX_SEGMENTS must be re-measured together.
+    sources: [claude:performance]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: >-
+      Below the auto-fix severity gate (medium). Same root cause as
+      a1a06ed541045dd5, so it is covered by the same rework task.
+
+  - stable_id: 474e01ad8c29e7f0
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/terminal_core.rs
+    line: 2211
+    title: "gate の再アライン先が daemon の「記録上限」で、スナップショットが実際に運べるセグメント数より 2 少ない"
+    description: >-
+      62 mirrors MAX_DIM_MARKERS (the dim-marker record cap), but a snapshot can
+      carry MAX_DAEMON_SNAPSHOT_SEGMENTS = 64, exactly saturating
+      mux_ipc::protocol::MAX_SEGMENTS. Since a split needs at least one suffix
+      segment, a legal MIDDLE can reach 63 and is still rejected — the doc's
+      invariant "this gate never rejects a shape the daemon itself could have
+      produced" does not hold at the top end. Loop 2's WIRE_CAP_SLACK = 2
+      rationale (the two synthesized slots) is off by one for the MIDDLE bound,
+      because a synthesized head segment lands in the MIDDLE when h == 0.
+    suggestion: >-
+      Either align the bound to MAX_SEGMENTS - 1 (the largest reachable MIDDLE)
+      and re-derive the doc from MAX_DAEMON_SNAPSHOT_SEGMENTS, or weaken the
+      stated invariant and document that the top 1-2 slots are deliberately out
+      of scope.
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: >-
+      Below the auto-fix severity gate (medium). Entangled with the value
+      decision the a1a06ed541045dd5 rework must make, so it is folded into that
+      rework rather than patched separately.
+
+  - stable_id: 96f7205be52fece8
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/terminal_core.rs
+    line: 2249
+    title: "下限 pin がコスト方針の定数をトランスポート上限に溶接し、意図的な引き下げを『ドリフト』と誤診させる"
+    description: >-
+      Introduced by auto-fix loop 2. The lower-bound assertion pins
+      BYPASS_PREFIX_MAX_SEGMENTS into [62, 64], but the constant is a cost-policy
+      value (how many per-segment reflows the fast path tolerates), independent
+      of the wire cap. If the a1a06ed541045dd5 rework lowers the bound or adds a
+      separate h == 0 bound, this test fails and its assert message asserts "this
+      is exactly the round-7/round-8 regression" — misdiagnosing a deliberate
+      design decision as drift.
+    suggestion: >-
+      Pin a dedicated daemon-cap mirror constant instead, leaving the
+      cost-policy constant free; or keep the assertion but write its message so
+      it distinguishes a missed daemon-cap follow-up from a deliberate cost-driven
+      reduction.
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >-
+      Below the auto-fix severity gate (medium), and introduced by loop 2 itself.
+      Must be decided together with the a1a06ed541045dd5 rework, which is the
+      change that would trip it.
+
+  - stable_id: 1adb07864f11618f
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_core.rs
+    line: 2265
+    title: "新設の下限 pin が BYPASS_PREFIX_MAX_SEGMENTS を [62,64] に固定し、コスト上限ゲートを事実上の死にコードとして固着させる"
+    description: >-
+      Introduced by auto-fix loop 2, same site as 96f7205be52fece8 from the
+      comprehensive perspective. Because a split needs a non-empty suffix, the
+      largest reachable MIDDLE is 63; pinning the bound at 62 means the
+      segment-count gate can only ever reject the single shape (h == 0, k == 63,
+      64 segments total), so it no longer functions as a cost bound at all — and
+      the new pin makes that state permanent.
+    suggestion: >-
+      Decide the constant's purpose explicitly: keep it as a cost bound and drop
+      the lower-bound pin (justifying the value with a bench instead), remove the
+      segment-count condition altogether in favour of the byte bound plus
+      suffix-dominance, or re-derive the pin's boundary from MAX_SEGMENTS - 1
+      with WIRE_CAP_SLACK redefined as "total segments minus the mandatory
+      suffix".
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: >-
+      Below the auto-fix severity gate (medium), and introduced by loop 2 itself.
+      Folded into the a1a06ed541045dd5 rework, which owns the constant's fate.
+
+  - stable_id: 0029db1c89ab226f
+    severity: medium
+    category: architecture
+    file: src-tauri/src/window_host.rs
+    line: 1311
+    title: "inset 適用と settler 決定の分離が不完全: apply_pending_resize が settler 未確定の inset から PTY グリッドを算出する"
+    description: >-
+      Change 2 decoupled which events set pending_resize from the settler, but
+      not which inset value the resize consumes. grid_size() still reads
+      status_bar_bot_inset_logical, now updated immediately on any height change,
+      and apply_pending_resize feeds that into App::set_grid_size and the
+      group-wide Resize broadcast. When pending_resize is raised by something
+      else — refresh_mux_sidebar_inset on mux attach, or a compositor
+      Resized/ScaleFactorChanged — a transient, not-yet-settled status-bar height
+      reaches the PTYs, which is the very path FR6's debounce exists to close.
+      Before Change 2 the inset was only written on the settler's forward, so
+      this could not happen. Also risks ResizeSettler::last_forwarded diverging
+      from the size actually applied.
+    suggestion: >-
+      Split the drawing/pointer-routing inset from the grid-computation inset:
+      keep status_bar_bot_inset_logical immediate for hit-testing, and have
+      grid_size() read a separate field updated only when the settler forwards;
+      or have apply_pending_resize apply the settler's forwarded (cols, rows)
+      directly instead of recomputing from the inset. Add a regression test
+      pinning that a non-settler pending_resize during the settling window does
+      not broadcast a transient size.
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: >-
+      Below the auto-fix severity gate (medium). Needs a state-model change plus
+      a regression test, so it belongs in a rework task rather than an editor
+      patch.
+
+  - stable_id: 5b2f22c5a14f7364
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/window_host.rs
+    line: 1313
+    title: "inset の即時反映により、settler 由来でない pending_resize が過渡的なグリッドサイズを FR6 のデバウンスを迂回して適用する"
+    description: >-
+      Independent corroboration of 0029db1c89ab226f from the comprehensive
+      perspective, with the concrete same-render firing order traced:
+      refresh_status_bar_insets (resets the settler on mux attach and writes the
+      transient inset) -> refresh_mux_sidebar_inset (raises pending_resize on a
+      sidebar inset change) -> apply_pending_resize (computes the grid from the
+      transient inset and broadcasts). mux attach/reattach is exactly the moment
+      the settling storm occurs, so this fires in the intended scenario.
+    suggestion: Same as 0029db1c89ab226f.
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: >-
+      Below the auto-fix severity gate (medium). Same defect as
+      0029db1c89ab226f; covered by the same rework task.
+
+  - stable_id: 869ddd643c123a44
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/window_host.rs
+    line: 5647
+    title: "epsilon 許容をピン留めするはずのテストが恒真で、実際の inset 値域では許容幅がゼロに退化している"
+    description: >-
+      status_bar_insets_changed_false_within_epsilon passes 40.0 and
+      40.0 + f32::EPSILON / 2.0, but 40.0's ULP is ~3.81e-6 while
+      f32::EPSILON / 2 is ~5.96e-8, so the addition rounds back to exactly 40.0.
+      The test therefore duplicates ..._false_when_identical and pins nothing;
+      rewriting status_bar_insets_changed as a plain != comparison would keep it
+      green. Relatedly, at real inset magnitudes (tens of logical px) the
+      absolute-EPSILON threshold is equivalent to !=, so the doc's claimed
+      float-noise-churn avoidance does not occur.
+    suggestion: >-
+      Test where the tolerance is actually representable — e.g.
+      status_bar_insets_changed(0.5, 0.0, 0.5 + f32::EPSILON / 2.0, 0.0), since
+      0.5's ULP is exactly f32::EPSILON / 2 — or accept that the tolerance is
+      unreachable in this domain, switch to a plain != comparison, and drop the
+      epsilon claim from the doc.
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: >-
+      Below the auto-fix severity gate (medium). Routed to rework alongside the
+      other window_host.rs findings.
+
+auto_fix:
+  loops_run: 2
+  applied_total: 2
+  termination: clean
+  detail:
+    - loop: 1
+      dispatched: [143121d2652cbc62]
+      applied: 1
+      mode: sequential
+      commit: b94175604f2c3af42c2defda828a9e2b79b08c3e
+      note: >-
+        Added a #[cfg(test)] cross-crate pin. The re-review judged its
+        inequality to be in the harmless direction, so the finding stayed open
+        and a second loop ran.
+    - loop: 2
+      dispatched: [143121d2652cbc62]
+      applied: 1
+      mode: sequential
+      commit: 23f26ffca7c315d2edb47fe61b4668c6cccf7816
+      note: >-
+        Added the lower-bound assertion. Orchestrator verified empirically that
+        reverting the constant to 24 makes the new test fail (2 failures) and
+        that it passes at 62 (762 tests green).
+
+residual_critical_high: 1
+rework_required: true
+
+notes:
+  - >-
+    Cross-model coverage was degraded this round by provider limits: codex hit
+    its usage limit on its only dispatch (security), and vertex returned HTTP 429
+    on two consecutive dispatches for performance. security, architecture and
+    spec did get a vertex cross-model run; performance and comprehensive did not
+    (comprehensive is Claude-only by registry design).
+  - >-
+    Both remaining high-severity concerns collapse to one root cause — the
+    justification for BYPASS_PREFIX_MAX_SEGMENTS = 62 does not hold on the h == 0
+    degradation path — reported independently by the spec (high) and performance
+    (medium) perspectives.
