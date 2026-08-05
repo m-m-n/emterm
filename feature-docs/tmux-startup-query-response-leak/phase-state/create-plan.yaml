@@ -1,0 +1,21 @@
+schema_version: 1
+feature: tmux-startup-query-response-leak
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 3e325229a95ec8580c87b7a409d775c649d05a28
+last_input_digest: sha256:193b2822bb01415612b5181590f52edfbec6886f346d474cbb1d2f7663de5b0e
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:193b2822bb01415612b5181590f52edfbec6886f346d474cbb1d2f7663de5b0e
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
