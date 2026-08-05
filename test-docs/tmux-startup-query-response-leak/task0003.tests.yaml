@@ -1,0 +1,102 @@
+task_id: task0003
+
+# Observed via `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+# src-tauri/Cargo.toml --lib -- --test-threads=1` BEFORE any implementation
+# (step 4a). The `tabs.rs` off-thread-swap tests share one root cause:
+# `test_poll_until_swapped`'s fixed 10,000-yield spin bound occasionally
+# times out waiting for the worker thread in this (debug, unoptimized)
+# build, independent of test parallelism -- re-running the identical
+# unmodified suite produced a DIFFERENT subset of the same known-flaky
+# 7-test family on each attempt (4/7, then 5/7, then 7/7), confirming this
+# is pre-existing environmental flakiness, not something this task's diff
+# touches or causes. The full documented family (from task0001's own
+# recorded baseline, provided in this task's invocation notes) is:
+# ts10_resize_cancels_pending_restore_without_respawn,
+# ts11_restore_worker_panic_returns_failed_and_clears_state,
+# ts13_offthread_swap_installs_pending_scrollback_restore,
+# ts7_offthread_swap_then_restored_scrollback_matches_reference,
+# ts8_new_offthread_switch_supersedes_in_flight_restore,
+# ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates,
+# welcome_without_windows_leaves_group_none.
+baseline_failures:
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+# Observed after implementing (multiple re-runs of the identical, unmodified
+# final suite). Every failure across every re-run is drawn exclusively from
+# the same documented 7-test known-flaky family described above (same root
+# cause: "off-thread replay worker did not complete in time" at the same
+# spin-bound line, or the same pre-existing mux_group assertion). This run
+# (the widest observed) is recorded here; no failure outside that
+# documented family was ever observed.
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+
+acceptance_tests:
+  AC-1:
+    tests:
+      - tabs::tests::apply_offthread_swap_discards_replay_generated_device_response
+    red_confirmed: false
+    red_reason: >-
+      The gap this task's plan describes does not exist in the current
+      codebase: TerminalCore::build_from_snapshot_inner
+      (crates/term_core/src/terminal_core.rs), the function underlying BOTH
+      build_from_snapshot (1st-pass worker build) and
+      build_scrollback_only_from_snapshot (2nd-pass restore), already
+      drains response_buffer before returning SnapshotReplay -- added by
+      commit 4380805c ("fix(mux): drop stale device responses from
+      snapshot replay", 2026-06-24 09:58 JST), which fixed the synchronous
+      (reset_frame_for_replay) AND off-thread-worker paths in the SAME
+      change, predating this feature. By the time apply_offthread_swap
+      installs replay.core as the live core, its response buffer is
+      already empty, so this test passes even with the swap-site discard
+      this task adds REMOVED. Verified directly: a probe call to
+      TerminalCore::build_from_snapshot with the same DA1-embedded payload
+      showed get_response_len() == 0 immediately after the build, before
+      any tabs.rs code runs. Forcing a genuine red would require removing
+      term_core's existing discard, which is out of this task's file scope
+      (task plan Out of Scope: "Any change to term_core's response storage
+      or callback surface"). red_confirmed is honestly false per this
+      reason; see the implementer report's notes for the full finding.
+  AC-2:
+    tests:
+      - tabs::tests::reset_frame_for_replay_discards_historic_device_responses
+      - tabs::tests::reset_frame_for_replay_produces_no_outbound_device_response_write
+    red_confirmed: false
+    red_reason: >-
+      Pre-existing regression-floor tests for the synchronous path, not
+      written by this task and not part of this task's red-green cycle
+      (the criterion is "stays green unmodified", not a new behavior to
+      prove via red-then-green). Confirmed green both before and after
+      this task's change.
+  AC-3:
+    tests:
+      - tabs::tests::query_arriving_live_after_offthread_swap_is_delivered_exactly_once
+    red_confirmed: false
+    red_reason: >-
+      Guard-rail criterion ("the discard must not over-discard a
+      live-arriving response"), not a red-then-green criterion: it asserts
+      correct behavior that already held before this task's change (the
+      swap-site discard only touches the just-installed core's buffer,
+      before any live output is queued/drained; apply_queued_live_output's
+      own take_response call, which delivers this response, is untouched).
+      There is no "broken" pre-fix state to red-confirm against.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/lint outcome, not a unit test: `CARGO_TARGET_DIR=src-tauri/target
+      cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1`
+      (full suite) and `CARGO_TARGET_DIR=src-tauri/target cargo check
+      --manifest-path src-tauri/Cargo.toml --no-default-features` both pass
+      (the latter with zero warnings/errors); see baseline_failures /
+      final_failures above for the --lib subset comparison, which is
+      identical modulo the documented known-flaky family.
