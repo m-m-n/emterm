@@ -118,7 +118,7 @@ tasks:
     domains: [input-handling]
     complexity: high
     requirements: [FR1, FR6, NFR1, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-tab-switch-bypass-refix/task0004
     provenance:
