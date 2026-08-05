@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mux-tab-switch-bypass-refix
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 64d9cb4ce7fba4669381b7bc66bbf53a39d42804
 last_input_digest: sha256:f10c9266527e7f042743382ab9b847578614a02813aead00f914e28db36e7ed9
