@@ -1,11 +1,11 @@
 schema_version: 1
 feature: agent-badge-emoji
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 6a95d08
 last_input_digest: sha256:9bc92bece636e891c8c1bfc6dc14f83f14bb6b4d05f39f4e95b4b98cfb7afbc5
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -14,10 +14,16 @@ worker_runs:
     input_digest: sha256:aa04dcf28b575197fb8004d41f436975e1d2f8a25dfa43d009f46dbddbe18c47
     output_digest: sha256:analyst-0001-payload
   - request_id: create-spec-run-0002
-    status: dispatched
+    status: completed
     input_digest: sha256:9bc92bece636e891c8c1bfc6dc14f83f14bb6b4d05f39f4e95b4b98cfb7afbc5
-    output_digest: null
-artifacts: []
+    output_digest: sha256:spec-writer-0002-payload
+artifacts:
+  - path: feature-docs/agent-badge-emoji/REQUIREMENTS.md
+    sha256: sha256:997adcbbe64dc3f229d91be6ebdbdfb2b6e2b712dbeb0763c2aa5178789b3b72
+    produced_by: create-spec-run-0002
+  - path: feature-docs/agent-badge-emoji/SPEC.md
+    sha256: sha256:23c4dc03ca58056da580a8f96182b3564a75fd6dfde9aa5c9cadacc8291bab07
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
