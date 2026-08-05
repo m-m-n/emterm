@@ -42,12 +42,13 @@ modules, no new layers, no dependency-direction changes.
 
 ## Shared Components
 
-Single-task feature — no cross-task contracts. The public contracts that
-matter are existing ones the task must preserve:
+Originally a single-task feature; review-round-1 rework added task0002 and
+task0003, which share the drain contract pinned below (see D5). The public
+contracts that matter are:
 
 | Component | Responsibility | Contract to preserve | Used by tasks |
 |-----------|----------------|----------------------|---------------|
-| `TerminalCore::take_response` | Hand the pending device response to the embedder and clear the slot | Post: returned bytes are the response(s) synthesized since the previous drain; a second call returns empty. Callers (all in `tabs.rs`) remain the only delivery route to a PTY | task0001 |
+| `TerminalCore::take_response` | Hand ALL pending device responses to the embedder and clear the pending store | Post: returns every response synthesized since the previous drain, concatenated in synthesis order; a second call returns empty; a drain whose result is discarded removes every pending response. Callers (all in `tabs.rs`) remain the only delivery route to a PTY | task0001, task0002, task0003 |
 | `strip_replayable_rich_content` (+ its write-path alias) | Remove replay-unsafe content (viewer OSC, device queries, response echoes) from daemon snapshot/scrollback bytes | Signature and existing strip/keep sets unchanged or strictly documented if extended; never weakened (NFR4) | task0001 |
 
 ## Conventions
@@ -67,7 +68,8 @@ matter are existing ones the task must preserve:
 
 ## Cross-task Design Decisions
 
-Single-task feature; these bind the one task.
+D1–D4 bind task0001; D5 (added in review-round-1 rework) binds task0002
+and task0003.
 
 ### D1: Routing, not suppression (FR1, FR2)
 
@@ -103,6 +105,30 @@ query-detection gate (`payload_has_device_query` /
 happens once per frame/chunk, not per byte of ordinary output. Any change
 to the 2 MiB-scrollback strip path re-runs that module's existing
 `#[ignore]` bench against its documented threshold.
+
+### D5: Ordered multi-response drain, single delivery channel (review-round-1 rework)
+
+Review round 1 established that the single-slot response buffer, promoted
+by task0001 to the sole delivery route, loses all but the last response
+when one parse pass carries multiple queries (findings 9ef6b54302b083b3 /
+c6092a0fdcb3b4a5 / 49bc2b33fa3b053c; confirmed by an orchestrator-run
+byte-level probe). Binding decisions for the rework tasks:
+
+- term_core holds pending responses in an ordered store; `take_response`
+  follows the Shared Components contract above (every pending response, in
+  synthesis order, store empty after drain, discarded drain removes all).
+  task0002 implements this.
+- term_core keeps exactly ONE response delivery channel: the
+  device-response callback extension point is removed (fallback, as a
+  reportable deviation: default no-op with observe-only documentation);
+  no production callback delivers responses to a PTY. task0002 owns this.
+- Every replay path that rebuilds or swaps a core discards pending
+  responses after replay. The synchronous path already does; task0003 adds
+  the same discard to the off-thread swap path (finding 8bebc1e532a1b597).
+  task0003 depends only on the discard postcondition of the drain
+  contract, which holds under both the pre-rework single-slot buffer and
+  the new ordered store — the two tasks are worktree-independent and merge
+  cleanly in either order.
 
 ## Risk Assessment
 

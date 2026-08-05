@@ -26,7 +26,9 @@ is verified manually by the user on a release build.
 - Coverage target: no numeric coverage tooling is enforced in this project.
   The coverage criterion is enumerative: every in-scope response type
   (DA1 / DA2 / DSR status / CPR / XTWINOPS 14, 16, 18 / DECRPM) has at
-  least one test per in-scope runtime context (plain tab, mux pane).
+  least one test per in-scope runtime context (plain tab, mux pane),
+  plus the single-chunk multi-query burst case (TS8) and the off-thread
+  replay-discard invariant (TS9) added in review-round-1 rework.
 
 ### Test Scenarios from SPEC.md
 
@@ -39,6 +41,8 @@ is verified manually by the user on a release build.
 | TS5 | Unit, negative: query/response-lookalike bytes embedded in ordinary application output | Bytes reach the grid unchanged; non-query sessions byte-identical (NFR3) | Unit |
 | TS6 | Feature-gate check | `--no-default-features` check exits 0 (NFR2) | Build gate |
 | TS7 | Regression: pre-existing per-tab-grid-size and mux-snapshot-device-query-strip tests | All green, unmodified (or modified only with justification comments), in the `--lib` runs above | Unit |
+| TS8 | Unit, multi-query burst (rework round 1): a SINGLE parse chunk / coalesced buffer carrying multiple distinct in-scope queries (at minimum DA1, DA2, XTWINOPS 14/16/18) driven through the term_core chunk path, the plain-tab combined path, and the mux-pane path | Every response delivered toward the querying PTY exactly once, in query order; none visible in grid or scrollback; a second drain returns empty | Unit |
+| TS9 | Unit, off-thread swap replay discard (rework round 1): a worker-built core replaying snapshot bytes that embed an in-scope query, applied through the off-thread core-swap path | No replay-generated response bytes delivered toward the PTY after the swap (parity with the synchronous replay discard); a query arriving after the swap is answered exactly once | Unit |
 
 ## Code Quality Verification
 
@@ -65,11 +69,11 @@ is verified manually by the user on a release build.
 
 | Requirement | Tasks | Verification |
 |-------------|-------|--------------|
-| FR1 | task0001 | TS1 (manual on-screen), TS4 (automated mechanism) |
-| FR2 | task0001 | TS3 (manual tmux health), TS4 (exactly-once delivery assertions) |
-| FR3 | task0001 | TS4 (inline `#[cfg(test)]` tests exist and run under `--lib`) |
-| FR4 | task0001 | TS1 (plain tab) + TS2 (mux pane) manual; per-context automated tests in TS4. Status: assumed → `both` |
-| FR5 | task0001 | TS4 enumerates DA1 / DA2 / DSR status / CPR / XTWINOPS 14, 16, 18 / DECRPM. Status: assumed → `generalize` |
+| FR1 | task0001, task0003 | TS1 (manual on-screen), TS4 (automated mechanism), TS9 (off-thread replay discard) |
+| FR2 | task0001, task0002, task0003 | TS3 (manual tmux health), TS4 (exactly-once delivery assertions), TS8 (multi-query burst exactly-once), TS9 (no stale replay delivery) |
+| FR3 | task0001, task0002, task0003 | TS4, TS8, TS9 (inline `#[cfg(test)]` tests exist and run under `--lib`) |
+| FR4 | task0001, task0002 | TS1 (plain tab) + TS2 (mux pane) manual; per-context automated tests in TS4 and TS8. Status: assumed → `both` |
+| FR5 | task0001, task0002 | TS4 enumerates DA1 / DA2 / DSR status / CPR / XTWINOPS 14, 16, 18 / DECRPM; TS8 exercises the in-scope set as a single-chunk burst. Status: assumed → `generalize` |
 | FR6 | task0001 | TS7 (per-tab-grid-size suite green) |
 | NFR1 | task0001 | TS4 plus the implementer's hot-path reasoning (AC-7); if the strip predicate changed, its `#[ignore]` 2 MiB bench re-run manually under its documented threshold |
 | NFR2 | task0001 | TS6 |
@@ -108,7 +112,7 @@ run unprompted):
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build gates | 2 (check, no-default-features) | 2 | 0 | 0 |
-| Unit / regression | TS4, TS5, TS7 | 3 | 0 | 0 |
+| Unit / regression | TS4, TS5, TS7, TS8, TS9 | 5 | 0 | 0 |
 | On-screen behavior | TS1, TS2, TS3 | 0 | 0 | 3 |
 | Code quality | fmt no-new-drift | 1 | 0 | 0 |
 | Performance | NFR1 review + optional bench | 0 | 0 | 1 |
