@@ -1,7 +1,7 @@
 schema_version: 1
 feature: windows-imm32-ime-direct
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 66f61d03b45ba0b47a1e5dc1cac58e7530a28e6b
 last_input_digest: "sha256:a81f1edc9087712163a085105963545bdfea6959ce76c212f6f3388f6ad95791"
@@ -13,7 +13,13 @@ worker_runs:
     status: completed
     input_digest: "sha256:a81f1edc9087712163a085105963545bdfea6959ce76c212f6f3388f6ad95791"
     output_digest: "sha256:analyst-run-0001-payload"
-artifacts: []
+artifacts:
+  - path: feature-docs/windows-imm32-ime-direct/REQUIREMENTS.md
+    sha256: "sha256:31e5b29dd9aa0e7a2c063d2be407d3e7f658209b96f0ad348c3592e27650bbf8"
+    produced_by: create-spec-run-0002
+  - path: feature-docs/windows-imm32-ime-direct/SPEC.md
+    sha256: "sha256:f51de2565ccbedaf4225a3958e2e36cf68346a710142f3458f66fce73e39020d"
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: "sha256:create-spec-gen1-analyst-completed-no-open-questions"
 stale_redispatch_count: 0
