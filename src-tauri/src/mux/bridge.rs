@@ -427,6 +427,127 @@ fn conclude_connection(announced: bool) -> ConnectionEnded {
     }
 }
 
+// ---- stdout writer: the only place forwarded frames reach stdout ----
+//
+// `daemon_to_stdout` (below) must never perform the stdout syscall itself
+// (task0002 invariant 1): a stalled GUI-side PTY reader would then block
+// the tokio runtime thread, stalling `stdin_to_daemon` too. Instead it
+// admits each `Forward` frame to a bounded channel consumed by a pump
+// running on tokio's dedicated blocking-thread pool (never a runtime
+// worker thread), and only that pump touches stdout.
+
+/// Bounds the stdout writer's admission channel (FR4): how many decoded
+/// daemon frames may be queued awaiting a stalled sink before
+/// `daemon_to_stdout`'s admission suspends. Keeps memory growth capped and
+/// gives the socket-drain direction a bounded amount of slack before its
+/// own backpressure (not reading more from the socket) kicks in.
+const STDOUT_WRITER_CAPACITY: usize = 64;
+
+/// How long `forward_loop` waits for the stdout writer to drain its queue
+/// after the connection ends, before giving up and returning anyway
+/// (invariant 6: bounded quiesce, not an unconditional wait). Matches the
+/// project's named 5-second timeout convention (IMPLEMENTATION.md
+/// Convention 5, mirroring `connection.rs`'s `HANDSHAKE_TIMEOUT`).
+const STDOUT_WRITER_QUIESCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Where the stdout writer pump sends encoded bytes. Production plugs in
+/// real process stdout (locked once, inside the pump's own thread, since
+/// `StdoutLock` cannot be constructed elsewhere and then moved in); tests
+/// inject a controllable sink that can block until released, fail on
+/// demand, and record write order (Test Notes: testability seam).
+trait StdoutSink {
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()>;
+    fn flush(&mut self) -> std::io::Result<()>;
+}
+
+/// Production `StdoutSink`: the process's real stdout, locked for the
+/// pump's lifetime. Constructed INSIDE the pump's blocking closure (never
+/// passed in from outside), because `StdoutLock` is not `Send` and cannot
+/// cross the thread boundary into `spawn_blocking`.
+struct ProcessStdout(std::io::StdoutLock<'static>);
+
+impl ProcessStdout {
+    fn new() -> Self {
+        Self(std::io::stdout().lock())
+    }
+}
+
+impl StdoutSink for ProcessStdout {
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        std::io::Write::write_all(&mut self.0, buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.0)
+    }
+}
+
+/// Runs on a dedicated blocking-capable execution context (never the tokio
+/// runtime thread — invariant 1): the ONLY place forwarded frames are
+/// written to `sink`. Consumes `rx` in strict FIFO admission order
+/// (invariant 3, FR3) via `blocking_recv` (the tokio API meant for use
+/// inside `spawn_blocking`). Resolves each frame's transport encoding
+/// against `transport` AT WRITE TIME (invariant 4), the same per-frame
+/// resolution point as today's inline write. Ends when the channel closes
+/// (all senders dropped: normal end-of-connection quiesce) or a sink write
+/// fails (invariant 5): the loop stops and `rx` is dropped when this
+/// function returns, so a pending or future `send` on the paired `Sender`
+/// observes the channel is gone and the async side can react.
+fn stdout_writer_pump<S: StdoutSink>(
+    mut rx: tokio::sync::mpsc::Receiver<MuxMessage>,
+    transport: &Arc<AtomicU8>,
+    mut sink: S,
+) {
+    while let Some(msg) = rx.blocking_recv() {
+        let t = transport.load(Ordering::Relaxed);
+        let write_result = if t == TRANSPORT_UNDETECTED {
+            // Transport not yet detected: send both so at least one arrives.
+            let osc = msg.to_osc();
+            let apc = msg.to_apc();
+            sink.write_all(osc.as_bytes())
+                .and_then(|_| sink.write_all(apc.as_bytes()))
+        } else {
+            // Plaintext input means Windows ConPTY: use OSC for output.
+            let encoded = if t == Transport::Osc as u8 || t == Transport::Plaintext as u8 {
+                msg.to_osc()
+            } else {
+                msg.to_apc()
+            };
+            sink.write_all(encoded.as_bytes())
+        };
+        if write_result.is_err() {
+            log::info!("stdout write error, stopping stdout writer");
+            break;
+        }
+        let _ = sink.flush();
+    }
+}
+
+/// Spawns the stdout writer pump on tokio's dedicated blocking-thread pool
+/// and returns the admission channel's sender plus a join handle the
+/// caller quiesces against once the connection ends. `make_sink` is called
+/// ON the blocking thread (not here), so a non-`Send` sink like
+/// `ProcessStdout` never has to cross the thread boundary itself — only
+/// the zero/small-capture constructor does.
+fn spawn_stdout_writer<S, F>(
+    transport: Arc<AtomicU8>,
+    make_sink: F,
+) -> (
+    tokio::sync::mpsc::Sender<MuxMessage>,
+    tokio::task::JoinHandle<()>,
+)
+where
+    S: StdoutSink,
+    F: FnOnce() -> S + Send + 'static,
+{
+    let (tx, rx) = tokio::sync::mpsc::channel::<MuxMessage>(STDOUT_WRITER_CAPACITY);
+    let handle = tokio::task::spawn_blocking(move || {
+        let sink = make_sink();
+        stdout_writer_pump(rx, &transport, sink);
+    });
+    (tx, handle)
+}
+
 /// Bidirectional forwarding for one daemon connection: stdin -> daemon,
 /// daemon -> stdout. Ends when either direction's stream fails, and
 /// reports whether the upgrade announcement (`MessageType::Upgrading`)
@@ -452,6 +573,13 @@ fn conclude_connection(announced: bool) -> ConnectionEnded {
 /// Does not perform the synthetic-Detached-then-exit sequence; callers
 /// decide that (Unix: only after giving up on reconnecting; Windows:
 /// always) via `finish_bridge_exit`.
+///
+/// Thin wrapper over [`forward_loop_inner`] that plugs in real process
+/// stdout. Kept as a separate, signature-stable function (rather than
+/// folding the sink parameter in here) so every existing call site —
+/// including `bridge_main_loop_windows`, which task0002 must leave
+/// textually untouched (NFR3) — keeps compiling unchanged; tests call
+/// `forward_loop_inner` directly with an injected sink instead.
 async fn forward_loop<R, W, I>(
     sock_reader: &mut R,
     sock_writer: &mut W,
@@ -465,6 +593,49 @@ where
     W: tokio::io::AsyncWrite + Unpin,
     I: tokio::io::AsyncRead + Unpin,
 {
+    forward_loop_inner(
+        sock_reader,
+        sock_writer,
+        transport,
+        last_attach,
+        stdin,
+        parser,
+        ProcessStdout::new,
+    )
+    .await
+}
+
+/// Why one `forward_loop_inner` call's `tokio::select!` resolved — used to
+/// decide, right after, whether the stdout writer still needs quiescing
+/// (invariant 6/7) or has already ended on its own.
+enum ForwardEnd {
+    StdinEnded,
+    StdoutEnded,
+    WriterEnded,
+}
+
+/// Does the actual work for [`forward_loop`]; generic over the stdout
+/// sink so tests can inject a controllable one (Test Notes: testability
+/// seam) while production always supplies [`ProcessStdout`]. `make_sink`
+/// is invoked on the writer's own blocking-thread context, never here
+/// (see [`spawn_stdout_writer`]).
+#[allow(clippy::too_many_arguments)]
+async fn forward_loop_inner<R, W, I, S, F>(
+    sock_reader: &mut R,
+    sock_writer: &mut W,
+    transport: &Arc<AtomicU8>,
+    last_attach: &Arc<Mutex<Option<Vec<u8>>>>,
+    stdin: &mut I,
+    parser: &mut StdinApcParser,
+    make_sink: F,
+) -> ConnectionEnded
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+    I: tokio::io::AsyncRead + Unpin,
+    S: StdoutSink,
+    F: FnOnce() -> S + Send + 'static,
+{
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     log::info!("Starting bidirectional forwarding");
@@ -474,8 +645,13 @@ where
     let announced = Arc::new(AtomicBool::new(false));
     let announced_for_stdout = Arc::clone(&announced);
     let transport_for_stdin = Arc::clone(transport);
-    let transport_for_stdout = Arc::clone(transport);
     let last_attach_for_stdin = Arc::clone(last_attach);
+
+    // The only place forwarded frames reach stdout (invariant 1): a
+    // dedicated blocking-capable pump, fed through a bounded admission
+    // channel. `daemon_to_stdout` only ever awaits room in this channel —
+    // it never performs the stdout syscall itself.
+    let (stdout_tx, mut writer_handle) = spawn_stdout_writer(Arc::clone(transport), make_sink);
 
     let stdin_to_daemon = async {
         let mut buf = [0u8; 8192];
@@ -591,46 +767,64 @@ where
                             );
                         }
                     }
-                    let t = transport_for_stdout.load(Ordering::Relaxed);
-                    use std::io::Write;
-                    let stdout = std::io::stdout();
-                    let mut stdout = stdout.lock();
-                    if t == TRANSPORT_UNDETECTED {
-                        // Transport not yet detected: send both so at least one arrives.
-                        let osc = msg.to_osc();
-                        let apc = msg.to_apc();
-                        if stdout.write_all(osc.as_bytes()).is_err()
-                            || stdout.write_all(apc.as_bytes()).is_err()
-                        {
-                            log::info!("stdout write error, stopping daemon→stdout");
-                            break;
-                        }
-                    } else {
-                        // Plaintext input means Windows ConPTY: use OSC for output
-                        let encoded =
-                            if t == Transport::Osc as u8 || t == Transport::Plaintext as u8 {
-                                msg.to_osc()
-                            } else {
-                                msg.to_apc()
-                            };
-                        if stdout.write_all(encoded.as_bytes()).is_err() {
-                            log::info!("stdout write error, stopping daemon→stdout");
-                            break;
-                        }
+                    // Admit to the writer's bounded channel via an
+                    // asynchronous, yielding wait (invariant 1/2): this
+                    // suspends the daemon→stdout future — never a thread —
+                    // once the channel fills, which is exactly the
+                    // backpressure signal that stops reading more frames
+                    // from the socket until the writer catches up.
+                    // Encoding is resolved by the writer AT WRITE TIME
+                    // (invariant 4), not here.
+                    if stdout_tx.send(msg).await.is_err() {
+                        log::info!("stdout write error, stopping daemon→stdout");
+                        break;
                     }
-                    let _ = stdout.flush();
                 }
             }
         }
     };
 
-    // Run both directions concurrently; exit when either ends
-    tokio::select! {
+    // Run both directions concurrently, plus a third arm watching the
+    // stdout writer itself: if the writer ends on its own (a sink write
+    // error — invariant 5) while `daemon_to_stdout` is parked on a socket
+    // read rather than on channel admission, this arm is what makes that
+    // failure observable and ends the whole loop instead of leaving the
+    // bridge reading a socket forever on a dead output.
+    let which = tokio::select! {
         _ = stdin_to_daemon => {
             log::info!("stdin→daemon ended, shutting down bridge");
+            ForwardEnd::StdinEnded
         }
         _ = daemon_to_stdout => {
             log::info!("daemon→stdout ended, shutting down bridge");
+            ForwardEnd::StdoutEnded
+        }
+        join_result = &mut writer_handle => {
+            match join_result {
+                Ok(()) => log::info!("stdout writer ended, shutting down bridge"),
+                Err(e) => log::warn!("stdout writer task panicked: {}", e),
+            }
+            ForwardEnd::WriterEnded
+        }
+    };
+
+    // Quiesce the writer before returning (invariant 6/7): stop admitting
+    // (drop the sender) and give the writer a bounded chance to drain
+    // whatever it already has queued, so no queued frame can interleave
+    // with or follow whatever the caller writes to stdout next (the
+    // synthetic Detached in `finish_bridge_exit`, or a fresh writer for
+    // the next `forward_loop` call after a reconnect). If the writer
+    // already ended on its own (`ForwardEnd::WriterEnded`), it has nothing
+    // left to drain and re-awaiting the handle would just be a no-op wait.
+    drop(stdout_tx);
+    if !matches!(which, ForwardEnd::WriterEnded) {
+        match tokio::time::timeout(STDOUT_WRITER_QUIESCE_TIMEOUT, writer_handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => log::warn!("stdout writer task ended abnormally: {}", e),
+            Err(_) => log::warn!(
+                "stdout writer did not quiesce within {:?}; abandoning it",
+                STDOUT_WRITER_QUIESCE_TIMEOUT
+            ),
         }
     }
 
@@ -1915,5 +2109,463 @@ mod tests {
         assert_eq!(forwarded.msg_type, MessageType::PtyInput);
         assert_eq!(forwarded.pane_id, 1);
         assert_eq!(forwarded.payload, vec![0x41]);
+    }
+
+    // ---- task0002: bridge stdout writer decoupled from the runtime
+    // thread (Test Notes: testability seam) ----
+
+    /// Bound for waits expected to complete (Convention 5): matches the
+    /// project's existing named-timeout convention (`connection.rs`'s
+    /// `HANDSHAKE_TIMEOUT`).
+    const STDOUT_WRITER_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Short bound used only to assert a wait did NOT complete quickly
+    /// (i.e. it suspended rather than ran to completion) — long enough to
+    /// rule out scheduling jitter as a false negative, short enough to
+    /// keep the test fast.
+    const STDOUT_WRITER_TEST_SUSPEND_CHECK: std::time::Duration =
+        std::time::Duration::from_millis(200);
+
+    /// Settle delay after bulk-admitting frames in the `forward_loop`
+    /// level test: gives the scheduler a bounded window to drive
+    /// `daemon_to_stdout` through reading and admitting everything already
+    /// sitting in the socket buffer before the test proceeds to check the
+    /// sibling direction. Not a correctness wait (nothing here is racing
+    /// against it for correctness) — only a determinism aid.
+    const STDOUT_WRITER_TEST_SETTLE: std::time::Duration = std::time::Duration::from_millis(200);
+
+    /// Release-all gate used to simulate a stalled real stdout: every
+    /// `wait()` call blocks until `release()` is called once, after which
+    /// every past and future `wait()` returns immediately.
+    struct Gate {
+        released: Mutex<bool>,
+        cv: std::sync::Condvar,
+    }
+
+    impl Gate {
+        fn new() -> Self {
+            Self {
+                released: Mutex::new(false),
+                cv: std::sync::Condvar::new(),
+            }
+        }
+
+        fn wait(&self) {
+            let mut released = self.released.lock().expect("gate mutex poisoned");
+            while !*released {
+                released = self.cv.wait(released).expect("gate mutex poisoned");
+            }
+        }
+
+        fn release(&self) {
+            *self.released.lock().expect("gate mutex poisoned") = true;
+            self.cv.notify_all();
+        }
+    }
+
+    /// Test double for `StdoutSink` (Test Notes: testability seam). Each
+    /// `write_all` call signals `started` (so a test can confirm the pump
+    /// picked up a frame even while parked), then optionally blocks on
+    /// `gate`, then either fails (if `fail_at_call` matches this call's
+    /// index) or records the bytes into `written` in call order.
+    struct TestSink {
+        started: tokio::sync::mpsc::Sender<Vec<u8>>,
+        gate: Option<Arc<Gate>>,
+        written: Arc<Mutex<Vec<Vec<u8>>>>,
+        fail_at_call: Option<usize>,
+        call_count: usize,
+    }
+
+    impl StdoutSink for TestSink {
+        fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+            let idx = self.call_count;
+            self.call_count += 1;
+            // Signal only on the FIRST call: `started` has a small fixed
+            // capacity and most tests drain it only once (to confirm the
+            // writer picked up its first frame), so signalling on every
+            // call would eventually block this thread forever once the
+            // channel fills — on the very sink-blocking behaviour this
+            // test double exists to simulate, but as an artifact of the
+            // test double itself rather than of the code under test.
+            // `blocking_send` (not `.send().await`) because this runs on
+            // the pump's blocking thread (Test Notes / invariant 1).
+            if idx == 0 {
+                let _ = self.started.blocking_send(buf.to_vec());
+            }
+            if let Some(gate) = &self.gate {
+                gate.wait();
+            }
+            if self.fail_at_call == Some(idx) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "simulated sink failure",
+                ));
+            }
+            self.written
+                .lock()
+                .expect("written mutex poisoned")
+                .push(buf.to_vec());
+            Ok(())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Sends `msg` on `tx`, asserting the admission completes within the
+    /// bound rather than suspending — the AC-1/AC-4 "admissions up to the
+    /// bound complete without waiting on the sink" assertion, factored out
+    /// since several tests repeat it.
+    async fn send_bounded(tx: &tokio::sync::mpsc::Sender<MuxMessage>, msg: MuxMessage) {
+        tokio::time::timeout(STDOUT_WRITER_TEST_TIMEOUT, tx.send(msg))
+            .await
+            .expect("admission within the bound must not suspend")
+            .expect("channel must still be open");
+    }
+
+    /// AC-1 / AC-4: the writer's admission channel has a named, finite
+    /// bound — admissions up to that bound complete without waiting on
+    /// the (blocked) sink; the next admission suspends rather than
+    /// blocking a thread, and completes once the sink is released.
+    #[tokio::test]
+    async fn stdout_writer_admits_up_to_capacity_then_suspends_while_sink_blocked() {
+        let gate = Arc::new(Gate::new());
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+        let written: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let transport = Arc::new(AtomicU8::new(Transport::Apc as u8));
+
+        let gate_for_sink = Arc::clone(&gate);
+        let written_for_sink = Arc::clone(&written);
+        let (tx, handle) = spawn_stdout_writer(Arc::clone(&transport), move || TestSink {
+            started: started_tx,
+            gate: Some(gate_for_sink),
+            written: written_for_sink,
+            fail_at_call: None,
+            call_count: 0,
+        });
+
+        // Picked up by the writer immediately, which then blocks trying
+        // to write it (the gate is held closed).
+        send_bounded(&tx, MuxMessage::pty_output(1, vec![0])).await;
+        tokio::time::timeout(STDOUT_WRITER_TEST_TIMEOUT, started_rx.recv())
+            .await
+            .expect("writer must start within the timeout")
+            .expect("started channel open");
+
+        // STDOUT_WRITER_CAPACITY more admissions must all complete without
+        // waiting on the sink.
+        for i in 0..STDOUT_WRITER_CAPACITY {
+            send_bounded(&tx, MuxMessage::pty_output(1, vec![i as u8])).await;
+        }
+
+        // The next admission must suspend rather than complete immediately.
+        // Driven from a spawned task (own clone of `tx`, dropped when the
+        // task completes) so the original `tx` stays free to drop below
+        // without any lingering borrow from this send.
+        let tx_overflow = tx.clone();
+        let overflow_task = tokio::spawn(async move {
+            tx_overflow
+                .send(MuxMessage::pty_output(1, vec![0xFF]))
+                .await
+        });
+        tokio::time::sleep(STDOUT_WRITER_TEST_SUSPEND_CHECK).await;
+        assert!(
+            !overflow_task.is_finished(),
+            "admission beyond the bound must suspend rather than complete immediately"
+        );
+
+        // Releasing the sink drains everything, including the overflow send.
+        gate.release();
+        tokio::time::timeout(STDOUT_WRITER_TEST_TIMEOUT, overflow_task)
+            .await
+            .expect("overflow task must finish once the sink drains")
+            .expect("overflow task must not panic")
+            .expect("overflow admission completes once the sink drains");
+
+        drop(tx);
+        tokio::time::timeout(STDOUT_WRITER_TEST_TIMEOUT, handle)
+            .await
+            .expect("writer quiesces after the channel closes")
+            .expect("writer task must not panic");
+
+        let got = written.lock().expect("written mutex poisoned");
+        assert_eq!(
+            got.len(),
+            STDOUT_WRITER_CAPACITY + 2,
+            "every admitted frame reaches the sink"
+        );
+    }
+
+    /// AC-3: after a blocked sink is released, the sink has received
+    /// exactly the admitted frames in admission order (no loss, no
+    /// reorder) — a single admission channel feeding a single writer.
+    #[tokio::test]
+    async fn stdout_writer_delivers_frames_in_admission_order_after_release() {
+        let gate = Arc::new(Gate::new());
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+        let written: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let transport = Arc::new(AtomicU8::new(Transport::Apc as u8));
+
+        let gate_for_sink = Arc::clone(&gate);
+        let written_for_sink = Arc::clone(&written);
+        let (tx, handle) = spawn_stdout_writer(Arc::clone(&transport), move || TestSink {
+            started: started_tx,
+            gate: Some(gate_for_sink),
+            written: written_for_sink,
+            fail_at_call: None,
+            call_count: 0,
+        });
+
+        let panes: Vec<u32> = vec![1, 2, 3, 4, 5];
+        let expected: Vec<Vec<u8>> = panes
+            .iter()
+            .map(|&pane| {
+                MuxMessage::pty_output(pane, vec![pane as u8])
+                    .to_apc()
+                    .into_bytes()
+            })
+            .collect();
+        for &pane in &panes {
+            send_bounded(&tx, MuxMessage::pty_output(pane, vec![pane as u8])).await;
+        }
+
+        tokio::time::timeout(STDOUT_WRITER_TEST_TIMEOUT, started_rx.recv())
+            .await
+            .expect("writer must start within the timeout")
+            .expect("started channel open");
+
+        gate.release();
+        drop(tx);
+        tokio::time::timeout(STDOUT_WRITER_TEST_TIMEOUT, handle)
+            .await
+            .expect("writer quiesces")
+            .expect("writer task must not panic");
+
+        let got = written.lock().expect("written mutex poisoned");
+        assert_eq!(
+            *got, expected,
+            "frames must reach the sink in admission order"
+        );
+    }
+
+    /// Invariant 4 (transport parity, Test Notes): an undetected transport
+    /// resolves to BOTH encodings, OSC first, at write time — the same
+    /// both-encodings behaviour the inline write performed before this
+    /// task's rework.
+    #[tokio::test]
+    async fn stdout_writer_sends_both_encodings_when_transport_is_undetected() {
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+        let written: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
+
+        let written_for_sink = Arc::clone(&written);
+        let (tx, handle) = spawn_stdout_writer(Arc::clone(&transport), move || TestSink {
+            started: started_tx,
+            gate: None,
+            written: written_for_sink,
+            fail_at_call: None,
+            call_count: 0,
+        });
+
+        let msg = MuxMessage::pty_output(1, vec![0xAB]);
+        send_bounded(&tx, msg.clone()).await;
+        tokio::time::timeout(STDOUT_WRITER_TEST_TIMEOUT, started_rx.recv())
+            .await
+            .expect("writer must start within the timeout")
+            .expect("started channel open");
+
+        drop(tx);
+        tokio::time::timeout(STDOUT_WRITER_TEST_TIMEOUT, handle)
+            .await
+            .expect("writer quiesces")
+            .expect("writer task must not panic");
+
+        let got = written.lock().expect("written mutex poisoned");
+        assert_eq!(
+            *got,
+            vec![msg.to_osc().into_bytes(), msg.to_apc().into_bytes()],
+            "an undetected transport must send both OSC and APC, OSC first"
+        );
+    }
+
+    /// AC-2: while the pump's sink is blocked — and even once its channel
+    /// is full — the sibling stdin→daemon direction keeps making
+    /// progress: a stdin-fed mux message still reaches the daemon-side
+    /// transport within the timeout.
+    ///
+    /// Honest-TDD note (task plan): this criterion cannot be observed red
+    /// against the pre-task0002 code, because that code wrote directly to
+    /// the real process stdout, which a test cannot stall. It is verified
+    /// here against the reworked structure (this test plus the
+    /// per-invariant pump tests above), not as red-then-green.
+    #[tokio::test]
+    async fn forward_loop_keeps_stdin_to_daemon_progressing_while_stdout_sink_is_blocked() {
+        use tokio::io::AsyncReadExt as _;
+        use tokio::io::AsyncWriteExt as _;
+
+        let (sock, mut daemon_side) = tokio::io::duplex(1 << 20);
+        let (mut sock_reader, mut sock_writer) = tokio::io::split(sock);
+        let (mut stdin, mut stdin_writer) = tokio::io::duplex(4096);
+        let mut parser = StdinApcParser::new();
+        let transport = Arc::new(AtomicU8::new(Transport::Apc as u8));
+        let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+
+        let gate = Arc::new(Gate::new());
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+        let written: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let gate_for_sink = Arc::clone(&gate);
+        let written_for_sink = Arc::clone(&written);
+
+        let forward = forward_loop_inner(
+            &mut sock_reader,
+            &mut sock_writer,
+            &transport,
+            &last_attach,
+            &mut stdin,
+            &mut parser,
+            move || TestSink {
+                started: started_tx,
+                gate: Some(gate_for_sink),
+                written: written_for_sink,
+                fail_at_call: None,
+                call_count: 0,
+            },
+        );
+
+        let driver = async move {
+            // Comfortably beyond the bound, so the writer's channel is
+            // guaranteed full (sink blocked, nothing draining) once these
+            // are all admitted.
+            for i in 0..(STDOUT_WRITER_CAPACITY as u32 + 2) {
+                let out = MuxMessage::pty_output(1, vec![i as u8]);
+                let body = out.to_frame_body();
+                daemon_side
+                    .write_all(&(body.len() as u32).to_be_bytes())
+                    .await
+                    .expect("write frame length");
+                daemon_side
+                    .write_all(&body)
+                    .await
+                    .expect("write frame body");
+                daemon_side.flush().await.expect("flush");
+            }
+
+            // Confirm the writer actually started (picked up the first
+            // frame and is now parked on the gate) before proceeding.
+            tokio::time::timeout(STDOUT_WRITER_TEST_TIMEOUT, started_rx.recv())
+                .await
+                .expect("writer must start within the timeout")
+                .expect("started channel open");
+
+            // Let the scheduler finish draining the socket into the
+            // (now full) admission channel before checking the sibling
+            // direction.
+            tokio::time::sleep(STDOUT_WRITER_TEST_SETTLE).await;
+
+            // Even with the stdout writer fully stalled and its channel
+            // full, a stdin-fed keystroke must still reach the daemon
+            // side within the timeout (AC-2).
+            let keystroke = MuxMessage::pty_input(9, vec![0x41]);
+            let apc = keystroke.to_apc();
+            stdin_writer
+                .write_all(apc.as_bytes())
+                .await
+                .expect("write keystroke");
+            stdin_writer.flush().await.expect("flush keystroke");
+
+            let mut len_buf = [0u8; 4];
+            tokio::time::timeout(
+                STDOUT_WRITER_TEST_TIMEOUT,
+                daemon_side.read_exact(&mut len_buf),
+            )
+            .await
+            .expect("keystroke must reach the daemon side within the timeout")
+            .expect("read forwarded frame length");
+            let frame_len = u32::from_be_bytes(len_buf) as usize;
+            let mut frame_buf = vec![0u8; frame_len];
+            daemon_side
+                .read_exact(&mut frame_buf)
+                .await
+                .expect("read forwarded frame body");
+            let forwarded = MuxMessage::from_frame_body(&frame_buf).expect("valid forwarded frame");
+            assert_eq!(forwarded.msg_type, MessageType::PtyInput);
+            assert_eq!(forwarded.pane_id, 9);
+            assert_eq!(forwarded.payload, vec![0x41]);
+
+            // Let forward_loop_inner end cleanly instead of running
+            // forever: release the sink and close stdin.
+            gate.release();
+            drop(stdin_writer);
+        };
+
+        let (ended, ()) = tokio::join!(forward, driver);
+        assert_eq!(ended, ConnectionEnded::Normal);
+    }
+
+    /// AC-5: a sink write error ends the forwarding — the async side
+    /// observes termination and `forward_loop`/`daemon_to_stdout`
+    /// conclude with the same `ConnectionEnded` semantics as today's
+    /// break-on-write-error (no `Upgrading` frame arrived here, so this
+    /// concludes `Normal`; `Announced` classification is a separate path,
+    /// unaffected by this change).
+    #[tokio::test]
+    async fn forward_loop_ends_normal_on_stdout_sink_write_error() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let (sock, mut daemon_side) = tokio::io::duplex(65536);
+        let (mut sock_reader, mut sock_writer) = tokio::io::split(sock);
+        let transport = Arc::new(AtomicU8::new(Transport::Apc as u8));
+        let last_attach: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+        let (mut stdin, _stdin_writer) = tokio::io::duplex(64);
+        let mut parser = StdinApcParser::new();
+
+        let (started_tx, _started_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+        let written: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let written_for_sink = Arc::clone(&written);
+
+        let msg = MuxMessage::pty_output(1, vec![0xAA]);
+        let body = msg.to_frame_body();
+        daemon_side
+            .write_all(&(body.len() as u32).to_be_bytes())
+            .await
+            .expect("write frame length");
+        daemon_side
+            .write_all(&body)
+            .await
+            .expect("write frame body");
+        daemon_side.flush().await.expect("flush");
+
+        let ended = tokio::time::timeout(
+            STDOUT_WRITER_TEST_TIMEOUT,
+            forward_loop_inner(
+                &mut sock_reader,
+                &mut sock_writer,
+                &transport,
+                &last_attach,
+                &mut stdin,
+                &mut parser,
+                move || TestSink {
+                    started: started_tx,
+                    gate: None,
+                    written: written_for_sink,
+                    fail_at_call: Some(0),
+                    call_count: 0,
+                },
+            ),
+        )
+        .await
+        .expect("forward_loop must end within the timeout once the sink fails");
+
+        assert_eq!(
+            ended,
+            ConnectionEnded::Normal,
+            "no Upgrading frame arrived, so the connection ends Normal"
+        );
+        assert!(
+            written.lock().expect("written mutex poisoned").is_empty(),
+            "the failed write must not be recorded as delivered"
+        );
     }
 }

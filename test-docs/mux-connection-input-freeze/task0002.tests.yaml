@@ -1,0 +1,80 @@
+task_id: task0002
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::bridge::tests::stdout_writer_admits_up_to_capacity_then_suspends_while_sink_blocked
+    red_confirmed: false
+    red_reason: >
+      This task introduces the pump/channel/sink abstraction the test
+      exercises; there was no pre-existing behavior to observe red against,
+      only the wholly new types (StdoutSink, spawn_stdout_writer,
+      stdout_writer_pump) this task adds. A "red" run against the
+      pre-implementation tree would only ever have been a compile error
+      (missing symbols), not a demonstration of missing behavior, so
+      implementation and test were written together rather than in strict
+      red-green order. Two genuine failures WERE observed and fixed while
+      iterating (a borrow-checker conflict over the admission channel's
+      Sender, and a self-inflicted deadlock in the test double's "started"
+      notification channel filling up) but both were bugs in the test
+      double, not evidence the feature was missing.
+  AC-2:
+    tests:
+      - mux::bridge::tests::forward_loop_keeps_stdin_to_daemon_progressing_while_stdout_sink_is_blocked
+    red_confirmed: false
+    red_reason: >
+      Per the task plan's explicit Honest-TDD note: this criterion cannot
+      be observed red against the pre-task0002 code, because that code
+      wrote directly to the real process stdout, which a test cannot
+      stall. Verified against the reworked structure (this test plus the
+      per-invariant pump tests) instead of red-then-green.
+  AC-3:
+    tests:
+      - mux::bridge::tests::stdout_writer_delivers_frames_in_admission_order_after_release
+    red_confirmed: false
+    red_reason: >
+      Same reasoning as AC-1: the admission channel and writer pump this
+      test exercises did not exist before this task, so there was nothing
+      to observe red against beyond a compile error.
+  AC-4:
+    tests:
+      - mux::bridge::tests::stdout_writer_admits_up_to_capacity_then_suspends_while_sink_blocked
+    red_confirmed: false
+    red_reason: >
+      Same test and same reasoning as AC-1 (the named-constant bound and
+      the suspend-on-full behavior are asserted by the same test); no
+      pre-existing behavior existed to observe red against.
+  AC-5:
+    tests:
+      - mux::bridge::tests::forward_loop_ends_normal_on_stdout_sink_write_error
+    red_confirmed: false
+    red_reason: >
+      Same reasoning as AC-1: `forward_loop_inner`'s injectable-sink
+      pathway (and the third `select!` arm that observes the writer ending
+      on its own) is new code introduced by this task; nothing pre-existing
+      to observe red against.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Build/compile check, not a test. Verified by running both
+      `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+      src-tauri/Cargo.toml` and the same with `--no-default-features`
+      (both green), and by diffing `bridge_main_loop_windows`'s function
+      body between the pre-task0002 commit and the current tree, which are
+      byte-for-byte identical.
