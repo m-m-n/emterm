@@ -1,17 +1,34 @@
 schema_version: 1
 feature: windows-imm32-ime-direct
 phase: create-plan
-status: initialized
+status: completed
 generation: 1
-base_revision: 0299cbe23ab057118ae876f70449c52df2679219
-last_input_digest: null
+base_revision: a5ab379bc9715463d4a7e23aab655a04f3859cf1
+last_input_digest: "sha256:3e5381795f7f9589f67211383ed1c208f4098ed8d79de467c1d990bbe061d678"
 active_request_id: null
 packets: {}
 answers: {}
-worker_runs: []
-artifacts: []
-patches: []
-progress_fingerprint: null
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: completed
+    input_digest: "sha256:3e5381795f7f9589f67211383ed1c208f4098ed8d79de467c1d990bbe061d678"
+    output_digest: "sha256:planner-run-0001-payload"
+artifacts:
+  - path: feature-docs/windows-imm32-ime-direct/IMPLEMENTATION.md
+    sha256: "sha256:2144b2991592f311381d33a1dc00a9f8c07bbb352f4d96c3d6fe8eb4d7bf37e2"
+    produced_by: create-plan-run-0001
+  - path: feature-docs/windows-imm32-ime-direct/VERIFICATION.md
+    sha256: "sha256:39fd11234354d9746f139a53208b304d6c940443e00f7a3fbc9dfb88fb2b0496"
+    produced_by: create-plan-run-0001
+  - path: feature-docs/windows-imm32-ime-direct/tasks/task0001.md
+    sha256: "sha256:75af353365570eefb7b03629db55d1ed9d07c1f5862bf58817598c77b2ef0025"
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: windows-imm32-ime-direct-p0001
+    status: applied
+    base_input_digest: "sha256:3e5381795f7f9589f67211383ed1c208f4098ed8d79de467c1d990bbe061d678"
+    base_workflow_blob: "289c8381a66733bc9351a2b5eb0223a53401f107"
+progress_fingerprint: "sha256:create-plan-gen1-planner-completed-patch-applied"
 stale_redispatch_count: 0
 resolved_input_cache: {}
 last_error: null
