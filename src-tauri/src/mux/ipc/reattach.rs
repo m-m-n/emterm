@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
+use super::outbound::OutboundAdmission;
 use super::protocol::*;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
@@ -301,52 +302,59 @@ const REATTACH_CHUNK_SIZE: usize = MAX_SNAPSHOT_FRAME_PAYLOAD;
 /// frame (the codec would fail to encode it, tearing the socket down) —
 /// this size check is what prevents that, not a multi-frame split.
 ///
-/// `outbound_tx` (task0001): every frame goes through the GUI loop's
-/// outbound admission queue, the same single ordered path every other
-/// client-bound frame uses (Design "Admission path") — this replaces the
-/// pre-task0001 direct `framed.send`. Only called from `handle_attach`
-/// (GUI loop), never the CLI-client path, so no [`super::outbound::ReplySink`]
+/// `admission` (task0001, task0003 rework): every frame goes through the
+/// GUI loop's SINGLE outbound admission component (module doc "Admission
+/// path"), via [`OutboundAdmission::admit_blocking`] — this replaces the
+/// pre-task0001 direct `framed.send`. Each pane entry's `PaneCreated` (and
+/// its optional `SnapshotRestore`) is admitted together in ONE
+/// `admit_blocking` call: that call drains any remainder already held by
+/// an earlier producer FIRST, so a same-pane `SnapshotRestore` can never
+/// overtake older held `PtyOutput` for that same pane (FR3, the worst-case
+/// scenario the task plan's Design section names) — the exact ordering
+/// hazard chunking into two separate calls per entry would not, by
+/// itself, break (each call drains what's ahead of it either way), but a
+/// single call keeps the pair atomic relative to any OTHER producer that
+/// might interleave between them. Only called from `handle_attach` (GUI
+/// loop), never the CLI-client path, so no [`super::outbound::ReplySink`]
 /// dual-mode is needed here.
 pub(super) async fn send_reattach_data(
-    outbound_tx: &mpsc::Sender<MuxMessage>,
+    admission: &mut OutboundAdmission,
     reattach_data: &[(PaneId, Vec<u8>, Vec<(usize, u16, u16)>)],
 ) -> Result<(), ()> {
     for (pane_id, buffered, segments) in reattach_data {
-        let resp = MuxMessage::control(MessageType::PaneCreated, *pane_id, pane_id);
-        if outbound_tx.send(resp).await.is_err() {
-            return Err(());
-        }
-        if buffered.is_empty() {
-            continue;
-        }
-        let encoded = crate::mux::session::pane::encode_snapshot_segments(buffered, segments);
-        // D6'' (task0005 rework, review round-4 finding `1d4a0c96821da0ef`):
-        // route through the SAME shared size-policy check
-        // `mux::ipc::handlers::handle_request_pane_snapshot` and the
-        // visibility-resume path now use, rather than each producer
-        // re-deriving its own comparison against `MAX_SNAPSHOT_FRAME_PAYLOAD`
-        // (here via the `REATTACH_CHUNK_SIZE` alias — same value, same
-        // check, one implementation).
-        if mux_ipc::protocol::fits_single_snapshot_frame(encoded.len()) {
-            let msg = MuxMessage {
-                msg_type: MessageType::SnapshotRestore,
-                pane_id: *pane_id,
-                payload: encoded,
-            };
-            if outbound_tx.send(msg).await.is_err() {
-                return Err(());
-            }
-            continue;
-        }
-        log::error!(
-            "reattach: pane {} snapshot {}B exceeds the single-frame limit \
-             ({}B); skipping this pane's buffered history rather than \
-             replaying it segment-blind at the client's current dimensions \
-             (D6''')",
+        let mut frames = vec![MuxMessage::control(
+            MessageType::PaneCreated,
+            *pane_id,
             pane_id,
-            encoded.len(),
-            REATTACH_CHUNK_SIZE
-        );
+        )];
+        if !buffered.is_empty() {
+            let encoded = crate::mux::session::pane::encode_snapshot_segments(buffered, segments);
+            // D6'' (task0005 rework, review round-4 finding `1d4a0c96821da0ef`):
+            // route through the SAME shared size-policy check
+            // `mux::ipc::handlers::handle_request_pane_snapshot` and the
+            // visibility-resume path now use, rather than each producer
+            // re-deriving its own comparison against `MAX_SNAPSHOT_FRAME_PAYLOAD`
+            // (here via the `REATTACH_CHUNK_SIZE` alias — same value, same
+            // check, one implementation).
+            if mux_ipc::protocol::fits_single_snapshot_frame(encoded.len()) {
+                frames.push(MuxMessage {
+                    msg_type: MessageType::SnapshotRestore,
+                    pane_id: *pane_id,
+                    payload: encoded,
+                });
+            } else {
+                log::error!(
+                    "reattach: pane {} snapshot {}B exceeds the single-frame limit \
+                     ({}B); skipping this pane's buffered history rather than \
+                     replaying it segment-blind at the client's current dimensions \
+                     (D6''')",
+                    pane_id,
+                    encoded.len(),
+                    REATTACH_CHUNK_SIZE
+                );
+            }
+        }
+        admission.admit_blocking(frames).await?;
     }
     Ok(())
 }
@@ -926,15 +934,17 @@ mod tests {
     /// chunks reassembling to the original buffer — this test's "no further
     /// frames" assertion would have seen the first chunk instead.
     ///
-    /// task0001: `send_reattach_data` now admits into an `mpsc::Sender<
-    /// MuxMessage>` (the GUI loop's outbound admission queue) rather than
-    /// sending over a real socket — no codec round-trip is exercised here
-    /// any more (that is covered separately by `codec.rs`'s own tests and
-    /// the connection-level tests in `connection.rs`), so the harness
+    /// task0001/task0003: `send_reattach_data` now admits through an
+    /// `OutboundAdmission` (the GUI loop's single outbound admission
+    /// component, wrapping a plain channel here) rather than sending over
+    /// a real socket — no codec round-trip is exercised here any more
+    /// (that is covered separately by `codec.rs`'s own tests and the
+    /// connection-level tests in `connection.rs`), so the harness
     /// simplifies to a plain channel with no spawned task needed.
     #[tokio::test]
     async fn test_send_reattach_data_skips_history_for_oversize_buffer() {
         let (tx, mut rx) = mpsc::channel::<MuxMessage>(4);
+        let mut admission = OutboundAdmission::new(tx);
 
         // Payload that spans just over two full chunks — its ENCODED form
         // exceeds `MAX_SNAPSHOT_FRAME_PAYLOAD`.
@@ -942,10 +952,10 @@ mod tests {
         let big: Vec<u8> = (0..payload_len).map(|i| (i % 251) as u8).collect();
         let reattach_data = vec![(42u32, big.clone(), Vec::new())];
 
-        send_reattach_data(&tx, &reattach_data)
+        send_reattach_data(&mut admission, &reattach_data)
             .await
             .expect("send_reattach_data ok");
-        drop(tx);
+        drop(admission);
 
         // First (and only) frame: PaneCreated — the pane still attaches.
         let first = rx.recv().await.unwrap();
@@ -963,12 +973,13 @@ mod tests {
     #[tokio::test]
     async fn test_send_reattach_data_empty_buffer_emits_only_pane_created() {
         let (tx, mut rx) = mpsc::channel::<MuxMessage>(4);
+        let mut admission = OutboundAdmission::new(tx);
 
         let reattach_data = vec![(7u32, Vec::<u8>::new(), Vec::new())];
-        send_reattach_data(&tx, &reattach_data)
+        send_reattach_data(&mut admission, &reattach_data)
             .await
             .expect("send_reattach_data ok");
-        drop(tx);
+        drop(admission);
 
         let first = rx.recv().await.unwrap();
         assert_eq!(first.msg_type, MessageType::PaneCreated);
@@ -989,13 +1000,14 @@ mod tests {
     #[tokio::test]
     async fn test_send_reattach_data_sends_snapshot_restore_for_normal_sized_buffer() {
         let (tx, mut rx) = mpsc::channel::<MuxMessage>(4);
+        let mut admission = OutboundAdmission::new(tx);
 
         let payload = b"\x1b[3J\x1b[H\x1b[2Jsome scrollback bytes".to_vec();
         let reattach_data = vec![(9u32, payload.clone(), Vec::new())];
-        send_reattach_data(&tx, &reattach_data)
+        send_reattach_data(&mut admission, &reattach_data)
             .await
             .expect("send_reattach_data ok");
-        drop(tx);
+        drop(admission);
 
         let first = rx.recv().await.unwrap();
         assert_eq!(first.msg_type, MessageType::PaneCreated);
@@ -1024,6 +1036,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_reattach_data_snapshot_restore_payload_is_segment_interpretable() {
         let (tx, mut rx) = mpsc::channel::<MuxMessage>(4);
+        let mut admission = OutboundAdmission::new(tx);
 
         let before = b"before\r\n".to_vec();
         let after = b"after\r\n".to_vec();
@@ -1034,10 +1047,10 @@ mod tests {
             build_snapshot_bytes(&scrollback, &segments, b"", false, (80, 24));
         let reattach_data = vec![(3u32, snapshot, snapshot_segments)];
 
-        send_reattach_data(&tx, &reattach_data)
+        send_reattach_data(&mut admission, &reattach_data)
             .await
             .expect("send_reattach_data ok");
-        drop(tx);
+        drop(admission);
 
         let _pane_created = rx.recv().await.unwrap();
         let snapshot_frame = rx.recv().await.unwrap();
@@ -1088,6 +1101,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_reattach_data_above_old_chunking_threshold_still_segment_aware() {
         let (tx, mut rx) = mpsc::channel::<MuxMessage>(4);
+        let mut admission = OutboundAdmission::new(tx);
 
         const OLD_CHUNK_THRESHOLD: usize = 8 * 1024 * 1024;
 
@@ -1136,10 +1150,10 @@ mod tests {
         );
 
         let reattach_data = vec![(5u32, snapshot, snapshot_segments)];
-        send_reattach_data(&tx, &reattach_data)
+        send_reattach_data(&mut admission, &reattach_data)
             .await
             .expect("send_reattach_data ok");
-        drop(tx);
+        drop(admission);
 
         let _pane_created = rx.recv().await.unwrap();
         let frame = rx.recv().await.unwrap();
