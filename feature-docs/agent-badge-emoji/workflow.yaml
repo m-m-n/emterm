@@ -69,15 +69,18 @@ tasks:
     branch: em-workflow/agent-badge-emoji/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, spec]
     discretionary:
       - perspective: architecture
         reason: "共有型 BadgePresentation の内部契約が変わり（Emoji バリアントに fallback_filled を追加）、tab_bar.rs と mux_sidebar.rs の両方が消費するため"
     cross_validation: false
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    architecture: completed
   residual_critical_high: 0
   needs_rework: false
 
