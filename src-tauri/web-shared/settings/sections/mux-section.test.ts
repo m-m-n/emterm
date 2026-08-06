@@ -237,3 +237,87 @@ describe("renderMuxSection() — i18n keys", () => {
     expect(labels).toContain(t("settings.mux.keybind.toggleWindowSidebar"));
   });
 });
+
+describe("renderMuxSection() — next-agent-window keybind row", () => {
+  test("AC-1: ja and en both resolve the next-agent-window keybind label key", () => {
+    for (const locale of ["en", "ja"] as const) {
+      setLocale(locale);
+      expect(t("settings.mux.keybind.nextAgentWindow")).not.toBe(
+        "settings.mux.keybind.nextAgentWindow",
+      );
+    }
+  });
+
+  test("AC-1: the keybind grid renders a labeled row for next-agent-window once the backend exposes the action", () => {
+    setLocale("en");
+    const panel = document.createElement("div");
+    const settings = makeSettings();
+    const ctx = makeCtx(settings, () => {}, [
+      { action: "next-agent-window", key: "Ctrl+A" },
+    ]);
+
+    renderMuxSection(panel, ctx);
+
+    const labels = Array.from(
+      panel.querySelectorAll(".settings-row-keybind .settings-label"),
+    ).map((el) => el.textContent);
+    expect(labels).toContain(t("settings.mux.keybind.nextAgentWindow"));
+  });
+
+  test("AC-2: the row reads settings.mux.keybinds['next-agent-window'] over the backend default", () => {
+    setLocale("en");
+    const panel = document.createElement("div");
+    const settings = makeSettings({
+      mux: makeMux({ keybinds: { "next-agent-window": "Ctrl+X" } }),
+    });
+    const ctx = makeCtx(settings, () => {}, [
+      { action: "next-agent-window", key: "Ctrl+A" },
+    ]);
+
+    renderMuxSection(panel, ctx);
+
+    const button = Array.from(
+      panel.querySelectorAll<HTMLButtonElement>(
+        ".settings-row-keybind .settings-keybind-input",
+      ),
+    ).find((el) => el.textContent === "Ctrl+X");
+    expect(button).toBeTruthy();
+  });
+
+  test("AC-2: capturing a key writes settings.mux.keybinds['next-agent-window'] like existing mux action rows", () => {
+    setLocale("en");
+    const panel = document.createElement("div");
+    const settings = makeSettings({
+      mux: makeMux({ keybinds: { "next-agent-window": "Ctrl+A" } }),
+    });
+    const saved: Array<[string, unknown]> = [];
+    const ctx = makeCtx(
+      settings,
+      (key, value) => {
+        saved.push([key, value]);
+      },
+      [{ action: "next-agent-window", key: "Ctrl+A" }],
+    );
+
+    renderMuxSection(panel, ctx);
+
+    const button = Array.from(
+      panel.querySelectorAll<HTMLButtonElement>(
+        ".settings-row-keybind .settings-keybind-input",
+      ),
+    ).find((el) => el.textContent === "Ctrl+A");
+    expect(button).toBeTruthy();
+
+    button!.click();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true }),
+    );
+
+    expect(saved.length).toBe(1);
+    const [key, value] = saved[0]!;
+    expect(key).toBe("mux");
+    expect((value as MuxSettings).keybinds).toEqual({
+      "next-agent-window": "Ctrl+B",
+    });
+  });
+});

@@ -355,7 +355,8 @@
         "prevWindow": "Previous Window",
         "renameWindow": "Rename Window",
         "moveWindow": "Move Window",
-        "toggleWindowSidebar": "Toggle Window Sidebar"
+        "toggleWindowSidebar": "Toggle Window Sidebar",
+        "nextAgentWindow": "Next Agent Window"
       }
     },
     "log": {

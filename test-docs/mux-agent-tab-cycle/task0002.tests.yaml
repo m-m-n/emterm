@@ -1,0 +1,38 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - "renderMuxSection() — next-agent-window keybind row > AC-1: ja and en both resolve the next-agent-window keybind label key"
+      - "renderMuxSection() — next-agent-window keybind row > AC-1: the keybind grid renders a labeled row for next-agent-window once the backend exposes the action"
+    red_confirmed: true
+    red_reason: >-
+      First test: expect(t("settings.mux.keybind.nextAgentWindow")).not.toBe(...)
+      failed because the locale files had no such key yet (t() fell back to
+      returning the raw key). Second test: expected labels array to contain
+      the translated string but it only contained "Prefix Key" because
+      ACTION_I18N_KEYS had no entry for "next-agent-window", so the row was
+      silently skipped by the `if (!i18nKey) continue;` guard.
+  AC-2:
+    tests:
+      - "renderMuxSection() — next-agent-window keybind row > AC-2: the row reads settings.mux.keybinds['next-agent-window'] over the backend default"
+      - "renderMuxSection() — next-agent-window keybind row > AC-2: capturing a key writes settings.mux.keybinds['next-agent-window'] like existing mux action rows"
+    red_confirmed: true
+    red_reason: >-
+      Both tests failed with `expect(button).toBeTruthy()` receiving
+      `undefined` because no row (and thus no keybind-input button) was
+      rendered for "next-agent-window" before ACTION_I18N_KEYS gained the
+      entry.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No dedicated test; verified directly by running the project commands.
+      `bun run typecheck` and `bun test` passed (315 pass / 0 fail, up from
+      the 311/0 baseline). `bunx biome check` on the touched files
+      (mux-section.ts, mux-section.test.ts, en.json, ja.json) reported no
+      issues. A pre-existing biome formatting drift in
+      src-tauri/web-shared/settings/types.ts (an untouched file, unrelated
+      union-type wrapping) was observed and left alone per project
+      convention of not running crate/project-wide format fixes.
