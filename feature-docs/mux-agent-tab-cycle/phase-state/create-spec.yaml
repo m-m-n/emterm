@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-agent-tab-cycle
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: d13e2767638b511c9a58928c0511f0a63b9bacec
-last_input_digest: "sha256:2790e5e7001de1fc1273517c92c452c5fe7c06001d236c622db4a6ada0f4ffee"
-active_request_id: create-spec-run-0001
+last_input_digest: "sha256:a2cdd21b52ebc6f39b8ef628774b4156cb4fbcaa186bdf0c4144201977500f8c"
+active_request_id: null
 packets:
   mux-agent-tab-cycle-q0001:
     status: answered
@@ -66,7 +66,21 @@ worker_runs:
     status: needs_user_input
     input_digest: "sha256:2790e5e7001de1fc1273517c92c452c5fe7c06001d236c622db4a6ada0f4ffee"
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:133d5fba9e3a5913cf420fac856f9ff09d11abfa4bacfc7c2813c8d12df59b31"
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: "sha256:a2cdd21b52ebc6f39b8ef628774b4156cb4fbcaa186bdf0c4144201977500f8c"
+    output_digest: null
+artifacts:
+  - path: feature-docs/mux-agent-tab-cycle/REQUIREMENTS.md
+    sha256: "sha256:cfaebe6bd62ad984a62c84c59ab1cbb6dd2bbb0561bb48b5c5eba9f3fd60e9b7"
+    produced_by: create-spec-run-0003
+  - path: feature-docs/mux-agent-tab-cycle/SPEC.md
+    sha256: "sha256:75fea53bdc7841289e0bae7b48a2bfef3fa266e8f038be849d256e637c125606"
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
