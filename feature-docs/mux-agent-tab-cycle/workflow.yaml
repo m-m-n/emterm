@@ -83,7 +83,7 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR1, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-agent-tab-cycle/task0002
 
