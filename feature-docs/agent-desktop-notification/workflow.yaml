@@ -64,7 +64,7 @@ tasks:
     domains: [data-persistence, input-handling]
     complexity: medium
     requirements: [FR2, FR3, FR4, FR6, FR7, NFR1, NFR2]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/agent-desktop-notification/task0001
   task0002:
