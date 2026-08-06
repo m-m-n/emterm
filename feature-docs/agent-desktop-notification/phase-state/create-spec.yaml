@@ -1,0 +1,26 @@
+schema_version: 1
+feature: agent-desktop-notification
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: 6a95d08b6405b827f420dd8a10b820b5434aa8b8
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+    digests: {}
+    truncated: false
+last_error: null
