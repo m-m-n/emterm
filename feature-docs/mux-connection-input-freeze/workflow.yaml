@@ -40,8 +40,8 @@ workflow:
     status: completed
     completed_at_commit: e973c060685bb56113b6481f4cc7a96d26e6ce82
   - id: implement
-    status: in_progress
-    completed_at_commit: 4e4e33c21468e5220f2795f7632babb17977c811
+    status: completed
+    completed_at_commit: cd770ace2598c8336912e4824c729090769e373e
     base_commit: 8e2311c2ffbb5b07f7f185c0207db5bd18b8c5f8
   - id: review
     status: pending
@@ -93,7 +93,7 @@ tasks:
     domains: [concurrency, external-io]
     complexity: high
     requirements: [FR1, FR3, FR4, NFR1, NFR4]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-connection-input-freeze/task0003
     provenance:
