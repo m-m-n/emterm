@@ -76,7 +76,7 @@ tasks:
     domains: [concurrency, external-io]
     complexity: high
     requirements: [FR2, FR3, FR4, NFR1, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/mux-connection-input-freeze/task0002
 
