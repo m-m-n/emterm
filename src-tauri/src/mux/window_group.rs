@@ -359,6 +359,30 @@ impl MuxWindowGroup {
     }
 }
 
+/// Resolve the `next-agent-window` mux action's cycle target (SPEC
+/// mux-agent-tab-cycle FR2/FR3/FR5, IMPLEMENTATION.md cross-task decision
+/// 2): a pure decision over a display-ordered, per-window qualifying-flag
+/// list and the current window index.
+///
+/// Scans forward starting at the position after `current`, wrapping once
+/// through the full order with `current` itself considered last, and
+/// returns the index of the first qualifying (`true`) entry found.
+/// Consequences: if `current` is the only qualifying window, the scan
+/// returns `current` (active window unchanged, AC-4); if no window
+/// qualifies, returns `None` (no-op, AC-5, FR5). Returns `None` for an
+/// empty list. Deliberately independent of [`MuxWindowGroup`] (takes plain
+/// slices) so it is unit-testable without a GUI context and callable at
+/// key-event time with no polling or cached qualify lists (NFR2).
+pub fn next_qualifying_index(qualifies: &[bool], current: usize) -> Option<usize> {
+    let len = qualifies.len();
+    if len == 0 {
+        return None;
+    }
+    (1..=len)
+        .map(|offset| (current + offset) % len)
+        .find(|&idx| qualifies[idx])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,5 +646,66 @@ mod tests {
         // The previously-scrolled pane keeps its offset.
         g.set_active_clamped(0);
         assert_eq!(g.active_pane_scroll(), ScrollPosition::OffsetFromLive(4));
+    }
+
+    // ── next_qualifying_index (mux-agent-tab-cycle task0001 TS-1 … TS-5) ──
+
+    /// AC-2 (TS-1, TS-2): with a subset of qualifying windows, repeated
+    /// invocations visit exactly the qualifying windows in display order,
+    /// skipping non-qualifying ones.
+    #[test]
+    fn next_qualifying_index_skips_non_qualifying_in_display_order() {
+        // windows 0..5; only 1 and 3 qualify.
+        let qualifies = [false, true, false, true, false];
+        assert_eq!(next_qualifying_index(&qualifies, 0), Some(1));
+        assert_eq!(next_qualifying_index(&qualifies, 1), Some(3));
+        assert_eq!(next_qualifying_index(&qualifies, 2), Some(3));
+    }
+
+    /// AC-2/AC-3: a full repeated-invocation walk cycles through exactly
+    /// the qualifying windows, wrapping back to the first once the last
+    /// qualifying window is reached.
+    #[test]
+    fn next_qualifying_index_repeated_invocation_cycles_qualifying_only() {
+        let qualifies = [false, true, false, true, false];
+        let mut current = 0usize;
+        let mut visited = Vec::new();
+        for _ in 0..4 {
+            let next = next_qualifying_index(&qualifies, current).unwrap();
+            visited.push(next);
+            current = next;
+        }
+        assert_eq!(visited, vec![1, 3, 1, 3]);
+    }
+
+    /// AC-3 (TS-3): invoking from the last qualifying window in display
+    /// order wraps around and lands on the first qualifying window.
+    #[test]
+    fn next_qualifying_index_wraps_from_last_qualifying_to_first() {
+        let qualifies = [false, true, false, true, false];
+        // Window 3 is the last qualifying window in display order.
+        assert_eq!(next_qualifying_index(&qualifies, 3), Some(1));
+    }
+
+    /// AC-4 (TS-4): with exactly one qualifying window, invocation lands
+    /// on (or stays on) that window regardless of the starting index.
+    #[test]
+    fn next_qualifying_index_single_qualifying_window_is_stable() {
+        let qualifies = [false, true, false];
+        assert_eq!(next_qualifying_index(&qualifies, 1), Some(1));
+        assert_eq!(next_qualifying_index(&qualifies, 0), Some(1));
+        assert_eq!(next_qualifying_index(&qualifies, 2), Some(1));
+    }
+
+    /// AC-5 (TS-5): with zero qualifying windows, there is no target.
+    #[test]
+    fn next_qualifying_index_zero_qualifying_returns_none() {
+        let qualifies = [false, false, false];
+        assert_eq!(next_qualifying_index(&qualifies, 0), None);
+    }
+
+    #[test]
+    fn next_qualifying_index_empty_list_returns_none() {
+        assert_eq!(next_qualifying_index(&[], 0), None);
     }
 }

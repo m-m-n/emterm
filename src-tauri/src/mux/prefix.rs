@@ -159,6 +159,12 @@ pub enum PrefixAction {
     /// `settings.mux.window_sidebar_overlay` is `true`; a strict no-op in
     /// persistent mode (FR4). Handled by `App::dispatch_mux_action`.
     ToggleWindowSidebar,
+    /// Switch to the next window that has a reported (uncleared) agent
+    /// status, in display order with wrap-around — skipping windows with no
+    /// status and stopping at the current window when it is the only
+    /// qualifying one (SPEC mux-agent-tab-cycle FR2/FR3/FR5/FR6). A no-op
+    /// when zero windows qualify. Handled by `App::dispatch_mux_action`.
+    NextAgentWindow,
 }
 
 /// Effective follow-up key bindings for the mux actions, resolved from
@@ -189,6 +195,8 @@ pub struct ActionBindings {
     pub move_window: PrefixChord,
     /// toggle-window-sidebar
     pub toggle_window_sidebar: PrefixChord,
+    /// next-agent-window
+    pub next_agent_window: PrefixChord,
 }
 
 /// Bare single-letter [`PrefixChord`] (no modifiers). Test-only: the defaults
@@ -230,6 +238,7 @@ pub const DEFAULT_ACTION_BINDINGS: &[(&str, PrefixChord)] = &[
     ("rename-window", ctrl_letter('r')),
     ("move-window", ctrl_letter('t')),
     ("toggle-window-sidebar", ctrl_letter('w')),
+    ("next-agent-window", ctrl_letter('a')),
 ];
 
 /// Default follow-up chord for a mux action, or `None` if the action
@@ -310,6 +319,7 @@ impl Default for ActionBindings {
             rename_window: get("rename-window"),
             move_window: get("move-window"),
             toggle_window_sidebar: get("toggle-window-sidebar"),
+            next_agent_window: get("next-agent-window"),
         }
     }
 }
@@ -332,6 +342,10 @@ impl ActionBindings {
                 .get("toggle-window-sidebar")
                 .copied()
                 .unwrap_or(d.toggle_window_sidebar),
+            next_agent_window: map
+                .get("next-agent-window")
+                .copied()
+                .unwrap_or(d.next_agent_window),
         }
     }
 
@@ -355,6 +369,8 @@ impl ActionBindings {
             Some(PrefixAction::MoveWindow)
         } else if self.toggle_window_sidebar.matches_as_follow_up(input) {
             Some(PrefixAction::ToggleWindowSidebar)
+        } else if self.next_agent_window.matches_as_follow_up(input) {
+            Some(PrefixAction::NextAgentWindow)
         } else {
             None
         }
@@ -727,6 +743,7 @@ mod tests {
                 ("rename-window", "Ctrl+R".to_string()),
                 ("move-window", "Ctrl+T".to_string()),
                 ("toggle-window-sidebar", "Ctrl+W".to_string()),
+                ("next-agent-window", "Ctrl+A".to_string()),
             ]
         );
     }
@@ -742,6 +759,20 @@ mod tests {
         assert_eq!(
             ActionBindings::default().toggle_window_sidebar,
             ctrl_letter('w')
+        );
+    }
+
+    /// mux-agent-tab-cycle task0001 AC-1: `next-agent-window` appears in
+    /// the default action bindings with chord Ctrl+A.
+    #[test]
+    fn next_agent_window_default_chord_is_ctrl_a() {
+        assert_eq!(
+            default_action_chord("next-agent-window"),
+            Some(ctrl_letter('a'))
+        );
+        assert_eq!(
+            ActionBindings::default().next_agent_window,
+            ctrl_letter('a')
         );
     }
 
@@ -973,6 +1004,44 @@ mod tests {
         assert_eq!(
             arm_then(&mut l, KeyInput::ctrl_letter('w')),
             PrefixAction::ToggleWindowSidebar
+        );
+    }
+
+    /// mux-agent-tab-cycle task0001 AC-1: the Ctrl+Z Ctrl+A chord
+    /// dispatches `NextAgentWindow` through the same latch path as the
+    /// other default follow-ups.
+    #[test]
+    fn default_binding_maps_ctrl_a_to_next_agent_window() {
+        let mut l = Latch::default();
+        assert_eq!(
+            arm_then(&mut l, KeyInput::ctrl_letter('a')),
+            PrefixAction::NextAgentWindow
+        );
+    }
+
+    /// mux-agent-tab-cycle task0001 AC-1: a user override of
+    /// `settings.mux.keybinds["next-agent-window"]` wins over the Ctrl+A
+    /// default, and the default no longer fires once overridden.
+    #[test]
+    fn custom_next_agent_window_binding_overrides_default() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("next-agent-window".to_string(), bare_letter('g'));
+        let bindings = ActionBindings::from_settings_map(&map);
+        let mut l = Latch::with_bindings(PrefixChord::default(), DEFAULT_ARMED_TIMEOUT, bindings);
+        assert_eq!(
+            arm_then(&mut l, KeyInput::letter('g')),
+            PrefixAction::NextAgentWindow
+        );
+
+        let mut l_stale = Latch::with_bindings(
+            PrefixChord::default(),
+            DEFAULT_ARMED_TIMEOUT,
+            ActionBindings::from_settings_map(&map),
+        );
+        assert_eq!(
+            arm_then(&mut l_stale, KeyInput::ctrl_letter('a')),
+            PrefixAction::None,
+            "the overridden default (Ctrl+A) no longer fires"
         );
     }
 
