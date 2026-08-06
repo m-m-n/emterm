@@ -37,7 +37,8 @@ workflow:
     skipped_reason: "Backend concurrency bugfix in the mux daemon connection task and bridge I/O path; no UI surface, no visual or interaction change."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: e973c060685bb56113b6481f4cc7a96d26e6ce82
   - id: implement
     status: pending
     base_commit: 6a95d08b6405b827f420dd8a10b820b5434aa8b8
@@ -50,7 +51,34 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Connection task: decouple socket sends from the select! loop"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/mux/ipc/connection.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/ipc/reattach.rs
+      - src-tauri/src/mux/ipc/mod.rs
+    skills: [backend-impl]
+    domains: [concurrency, external-io]
+    complexity: high
+    requirements: [FR1, FR3, FR4, FR5, NFR1, NFR4]
+    status: pending
+    notes: null
+    branch: null
+  task0002:
+    title: "Bridge: move stdout writes off the tokio runtime thread"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/mux/bridge.rs
+    skills: [backend-impl]
+    domains: [concurrency, external-io]
+    complexity: high
+    requirements: [FR2, FR3, FR4, NFR1, NFR3]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -66,64 +94,64 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS5]
   FR2:
     title: "Bridge: no synchronous stdout syscall on the tokio task"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS3, TS5]
   FR3:
     title: "Preserve same-pane FIFO ordering (carried from prior feature)"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002]
+    tests: [TS2, TS4]
   FR4:
     title: "Preserve backpressure; no unbounded channels (carried from prior feature)"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002]
+    tests: [TS4]
   FR5:
     title: "Regression test for bounded input polling during drain"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1]
   NFR1:
     title: "Protocol stability: no mux protocol change"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002]
+    tests: [TS6]
   NFR2:
     title: "Scope boundary: GUI-side event_tx bounded(4096) sizing out of scope"
     status: ok
     tbd_reason: null
     excluded_reason: null
     tasks: []
-    tests: []
+    tests: [TS7]
   NFR3:
     title: "Scope boundary: Windows bridge same-shape fix out of scope"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS7]
   NFR4:
     title: "No regression of PTY-exit reap and Upgrading-ack paths"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS4]
 
 batch:
   review_rework_count: 0
