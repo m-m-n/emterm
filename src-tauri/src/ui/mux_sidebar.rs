@@ -1957,8 +1957,10 @@ mod tests {
     fn ac5_working_to_done_transition_causes_no_name_column_shift() {
         // The reserved slot width is unified across ALL states (Design
         // 4), so a badge state transition must never move the name
-        // column even though `working` and `done` render via different
-        // presentations (emoji fallback-circle vs. native circle).
+        // column even though `working` and `done` render different
+        // emoji clusters (agent-badge-emoji task0001) and (with no
+        // emoji resources supplied here) different fallback-circle
+        // shapes.
         let mut working = entries(1, 0);
         working[0].badge = Some(Aggregated {
             state: crate::agent_status::AgentState::Working,
