@@ -37,7 +37,7 @@ workflow:
     skipped_reason: "Backend concurrency bugfix in the mux daemon connection task and bridge I/O path; no UI surface, no visual or interaction change."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: 6a95d08b6405b827f420dd8a10b820b5434aa8b8
