@@ -1,0 +1,152 @@
+round: 1
+executed_at: "2026-08-06T15:23:17+09:00"
+scope:
+  review_mode: diff
+  base_commit: 37dc21bbbed5f02a918950166c6271769fd79605
+  head_commit: ce0d6a23e4661474b5e08dbc52ef4d7a486180fc
+  changed_files:
+    - src-tauri/src/agent_status_model.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/mux/prefix.rs
+    - src-tauri/src/mux/window_group.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/src/settings_window/commands.rs
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/settings/sections/mux-section.test.ts
+    - src-tauri/web-shared/settings/sections/mux-section.ts
+    - test-docs/mux-agent-tab-cycle/task0001.tests.yaml
+    - test-docs/mux-agent-tab-cycle/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+    - perspective: architecture
+      reason: "新 mux アクションが prefix.rs / app.rs / window_group.rs / agent_status_model.rs の4モジュールにまたがり、既存 PrefixAction 経路との境界が変わるため"
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: vertex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: vertex, status: skipped, skip_reason: "vertex_error: HTTP 429 RESOURCE_EXHAUSTED (6 attempts)"}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: vertex, status: completed}
+orchestrator_deviations:
+  - >-
+    security の cross_validation チェーンは [codex, vertex] だが、codex は本 run の
+    create-spec 段階で利用上限 (usage limit, ~2026-08-08 まで) を返すことが実測済みだったため、
+    R2 で codex を飛ばして直接 vertex を dispatch した。R2b の rate-limit fallback が
+    到達する結果と同一。
+  - >-
+    loop 1 後の再レビューは claude 側4観点をすべて再実行し、cross-model の再実行は
+    省略した。変更が app.rs 1ファイル・ガード1箇所 + テスト assert 追加に限定されており、
+    初回 cross-model 実行が該当箇所に findings を出していないため。
+findings:
+  - stable_id: c4a1f0d2b8e37596
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/app.rs
+    line: 3183
+    title: "自窓が唯一の qualifying のとき同一ペインへ SwitchWindow + スナップショット再生が走る"
+    description: >-
+      next_qualifying_index は current 自身を最後に走査するため、アクティブ窓が唯一の
+      qualifying 窓のとき Some(current) を返す。dispatch 側はその値をそのまま switch_to に
+      渡すので、既にアクティブなペインへ SwitchWindow を送り request_pane_snapshot を発行し、
+      MuxActionOutcome::Changed を返して needs_full_redraw と record_mux_window_switch まで
+      発火する。daemon は画面ダンプ + 最大 2MiB の scrollback を返し、クライアントは
+      TerminalCore を build_from_snapshot し直す (64KiB 超は off-thread replay + core swap の
+      重い経路)。「エージェント窓が1つだけ」という最も普通の使い方でキーを押すたびに、
+      何も変わらないのに端末の全面再構築が起きる。
+    suggestion: >-
+      NextAgentWindow アームで target == Some(current) の場合は switch_to を呼ばず
+      MuxActionOutcome::None を返す。純関数 next_qualifying_index の契約は変更しない。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (ガード追加 + 既存テストに outcome assert 追加)。cargo check 通過、feature テスト9件 green"
+  - stable_id: 7b2e91a4c0d5f318
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/prefix.rs
+    line: 241
+    title: "デフォルト chord Ctrl+A は prefix=Ctrl+A のユーザーで到達不能になる"
+    description: >-
+      Latch::observe は Armed 状態でまず chord.matches(input) を見て PrefixAction::Literal を
+      返し、その後でしか decode_follow_up を呼ばない。mux.prefix が Ctrl+A のとき
+      prefix→Ctrl+A は常に prefix パススルーになり、next-agent-window のデフォルトバインドは
+      一度も発火しない。Ctrl+A は tmux ユーザーの定番 prefix で、本プロジェクトの tmux.conf
+      インポータも `set -g prefix C-a` を Ctrl+A に変換する。keybind と prefix の衝突を
+      検出する検証も警告も無いため、該当ユーザーには「設定画面に行が出ているのに何も起きない
+      キー」が黙って残る。
+    suggestion: >-
+      (a) デフォルト chord を prefix に採用されにくいキー (例 Ctrl+G) に変える、または
+      (b) 設定ロード時にアクション chord が prefix chord と一致したら log::warn! を出す
+      (他アクションにも同じ潜在的衝突があるため横断的に効く)。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium のため R4 の auto-fix 候補ゲート (critical/high) に該当せず"
+  - stable_id: 2f8c6d10a95b47e3
+    severity: medium
+    category: comprehensive
+    file: doc/SPECIFICATION.md
+    line: 1044
+    title: "プロジェクト仕様書の prefix アクション表に next-agent-window が未追加"
+    description: >-
+      doc/SPECIFICATION.md の "Retained prefix key actions" 表は mux の prefix アクション
+      一覧で、直前の mux-vertical-tabs 機能では追加アクションがここに追記されている。
+      今回追加した next-agent-window は表にも本文にも現れず、コード側 SSOT
+      (DEFAULT_ACTION_BINDINGS / MUX_ACTION_NAMES) と乖離した状態になる。
+    suggestion: >-
+      "Retained prefix key actions" 表に next-agent-window の行 (デフォルト Ctrl+A、
+      prefix と合わせて Ctrl+Z Ctrl+A) を追加し、mux セクション本文に挙動を1行加える。
+    sources: [claude:comprehensive]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium かつ changed_files 外のファイル (diff モードで confidence 上限 50)"
+  - stable_id: 9d3a05c7e618b2f4
+    severity: medium
+    category: architecture
+    file: src-tauri/src/agent_status_model.rs
+    line: 311
+    title: "既存の集約 API を迂回する重複述語 any_pane_has_reported_state (PaneKey 抽象のバイパス)"
+    description: >-
+      新規メソッド any_pane_has_reported_state は既存の aggregate() と意味が完全に一致し、
+      かつモデルの読み取り API が一貫して採用している PaneKey 抽象を破って生の u32 を受ける。
+      mux サイドバーのバッジ判定 (App::agent_status_pane_badge) と next-agent-window の
+      qualify 判定が独立した2経路になり、両者を結ぶテストも無い。将来 aggregate の参加条件に
+      手が入ると、サイドバーはバッジを出すのにサイクルは飛ばす (またはその逆) という
+      無言の不整合になる。
+    suggestion: >-
+      qualify 生成を self.agent_status_pane_badge(pane_id).is_some() に置き換えて判定を
+      一本化する。モデル側に述語を置くなら PaneKey を受け取り aggregate へ委譲する形にする。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium のため R4 の auto-fix 候補ゲート (critical/high) に該当せず"
+  - stable_id: 5e1b8437f2a6c09d
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/prefix.rs
+    line: 199
+    title: "mux アクション追加が SSOT テーブルから導出されない手作業配線を要求し、網羅性チェックが無い"
+    description: >-
+      DEFAULT_ACTION_BINDINGS は「mux アクションの SSOT」と宣言されているが、ActionBindings の
+      アクション別名前付きフィールドと matches_as_follow_up の手書き if-else 連鎖はそこから
+      導出されない。MUX_ACTION_NAMES は drift テストで守られ、設定パネル側はテーブルから
+      導出されるが、この2つは守られていない。テーブルに行を足してチェーン分岐を書き忘れると、
+      コンパイルは通り設定パネルにも行が出るのに、そのキーだけ永久に無反応になる。
+    suggestion: >-
+      (a) DEFAULT_ACTION_BINDINGS を走査して各 chord が非 None の PrefixAction に解決される
+      ことを assert する SSOT 網羅テストを1本追加する、または (b) ActionBindings のフィールドを
+      HashMap 化して名前→PrefixAction の変換を1つの match に集約する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium のため R4 の auto-fix 候補ゲート (critical/high) に該当せず。今回の変更自体は4箇所とも正しく埋まっており、後続アクションのための予防措置"
+auto_fix:
+  loops_run: 1
+  applied_total: 1
+  termination: clean
+residual_critical_high: 0
+rework_required: false
