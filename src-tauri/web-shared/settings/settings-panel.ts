@@ -22,6 +22,7 @@ import {
   renderTerminalAppearanceSection,
   renderTerminalBehaviorSection,
   renderNotificationSection,
+  renderAgentSection,
   renderMarkdownViewerSection,
   renderProfilesSection,
   renderSshSection,
@@ -60,6 +61,8 @@ const CATEGORY_ICONS: Record<string, string> = {
     '<svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v12zM6 10l4 4-4 4 1.4 1.4L12.8 14l-5.4-5.4L6 10z"/></svg>',
   notification:
     '<svg viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>',
+  agent:
+    '<svg viewBox="0 0 24 24"><path d="M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-1.5h8V17zm-1-4c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5S15.83 13 15 13z"/></svg>',
   "markdown-viewer":
     '<svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>',
   profiles:
@@ -110,6 +113,11 @@ export class SettingsPanel {
       {
         id: "notification",
         label: t("settings.categories.notification"),
+        enabled: true,
+      },
+      {
+        id: "agent",
+        label: t("settings.categories.agent"),
         enabled: true,
       },
       {
@@ -272,6 +280,9 @@ export class SettingsPanel {
         break;
       case "notification":
         renderNotificationSection(panel, ctx);
+        break;
+      case "agent":
+        renderAgentSection(panel, ctx);
         break;
       case "markdown-viewer":
         renderMarkdownViewerSection(panel, ctx);

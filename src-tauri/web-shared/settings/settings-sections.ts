@@ -10,6 +10,7 @@ export { renderTerminalAppearanceSection } from "./sections/terminal-appearance-
 export { renderTerminalBehaviorSection } from "./sections/terminal-behavior-section";
 export { renderKeybindsSection } from "./sections/keybinds-section";
 export { renderNotificationSection } from "./sections/notification-section";
+export { renderAgentSection } from "./sections/agent-section";
 export { renderSshSection } from "./sections/ssh-section";
 export { renderMarkdownViewerSection } from "./sections/markdown-viewer-section";
 export { renderProfilesSection } from "./sections/profiles-section";
