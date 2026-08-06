@@ -11,6 +11,7 @@ const ACTION_I18N_KEYS: Record<string, string> = {
   "rename-window": "settings.mux.keybind.renameWindow",
   "move-window": "settings.mux.keybind.moveWindow",
   "toggle-window-sidebar": "settings.mux.keybind.toggleWindowSidebar",
+  "next-agent-window": "settings.mux.keybind.nextAgentWindow",
 };
 
 export function renderMuxSection(

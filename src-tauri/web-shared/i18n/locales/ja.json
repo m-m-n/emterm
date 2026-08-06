@@ -355,7 +355,8 @@
         "prevWindow": "前のウィンドウ",
         "renameWindow": "ウィンドウ名変更",
         "moveWindow": "ウィンドウ移動",
-        "toggleWindowSidebar": "ウィンドウサイドバー切替"
+        "toggleWindowSidebar": "ウィンドウサイドバー切替",
+        "nextAgentWindow": "次のエージェントウィンドウ"
       }
     },
     "log": {
