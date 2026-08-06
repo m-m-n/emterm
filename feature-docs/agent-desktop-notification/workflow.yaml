@@ -85,7 +85,7 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR5, FR6, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/agent-desktop-notification/task0002
 
