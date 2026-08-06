@@ -69,7 +69,8 @@ workflow:
       同一の 7 件が失敗したため（今回の 6 件はその部分集合）、既存の不安定テストと確定。
       IME 関連テストの失敗はゼロ。
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 2facdc9f7a697dd1b6d138e2d11b7af369954fdf
 
 tasks:
   task0001:
