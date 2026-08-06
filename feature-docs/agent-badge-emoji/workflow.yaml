@@ -1,0 +1,165 @@
+schema_version: 1
+feature: agent-badge-emoji
+created: 2026-08-06
+base_branch: main
+parent_branch: em-workflow/agent-badge-emoji/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 58c544d8d9cdc60618b17334f5b4894613e05669
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "視覚的成果物はタスク記述で完全に確定している（状態 × unseen/seen ごとの絵文字コードポイントが表で指定済み）。レイアウトは既存の統一バッジスロット（AGENT_BADGE_SLOT_WIDTH=12px）をそのまま使い、新規のレイアウト・トークン・コンポーネント設計判断が存在しない。"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 190b34a47f6260ab71fa270b7b81166a471fb533
+  - id: implement
+    status: completed
+    completed_at_commit: da9b3eefbc28645ad4aea2108c923fc1dc0772cb
+    base_commit: 26ffd0eb05773367c4a1a70f17554182346909db
+  - id: review
+    status: completed
+    completed_at_commit: 8376dbfb18b2f1971ab0ad822b76f708515174cc
+  - id: verify
+    status: completed
+    result: pass
+    failed_items: []
+    notes: |
+      build: GUI check / CLI --no-default-features check ともに exit 0。
+      test: --lib スイート（--test-threads=1）で 3132 passed / 7 failed。
+      失敗 7 件は tabs::tests の既知 replay テストで、同一コマンドを main
+      (6a95d08) で実行しても完全に同じ 7 件が失敗する（回帰ゼロ）。
+      TS-1〜TS-4 は全てグリーン（badge_presentation_resolves_all_eight_state_unseen_combinations,
+      resolve_badge_render_mode_blocked_done_fallback_follows_unseen,
+      badge_presentation_done_seen_is_the_same_cluster_constant_as_idle 他）。
+      MT-1 / MT-2 は実機目視のため未実施（人間の評価者に委ねる）。
+  - id: retrospect
+    status: completed
+    completed_at_commit: 05132efb93d9d2a7a7e9b5ec7756f51b6a966eed
+
+tasks:
+  task0001:
+    title: "エージェント状態バッジの 4 状態絵文字統一（blocked=❓/❔・done=✅/💤）"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/ui/tab_bar.rs
+      - src-tauri/src/ui/mux_sidebar.rs
+    skills: [design-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3]
+    status: merged
+    notes: null
+    branch: em-workflow/agent-badge-emoji/task0001
+
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, spec]
+    discretionary:
+      - perspective: architecture
+        reason: "共有型 BadgePresentation の内部契約が変わり（Emoji バリアントに fallback_filled を追加）、tab_bar.rs と mux_sidebar.rs の両方が消費するため"
+    cross_validation: false
+  perspectives:
+    comprehensive: completed
+    spec: completed
+    architecture: completed
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "blocked の絵文字表示"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1]
+  FR2:
+    title: "done の絵文字表示"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-3]
+  FR3:
+    title: "working / idle は不変"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-4]
+  FR4:
+    title: "テクスチャ不在時の円フォールバック維持"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-2]
+  FR5:
+    title: "判定関数の単一共有の維持"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-4]
+  FR6:
+    title: "絵文字クラスタ定数の形式"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-3]
+  NFR1:
+    title: "集約・unseen セマンティクス不変"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-4]
+  NFR2:
+    title: "内部状態の互換性"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-4]
+  NFR3:
+    title: "テスト規約準拠"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-4]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

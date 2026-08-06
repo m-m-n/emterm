@@ -1,0 +1,33 @@
+feature: agent-badge-emoji
+collected_at: "2026-08-06T10:45:00+09:00"
+session_ids: [5d0039b9-aa11-4c37-bac9-65c065965493]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: architecture
+      reason: "共有型 BadgePresentation の内部契約が変わり（Emoji バリアントに fallback_filled を追加）、tab_bar.rs と mux_sidebar.rs の両方が消費するため"
+  declined_findings: []
+lessons_candidates:
+  - |
+    実装エージェントが gitignore 済みのバンドルフォント（src-tauri/assets/fonts/*.ttf|.otf）を
+    メインツリーから worktree へコピーしないと build.rs のフォント存在チェックで落ちる。
+    verify フェーズでも同じ対処が必要だった。em-workflow の worktree 作成時に
+    「gitignored だがビルドに必要な資産」をコピーする手順があると、実装/検証の双方で
+    同じ手戻りを避けられる。
+  - |
+    tabs::tests の replay テスト 7 件は main 基線でも失敗する既知のフレーク。
+    verify で「基線と同じ集合か」を毎回 main で実測して比較する必要があり、
+    フルビルド 1 回ぶんのコストがかかっている。基線失敗リストをリポジトリ側に
+    記録しておけば比較実行を省ける。
+  - |
+    comprehensive レビュアーが、絵文字テクスチャの untinted blit と明色テーマ下地の
+    コントラストを実フォント（Noto-COLRv1.ttf の CPAL/COLR）から実測して指摘した。
+    タスク記述でコードポイントが確定していても、描画結果の視認性は別軸で検証が要る
+    という示唆。medium だったため auto-fix 対象外で残存。
+  - |
+    architecture レビュアーが、単一バリアントになった enum（BadgePresentation）と
+    fallback_filled の二重真実源を指摘。要件を満たす最短実装が型設計として痩せる
+    ケースで、medium 止まりのため今回は未対応。

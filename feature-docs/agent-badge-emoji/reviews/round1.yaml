@@ -1,0 +1,77 @@
+round: 1
+executed_at: "2026-08-06T10:20:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 26ffd0eb05773367c4a1a70f17554182346909db
+  head_commit: dd297753d51a1a0dac19b3660113dec5f7ed2506
+  changed_files:
+    - src-tauri/src/ui/mux_sidebar.rs
+    - src-tauri/src/ui/tab_bar.rs
+    - test-docs/agent-badge-emoji/task0001.tests.yaml
+plan:
+  floor: [comprehensive, spec]
+  discretionary:
+    - perspective: architecture
+      reason: "共有型 BadgePresentation の内部契約が変わり（Emoji バリアントに fallback_filled を追加）、tab_bar.rs と mux_sidebar.rs の両方が消費するため"
+  cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+findings:
+  - stable_id: 5d30a16765cb033d
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/ui/tab_bar.rs
+    line: 132
+    title: "blocked+seen の ❔ (U+2754) は明色テーマでほぼ不可視になる"
+    description: |
+      バッジは untinted blit（paint_agent_badge の Image::new(&texture).paint_at、色引数なし）なので、
+      絵文字自身の色がそのまま出る。バンドルの Noto-COLRv1.ttf を CPAL/COLR から実測すると、
+      BLOCKED_BADGE_EMOJI_SEEN = U+2754 の使用色は #FFFFFF / #E0E0E0 / #BDBDBD のみで、暗いストロークが
+      一切ない。タブバー／mux サイドバーの下地は明色テーマで md3::surface_container() = #F3EDF7 なので、
+      コントラスト比は約 1.1〜1.6:1 にしかならず、12px スロットでは「バッジ無し」と区別が付かない。
+      本変更前の blocked+seen は agent_state_color(Blocked) = on_error_container（明色テーマで #410E0B）
+      のリングで、同じ下地に対して約 14:1 だった。実測した他クラスタは問題ない
+      （❓ #CC3333/#F44336、✅ #689F38/#7CB342、💤 #176BC6）。working の ⚡（#FFE567 系）も明色テーマでは
+      同じ untinted-blit の弱点を持つが、これは本 diff 以前からの既存挙動。
+    suggestion: |
+      (a) blocked+seen だけはフォールバック円（agent_state_color の theme-aware なリング）を描く経路を残す
+          — FR1 の「seen で ❔」とは矛盾するので要件側の再確認が必要。
+      (b) 既読 blocked を明色テーマでも視認できる別クラスタに差し替える。
+      (c) ❔ のまま維持するなら、明色テーマで既読 blocked が視認しづらいことを SPEC の Assumptions に明記し、
+          意図された挙動として合意しておく。
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "severity=medium のため auto-fix 対象外（R4 のゲートは critical/high のみ）。絵文字コードポイントはタスク記述で明示指定されており、変更は要件側の判断が要る"
+  - stable_id: 0f448121337204a7
+    severity: medium
+    category: architecture
+    file: src-tauri/src/ui/tab_bar.rs
+    line: 283
+    title: "BadgePresentation が単一バリアント化し、判定パイプラインが素通し + fallback_filled が二重の真実源になっている"
+    description: |
+      Circle バリアントの削除で BadgePresentation は Emoji { cluster, fallback_filled } の1バリアントのみとなり、
+      「表示種別を判定する enum」という型の役割が消えた。resolve_badge_render_mode の match は分岐の実体を失い、
+      実質 bool 分岐の素通しになっている。paint_agent_badge は irrefutable let で分解しており、型が情報を
+      持たないことに暗黙依存している。より実害があるのは fallback_filled で、これは agent_badge_filled(agg) の
+      派生値をパイプラインに詰め替えたもの。塗り分け(fill/ring)の SSOT が agent_badge_filled と
+      プレゼンテーション値の2箇所に割れる。BadgePresentation / BadgeRenderMode / badge_presentation /
+      resolve_badge_render_mode の crate 内参照は tab_bar.rs 内に限られるため、外部呼び出し側の破壊は無い。
+    suggestion: |
+      (a) enum をやめて構造体化する:
+          pub struct BadgePresentation { pub cluster: &'static str, pub fallback_filled: bool }
+      (b) 派生値の詰め替えをやめる: BadgePresentation は cluster のみを保持し、
+          resolve_badge_render_mode(presentation, agg, texture_available) のように Aggregated を受けて
+          内部で agent_badge_filled(agg) を呼ぶ。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "severity=medium のため auto-fix 対象外（R4 のゲートは critical/high のみ）"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

@@ -1,0 +1,116 @@
+task_id: task0001
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - ui::tab_bar::tests::badge_presentation_resolves_all_eight_state_unseen_combinations
+      - ui::tab_bar::tests::resolve_badge_render_mode_emoji_with_texture_blits_the_texture
+    red_confirmed: true
+    red_reason: >-
+      Retroactively confirmed by temporarily reverting badge_presentation()/
+      BadgePresentation/resolve_badge_render_mode() to the pre-task
+      two-variant (Emoji{cluster} for working/idle, Circle{filled} for
+      blocked/done) implementation while keeping the new test code.
+      badge_presentation_resolves_all_eight_state_unseen_combinations failed
+      to compile (E0425 cannot find value BLOCKED_BADGE_EMOJI_UNSEEN /
+      BLOCKED_BADGE_EMOJI_SEEN / DONE_BADGE_EMOJI_UNSEEN; E0559 no field
+      `fallback_filled` on BadgePresentation::Emoji) — the required API did
+      not exist yet. resolve_badge_render_mode_emoji_with_texture_blits_the_texture
+      failed at runtime once isolated from the other compile errors:
+      "assertion `left == right` failed: Blocked unseen=true / left: Circle
+      { filled: true } / right: EmojiTexture" — under the old implementation
+      blocked/done never resolved to an Emoji presentation, so
+      texture_available=true never produced EmojiTexture for them.
+  AC-2:
+    tests:
+      - ui::tab_bar::tests::badge_presentation_done_seen_is_the_same_cluster_constant_as_idle
+    red_confirmed: true
+    red_reason: >-
+      Same reversion as AC-1. Compile error E0005 "refutable pattern in
+      local binding" — `let BadgePresentation::Emoji { cluster, .. } = ...`
+      did not compile because the pre-task badge_presentation() returned
+      BadgePresentation::Circle for Done, not Emoji, so the pattern was
+      non-exhaustive.
+  AC-3:
+    tests:
+      - ui::tab_bar::tests::new_badge_emoji_constants_are_single_codepoint_no_vs16
+    red_confirmed: true
+    red_reason: >-
+      Same reversion as AC-1, with the three new constants (BLOCKED_BADGE_EMOJI_UNSEEN,
+      BLOCKED_BADGE_EMOJI_SEEN, DONE_BADGE_EMOJI_UNSEEN) also removed.
+      Compile error E0425 "cannot find value ... in this scope" for all
+      three constants — they did not exist before this task.
+  AC-4:
+    tests:
+      - ui::tab_bar::tests::resolve_badge_render_mode_blocked_done_fallback_follows_unseen
+    red_confirmed: false
+    red_reason: >-
+      Isolated the test against the reverted pre-task implementation (the
+      three AC-1/AC-2/AC-3 tests were stubbed out to let the crate compile;
+      this test's body was left untouched) and it PASSED unchanged: under
+      the old code badge_presentation() already returned
+      BadgePresentation::Circle{filled: agg.unseen} directly for
+      blocked/done, and the old resolve_badge_render_mode() already mapped
+      that straight through to Circle{filled: agg.unseen} regardless of
+      texture_available. The observable outcome this criterion states
+      (unseen=filled/seen=ring fallback, never blank) is explicitly a
+      *preserved* behavior across the refactor (task plan D3/D4, SPEC A1) —
+      only the internal mechanism changed (now routed through
+      BadgePresentation::Emoji's `fallback_filled` field instead of a
+      direct Circle variant). There is no observable red state to confirm;
+      the test is a regression lock on the new code path, not a
+      red-to-green criterion.
+  AC-5:
+    tests:
+      - ui::tab_bar::tests::resolve_badge_render_mode_working_idle_fallback_is_always_filled
+    red_confirmed: false
+    red_reason: >-
+      Same isolation method as AC-4. PASSED unchanged against the reverted
+      pre-task implementation — working/idle's fallback was already always
+      `filled: true` before this task and the plan explicitly requires it
+      stay that way (FR3, D4 "変更しないもの" analog for working/idle).
+      Preserved, not new, behavior; no red state exists to confirm.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Structural criterion (single shared judgment point, no new decision
+      logic outside tab_bar.rs) verified by code review, not a unit test:
+      badge_presentation() remains the only construction site of
+      BadgePresentation, and mux_sidebar.rs's paint_row_content still calls
+      the shared paint_agent_badge(...) with an unchanged call signature
+      (mux_sidebar.rs was not touched for logic, only two stale doc
+      comments). grep confirms no BadgePresentation/BadgeRenderMode/
+      badge_presentation/resolve_badge_render_mode references outside
+      tab_bar.rs.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Regression/non-functional criterion verified by the full `--lib` run
+      compared against the step-4a baseline (see baseline_failures/
+      final_failures above): final_failures is a subset of
+      baseline_failures (0 new failures), and agent_status_model.rs /
+      app.rs / agent_state_color() were not modified (confirmed via `git
+      diff --stat`). Not a single pass/fail unit test by nature.
+notes: >-
+  AC-4 and AC-5's tests could not be driven red because the criteria they
+  encode are explicitly preservation criteria (task plan D3/D4): the
+  observable unseen=filled/seen=ring and always-filled behaviors already
+  held under the pre-task direct-Circle code path. Confirmed this honestly
+  by isolating each test against the reverted pre-task implementation
+  (see red_reason above) rather than guessing.
