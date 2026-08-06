@@ -50,7 +50,8 @@ workflow:
     completed_at_commit: d6afea5134d6dbd31d16c5af357ee1033ce35694
     base_commit: 48bb0fa8703508d3cf99319e3d000dcac3930162
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: b1e80c1cef767022f1b9b452ceb4ba8c13f1813c
   - id: verify
     status: pending
     result: null
@@ -74,15 +75,21 @@ tasks:
     branch: em-workflow/windows-imm32-ime-direct/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary:
       - perspective: license
         reason: "diff が依存マニフェスト src-tauri/Cargo.toml に触れているため（windows-sys の feature 追加）"
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+    license: completed
   residual_critical_high: 0
   needs_rework: false
 
