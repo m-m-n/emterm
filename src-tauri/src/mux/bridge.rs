@@ -460,25 +460,29 @@ trait StdoutSink {
     fn flush(&mut self) -> std::io::Result<()>;
 }
 
-/// Production `StdoutSink`: the process's real stdout, locked for the
-/// pump's lifetime. Constructed INSIDE the pump's blocking closure (never
-/// passed in from outside), because `StdoutLock` is not `Send` and cannot
-/// cross the thread boundary into `spawn_blocking`.
-struct ProcessStdout(std::io::StdoutLock<'static>);
+/// Production `StdoutSink`: the process's real stdout. Locks stdout PER
+/// WRITE rather than holding a `StdoutLock` for the pump's lifetime, so an
+/// abandoned pump (after `STDOUT_WRITER_QUIESCE_TIMEOUT` gives up on it)
+/// holds the global stdout lock for at most one write, not forever. That
+/// keeps `finish_bridge_exit`'s own `stdout.lock()` and a later
+/// `ProcessStdout::new()` from a reconnect's `forward_loop` from
+/// deadlocking against a pump thread that is blocked writing and was never
+/// aborted.
+struct ProcessStdout;
 
 impl ProcessStdout {
     fn new() -> Self {
-        Self(std::io::stdout().lock())
+        Self
     }
 }
 
 impl StdoutSink for ProcessStdout {
     fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        std::io::Write::write_all(&mut self.0, buf)
+        std::io::Write::write_all(&mut std::io::stdout().lock(), buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        std::io::Write::flush(&mut self.0)
+        std::io::Write::flush(&mut std::io::stdout().lock())
     }
 }
 
