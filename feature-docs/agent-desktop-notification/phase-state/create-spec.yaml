@@ -1,15 +1,29 @@
 schema_version: 1
 feature: agent-desktop-notification
 phase: create-spec
-status: initialized
+status: completed
 generation: 1
 base_revision: 6a95d08b6405b827f420dd8a10b820b5434aa8b8
-last_input_digest: null
+last_input_digest: sha256:cd533feee3f8d0cd370c6ba3c34510051afbf4af30ec6f099ce41b2bdd97c67d
 active_request_id: null
 packets: {}
 answers: {}
-worker_runs: []
-artifacts: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: sha256:e27037fc74865285754a5cb92713cf2915b295f2d9b6975c4827bb9eda3f8857
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:cd533feee3f8d0cd370c6ba3c34510051afbf4af30ec6f099ce41b2bdd97c67d
+    output_digest: null
+artifacts:
+  - path: feature-docs/agent-desktop-notification/REQUIREMENTS.md
+    sha256: null
+    produced_by: create-spec-run-0002
+  - path: feature-docs/agent-desktop-notification/SPEC.md
+    sha256: null
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
