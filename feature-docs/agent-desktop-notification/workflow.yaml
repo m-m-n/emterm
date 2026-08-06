@@ -37,7 +37,7 @@ workflow:
     skipped_reason: "設定パネルへのカテゴリ・トグル追加のみで、既存コンポーネント（renderToggle / カテゴリナビ）と MD3 トークン体系（doc/UI-DESIGN-GUIDELINES.yaml ⇔ md3.rs ⇔ styles.css）を踏襲する定型作業のため、独立した設計ステップは不要"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: 6a95d08b6405b827f420dd8a10b820b5434aa8b8
