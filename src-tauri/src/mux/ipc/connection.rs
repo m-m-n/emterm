@@ -498,23 +498,29 @@ pub async fn handle_connection<S>(
         let has_pending_output = has_unforwarded_pane_output(has_deferred_work, &pane_output_rx)
             || !outbound_remainder.is_empty()
             || pending_outbound_reserve.is_some();
-        // Review round (finding `c1-outbound-remainder-starvation`): a held
-        // `outbound_remainder` must NOT unconditionally keep the client arm
-        // enabled — doing so defeated the starvation guard below for as
-        // long as the remainder was outstanding (which, per
-        // `OUTBOUND_QUEUE_CAPACITY`, is routine under multi-pane output),
-        // silently starving PTY output for the entire span. The earlier
-        // concern this short-circuit was guarding against — "excluding the
-        // client arm on a quota-exhausted iteration could leave `select!`
-        // with no arm capable of becoming ready" — is now moot: the
-        // `outbound_permit_result` arm is listed BEFORE this one (see its
-        // own placement doc just below), so under `biased` it is polled,
-        // and therefore registered as a semaphore waiter, on every single
-        // iteration regardless of whether the client arm is enabled. The
-        // guard below is the ordinary one; no remainder-specific override
-        // is needed.
+        // Review round (finding `9537da352469bc68`): the guard must only
+        // exclude the client arm when SOME OTHER arm can still make
+        // progress without the client reading from the socket. A held
+        // `outbound_remainder` does NOT qualify: draining it requires the
+        // `outbound_permit_result` arm to resolve, which in turn requires
+        // the writer to feed+flush the socket, which in turn requires the
+        // client to read — so on a quota-exhausted iteration with only a
+        // remainder outstanding (no unforwarded pane output), excluding
+        // the client arm would leave `select!` with zero arms able to
+        // become ready without new client-side activity, re-creating the
+        // exact freeze this task closes. `has_unforwarded_pane_output`
+        // (deferred pane output waiting to be forwarded) DOES qualify: the
+        // drain/permit machinery for `pane_output_tx` can progress on its
+        // own once the corresponding permit or send resolves, independent
+        // of the client. So the guard uses a narrower "excludable work"
+        // signal than `has_pending_output` above (which intentionally
+        // keeps counting the remainder for the starvation-counter
+        // bookkeeping below `select!`).
+        let excludable_work =
+            has_unforwarded_pane_output(has_deferred_work, &pane_output_rx)
+                && outbound_remainder.is_empty();
         let allow_client_arm =
-            allow_client_message_arm(has_pending_output, consecutive_client_msgs_while_deferred);
+            allow_client_message_arm(excludable_work, consecutive_client_msgs_while_deferred);
         let mut took_client_arm = false;
 
         tokio::select! {
@@ -675,15 +681,32 @@ pub async fn handle_connection<S>(
                 );
                 was_kicked = true;
                 let resp = MuxMessage::control(MessageType::Detached, 0, &());
-                // task0001: admission only (best-effort, mirrors the
-                // pre-task0001 `let _ = framed.send(...).await;` shape —
-                // errors ignored either way). This is the last thing this
-                // arm does before `break`, so awaiting admission here does
-                // not reintroduce the residual freeze (no other arm needs
-                // to run concurrently at this exact point); the teardown
-                // code after the loop gives whatever gets admitted here a
-                // bounded, best-effort flush (Design invariant 7).
-                let _ = outbound_tx.send(resp).await;
+                // task0001 (best-effort, mirrors the pre-task0001
+                // `let _ = framed.send(...).await;` shape — errors ignored
+                // either way). Ordering fix (this review round): admitting
+                // directly into `outbound_tx` here — bypassing a
+                // non-empty `outbound_remainder` — let this Detached frame
+                // overtake older PtyOutput frames still held in the
+                // remainder, since only the `outbound_permit_result` arm
+                // above drains that remainder FIFO. Route through the same
+                // remainder instead: append to its tail when one is
+                // already held (preserving arrival order), otherwise try a
+                // non-blocking admit and fall back to starting a new
+                // remainder. This is the last thing this arm does before
+                // `break`, so it does not reintroduce the residual freeze.
+                if outbound_remainder.is_empty() {
+                    let remainder = try_admit_outbound_frames(&outbound_tx, vec![resp]);
+                    if !remainder.is_empty() {
+                        outbound_remainder = remainder;
+                        arm_pending_outbound_reserve(
+                            &mut pending_outbound_reserve,
+                            &outbound_remainder,
+                            &outbound_tx,
+                        );
+                    }
+                } else {
+                    outbound_remainder.push_back(resp);
+                }
                 break;
             }
             // task0001 (AC-6): the outbound writer only ever completes
@@ -918,15 +941,39 @@ pub async fn handle_connection<S>(
                     Ok(msg) => {
                         // Forward cross-client notification (e.g., CLI SwitchWindow) to GUI
                         log::info!("Forwarding notification to GUI: {:?} pane={}", msg.msg_type, msg.pane_id);
-                        // task0001: admission only (Design invariant 1 —
-                        // "MAY await admission", not the drain arm). The
-                        // Upgrading-ack fire (AC-7 / NFR4) now happens
-                        // inside the writer task itself, once the frame is
-                        // actually written AND flushed — see
-                        // `outbound::run_outbound_writer`'s doc — rather
-                        // than here at admission time.
-                        if outbound_tx.send(msg).await.is_err() {
-                            break;
+                        // task0001 (Design invariant 1 — "MAY await
+                        // admission", not the drain arm). The Upgrading-ack
+                        // fire (AC-7 / NFR4) now happens inside the writer
+                        // task itself, once the frame is actually written
+                        // AND flushed — see `outbound::run_outbound_writer`'s
+                        // doc — rather than here at admission time.
+                        //
+                        // Ordering fix (this review round): sending
+                        // directly into `outbound_tx` here — bypassing a
+                        // non-empty `outbound_remainder` — let this
+                        // notification overtake older PtyOutput frames
+                        // still held in the remainder. Route through the
+                        // same remainder instead: append to its tail when
+                        // one is already held, otherwise try a
+                        // non-blocking admit and fall back to starting a
+                        // new remainder. A closed `outbound_tx` is not
+                        // detected here anymore (no synchronous send to
+                        // observe the error on) — the `writer_result` arm
+                        // above independently detects writer exit and
+                        // tears the connection down on the next iteration,
+                        // so no producer needs to re-detect it here.
+                        if outbound_remainder.is_empty() {
+                            let remainder = try_admit_outbound_frames(&outbound_tx, vec![msg]);
+                            if !remainder.is_empty() {
+                                outbound_remainder = remainder;
+                                arm_pending_outbound_reserve(
+                                    &mut pending_outbound_reserve,
+                                    &outbound_remainder,
+                                    &outbound_tx,
+                                );
+                            }
+                        } else {
+                            outbound_remainder.push_back(msg);
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
@@ -943,8 +990,24 @@ pub async fn handle_connection<S>(
                                     win.id,
                                     &payload,
                                 );
-                                if outbound_tx.send(msg).await.is_err() {
-                                    break;
+                                // Same remainder-routing fix as the single
+                                // notification-forward path above — see its
+                                // comment for the ordering rationale and why
+                                // a closed `outbound_tx` no longer needs to
+                                // be detected at this call site.
+                                if outbound_remainder.is_empty() {
+                                    let remainder =
+                                        try_admit_outbound_frames(&outbound_tx, vec![msg]);
+                                    if !remainder.is_empty() {
+                                        outbound_remainder = remainder;
+                                        arm_pending_outbound_reserve(
+                                            &mut pending_outbound_reserve,
+                                            &outbound_remainder,
+                                            &outbound_tx,
+                                        );
+                                    }
+                                } else {
+                                    outbound_remainder.push_back(msg);
                                 }
                             }
                         }
