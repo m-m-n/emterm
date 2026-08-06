@@ -1,0 +1,274 @@
+round: 2
+executed_at: "2026-08-07T01:35:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 8e2311c2ffbb5b07f7f185c0207db5bd18b8c5f8
+  head_commit: 05781116e72a699cf0046ff55964cba5e6f77b95
+  changed_files:
+    - src-tauri/src/mux/bridge.rs
+    - src-tauri/src/mux/ipc/connection.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/mod.rs
+    - src-tauri/src/mux/ipc/outbound.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - test-docs/mux-connection-input-freeze/task0001.tests.yaml
+    - test-docs/mux-connection-input-freeze/task0002.tests.yaml
+    - test-docs/mux-connection-input-freeze/task0003.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: architecture, source: vertex, status: completed}
+
+resolved_from_round1:
+  - stable_id: 7f9f9ad6fb4dd977
+    verdict: fixed
+    note: "notify アームが `if !admission.is_holding()` でゲートされ、remainder の比例成長が閉じた（comprehensive / spec / architecture が独立に確認）"
+  - stable_id: ee54e1d2ff740104
+    verdict: fixed
+    note: "同上"
+  - stable_id: 4e6f23b7d53527e5
+    verdict: fixed
+    note: "FR4 の有界性が回復"
+  - stable_id: f9cde80880407a13
+    verdict: fixed
+    note: "同上"
+  - stable_id: 79d48554f94fd3df
+    verdict: fixed
+    note: "OutboundAdmission::admit_blocking の remainder 先行排出により reply/reattach の追い越しが解消"
+  - stable_id: d730fe0ef003f984
+    verdict: fixed
+    note: "同上（reattach 経路）"
+  - stable_id: ebb33f43f48f612a
+    verdict: fixed
+    note: "生の mpsc::Sender<MuxMessage> は outbound.rs 外から到達不能になり、全 producer が単一コンポーネント経由になった"
+  - stable_id: 96633ec8862e6c64
+    verdict: fixed
+    note: "teardown_flush で held remainder + kick の Detached をベストエフォート送出する"
+  - stable_id: 76e7d90468e859d0
+    verdict: fixed
+    note: "同上"
+
+findings:
+  - stable_id: d55d5d410f85e087
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/ipc/outbound.rs
+    line: 368
+    line_end: 377
+    title: "reply/reattach 経路の admit_blocking が select! ループ全体を停止させ、FR1 が未達のまま残る（task0003 で悪化）"
+    description: >
+      SPEC FR1（drain 側出力が pending の間も select! は framed.next() を有界遅延で
+      poll し続ける）に対する残存違反。OutboundAdmission::admit_blocking は容量 2 の
+      bounded mpsc に対して tx.send().await するが、これが handle_connection の
+      client-message アーム本体（route_message 内）から呼ばれるため、await 中は
+      client_reader.next() / kick_fut / writer_result / drain / notify のどのアームも
+      poll されずタスク全体が停止する。クライアントがソケットを読まない限り writer は
+      進めないので、この停止に内部的な上限は無い。さらに task0003 の rework で
+      admit_blocking は「保持中の remainder を全て流してから自分のフレームを admit する」
+      形になったため、ブロック時間は round 1 時点の「2 スロット空くまで」から
+      「remainder 全体（doc 記載で最悪 ~4MB、send_reattach_data ではペイン数倍）を
+      押し込むまで」に拡大している。到達経路は GUI の CreateWindow / Attach /
+      Detach / Upgrade で実在する。FR5/TS1 の回帰テストは返信を伴わない PtyInput しか
+      流さないため、この経路はピン留めされていない。performance 観点（88fb77d06c1adf66）、
+      comprehensive 観点（e37794f998cbd7ac の前提）、architecture 観点
+      （a10652d3307672fe）も同一の設計点を独立に指摘している。
+      round 1 の f7fa656b26a25199（deferred）と同根で、順序の問題は解決した一方
+      ブロック時間の問題は残っている。
+    suggestion: >
+      (a) 返信/reattach 経路も非ブロッキング形に寄せる — admit_blocking を廃し
+      push_or_admit（remainder 末尾へ追加、FIFO 維持）に置き換える。
+      send_reattach_data 用に複数フレームを一括で末尾追加するメソッドを用意すれば
+      追い越し防止も保てる。remainder 増分は Attach 1 回あたりペイン数、
+      CreateWindow 1 回あたり 1 フレームで有界。
+      (b) それが設計上受け入れられないなら、SPEC FR1 に「client-message アーム自身の
+      本体から発生する返信 admission は bounded delay の対象外」という例外を明記して
+      REQUIREMENTS 側で合意を取り、採らない理由を IMPLEMENTATION.md に残す。
+      いずれの場合も、返信フレームを伴うクライアントメッセージを飽和中に送っても
+      他ペインの PtyInput が有界時間で処理されることを検証するテストを追加すること。
+    sources: [claude:spec]
+    confidence: 85
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: e37794f998cbd7ac
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/outbound.rs
+    line: 368
+    line_end: 377
+    title: "admit_blocking の送信失敗で remainder 非空 + 予約なしの wedge 状態が残り、接続ループが恒久停止しうる"
+    description: >
+      admit_blocking は先頭で pending_reserve = None にした後 tx.send().await の失敗で
+      早期 return するため、remainder 非空かつ pending_reserve == None という
+      OutboundAdmission の lockstep 不変条件に反する状態を残す。この状態では
+      outbound_permit_result アーム（has_pending_reserve() が false）も drain / notify
+      アーム（is_holding() が true）も無効になり、remainder を排出できる機構が
+      1 つも残らない。さらに excludable_work が常に false になるため client アームが
+      常時有効となり、biased 順で下にある writer_result アームが poll されず
+      ループが break しない。到達経路は admit_blocking の Err を break に伝播しない
+      呼び出し元 3 箇所（handle_create_window のエラー返信 2 つ、handle_attach の
+      session-not-found 返信、handle_upgrade_request の全返信）。
+      try_admit_outbound_frames の Closed 分岐と apply_reserve_result の Err 分岐は
+      どちらも remainder を空にする方針を取っており、admit_blocking だけが外れている。
+    suggestion: >
+      admit_blocking の送信失敗時に self.remainder.clear() してから Err を返し、
+      他 2 経路と同じ「writer が消えたら保持を捨てる」方針に揃える。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: 102aa3a177cece61
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 694
+    line_end: 706
+    title: "AC-6 の唯一の検出点である writer_result アームが biased 順で client アームより下にあり、飢餓ガードの対象外"
+    description: >
+      ソケット write/flush 失敗の検出は task0001 で writer_result アーム 1 本に移されたが、
+      このアームは biased 順で client アームより下にある。excludable_work に
+      「writer が既に完了している」は含まれないため、pane_output_rx が空・deferred work
+      なし・remainder 非保持でクライアントが連続 ready な状態では writer_result が
+      一度も poll されず、writer が死んだまま接続が生存し続ける。
+      e37794f998cbd7ac の wedge が起きた場合は is_holding() が恒久的に true になるため
+      自己回復せず、恒久ハングの実行経路になる。
+    suggestion: >
+      writer_result アームを outbound_permit_result アームの直後・client アームの前に
+      移動する。JoinHandle は writer 終了まで即 Pending なので非武装時コストはゼロで、
+      outbound_permit_result と同じ配置理由が適用できる。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: a10652d3307672fe
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/handlers.rs
+    line: 653
+    title: "admit_blocking を SessionManager ミューテックス保持中に呼んでおり、クライアントの読み取り速度がデーモン全体のロック可用性に結合する"
+    description: >
+      handle_attach の session-not-found 分岐は session_manager.lock().await の guard が
+      生存したまま admit_blocking().await を呼ぶ。task0003 で admit_blocking の所要時間は
+      remainder 全体の押し込み時間（= リモートクライアントの読み取り速度）に支配される
+      ようになったため、読み取りが停滞した GUI 1 つが共有 SessionManager ミューテックスを
+      不定時間占有し、他の全接続・CLI クライアント・pane 生成・agent status 更新・
+      upgrade スナップショットまで巻き込んで停止しうる。同ファイルの handle_create_window は
+      全 send_reply の直前で明示的に drop(mgr) しており、規律とも不整合。
+    suggestion: >
+      ロック guard を await より前に落とす（session の存在確認結果だけを bool で取り出し、
+      ブロックを抜けてから返信する）。あわせて OutboundAdmission / OutboundHandle の doc に
+      「admit_blocking は共有ロック保持中に呼ばない」を契約として明記する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: 323308d1d4d1f117
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 921
+    title: "notify アームのゲートが根拠にしている「Lagged 再同期で回復する」契約が、broadcast が運ぶ 5 種のうち 1 種にしか成立していない"
+    description: >
+      task0003 は remainder の非有界成長を止めるため notify アームに
+      `if !admission.is_holding()` を付け、その正当化として「overflow takes the existing
+      Lagged resync path」を置いた。しかし Lagged 分岐が再送するのは session_list から
+      再構成した RenameWindow だけで、同じ broadcast チャネルが運ぶ Upgrading / Notify /
+      AgentStatusUpdate / SwitchWindow は回復経路を持たず lag した時点で恒久的に失われる。
+      Upgrading の取りこぼしはそのコネクションが ack を返さないまま
+      UPGRADE_ANNOUNCE_ACK_TIMEOUT を消費し、daemon は予告なく exec 置換する。
+      メモリ有界性の問題を、回復契約が 1/5 しかカバーしないロッシーなチャネルへ
+      転嫁している。
+    suggestion: >
+      (a) Lagged 再同期を broadcast の実際の内容に合わせる（全ペインの AgentStatusUpdate
+      再送 + アクティブウィンドウの SwitchWindow 1 本）、または (b) 再構成不能な種別
+      （Upgrading / Notify）だけゲートを迂回して push_or_admit する。いずれにせよ
+      「Lagged resync で回復する」という一般化したコメントを、実際に回復する種別だけに
+      書き直すこと。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: 39b62d52ab6e3bee
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/outbound.rs
+    line: 275
+    line_end: 285
+    title: "OutboundAdmission::try_admit が FIFO 不変条件を呼び出し側のゲートに委ね、release ビルドでは違反時に remainder を黙って上書きする"
+    description: >
+      try_admit だけは不変条件の担保が debug_assert! と呼び出し側の
+      `if !admission.is_holding()` ゲートに残っている。debug_assert は release で消え、
+      違反時のフォールバックが `self.remainder = remainder;`（追加ではなく代入）なので、
+      新しいフレーム群が保持中の古い remainder を追い越してキューへ入り（FR3 違反）、
+      古い remainder は静かに全消失する。隣の push_or_admit は is_holding() を見て
+      正しく末尾追加しており、try_admit だけが呼び出し側規律に依存している。
+      今日は drain アームのゲートで到達不能だが、将来 try_admit を新しい producer に
+      配った瞬間に無音のデータ喪失として現れる。
+    suggestion: >
+      try_admit の先頭で is_holding() を見て、true なら remainder.extend(frames) +
+      arm_reserve() へ縮退させる。debug ビルドは従来どおり debug_assert! で
+      呼び出し側バグを検出しつつ、release では FIFO と内容の両方が保たれる。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: 88fb77d06c1adf66
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/outbound.rs
+    line: 368
+    line_end: 377
+    title: "admit_blocking が held remainder 全体を先に排出するため、reply/reattach 中は接続ループが remainder サイズ分だけ park する"
+    description: >
+      d55d5d410f85e087 と同一サイトの performance 観点の指摘。park 中は
+      pane_output_rx が一切ドレインされず PTY リーダースレッドが blocking_send で
+      ブロックし、client_reader.next() も poll されない。send_reattach_data は
+      ペインごとに admit_blocking を呼ぶため、N ペインの reattach では park が N 回連結する。
+    suggestion: >
+      (a) admit_blocking 内の remainder 排出に 1 回あたりのフレーム上限を設け、
+      上限到達時は残りを remainder に残して pending_reserve を再武装し、reply フレームは
+      remainder 末尾へ回す、(b) reply/reattach も push_or_admit に統一する、
+      (c) 受け入れるなら park の最悪ケース見積もりを数値で doc に残す。
+    sources: [claude:performance]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: 2366b01e268f580c
+    severity: medium
+    category: spec
+    file: test-docs/mux-connection-input-freeze/task0003.tests.yaml
+    line: 140
+    line_end: 143
+    title: "TS4 のスループット回帰ガード (mux_throughput) が一度も実行されておらず、Success Criteria を満たしていない"
+    description: >
+      AC-7 の記録は `cargo test --test mux_throughput` が「compiles, its one test
+      correctly reports ignored」としている。src-tauri/tests/mux_throughput.rs の
+      当該テストは `#[ignore = "spawns a real daemon process; run with --release
+      --ignored --nocapture"]` なので、コンパイルが通ったことしか確認できていない。
+      本 feature は出力経路の構造を変えている（drain アームのゲート、fair reservation
+      1 件あたり 1 フレーム排出、writer タスクを 1 段挟む、OUTBOUND_QUEUE_CAPACITY=2）
+      ため、スループットへの影響が無いことは推測で代替できない。
+    suggestion: >
+      release + --ignored でガードを実行し、ベースライン (8e2311c2) と本ブランチの
+      両方で測って差分を記録する。実行できない場合は AC-7 を「未実行」と正直に書き換え、
+      SPEC の TS4 / Success Criteria を満たしていない旨を明示する。
+    sources: [claude:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached — verify フェーズで実行可否を再評価する"
+
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: skipped
+  notes: >
+    round 2 の唯一の critical/high は category: spec のため R4 の candidate gate に
+    かからず、auto-fix は起動しない。残りは全て medium で同じくゲート外。
+
+residual_critical_high: 1
+rework_required: false
