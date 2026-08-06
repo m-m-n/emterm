@@ -5014,20 +5014,30 @@ impl App {
     }
 
     /// Fire (or suppress) a desktop notification for one drained
-    /// agent-status transition (task0007 / FR9).
+    /// agent-status transition (task0007 / FR9; task0001's event-type
+    /// toggles).
     ///
     /// `pane_key` identifies the pane for the per-pane rate limit
     /// (task0005's mux `public_pane_id`, or a caller-chosen stable key for
-    /// plain tabs). `pane_visible` is `true` when the pane is the one
-    /// currently shown in the foreground OS window — the caller computes
-    /// this (it owns the tab/pane visibility model; this method only
-    /// applies the gating rule). `tab_title` feeds the notification body.
+    /// plain tabs) — an opaque string; the gating decision below never
+    /// branches on its contents, so plain-tab-shaped and mux-pane-shaped
+    /// keys produce identical judgements for identical settings/state
+    /// inputs (task0001 AC-6). `pane_visible` is `true` when the pane is
+    /// the one currently shown in the foreground OS window — the caller
+    /// computes this (it owns the tab/pane visibility model; this method
+    /// only applies the gating rule). `tab_title` feeds the notification
+    /// body.
     ///
     /// This is the integration point IMPLEMENTATION.md assigns to
     /// task0007 ("read the model from app state"): once `AgentStatusModel`
     /// (task0005) is wired into `App`, its per-frame
     /// `drain_transitions()` calls this method once per drained event.
-    /// Returns whether the notification fired, for tests.
+    /// `Settings::agent_notify_on_done` / `Settings::agent_notify_on_blocked`
+    /// (task0001) are read here alongside the existing
+    /// `agent_status_notifications` / `notification_enabled` gates and
+    /// passed to [`crate::notifications::should_fire_agent_notification`],
+    /// which selects the toggle matching `transition.new_state`. Returns
+    /// whether the notification fired, for tests.
     pub fn maybe_notify_agent_transition(
         &mut self,
         pane_key: impl Into<String>,
@@ -5045,6 +5055,8 @@ impl App {
             pane_visible,
             self.settings.agent_status_notifications,
             self.settings.notification_enabled,
+            self.settings.agent_notify_on_done,
+            self.settings.agent_notify_on_blocked,
             rate_limit_ok,
         );
         if fire {
@@ -5282,6 +5294,82 @@ mod tests {
         // A different pane is unaffected by pane-1's window.
         assert!(app.maybe_notify_agent_transition("pane-2", false, &t, "my-tab"));
 
+        assert_eq!(sink.calls().len(), 2);
+    }
+
+    // task0001 AC-2/AC-3: `App::maybe_notify_agent_transition` reads
+    // `Settings::agent_notify_on_done` / `agent_notify_on_blocked` and
+    // passes them through to the gating decision — verifies the wiring
+    // itself (the pure decision logic is exhaustively covered by
+    // `notifications::tests`).
+    #[test]
+    fn maybe_notify_agent_transition_reads_event_type_toggles_from_settings() {
+        let (mut app, sink) = app_with_test_sink();
+
+        with_setting(&mut app, |s| s.agent_notify_on_done = false);
+        let fired = app.maybe_notify_agent_transition(
+            "pane-1",
+            false,
+            &agent_transition(crate::notifications::AgentState::Done),
+            "my-tab",
+        );
+        assert!(
+            !fired,
+            "agent_notify_on_done=false must suppress a Done transition"
+        );
+
+        // Blocked is unaffected by the done-only toggle (independence).
+        let fired = app.maybe_notify_agent_transition(
+            "pane-1",
+            false,
+            &agent_transition(crate::notifications::AgentState::Blocked),
+            "my-tab",
+        );
+        assert!(
+            fired,
+            "agent_notify_on_done=false must not suppress Blocked"
+        );
+
+        with_setting(&mut app, |s| {
+            s.agent_notify_on_done = true;
+            s.agent_notify_on_blocked = false;
+        });
+        let fired = app.maybe_notify_agent_transition(
+            "pane-2",
+            false,
+            &agent_transition(crate::notifications::AgentState::Blocked),
+            "my-tab",
+        );
+        assert!(
+            !fired,
+            "agent_notify_on_blocked=false must suppress a Blocked transition"
+        );
+
+        assert_eq!(sink.calls().len(), 1);
+    }
+
+    // AC-6: the fire/suppress judgement never depends on `pane_key`'s
+    // format — a plain-tab-shaped key (`"tab:<id>"`, see
+    // `agent_notification_rate_limit_key`) and a mux-pane-shaped key (the
+    // daemon's `public_pane_id`, e.g. `"xyz-7"`) produce identical
+    // decisions for identical settings/visibility/state inputs, both when
+    // firing and when suppressed by an event-type toggle.
+    #[test]
+    fn maybe_notify_agent_transition_ac6_judgement_independent_of_pane_key_format() {
+        let (mut app, sink) = app_with_test_sink();
+        let t = agent_transition(crate::notifications::AgentState::Blocked);
+
+        // Both key formats fire under the default (all-ON) settings.
+        assert!(app.maybe_notify_agent_transition("tab:42", false, &t, "shell"));
+        assert!(app.maybe_notify_agent_transition("xyz-7", false, &t, "shell"));
+        assert_eq!(sink.calls().len(), 2);
+
+        // Flip the event-type toggle matching this transition's state
+        // OFF: both formats are suppressed identically (fresh keys so the
+        // rate limiter from the block above cannot explain the result).
+        with_setting(&mut app, |s| s.agent_notify_on_blocked = false);
+        assert!(!app.maybe_notify_agent_transition("tab:99", false, &t, "shell"));
+        assert!(!app.maybe_notify_agent_transition("mux-99", false, &t, "shell"));
         assert_eq!(sink.calls().len(), 2);
     }
 
