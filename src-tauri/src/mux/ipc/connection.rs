@@ -3,7 +3,6 @@
 //! Manages per-client connection state machine:
 //! handshake -> authenticated (GUI streaming or CLI control).
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -23,10 +22,11 @@ use super::handlers::{
     handle_send_text, handle_set_visibility, handle_switch_window, handle_wait_agent_state,
 };
 use super::outbound::{
-    OUTBOUND_QUEUE_CAPACITY, OutboundHandle, PendingOutboundReserve, ReplySink,
-    arm_pending_outbound_reserve, run_outbound_writer, try_admit_outbound_frames,
+    OUTBOUND_QUEUE_CAPACITY, OutboundAdmission, OutboundHandle, ReplySink, run_outbound_writer,
 };
 use super::protocol::*;
+#[cfg(test)]
+use super::reattach::collect_reattach_data;
 use super::reattach::detach_session_panes;
 use crate::mux::daemon::{SharedUpgradeAckSlot, UpgradeSignal, UpgradeSignalSender};
 use crate::mux::session::manager::SessionManager;
@@ -51,12 +51,15 @@ const UPGRADE_PREPARE_TIMEOUT: Duration = Duration::from_secs(30);
 const DRAIN_BATCH_LIMIT: usize = 64;
 
 /// Bound on the best-effort teardown flush after the GUI loop exits
-/// (task0001, Design invariant 7): once the loop breaks (kick, client EOF,
-/// error) and drops its own `outbound_tx`, the outbound writer drains
-/// whatever was already admitted and exits; this bounds how long
-/// `handle_connection` waits for that drain before abandoning it and
-/// returning anyway. Short and named — this is cleanup after the
-/// connection is already ending, not a correctness-critical wait.
+/// (task0001 Design invariant 7; task0003 AC-5 rework): once the loop
+/// breaks (kick, client EOF, error), `OutboundAdmission::teardown_flush`
+/// admits whatever remainder is still held (e.g. a kick arm's `Detached`,
+/// appended to the tail of a held remainder) and then drops its sender, so
+/// the outbound writer drains everything now-admitted and exits; this
+/// single budget bounds BOTH that flush and the subsequent wait for the
+/// writer's `JoinHandle` before `handle_connection` abandons it and
+/// returns anyway. Short and named — this is cleanup after the connection
+/// is already ending, not a correctness-critical wait.
 const OUTBOUND_TEARDOWN_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Starvation-guard quota (G2 rework, mux-window-switch-output-hang
@@ -446,15 +449,23 @@ pub async fn handle_connection<S>(
     ));
     let mut writer_task_failed = false;
 
-    // Drain-arm outbound state (FR1/FR4): frames the drain arm consumed
-    // from `pane_output_rx` but could not admit into `outbound_tx` without
-    // blocking. Bounded by construction — the drain arm is gated off (see
-    // the `chunk = pane_output_rx.recv()` arm's guard below) while this is
-    // non-empty, so it can never grow past one drain batch's worth
-    // (`DRAIN_BATCH_LIMIT`, ~4MB — see `OUTBOUND_QUEUE_CAPACITY`'s doc for
-    // the combined worst-case accounting).
-    let mut outbound_remainder: VecDeque<MuxMessage> = VecDeque::new();
-    let mut pending_outbound_reserve: Option<PendingOutboundReserve> = None;
+    // Outbound admission (task0003, FR1/FR3/FR4 — consolidated single
+    // component, see `outbound::OutboundAdmission`'s doc): owns the
+    // bounded queue sender, the held remainder, and the in-flight fair
+    // reservation together. EVERY client-bound frame producer on this loop
+    // — the drain arm, the notify arm (single forward + Lagged resync,
+    // gated off while holding), the kick arm's `Detached` (may append to a
+    // held remainder), and `route_message`'s replies/reattach frames
+    // (ordered blocking admission that drains any held remainder first) —
+    // funnels through this ONE instance; the raw `mpsc::Sender` is never
+    // reachable outside `outbound.rs`. Restored bound: while a remainder
+    // is held, no producer can grow it in proportion to notification or
+    // client-message traffic — the worst case is one drain batch
+    // (`DRAIN_BATCH_LIMIT`, ~4MB) OR one Lagged resync's window count,
+    // plus at most one appended kick `Detached` frame (see
+    // `OUTBOUND_QUEUE_CAPACITY`'s doc for the combined worst-case
+    // accounting).
+    let mut admission = OutboundAdmission::new(outbound_tx);
 
     // Message + output loop using select! to handle both directions concurrently
     loop {
@@ -488,20 +499,24 @@ pub async fn handle_connection<S>(
         // why admission alone is not enough. This is the value actually fed
         // to the guard and to the post-`select!` bookkeeping below.
         //
-        // task0001 (Design "Starvation-guard interaction"): a held outbound
-        // remainder or an armed outbound-capacity reservation is likewise
-        // outstanding output work — the SAME class of "admitted but not yet
-        // delivered" gap `has_unforwarded_pane_output` already closes for
-        // `pane_output_tx`, now extended to the outbound socket queue this
-        // task adds, so continuous client traffic cannot starve draining
-        // the outbound remainder either.
+        // task0001 (Design "Starvation-guard interaction"), task0003
+        // rework: a held outbound remainder or an armed outbound-capacity
+        // reservation is likewise outstanding output work — the SAME class
+        // of "admitted but not yet delivered" gap `has_unforwarded_pane_output`
+        // already closes for `pane_output_tx`, now extended to the
+        // outbound admission component this task consolidates, so
+        // continuous client traffic cannot starve draining the outbound
+        // remainder either. `admission.is_holding()` is the single
+        // predicate that replaces the old
+        // `!outbound_remainder.is_empty() || pending_outbound_reserve.is_some()`
+        // pair (see `OutboundAdmission`'s doc for why the two were always
+        // kept in lockstep).
         let has_pending_output = has_unforwarded_pane_output(has_deferred_work, &pane_output_rx)
-            || !outbound_remainder.is_empty()
-            || pending_outbound_reserve.is_some();
+            || admission.is_holding();
         // Review round (finding `9537da352469bc68`): the guard must only
         // exclude the client arm when SOME OTHER arm can still make
         // progress without the client reading from the socket. A held
-        // `outbound_remainder` does NOT qualify: draining it requires the
+        // outbound remainder does NOT qualify: draining it requires the
         // `outbound_permit_result` arm to resolve, which in turn requires
         // the writer to feed+flush the socket, which in turn requires the
         // client to read — so on a quota-exhausted iteration with only a
@@ -516,9 +531,8 @@ pub async fn handle_connection<S>(
         // signal than `has_pending_output` above (which intentionally
         // keeps counting the remainder for the starvation-counter
         // bookkeeping below `select!`).
-        let excludable_work =
-            has_unforwarded_pane_output(has_deferred_work, &pane_output_rx)
-                && outbound_remainder.is_empty();
+        let excludable_work = has_unforwarded_pane_output(has_deferred_work, &pane_output_rx)
+            && !admission.is_holding();
         let allow_client_arm =
             allow_client_message_arm(excludable_work, consecutive_client_msgs_while_deferred);
         let mut took_client_arm = false;
@@ -532,8 +546,8 @@ pub async fn handle_connection<S>(
 
             // Review round (finding `c1-outbound-remainder-starvation`):
             // listed FIRST, ahead of the client-message arm below, so it is
-            // polled — and therefore registered as a waiter on
-            // `outbound_tx`'s semaphore — on every single loop iteration,
+            // polled — and therefore registered as a waiter on the outbound
+            // queue's semaphore — on every single loop iteration,
             // independent of whatever `allow_client_arm` decides for the
             // client arm. Mirrors the `permit_result` arm's own placement
             // requirement relative to the drain arm (see that arm's doc
@@ -541,42 +555,18 @@ pub async fn handle_connection<S>(
             // retry can never win fairly against a reader thread's
             // `blocking_send` waiter already parked on the channel, so this
             // fair `reserve_owned()` future is the only thing that can ever
-            // drain `outbound_remainder`, and it must be polled unconditionally
-            // for that guarantee to hold. Costs nothing when not armed
-            // (`if pending_outbound_reserve.is_some()` short-circuits to
-            // `Pending` instantly) or when armed but not yet resolved (ditto)
-            // — the client arm and every arm below still get serviced this
-            // same iteration.
-            outbound_permit_result = async {
-                pending_outbound_reserve.as_mut().unwrap().await
-            }, if pending_outbound_reserve.is_some() => {
-                pending_outbound_reserve = None;
-                match outbound_permit_result {
-                    Ok(permit) => {
-                        if let Some(frame) = outbound_remainder.pop_front() {
-                            let _ = permit.send(frame);
-                        } else {
-                            drop(permit);
-                        }
-                    }
-                    Err(_) => {
-                        log::warn!(
-                            "outbound queue closed while an outbound-remainder reservation \
-                             was pending; dropping the remaining outbound backlog (the \
-                             writer's own completion is what actually tears this \
-                             connection down, AC-6)"
-                        );
-                        outbound_remainder.clear();
-                    }
-                }
-                // More frames may remain (only one is applied per resolved
-                // reservation) — re-arm immediately, mirroring
-                // `arm_pending_deferred_reserve`'s own re-arm.
-                arm_pending_outbound_reserve(
-                    &mut pending_outbound_reserve,
-                    &outbound_remainder,
-                    &outbound_tx,
-                );
+            // drain `admission`'s held remainder, and it must be polled
+            // unconditionally for that guarantee to hold. Costs nothing
+            // when not armed (`if admission.has_pending_reserve()`
+            // short-circuits to `Pending` instantly) or when armed but not
+            // yet resolved (ditto) — the client arm and every arm below
+            // still get serviced this same iteration.
+            outbound_permit_result = admission.poll_pending_reserve(),
+                if admission.has_pending_reserve() => {
+                // `apply_reserve_result` clears/re-arms internally
+                // (mirrors `arm_pending_deferred_reserve`'s own re-arm) —
+                // see `OutboundAdmission`'s doc.
+                admission.apply_reserve_result(outbound_permit_result);
             }
 
             // G2 rework (AC-2, review round 3 findings `dd23cfc388062939` /
@@ -635,7 +625,7 @@ pub async fn handle_connection<S>(
                         if let Err(should_break) = route_message(
                             msg,
                             &session_manager,
-                            &outbound_tx,
+                            &mut admission,
                             &pane_output_tx,
                             &mut active_session_id,
                             &shutdown_tx,
@@ -683,30 +673,14 @@ pub async fn handle_connection<S>(
                 let resp = MuxMessage::control(MessageType::Detached, 0, &());
                 // task0001 (best-effort, mirrors the pre-task0001
                 // `let _ = framed.send(...).await;` shape — errors ignored
-                // either way). Ordering fix (this review round): admitting
-                // directly into `outbound_tx` here — bypassing a
-                // non-empty `outbound_remainder` — let this Detached frame
-                // overtake older PtyOutput frames still held in the
-                // remainder, since only the `outbound_permit_result` arm
-                // above drains that remainder FIFO. Route through the same
-                // remainder instead: append to its tail when one is
-                // already held (preserving arrival order), otherwise try a
-                // non-blocking admit and fall back to starting a new
-                // remainder. This is the last thing this arm does before
-                // `break`, so it does not reintroduce the residual freeze.
-                if outbound_remainder.is_empty() {
-                    let remainder = try_admit_outbound_frames(&outbound_tx, vec![resp]);
-                    if !remainder.is_empty() {
-                        outbound_remainder = remainder;
-                        arm_pending_outbound_reserve(
-                            &mut pending_outbound_reserve,
-                            &outbound_remainder,
-                            &outbound_tx,
-                        );
-                    }
-                } else {
-                    outbound_remainder.push_back(resp);
-                }
+                // either way). FR3 (no overtaking): `push_or_admit` appends
+                // to the tail of a held remainder (preserving arrival
+                // order) or admits immediately when nothing is held — the
+                // ONE frame this arm ever contributes (it breaks the loop
+                // immediately after). This is the last thing this arm does
+                // before `break`, so it does not reintroduce the residual
+                // freeze.
+                admission.push_or_admit(resp);
                 break;
             }
             // task0001 (AC-6): the outbound writer only ever completes
@@ -784,8 +758,10 @@ pub async fn handle_connection<S>(
             // holding an unsent remainder" — Design "Reworked drain-arm
             // flow" step 1) — the `outbound_permit_result` arm above is
             // what drains that remainder; this arm resumes once it is
-            // empty again.
-            chunk = pane_output_rx.recv(), if outbound_remainder.is_empty() => {
+            // empty again. task0003: `admission.is_holding()` replaces the
+            // old `outbound_remainder.is_empty()` check (see
+            // `OutboundAdmission`'s doc for the equivalence).
+            chunk = pane_output_rx.recv(), if !admission.is_holding() => {
                 if let Some(first) = chunk {
                     let batch_start = std::time::Instant::now();
 
@@ -881,21 +857,13 @@ pub async fn handle_connection<S>(
 
                     // Admission (FR1, invariant 1): non-blocking. Admits as
                     // many frames as the outbound queue currently has room
-                    // for, in order; a non-empty remainder is held as loop
-                    // state and the fair capacity-acquisition future is
-                    // armed so it is serviced ahead of any newer chunk
+                    // for, in order; a non-empty remainder is held inside
+                    // `admission` and its fair capacity-acquisition future
+                    // is armed so it is serviced ahead of any newer chunk
                     // (FR3) — this arm never awaits outbound capacity at
                     // this point position, which is exactly the self-block
                     // this task removes.
-                    let remainder = try_admit_outbound_frames(&outbound_tx, frames);
-                    if !remainder.is_empty() {
-                        outbound_remainder = remainder;
-                        arm_pending_outbound_reserve(
-                            &mut pending_outbound_reserve,
-                            &outbound_remainder,
-                            &outbound_tx,
-                        );
-                    }
+                    admission.try_admit(frames);
 
                     let elapsed = batch_start.elapsed();
                     if elapsed.as_millis() > 50 {
@@ -936,7 +904,21 @@ pub async fn handle_connection<S>(
                     );
                 }
             }
-            notification = notify_rx.recv() => {
+            // task0003 (FR4, Design invariant 3): gated off while a
+            // remainder is held — SAME gate shape as the drain arm above.
+            // Notifications then simply wait in the broadcast channel
+            // (fixed capacity); overflow takes the existing Lagged resync
+            // path once the arm resumes (a resync starting from an empty
+            // remainder contributes at most the current window count, not
+            // one frame per notification that arrived while gated off).
+            // With this gate in place, a held remainder is GUARANTEED
+            // empty on entry to this arm's body, so the single-forward
+            // path's old "append to a non-empty remainder" branch is
+            // unreachable and removed rather than left as dead code — see
+            // `push_or_admit`'s own doc for why it is still needed for the
+            // Lagged resync loop below (remainder CAN become non-empty
+            // partway through that loop, across its own iterations).
+            notification = notify_rx.recv(), if !admission.is_holding() => {
                 match notification {
                     Ok(msg) => {
                         // Forward cross-client notification (e.g., CLI SwitchWindow) to GUI
@@ -948,33 +930,13 @@ pub async fn handle_connection<S>(
                         // AND flushed — see `outbound::run_outbound_writer`'s
                         // doc — rather than here at admission time.
                         //
-                        // Ordering fix (this review round): sending
-                        // directly into `outbound_tx` here — bypassing a
-                        // non-empty `outbound_remainder` — let this
-                        // notification overtake older PtyOutput frames
-                        // still held in the remainder. Route through the
-                        // same remainder instead: append to its tail when
-                        // one is already held, otherwise try a
-                        // non-blocking admit and fall back to starting a
-                        // new remainder. A closed `outbound_tx` is not
-                        // detected here anymore (no synchronous send to
-                        // observe the error on) — the `writer_result` arm
-                        // above independently detects writer exit and
-                        // tears the connection down on the next iteration,
-                        // so no producer needs to re-detect it here.
-                        if outbound_remainder.is_empty() {
-                            let remainder = try_admit_outbound_frames(&outbound_tx, vec![msg]);
-                            if !remainder.is_empty() {
-                                outbound_remainder = remainder;
-                                arm_pending_outbound_reserve(
-                                    &mut pending_outbound_reserve,
-                                    &outbound_remainder,
-                                    &outbound_tx,
-                                );
-                            }
-                        } else {
-                            outbound_remainder.push_back(msg);
-                        }
+                        // A closed outbound channel is not detected here
+                        // (no synchronous send to observe the error on) —
+                        // the `writer_result` arm above independently
+                        // detects writer exit and tears the connection
+                        // down on the next iteration, so no producer needs
+                        // to re-detect it here.
+                        admission.push_or_admit(msg);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                         log::warn!(
@@ -990,25 +952,14 @@ pub async fn handle_connection<S>(
                                     win.id,
                                     &payload,
                                 );
-                                // Same remainder-routing fix as the single
-                                // notification-forward path above — see its
-                                // comment for the ordering rationale and why
-                                // a closed `outbound_tx` no longer needs to
-                                // be detected at this call site.
-                                if outbound_remainder.is_empty() {
-                                    let remainder =
-                                        try_admit_outbound_frames(&outbound_tx, vec![msg]);
-                                    if !remainder.is_empty() {
-                                        outbound_remainder = remainder;
-                                        arm_pending_outbound_reserve(
-                                            &mut pending_outbound_reserve,
-                                            &outbound_remainder,
-                                            &outbound_tx,
-                                        );
-                                    }
-                                } else {
-                                    outbound_remainder.push_back(msg);
-                                }
+                                // `push_or_admit` (not `try_admit`): the
+                                // gate above only guarantees the remainder
+                                // was empty when THIS arm started — the
+                                // outbound queue can fill partway through
+                                // this multi-frame resync loop, at which
+                                // point later iterations must append rather
+                                // than overtake.
+                                admission.push_or_admit(msg);
                             }
                         }
                     }
@@ -1069,25 +1020,29 @@ pub async fn handle_connection<S>(
         );
     }
 
-    // task0001 (Design invariant 7): a socket write/flush failure inside
-    // the writer already tore this loop down via the `writer_result` arm
-    // above (AC-6) — the writer has already exited, so there is nothing
-    // further to flush. Otherwise, drop every sender THIS loop itself
-    // still holds — the plain `outbound_tx` and any in-flight
-    // outbound-remainder reservation (which owns its own internal clone;
-    // clearing `pending_outbound_reserve` drops it) — so
-    // `run_outbound_writer`'s `outbound_rx.recv()` naturally drains
-    // whatever was ALREADY admitted (FIFO, one final pass) and then
-    // observes the channel closed and exits gracefully. A bounded wait on
-    // its `JoinHandle` gives that best-effort final flush a chance to land
-    // before this connection fully tears down. Frames still sitting in
-    // `outbound_remainder` (never admitted at all) are NOT covered by this
-    // guarantee — see Design invariant 7's "already-admitted frames"
-    // wording.
+    // task0001/task0003 (Design invariant 4, AC-5): a socket write/flush
+    // failure inside the writer already tore this loop down via the
+    // `writer_result` arm above (AC-6) — the writer has already exited, so
+    // there is nothing further to flush. Otherwise: first perform a
+    // bounded best-effort FIFO admission of whatever remainder `admission`
+    // still holds (a kicked client's Detached, appended to the tail of a
+    // held remainder by the kick arm above, is included here — so a
+    // client that resumes reading receives the held frames followed by
+    // Detached, in order), THEN release every sender this loop still
+    // holds (`OutboundAdmission::teardown_flush` consumes `admission`,
+    // dropping its sender) so `run_outbound_writer`'s `outbound_rx.recv()`
+    // observes the channel closed and exits gracefully. Both steps run
+    // inside the SAME named teardown-flush timeout: a slow/never-reading
+    // client bounds the whole sequence, not just the writer join — frames
+    // that do not fit within the budget are dropped exactly as the
+    // pre-task0003 already-admitted-only flush would have dropped them
+    // (best-effort, not absolute).
     if !writer_task_failed {
-        drop(pending_outbound_reserve.take());
-        drop(outbound_tx);
-        match tokio::time::timeout(OUTBOUND_TEARDOWN_FLUSH_TIMEOUT, writer_task_handle).await {
+        let flush_and_join = async {
+            admission.teardown_flush().await;
+            writer_task_handle.await
+        };
+        match tokio::time::timeout(OUTBOUND_TEARDOWN_FLUSH_TIMEOUT, flush_and_join).await {
             Ok(Ok(())) => {}
             Ok(Err(join_err)) => {
                 log::warn!(
@@ -1428,15 +1383,22 @@ async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, s
 /// incoming client message a chance to progress the queue too closes the
 /// residual edge case of PTY output going quiet right after a deferral.
 ///
-/// `outbound_tx` (task0001): every reply/frame this function (or a handler
-/// it calls) sends goes through the GUI loop's outbound admission queue —
-/// this function is only ever called from that loop, never the CLI-client
-/// path, so it is no longer generic over a raw stream type at all.
+/// `admission` (task0001, task0003 rework): every reply/frame this
+/// function (or a handler it calls) sends goes through the GUI loop's
+/// SINGLE outbound admission component — this function is only ever
+/// called from that loop, never the CLI-client path, so it is no longer
+/// generic over a raw stream type at all. Every send below is therefore an
+/// ordered BLOCKING admission (`OutboundAdmission::admit_blocking`, via
+/// [`OutboundHandle`] or directly): it drains any held remainder first
+/// (FR3, no overtaking), then admits its own frame(s) — see
+/// `OutboundAdmission`'s doc for why blocking here is an accepted
+/// carve-out (task0001 invariant 1) rather than the point-position
+/// capacity-await Convention 1 forbids elsewhere.
 #[allow(clippy::too_many_arguments)]
 async fn route_message(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-    outbound_tx: &mpsc::Sender<MuxMessage>,
+    admission: &mut OutboundAdmission,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: &mut u32,
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
@@ -1463,7 +1425,7 @@ async fn route_message(
             handle_create_window(
                 &msg,
                 session_manager,
-                &mut OutboundHandle::new(outbound_tx),
+                &mut OutboundHandle::new(admission),
                 pane_output_tx,
                 *active_session_id,
                 title_tx,
@@ -1477,7 +1439,7 @@ async fn route_message(
             handle_attach(
                 msg,
                 session_manager,
-                outbound_tx,
+                admission,
                 pane_output_tx,
                 active_session_id,
                 title_tx,
@@ -1489,7 +1451,7 @@ async fn route_message(
         MessageType::Detach => {
             log::info!("Client requested detach");
             let resp = MuxMessage::control(MessageType::Detached, 0, &());
-            let _ = outbound_tx.send(resp).await;
+            let _ = admission.admit_blocking(vec![resp]).await;
             return Err(true);
         }
         MessageType::DestroyPane => {
@@ -1570,7 +1532,7 @@ async fn route_message(
             // upgrade` CLI connection — same handling as the CLI path,
             // factored into `handle_upgrade_request` so the two never drift.
             log::info!("GUI client requested mux daemon upgrade");
-            handle_upgrade_request(&mut OutboundHandle::new(outbound_tx), upgrade_tx).await;
+            handle_upgrade_request(&mut OutboundHandle::new(admission), upgrade_tx).await;
         }
         _ => {
             log::debug!(
@@ -3739,6 +3701,847 @@ mod tests {
             !session_manager.lock().await.is_empty(),
             "AC-6: the pane itself never exited, so it must NOT be reaped — only \
              detached"
+        );
+
+        drop(client);
+    }
+
+    // ── task0003 (mux-connection-input-freeze): AC-1/AC-2/AC-3/AC-5
+    // regression tests for the consolidated `OutboundAdmission` component. ──
+
+    /// AC-1 (FR4, findings 7f9f9ad6fb4dd977 / ee54e1d2ff740104 /
+    /// 4e6f23b7d53527e5 / f9cde80880407a13) / AC-2 (FR1) — VERIFICATION
+    /// TS8: with a PtyOutput remainder held (client deliberately not
+    /// reading), a sustained stream of notifications — individually-spaced
+    /// sends plus a burst that overflows the broadcast channel's fixed
+    /// capacity (16, `SessionManager::notify_tx`), forcing a Lagged resync
+    /// — must NOT grow the held-frame count in proportion to how many
+    /// notifications were sent (AC-1): once the client resumes reading,
+    /// the RenameWindow frames delivered from the resync are bounded by
+    /// the session's own window count, not by the notification count.
+    /// AC-2: the SAME resumed read also proves the remainder does not
+    /// permanently close the drain arm — a freshly produced PtyOutput
+    /// chunk reaches the client within the named 5s timeout.
+    ///
+    /// Pre-fix (notify arm ungated) this test fails: each individually-
+    /// spaced notification is forwarded into the held remainder as it
+    /// arrives (`outbound_remainder.push_back`), so the delivered
+    /// RenameWindow count after resuming grows with the notification
+    /// count instead of staying bounded by `N_WINDOWS`.
+    #[tokio::test]
+    async fn connection_level_notification_traffic_does_not_grow_held_remainder_and_drain_arm_resumes()
+     {
+        const N_WINDOWS: usize = 3;
+        let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+        const PANE_A: u32 = 1;
+        let session_id;
+        {
+            let mut mgr = session_manager.lock().await;
+            session_id = mgr.create_session("default".to_string());
+            let mut first_window = None;
+            for _ in 0..N_WINDOWS {
+                let wid = mgr.create_window(session_id, "shell".to_string()).unwrap();
+                first_window.get_or_insert(wid);
+            }
+            let target_a: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_a = MuxPane::new_test(PANE_A, 80, 24, target_a);
+            mgr.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&first_window.unwrap())
+                .unwrap()
+                .add_pane(pane_a);
+        }
+
+        let (server_stream, client_stream) = tokio::io::duplex(256);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let conn_task = tokio::spawn(handle_connection(
+            server_stream,
+            session_manager.clone(),
+            shutdown_tx,
+            title_tx,
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            no_ack_slot(),
+        ));
+
+        let mut client = Framed::new(client_stream, MuxCodec::new());
+        client
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        drain_until_pane_created(&mut client, &[PANE_A]).await;
+
+        let owned_tx: mpsc::Sender<PtyOutputChunk> = {
+            let mgr = session_manager.lock().await;
+            let pane = mgr
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .get(&PANE_A)
+                .unwrap();
+            match &*pane.output_target.lock().unwrap() {
+                PaneOutputTarget::Connected(tx) => tx.clone(),
+                PaneOutputTarget::Detached { .. } => {
+                    panic!("pane A must be Connected after attach, still Detached")
+                }
+            }
+        };
+
+        const PANE_B: u32 = 2;
+        const PANE_C: u32 = 3;
+        const REMAINDER_MARKER: &[u8] = b"AC1-REMAINDER-MARKER";
+
+        // Phase 1 (mirrors the existing outbound-saturation test): stick
+        // the writer's flush permanently (client never reads again from
+        // here on).
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'x'; 4096]))
+            .await
+            .expect("pane_output_tx must accept the saturating chunk");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // Phase 2: three distinct, non-mergeable chunks admitted in one
+        // synchronous drain pass — two fit `OUTBOUND_QUEUE_CAPACITY` (2),
+        // the third becomes the held remainder. Tag it with a recognizable
+        // marker.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'a'; 16]))
+            .await
+            .unwrap();
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_B, vec![b'b'; 16]))
+            .await
+            .unwrap();
+        owned_tx
+            .send(PtyOutputChunk::pty_output(
+                PANE_C,
+                REMAINDER_MARKER.to_vec(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // DIAGNOSTIC precondition check (mirrors the existing outbound-
+        // saturation test's technique): confirm the drain arm has
+        // genuinely stopped consuming `pane_output_rx` — i.e. a remainder
+        // is actually held — before starting the notification phase.
+        let capacity_before_probe = owned_tx.capacity();
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'z'; 8]))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(
+            owned_tx.capacity(),
+            capacity_before_probe - 1,
+            "DIAGNOSTIC: test precondition failed — the drain arm must have \
+             stopped consuming pane_output_rx (a remainder must be held) before \
+             the notification phase begins"
+        );
+
+        // AC-1: sustained notification stream while the remainder is
+        // held — a SUSTAINED count (40), each send followed by a short
+        // sleep so a pre-fix, UNGATED notify arm gets a genuine chance to
+        // run and process (append to the held remainder) EACH one as it
+        // arrives, rather than all piling up while the connection task
+        // never gets scheduled.
+        //
+        // Why this differentiates pre-/post-fix even though BOTH are
+        // eventually bounded by the SAME pre-existing broadcast channel
+        // capacity (`SessionManager::notify_tx`, 16) once the connection
+        // task finally reads: pre-fix, the connection task DOES keep up
+        // (it actively consumes `notify_rx.recv()` on every iteration,
+        // no gate), so none of the 40 notifications are ever evicted —
+        // all 40 get individually appended to the ALREADY-held remainder,
+        // proportional growth. Post-fix, the gate means the connection
+        // task never calls `notify_rx.recv()` AT ALL while holding, so
+        // the broadcast channel's OWN pre-existing (unrelated to this
+        // fix) 16-slot ring buffer is what ends up bounding how many of
+        // the 40 sends are even still available once the gate reopens —
+        // the rest are evicted and recovered via ONE bounded Lagged
+        // resync (contributing at most the session's window count).
+        const NOTIFICATION_COUNT: u32 = 40;
+        for i in 0..NOTIFICATION_COUNT {
+            let msg = MuxMessage::control(
+                MessageType::RenameWindow,
+                9000 + i,
+                &RenameWindowMsg {
+                    name: format!("notif-{i}"),
+                },
+            );
+            let _ = session_manager.lock().await.notify_tx().send(msg);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // Resume reading: collect frames until the stream goes quiet,
+        // sending AC-2's fresh probe chunk once the held marker has been
+        // observed.
+        let mut rename_count = 0usize;
+        let mut saw_marker = false;
+        let mut saw_post_resume = false;
+        let overall_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let remaining = overall_deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining.min(Duration::from_millis(500)), client.next())
+                .await
+            {
+                Ok(Some(Ok(msg))) => {
+                    if msg.msg_type == MessageType::RenameWindow {
+                        rename_count += 1;
+                    } else if msg.msg_type == MessageType::PtyOutput
+                        && msg.pane_id == PANE_C
+                        && msg.payload == REMAINDER_MARKER
+                    {
+                        saw_marker = true;
+                    } else if msg.msg_type == MessageType::PtyOutput
+                        && msg.pane_id == PANE_A
+                        && msg.payload == b"post-resume"
+                    {
+                        saw_post_resume = true;
+                    }
+                }
+                Ok(Some(Err(e))) => panic!("frame decode error: {e}"),
+                Ok(None) => break,
+                Err(_) => {
+                    // 500ms quiet gap: send AC-2's probe once the held
+                    // marker has been observed, then keep reading.
+                    if saw_marker && !saw_post_resume {
+                        owned_tx
+                            .send(PtyOutputChunk::pty_output(PANE_A, b"post-resume".to_vec()))
+                            .await
+                            .expect("pane_output_tx must accept the post-resume chunk");
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            saw_marker,
+            "the originally held remainder frame must still be delivered"
+        );
+        assert!(
+            rename_count <= 25,
+            "AC-1: notification-driven remainder growth must be bounded — \
+             regardless of how many notifications ({NOTIFICATION_COUNT}) were sent \
+             while a remainder was held, the eventual delivery count must stay \
+             capped by the broadcast channel's own pre-existing fixed capacity plus \
+             one resync's window count ({N_WINDOWS}), not grow proportionally with \
+             the notification count. Got {rename_count} RenameWindow frames \
+             (unbounded pre-fix growth would approach {NOTIFICATION_COUNT})."
+        );
+        assert!(
+            saw_post_resume,
+            "AC-2: a freshly produced PtyOutput chunk must reach the client within \
+             the named timeout once the client resumes reading — the remainder must \
+             not permanently close the drain arm"
+        );
+
+        drop(client);
+        conn_task.abort();
+    }
+
+    /// AC-3 (FR3, findings 79d48554f94fd3df / ebb33f43f48f612a): with a
+    /// PtyOutput remainder held, reply/reattach-path frames — a same-pane
+    /// PaneCreated + SnapshotRestore (via a re-Attach to the same session)
+    /// plus one plain `route_message` reply (a queued Detach) — are
+    /// observed by the client strictly AFTER every held remainder frame;
+    /// same-pane SnapshotRestore never precedes the older held PtyOutput.
+    ///
+    /// Pre-fix this test fails: `handle_attach`/`send_reattach_data`
+    /// admitted directly into the raw outbound sender, bypassing the held
+    /// remainder — the reattach's PaneCreated/SnapshotRestore would arrive
+    /// BEFORE the older held marker chunk.
+    #[tokio::test]
+    async fn connection_level_reply_and_reattach_frames_never_overtake_held_remainder() {
+        let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+        const PANE_A: u32 = 1;
+        let session_id;
+        {
+            let mut mgr = session_manager.lock().await;
+            session_id = mgr.create_session("default".to_string());
+            let wid = mgr.create_window(session_id, "shell".to_string()).unwrap();
+            let target_a: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_a = MuxPane::new_test(PANE_A, 80, 24, target_a);
+            mgr.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_a);
+        }
+
+        let (server_stream, client_stream) = tokio::io::duplex(256);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let conn_task = tokio::spawn(handle_connection(
+            server_stream,
+            session_manager.clone(),
+            shutdown_tx,
+            title_tx,
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            no_ack_slot(),
+        ));
+
+        let mut client = Framed::new(client_stream, MuxCodec::new());
+        client
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        drain_until_pane_created(&mut client, &[PANE_A]).await;
+        // The initial attach's own reattach-data snapshot: PaneCreated is
+        // immediately followed by a SnapshotRestore (pane A's buffer is
+        // never empty — it always carries at least the leading clear
+        // sequence). Drain it now so it cannot contaminate the ordered-
+        // sequence assertion below, which specifically tracks
+        // SnapshotRestore(A) as a significant event for the LATER
+        // (re-)Attach this test triggers.
+        let initial_snapshot = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang draining the initial attach's own snapshot")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(initial_snapshot.msg_type, MessageType::SnapshotRestore);
+        assert_eq!(initial_snapshot.pane_id, PANE_A);
+
+        let owned_tx: mpsc::Sender<PtyOutputChunk> = {
+            let mgr = session_manager.lock().await;
+            let pane = mgr
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .get(&PANE_A)
+                .unwrap();
+            match &*pane.output_target.lock().unwrap() {
+                PaneOutputTarget::Connected(tx) => tx.clone(),
+                PaneOutputTarget::Detached { .. } => {
+                    panic!("pane A must be Connected after attach, still Detached")
+                }
+            }
+        };
+
+        const PANE_B: u32 = 2;
+        const REMAINDER_MARKER: &[u8] = b"AC3-REMAINDER-MARKER";
+
+        // Stick the writer's flush permanently.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'x'; 4096]))
+            .await
+            .expect("pane_output_tx must accept the saturating chunk");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // Three distinct, non-mergeable chunks (A, B, A again — B in
+        // between prevents same-pane merging) admitted in one synchronous
+        // pass; the third (pane A's marker) becomes the held remainder.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'a'; 16]))
+            .await
+            .unwrap();
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_B, vec![b'b'; 16]))
+            .await
+            .unwrap();
+        owned_tx
+            .send(PtyOutputChunk::pty_output(
+                PANE_A,
+                REMAINDER_MARKER.to_vec(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // With the remainder held, queue a re-Attach to the SAME session
+        // (same-pane PaneCreated + SnapshotRestore for pane A) followed
+        // immediately by a Detach (a plain route_message reply) — both
+        // writes succeed immediately (client->server is independent of
+        // the stalled server->client direction).
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        client
+            .send(MuxMessage::control(MessageType::Detach, 0, &()))
+            .await
+            .unwrap();
+
+        // Resume reading: collect the ordered sequence of "significant"
+        // frames.
+        #[derive(Debug, PartialEq, Eq)]
+        enum Seen {
+            RemainderMarker,
+            PaneCreatedA,
+            SnapshotRestoreA,
+            Detached,
+        }
+        let mut order = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while order.last() != Some(&Seen::Detached) {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "must not hang waiting for the full ordered sequence, got {order:?}"
+            );
+            let msg = tokio::time::timeout(remaining, client.next())
+                .await
+                .expect("must not hang")
+                .expect("stream must not end")
+                .expect("frame must decode");
+            if msg.msg_type == MessageType::PtyOutput
+                && msg.pane_id == PANE_A
+                && msg.payload == REMAINDER_MARKER
+            {
+                order.push(Seen::RemainderMarker);
+            } else if msg.msg_type == MessageType::PaneCreated && msg.pane_id == PANE_A {
+                order.push(Seen::PaneCreatedA);
+            } else if msg.msg_type == MessageType::SnapshotRestore && msg.pane_id == PANE_A {
+                order.push(Seen::SnapshotRestoreA);
+            } else if msg.msg_type == MessageType::Detached {
+                order.push(Seen::Detached);
+            }
+        }
+
+        assert_eq!(
+            order,
+            vec![
+                Seen::RemainderMarker,
+                Seen::PaneCreatedA,
+                Seen::SnapshotRestoreA,
+                Seen::Detached,
+            ],
+            "AC-3: reply/reattach frames must arrive strictly after every held \
+             remainder frame — no overtaking"
+        );
+
+        drop(client);
+        conn_task.abort();
+    }
+
+    /// AC-5 (teardown delivery, findings 96633ec8862e6c64 /
+    /// 76e7d90468e859d0): a client kicked while a remainder is held and
+    /// THEN resumes reading receives the held frame(s) followed by
+    /// Detached, in order, within the named teardown budget.
+    ///
+    /// Pre-fix this test fails: teardown only flushed frames already
+    /// admitted into the outbound queue — the held remainder (including
+    /// the kick arm's appended Detached) was dropped, so the client would
+    /// observe a bare socket EOF instead of the marker frame followed by
+    /// Detached.
+    #[tokio::test]
+    async fn connection_level_teardown_delivers_held_remainder_then_detached_to_a_resuming_client()
+    {
+        let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+        const PANE_A: u32 = 1;
+        let session_id;
+        {
+            let mut mgr = session_manager.lock().await;
+            session_id = mgr.create_session("default".to_string());
+            let wid = mgr.create_window(session_id, "shell".to_string()).unwrap();
+            let target_a: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_a = MuxPane::new_test(PANE_A, 80, 24, target_a);
+            mgr.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_a);
+        }
+
+        let (server_stream, client_stream) = tokio::io::duplex(256);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let conn_task = tokio::spawn(handle_connection(
+            server_stream,
+            session_manager.clone(),
+            shutdown_tx,
+            title_tx.clone(),
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            no_ack_slot(),
+        ));
+
+        let mut client = Framed::new(client_stream, MuxCodec::new());
+        client
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        drain_until_pane_created(&mut client, &[PANE_A]).await;
+
+        let owned_tx: mpsc::Sender<PtyOutputChunk> = {
+            let mgr = session_manager.lock().await;
+            let pane = mgr
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .get(&PANE_A)
+                .unwrap();
+            match &*pane.output_target.lock().unwrap() {
+                PaneOutputTarget::Connected(tx) => tx.clone(),
+                PaneOutputTarget::Detached { .. } => {
+                    panic!("pane A must be Connected after attach, still Detached")
+                }
+            }
+        };
+
+        const PANE_B: u32 = 2;
+        const PANE_C: u32 = 3;
+        const REMAINDER_MARKER: &[u8] = b"AC5-REMAINDER-MARKER";
+
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'x'; 4096]))
+            .await
+            .expect("pane_output_tx must accept the saturating chunk");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'a'; 16]))
+            .await
+            .unwrap();
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_B, vec![b'b'; 16]))
+            .await
+            .unwrap();
+        owned_tx
+            .send(PtyOutputChunk::pty_output(
+                PANE_C,
+                REMAINDER_MARKER.to_vec(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // Fire the kick directly (mirrors what a second GUI client's
+        // Attach would do): re-run `collect_reattach_data` for the SAME
+        // session with a throwaway target — this swaps in a new kick
+        // sender and fires the one this connection installed at its own
+        // Attach above, evicting it.
+        let (dummy_tx, _dummy_rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let (new_kick_tx, _new_kick_rx) = oneshot::channel::<()>();
+        let _ = collect_reattach_data(
+            &session_manager,
+            session_id,
+            &dummy_tx,
+            &title_tx,
+            new_kick_tx,
+            true,
+        )
+        .await;
+
+        // Give the connection task a moment to observe the kick and
+        // append Detached to the held remainder before resuming reads.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let mut saw_marker = false;
+        let mut saw_detached = false;
+        let deadline = OUTBOUND_TEARDOWN_FLUSH_TIMEOUT + Duration::from_secs(2);
+        let read_result = tokio::time::timeout(deadline, async {
+            loop {
+                let msg = client
+                    .next()
+                    .await
+                    .expect("stream must not end")
+                    .expect("frame must decode");
+                if msg.msg_type == MessageType::PtyOutput
+                    && msg.pane_id == PANE_C
+                    && msg.payload == REMAINDER_MARKER
+                {
+                    assert!(
+                        !saw_detached,
+                        "AC-5: the held remainder frame must arrive BEFORE Detached"
+                    );
+                    saw_marker = true;
+                } else if msg.msg_type == MessageType::Detached {
+                    saw_detached = true;
+                    break;
+                }
+            }
+        })
+        .await;
+
+        assert!(
+            read_result.is_ok(),
+            "AC-5: a resuming client must receive the held frame(s) followed by \
+             Detached within the named teardown budget"
+        );
+        assert!(
+            saw_marker,
+            "the originally held remainder frame must be delivered"
+        );
+        assert!(
+            saw_detached,
+            "Detached must be delivered after the held remainder"
+        );
+
+        drop(client);
+        let joined = tokio::time::timeout(Duration::from_secs(2), conn_task).await;
+        assert!(
+            joined.is_ok(),
+            "connection task must complete after teardown"
+        );
+    }
+
+    /// AC-5 companion: a client that NEVER resumes reading still lets the
+    /// connection task complete teardown within the bounded budget (rather
+    /// than hanging forever on the never-freeing outbound send).
+    #[tokio::test]
+    async fn connection_level_teardown_completes_within_budget_for_a_never_reading_client() {
+        let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+        const PANE_A: u32 = 1;
+        let session_id;
+        {
+            let mut mgr = session_manager.lock().await;
+            session_id = mgr.create_session("default".to_string());
+            let wid = mgr.create_window(session_id, "shell".to_string()).unwrap();
+            let target_a: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_a = MuxPane::new_test(PANE_A, 80, 24, target_a);
+            mgr.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_a);
+        }
+
+        let (server_stream, client_stream) = tokio::io::duplex(256);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let conn_task = tokio::spawn(handle_connection(
+            server_stream,
+            session_manager.clone(),
+            shutdown_tx,
+            title_tx.clone(),
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            no_ack_slot(),
+        ));
+
+        let mut client = Framed::new(client_stream, MuxCodec::new());
+        client
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        drain_until_pane_created(&mut client, &[PANE_A]).await;
+
+        let owned_tx: mpsc::Sender<PtyOutputChunk> = {
+            let mgr = session_manager.lock().await;
+            let pane = mgr
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .get(&PANE_A)
+                .unwrap();
+            match &*pane.output_target.lock().unwrap() {
+                PaneOutputTarget::Connected(tx) => tx.clone(),
+                PaneOutputTarget::Detached { .. } => {
+                    panic!("pane A must be Connected after attach, still Detached")
+                }
+            }
+        };
+
+        const PANE_B: u32 = 2;
+        const PANE_C: u32 = 3;
+
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'x'; 4096]))
+            .await
+            .expect("pane_output_tx must accept the saturating chunk");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'a'; 16]))
+            .await
+            .unwrap();
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_B, vec![b'b'; 16]))
+            .await
+            .unwrap();
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_C, vec![b'c'; 16]))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let (dummy_tx, _dummy_rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let (new_kick_tx, _new_kick_rx) = oneshot::channel::<()>();
+        let _ = collect_reattach_data(
+            &session_manager,
+            session_id,
+            &dummy_tx,
+            &title_tx,
+            new_kick_tx,
+            true,
+        )
+        .await;
+
+        // The client NEVER reads again from here on.
+        let joined = tokio::time::timeout(
+            OUTBOUND_TEARDOWN_FLUSH_TIMEOUT + Duration::from_secs(2),
+            conn_task,
+        )
+        .await;
+        assert!(
+            joined.is_ok(),
+            "AC-5: teardown must complete within the bounded budget even when the \
+             client never resumes reading"
         );
 
         drop(client);

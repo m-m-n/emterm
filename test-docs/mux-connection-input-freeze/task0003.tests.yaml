@@ -1,0 +1,143 @@
+task_id: task0003
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::connection::tests::connection_level_notification_traffic_does_not_grow_held_remainder_and_drain_arm_resumes
+    red_confirmed: true
+    red_reason: >-
+      Temporarily removed the notify arm's `if !admission.is_holding()` gate
+      (reverted to unconditional `notification = notify_rx.recv() =>`) and
+      re-ran: with a remainder held and 40 individually-spaced notifications
+      sent, all 40 were individually delivered once the client resumed
+      reading (rename_count == 40, assertion required <= 25) — "AC-1:
+      notification-driven remainder growth must be bounded ... Got 40
+      RenameWindow frames (unbounded pre-fix growth would approach 40)."
+      Confirmed this is the actual pre-fix mechanism (each notification
+      individually appended to the already-held remainder while gated), not
+      an artifact of the broadcast channel's own pre-existing 16-slot
+      capacity, which the test is specifically designed to exceed and still
+      pass post-fix. Restored the gate afterward; test is green.
+  AC-2:
+    tests:
+      - mux::ipc::connection::tests::connection_level_notification_traffic_does_not_grow_held_remainder_and_drain_arm_resumes
+    red_confirmed: false
+    red_reason: >-
+      AC-2 (drain arm resumes once the client reads) shares this test with
+      AC-1 as a second, later assertion (`saw_post_resume`). The finite
+      (40) notification burst used to force AC-1 red is not, by itself,
+      sustained/continuous pressure — once all 40 sends complete the
+      remainder eventually drains on its own even under the ungated
+      (pre-fix) notify arm, so AC-2's own positive assertion was not
+      independently forced red by this test. AC-2's mechanism (the drain
+      arm's own `!admission.is_holding()` gate) was not touched by this
+      task's notify-arm fix and was already correct from task0001; this
+      test's AC-2 assertion documents/guards that behavior rather than
+      proving a new regression fix.
+  AC-3:
+    tests:
+      - mux::ipc::connection::tests::connection_level_reply_and_reattach_frames_never_overtake_held_remainder
+    red_confirmed: true
+    red_reason: >-
+      Temporarily reverted `OutboundAdmission::admit_blocking` to skip
+      draining the held remainder first (admitting `frames` directly,
+      mirroring the pre-fix bug where `handle_attach`/`send_reattach_data`
+      admitted straight into the raw sender) and re-ran: the observed
+      frame order was [PaneCreatedA, SnapshotRestoreA, RemainderMarker,
+      Detached] instead of [RemainderMarker, PaneCreatedA, SnapshotRestoreA,
+      Detached] — the reattach frames overtook the older held PtyOutput
+      remainder, exactly the FR3 violation this task fixes. Restored the
+      real `admit_blocking` (drain-remainder-first) afterward; test is
+      green.
+  AC-4:
+    tests:
+      - mux::ipc::outbound::tests::admission_is_holding_false_initially
+      - mux::ipc::outbound::tests::admission_try_admit_sets_is_holding_on_partial_admit
+      - mux::ipc::outbound::tests::admission_push_or_admit_appends_to_held_remainder_in_order
+      - mux::ipc::outbound::tests::admission_admit_blocking_drains_remainder_before_new_frames_in_order
+      - mux::ipc::outbound::tests::admission_admit_blocking_cancels_a_stale_pending_reserve
+      - mux::ipc::outbound::tests::admission_teardown_flush_admits_held_remainder_in_order
+      - mux::ipc::outbound::tests::admission_teardown_flush_is_cancellable_when_nothing_drains_the_channel
+    red_confirmed: false
+    red_reason: >-
+      These unit tests exercise the NEW `OutboundAdmission` component
+      directly (no live connection), per AC-4's own requirement. They were
+      developed together with the component's implementation rather than
+      written first against a not-yet-existing type, so no standalone
+      "red because the method didn't exist" observation was recorded for
+      each individually. The consolidation's actual correctness — that the
+      real `select!` loop routes every producer through this one component
+      with no raw-sender bypass — was red/green confirmed end-to-end via
+      the AC-1 and AC-3 live-connection tests above, which exercise this
+      same admission logic through the real connection loop. Inspection
+      (AC-4's other requirement) confirms `mpsc::Sender<MuxMessage>` is a
+      private field of `OutboundAdmission`, unreachable from
+      `handlers.rs`/`reattach.rs`, which now receive `&mut OutboundAdmission`
+      instead of the raw sender (signature-level change, as required).
+  AC-5:
+    tests:
+      - mux::ipc::connection::tests::connection_level_teardown_delivers_held_remainder_then_detached_to_a_resuming_client
+      - mux::ipc::connection::tests::connection_level_teardown_completes_within_budget_for_a_never_reading_client
+    red_confirmed: true
+    red_reason: >-
+      Temporarily reverted `OutboundAdmission::teardown_flush` to a no-op
+      (dropping the held remainder unflushed, mirroring the pre-fix bug
+      where teardown only flushed already-admitted frames) and re-ran both
+      tests: `connection_level_teardown_delivers_held_remainder_then_detached_to_a_resuming_client`
+      failed with "stream must not end" — the kicked client, on resuming
+      reads, observed a bare socket EOF instead of the held marker frame
+      followed by Detached, exactly the regression the task plan's Design
+      section names ("eviction degrades to a bare socket EOF"). The
+      companion `connection_level_teardown_completes_within_budget_for_a_never_reading_client`
+      stayed green even with the no-op revert (dropping the remainder
+      trivially satisfies "completes within budget" — that half of AC-5 was
+      already true pre-fix and is recorded honestly as not independently
+      red). Restored the real `teardown_flush` (drain-then-close)
+      afterward; both tests are green.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Documentation-parity criterion, inspection-verified rather than
+      test-driven. Updated: `outbound.rs`'s `OUTBOUND_QUEUE_CAPACITY` doc
+      (now states the restored worst-case bound — one drain batch OR one
+      resync's window count, plus at most one appended kick `Detached`,
+      reconciled with the ~4MB `DRAIN_BATCH_LIMIT` order of magnitude,
+      instead of the stale "bounded by construction" claim the code no
+      longer enforced); `OutboundAdmission`'s and `OutboundHandle`'s doc
+      (describe the single consolidated admission path, the `is_holding()`
+      lockstep invariant, and each producer's admission method, as
+      implemented); `connection.rs`'s `admission` declaration comment
+      (states every producer that funnels through it and the restored
+      bound) replacing the old, now-false `outbound_remainder`
+      "bounded by construction" comment task0003's own plan named as
+      stale.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Regression gate covering the full existing suite plus the
+      `mux_throughput` integration test, not a single new test. Verified:
+      `cargo test --lib` (full, `--test-threads=1`) — 3157 passed, 7 failed
+      (all pre-existing `tabs::tests` baseline failures, unrelated to this
+      task, see `baseline_failures`/`final_failures` above — identical
+      sets); `cargo check --no-default-features` — clean; `cargo test
+      --test mux_throughput` — compiles, its one test correctly reports
+      `ignored` (release-only, unaffected by this task's changes, same as
+      before); every existing connection-level saturation/ordering test in
+      `connection.rs` (task0001/task0002-era) still passes unmodified.

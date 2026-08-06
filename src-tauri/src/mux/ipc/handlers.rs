@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use super::outbound::ReplySink;
+use super::outbound::{OutboundAdmission, ReplySink};
 use super::protocol::*;
 use super::pty_spawn::{register_pane_and_start_reader, spawn_pty};
 use super::reattach::{
@@ -610,14 +610,20 @@ pub(super) async fn handle_request_pane_snapshot(
 /// it in its select!. Any prior receiver held by the caller is replaced.
 ///
 /// Only called from the GUI loop (`route_message`) — never from the
-/// CLI-client path — so `outbound_tx` (task0001) is the outbound admission
-/// queue directly, with no need for the [`ReplySink`] abstraction
-/// `handle_create_window` uses to serve both paths.
+/// CLI-client path — so `admission` (task0001, task0003 rework) is the
+/// outbound admission component directly, with no need for the
+/// [`ReplySink`] abstraction `handle_create_window` uses to serve both
+/// paths. Every send below (the error reply, and every frame
+/// `send_reattach_data` emits) is an ORDERED BLOCKING admission
+/// (`OutboundAdmission::admit_blocking`): it drains any remainder already
+/// held by an earlier producer FIRST, then admits its own frame(s) — so a
+/// reattach's `PaneCreated`/`SnapshotRestore` can never overtake older
+/// held `PtyOutput` (FR3, the worst case Design "Problem" names).
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_attach(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-    outbound_tx: &mpsc::Sender<MuxMessage>,
+    admission: &mut OutboundAdmission,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: &mut u32,
     title_tx: &TitleChangeSender,
@@ -644,7 +650,7 @@ pub(super) async fn handle_attach(
                 message: format!("Session {} not found", new_session_id),
             };
             let resp = MuxMessage::control(MessageType::Error, 0, &err);
-            let _ = outbound_tx.send(resp).await;
+            let _ = admission.admit_blocking(vec![resp]).await;
             return Ok(());
         }
     }
@@ -687,10 +693,7 @@ pub(super) async fn handle_attach(
     // `attach_visible == false`, every entry has empty buffer bytes so no
     // snapshot frame is sent (the frontend learns the pane exists but
     // receives no screen contents until the next SetVisibility(true) resume).
-    if send_reattach_data(outbound_tx, &reattach_data)
-        .await
-        .is_err()
-    {
+    if send_reattach_data(admission, &reattach_data).await.is_err() {
         return Err(true);
     }
 
