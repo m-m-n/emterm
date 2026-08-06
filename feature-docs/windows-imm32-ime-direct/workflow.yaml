@@ -53,9 +53,21 @@ workflow:
     status: completed
     completed_at_commit: b1e80c1cef767022f1b9b452ceb4ba8c13f1813c
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 9065c1356a686a4bcc64fa3e366971cfa2c34a85
+    result: pass
     failed_items: []
+    manual_pending:
+      - "AC3 / TS5-a: Windows + CorvusSKK 実機での変換確定連打（この Linux ホストでは実行不能）"
+      - "AC4 / TS5-b: 実機での変換中 Alt+Tab フォーカスアウト（同上）"
+      - "AC5 / TS5-c: 実機での候補ウィンドウのカーソル追従（同上）"
+      - "AC6 / TS6: Linux ホストでの X11 / Wayland composition 往復の手動スポットチェック（GUI 起動が必要）"
+    notes: >-
+      自動ゲートは全通過。main build / cli check / windows cross-target check の 3 コンポーネントが
+      exit 0、winit_bridge.rs の fmt ドリフトはゼロ。ユニットテストは 3169 passed / 6 failed で、
+      失敗はすべて tabs::tests。feature を含まない main (b98f5373) で同じテストを実行したところ
+      同一の 7 件が失敗したため（今回の 6 件はその部分集合）、既存の不安定テストと確定。
+      IME 関連テストの失敗はゼロ。
   - id: retrospect
     status: pending
 
