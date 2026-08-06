@@ -1,17 +1,86 @@
 schema_version: 1
 feature: mux-agent-tab-cycle
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: 6a95d08b6405b827f420dd8a10b820b5434aa8b8
-last_input_digest: null
-active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+base_revision: d13e2767638b511c9a58928c0511f0a63b9bacec
+last_input_digest: "sha256:2790e5e7001de1fc1273517c92c452c5fe7c06001d236c622db4a6ada0f4ffee"
+active_request_id: create-spec-run-0001
+packets:
+  mux-agent-tab-cycle-q0001:
+    status: answered
+    issued_at: "2026-08-06T14:07:00+09:00"
+    questions:
+      - question_id: keybinding.default
+        status: answered
+      - question_id: qualifying-states
+        status: answered
+      - question_id: design-step
+        status: answered
+answers:
+  keybinding.default:
+    packet_id: mux-agent-tab-cycle-q0001
+    answered_at: "2026-08-06T14:07:00+09:00"
+    source: batch-decision-table
+    answer_mode: select_or_freeform
+    selected_option_ids: []
+    freeform: null
+    normalized_answer: "TBD — キーバインドは create-plan 時に確定する"
+    resolution_note: >-
+      gate create-spec.requirement-clarification の policy は
+      action: codex_consultation。Codex CLI は利用上限
+      (ERROR: You've hit your usage limit) で応答せず、consultation は
+      成立しなかったため policy の unresolved: record_tbd を適用した。
+      worker の推奨は planning-default-configurable
+      (既存キーバインド慣例に沿った既定キーを planning で選定)。
+  qualifying-states:
+    packet_id: mux-agent-tab-cycle-q0001
+    answered_at: "2026-08-06T14:07:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: []
+    freeform: null
+    normalized_answer: "TBD — 巡回対象とする agent 状態集合は create-plan 時に確定する"
+    resolution_note: >-
+      同上 (codex_consultation 不成立 → unresolved: record_tbd)。
+      worker の推奨は any-reported-state
+      (clear されていない agent-status を持つペインを含む mux タブ全て)。
+  design-step:
+    packet_id: mux-agent-tab-cycle-q0001
+    answered_at: "2026-08-06T14:07:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [skip]
+    freeform: null
+    normalized_answer: "design ステップは skipped"
+    resolution_note: >-
+      gate create-spec.design-step の policy option_id は
+      decide_autonomously。worker のパケットは option_id を skip / run で
+      提示しており canonical な decide_autonomously を含まなかった
+      (worker 側の option-id 逸脱)。decide_autonomously の意味は
+      「analyst の自律的推奨をそのまま採る」であり、worker の
+      design_step_recommendation.value は skip、recommended option も skip
+      で一致するため skip として解決した。フェーズ中断はしていない。
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: "sha256:2790e5e7001de1fc1273517c92c452c5fe7c06001d236c622db4a6ada0f4ffee"
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: "sha256:2790e5e7001de1fc1273517c92c452c5fe7c06001d236c622db4a6ada0f4ffee"
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: "sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef"
+      src-tauri/src/ui/md3.rs: "sha256:8165557d9c2a3ea1a64c2d952de2e932b61b3514f03b52c03b9bc810e8acdc7b"
+      src-tauri/web-shared/styles.css: "sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb"
+    truncated: false
 last_error: null
