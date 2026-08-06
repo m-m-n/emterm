@@ -71,6 +71,8 @@ export interface AppSettings {
   notify_on_output: boolean;
   notify_on_bell: boolean;
   agent_status_notifications: boolean;
+  agent_notify_on_done: boolean;
+  agent_notify_on_blocked: boolean;
 
   // Keybinds
   keybinds: KeybindSettings;

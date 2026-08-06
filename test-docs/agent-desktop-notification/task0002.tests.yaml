@@ -1,0 +1,93 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - "SettingsPanel — agent category wiring (AC-1) > categories list includes an enabled 'agent' entry with a translated label"
+      - "SettingsPanel — agent category wiring (AC-1) > nav renders a registered (non-empty) icon for the 'agent' category"
+      - "SettingsPanel — agent category wiring (AC-1) > selecting 'agent' renders the agent section (content render branch)"
+    red_confirmed: true
+    red_reason: >
+      Before settings-panel.ts was wired: categories.find(c => c.id ===
+      "agent") returned undefined (expect(...).toBeTruthy() failed with
+      Received: undefined); the nav had no [data-category-id="agent"]
+      .settings-nav-icon (Received: null); and renderContent() with
+      activeCategory="agent" produced no #settings-agent-status-notifications
+      element in the content panel (Received: null). All three asserted
+      correctly before settings-panel.ts had the category/icon/switch-case
+      wiring.
+  AC-2:
+    tests:
+      - "renderAgentSection() — toggle order and values (AC-2) > renders master, turn-complete, waiting-for-input toggles in that order, reflecting settings"
+      - "renderAgentSection() — toggle order and values (AC-2) > reflects all-off settings"
+    red_confirmed: true
+    red_reason: >
+      Before agent-section.ts existed: `error: Cannot find module
+      './agent-section.ts' from
+      '.../sections/agent-section.test.ts'` — the whole test file failed to
+      load at import time, so every test in it (including these) failed
+      because the renderer did not exist yet.
+  AC-3:
+    tests:
+      - "renderAgentSection() — save on toggle (AC-3) > flipping the master toggle saves agent_status_notifications"
+      - "renderAgentSection() — save on toggle (AC-3) > flipping the turn-complete toggle saves agent_notify_on_done"
+      - "renderAgentSection() — save on toggle (AC-3) > flipping the waiting-for-input toggle saves agent_notify_on_blocked"
+    red_confirmed: true
+    red_reason: >
+      Same "Cannot find module './agent-section.ts'" import-time failure as
+      AC-2 (both ACs' tests live in the same file, which failed to load
+      before the renderer existed).
+  AC-4:
+    tests:
+      - "renderNotificationSection() — agent toggle moved out (AC-4) > does not render the agent status notifications toggle"
+    red_confirmed: true
+    red_reason: >
+      With agent-section.ts restored but notification-section.ts still
+      containing the original "Agent Status Notifications (toggle) —
+      task0007" block:
+      expect(panel.querySelector("#settings-agent-status-notifications")).toBeNull()
+      failed because the toggle button element was still present (not yet
+      moved out of the notification section).
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >
+      No AC-5-specific test exists; the interface addition is verified by
+      `bun run typecheck`. Confirmed red by temporarily removing
+      agent_notify_on_done/agent_notify_on_blocked from AppSettings in
+      types.ts: `tsc --noEmit` failed with
+      "error TS2339: Property 'agent_notify_on_done' does not exist on type
+      'AppSettings'" (and the matching agent_notify_on_blocked /
+      keyof-AppSettings errors) at the two call sites in agent-section.ts.
+      Restoring the two fields made typecheck clean again.
+  AC-6:
+    tests:
+      - "renderAgentSection() — i18n (AC-6) > ja and en both resolve the category label"
+      - "renderAgentSection() — i18n (AC-6) > ja and en both resolve every label/description key used by the section"
+      - "renderAgentSection() — i18n (AC-6) > the rendered labels are translated text, not the raw i18n key (en)"
+      - "renderAgentSection() — i18n (AC-6) > the old settings.notification.agentStatusNotifications* keys resolve to nothing in en/ja"
+    red_confirmed: true
+    red_reason: >
+      With agent-section.ts restored but en.json/ja.json still on their
+      pre-task content (no settings.agent.* namespace, old
+      settings.notification.agentStatusNotifications* keys still present):
+      t("settings.categories.agent") returned the raw key itself (i18n
+      falls back to returning the key string when unresolved in both
+      current locale and the English fallback); every settings.agent.*
+      key likewise resolved to itself; the rendered labels array contained
+      the raw key "settings.agent.master"; and
+      t("settings.notification.agentStatusNotifications") resolved to the
+      real (not-yet-removed) string "Agent Status Notifications" instead of
+      falling back to the raw key, so the "keys resolve to nothing"
+      assertion failed as expected.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      AC-7 is an aggregate gate ("bun test and bun run typecheck both
+      pass"), not a single behavior with its own red/green cycle — it is
+      the conjunction of AC-1..AC-6 plus the existing suite staying green.
+      Verified directly: full `bun test` run is 324 pass / 0 fail (up from
+      the 311/0 baseline) and `bun run typecheck` produces no output
+      (clean) after all implementation files were restored.
