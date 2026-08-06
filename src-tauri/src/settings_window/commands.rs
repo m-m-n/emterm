@@ -459,12 +459,16 @@ mod tests {
         let v = out.result.unwrap();
         let arr = v.as_array().expect("array");
         // Mirrors the Rust SSOT order/values (crate::mux::prefix).
-        assert_eq!(arr.len(), 7);
+        assert_eq!(arr.len(), 8);
         assert_eq!(arr[0], json!({ "action": "detach", "key": "Ctrl+D" }));
         assert_eq!(arr[5], json!({ "action": "move-window", "key": "Ctrl+T" }));
         assert_eq!(
             arr[6],
             json!({ "action": "toggle-window-sidebar", "key": "Ctrl+W" })
+        );
+        assert_eq!(
+            arr[7],
+            json!({ "action": "next-agent-window", "key": "Ctrl+A" })
         );
         assert!(!out.saved);
     }
