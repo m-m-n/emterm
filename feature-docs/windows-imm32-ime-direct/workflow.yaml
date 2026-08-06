@@ -27,7 +27,7 @@ project:
       e2e_test_command: ""
     windows:
       language: rust
-      build_command: "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target-wincheck cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc"
+      build_command: "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target-win cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc"
       test_command: ""
       format_command: ""
       e2e_test_command: ""
@@ -43,7 +43,7 @@ workflow:
     skipped_reason: "IME plumbing bug fix (IMM32 call routing inside the winit bridge). No visual or UI surface is added or changed, so there is nothing for a design step to specify."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: b98f5373fc4e7892c7f3b31fb06cb7c6df8ce0e5
