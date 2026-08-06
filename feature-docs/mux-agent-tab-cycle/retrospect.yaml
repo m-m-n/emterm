@@ -1,0 +1,72 @@
+feature: mux-agent-tab-cycle
+collected_at: "2026-08-06T15:29:28+09:00"
+session_ids: [f4cf8b71-7093-4a9d-a073-9313aa39a944]
+signals:
+  review_critical_high:
+    - stable_id: c4a1f0d2b8e37596
+      category: comprehensive
+      file: src-tauri/src/app.rs
+      title: "自窓が唯一の qualifying のとき同一ペインへ SwitchWindow + スナップショット再生が走る"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files: [src-tauri/src/settings_window/commands.rs]
+      note: >-
+        DEFAULT_ACTION_BINDINGS を増やすと get_mux_action_defaults IPC の
+        期待配列テストが連動して落ちるが、planner の files 予測に含まれていなかった。
+    - task: task0002
+      files: [src-tauri/web-shared/settings/sections/mux-section.test.ts]
+      note: >-
+        テストファイルは planner の files 予測に無かったが実際には追加された
+        (TDD で新規テストを書く以上、対応するテストファイルは予測に含めるべき)。
+    - task: task0002
+      files: [src-tauri/web-shared/settings/types.ts]
+      note: >-
+        逆方向のミス。files に予測されていたが実際には変更不要だった
+        (MuxSettings.keybinds が既に Record<string,string> のため形状変更なし)。
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: architecture
+      reason: >-
+        新 mux アクションが prefix.rs / app.rs / window_group.rs /
+        agent_status_model.rs の4モジュールにまたがり、既存 PrefixAction 経路との
+        境界が変わるため
+  declined_findings: []
+lessons_candidates:
+  - id: L1
+    note: >-
+      batch モードで Codex CLI が利用上限に当たると、
+      create-spec.requirement-clarification の policy (codex_consultation) が
+      成立せず unresolved: record_tbd に落ちる。今回はキーバインドと巡回対象状態という
+      機能の中核2件がそのまま TBD になり、create-plan の tbd-resolution (assume) まで
+      決定が持ち越された。結果としては worker の推奨値がそのまま採用され、
+      チェーン全体は正しく終端したが、「Codex が使えない環境では
+      requirement-clarification が実質 assume に縮退する」ことは
+      batch 運用の前提として記録に値する。
+  - id: L2
+    note: >-
+      requirements-analyst が create-spec.design-step の question を canonical な
+      option_id (decide_autonomously) ではなく独自の skip / run で返した。
+      question-resolution.md の batch resolution sequence step 6 は
+      「解決した option_id が options に無ければ protocol error でフェーズ中断」と
+      定めており、額面どおりならここでフェーズが落ちる。今回は
+      decide_autonomously の意味 (analyst の自律推奨を採る) と analyst の
+      design_step_recommendation.value = skip が一致したため skip として解決したが、
+      gate ごとの canonical option_id を worker 契約側に明記するか、
+      batch-policies.yaml に別名を許す仕組みが要るかもしれない。
+  - id: L3
+    note: >-
+      新規に作った integration worktree では gitignore されたビルド入力
+      (src-tauri/assets/fonts/*) が無いため build.rs が panic し、
+      cargo check / cargo test が一切走らない。task0001 の implementer も
+      同じ壁に当たって main ツリーからコピーして回避しており、orchestrator 側の
+      verify フェーズでも同じ対処が必要だった。worktree 作成時に
+      gitignored なビルド入力を同期する手順が無いのは em-workflow 側の穴。
+  - id: L4
+    note: >-
+      tabs.rs の off-thread replay 系テストは --test-threads=1 でも
+      非決定的に落ちる (実行ごとに 5-7 件のプールから変動)。MEMORY.md には
+      「--test-threads=1 で安定」と記録されているが、少なくとも現在は安定していない。
+      verify では main ツリーで同じコマンドを回してベースラインを取り、
+      失敗集合が既知プールの部分集合であることを確認して回帰なしと判定した。

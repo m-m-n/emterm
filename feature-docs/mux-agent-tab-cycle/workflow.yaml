@@ -68,7 +68,8 @@ workflow:
       union 折返しで本 diff 由来ではない。MT-1〜MT-3 は実機確認項目のため未実施
       (人間の評価者に委ねる)。
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 00411640b33582369339c3a39e13b55de47a0473
 
 tasks:
   task0001:
