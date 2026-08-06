@@ -685,6 +685,16 @@ pub struct Settings {
     /// notification-fire time (no restart needed on change) alongside the
     /// master [`Settings::notification_enabled`] switch.
     pub agent_status_notifications: bool,
+    /// task0001 (agent-desktop-notification): per-event-type toggle for
+    /// the "turn ended" (done) agent-status notification. Read alongside
+    /// [`Settings::agent_status_notifications`] and
+    /// [`Settings::notification_enabled`] by the notification gate
+    /// (`crate::notifications::should_fire_agent_notification`).
+    pub agent_notify_on_done: bool,
+    /// task0001 (agent-desktop-notification): per-event-type toggle for
+    /// the "waiting for input" (blocked) agent-status notification. Same
+    /// gating role as [`Settings::agent_notify_on_done`].
+    pub agent_notify_on_blocked: bool,
     /// UI language: `Auto` (OS locale), `En`, or `Ja`. Resolved to a
     /// concrete [`crate::i18n::Locale`] once at startup
     /// (`App::with_settings`); `Auto` consults the system locale and
@@ -1071,6 +1081,8 @@ impl Default for Settings {
             notify_on_output: false,
             notify_on_bell: true,
             agent_status_notifications: true,
+            agent_notify_on_done: true,
+            agent_notify_on_blocked: true,
             language: Language::default(),
             log_recording_enabled: false,
             markdown_theme_follow_ui: true,
@@ -1295,6 +1307,8 @@ struct RawSettings {
     notify_on_output: Option<bool>,
     notify_on_bell: Option<bool>,
     agent_status_notifications: Option<bool>,
+    agent_notify_on_done: Option<bool>,
+    agent_notify_on_blocked: Option<bool>,
 
     // ── Language / logging ──
     language: Option<String>,
@@ -1729,6 +1743,12 @@ impl RawSettings {
         }
         if let Some(v) = self.agent_status_notifications {
             dst.agent_status_notifications = v;
+        }
+        if let Some(v) = self.agent_notify_on_done {
+            dst.agent_notify_on_done = v;
+        }
+        if let Some(v) = self.agent_notify_on_blocked {
+            dst.agent_notify_on_blocked = v;
         }
 
         // ── Language / logging ──
@@ -2317,6 +2337,48 @@ mod tests {
         assert_eq!(
             s.agent_status_notifications,
             Settings::default().agent_status_notifications
+        );
+    }
+
+    // ── agent_notify_on_done / agent_notify_on_blocked (task0001 AC-1) ──
+
+    #[test]
+    fn default_agent_notify_on_done_is_true() {
+        assert!(Settings::new().agent_notify_on_done);
+    }
+
+    #[test]
+    fn loader_agent_notify_on_done_flat_key_is_applied() {
+        let s = load_json(r#"{"agent_notify_on_done": false}"#);
+        assert!(!s.agent_notify_on_done);
+    }
+
+    #[test]
+    fn loader_agent_notify_on_done_null_keeps_default() {
+        let s = load_json(r#"{"agent_notify_on_done": null}"#);
+        assert_eq!(
+            s.agent_notify_on_done,
+            Settings::default().agent_notify_on_done
+        );
+    }
+
+    #[test]
+    fn default_agent_notify_on_blocked_is_true() {
+        assert!(Settings::new().agent_notify_on_blocked);
+    }
+
+    #[test]
+    fn loader_agent_notify_on_blocked_flat_key_is_applied() {
+        let s = load_json(r#"{"agent_notify_on_blocked": false}"#);
+        assert!(!s.agent_notify_on_blocked);
+    }
+
+    #[test]
+    fn loader_agent_notify_on_blocked_null_keeps_default() {
+        let s = load_json(r#"{"agent_notify_on_blocked": null}"#);
+        assert_eq!(
+            s.agent_notify_on_blocked,
+            Settings::default().agent_notify_on_blocked
         );
     }
 
