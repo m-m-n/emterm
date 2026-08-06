@@ -74,8 +74,15 @@ tasks:
     branch: em-workflow/windows-imm32-ime-direct/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary:
+      - perspective: license
+        reason: "diff が依存マニフェスト src-tauri/Cargo.toml に触れているため（windows-sys の feature 追加）"
+    cross_validation: true
+  perspectives: {}
   residual_critical_high: 0
   needs_rework: false
 
