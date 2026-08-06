@@ -50,9 +50,23 @@ workflow:
     status: completed
     completed_at_commit: ce0d6a23e4661474b5e08dbc52ef4d7a486180fc
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 131d47f00b26a6a531c455d0635435c0faeb2549
+    result: pass
     failed_items: []
+    notes: >-
+      Build: cargo check (gui) 0 / bun run build:viewer && build:settings 0 /
+      NFR1 cargo check --no-default-features 0。Tests: Rust --lib
+      -- --test-threads=1 は 3151 passed / 7 failed、7件はすべて tabs.rs の
+      off-thread replay worker タイムアウト系 + welcome_without_windows で、
+      未変更の main ツリーでも同じプールから5件が失敗する既知の非決定的失敗。
+      本 feature の diff は tabs.rs に一切触れておらず回帰ではない。TS は
+      typecheck 0 / bun test 315 passed 0 failed。TS-1〜TS-6 は
+      app::tests / mux::prefix::tests / settings::tests の9テストで全て green。
+      Format: cargo fmt --check の drift 17ファイルは main と同一集合で新規増加なし。
+      bunx biome check の1エラーは未変更の web-shared/settings/types.ts の既存
+      union 折返しで本 diff 由来ではない。MT-1〜MT-3 は実機確認項目のため未実施
+      (人間の評価者に委ねる)。
   - id: retrospect
     status: pending
 
