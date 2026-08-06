@@ -44,7 +44,8 @@ workflow:
     completed_at_commit: 74599171c71e4d5afbe63a4a505a6d7012e3ef75
     base_commit: df500240a71f4c1061d406d588019517b6d9a281
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 5164c572823de6c70f1289b3fa82db7d490a6be6
   - id: verify
     status: pending
     result: null
@@ -91,17 +92,17 @@ tasks:
     branch: em-workflow/agent-desktop-notification/task0002
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, spec]
     discretionary: []
     cross_validation: true
   perspectives:
-    comprehensive: pending
-    security: pending
-    performance: pending
-    spec: pending
+    comprehensive: completed
+    security: completed
+    performance: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
