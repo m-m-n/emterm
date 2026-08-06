@@ -1,0 +1,113 @@
+round: 1
+executed_at: "2026-08-06T14:20:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: df500240a71f4c1061d406d588019517b6d9a281
+  head_commit: 5164c572823de6c70f1289b3fa82db7d490a6be6
+  changed_files:
+    - crates/app_settings/src/settings.rs
+    - src-tauri/src/app.rs
+    - src-tauri/src/notifications.rs
+    - src-tauri/src/settings.rs
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/settings/sections/agent-section.test.ts
+    - src-tauri/web-shared/settings/sections/agent-section.ts
+    - src-tauri/web-shared/settings/sections/mux-section.test.ts
+    - src-tauri/web-shared/settings/sections/notification-section.ts
+    - src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+    - src-tauri/web-shared/settings/settings-panel.test.ts
+    - src-tauri/web-shared/settings/settings-panel.ts
+    - src-tauri/web-shared/settings/settings-sections.ts
+    - src-tauri/web-shared/settings/types.ts
+    - test-docs/agent-desktop-notification/task0001.tests.yaml
+    - test-docs/agent-desktop-notification/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "rate_limited"}
+  - {perspective: security, source: vertex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: vertex, status: skipped, skip_reason: "HTTP 429 resource exhausted after 6 retries"}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: vertex, status: skipped, skip_reason: "HTTP 429 resource exhausted after 6 retries"}
+findings:
+  - stable_id: "6801c2f289779074"
+    severity: medium
+    category: comprehensive
+    file: doc/AGENT-STATUS.md
+    line: 199
+    title: "ユーザー向けドキュメントの通知ゲート記述が実装とずれた"
+    description: >-
+      doc/AGENT-STATUS.md の Notifications 節はゲート条件を
+      「agent_status_notifications（既定 on）とグローバル通知設定の両方が有効なときだけ発火する」と
+      網羅的に書いているが、本変更で agent_notify_on_done / agent_notify_on_blocked の段が
+      追加されたため記述が実装とずれた。新キーの存在自体もユーザー向けドキュメントに無い。
+    suggestion: >-
+      Notifications 節に種別トグルの段を追記する（done → agent_notify_on_done、
+      blocked → agent_notify_on_blocked、いずれも既定 on、設定画面の「エージェント」カテゴリ）。
+    sources: [claude:comprehensive]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix gate は critical/high のみを対象とするため未適用"
+  - stable_id: "4297791c173f2dba"
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/notifications.rs
+    line: 748
+    title: "AC-5 回帰テストが既存 AC-1 テストとバイト単位で同一で、追加のカバレッジがない"
+    description: >-
+      should_fire_task0001_ac5_both_toggles_on_matches_prior_behavior の本体が
+      should_fire_ac1_blocked_and_done_fire_working_idle_never_fire と完全一致しており、
+      AC-5 が主張する独立した保証が得られていない。
+    suggestion: >-
+      AC-5 テストを差別化する（種別ゲートを通さない期待値との比較で「種別ゲートが恒等」を直接主張する）か、
+      重複テストを削除して AC-5 を既存テスト群に紐付ける。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix gate は critical/high のみを対象とするため未適用"
+  - stable_id: "a25fc578cb6d3cec"
+    severity: medium
+    category: comprehensive
+    file: src-tauri/web-shared/settings/settings-panel.test.ts
+    line: 72
+    title: "AppSettings 全フィールド構築フィクスチャが4ファイルに複製され、typecheck の網に掛からない"
+    description: >-
+      makeSettings() のコピーが4ファイルに並び、tsconfig.json の exclude に **/*.test.ts が
+      あるため bun run typecheck の対象外。AppSettings にキーが増えても型エラーにならず、
+      セクションレンダラーが undefined を受け取ったままテストが通る。
+    suggestion: >-
+      共有フィクスチャを .test.ts 以外のファイル名で1箇所に切り出し
+      （例 src-tauri/web-shared/settings/__fixtures__/app-settings.ts）、4テストから import する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix gate は critical/high のみを対象とするため未適用"
+  - stable_id: "35fbed219f91de3d"
+    severity: medium
+    category: security
+    file: src-tauri/src/notifications.rs
+    line: 363
+    title: "agent_notification_body がタブタイトルを未サニタイズのまま通知本文に埋め込む"
+    description: >-
+      agent_notification_body が tab_title（OSC 0/2 由来の untrusted 文字列）を
+      サニタイズせず format! に埋めている。同モジュールのタブアクティビティ通知は
+      sanitized_title を要求する契約になっており、エージェント通知経路だけが外れている。
+      本 diff が作った欠陥ではなく既存の欠落（本 diff は AND ゲートを増やすのみで露出を拡大しない）。
+    suggestion: >-
+      agent_notification_body 内で tab_title に notification_body と同じサニタイズを適用する。
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix gate は critical/high のみを対象とするため未適用。既存コード由来"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

@@ -1,0 +1,141 @@
+task_id: task0001
+# `cargo test --lib` (default features) is nondeterministic under
+# parallelism for a pre-existing, unrelated `tabs.rs` off-thread-replay
+# timing issue (task notes call this out explicitly). baseline/final below
+# were both captured with `-- --test-threads=1` for stability, per the
+# task notes' guidance. final_failures is a strict subset of
+# baseline_failures; none of the 4 files this task touches
+# (crates/app_settings/src/settings.rs, src-tauri/src/settings.rs,
+# src-tauri/src/notifications.rs, src-tauri/src/app.rs) appear in either
+# list.
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - app_settings::settings::tests::agent_notify_on_done_defaults_to_true
+      - app_settings::settings::tests::agent_notify_on_done_missing_key_resolves_to_default_true
+      - app_settings::settings::tests::agent_notify_on_done_null_resolves_to_default_true
+      - app_settings::settings::tests::agent_notify_on_done_explicit_false_deserializes
+      - app_settings::settings::tests::agent_notify_on_blocked_defaults_to_true
+      - app_settings::settings::tests::agent_notify_on_blocked_missing_key_resolves_to_default_true
+      - app_settings::settings::tests::agent_notify_on_blocked_null_resolves_to_default_true
+      - app_settings::settings::tests::agent_notify_on_blocked_explicit_false_deserializes
+      - settings::tests::default_agent_notify_on_done_is_true
+      - settings::tests::loader_agent_notify_on_done_flat_key_is_applied
+      - settings::tests::loader_agent_notify_on_done_null_keeps_default
+      - settings::tests::default_agent_notify_on_blocked_is_true
+      - settings::tests::loader_agent_notify_on_blocked_flat_key_is_applied
+      - settings::tests::loader_agent_notify_on_blocked_null_keeps_default
+    red_confirmed: true
+    red_reason: >-
+      Observed directly: with AppSettings::default()/Settings::default()
+      temporarily flipped to false for both new fields, the
+      *_defaults_to_true tests failed with "assertion failed:
+      ...agent_notify_on_done/blocked". With the serde `default =
+      "default_true"` attribute temporarily swapped to a false-returning
+      helper, the *_missing_key_resolves_to_default_true and
+      *_null_resolves_to_default_true tests failed the same way. With the
+      src-tauri merge_into wiring for the two fields temporarily commented
+      out, the *_flat_key_is_applied tests failed with "assertion failed:
+      !s.agent_notify_on_done/blocked". All reverted after observing red.
+  AC-2:
+    tests:
+      - notifications::tests::should_fire_task0001_ac2_event_type_toggle_off_suppresses_that_state
+      - app::tests::maybe_notify_agent_transition_reads_event_type_toggles_from_settings
+    red_confirmed: true
+    red_reason: >-
+      With event_type_notifications_enabled temporarily hardcoded to
+      always return true, should_fire_task0001_ac2_event_type_toggle_off_suppresses_that_state
+      failed at the Done-toggle-off assertion ("assertion failed:
+      !should_fire_agent_notification(Done, false, true, true, false,
+      true, true)"). With App::maybe_notify_agent_transition's call
+      temporarily hardcoded to pass true/true instead of
+      settings.agent_notify_on_done/blocked,
+      maybe_notify_agent_transition_reads_event_type_toggles_from_settings
+      failed. Both reverted after observing red.
+  AC-3:
+    tests:
+      - notifications::tests::should_fire_task0001_ac3_event_type_toggles_are_independent
+      - notifications::tests::event_type_notifications_enabled_maps_state_to_matching_toggle
+    red_confirmed: true
+    red_reason: >-
+      With the state->toggle mapping in event_type_notifications_enabled
+      temporarily swapped (Done consults notify_on_blocked, Blocked
+      consults notify_on_done — a plausible "wrong wiring" bug), both
+      tests failed: event_type_notifications_enabled_maps_state_to_matching_toggle
+      at its Done/false-toggle assertion, and
+      should_fire_task0001_ac3_event_type_toggles_are_independent at
+      "assertion failed:
+      should_fire_agent_notification(Blocked, false, true, true, false,
+      true, true)" (the OFF agent_notify_on_done wrongly suppressed
+      Blocked under the swap). Reverted after observing red.
+  AC-4:
+    tests:
+      - notifications::tests::should_fire_task0001_ac4_master_gates_override_event_type_toggles
+    red_confirmed: false
+    red_reason: >-
+      This asserts the pre-existing agent_status_notifications /
+      notification_enabled hierarchy (unchanged by this task) still wins
+      over the new event-type toggles. That logic is untouched by
+      task0001 and already covered pre-task0001 by
+      should_fire_ac3_either_settings_switch_off_suppresses; no mutation
+      of task0001's own new code makes this test red, so it is a
+      regression/contract test rather than a red-green-cycled one.
+  AC-5:
+    tests:
+      - notifications::tests::should_fire_ac1_blocked_and_done_fire_working_idle_never_fire
+      - notifications::tests::should_fire_ac2_visible_pane_does_not_fire
+      - notifications::tests::should_fire_ac3_either_settings_switch_off_suppresses
+      - notifications::tests::should_fire_ac4_rate_limit_not_ok_suppresses
+      - notifications::tests::rate_limiter_suppressed_attempt_does_not_arm_window
+      - notifications::tests::should_fire_task0001_ac5_both_toggles_on_matches_prior_behavior
+    red_confirmed: true
+    red_reason: >-
+      These are the pre-existing task0007 regression tests (unchanged
+      assertions, updated only for the new function arity) plus a new
+      explicit "both toggles ON matches prior behavior" regression test.
+      Red was confirmed indirectly: while event_type_notifications_enabled
+      was temporarily hardcoded to true (see AC-2/AC-3), all of these
+      still passed (proving they do not depend on the new gate when both
+      toggles are ON) and, more directly, should_fire_ac4_rate_limit_not_ok_suppresses
+      and the ac2 (rate-limit-window) tests were watched failing to
+      compile before the call sites were updated to the new 7-arg
+      signature (missing/extra argument compile errors), confirming they
+      exercise the real function.
+  AC-6:
+    tests:
+      - app::tests::maybe_notify_agent_transition_ac6_judgement_independent_of_pane_key_format
+    red_confirmed: true
+    red_reason: >-
+      With App::maybe_notify_agent_transition's call to
+      should_fire_agent_notification temporarily hardcoded to pass
+      true/true instead of settings.agent_notify_on_done/blocked, this
+      test failed at "assertion failed:
+      !app.maybe_notify_agent_transition(\"tab:99\", false, &t, \"shell\")"
+      (the OFF-toggle suppression half of the test). Reverted after
+      observing red.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/check outcome, not a unit test. Verified directly:
+      `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+      src-tauri/Cargo.toml` (default features) and the same command with
+      `--no-default-features` both completed with "Finished `dev`
+      profile" and no errors after the app_settings crate change (new
+      AppSettings fields consumed only by serde/plain-bool code paths
+      that compile under both feature sets).

@@ -1,0 +1,192 @@
+schema_version: 1
+feature: agent-desktop-notification
+created: 2026-08-06
+base_branch: main
+parent_branch: em-workflow/agent-desktop-notification/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    typescript:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: ecbe35208b258dbeb139b1ebac7a05b99c92b6c5
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "設定パネルへのカテゴリ・トグル追加のみで、既存コンポーネント（renderToggle / カテゴリナビ）と MD3 トークン体系（doc/UI-DESIGN-GUIDELINES.yaml ⇔ md3.rs ⇔ styles.css）を踏襲する定型作業のため、独立した設計ステップは不要"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: cd92f97d11593b4f2d07fb1430899239b0a78f88
+  - id: implement
+    status: completed
+    completed_at_commit: 74599171c71e4d5afbe63a4a505a6d7012e3ef75
+    base_commit: df500240a71f4c1061d406d588019517b6d9a281
+  - id: review
+    status: completed
+    completed_at_commit: 5164c572823de6c70f1289b3fa82db7d490a6be6
+  - id: verify
+    status: completed
+    completed_at_commit: 10393f85f9829ce0668c11bde4a08b2f89db2188
+    result: pass
+    failed_items: []
+    notes: >-
+      Build 3/3 green (cargo check, cargo check --no-default-features, bun run typecheck).
+      bun test 324 pass / 0 fail. cargo test --lib --test-threads=1 は tabs::tests の
+      既知フレーク 7 件のみ失敗し、同一コマンドを main で 2 回実行したベースライン
+      (6 件 / 7 件、ts13 の出没が非決定的) の部分集合。本機能が触れたファイル由来の
+      失敗はゼロ。TS-1..TS-5 はすべてグリーン。手動確認 5 項目は E2E 基盤が無いため
+      VERIFICATION.md の記載どおり実機確認に委ねる。
+  - id: retrospect
+    status: completed
+    completed_at_commit: 23b6509ee1d4d29200e72a852c77eab1ddaa1fff
+
+tasks:
+  task0001:
+    title: "Rust: イベント種別トグルの設定キー追加と通知ゲート拡張"
+    plan: tasks/task0001.md
+    files:
+      - crates/app_settings/src/settings.rs
+      - src-tauri/src/settings.rs
+      - src-tauri/src/notifications.rs
+      - src-tauri/src/app.rs
+    skills: [backend-impl]
+    domains: [data-persistence, input-handling]
+    complexity: medium
+    requirements: [FR2, FR3, FR4, FR6, FR7, NFR1, NFR2]
+    status: merged
+    notes: null
+    branch: em-workflow/agent-desktop-notification/task0001
+  task0002:
+    title: "TS: 設定パネル「エージェント」カテゴリと種別トグル UI"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/web-shared/settings/sections/agent-section.ts
+      - src-tauri/web-shared/settings/sections/agent-section.test.ts
+      - src-tauri/web-shared/settings/settings-panel.ts
+      - src-tauri/web-shared/settings/settings-sections.ts
+      - src-tauri/web-shared/settings/sections/notification-section.ts
+      - src-tauri/web-shared/settings/types.ts
+      - src-tauri/web-shared/settings/sections/mux-section.test.ts
+      - src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+      - src-tauri/web-shared/i18n/locales/en.json
+      - src-tauri/web-shared/i18n/locales/ja.json
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR5, FR6, NFR3]
+    status: merged
+    notes: null
+    branch: em-workflow/agent-desktop-notification/task0002
+
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, security, performance, spec]
+    discretionary: []
+    cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: 設定画面に「エージェント」カテゴリを新設する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS-4]
+  FR2:
+    title: ターン終了通知の個別ON/OFF
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002]
+    tests: [TS-1, TS-4]
+  FR3:
+    title: 質問待ち通知の個別ON/OFF
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002]
+    tests: [TS-1, TS-4]
+  FR4:
+    title: 全体通知設定を頂点とする階層ゲート
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-3]
+  FR5:
+    title: エージェント通知マスターの「エージェント」カテゴリへの移設
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS-4]
+  FR6:
+    title: 設定スキーマの追加（Settings Pattern 準拠）
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002]
+    tests: [TS-2, TS-4]
+  FR7:
+    title: plain タブ・mux ペイン両対応
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-5]
+  NFR1:
+    title: 既存通知ゲートの互換維持
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-3]
+  NFR2:
+    title: 後方互換
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-2]
+  NFR3:
+    title: i18n
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS-4]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

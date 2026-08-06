@@ -446,6 +446,18 @@ pub struct AppSettings {
     /// transition on a non-visible pane.
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub agent_status_notifications: bool,
+    /// task0001 (agent-desktop-notification): per-event-type toggle for
+    /// the "turn ended" (done) agent-status notification. Same
+    /// declaration pattern as `agent_status_notifications`: default ON,
+    /// missing/null keys resolve to the default.
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub agent_notify_on_done: bool,
+    /// task0001 (agent-desktop-notification): per-event-type toggle for
+    /// the "waiting for input" (blocked) agent-status notification. Same
+    /// declaration pattern as `agent_status_notifications`: default ON,
+    /// missing/null keys resolve to the default.
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub agent_notify_on_blocked: bool,
 
     // Keybinds
     #[serde(default, deserialize_with = "deserialize_null_default")]
@@ -754,6 +766,8 @@ impl Default for AppSettings {
             notify_on_output: false,
             notify_on_bell: default_true(),
             agent_status_notifications: default_true(),
+            agent_notify_on_done: default_true(),
+            agent_notify_on_blocked: default_true(),
             clipboard_read_osc52: default_true(),
             clipboard_max_size_osc52: default_clipboard_max_size_osc52(),
             log_recording_enabled: false,
@@ -918,6 +932,8 @@ mod tests {
             notify_on_output: true,
             notify_on_bell: false,
             agent_status_notifications: false,
+            agent_notify_on_done: false,
+            agent_notify_on_blocked: false,
             mux: MuxSettings::default(),
             statusbar_enabled: true,
             statusbar_app_line1_left: "{git_branch}".to_string(),
@@ -975,6 +991,8 @@ mod tests {
         assert!(restored.notify_on_output);
         assert!(!restored.notify_on_bell);
         assert!(!restored.agent_status_notifications);
+        assert!(!restored.agent_notify_on_done);
+        assert!(!restored.agent_notify_on_blocked);
         assert_eq!(restored.profiles.len(), 1);
         assert_eq!(restored.profiles[0].name, "Dev");
         assert_eq!(restored.profiles[0].shell_path, "/bin/zsh");
@@ -1064,6 +1082,56 @@ mod tests {
         let s: AppSettings =
             serde_json::from_str(r#"{"agent_status_notifications": false}"#).unwrap();
         assert!(!s.agent_status_notifications);
+    }
+
+    // ── agent_notify_on_done / agent_notify_on_blocked (task0001 AC-1) ──
+
+    #[test]
+    fn agent_notify_on_done_defaults_to_true() {
+        assert!(AppSettings::default().agent_notify_on_done);
+    }
+
+    #[test]
+    fn agent_notify_on_done_missing_key_resolves_to_default_true() {
+        let s: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(s.agent_notify_on_done);
+    }
+
+    #[test]
+    fn agent_notify_on_done_null_resolves_to_default_true() {
+        let s: AppSettings = serde_json::from_str(r#"{"agent_notify_on_done": null}"#).unwrap();
+        assert!(s.agent_notify_on_done);
+    }
+
+    #[test]
+    fn agent_notify_on_done_explicit_false_deserializes() {
+        let s: AppSettings = serde_json::from_str(r#"{"agent_notify_on_done": false}"#).unwrap();
+        assert!(!s.agent_notify_on_done);
+    }
+
+    #[test]
+    fn agent_notify_on_blocked_defaults_to_true() {
+        assert!(AppSettings::default().agent_notify_on_blocked);
+    }
+
+    #[test]
+    fn agent_notify_on_blocked_missing_key_resolves_to_default_true() {
+        let s: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(s.agent_notify_on_blocked);
+    }
+
+    #[test]
+    fn agent_notify_on_blocked_null_resolves_to_default_true() {
+        let s: AppSettings =
+            serde_json::from_str(r#"{"agent_notify_on_blocked": null}"#).unwrap();
+        assert!(s.agent_notify_on_blocked);
+    }
+
+    #[test]
+    fn agent_notify_on_blocked_explicit_false_deserializes() {
+        let s: AppSettings =
+            serde_json::from_str(r#"{"agent_notify_on_blocked": false}"#).unwrap();
+        assert!(!s.agent_notify_on_blocked);
     }
 
     #[test]
