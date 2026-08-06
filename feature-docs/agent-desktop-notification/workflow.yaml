@@ -59,7 +59,8 @@ workflow:
       失敗はゼロ。TS-1..TS-5 はすべてグリーン。手動確認 5 項目は E2E 基盤が無いため
       VERIFICATION.md の記載どおり実機確認に委ねる。
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 23b6509ee1d4d29200e72a852c77eab1ddaa1fff
 
 tasks:
   task0001:

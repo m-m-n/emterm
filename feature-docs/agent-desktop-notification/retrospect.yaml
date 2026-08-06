@@ -1,0 +1,50 @@
+feature: agent-desktop-notification
+collected_at: "2026-08-06T14:40:00+09:00"
+session_ids: [a8d6757b-871f-465c-ac8f-6e39eec09a47]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0002
+      files:
+        - src-tauri/web-shared/settings/settings-panel.test.ts
+      reason: >-
+        AC-1（カテゴリ一覧・ナビアイコン・renderContent 分岐）を検証する既存テストが
+        存在せず、SettingsPanel にテストファイルが 1 つも無かったため implementer が新規作成した。
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  unresolved_findings:
+    - stable_id: "6801c2f289779074"
+      severity: medium
+      category: comprehensive
+      note: "doc/AGENT-STATUS.md の通知ゲート記述が新トグル追加で実装とずれた"
+    - stable_id: "4297791c173f2dba"
+      severity: medium
+      category: comprehensive
+      note: "AC-5 回帰テストが既存 AC-1 テストと完全同一で独立したカバレッジが無い"
+    - stable_id: "a25fc578cb6d3cec"
+      severity: medium
+      category: comprehensive
+      note: "AppSettings フィクスチャが 4 ファイルに複製、tsconfig exclude で typecheck 対象外"
+    - stable_id: "35fbed219f91de3d"
+      severity: medium
+      category: security
+      note: "agent_notification_body が OSC 由来の tab_title を未サニタイズで通知本文へ（既存欠落）"
+  cross_model_availability:
+    - {provider: codex, perspective: security, result: rate_limited}
+    - {provider: vertex, perspective: performance, result: "HTTP 429 (並列実行由来)"}
+    - {provider: vertex, perspective: spec, result: "HTTP 429 (並列実行由来)"}
+    - {provider: vertex, perspective: security, result: "completed (R2b フォールバック・単独実行では成功)"}
+lessons_candidates:
+  - >-
+    fresh worktree では gitignored の src-tauri/assets/fonts/ が空でビルドが止まる。
+    implementer も verify も main worktree からのコピーで回避した。
+    worktree 作成時の定型手順にする価値がある。
+  - >-
+    vertex-reviewer を 3 本同時に投げると 429 で全滅する一方、単独実行では成功した。
+    R2b フォールバックが結果的に救ったが、cross-validation の vertex 並列度に上限を
+    設ける余地がある。
+  - >-
+    auto-fix ゲートが critical/high のみのため、レビューで挙がった medium 4 件は
+    すべて unresolved のまま完了した。medium の扱いを batch でどうするかは検討余地あり。
