@@ -40,7 +40,7 @@ workflow:
       (decide_autonomously) により analyst の推奨 skip をそのまま採用した。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: null
