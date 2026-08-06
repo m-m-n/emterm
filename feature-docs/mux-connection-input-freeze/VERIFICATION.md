@@ -37,6 +37,9 @@
 | TS5 | Manual repro: `seq 1 10000000` in one mux window; switch to another window; type continuously | Rendering of the seq window does not freeze the connection; destination window accepts continuous input without waiting for seq to finish (FR1, FR2; SPEC AC-1, AC-2) | Manual |
 | TS6 | Diff inspection: protocol stability | No changes under `crates/mux_ipc/`, `src-tauri/src/mux/ipc/codec.rs`, or any wire message shape (NFR1) | Inspection |
 | TS7 | Diff inspection: scope boundaries | Diff touches neither GUI-side `event_tx` sizing (NFR2) nor `bridge_main_loop_windows` (NFR3) | Inspection |
+| TS8 | Rework (task0003): outbound path saturated with a held remainder (client not reading); sustained notification stream arrives (single-forward and a forced Lagged resync) | Held-remainder frame count never exceeds its named bound (no per-notification growth); once the client resumes reading, the drain arm resumes and new PTY output reaches the client within the named 5 s timeout (FR4, FR1) | Unit/Integration (`--lib`, connection-level harness) |
+| TS9 | Rework (task0003): reply / reattach frames (`route_message` reply, PaneCreated, same-pane SnapshotRestore) admitted while a PtyOutput remainder is held | Client observes every held remainder frame before the later reply/reattach frames — no overtaking; same-pane SnapshotRestore never precedes older held PtyOutput (FR3) | Unit/Integration (`--lib`, connection-level harness) |
+| TS10 | Rework (task0003): client evicted (kick) while a remainder is held | A client that resumes reading receives the held frames followed by Detached, in FIFO order, within the named teardown budget; a never-reading client still completes teardown within the bounded budget (FR3) | Unit/Integration (`--lib`, connection-level harness) |
 
 ## Code Quality Verification
 
@@ -53,8 +56,8 @@
 
 | ID | Criterion | How to Verify |
 |----|-----------|---------------|
-| SC-1 | FR1-FR5 implemented and tested | task0001 AC-1..AC-6 and task0002 AC-1..AC-6 pass |
-| SC-2 | All test scenarios pass | TS1-TS4 automated pass; TS5 manual pass; TS6-TS7 inspection pass |
+| SC-1 | FR1-FR5 implemented and tested | task0001 AC-1..AC-6, task0002 AC-1..AC-6, and task0003 AC-1..AC-7 pass |
+| SC-2 | All test scenarios pass | TS1-TS4 and TS8-TS10 automated pass; TS5 manual pass; TS6-TS7 inspection pass |
 | SC-3 | SPEC AC-1/AC-2 (live repro) | TS5 (manual — no E2E infrastructure exists) |
 | SC-4 | SPEC AC-3 (bounded input polling pinned by test) | TS1 |
 | SC-5 | NFR1-NFR4 satisfied | TS6, TS7, TS4 (reap/ack regressions), task-level ACs (task0001 AC-4/AC-5, task0002 AC-6) |
@@ -64,15 +67,15 @@
 
 | Requirement | Tasks | Verification |
 |-------------|-------|--------------|
-| FR1 | task0001 | TS1 (automated), TS5 (manual) |
+| FR1 | task0001, task0003 | TS1 (automated), TS5 (manual), TS8 (rework: drain-arm resumption) |
 | FR2 | task0002 | TS3 (automated), TS5 (manual) |
-| FR3 | task0001, task0002 | TS2, TS4 |
-| FR4 | task0001, task0002 | TS4 (+ boundedness ACs: task0001 AC-3, task0002 AC-4) |
+| FR3 | task0001, task0002, task0003 | TS2, TS4, TS9, TS10 |
+| FR4 | task0001, task0002, task0003 | TS4, TS8 (+ boundedness ACs: task0001 AC-3, task0002 AC-4, task0003 AC-1) |
 | FR5 | task0001 | TS1 |
-| NFR1 | task0001, task0002 | TS6 |
+| NFR1 | task0001, task0002, task0003 | TS6 |
 | NFR2 | (scope boundary — no implementing task by design) | TS7 |
 | NFR3 | task0002 (boundary enforced by its scope/AC-6) | TS7 |
-| NFR4 | task0001 | TS4 (+ task0001 AC-4/AC-5) |
+| NFR4 | task0001, task0003 | TS4 (+ task0001 AC-4/AC-5; task0003 leaves reap/ack contracts untouched) |
 
 ## E2E Testing
 
@@ -107,7 +110,7 @@ SPEC AC-1/AC-2 are covered manually (TS5 below).
 
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
-| Functional | FR1, FR2, FR5 | TS1, TS3 | - | TS5 |
-| Ordering / backpressure | FR3, FR4 | TS2, TS4 | - | - |
+| Functional | FR1, FR2, FR5 | TS1, TS3, TS8 | - | TS5 |
+| Ordering / backpressure | FR3, FR4 | TS2, TS4, TS8, TS9, TS10 | - | - |
 | Non-functional | NFR1, NFR2, NFR3, NFR4 | TS4 | - | TS6, TS7 (inspection) |
 | Build / quality | build, format | check ×2, fmt --check | - | - |
