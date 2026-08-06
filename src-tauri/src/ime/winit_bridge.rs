@@ -44,6 +44,46 @@
 //! dispatch (SPEC FR3) and a bridge about to be destroyed has no
 //! future flush to run them.
 //!
+//! ## Windows IMM32-direct cursor area + deferred detach (task0001,
+//! windows-imm32-ime-direct)
+//!
+//! Two further changes narrow the "queued intent → platform call" gap
+//! specifically for Windows:
+//!
+//! 1. **Cursor-area routing split.** `WinitWindowHandle::set_ime_cursor_area`
+//!    has two `#[cfg]`'d bodies. Every target except Windows keeps the
+//!    winit-routed `ImeRequest::Update` call, byte-for-byte unchanged
+//!    (SPEC FR5). On Windows it instead calls IMM32 directly —
+//!    `ImmGetContext` → `ImmSetCompositionWindow` + `ImmSetCandidateWindow`
+//!    → `ImmReleaseContext` — against the window's raw `HWND`
+//!    (`raw_window_handle::HasWindowHandle`), never touching
+//!    `request_ime_update` (SPEC FR1/FR2/FR6). `set_ime_allowed` (the
+//!    enable/disable call) is unaffected and stays winit-routed on every
+//!    target: winit gates all `WM_IME_*` processing on its own
+//!    IME-capabilities state, so bypassing Enable would stop
+//!    `WindowEvent::Ime` delivery entirely (SPEC FR4). A missing or
+//!    non-Win32 window handle, or a null IMM32 context, is a silent
+//!    no-op — no logging, no retry.
+//!
+//! 2. **Deferred detach.** `flush` now holds a pending DISABLE
+//!    (`pending_allow == Some(false)`) instead of delivering it while a
+//!    composition is still open, tracked by the new `composition_alive`
+//!    field. `composition_alive` is deliberately distinct from
+//!    `ime_enabled`: `notify_focus(false)` clears `ime_enabled`
+//!    immediately (FR10, below), which would make the composition look
+//!    closed before the real `Ime::Disabled` arrives; `composition_alive`
+//!    is set only by `Ime::Enabled` and cleared only by `Ime::Disabled`,
+//!    so it survives focus loss. A held detach never blocks a pending
+//!    cursor-area call in the same flush; an ENABLE is never held; a
+//!    focus-in recorded while a detach is held overwrites `pending_allow`
+//!    (last-writer-wins), so the detach is then never delivered. If
+//!    `Ime::Disabled` never arrives the detach stays held indefinitely —
+//!    an accepted, SPEC-settled failure mode with no timeout machinery.
+//!    `Drop` is unchanged: it still calls `set_ime_allowed(false)`
+//!    directly and discards any pending state regardless of
+//!    `composition_alive` — a known residual hole for a bridge swapped
+//!    mid-composition, deliberately out of scope.
+//!
 //! ## Why two states, and why the key-suppression gate is platform-conditional
 //!
 //! `Ime::Enabled` / `Ime::Disabled` do not delimit the same thing on
@@ -96,6 +136,9 @@ pub trait BridgeWindow: Send + Sync {
     fn set_ime_allowed(&self, allowed: bool);
     /// Inform the IM server where the active cursor cell currently
     /// sits, in physical pixels. Drives the candidate window position.
+    /// On the production Windows sink this bypasses winit and talks to
+    /// IMM32 directly (task0001, windows-imm32-ime-direct); every other
+    /// target stays winit-routed.
     fn set_ime_cursor_area(&self, x: i32, y: i32, width: i32, height: i32);
 }
 
@@ -136,6 +179,9 @@ impl BridgeWindow for WinitWindowHandle {
         let _ = self.0.request_ime_update(request);
     }
 
+    /// Non-Windows targets: winit-routed cursor-area delivery, unchanged
+    /// from the pre-task0001 behavior (SPEC FR5).
+    #[cfg(not(windows))]
     fn set_ime_cursor_area(&self, x: i32, y: i32, width: i32, height: i32) {
         // NotEnabled (rect pushed while the IME is off) is fine — the
         // enable path re-seeds the area and notify_cursor_rect keeps
@@ -149,6 +195,73 @@ impl BridgeWindow for WinitWindowHandle {
                 )),
             ),
         ));
+    }
+
+    /// Windows: IMM32-direct cursor-area delivery (SPEC FR1/FR2/FR6),
+    /// bypassing `request_ime_update` entirely so the call never
+    /// contends with winit-win32's window-state mutex (module docs,
+    /// "Windows IMM32-direct cursor area + deferred detach" — that lock
+    /// being held across an equivalent call is the identified CorvusSKK
+    /// deadlock mechanism). Decision-free executor: every branch above
+    /// (when to call this at all) lives in bridge state exercised by
+    /// host-run unit tests (task plan Design §1); this method has no
+    /// host-runnable test by design and is gated by the windows
+    /// cross-target compile check (AC-6 gate 3) plus the feature-level
+    /// real-device manual scenario (VERIFICATION TS5).
+    #[cfg(windows)]
+    fn set_ime_cursor_area(&self, x: i32, y: i32, width: i32, height: i32) {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
+        use windows_sys::Win32::UI::Input::Ime::{
+            CANDIDATEFORM, CFS_EXCLUDE, CFS_POINT, COMPOSITIONFORM, ImmGetContext,
+            ImmReleaseContext, ImmSetCandidateWindow, ImmSetCompositionWindow,
+        };
+
+        // FR6 step 1: obtain the HWND via raw-window-handle. Any
+        // unavailable or non-Win32 handle is a silent no-op — same
+        // posture as the null-context case below.
+        let Ok(handle) = self.0.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = win32.hwnd.get() as HWND;
+
+        // FR2 steps 2-3: acquire the input-method context; a null
+        // context is the defined error case — return without any
+        // further IMM32 call.
+        let himc = unsafe { ImmGetContext(hwnd) };
+        if himc.is_null() {
+            return;
+        }
+
+        let rect = RECT {
+            left: x,
+            top: y,
+            right: x + width,
+            bottom: y + height,
+        };
+        let composition = COMPOSITIONFORM {
+            dwStyle: CFS_POINT,
+            ptCurrentPos: POINT { x, y: y + height },
+            rcArea: rect,
+        };
+        let candidate = CANDIDATEFORM {
+            dwIndex: 0,
+            dwStyle: CFS_EXCLUDE,
+            ptCurrentPos: POINT { x, y },
+            rcArea: rect,
+        };
+        // FR2 steps 4-6: set the composition window, then the candidate
+        // window, then release the context — always paired with the
+        // successful acquisition above, regardless of the outcome of
+        // the two set calls.
+        unsafe {
+            ImmSetCompositionWindow(himc, &composition);
+            ImmSetCandidateWindow(himc, &candidate);
+            ImmReleaseContext(hwnd, himc);
+        }
     }
 }
 
@@ -167,6 +280,15 @@ pub struct WinitImeBridge {
     /// Windows, where the pair delimits exactly one composition (see
     /// module docs, "Why two states").
     ime_enabled: bool,
+    /// `true` while a composition is open on the platform's own terms:
+    /// set by `Ime::Enabled`, cleared ONLY by `Ime::Disabled` (task0001
+    /// "Deferred detach", module docs). Deliberately distinct from
+    /// `ime_enabled` — `notify_focus(false)` clears `ime_enabled`
+    /// immediately (FR10) but must NOT clear this, or a detach held
+    /// during a live composition would look safe to deliver before the
+    /// real `Ime::Disabled` arrives. `flush` reads this to decide
+    /// whether a pending DISABLE must be held rather than delivered.
+    composition_alive: bool,
     /// Events produced by `on_winit_ime` waiting for the next
     /// `pump` drain.
     queue: VecDeque<ImeEvent>,
@@ -217,6 +339,7 @@ impl WinitImeBridge {
             window,
             has_preedit: false,
             ime_enabled: false,
+            composition_alive: false,
             queue: VecDeque::new(),
             last_cursor_area: None,
             pending_allow: Some(true),
@@ -251,6 +374,11 @@ impl WinitImeBridge {
                 // module docs), so it must not gate key suppression by
                 // itself — has_preedit is left untouched.
                 self.ime_enabled = true;
+                // task0001 "Deferred detach": a composition is now
+                // alive on the platform's own terms. Unlike
+                // `ime_enabled`, this is never cleared by focus loss —
+                // only by the matching `Ime::Disabled` below.
+                self.composition_alive = true;
             }
             WinitIme::Preedit(text, _cursor) => {
                 self.has_preedit = !text.is_empty();
@@ -282,6 +410,10 @@ impl WinitImeBridge {
                 // signal the App to drop any preedit overlay.
                 self.has_preedit = false;
                 self.ime_enabled = false;
+                // task0001 "Deferred detach": the composition is now
+                // actually closed — the next flush may deliver a held
+                // detach (see `flush`).
+                self.composition_alive = false;
                 self.queue.push_back(ImeEvent::FocusOut);
             }
             WinitIme::DeleteSurrounding { .. } => {
@@ -409,8 +541,21 @@ impl ImeBackend for WinitImeBridge {
         // the candidate window, matching the pre-task0001 enable→seed
         // order. At most one call per kind; nothing recorded means no
         // call and no allocation.
-        if let Some(allowed) = self.pending_allow.take() {
-            self.window.set_ime_allowed(allowed);
+        //
+        // task0001 "Deferred detach": a pending DISABLE
+        // (`allowed == false`) is held — left in `pending_allow`, not
+        // delivered — while `composition_alive` is still true; delivering
+        // it now would detach the IM server mid-composition. An ENABLE
+        // is never held. Holding does not take `pending_allow`, so a
+        // later flush (once `Ime::Disabled` closes the composition, or a
+        // focus-in overwrites the pending state first — last-writer-wins)
+        // resolves it.
+        if let Some(allowed) = self.pending_allow {
+            let held = !allowed && self.composition_alive;
+            if !held {
+                self.pending_allow = None;
+                self.window.set_ime_allowed(allowed);
+            }
         }
         if let Some((x, y, w, h)) = self.pending_cursor_area.take() {
             self.window.set_ime_cursor_area(x, y, w, h);
@@ -785,6 +930,140 @@ mod tests {
         assert!(
             inner.cursor_calls.is_empty(),
             "pending cursor rect must be discarded, not flushed, on Drop"
+        );
+    }
+
+    // ── task0001 (windows-imm32-ime-direct) "Deferred detach" ──────────
+
+    // ── AC-1 (SPEC TS1): with a composition open, focus loss followed
+    //    by a flush delivers no detach; once Disabled arrives, the next
+    //    flush delivers the detach exactly once, and a further flush
+    //    delivers nothing.
+    #[test]
+    fn held_detach_delivers_exactly_once_after_disabled() {
+        let (mut b, mock) = make_bridge();
+        b.flush(); // discharge the constructor's recorded allow=true
+        mock.reset();
+
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.notify_focus(false);
+        b.flush();
+        assert!(
+            mock.snapshot().allowed_calls.is_empty(),
+            "a detach must be held (not delivered) while the composition is alive"
+        );
+
+        b.on_winit_ime(&WinitIme::Disabled);
+        b.flush();
+        assert_eq!(
+            mock.snapshot().allowed_calls,
+            vec![false],
+            "the held detach must deliver exactly once after Disabled"
+        );
+
+        mock.reset();
+        b.flush();
+        assert!(
+            mock.snapshot().allowed_calls.is_empty(),
+            "a further flush must deliver nothing — delivery consumed the pending state"
+        );
+    }
+
+    // ── AC-2 (SPEC TS2): a focus-in recorded while a detach is held
+    //    overwrites the pending allow-state (last-writer-wins), so the
+    //    detach is never delivered.
+    #[test]
+    fn focus_in_during_held_detach_overwrites_pending_state_so_detach_never_delivers() {
+        let (mut b, mock) = make_bridge();
+        b.flush(); // discharge the constructor's recorded allow=true
+        mock.reset();
+
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.notify_focus(false);
+        b.flush();
+        assert!(
+            mock.snapshot().allowed_calls.is_empty(),
+            "detach must still be held"
+        );
+
+        b.notify_focus(true); // overwrites pending_allow = Some(false)
+        b.flush();
+        assert_eq!(
+            mock.snapshot().allowed_calls,
+            vec![true],
+            "the focus-in must win; the held detach must never reach the window"
+        );
+    }
+
+    // ── AC-3 (FR3 regression guard): with no composition alive, focus
+    //    loss followed by a flush delivers the detach on that same
+    //    flush — current (non-composing) behavior is preserved.
+    #[test]
+    fn detach_without_live_composition_delivers_on_same_flush() {
+        let (mut b, mock) = make_bridge();
+        b.flush(); // discharge the constructor's recorded allow=true
+        mock.reset();
+
+        // No Enabled was ever observed, so composition_alive is false.
+        b.notify_focus(false);
+        b.flush();
+        assert_eq!(mock.snapshot().allowed_calls, vec![false]);
+    }
+
+    // ── AC-5: a held detach does not block cursor-area delivery — with
+    //    a composition alive, a pending detach plus a pending cursor
+    //    area flush as a cursor-area-only delivery in that turn.
+    #[test]
+    fn held_detach_does_not_block_pending_cursor_area_delivery() {
+        let (mut b, mock) = make_bridge();
+        b.flush(); // discharge the constructor's recorded allow=true
+        mock.reset();
+
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.notify_focus(false);
+        b.notify_cursor_rect(1, 2, 3, 4);
+        b.flush();
+
+        let inner = mock.snapshot();
+        assert!(inner.allowed_calls.is_empty(), "the detach must stay held");
+        assert_eq!(
+            inner.cursor_calls,
+            vec![(1, 2, 3, 4)],
+            "the cursor area must still flush even while the detach is held"
+        );
+    }
+
+    // ── Edge case (Test Notes): Enabled → Disabled → focus loss → flush
+    //    delivers the detach immediately, because the composition was
+    //    already closed before focus was lost.
+    #[test]
+    fn focus_loss_after_composition_already_closed_delivers_detach_immediately() {
+        let (mut b, mock) = make_bridge();
+        b.flush(); // discharge the constructor's recorded allow=true
+        mock.reset();
+
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.on_winit_ime(&WinitIme::Disabled);
+        b.notify_focus(false);
+        b.flush();
+        assert_eq!(mock.snapshot().allowed_calls, vec![false]);
+    }
+
+    // ── Regression guard: an ENABLE recorded while a composition is
+    //    alive is never held — only a pending DISABLE can be held.
+    #[test]
+    fn pending_enable_is_never_held_even_with_live_composition() {
+        let (mut b, mock) = make_bridge();
+        b.flush(); // discharge the constructor's recorded allow=true
+        mock.reset();
+
+        b.on_winit_ime(&WinitIme::Enabled);
+        b.notify_focus(true); // records allow=true, not a detach
+        b.flush();
+        assert_eq!(
+            mock.snapshot().allowed_calls,
+            vec![true],
+            "an enable must never be held regardless of composition_alive"
         );
     }
 
