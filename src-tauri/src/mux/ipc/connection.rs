@@ -172,7 +172,7 @@ fn next_client_msg_starvation_count(
     previous_count: u32,
 ) -> u32 {
     if took_client_arm && has_pending_output {
-        previous_count + 1
+        previous_count.saturating_add(1)
     } else {
         0
     }
@@ -498,22 +498,23 @@ pub async fn handle_connection<S>(
         let has_pending_output = has_unforwarded_pane_output(has_deferred_work, &pane_output_rx)
             || !outbound_remainder.is_empty()
             || pending_outbound_reserve.is_some();
-        // Review round (finding on outbound-remainder starvation): while
-        // `outbound_remainder` is held, the drain arm below is gated off
-        // (see its own `if outbound_remainder.is_empty()` guard), so the
-        // ONLY arm that can make progress on it is the fair reservation
-        // (`permit_result`) — and that reservation only resolves once the
-        // writer task drains `outbound_tx`, which it cannot do while
-        // blocked flushing to a slow/stalled socket. If the client arm were
-        // also excluded for that same quota-exhausted iteration, `select!`
-        // would be left with no arm capable of becoming ready on its own,
-        // parking indefinitely and starving `PtyInput` — the exact freeze
-        // this feature exists to close, one layer further out. So a held
-        // remainder must never disable the client arm; it can only be
-        // disabled by pending *admission* work that the reservation/drain
-        // arms can independently resolve without the client's help.
-        let allow_client_arm = !outbound_remainder.is_empty()
-            || allow_client_message_arm(has_pending_output, consecutive_client_msgs_while_deferred);
+        // Review round (finding `c1-outbound-remainder-starvation`): a held
+        // `outbound_remainder` must NOT unconditionally keep the client arm
+        // enabled — doing so defeated the starvation guard below for as
+        // long as the remainder was outstanding (which, per
+        // `OUTBOUND_QUEUE_CAPACITY`, is routine under multi-pane output),
+        // silently starving PTY output for the entire span. The earlier
+        // concern this short-circuit was guarding against — "excluding the
+        // client arm on a quota-exhausted iteration could leave `select!`
+        // with no arm capable of becoming ready" — is now moot: the
+        // `outbound_permit_result` arm is listed BEFORE this one (see its
+        // own placement doc just below), so under `biased` it is polled,
+        // and therefore registered as a semaphore waiter, on every single
+        // iteration regardless of whether the client arm is enabled. The
+        // guard below is the ordinary one; no remainder-specific override
+        // is needed.
+        let allow_client_arm =
+            allow_client_message_arm(has_pending_output, consecutive_client_msgs_while_deferred);
         let mut took_client_arm = false;
 
         tokio::select! {
@@ -522,6 +523,55 @@ pub async fn handle_connection<S>(
             // computed just above). See that arm's own doc for the full G2
             // design decision.
             biased;
+
+            // Review round (finding `c1-outbound-remainder-starvation`):
+            // listed FIRST, ahead of the client-message arm below, so it is
+            // polled — and therefore registered as a waiter on
+            // `outbound_tx`'s semaphore — on every single loop iteration,
+            // independent of whatever `allow_client_arm` decides for the
+            // client arm. Mirrors the `permit_result` arm's own placement
+            // requirement relative to the drain arm (see that arm's doc
+            // below), applied one layer further out: a `try_send`-only
+            // retry can never win fairly against a reader thread's
+            // `blocking_send` waiter already parked on the channel, so this
+            // fair `reserve_owned()` future is the only thing that can ever
+            // drain `outbound_remainder`, and it must be polled unconditionally
+            // for that guarantee to hold. Costs nothing when not armed
+            // (`if pending_outbound_reserve.is_some()` short-circuits to
+            // `Pending` instantly) or when armed but not yet resolved (ditto)
+            // — the client arm and every arm below still get serviced this
+            // same iteration.
+            outbound_permit_result = async {
+                pending_outbound_reserve.as_mut().unwrap().await
+            }, if pending_outbound_reserve.is_some() => {
+                pending_outbound_reserve = None;
+                match outbound_permit_result {
+                    Ok(permit) => {
+                        if let Some(frame) = outbound_remainder.pop_front() {
+                            let _ = permit.send(frame);
+                        } else {
+                            drop(permit);
+                        }
+                    }
+                    Err(_) => {
+                        log::warn!(
+                            "outbound queue closed while an outbound-remainder reservation \
+                             was pending; dropping the remaining outbound backlog (the \
+                             writer's own completion is what actually tears this \
+                             connection down, AC-6)"
+                        );
+                        outbound_remainder.clear();
+                    }
+                }
+                // More frames may remain (only one is applied per resolved
+                // reservation) — re-arm immediately, mirroring
+                // `arm_pending_deferred_reserve`'s own re-arm.
+                arm_pending_outbound_reserve(
+                    &mut pending_outbound_reserve,
+                    &outbound_remainder,
+                    &outbound_tx,
+                );
+            }
 
             // G2 rework (AC-2, review round 3 findings `dd23cfc388062939` /
             // `5c01ffb8d53dc9f7`) — DESIGN DECISION: which invariant wins.
@@ -704,43 +754,6 @@ pub async fn handle_connection<S>(
                     &mut pending_deferred_reserve,
                     &deferred_output,
                     &pane_output_tx,
-                );
-            }
-            // task0001 (FR1/invariant 1): mirrors the `permit_result` arm
-            // immediately above — same placement requirement, same
-            // reasoning, applied to the outbound socket queue's own
-            // remainder instead of `deferred_output`. MUST be listed
-            // before the `chunk = pane_output_rx.recv()` drain arm below;
-            // see `arm_pending_outbound_reserve`'s doc.
-            outbound_permit_result = async {
-                pending_outbound_reserve.as_mut().unwrap().await
-            }, if pending_outbound_reserve.is_some() => {
-                pending_outbound_reserve = None;
-                match outbound_permit_result {
-                    Ok(permit) => {
-                        if let Some(frame) = outbound_remainder.pop_front() {
-                            let _ = permit.send(frame);
-                        } else {
-                            drop(permit);
-                        }
-                    }
-                    Err(_) => {
-                        log::warn!(
-                            "outbound queue closed while an outbound-remainder reservation \
-                             was pending; dropping the remaining outbound backlog (the \
-                             writer's own completion is what actually tears this \
-                             connection down, AC-6)"
-                        );
-                        outbound_remainder.clear();
-                    }
-                }
-                // More frames may remain (only one is applied per resolved
-                // reservation) — re-arm immediately, mirroring
-                // `arm_pending_deferred_reserve`'s own re-arm above.
-                arm_pending_outbound_reserve(
-                    &mut pending_outbound_reserve,
-                    &outbound_remainder,
-                    &outbound_tx,
                 );
             }
             // task0001 (FR1/FR5): arm gated off while an outbound remainder
