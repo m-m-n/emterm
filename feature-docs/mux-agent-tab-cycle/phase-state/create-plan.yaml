@@ -1,14 +1,50 @@
 schema_version: 1
 feature: mux-agent-tab-cycle
 phase: create-plan
-status: initialized
+status: dispatching
 generation: 1
-base_revision: a1d1391e70116fe9a8533c6638d44b3ae5c3672b
-last_input_digest: null
-active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+base_revision: 59dc16296eb03858149a7c2ea45ca496b9b360a1
+last_input_digest: "sha256:2ffe3d1aeceb6db868aebddc4ca42b67f6623bdfbec21ec8ce3c477c768a94e0"
+active_request_id: create-plan-run-0001
+packets:
+  mux-agent-tab-cycle-plan-q0001:
+    status: answered
+    issued_at: "2026-08-06T14:30:00+09:00"
+    questions:
+      - question_id: fr1.keybind-tbd-resolution
+        status: answered
+      - question_id: fr6.qualifying-states-tbd-resolution
+        status: answered
+answers:
+  fr1.keybind-tbd-resolution:
+    packet_id: mux-agent-tab-cycle-plan-q0001
+    answered_at: "2026-08-06T14:30:00+09:00"
+    source: batch-decision-table
+    answer_mode: select_or_freeform
+    selected_option_ids: [assume]
+    freeform: null
+    normalized_answer: >-
+      mux prefix (既定 Ctrl+Z) の後続キー Ctrl+A を既定バインドとする新 mux アクション
+      next-agent-window を追加し、settings.mux.keybinds で変更可能にする。FR1 は
+      status: assumed。
+    resolution_note: "gate create-plan.tbd-resolution の batch policy option_id: assume を適用。"
+  fr6.qualifying-states-tbd-resolution:
+    packet_id: mux-agent-tab-cycle-plan-q0001
+    answered_at: "2026-08-06T14:30:00+09:00"
+    source: batch-decision-table
+    answer_mode: select_or_freeform
+    selected_option_ids: [assume]
+    freeform: null
+    normalized_answer: >-
+      any-reported-state: AgentStatusModel のエントリが state = Some(Idle|Working|Blocked|Done)
+      であるペインを持つ mux ウィンドウを巡回対象とする。クリア済み (state: None) と未報告は除外。
+      FR6 は status: assumed。
+    resolution_note: "gate create-plan.tbd-resolution の batch policy option_id: assume を適用。"
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: needs_user_input
+    input_digest: "sha256:2ffe3d1aeceb6db868aebddc4ca42b67f6623bdfbec21ec8ce3c477c768a94e0"
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
