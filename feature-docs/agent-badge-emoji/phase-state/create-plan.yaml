@@ -1,20 +1,30 @@
 schema_version: 1
 feature: agent-badge-emoji
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
 base_revision: a13e6db5df92c1bae88e42ca36de379a76a1c82f
 last_input_digest: sha256:5fb104d67b1908026cc8cede3cf7a9c86c41df4ed46e27456703cb5ffee6b2a1
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-plan-run-0001
-    status: dispatched
+    status: completed
     input_digest: sha256:5fb104d67b1908026cc8cede3cf7a9c86c41df4ed46e27456703cb5ffee6b2a1
     output_digest: null
-artifacts: []
-patches: []
+artifacts:
+  - path: feature-docs/agent-badge-emoji/IMPLEMENTATION.md
+    produced_by: create-plan-run-0001
+  - path: feature-docs/agent-badge-emoji/VERIFICATION.md
+    produced_by: create-plan-run-0001
+  - path: feature-docs/agent-badge-emoji/tasks/task0001.md
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: agent-badge-emoji-p0001
+    status: applied
+    base_input_digest: sha256:5fb104d67b1908026cc8cede3cf7a9c86c41df4ed46e27456703cb5ffee6b2a1
+    base_workflow_blob: 4726c875c08b37d328c084fb534805d91f8172a2
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
