@@ -1,0 +1,29 @@
+schema_version: 1
+feature: mux-connection-input-freeze
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: 6a95d08b6405b827f420dd8a10b820b5434aa8b8
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
+      src-tauri/src/ui/md3.rs: sha256:8165557d9c2a3ea1a64c2d952de2e932b61b3514f03b52c03b9bc810e8acdc7b
+    truncated: false
+last_error: null
