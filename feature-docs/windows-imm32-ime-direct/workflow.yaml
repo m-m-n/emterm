@@ -46,7 +46,8 @@ workflow:
     status: completed
     completed_at_commit: a5ab379bc9715463d4a7e23aab655a04f3859cf1
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: d6afea5134d6dbd31d16c5af357ee1033ce35694
     base_commit: 48bb0fa8703508d3cf99319e3d000dcac3930162
   - id: review
     status: pending
@@ -68,7 +69,7 @@ tasks:
     domains: [input-handling, concurrency, external-io]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/windows-imm32-ime-direct/task0001
 
