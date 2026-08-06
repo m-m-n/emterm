@@ -64,9 +64,9 @@ tasks:
     domains: [data-persistence, input-handling]
     complexity: medium
     requirements: [FR2, FR3, FR4, FR6, FR7, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/agent-desktop-notification/task0001
   task0002:
     title: "TS: 設定パネル「エージェント」カテゴリと種別トグル UI"
     plan: tasks/task0002.md
@@ -85,9 +85,9 @@ tasks:
     domains: [ui]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR5, FR6, NFR3]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/agent-desktop-notification/task0002
 
 review:
   status: pending
