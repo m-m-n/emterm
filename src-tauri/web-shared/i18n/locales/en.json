@@ -8,6 +8,7 @@
       "terminalAppearance": "Terminal Appearance",
       "terminalBehavior": "Terminal Behavior",
       "notification": "Notifications",
+      "agent": "Agent",
       "markdownViewer": "Markdown Viewer",
       "profiles": "Profiles",
       "ssh": "SSH Connections",
@@ -218,13 +219,20 @@
       "notifyOnOutputDesc": "Notify when new output appears in a background tab",
       "notifyOnBell": "Bell",
       "notifyOnBellDesc": "Notify when a bell character is received in a background tab",
-      "agentStatusNotifications": "Agent Status Notifications",
-      "agentStatusNotificationsDesc": "Notify when an agent on a background pane becomes blocked or done",
       "body": {
         "processExit": "Process exited",
         "newOutput": "New output",
         "bell": "Bell"
       }
+    },
+    "agent": {
+      "title": "Agent",
+      "master": "Agent Status Notifications",
+      "masterDesc": "Notify when an agent on a background pane becomes blocked or done",
+      "notifyOnDone": "Turn Complete",
+      "notifyOnDoneDesc": "Notify when an agent finishes its turn (requires Agent Status Notifications to be on)",
+      "notifyOnBlocked": "Waiting for Input",
+      "notifyOnBlockedDesc": "Notify when an agent is waiting for your input (requires Agent Status Notifications to be on)"
     },
     "markdownViewer": {
       "title": "Markdown Viewer",

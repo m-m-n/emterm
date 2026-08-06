@@ -173,14 +173,16 @@ pub fn notification_body(sanitized_title: &str, kind: ActivityKind, locale: Loca
     format!("{sanitized_title}: {msg}")
 }
 
-// ── Agent-status notifications (task0007 / FR9) ──────────────────────────
+// ── Agent-status notifications (task0007 / FR9; task0001 event-type
+// toggles) ─────────────────────────────────────────────────────────────
 //
 // blocked/done transitions on panes the user is not looking at fire OS
 // notifications, gated by (IMPLEMENTATION.md "Notification gating"):
 // qualifying transition (blocked/done) -> pane not visible (foreground
 // window + displayed tab) -> both `Settings::agent_status_notifications`
 // and the existing global `Settings::notification_enabled` on -> the
-// per-pane rate limit not exceeded.
+// event-type toggle for the target state (`agent_notify_on_done` /
+// `agent_notify_on_blocked`) on -> the per-pane rate limit not exceeded.
 //
 // The gating decision ([`should_fire_agent_notification`]) is a pure
 // function so it is testable without the GUI event loop or the
@@ -225,23 +227,53 @@ pub fn is_qualifying_agent_state(state: AgentState) -> bool {
     matches!(state, AgentState::Blocked | AgentState::Done)
 }
 
+/// Event-type toggle applicable to `state` (task0001 design: "done 遷移に
+/// は `agent_notify_on_done`、blocked 遷移には `agent_notify_on_blocked`
+/// が対応する"). The state -> toggle mapping lives here — the single
+/// place [`should_fire_agent_notification`] consults it — so tests can
+/// verify the two toggles are independent without duplicating the
+/// mapping logic. `Working`/`Idle` never reach a meaningful answer here
+/// in practice ([`should_fire_agent_notification`] short-circuits on
+/// [`is_qualifying_agent_state`] first); matched exhaustively (`false`)
+/// rather than panicking on an unexpected state.
+fn event_type_notifications_enabled(
+    state: AgentState,
+    notify_on_done: bool,
+    notify_on_blocked: bool,
+) -> bool {
+    match state {
+        AgentState::Done => notify_on_done,
+        AgentState::Blocked => notify_on_blocked,
+        AgentState::Working | AgentState::Idle => false,
+    }
+}
+
 /// Pure gating decision for one drained agent-status transition
-/// (AC-1..AC-4). `rate_limit_ok` is a read-only check the caller obtains
-/// from [`AgentNotificationRateLimiter::is_within_limit`] *before* calling
-/// this function; the caller then records the fire (if any) via
+/// (AC-1..AC-4 of task0007; AC-2..AC-4 of task0001's event-type toggles).
+/// `notify_on_done` / `notify_on_blocked` are the per-event-type settings
+/// (`Settings::agent_notify_on_done` / `Settings::agent_notify_on_blocked`)
+/// — only the toggle matching `new_state` gates the decision (see
+/// [`event_type_notifications_enabled`]). `rate_limit_ok` is a read-only
+/// check the caller obtains from
+/// [`AgentNotificationRateLimiter::is_within_limit`] *before* calling this
+/// function; the caller then records the fire (if any) via
 /// [`AgentNotificationRateLimiter::record`] — this function performs no
 /// mutation itself.
+#[allow(clippy::too_many_arguments)]
 pub fn should_fire_agent_notification(
     new_state: AgentState,
     pane_visible: bool,
     agent_notifications_enabled: bool,
     global_notifications_enabled: bool,
+    notify_on_done: bool,
+    notify_on_blocked: bool,
     rate_limit_ok: bool,
 ) -> bool {
     is_qualifying_agent_state(new_state)
         && !pane_visible
         && agent_notifications_enabled
         && global_notifications_enabled
+        && event_type_notifications_enabled(new_state, notify_on_done, notify_on_blocked)
         && rate_limit_ok
 }
 
@@ -518,16 +550,18 @@ mod tests {
 
     // AC-1: a non-visible pane fires exactly one notification for
     // blocked/done; working/idle never fire, regardless of visibility.
+    // Event-type toggles both ON (task0001) — equivalent to the
+    // pre-task0001 signature's implicit "always eligible" behavior.
     #[test]
     fn should_fire_ac1_blocked_and_done_fire_working_idle_never_fire() {
         for state in [AgentState::Blocked, AgentState::Done] {
             assert!(should_fire_agent_notification(
-                state, false, true, true, true
+                state, false, true, true, true, true, true
             ));
         }
         for state in [AgentState::Working, AgentState::Idle] {
             assert!(!should_fire_agent_notification(
-                state, false, true, true, true
+                state, false, true, true, true, true, true
             ));
         }
     }
@@ -540,10 +574,14 @@ mod tests {
             true,
             true,
             true,
+            true,
+            true,
             true
         ));
         assert!(!should_fire_agent_notification(
             AgentState::Done,
+            true,
+            true,
             true,
             true,
             true,
@@ -560,6 +598,8 @@ mod tests {
             false,
             false,
             true,
+            true,
+            true,
             true
         ));
         // Global notification switch off.
@@ -568,6 +608,8 @@ mod tests {
             false,
             true,
             false,
+            true,
+            true,
             true
         ));
         // Both off.
@@ -576,6 +618,8 @@ mod tests {
             false,
             false,
             false,
+            true,
+            true,
             true
         ));
     }
@@ -588,8 +632,130 @@ mod tests {
             false,
             true,
             true,
+            true,
+            true,
             false
         ));
+    }
+
+    // ── Event-type toggles (task0001: agent_notify_on_done /
+    // agent_notify_on_blocked) ───────────────────────────────────────
+
+    #[test]
+    fn event_type_notifications_enabled_maps_state_to_matching_toggle() {
+        assert!(event_type_notifications_enabled(
+            AgentState::Done,
+            true,
+            false
+        ));
+        assert!(!event_type_notifications_enabled(
+            AgentState::Done,
+            false,
+            true
+        ));
+        assert!(event_type_notifications_enabled(
+            AgentState::Blocked,
+            false,
+            true
+        ));
+        assert!(!event_type_notifications_enabled(
+            AgentState::Blocked,
+            true,
+            false
+        ));
+    }
+
+    // AC-2: done rejects when `agent_notify_on_done` is off, even with
+    // every other gate satisfied; blocked rejects when
+    // `agent_notify_on_blocked` is off.
+    #[test]
+    fn should_fire_task0001_ac2_event_type_toggle_off_suppresses_that_state() {
+        assert!(!should_fire_agent_notification(
+            AgentState::Done,
+            false,
+            true,
+            true,
+            false,
+            true,
+            true
+        ));
+        assert!(!should_fire_agent_notification(
+            AgentState::Blocked,
+            false,
+            true,
+            true,
+            true,
+            false,
+            true
+        ));
+    }
+
+    // AC-3: the two event-type toggles are independent — one OFF does not
+    // suppress the OTHER state's notification.
+    #[test]
+    fn should_fire_task0001_ac3_event_type_toggles_are_independent() {
+        // agent_notify_on_done OFF: blocked still fires.
+        assert!(should_fire_agent_notification(
+            AgentState::Blocked,
+            false,
+            true,
+            true,
+            false,
+            true,
+            true
+        ));
+        // agent_notify_on_blocked OFF: done still fires.
+        assert!(should_fire_agent_notification(
+            AgentState::Done,
+            false,
+            true,
+            true,
+            true,
+            false,
+            true
+        ));
+    }
+
+    // AC-4: `notification_enabled` OFF or `agent_status_notifications`
+    // OFF suppresses regardless of the event-type toggle values — the
+    // hierarchical gate is an AND, not an override the type toggle can
+    // bypass.
+    #[test]
+    fn should_fire_task0001_ac4_master_gates_override_event_type_toggles() {
+        assert!(!should_fire_agent_notification(
+            AgentState::Blocked,
+            false,
+            false,
+            true,
+            true,
+            true,
+            true
+        ));
+        assert!(!should_fire_agent_notification(
+            AgentState::Done,
+            false,
+            true,
+            false,
+            true,
+            true,
+            true
+        ));
+    }
+
+    // AC-5 (regression): with both event-type toggles ON, the decision
+    // matches the pre-task0001 behavior exactly for every state.
+    #[test]
+    fn should_fire_task0001_ac5_both_toggles_on_matches_prior_behavior() {
+        for state in [AgentState::Blocked, AgentState::Done] {
+            assert!(should_fire_agent_notification(
+                state, false, true, true, true, true, true
+            ));
+        }
+        for state in [AgentState::Working, AgentState::Idle] {
+            assert!(!should_fire_agent_notification(
+                state, false, true, true, true, true, true
+            ));
+        }
     }
 
     // AC-4: two qualifying transitions on one pane inside the rate-limit
@@ -627,7 +793,8 @@ mod tests {
         // Simulate a transition that was suppressed by visibility (the
         // caller never calls `record` because `should_fire_*` was false).
         let visible = true;
-        let fire = should_fire_agent_notification(AgentState::Blocked, visible, true, true, true);
+        let fire =
+            should_fire_agent_notification(AgentState::Blocked, visible, true, true, true, true, true);
         assert!(!fire);
         // No `record` call — the window must still be open.
         assert!(limiter.is_within_limit(&"pane-1", now));

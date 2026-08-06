@@ -8,6 +8,7 @@
       "terminalAppearance": "ターミナル外観",
       "terminalBehavior": "ターミナル動作",
       "notification": "通知",
+      "agent": "エージェント",
       "markdownViewer": "Markdownビューアー",
       "profiles": "プロファイル",
       "ssh": "SSH接続",
@@ -218,13 +219,20 @@
       "notifyOnOutputDesc": "バックグラウンドタブに新しい出力が表示された時に通知します",
       "notifyOnBell": "ベル",
       "notifyOnBellDesc": "バックグラウンドタブでベル文字を受信した時に通知します",
-      "agentStatusNotifications": "エージェントステータス通知",
-      "agentStatusNotificationsDesc": "バックグラウンドのペインでエージェントがブロック中または完了になった時に通知します",
       "body": {
         "processExit": "プロセスが終了しました",
         "newOutput": "新しい出力",
         "bell": "ベル"
       }
+    },
+    "agent": {
+      "title": "エージェント",
+      "master": "エージェントステータス通知",
+      "masterDesc": "バックグラウンドのペインでエージェントがブロック中または完了になった時に通知します",
+      "notifyOnDone": "ターン終了",
+      "notifyOnDoneDesc": "エージェントのターンが終了した時に通知します（エージェントステータス通知がオンの場合のみ有効）",
+      "notifyOnBlocked": "質問待ち",
+      "notifyOnBlockedDesc": "エージェントが入力待ちになった時に通知します（エージェントステータス通知がオンの場合のみ有効）"
     },
     "markdownViewer": {
       "title": "Markdownビューアー",
