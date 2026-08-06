@@ -1,15 +1,29 @@
 schema_version: 1
 feature: mux-connection-input-freeze
 phase: create-spec
-status: initialized
+status: completed
 generation: 1
-base_revision: 6a95d08b6405b827f420dd8a10b820b5434aa8b8
-last_input_digest: null
+base_revision: ded9e7afe03cdff9b45c1199bfb86a6fde0f5805
+last_input_digest: sha256:571359a8e6cd4eddf468e5c8be47662258d44db3181d423cafab886a47a67980
 active_request_id: null
 packets: {}
 answers: {}
-worker_runs: []
-artifacts: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: sha256:59b80e542ebd815d942e09bdaaca03aeacdddf6c237ac2330090a00475fca547
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:571359a8e6cd4eddf468e5c8be47662258d44db3181d423cafab886a47a67980
+    output_digest: null
+artifacts:
+  - path: feature-docs/mux-connection-input-freeze/REQUIREMENTS.md
+    sha256: sha256:2733e9dcff2beb8905d29ac107b8ad46d9882fd42903f688e701c899772c828a
+    produced_by: create-spec-run-0002
+  - path: feature-docs/mux-connection-input-freeze/SPEC.md
+    sha256: sha256:82d25167258a3a1c6366050eeceeeb8aae27aa67e3c3bed04e493dc557a9b645
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
