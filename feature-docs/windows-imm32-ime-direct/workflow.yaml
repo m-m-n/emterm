@@ -43,7 +43,8 @@ workflow:
     skipped_reason: "IME plumbing bug fix (IMM32 call routing inside the winit bridge). No visual or UI surface is added or changed, so there is nothing for a design step to specify."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: a5ab379bc9715463d4a7e23aab655a04f3859cf1
   - id: implement
     status: pending
     base_commit: b98f5373fc4e7892c7f3b31fb06cb7c6df8ce0e5
@@ -56,7 +57,20 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: IMM32-direct cursor area on Windows + deferred IME detach
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/ime/winit_bridge.rs
+      - src-tauri/Cargo.toml
+    skills: []
+    domains: [input-handling, concurrency, external-io]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -70,63 +84,63 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3, TS4, TS5]
   FR2:
     title: IMM32 call sequence and window forms match winit
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4, TS5]
   FR3:
     title: Deferred IME detach
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2, TS5]
   FR4:
     title: Enable stays winit-routed
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3]
   FR5:
     title: Non-Windows path unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3, TS6]
   FR6:
     title: HWND acquisition and dependency
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   NFR1:
     title: No winit modification
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   NFR2:
     title: CLI-only build unaffected
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   NFR3:
     title: IMM32 thread requirement satisfied by existing flush
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
 
 batch:
