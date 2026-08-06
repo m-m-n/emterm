@@ -47,9 +47,17 @@ workflow:
     status: completed
     completed_at_commit: 5164c572823de6c70f1289b3fa82db7d490a6be6
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 10393f85f9829ce0668c11bde4a08b2f89db2188
+    result: pass
     failed_items: []
+    notes: >-
+      Build 3/3 green (cargo check, cargo check --no-default-features, bun run typecheck).
+      bun test 324 pass / 0 fail. cargo test --lib --test-threads=1 は tabs::tests の
+      既知フレーク 7 件のみ失敗し、同一コマンドを main で 2 回実行したベースライン
+      (6 件 / 7 件、ts13 の出没が非決定的) の部分集合。本機能が触れたファイル由来の
+      失敗はゼロ。TS-1..TS-5 はすべてグリーン。手動確認 5 項目は E2E 基盤が無いため
+      VERIFICATION.md の記載どおり実機確認に委ねる。
   - id: retrospect
     status: pending
 
