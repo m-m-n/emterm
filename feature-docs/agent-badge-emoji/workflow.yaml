@@ -61,7 +61,8 @@ workflow:
       badge_presentation_done_seen_is_the_same_cluster_constant_as_idle 他）。
       MT-1 / MT-2 は実機目視のため未実施（人間の評価者に委ねる）。
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 05132efb93d9d2a7a7e9b5ec7756f51b6a966eed
 
 tasks:
   task0001:
