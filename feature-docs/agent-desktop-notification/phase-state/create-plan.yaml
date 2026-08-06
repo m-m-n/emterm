@@ -1,20 +1,24 @@
 schema_version: 1
 feature: agent-desktop-notification
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
 base_revision: 61c60f1c196bc636efb6a8603b5bdd995d36db1d
 last_input_digest: sha256:c6298f45a8194d853cf16d7ae30e4210862fdf7f68e01d1765c7d1bc3401918a
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-plan-run-0001
-    status: dispatched
+    status: completed
     input_digest: sha256:c6298f45a8194d853cf16d7ae30e4210862fdf7f68e01d1765c7d1bc3401918a
     output_digest: null
 artifacts: []
-patches: []
+patches:
+  - patch_id: agent-desktop-notification-p0001
+    status: applied
+    base_input_digest: sha256:c6298f45a8194d853cf16d7ae30e4210862fdf7f68e01d1765c7d1bc3401918a
+    base_workflow_blob: null
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
