@@ -249,6 +249,12 @@ opener = { version = "0.7", optional = true }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_System_Console",
+    # IMM32 (task0001, windows-imm32-ime-direct): direct
+    # ImmGetContext / ImmSetCompositionWindow / ImmSetCandidateWindow /
+    # ImmReleaseContext calls from the Windows `BridgeWindow` cursor-area
+    # sink in `src/ime/winit_bridge.rs`, bypassing winit's
+    # `request_ime_update` for that one call.
+    "Win32_UI_Input_Ime",
 ] }
 
 # Phase 4-G-1 redesign (2026-05-14): removed x11-dl / wayland-client /
