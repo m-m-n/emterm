@@ -1,0 +1,119 @@
+task_id: task0001
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+# Note on tabs.rs flakiness: this cluster of tabs.rs off-thread-replay-worker
+# tests is non-deterministic even under --test-threads=1 (confirmed by
+# repeated full-suite runs on this same, already-modified tree: composition
+# varies run to run, e.g. `ts11_restore_worker_panic_returns_failed_and_clears_state`
+# appeared in some runs and not others, always drawn from the same
+# ~7-member cluster). This module is entirely outside this task's diff
+# (src-tauri/src/mux/ipc/*, zero overlap with tabs.rs); an isolated
+# `--test-threads=1 tabs::` run (no mux::ipc code exercised at all) on this
+# same modified tree reproduces the identical flaky pattern, confirming it
+# predates and is independent of this task. `final_failures` above lists the
+# exact composition from the specific full-suite run this record is anchored
+# to (a subset of the observed flaky-cluster superset); see the implementer
+# report's `notes` for the full account.
+acceptance_tests:
+  AC-1:
+    tests:
+      - mux::ipc::connection::tests::connection_level_client_input_processed_while_outbound_socket_saturated
+    red_confirmed: true
+    red_reason: >-
+      Written and run against the pre-task0001 connection.rs (single
+      combined Framed, drain arm feeds/flushes the socket inline). Failed
+      with: "AC-1: PtyInput for pane B must be processed within the named
+      5s timeout despite pane A's output channel and the outbound socket
+      both being saturated" — the drain arm's framed.feed/framed.flush
+      blocked the whole select! loop once the small duplex saturated, so
+      framed.next() never got polled again.
+  AC-2:
+    tests:
+      - mux::ipc::connection::tests::connection_level_deferred_snapshot_survives_sustained_saturation_and_input_keeps_flowing
+      - mux::ipc::connection::tests::connection_level_deferred_snapshot_delivered_despite_continuous_client_traffic
+    red_confirmed: false
+    red_reason: >-
+      Preservation guarantee, not new behavior: these two tests predate
+      this task and already passed before the rework. AC-2 requires them
+      to keep passing "unmodified in their assertions" after the drain
+      arm/outbound-writer rework; their bodies were left untouched by
+      this task's diff and both remain green. There is no red state to
+      observe for a continuity requirement — the criterion is that
+      nothing regresses, confirmed by the diff (no edits to these test
+      bodies) plus a green run post-rework.
+  AC-3:
+    tests:
+      - mux::ipc::connection::tests::connection_level_stops_consuming_pane_output_rx_when_outbound_queue_saturated
+      - mux::ipc::outbound::tests::try_admit_outbound_frames_admits_all_when_capacity_available
+      - mux::ipc::outbound::tests::try_admit_outbound_frames_holds_remainder_in_order_when_queue_full
+      - mux::ipc::outbound::tests::try_admit_outbound_frames_empty_remainder_when_channel_closed
+      - mux::ipc::outbound::tests::arm_pending_outbound_reserve_only_arms_for_nonempty_remainder
+    red_confirmed: true
+    red_reason: >-
+      Verified after the fact (implementation and its dependent tests were
+      built together, since the mechanism under test did not exist to
+      isolate beforehand): temporarily changed the drain arm's `chunk =
+      pane_output_rx.recv()` guard from `if outbound_remainder.is_empty()`
+      to unconditionally true (letting it keep consuming while a remainder
+      is held) and re-ran connection_level_stops_consuming_pane_output_rx_when_outbound_queue_saturated
+      — failed with "AC-3: a chunk sent while an outbound remainder is
+      held must sit UNCONSUMED in pane_output_rx ... left: 256 right: 255"
+      (the channel drained a chunk it should have left alone). Reverted
+      immediately after confirming. The four outbound.rs unit tests were
+      written and observed passing against the real (non-broken)
+      implementation only; they were not independently red-confirmed, but
+      cover the same `try_admit_outbound_frames`/`arm_pending_outbound_reserve`
+      pure functions the connection-level test exercises live.
+  AC-4:
+    tests:
+      - mux::ipc::connection::tests::connection_level_pty_exit_reaps_pane_even_when_delivery_can_never_succeed
+    red_confirmed: true
+    red_reason: >-
+      Verified after the fact: temporarily replaced the drain arm's reap
+      loop body (`handle_destroy_pane(pane_id, ...).await`) with a no-op,
+      re-ran the test — failed with "AC-4: the exited pane must be reaped
+      within a bounded time regardless of whether delivery to the client
+      can succeed" (timed out; session_manager never became empty).
+      Reverted immediately after confirming.
+  AC-5:
+    tests:
+      - mux::ipc::connection::tests::connection_level_upgrading_ack_fires_only_after_flush_not_at_admission
+    red_confirmed: true
+    red_reason: >-
+      Verified after the fact: temporarily moved the Upgrading-ack fire
+      from inside the writer (after a successful flush) to the
+      connection's notify_rx arm (fired right after `outbound_tx.send()`
+      admission succeeds, i.e. the pre-task0001-shaped "fire at send"
+      timing) — re-ran the test, failed with "AC-5: the Upgrading ack must
+      not fire while the frame is queued behind a saturated socket". A
+      first attempt (firing inside the writer's per-message loop, before
+      that same batch's own flush) did NOT fail, because the writer only
+      ever dequeues a batch containing Upgrading once the prior stuck
+      batch's flush has already completed — recorded here for honesty:
+      that variant was not a meaningful red for this design's batching
+      semantics; the admission-time variant above is the one that
+      actually corresponds to what AC-5 forbids and reliably reds.
+      Reverted immediately after confirming.
+  AC-6:
+    tests:
+      - mux::ipc::connection::tests::connection_level_socket_write_failure_terminates_loop_and_detaches_panes
+    red_confirmed: true
+    red_reason: >-
+      Verified after the fact: temporarily made the writer's
+      write_failed branch unreachable (`if write_failed && false`),
+      re-ran the test — failed with "connection loop must terminate after
+      a socket write failure: Elapsed(())" (the spawned handle_connection
+      task never returned within the 5s bound). Reverted immediately
+      after confirming.
