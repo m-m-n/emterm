@@ -3181,9 +3181,17 @@ impl App {
                     .map(|pane_id| self.agent_status.any_pane_has_reported_state([pane_id]))
                     .collect();
                 let target = crate::mux::window_group::next_qualifying_index(&qualifies, current);
-                let result = Self::switch_to(tab, target, &mut scroll);
-                window_switch_committed = result == MuxActionOutcome::Changed;
-                result
+                // When the active window is the sole qualifying window,
+                // next_qualifying_index returns Some(current); treat that as
+                // a no-op instead of round-tripping SwitchWindow + a
+                // snapshot replay onto the pane that's already active.
+                if target == Some(current) {
+                    MuxActionOutcome::None
+                } else {
+                    let result = Self::switch_to(tab, target, &mut scroll);
+                    window_switch_committed = result == MuxActionOutcome::Changed;
+                    result
+                }
             }
         };
         // The `tab` borrow has ended; commit the swapped scroll value and, on
@@ -8006,7 +8014,11 @@ mod tests {
         app.dispatch_mux_action(PrefixAction::SelectWindow(1));
         assert_eq!(active_idx(&app), 1);
 
-        app.dispatch_mux_action(PrefixAction::NextAgentWindow);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextAgentWindow),
+            MuxActionOutcome::None,
+            "already-active sole qualifier must not trigger a SwitchWindow + snapshot replay"
+        );
         assert_eq!(active_idx(&app), 1, "stays on the only qualifying window");
 
         // From a different starting window, still lands on the only qualifier.
