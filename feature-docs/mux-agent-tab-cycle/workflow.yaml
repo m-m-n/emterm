@@ -43,7 +43,8 @@ workflow:
     status: completed
     completed_at_commit: dae848b4e31d9f040306c7d30ba9bafbea2b615c
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 06411ef87c63c23ec946345dadeb7339d4aee098
     base_commit: 37dc21bbbed5f02a918950166c6271769fd79605
   - id: review
     status: pending
@@ -68,7 +69,10 @@ tasks:
     domains: [input-handling, ui]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2]
-    status: in_progress
+    status: merged
+    deviations:
+      - "src-tauri/src/settings_window/commands.rs: get_mux_action_defaults_returns_ordered_action_key_list の期待配列を 7->8 件に更新 (DEFAULT_ACTION_BINDINGS に next-agent-window/Ctrl+A が加わったため)"
+
     notes: null
     branch: em-workflow/mux-agent-tab-cycle/task0001
   task0002:
