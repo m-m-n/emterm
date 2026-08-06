@@ -82,15 +82,19 @@ tasks:
     branch: em-workflow/mux-connection-input-freeze/task0002
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
   plan:
     floor: [comprehensive, performance, architecture, spec]
     discretionary: []
     cross_validation: true
-  perspectives: {}
-  residual_critical_high: 0
-  needs_rework: false
+  perspectives:
+    comprehensive: {claude: completed, cross_model: none}
+    performance: {claude: completed, vertex: skipped, codex: skipped}
+    architecture: {claude: completed, vertex: completed}
+    spec: {claude: completed, vertex: skipped, codex: skipped}
+  residual_critical_high: 2
+  needs_rework: true
 
 requirements:
   FR1:
@@ -158,5 +162,5 @@ requirements:
     tests: [TS4]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework_count: 0
