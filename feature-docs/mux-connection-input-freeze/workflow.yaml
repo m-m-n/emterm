@@ -40,11 +40,11 @@ workflow:
     status: completed
     completed_at_commit: e973c060685bb56113b6481f4cc7a96d26e6ce82
   - id: implement
-    status: completed
+    status: pending
     completed_at_commit: 4e4e33c21468e5220f2795f7632babb17977c811
     base_commit: 8e2311c2ffbb5b07f7f185c0207db5bd18b8c5f8
   - id: review
-    status: in_progress
+    status: pending
   - id: verify
     status: pending
     result: null
@@ -80,6 +80,25 @@ tasks:
     status: merged
     notes: null
     branch: em-workflow/mux-connection-input-freeze/task0002
+  task0003:
+    title: "Outbound admission path: restore bounded remainder, single ordered admission, and teardown delivery"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/mux/ipc/connection.rs
+      - src-tauri/src/mux/ipc/outbound.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/ipc/reattach.rs
+      - src-tauri/src/mux/ipc/mod.rs
+    skills: [backend-impl]
+    domains: [concurrency, external-io]
+    complexity: high
+    requirements: [FR1, FR3, FR4, NFR1, NFR4]
+    status: pending
+    notes: null
+    provenance:
+      source: review
+      review_round: 1
+      source_ids: [7f9f9ad6fb4dd977, ee54e1d2ff740104, 4e6f23b7d53527e5, f9cde80880407a13, 79d48554f94fd3df, ebb33f43f48f612a, 96633ec8862e6c64, 76e7d90468e859d0]
 
 review:
   status: pending
@@ -116,28 +135,28 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
-    tests: [TS2, TS4]
+    tasks: [task0001, task0002, task0003]
+    tests: [TS2, TS4, TS9, TS10]
   FR4:
     title: "Preserve backpressure; no unbounded channels (carried from prior feature)"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
-    tests: [TS4]
+    tasks: [task0001, task0002, task0003]
+    tests: [TS4, TS8]
   FR5:
     title: "Regression test for bounded input polling during drain"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
-    tests: [TS1]
+    tasks: [task0001, task0003]
+    tests: [TS1, TS8]
   NFR1:
     title: "Protocol stability: no mux protocol change"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
+    tasks: [task0001, task0002, task0003]
     tests: [TS6]
   NFR2:
     title: "Scope boundary: GUI-side event_tx bounded(4096) sizing out of scope"
@@ -158,7 +177,7 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0003]
     tests: [TS4]
 
 batch:
