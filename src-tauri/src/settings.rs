@@ -154,7 +154,7 @@ pub const DEFAULT_MUX_PREFIX_KEY: &str = "Ctrl+Z";
 /// `Ctrl+D`/`Ctrl+C`/`Ctrl+N`/`Ctrl+P`/`Ctrl+R`/`Ctrl+T`). SSOT is
 /// `DEFAULT_ACTION_BINDINGS` in `src-tauri/src/mux/prefix.rs`; the
 /// `src-tauri/web-shared/terminal/mux/prefix-key.ts` table is a mirror.
-pub const MUX_ACTION_NAMES: [&str; 7] = [
+pub const MUX_ACTION_NAMES: [&str; 8] = [
     "detach",
     "new-window",
     "next-window",
@@ -162,6 +162,7 @@ pub const MUX_ACTION_NAMES: [&str; 7] = [
     "rename-window",
     "move-window",
     "toggle-window-sidebar",
+    "next-agent-window",
 ];
 
 /// Default follow-up chord for a mux action, or `None` if the action
@@ -2110,6 +2111,23 @@ mod tests {
         assert_eq!(s.mux.keybinds.get("prev-window"), Some(&chord("Ctrl+P")));
         assert_eq!(s.mux.keybinds.get("rename-window"), Some(&chord("Ctrl+R")));
         assert_eq!(s.mux.keybinds.get("move-window"), Some(&chord("Ctrl+T")));
+        // mux-agent-tab-cycle task0001 AC-1: default present when unset.
+        assert_eq!(
+            s.mux.keybinds.get("next-agent-window"),
+            Some(&chord("Ctrl+A"))
+        );
+    }
+
+    /// mux-agent-tab-cycle task0001 AC-1: a user override of
+    /// `settings.mux.keybinds["next-agent-window"]` wins over the Ctrl+A
+    /// default.
+    #[test]
+    fn loader_mux_keybinds_next_agent_window_override() {
+        let s = load_json(r#"{"mux": {"keybinds": {"next-agent-window": "g"}}}"#);
+        let chord = |spec: &str| parse_mux_action_chord(spec).unwrap();
+        assert_eq!(s.mux.keybinds.get("next-agent-window"), Some(&chord("g")));
+        // Untouched actions keep their defaults.
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&chord("Ctrl+N")));
     }
 
     #[test]
