@@ -3,6 +3,7 @@
 //! Manages per-client connection state machine:
 //! handshake -> authenticated (GUI streaming or CLI control).
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -12,7 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio_util::codec::Framed;
+use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 
 use super::codec::MuxCodec;
 use super::handlers::{
@@ -20,6 +21,10 @@ use super::handlers::{
     handle_create_window, handle_destroy_pane, handle_destroy_window, handle_move_window,
     handle_read_pane, handle_rename_window, handle_request_pane_snapshot, handle_resize,
     handle_send_text, handle_set_visibility, handle_switch_window, handle_wait_agent_state,
+};
+use super::outbound::{
+    OUTBOUND_QUEUE_CAPACITY, OutboundHandle, PendingOutboundReserve, ReplySink,
+    arm_pending_outbound_reserve, run_outbound_writer, try_admit_outbound_frames,
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
@@ -45,21 +50,32 @@ const UPGRADE_PREPARE_TIMEOUT: Duration = Duration::from_secs(30);
 /// each, worst-case batch memory is ~4MB (transient, freed after flush).
 const DRAIN_BATCH_LIMIT: usize = 64;
 
+/// Bound on the best-effort teardown flush after the GUI loop exits
+/// (task0001, Design invariant 7): once the loop breaks (kick, client EOF,
+/// error) and drops its own `outbound_tx`, the outbound writer drains
+/// whatever was already admitted and exits; this bounds how long
+/// `handle_connection` waits for that drain before abandoning it and
+/// returning anyway. Short and named — this is cleanup after the
+/// connection is already ending, not a correctness-critical wait.
+const OUTBOUND_TEARDOWN_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Starvation-guard quota (G2 rework, mux-window-switch-output-hang
 /// task0004, review round 3 findings `dd23cfc388062939`/`5c01ffb8d53dc9f7`).
 ///
 /// Bound on how many CONSECUTIVE `select!` iterations the client-message
-/// arm (`framed.next()`) may win while deferred output work (a fair
+/// arm (`client_reader.next()`, task0001 rename — was `framed.next()`
+/// before the read/write split) may win while deferred output work (a fair
 /// reservation, or a non-empty `deferred_output`) is outstanding, before it
 /// is excluded from exactly one iteration so the reservation/drain arms are
 /// guaranteed to be POLLED at least once. See the design-decision doc at
-/// `msg = framed.next()`'s guard, below, for why this exists and why it is
-/// a bounded round-robin rather than either arm unconditionally winning.
+/// `msg = client_reader.next()`'s guard, below, for why this exists and why
+/// it is a bounded round-robin rather than either arm unconditionally
+/// winning.
 const CLIENT_MSG_STARVATION_QUOTA: u32 = 8;
 
 /// Pure decision function for the G2 starvation guard: whether the
-/// client-message arm (`framed.next()`) is allowed to be included in THIS
-/// `select!` iteration.
+/// client-message arm (`client_reader.next()`) is allowed to be included in
+/// THIS `select!` iteration.
 ///
 /// Extracted out of `handle_connection`'s loop body (rather than inlined at
 /// the call site) specifically so the quota/reset arithmetic is
@@ -396,8 +412,49 @@ pub async fn handle_connection<S>(
 
     // Starvation-guard counter for the client-message arm (G2 rework,
     // AC-2) — see `CLIENT_MSG_STARVATION_QUOTA`'s doc and the
-    // design-decision comment at `msg = framed.next()`'s guard below.
+    // design-decision comment at `msg = client_reader.next()`'s guard
+    // below.
     let mut consecutive_client_msgs_while_deferred: u32 = 0;
+
+    // task0001 (FR1/FR3): from here on this connection NEVER touches the
+    // socket's write side directly again — every client-bound frame
+    // instead funnels through `outbound_tx`, a bounded admission queue
+    // drained independently by a dedicated writer task
+    // (`run_outbound_writer`). This is what lets the client-message arm
+    // below keep being polled even while the socket's send buffer is
+    // saturated — the residual freeze this task closes (Design "Problem
+    // (current shape)").
+    //
+    // Splitting via `Framed::into_parts()` (not `Framed::into_inner()`)
+    // preserves any bytes already read into `framed`'s internal buffer but
+    // not yet decoded into a full message, and any bytes fed but not yet
+    // flushed — `into_inner()` would silently drop them, corrupting the
+    // read/write stream if e.g. the client's Hello and a following message
+    // arrived in the same read.
+    let parts = framed.into_parts();
+    let (read_half, write_half) = tokio::io::split(parts.io);
+    let mut client_reader = FramedRead::new(read_half, MuxCodec::new());
+    *client_reader.read_buffer_mut() = parts.read_buf;
+    let mut writer_sink = FramedWrite::new(write_half, MuxCodec::new());
+    *writer_sink.write_buffer_mut() = parts.write_buf;
+
+    let (outbound_tx, outbound_rx) = mpsc::channel::<MuxMessage>(OUTBOUND_QUEUE_CAPACITY);
+    let mut writer_task_handle = tokio::spawn(run_outbound_writer(
+        writer_sink,
+        outbound_rx,
+        upgrade_ack_slot,
+    ));
+    let mut writer_task_failed = false;
+
+    // Drain-arm outbound state (FR1/FR4): frames the drain arm consumed
+    // from `pane_output_rx` but could not admit into `outbound_tx` without
+    // blocking. Bounded by construction — the drain arm is gated off (see
+    // the `chunk = pane_output_rx.recv()` arm's guard below) while this is
+    // non-empty, so it can never grow past one drain batch's worth
+    // (`DRAIN_BATCH_LIMIT`, ~4MB — see `OUTBOUND_QUEUE_CAPACITY`'s doc for
+    // the combined worst-case accounting).
+    let mut outbound_remainder: VecDeque<MuxMessage> = VecDeque::new();
+    let mut pending_outbound_reserve: Option<PendingOutboundReserve> = None;
 
     // Message + output loop using select! to handle both directions concurrently
     loop {
@@ -430,7 +487,17 @@ pub async fn handle_connection<S>(
         // own channel backlog — see `has_unforwarded_pane_output`'s doc for
         // why admission alone is not enough. This is the value actually fed
         // to the guard and to the post-`select!` bookkeeping below.
-        let has_pending_output = has_unforwarded_pane_output(has_deferred_work, &pane_output_rx);
+        //
+        // task0001 (Design "Starvation-guard interaction"): a held outbound
+        // remainder or an armed outbound-capacity reservation is likewise
+        // outstanding output work — the SAME class of "admitted but not yet
+        // delivered" gap `has_unforwarded_pane_output` already closes for
+        // `pane_output_tx`, now extended to the outbound socket queue this
+        // task adds, so continuous client traffic cannot starve draining
+        // the outbound remainder either.
+        let has_pending_output = has_unforwarded_pane_output(has_deferred_work, &pane_output_rx)
+            || !outbound_remainder.is_empty()
+            || pending_outbound_reserve.is_some();
         let allow_client_arm =
             allow_client_message_arm(has_pending_output, consecutive_client_msgs_while_deferred);
         let mut took_client_arm = false;
@@ -450,7 +517,7 @@ pub async fn handle_connection<S>(
             // so it can ever be polled under saturation. Round 3 found
             // THIS arm has the identical structural problem one level
             // further out: under `biased`, a client that keeps
-            // `framed.next()` continuously ready (buffered messages
+            // `client_reader.next()` continuously ready (buffered messages
             // arriving faster than one per loop iteration) wins EVERY
             // iteration, so every arm below it — the fair reservation AND
             // the plain drain arm — is never even POLLED, regardless of
@@ -491,14 +558,14 @@ pub async fn handle_connection<S>(
             // `false`. Net effect: pending output is guaranteed at least one
             // poll at least once every `CLIENT_MSG_STARVATION_QUOTA + 1`
             // iterations — a bounded number, as AC-2/AC-4 require.
-            msg = framed.next(), if allow_client_arm => {
+            msg = client_reader.next(), if allow_client_arm => {
                 took_client_arm = true;
                 match msg {
                     Some(Ok(msg)) => {
                         if let Err(should_break) = route_message(
                             msg,
                             &session_manager,
-                            &mut framed,
+                            &outbound_tx,
                             &pane_output_tx,
                             &mut active_session_id,
                             &shutdown_tx,
@@ -544,7 +611,36 @@ pub async fn handle_connection<S>(
                 );
                 was_kicked = true;
                 let resp = MuxMessage::control(MessageType::Detached, 0, &());
-                let _ = framed.send(resp).await;
+                // task0001: admission only (best-effort, mirrors the
+                // pre-task0001 `let _ = framed.send(...).await;` shape —
+                // errors ignored either way). This is the last thing this
+                // arm does before `break`, so awaiting admission here does
+                // not reintroduce the residual freeze (no other arm needs
+                // to run concurrently at this exact point); the teardown
+                // code after the loop gives whatever gets admitted here a
+                // bounded, best-effort flush (Design invariant 7).
+                let _ = outbound_tx.send(resp).await;
+                break;
+            }
+            // task0001 (AC-6): the outbound writer only ever completes
+            // DURING an active loop iteration if it hit a socket
+            // write/flush failure (its graceful-shutdown exit only happens
+            // after THIS loop has already broken and dropped `outbound_tx`
+            // — see the teardown code after the loop) — so any completion
+            // observed here is fatal, mirroring the pre-task0001
+            // `send_err`/`flush_failed` break in the drain arm, just moved
+            // to where the failure is actually detected now.
+            writer_result = &mut writer_task_handle => {
+                writer_task_failed = true;
+                match writer_result {
+                    Ok(()) => log::warn!(
+                        "mux outbound writer exited during an active connection (socket \
+                         write/flush failure); tearing the connection down"
+                    ),
+                    Err(join_err) => {
+                        log::warn!("mux outbound writer task panicked: {}", join_err);
+                    }
+                }
                 break;
             }
             // task0003 (AC-3/G2): polled only while a fair reservation is in
@@ -596,7 +692,50 @@ pub async fn handle_connection<S>(
                     &pane_output_tx,
                 );
             }
-            chunk = pane_output_rx.recv() => {
+            // task0001 (FR1/invariant 1): mirrors the `permit_result` arm
+            // immediately above — same placement requirement, same
+            // reasoning, applied to the outbound socket queue's own
+            // remainder instead of `deferred_output`. MUST be listed
+            // before the `chunk = pane_output_rx.recv()` drain arm below;
+            // see `arm_pending_outbound_reserve`'s doc.
+            outbound_permit_result = async {
+                pending_outbound_reserve.as_mut().unwrap().await
+            }, if pending_outbound_reserve.is_some() => {
+                pending_outbound_reserve = None;
+                match outbound_permit_result {
+                    Ok(permit) => {
+                        if let Some(frame) = outbound_remainder.pop_front() {
+                            let _ = permit.send(frame);
+                        } else {
+                            drop(permit);
+                        }
+                    }
+                    Err(_) => {
+                        log::warn!(
+                            "outbound queue closed while an outbound-remainder reservation \
+                             was pending; dropping the remaining outbound backlog (the \
+                             writer's own completion is what actually tears this \
+                             connection down, AC-6)"
+                        );
+                        outbound_remainder.clear();
+                    }
+                }
+                // More frames may remain (only one is applied per resolved
+                // reservation) — re-arm immediately, mirroring
+                // `arm_pending_deferred_reserve`'s own re-arm above.
+                arm_pending_outbound_reserve(
+                    &mut pending_outbound_reserve,
+                    &outbound_remainder,
+                    &outbound_tx,
+                );
+            }
+            // task0001 (FR1/FR5): arm gated off while an outbound remainder
+            // is held ("arm fires only when the loop is not already
+            // holding an unsent remainder" — Design "Reworked drain-arm
+            // flow" step 1) — the `outbound_permit_result` arm above is
+            // what drains that remainder; this arm resumes once it is
+            // empty again.
+            chunk = pane_output_rx.recv(), if outbound_remainder.is_empty() => {
                 if let Some(first) = chunk {
                     let batch_start = std::time::Instant::now();
 
@@ -627,7 +766,18 @@ pub async fn handle_connection<S>(
                         );
                     }
 
-                    // Batch send: feed all into buffer, then flush once.
+                    // Classify each merged chunk into its wire frame (FR1)
+                    // and reap any PTY-exit chunk IMMEDIATELY, at
+                    // consumption time — task0001 AC-4/invariant 5: the
+                    // reap must not wait on the frame's eventual
+                    // admission/delivery outcome, since delivery is no
+                    // longer synchronously observable in this arm (the
+                    // writer task owns that now). This preserves "reap
+                    // regardless of delivery success" (see the original
+                    // rationale below, now reworded for the admission
+                    // step) by moving the checkpoint earlier: consumption,
+                    // not a send attempt, is the only synchronous point
+                    // this arm still has.
                     //
                     // FR1: each merged chunk is encoded according to its
                     // `ChunkKind` discriminator. `ChunkKind::Snapshot` chunks
@@ -640,7 +790,7 @@ pub async fn handle_connection<S>(
                     // `MessageType::PtyOutput`. Empty-data PtyOutput chunks
                     // still mean "PTY exited" (the merge layer never folds
                     // empty chunks, and the snapshot path never emits empty).
-                    let mut send_err = false;
+                    let mut frames: Vec<MuxMessage> = Vec::with_capacity(merged_count);
                     let mut exited_panes: Vec<u32> = Vec::new();
                     for chunk in merged {
                         let msg = match chunk.kind {
@@ -662,15 +812,10 @@ pub async fn handle_connection<S>(
                                 }
                             }
                         };
-                        if framed.feed(msg).await.is_err() {
-                            log::warn!("pty-batch feed error: merged_count={}", merged_count);
-                            send_err = true;
-                            break;
-                        }
+                        frames.push(msg);
                     }
-                    let flush_failed = framed.flush().await.is_err();
                     // Reap each exited pane from the daemon's own SessionManager
-                    // *regardless* of whether delivery to the client succeeded:
+                    // *regardless* of whether delivery to the client succeeds:
                     // the PTY genuinely exited, so the empty window / session must
                     // be removed and the daemon shut down once the last pane is
                     // gone. Gating this on a successful flush would re-open the
@@ -683,11 +828,23 @@ pub async fn handle_connection<S>(
                     for pane_id in exited_panes {
                         handle_destroy_pane(pane_id, &session_manager, &shutdown_tx).await;
                     }
-                    if send_err || flush_failed {
-                        if !send_err {
-                            log::warn!("pty-batch flush error: merged_count={}", merged_count);
-                        }
-                        break;
+
+                    // Admission (FR1, invariant 1): non-blocking. Admits as
+                    // many frames as the outbound queue currently has room
+                    // for, in order; a non-empty remainder is held as loop
+                    // state and the fair capacity-acquisition future is
+                    // armed so it is serviced ahead of any newer chunk
+                    // (FR3) — this arm never awaits outbound capacity at
+                    // this point position, which is exactly the self-block
+                    // this task removes.
+                    let remainder = try_admit_outbound_frames(&outbound_tx, frames);
+                    if !remainder.is_empty() {
+                        outbound_remainder = remainder;
+                        arm_pending_outbound_reserve(
+                            &mut pending_outbound_reserve,
+                            &outbound_remainder,
+                            &outbound_tx,
+                        );
                     }
 
                     let elapsed = batch_start.elapsed();
@@ -703,7 +860,12 @@ pub async fn handle_connection<S>(
                     // freed, so it is also the right place to retry anything
                     // deferred while the channel was momentarily full (see
                     // `DeferredOutputQueue`'s doc for why this beats a
-                    // spawned task per deferral).
+                    // spawned task per deferral). Unchanged trigger point
+                    // (task0001 Design invariant 3): runs regardless of
+                    // whether the outbound admission above left a
+                    // remainder — this is about `pane_output_tx` capacity,
+                    // which this arm just freed by consuming, not about
+                    // outbound-socket capacity.
                     flush_deferred_output(
                         &mut deferred_output,
                         &pane_output_tx,
@@ -729,21 +891,15 @@ pub async fn handle_connection<S>(
                     Ok(msg) => {
                         // Forward cross-client notification (e.g., CLI SwitchWindow) to GUI
                         log::info!("Forwarding notification to GUI: {:?} pane={}", msg.msg_type, msg.pane_id);
-                        // AC-7 (Design "Announcement delivery"): once an
-                        // `Upgrading` frame is actually written to THIS
-                        // socket, acknowledge it so `prepare_upgrade` can
-                        // observe delivery (not merely queueing) before
-                        // the runtime is torn down. Every other message
-                        // type never touches the slot.
-                        let is_upgrading = msg.msg_type == MessageType::Upgrading;
-                        if framed.send(msg).await.is_err() {
+                        // task0001: admission only (Design invariant 1 —
+                        // "MAY await admission", not the drain arm). The
+                        // Upgrading-ack fire (AC-7 / NFR4) now happens
+                        // inside the writer task itself, once the frame is
+                        // actually written AND flushed — see
+                        // `outbound::run_outbound_writer`'s doc — rather
+                        // than here at admission time.
+                        if outbound_tx.send(msg).await.is_err() {
                             break;
-                        }
-                        if is_upgrading {
-                            let ack_tx = upgrade_ack_slot.lock().unwrap().clone();
-                            if let Some(ack_tx) = ack_tx {
-                                let _ = ack_tx.try_send(());
-                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
@@ -760,7 +916,7 @@ pub async fn handle_connection<S>(
                                     win.id,
                                     &payload,
                                 );
-                                if framed.send(msg).await.is_err() {
+                                if outbound_tx.send(msg).await.is_err() {
                                     break;
                                 }
                             }
@@ -812,14 +968,51 @@ pub async fn handle_connection<S>(
         );
         // Identity-scoped: detach only panes still owned by our pane_output_tx.
         // Belt-and-suspenders with `was_kicked`: protects against races where
-        // framed.next() wins over kick_fut in the select!, or where the socket
-        // fails mid-eviction and we exit without observing the kick.
+        // client_reader.next() wins over kick_fut in the select!, or where
+        // the socket fails mid-eviction and we exit without observing the
+        // kick.
         detach_session_panes(&session_manager, active_session_id, &pane_output_tx).await;
 
         log::info!(
             "Client disconnected, session {} panes detached",
             active_session_id
         );
+    }
+
+    // task0001 (Design invariant 7): a socket write/flush failure inside
+    // the writer already tore this loop down via the `writer_result` arm
+    // above (AC-6) — the writer has already exited, so there is nothing
+    // further to flush. Otherwise, drop every sender THIS loop itself
+    // still holds — the plain `outbound_tx` and any in-flight
+    // outbound-remainder reservation (which owns its own internal clone;
+    // clearing `pending_outbound_reserve` drops it) — so
+    // `run_outbound_writer`'s `outbound_rx.recv()` naturally drains
+    // whatever was ALREADY admitted (FIFO, one final pass) and then
+    // observes the channel closed and exits gracefully. A bounded wait on
+    // its `JoinHandle` gives that best-effort final flush a chance to land
+    // before this connection fully tears down. Frames still sitting in
+    // `outbound_remainder` (never admitted at all) are NOT covered by this
+    // guarantee — see Design invariant 7's "already-admitted frames"
+    // wording.
+    if !writer_task_failed {
+        drop(pending_outbound_reserve.take());
+        drop(outbound_tx);
+        match tokio::time::timeout(OUTBOUND_TEARDOWN_FLUSH_TIMEOUT, writer_task_handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(join_err)) => {
+                log::warn!(
+                    "mux outbound writer task panicked during teardown: {}",
+                    join_err
+                );
+            }
+            Err(_) => {
+                log::warn!(
+                    "mux outbound writer teardown flush timed out after {:?}; abandoning \
+                     any remaining queued output",
+                    OUTBOUND_TEARDOWN_FLUSH_TIMEOUT
+                );
+            }
+        }
     }
 }
 
@@ -1035,12 +1228,12 @@ fn upgrade_reply_to_message(
 /// (`route_message`) — FR1's wire message is not scoped to one client type,
 /// and duplicating this logic per call site is exactly the kind of drift
 /// this task exists to close (task0009 rework).
-async fn handle_upgrade_request<S>(
-    framed: &mut Framed<S, MuxCodec>,
-    upgrade_tx: &UpgradeSignalSender,
-) where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+///
+/// `reply` is generic over [`ReplySink`] (task0001), exactly as
+/// `handlers::handle_create_window` is: the CLI-client path passes its
+/// still-undivided `Framed` sink, the GUI loop (`route_message`) passes an
+/// [`OutboundHandle`] wrapping the outbound admission queue.
+async fn handle_upgrade_request<R: ReplySink>(reply: &mut R, upgrade_tx: &UpgradeSignalSender) {
     let (reply_tx, reply_rx) = oneshot::channel();
     if upgrade_tx
         .send(UpgradeSignal { reply: reply_tx })
@@ -1052,14 +1245,14 @@ async fn handle_upgrade_request<S>(
             message: "mux daemon cannot process upgrade requests right now".to_string(),
         };
         let resp = MuxMessage::control(MessageType::Error, 0, &err);
-        let _ = framed.send(resp).await;
+        let _ = reply.send_reply(resp).await;
         return;
     }
 
     match tokio::time::timeout(UPGRADE_PREPARE_TIMEOUT, reply_rx).await {
         Ok(recv_result) => {
             if let Some(msg) = upgrade_reply_to_message(recv_result) {
-                let _ = framed.send(msg).await;
+                let _ = reply.send_reply(msg).await;
             } else {
                 log::info!("Upgrade preparation succeeded; daemon is replacing itself");
             }
@@ -1070,7 +1263,7 @@ async fn handle_upgrade_request<S>(
                 message: "mux daemon did not respond to the upgrade request in time".to_string(),
             };
             let resp = MuxMessage::control(MessageType::Error, 0, &err);
-            let _ = framed.send(resp).await;
+            let _ = reply.send_reply(resp).await;
         }
     }
 }
@@ -1097,7 +1290,8 @@ async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, s
 /// ### Audit note (mux-window-switch-output-hang task0001, reworked task0002)
 ///
 /// This function runs inside the connection's own `select!` loop
-/// (`handle_connection`, the `msg = framed.next() =>` arm), so any call it
+/// (`handle_connection`, the `msg = client_reader.next() =>` arm — renamed
+/// from `framed.next()` by task0001's read/write split), so any call it
 /// makes into a handler that performs a *blocking* send/reserve against
 /// `pane_output_tx` would self-deadlock the connection: that channel's ONLY
 /// consumer is this same task's `pane_output_rx.recv()` arm, which cannot
@@ -1143,11 +1337,16 @@ async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, s
 /// primary trigger (capacity can only free there), but giving every
 /// incoming client message a chance to progress the queue too closes the
 /// residual edge case of PTY output going quiet right after a deferral.
+///
+/// `outbound_tx` (task0001): every reply/frame this function (or a handler
+/// it calls) sends goes through the GUI loop's outbound admission queue —
+/// this function is only ever called from that loop, never the CLI-client
+/// path, so it is no longer generic over a raw stream type at all.
 #[allow(clippy::too_many_arguments)]
-async fn route_message<S>(
+async fn route_message(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-    framed: &mut Framed<S, MuxCodec>,
+    outbound_tx: &mpsc::Sender<MuxMessage>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: &mut u32,
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
@@ -1159,10 +1358,7 @@ async fn route_message<S>(
     visible_state: &Arc<AtomicBool>,
     upgrade_tx: &UpgradeSignalSender,
     deferred_output: &mut DeferredOutputQueue,
-) -> Result<(), bool>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+) -> Result<(), bool> {
     flush_deferred_output(
         deferred_output,
         pane_output_tx,
@@ -1177,7 +1373,7 @@ where
             handle_create_window(
                 &msg,
                 session_manager,
-                framed,
+                &mut OutboundHandle::new(outbound_tx),
                 pane_output_tx,
                 *active_session_id,
                 title_tx,
@@ -1191,7 +1387,7 @@ where
             handle_attach(
                 msg,
                 session_manager,
-                framed,
+                outbound_tx,
                 pane_output_tx,
                 active_session_id,
                 title_tx,
@@ -1203,7 +1399,7 @@ where
         MessageType::Detach => {
             log::info!("Client requested detach");
             let resp = MuxMessage::control(MessageType::Detached, 0, &());
-            let _ = framed.send(resp).await;
+            let _ = outbound_tx.send(resp).await;
             return Err(true);
         }
         MessageType::DestroyPane => {
@@ -1284,7 +1480,7 @@ where
             // upgrade` CLI connection — same handling as the CLI path,
             // factored into `handle_upgrade_request` so the two never drift.
             log::info!("GUI client requested mux daemon upgrade");
-            handle_upgrade_request(framed, upgrade_tx).await;
+            handle_upgrade_request(&mut OutboundHandle::new(outbound_tx), upgrade_tx).await;
         }
         _ => {
             log::debug!(
@@ -1849,6 +2045,64 @@ mod tests {
         }
     }
 
+    /// task0001 (AC-4/AC-6): a `tokio::io::DuplexStream` wrapper whose
+    /// WRITE side (`poll_write`/`poll_flush`) starts unconditionally
+    /// failing once `fail_writes` is flipped `true` — deterministic,
+    /// test-controlled "the socket write failed" injection, sharper than
+    /// a saturated-but-not-broken duplex (AC-1's own harness): reads keep
+    /// working (delegated straight through) so the handshake/attach
+    /// sequence still completes normally before the test flips the flag.
+    struct FailableWriteStream {
+        inner: tokio::io::DuplexStream,
+        fail_writes: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl tokio::io::AsyncRead for FailableWriteStream {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+        }
+    }
+
+    impl tokio::io::AsyncWrite for FailableWriteStream {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            if self.fail_writes.load(StdOrdering::Relaxed) {
+                return std::task::Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "test-injected write failure",
+                )));
+            }
+            std::pin::Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if self.fail_writes.load(StdOrdering::Relaxed) {
+                return std::task::Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "test-injected write failure",
+                )));
+            }
+            std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+        }
+    }
+
     /// Read frames off `client` until a `PaneCreated` has been seen for
     /// every id in `expected_pane_ids` (ignoring every other frame type
     /// in between, e.g. `SnapshotRestore`).
@@ -2195,8 +2449,9 @@ mod tests {
 
     /// AC-2 (G2 rework, mux-window-switch-output-hang task0004, review
     /// round 3 findings `dd23cfc388062939`/`5c01ffb8d53dc9f7`): a client
-    /// that keeps `framed.next()` CONTINUOUSLY ready must not be able to
-    /// starve the fair-reservation/drain machinery forever. Pane A's
+    /// that keeps the server's client-message arm (`client_reader.next()`,
+    /// task0001 rename) CONTINUOUSLY ready must not be able to starve the
+    /// fair-reservation/drain machinery forever. Pane A's
     /// channel is saturated exactly as in the sibling test above; a
     /// `RequestPaneSnapshot` for pane A is deferred against the full
     /// channel, and then — for the ENTIRE wait — a genuinely CONCURRENT
@@ -2524,5 +2779,878 @@ mod tests {
         .await
         .expect("producer threads must exit once the channel closes")
         .expect("spawn_blocking must not panic");
+    }
+
+    // ── task0001 (mux-connection-input-freeze): AC-1 regression test ──
+
+    /// AC-1 (FR1/FR5): the daemon connection task's drain arm must not park
+    /// the WHOLE `select!` loop when the socket's send buffer is full. This
+    /// is VERIFICATION TS1 / the regression test for the residual freeze
+    /// this feature closes.
+    ///
+    /// Floods pane A's output channel via background `blocking_send`
+    /// threads (same shape as the sibling task0003/task0004 tests above)
+    /// over a SMALL duplex whose server->client capacity saturates almost
+    /// immediately once the client stops reading, then sends `PtyInput`
+    /// for a DIFFERENT pane (B) and asserts it is processed — observable
+    /// directly at pane B's captured writer, NOT via a reply frame (the
+    /// client never reads again after draining the reattach handshake, so
+    /// a reply-frame-based assertion could never resolve either way) —
+    /// within the named 5s timeout.
+    ///
+    /// Pre-task0001 this test fails: the drain arm's
+    /// `framed.feed`/`framed.flush` calls block the WHOLE connection task
+    /// once the duplex buffer fills (nobody is reading), so `framed.next()`
+    /// never gets polled again and pane B's `PtyInput` is never processed
+    /// — the test's own timeout fires.
+    #[tokio::test]
+    async fn connection_level_client_input_processed_while_outbound_socket_saturated() {
+        let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+        const PANE_A: u32 = 1;
+        const PANE_B: u32 = 2;
+        let captured_input: Arc<StdMutex<Vec<u8>>> = Arc::new(StdMutex::new(Vec::new()));
+        {
+            let mut mgr = session_manager.lock().await;
+            let sid = mgr.create_session("default".to_string());
+            let wid = mgr.create_window(sid, "shell".to_string()).unwrap();
+
+            let target_a: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_a = MuxPane::new_test(PANE_A, 80, 24, target_a);
+            mgr.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_a);
+
+            let target_b: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_b = MuxPane::new_test_with_writer(
+                PANE_B,
+                80,
+                24,
+                target_b,
+                Box::new(CapturingWriter(captured_input.clone())),
+            );
+            mgr.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_b);
+        }
+
+        // Small duplex: comfortably fits the handshake/reattach exchange
+        // but saturates almost immediately once the flood begins and the
+        // client stops reading (matches the sibling AC-3/AC-4 tests'
+        // duplex sizing above, for the identical reason).
+        let (server_stream, client_stream) = tokio::io::duplex(16 * 1024);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let conn_task = tokio::spawn(handle_connection(
+            server_stream,
+            session_manager.clone(),
+            shutdown_tx,
+            title_tx,
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            no_ack_slot(),
+        ));
+
+        let mut client = Framed::new(client_stream, MuxCodec::new());
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+        let welcome_payload: WelcomeMsg = welcome.decode_payload().unwrap();
+        let session_id = match welcome_payload {
+            WelcomeMsg::Accepted { sessions, .. } => sessions[0].id,
+            WelcomeMsg::Rejected { reason } => panic!("unexpected rejection: {reason}"),
+        };
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        drain_until_pane_created(&mut client, &[PANE_A, PANE_B]).await;
+
+        let owned_tx: mpsc::Sender<PtyOutputChunk> = {
+            let mgr = session_manager.lock().await;
+            let pane = mgr
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .get(&PANE_A)
+                .unwrap();
+            match &*pane.output_target.lock().unwrap() {
+                PaneOutputTarget::Connected(tx) => tx.clone(),
+                PaneOutputTarget::Detached { .. } => {
+                    panic!("pane A must be Connected after attach, still Detached")
+                }
+            }
+        };
+
+        // Background OS threads saturating pane A's channel via
+        // `blocking_send` — same shape as the sibling AC-3/AC-4 tests
+        // above (mirrors `pty_spawn.rs`'s reader thread).
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut producers = Vec::new();
+        for _ in 0..8 {
+            let stop_clone = stop.clone();
+            let producer_tx = owned_tx.clone();
+            producers.push(std::thread::spawn(move || {
+                while !stop_clone.load(StdOrdering::Relaxed) {
+                    if producer_tx
+                        .blocking_send(PtyOutputChunk::pty_output(PANE_A, vec![b'x'; 32768]))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }));
+        }
+
+        // The client deliberately stops reading from here on (AC-1's own
+        // scenario): give the flood time to genuinely saturate the
+        // outbound socket (small duplex, nobody draining it) before
+        // sending the probe message.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        client
+            .send(MuxMessage {
+                msg_type: MessageType::PtyInput,
+                pane_id: PANE_B,
+                payload: b"hi".to_vec(),
+            })
+            .await
+            .expect(
+                "client->server direction is independent of the saturated \
+                 server->client direction",
+            );
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if *captured_input.lock().unwrap() == b"hi" {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "AC-1: PtyInput for pane B must be processed within the named 5s \
+                 timeout despite pane A's output channel and the outbound socket \
+                 both being saturated"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        stop.store(true, StdOrdering::Relaxed);
+        drop(client);
+        conn_task.abort();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || {
+                for p in producers {
+                    p.join().unwrap();
+                }
+            }),
+        )
+        .await
+        .expect("producer threads must exit once the channel closes")
+        .expect("spawn_blocking must not panic");
+    }
+
+    /// AC-3 (FR4): when the outbound admission path is saturated, the
+    /// connection STOPS consuming `pane_output_rx` — upstream backpressure
+    /// is directly observable (the channel's own reported capacity drops
+    /// by exactly what was sent and then stays put) — rather than
+    /// continuing to drain it into some other, unbounded buffer.
+    ///
+    /// The writer task ALWAYS eagerly dequeues whatever `outbound_tx`
+    /// currently holds the instant it is scheduled (freeing that channel
+    /// capacity immediately, independent of how long the actual socket
+    /// write of that dequeued batch then takes) — so a single slow-to-flush
+    /// chunk alone does not keep `outbound_tx` looking "full" to a `try_send`
+    /// arriving later. Saturating `outbound_tx` itself (`OUTBOUND_QUEUE_CAPACITY`
+    /// = 2) therefore needs more DISTINCT frames admitted in ONE drain-arm
+    /// iteration than fit — three different, non-mergeable pane ids' chunks
+    /// queued into `pane_output_rx` back-to-back (no `.await` yield point in
+    /// between: each `send()` resolves immediately since `pane_output_tx`
+    /// has ample capacity, so the writer task never gets scheduled in
+    /// between on this test's single-threaded runtime) does that
+    /// deterministically. Only pane A is a REAL registered pane (needed for
+    /// Attach); the other two ids are fictional — `PtyOutput` classification
+    /// builds a frame straight from the chunk's own `pane_id`/`data`, with
+    /// no `SessionManager` lookup, so this is a faithful, minimal probe of
+    /// the admission mechanism alone.
+    #[tokio::test]
+    async fn connection_level_stops_consuming_pane_output_rx_when_outbound_queue_saturated() {
+        let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+        const PANE_A: u32 = 1;
+        let session_id;
+        {
+            let mut mgr = session_manager.lock().await;
+            session_id = mgr.create_session("default".to_string());
+            let wid = mgr.create_window(session_id, "shell".to_string()).unwrap();
+            let target_a: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_a = MuxPane::new_test(PANE_A, 80, 24, target_a);
+            mgr.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_a);
+        }
+
+        // Tiny duplex, exactly as AC-5's test: a single chunk past this is
+        // enough to get the writer's flush genuinely stuck.
+        let (server_stream, client_stream) = tokio::io::duplex(256);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let conn_task = tokio::spawn(handle_connection(
+            server_stream,
+            session_manager.clone(),
+            shutdown_tx,
+            title_tx,
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            no_ack_slot(),
+        ));
+
+        let mut client = Framed::new(client_stream, MuxCodec::new());
+        client
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        drain_until_pane_created(&mut client, &[PANE_A]).await;
+
+        let owned_tx: mpsc::Sender<PtyOutputChunk> = {
+            let mgr = session_manager.lock().await;
+            let pane = mgr
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .get(&PANE_A)
+                .unwrap();
+            match &*pane.output_target.lock().unwrap() {
+                PaneOutputTarget::Connected(tx) => tx.clone(),
+                PaneOutputTarget::Detached { .. } => {
+                    panic!("pane A must be Connected after attach, still Detached")
+                }
+            }
+        };
+
+        const PANE_B: u32 = 2;
+        const PANE_C: u32 = 3;
+
+        let capacity_before = owned_tx.capacity();
+
+        // Phase 1: get the writer's own `flush()` genuinely, permanently
+        // stuck (client never reads again from here on) — ONE oversized
+        // chunk against the 256-byte duplex. This alone does NOT yet
+        // saturate `outbound_tx` itself (the writer eagerly dequeues the
+        // instant it is scheduled, freeing that one channel slot
+        // immediately — see this test's own doc), but it DOES mean the
+        // writer never calls `recv()` again afterward, so whatever gets
+        // admitted next stays admitted (and any remainder stays held) for
+        // good.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'x'; 4096]))
+            .await
+            .expect("pane_output_tx must accept the saturating chunk");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(
+            owned_tx.capacity(),
+            capacity_before,
+            "the saturating chunk must have been consumed (capacity restored) — \
+             the writer is now stuck flushing it, not the channel holding it"
+        );
+
+        // Phase 2: three DISTINCT (non-mergeable — different pane ids)
+        // chunks, queued into `pane_output_rx` back-to-back with NO
+        // intervening yield point: each `send()` resolves immediately
+        // (`pane_output_tx` has ample capacity), so nothing else gets
+        // scheduled in between. The drain arm's next run sees all three at
+        // once and tries to admit three distinct frames into `outbound_tx`
+        // (capacity 2, both slots free since the writer already dequeued
+        // phase 1's chunk) in ONE synchronous, non-blocking pass — the 3rd
+        // has nowhere to go and becomes `outbound_remainder`. Because the
+        // writer is stuck on phase 1's flush (client never reads), it never
+        // calls `recv()` again, so this remainder is never cleared either.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'a'; 16]))
+            .await
+            .expect("pane_output_tx must accept the first chunk");
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_B, vec![b'b'; 16]))
+            .await
+            .expect("pane_output_tx must accept the second chunk");
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_C, vec![b'c'; 16]))
+            .await
+            .expect("pane_output_tx must accept the third chunk");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(
+            owned_tx.capacity(),
+            capacity_before,
+            "AC-3: all three chunks must have been CONSUMED from pane_output_rx \
+             (capacity restored) — the unsent one lives in the connection's own \
+             outbound_remainder state, not left sitting in pane_output_rx"
+        );
+
+        // AC-3: with a genuine remainder held, `pane_output_rx` must now
+        // sit UNCONSUMED — the drain arm's own guard (`if
+        // outbound_remainder.is_empty()`) excludes it from the loop.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'd'; 16]))
+            .await
+            .expect("pane_output_tx must still accept sends up to its own capacity");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(
+            owned_tx.capacity(),
+            capacity_before - 1,
+            "AC-3: a chunk sent while an outbound remainder is held must sit \
+             UNCONSUMED in pane_output_rx (capacity down by exactly the one \
+             chunk sent), not be drained into some other, unbounded buffer"
+        );
+
+        // And stays put — the drain arm has genuinely STOPPED, not merely
+        // fallen behind.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(
+            owned_tx.capacity(),
+            capacity_before - 1,
+            "AC-3: pane_output_rx's backlog must remain UNCONSUMED (stable, not \
+             shrinking) while the outbound path stays saturated — this IS the \
+             upstream backpressure propagation FR4 requires"
+        );
+
+        drop(client);
+        conn_task.abort();
+    }
+
+    /// AC-4 (NFR4): a PTY-exit chunk consumed by the drain arm still reaps
+    /// the pane even when delivery of the corresponding `PtyExited` frame
+    /// to the client CANNOT succeed — reap is decided at consumption time
+    /// (Design invariant 5), independent of the outbound writer's outcome.
+    ///
+    /// Uses [`FailableWriteStream`] rather than a saturated-but-recoverable
+    /// duplex (AC-1's harness): flipping `fail_writes` makes delivery
+    /// genuinely, permanently impossible from that point on, which is a
+    /// sharper proof than "delivery hasn't happened YET" — it can never
+    /// happen at all, so a reap gated on delivery succeeding would never
+    /// fire.
+    #[tokio::test]
+    async fn connection_level_pty_exit_reaps_pane_even_when_delivery_can_never_succeed() {
+        let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+        const PANE_A: u32 = 1;
+        let session_id;
+        {
+            let mut mgr = session_manager.lock().await;
+            session_id = mgr.create_session("default".to_string());
+            let wid = mgr.create_window(session_id, "shell".to_string()).unwrap();
+            let target_a: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_a = MuxPane::new_test(PANE_A, 80, 24, target_a);
+            mgr.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_a);
+        }
+
+        let (server_stream, client_stream) = tokio::io::duplex(16 * 1024);
+        let fail_writes = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let wrapped_server = FailableWriteStream {
+            inner: server_stream,
+            fail_writes: fail_writes.clone(),
+        };
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let conn_task = tokio::spawn(handle_connection(
+            wrapped_server,
+            session_manager.clone(),
+            shutdown_tx,
+            title_tx,
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            no_ack_slot(),
+        ));
+
+        let mut client = Framed::new(client_stream, MuxCodec::new());
+        client
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        drain_until_pane_created(&mut client, &[PANE_A]).await;
+
+        let owned_tx: mpsc::Sender<PtyOutputChunk> = {
+            let mgr = session_manager.lock().await;
+            let pane = mgr
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .get(&PANE_A)
+                .unwrap();
+            match &*pane.output_target.lock().unwrap() {
+                PaneOutputTarget::Connected(tx) => tx.clone(),
+                PaneOutputTarget::Detached { .. } => {
+                    panic!("pane A must be Connected after attach, still Detached")
+                }
+            }
+        };
+
+        // From here on, delivery of ANY client-bound frame is permanently
+        // impossible.
+        fail_writes.store(true, StdOrdering::Relaxed);
+
+        // PTY-exit signal: empty-data chunk.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, Vec::new()))
+            .await
+            .expect("pane_output_tx must still accept the exit chunk");
+
+        // AC-4: the pane must be reaped (removed from the SessionManager)
+        // within a bounded time, even though the resulting `PtyExited`
+        // frame can never be delivered.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if session_manager.lock().await.is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "AC-4: the exited pane must be reaped within a bounded time \
+                 regardless of whether delivery to the client can succeed"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        drop(client);
+        conn_task.abort();
+    }
+
+    /// AC-5 (NFR4): the `Upgrading` ack does not fire while the frame is
+    /// merely QUEUED behind a saturated socket, and fires once it has
+    /// actually been written AND flushed (socket drained) — not merely
+    /// admitted into the outbound queue.
+    ///
+    /// Deliberately a SMALL saturation, unlike AC-1/AC-2's multi-thread
+    /// flood: a single oversized chunk against a tiny duplex is enough to
+    /// get the writer's `flush()` genuinely stuck (nothing drains it while
+    /// the client doesn't read), and keeps the backlog the client must
+    /// drain to observe the ack small and bounded — a multi-thread flood
+    /// here would keep re-winning the outbound queue's fair admission
+    /// ahead of the Upgrading notification for as long as it kept
+    /// producing, making the bound on "how much has to drain before the
+    /// ack fires" open-ended rather than the single small chunk this test
+    /// actually needs to prove the ordering.
+    #[tokio::test]
+    async fn connection_level_upgrading_ack_fires_only_after_flush_not_at_admission() {
+        let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+        const PANE_A: u32 = 1;
+        let session_id;
+        {
+            let mut mgr = session_manager.lock().await;
+            session_id = mgr.create_session("default".to_string());
+            let wid = mgr.create_window(session_id, "shell".to_string()).unwrap();
+            let target_a: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                    reason: DetachReason::NetworkDetach,
+                    owner: None,
+                }));
+            let pane_a = MuxPane::new_test(PANE_A, 80, 24, target_a);
+            mgr.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_a);
+        }
+
+        // Tiny duplex: still comfortably fits the handshake/attach
+        // exchange (the client drains those promptly), but a single
+        // few-KB chunk sent afterward already exceeds it.
+        let (server_stream, client_stream) = tokio::io::duplex(256);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        // Real ack channel, installed into the slot up front (mirrors
+        // `mux::daemon::prepare_upgrade`'s own wiring).
+        let (ack_tx, mut ack_rx) = mpsc::channel::<()>(4);
+        let upgrade_ack_slot: SharedUpgradeAckSlot = Arc::new(StdMutex::new(Some(ack_tx)));
+
+        let conn_task = tokio::spawn(handle_connection(
+            server_stream,
+            session_manager.clone(),
+            shutdown_tx,
+            title_tx,
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            upgrade_ack_slot,
+        ));
+
+        let mut client = Framed::new(client_stream, MuxCodec::new());
+        client
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        drain_until_pane_created(&mut client, &[PANE_A]).await;
+
+        let owned_tx: mpsc::Sender<PtyOutputChunk> = {
+            let mgr = session_manager.lock().await;
+            let pane = mgr
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .get(&PANE_A)
+                .unwrap();
+            match &*pane.output_target.lock().unwrap() {
+                PaneOutputTarget::Connected(tx) => tx.clone(),
+                PaneOutputTarget::Detached { .. } => {
+                    panic!("pane A must be Connected after attach, still Detached")
+                }
+            }
+        };
+
+        // A single chunk (a few KB, well past the 256-byte duplex) is
+        // enough to get the writer's `flush()` genuinely stuck once the
+        // client stops reading — no background flood needed.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, vec![b'x'; 4096]))
+            .await
+            .expect("pane_output_tx must accept the saturating chunk");
+        // Give the drain arm / writer time to actually reach the stuck
+        // `flush()` before forwarding the notification.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Forward the Upgrading announcement (mirrors
+        // `mux::daemon::prepare_upgrade`'s own construction) while the
+        // socket is saturated.
+        {
+            let mgr = session_manager.lock().await;
+            let upgrading = MuxMessage {
+                msg_type: MessageType::Upgrading,
+                pane_id: 0,
+                payload: Vec::new(),
+            };
+            let _ = mgr.notify_tx().send(upgrading);
+        }
+
+        // AC-5: the ack must NOT have fired yet — the frame is, at best,
+        // queued behind a saturated socket.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            ack_rx.try_recv().is_err(),
+            "AC-5: the Upgrading ack must not fire while the frame is queued behind \
+             a saturated socket"
+        );
+
+        // Resume client reads until the Upgrading frame itself is
+        // observed — only the one saturating chunk plus the Upgrading
+        // frame need to drain, a small, bounded backlog.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "must observe the Upgrading frame within a bounded time once reads resume"
+            );
+            let msg = tokio::time::timeout(remaining, client.next())
+                .await
+                .expect("must not hang")
+                .expect("stream must not end")
+                .expect("frame must decode");
+            if msg.msg_type == MessageType::Upgrading {
+                break;
+            }
+        }
+
+        // AC-5: now that the frame has actually been written AND flushed,
+        // the ack must fire, within a bounded time.
+        tokio::time::timeout(Duration::from_secs(5), ack_rx.recv())
+            .await
+            .expect("must not hang waiting for the ack")
+            .expect("ack channel must not be closed");
+
+        drop(client);
+        conn_task.abort();
+    }
+
+    /// AC-6: a socket write failure terminates the connection loop with
+    /// today's outcome — the loop exits and panes detach via the existing
+    /// teardown path (`detach_session_panes`, NOT the reap path AC-4
+    /// covers: the pane itself never exited here, only the socket did).
+    #[tokio::test]
+    async fn connection_level_socket_write_failure_terminates_loop_and_detaches_panes() {
+        let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+        const PANE_A: u32 = 1;
+        let session_id;
+        let target_a: SharedOutputTarget;
+        {
+            let mut mgr = session_manager.lock().await;
+            session_id = mgr.create_session("default".to_string());
+            let wid = mgr.create_window(session_id, "shell".to_string()).unwrap();
+            target_a = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+                reason: DetachReason::NetworkDetach,
+                owner: None,
+            }));
+            let pane_a = MuxPane::new_test(PANE_A, 80, 24, target_a.clone());
+            mgr.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane_a);
+        }
+
+        let (server_stream, client_stream) = tokio::io::duplex(16 * 1024);
+        let fail_writes = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let wrapped_server = FailableWriteStream {
+            inner: server_stream,
+            fail_writes: fail_writes.clone(),
+        };
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (title_tx, _title_rx): (TitleChangeSender, _) = mpsc::channel(16);
+        let (notification_tx, _notification_rx): (NotificationSender, _) = mpsc::channel(16);
+        let (agent_status_tx, _agent_status_rx): (AgentStatusReportSender, _) = mpsc::channel(16);
+        let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(None));
+        let (upgrade_tx, _upgrade_rx): (UpgradeSignalSender, _) = mpsc::channel(1);
+
+        let conn_task = tokio::spawn(handle_connection(
+            wrapped_server,
+            session_manager.clone(),
+            shutdown_tx,
+            title_tx,
+            notification_tx,
+            agent_status_tx,
+            pane_exit_sender,
+            upgrade_tx,
+            no_ack_slot(),
+        ));
+
+        let mut client = Framed::new(client_stream, MuxCodec::new());
+        client
+            .send(MuxMessage::control(
+                MessageType::Hello,
+                0,
+                &HelloMsg {
+                    client_type: ClientType::Gui,
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            ))
+            .await
+            .unwrap();
+        let welcome = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .expect("must not hang on Welcome")
+            .expect("stream must not end")
+            .expect("frame must decode");
+        assert_eq!(welcome.msg_type, MessageType::Welcome);
+
+        client
+            .send(MuxMessage::control(
+                MessageType::Attach,
+                0,
+                &AttachMsg { session_id },
+            ))
+            .await
+            .unwrap();
+        drain_until_pane_created(&mut client, &[PANE_A]).await;
+        assert!(matches!(
+            *target_a.lock().unwrap(),
+            PaneOutputTarget::Connected(_)
+        ));
+
+        let owned_tx: mpsc::Sender<PtyOutputChunk> = {
+            let mgr = session_manager.lock().await;
+            let pane = mgr
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .get(&PANE_A)
+                .unwrap();
+            match &*pane.output_target.lock().unwrap() {
+                PaneOutputTarget::Connected(tx) => tx.clone(),
+                PaneOutputTarget::Detached { .. } => {
+                    panic!("pane A must be Connected after attach, still Detached")
+                }
+            }
+        };
+
+        // Inject the write failure, then produce SOME output so the
+        // writer actually attempts (and fails) a write.
+        fail_writes.store(true, StdOrdering::Relaxed);
+        owned_tx
+            .send(PtyOutputChunk::pty_output(PANE_A, b"trigger".to_vec()))
+            .await
+            .expect("pane_output_tx must still accept the chunk");
+
+        // AC-6: the connection loop must exit (the spawned task
+        // completes) within a bounded time.
+        tokio::time::timeout(Duration::from_secs(5), conn_task)
+            .await
+            .expect("connection loop must terminate after a socket write failure")
+            .expect("handle_connection task must not panic");
+
+        // AC-6: panes detach via the existing teardown path — the pane
+        // itself never exited (only the socket did), so it must be back
+        // to Detached, not reaped.
+        assert!(
+            matches!(*target_a.lock().unwrap(), PaneOutputTarget::Detached { .. }),
+            "AC-6: a socket write failure must detach panes via the existing \
+             teardown path, the same outcome as today"
+        );
+        assert!(
+            !session_manager.lock().await.is_empty(),
+            "AC-6: the pane itself never exited, so it must NOT be reaped — only \
+             detached"
+        );
+
+        drop(client);
     }
 }

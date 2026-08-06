@@ -3,14 +3,11 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use futures::SinkExt;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio_util::codec::Framed;
 
-use super::codec::MuxCodec;
+use super::outbound::ReplySink;
 use super::protocol::*;
 use super::pty_spawn::{register_pane_and_start_reader, spawn_pty};
 use super::reattach::{
@@ -31,21 +28,24 @@ use crate::mux::session::pane::{
 /// Decodes optional `CreateWindowPayload` from the message to set window name
 /// and execute an initial command. Empty or missing payload defaults to
 /// name="Terminal" with no command (backward compatible with GUI).
+///
+/// `reply` is generic over [`ReplySink`] (task0001): the CLI-client path
+/// passes its still-undivided `Framed` sink directly, the GUI loop passes
+/// an [`super::outbound::OutboundHandle`] wrapping the outbound admission
+/// queue — same handler logic, same behavior per message, different
+/// destination for the reply.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn handle_create_window<S>(
+pub(super) async fn handle_create_window<R: ReplySink>(
     msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-    framed: &mut Framed<S, MuxCodec>,
+    reply: &mut R,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: u32,
     title_tx: &TitleChangeSender,
     notification_tx: &NotificationSender,
     agent_status_tx: &AgentStatusReportSender,
     pane_exit_sender: &SharedPaneExitSender,
-) -> Result<(), bool>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+) -> Result<(), bool> {
     // Decode payload; empty/invalid payload -> defaults (backward compat)
     let payload = msg
         .decode_payload::<CreateWindowPayload>()
@@ -77,7 +77,7 @@ where
                 message: format!("Failed to spawn PTY: {}", e),
             };
             let resp = MuxMessage::control(MessageType::Error, 0, &err);
-            let _ = framed.send(resp).await;
+            let _ = reply.send_reply(resp).await;
             return Ok(());
         }
     };
@@ -92,7 +92,7 @@ where
                 message: "Failed to create window".to_string(),
             };
             let resp = MuxMessage::control(MessageType::Error, 0, &err);
-            let _ = framed.send(resp).await;
+            let _ = reply.send_reply(resp).await;
             return Ok(());
         }
     };
@@ -150,7 +150,7 @@ where
     );
 
     let resp = MuxMessage::control(MessageType::PaneCreated, pane_id, &pane_id);
-    if framed.send(resp).await.is_err() {
+    if reply.send_reply(resp).await.is_err() {
         return Err(true);
     }
 
@@ -608,20 +608,22 @@ pub(super) async fn handle_request_pane_snapshot(
 /// session (firing any previously-installed kick to evict the prior client),
 /// and the receiver is written to `kick_rx` so the connection loop can await
 /// it in its select!. Any prior receiver held by the caller is replaced.
+///
+/// Only called from the GUI loop (`route_message`) — never from the
+/// CLI-client path — so `outbound_tx` (task0001) is the outbound admission
+/// queue directly, with no need for the [`ReplySink`] abstraction
+/// `handle_create_window` uses to serve both paths.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn handle_attach<S>(
+pub(super) async fn handle_attach(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-    framed: &mut Framed<S, MuxCodec>,
+    outbound_tx: &mpsc::Sender<MuxMessage>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: &mut u32,
     title_tx: &TitleChangeSender,
     kick_rx: &mut Option<oneshot::Receiver<()>>,
     visible_state: &Arc<AtomicBool>,
-) -> Result<(), bool>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+) -> Result<(), bool> {
     let attach_msg: AttachMsg = match msg.decode_payload() {
         Some(m) => m,
         None => {
@@ -642,7 +644,7 @@ where
                 message: format!("Session {} not found", new_session_id),
             };
             let resp = MuxMessage::control(MessageType::Error, 0, &err);
-            let _ = framed.send(resp).await;
+            let _ = outbound_tx.send(resp).await;
             return Ok(());
         }
     }
@@ -685,7 +687,10 @@ where
     // `attach_visible == false`, every entry has empty buffer bytes so no
     // snapshot frame is sent (the frontend learns the pane exists but
     // receives no screen contents until the next SetVisibility(true) resume).
-    if send_reattach_data(framed, &reattach_data).await.is_err() {
+    if send_reattach_data(outbound_tx, &reattach_data)
+        .await
+        .is_err()
+    {
         return Err(true);
     }
 
