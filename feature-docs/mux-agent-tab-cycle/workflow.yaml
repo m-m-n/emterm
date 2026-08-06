@@ -40,7 +40,8 @@ workflow:
       (decide_autonomously) により analyst の推奨 skip をそのまま採用した。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: dae848b4e31d9f040306c7d30ba9bafbea2b615c
   - id: implement
     status: pending
     base_commit: null
@@ -53,7 +54,38 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: next-agent-window mux action (native cycle behavior)
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/mux/prefix.rs
+      - src-tauri/src/settings.rs
+      - src-tauri/src/app.rs
+      - src-tauri/src/mux/window_group.rs
+      - src-tauri/src/agent_status_model.rs
+    skills: [backend-impl]
+    domains: [input-handling, ui]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2]
+    status: pending
+    notes: null
+    branch: em-workflow/mux-agent-tab-cycle/task0001
+  task0002:
+    title: settings UI row for the next-agent-window keybind
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/web-shared/settings/sections/mux-section.ts
+      - src-tauri/web-shared/i18n/locales/en.json
+      - src-tauri/web-shared/i18n/locales/ja.json
+      - src-tauri/web-shared/settings/types.ts
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: low
+    requirements: [FR1, NFR3]
+    status: pending
+    notes: null
+    branch: em-workflow/mux-agent-tab-cycle/task0002
 
 review:
   status: pending
@@ -66,74 +98,74 @@ review:
 requirements:
   FR1:
     title: Agent tab cycle key operation
-    status: tbd
+    status: assumed
     tbd_reason: >-
       キーバインド未確定（gate create-spec.requirement-clarification の Codex 相談が
       利用上限で不成立となり record_tbd を適用。create-plan の tbd-resolution で確定する）。
       analyst 推奨: planning-default-configurable — 計画時に既存キーマップと衝突しない
       既定バインドを定め、設定で変更可能にする。
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002]
     tests: [TS-1, TS-4]
   FR2:
     title: Cycle order and wrap-around
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-3, TS-4]
   FR3:
     title: Exclusion of normal tabs
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2]
   FR4:
     title: No-op on a non-mux tab
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-6]
   FR5:
     title: No-op when no qualifying tab exists
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-5]
   FR6:
     title: Qualifying agent-state set
-    status: tbd
+    status: assumed
     tbd_reason: >-
       巡回対象となる agent 状態集合が未確定（gate create-spec.requirement-clarification の
       Codex 相談が利用上限で不成立となり record_tbd を適用。create-plan の tbd-resolution で
       確定する）。analyst 推奨: any-reported-state — clear されていない agent-status を持つ
       ペインを含む mux タブ全て（idle/working/blocked/done を問わない）を対象とする。
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2]
   NFR1:
     title: GUI feature gate maintained
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR2:
     title: Event-driven target resolution
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR3:
     title: i18n convention for user-visible strings
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: []
 
 batch:
