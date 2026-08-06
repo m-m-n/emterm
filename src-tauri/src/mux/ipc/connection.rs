@@ -498,8 +498,22 @@ pub async fn handle_connection<S>(
         let has_pending_output = has_unforwarded_pane_output(has_deferred_work, &pane_output_rx)
             || !outbound_remainder.is_empty()
             || pending_outbound_reserve.is_some();
-        let allow_client_arm =
-            allow_client_message_arm(has_pending_output, consecutive_client_msgs_while_deferred);
+        // Review round (finding on outbound-remainder starvation): while
+        // `outbound_remainder` is held, the drain arm below is gated off
+        // (see its own `if outbound_remainder.is_empty()` guard), so the
+        // ONLY arm that can make progress on it is the fair reservation
+        // (`permit_result`) — and that reservation only resolves once the
+        // writer task drains `outbound_tx`, which it cannot do while
+        // blocked flushing to a slow/stalled socket. If the client arm were
+        // also excluded for that same quota-exhausted iteration, `select!`
+        // would be left with no arm capable of becoming ready on its own,
+        // parking indefinitely and starving `PtyInput` — the exact freeze
+        // this feature exists to close, one layer further out. So a held
+        // remainder must never disable the client arm; it can only be
+        // disabled by pending *admission* work that the reservation/drain
+        // arms can independently resolve without the client's help.
+        let allow_client_arm = !outbound_remainder.is_empty()
+            || allow_client_message_arm(has_pending_output, consecutive_client_msgs_while_deferred);
         let mut took_client_arm = false;
 
         tokio::select! {

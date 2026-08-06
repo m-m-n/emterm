@@ -77,13 +77,20 @@ where
 /// The GUI loop's outbound admission handle: wraps a borrowed clone of the
 /// admission queue's sender so a handler can send a reply frame through the
 /// SAME single ordered path every other client-bound frame in the loop uses
-/// (Design "Admission path"). Handlers "MAY await admission" here (Design
-/// invariant 1) — this is admission into a queue the writer drains
-/// independently, not a direct socket write, so it is bounded by outbound
-/// queue capacity rather than by the client's own read rate. Only the
-/// drain arm itself (`handle_connection`) is forbidden from awaiting here;
-/// see [`OUTBOUND_QUEUE_CAPACITY`]'s doc for that arm's own non-blocking
-/// mechanism.
+/// (Design "Admission path").
+///
+/// CONTRACT CORRECTION: admission here is NOT bounded by outbound queue
+/// capacity alone. A slot only frees once [`run_outbound_writer`] has fed
+/// AND flushed the frame ahead of it to the socket, and that flush is
+/// itself gated on the client actually reading — so `await`ing admission
+/// through this handle is transitively bounded by the client's own read
+/// rate, exactly like a direct socket write would be. `await`ing here from
+/// inside a `select!` arm body can therefore park the whole connection
+/// task (including the drain arm and every other `select!` arm) for as
+/// long as the client stalls its reads. Any call site that must keep the
+/// loop live under a stalled client — the drain arm — MUST NOT use this
+/// handle; it uses the non-blocking [`try_admit_outbound_frames`] +
+/// remainder path instead (see [`OUTBOUND_QUEUE_CAPACITY`]'s doc).
 pub(super) struct OutboundHandle<'a> {
     tx: &'a mpsc::Sender<MuxMessage>,
 }
