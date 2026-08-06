@@ -3166,6 +3166,25 @@ impl App {
                 }
                 MuxActionOutcome::None
             }
+            PrefixAction::NextAgentWindow => {
+                // SPEC mux-agent-tab-cycle: resolve the cycle target from
+                // in-memory state only (window order + agent-status model),
+                // at key-event time — no polling, no cached qualify list
+                // (NFR2). A window qualifies when at least one of its panes
+                // currently carries a reported (uncleared) agent status
+                // (FR6, existential).
+                let group = tab.mux_group.as_ref().unwrap();
+                let current = group.active_index();
+                let qualifies: Vec<bool> = group
+                    .pane_ids()
+                    .iter()
+                    .map(|pane_id| self.agent_status.any_pane_has_reported_state([pane_id]))
+                    .collect();
+                let target = crate::mux::window_group::next_qualifying_index(&qualifies, current);
+                let result = Self::switch_to(tab, target, &mut scroll);
+                window_switch_committed = result == MuxActionOutcome::Changed;
+                result
+            }
         };
         // The `tab` borrow has ended; commit the swapped scroll value and, on
         // a committed pane switch, force a full redraw so a shorter incoming
@@ -7921,6 +7940,126 @@ mod tests {
         assert_eq!(active_idx(&app), 0); // wrapped
         app.dispatch_mux_action(PrefixAction::PrevWindow);
         assert_eq!(active_idx(&app), 2); // wrapped backwards
+    }
+
+    // ── next-agent-window (mux-agent-tab-cycle task0001 AC-2 … AC-6) ──────
+    // `app_with_mux_windows(n)` seeds panes at ids 100 + i (mux_welcome_message).
+
+    /// AC-2/AC-3: with a subset of qualifying windows, repeated invocations
+    /// visit exactly the qualifying windows in display order, skipping
+    /// non-qualifying ones, and wrap back to the first once past the last.
+    #[test]
+    fn dispatch_next_agent_window_skips_non_qualifying_and_wraps() {
+        let mut app = app_with_mux_windows(4); // panes 100,101,102,103
+        // Only windows 1 and 3 (panes 101, 103) qualify.
+        app.agent_status.apply_daemon_update(
+            101,
+            Some(crate::agent_status::AgentState::Working),
+            None,
+            1,
+            false,
+        );
+        app.agent_status.apply_daemon_update(
+            103,
+            Some(crate::agent_status::AgentState::Idle),
+            None,
+            1,
+            false,
+        );
+
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextAgentWindow),
+            MuxActionOutcome::Changed
+        );
+        assert_eq!(active_idx(&app), 1, "skips non-qualifying window 0");
+
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextAgentWindow),
+            MuxActionOutcome::Changed
+        );
+        assert_eq!(active_idx(&app), 3, "skips non-qualifying window 2");
+
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextAgentWindow),
+            MuxActionOutcome::Changed
+        );
+        assert_eq!(
+            active_idx(&app),
+            1,
+            "wraps back to the first qualifying window"
+        );
+    }
+
+    /// AC-4: with exactly one qualifying window, invocation lands on (or
+    /// stays on) that window and never activates a non-qualifying window.
+    #[test]
+    fn dispatch_next_agent_window_single_qualifying_stays_put() {
+        let mut app = app_with_mux_windows(3); // panes 100,101,102
+        app.agent_status.apply_daemon_update(
+            101,
+            Some(crate::agent_status::AgentState::Blocked),
+            None,
+            1,
+            false,
+        );
+        // Move onto the qualifying window first.
+        app.dispatch_mux_action(PrefixAction::SelectWindow(1));
+        assert_eq!(active_idx(&app), 1);
+
+        app.dispatch_mux_action(PrefixAction::NextAgentWindow);
+        assert_eq!(active_idx(&app), 1, "stays on the only qualifying window");
+
+        // From a different starting window, still lands on the only qualifier.
+        app.dispatch_mux_action(PrefixAction::SelectWindow(0));
+        assert_eq!(active_idx(&app), 0);
+        app.dispatch_mux_action(PrefixAction::NextAgentWindow);
+        assert_eq!(active_idx(&app), 1);
+    }
+
+    /// AC-5: with zero qualifying windows, the active window does not change.
+    #[test]
+    fn dispatch_next_agent_window_zero_qualifying_is_noop() {
+        let mut app = app_with_mux_windows(3);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextAgentWindow),
+            MuxActionOutcome::None
+        );
+        assert_eq!(active_idx(&app), 0);
+    }
+
+    /// AC-6: with a non-mux GUI tab active, the action changes nothing —
+    /// the existing dispatch guard applies with no new mechanism.
+    #[test]
+    fn dispatch_next_agent_window_non_mux_tab_is_noop() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextAgentWindow),
+            MuxActionOutcome::None
+        );
+    }
+
+    /// AC-7: qualification follows the any-reported-state predicate —
+    /// cleared panes do not keep a window qualified.
+    #[test]
+    fn dispatch_next_agent_window_ignores_cleared_status() {
+        let mut app = app_with_mux_windows(2); // panes 100,101
+        app.agent_status.apply_daemon_update(
+            101,
+            Some(crate::agent_status::AgentState::Working),
+            None,
+            1,
+            false,
+        );
+        app.agent_status
+            .apply_daemon_update(101, None, None, 2, false); // cleared
+
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextAgentWindow),
+            MuxActionOutcome::None,
+            "the only reporting pane was cleared: no window qualifies"
+        );
+        assert_eq!(active_idx(&app), 0);
     }
 
     #[test]

@@ -300,6 +300,25 @@ impl AgentStatusModel {
         self.entries.get(pane)
     }
 
+    /// Whether any of the given mux pane ids currently carries a reported
+    /// (uncleared) agent status — one of Idle / Working / Blocked / Done.
+    /// Cleared (`state: None`) and never-reported (no tracked entry) panes
+    /// do not count. Used by the `next-agent-window` mux action (SPEC
+    /// mux-agent-tab-cycle FR6) to decide whether a mux window qualifies for
+    /// the cycle: a window qualifies when at least one of its panes
+    /// qualifies (existential), per IMPLEMENTATION.md's any-reported-state
+    /// assumption.
+    pub fn any_pane_has_reported_state<'a, I>(&self, pane_ids: I) -> bool
+    where
+        I: IntoIterator<Item = &'a u32>,
+    {
+        pane_ids.into_iter().any(|pid| {
+            self.entries
+                .get(&PaneKey::MuxPane(*pid))
+                .is_some_and(|e| e.state.is_some())
+        })
+    }
+
     /// Highest-priority state + that state's actual unseen flag among
     /// `panes`, ranked `blocked > unseen-done > working > seen-done > idle`.
     /// Panes with no tracked entry, or a cleared (`state: None`) entry, do
@@ -589,6 +608,57 @@ mod tests {
         model.apply_daemon_update(1, Some(AgentState::Working), None, 1, false);
         model.apply_daemon_update(1, None, None, 2, false); // cleared
         assert_eq!(model.aggregate(&[pane(1)]), None);
+    }
+
+    // ── mux-agent-tab-cycle task0001 AC-7: any_pane_has_reported_state ────
+
+    #[test]
+    fn any_pane_has_reported_state_true_for_each_reported_state_kind() {
+        for state in [
+            AgentState::Idle,
+            AgentState::Working,
+            AgentState::Blocked,
+            AgentState::Done,
+        ] {
+            let mut model = AgentStatusModel::new();
+            model.apply_daemon_update(1, Some(state), None, 1, false);
+            assert!(
+                model.any_pane_has_reported_state(&[1]),
+                "{state:?} must qualify"
+            );
+        }
+    }
+
+    #[test]
+    fn any_pane_has_reported_state_false_for_cleared_and_never_reported() {
+        let mut model = AgentStatusModel::new();
+        model.apply_daemon_update(1, Some(AgentState::Working), None, 1, false);
+        model.apply_daemon_update(1, None, None, 2, false); // cleared
+        assert!(
+            !model.any_pane_has_reported_state(&[1]),
+            "cleared pane must not qualify"
+        );
+        assert!(
+            !model.any_pane_has_reported_state(&[999]),
+            "never-reported pane must not qualify"
+        );
+    }
+
+    #[test]
+    fn any_pane_has_reported_state_multi_pane_qualifies_existentially() {
+        let mut model = AgentStatusModel::new();
+        model.apply_daemon_update(2, Some(AgentState::Idle), None, 1, false);
+        // pane 1 never reported, pane 2 reported Idle — the set qualifies
+        // because at least one pane does (existential, FR6).
+        assert!(model.any_pane_has_reported_state(&[1, 2]));
+        // Neither pane in this set ever reported: does not qualify.
+        assert!(!model.any_pane_has_reported_state(&[3, 4]));
+    }
+
+    #[test]
+    fn any_pane_has_reported_state_empty_set_is_false() {
+        let model = AgentStatusModel::new();
+        assert!(!model.any_pane_has_reported_state(&[]));
     }
 
     // ── AC-4: counts ignore seen, empty model reports zero ───────────────
