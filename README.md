@@ -6,7 +6,8 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
 
 - **Core Terminal**
   - Full ANSI/VT100/VT220/xterm control sequence support
-  - Multi-tab terminal with independent PTY sessions
+  - Multi-tab terminal with independent PTY sessions, each with its own independent terminal grid size
+  - Device-query responses (DA1/DA2/DSR/XTWINOPS) are delivered to the application that issued them (e.g. `tmux`) rather than rendered as visible text
   - New tab with global shell settings (`Ctrl+Shift+G`), bypassing the profile selector
   - New-tab chooser lists live tmux sessions as rows (Linux/Unix); confirming a row opens a new tab attached to that session
   - `term_core` Rust crate for the parser, grid, and Unicode width
@@ -36,26 +37,29 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
 
 - **Terminal Multiplexer**
   - `emterm mux` starts a native multiplexer daemon; GUI receives raw PTY bytes (no double-parse overhead)
-  - Detach (`prefix+d`) / reattach (`emterm mux attach`) with full screen state restoration
+  - Detach (`prefix+Ctrl+D`) / reattach (`emterm mux attach`) with full screen state restoration
   - Multiple windows per session; instant window switching (all windows stream simultaneously)
   - Vertical tab sidebar (native egui) lists mux windows by number/name with an active mark; right-edge overlay by default (fades to 35% opacity when idle, brightens on hover or right after a window switch), keybind-toggled (`Ctrl+Z Ctrl+W`), or a persistent right-edge panel (always opaque, opt-in via settings); the top tab bar shows a single consolidated `mux: <window name>` tab while attached
   - Per-pane scroll position and scrollback history preserved on window switch (no detach→reattach required)
-  - Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename), `prefix+m` (move/reorder with `[N]` position badge)
+  - Window management: `prefix+Ctrl+C` (new), `prefix+Ctrl+N`/`prefix+Ctrl+P` (navigate), `prefix+Ctrl+R` (rename), `prefix+Ctrl+T` (move/reorder with `[N]` position badge)
   - tmux.conf import: prefix key, keybindings, mouse
   - Inband APC protocol: mux control messages travel over the PTY stream (SSH-transparent, no socket forwarding needed)
   - `emterm mux new-window [-n name] [-c command]`: create named windows with initial commands from CLI
   - `emterm mux send-keys [-t window]`: pipe stdin data as key input to a mux window from CLI
   - `emterm mux script`: start daemon without attaching (for scripted workspace initialization)
   - `emterm mux kill`: gracefully terminate the daemon and all PTY sessions via IPC
-  - Agent status: panes report AI-agent state (idle/working/blocked/done) via OSC 777 or `emterm agent-status`; aggregated into tab/window badges and OS notifications
+  - Agent status: panes report AI-agent state (idle/working/blocked/done) via OSC 777 or `emterm agent-status`; shown as emoji badges (working ⚡, idle 💤, blocked ❓/❔, done ✅/💤) on tab/window badges and as OS notifications; badges auto-clear if the shell returns to its prompt without an explicit done/clear report (e.g. after Ctrl+C)
+  - Agent notification toggles in Settings > Agent: independent turn-end (done) and question-waiting (blocked) notification switches, both default on
+  - `next-agent-window` (`prefix+Ctrl+A` by default) cycles the active mux window through only the windows with a reported agent status, skipping the rest
   - Agent-facing API: `emterm mux read` / `emterm mux send` / `emterm mux wait` let one pane read, write to, and wait on another pane's state
   - OSC title propagation: daemon updates window names from shell OSC 0/2 sequences even while GUI is detached
   - Pane exit while detached is reaped correctly; daemon auto-shutdown fires when the last session empties
-  - Mux status bar: daemon-side command execution with template variables (`{cmd:name}`, `{hostname}`, `{cwd}`)
   - Correct main-buffer snapshot restore: daemon screen dump omitted for main-buffer panes; client replays scrollback bytes directly (eliminates progress-bar corruption after `apt install` and similar commands)
   - Resize-interleaved output replays correctly on window/tab switch: the daemon records pane-resize markers in scrollback so each replayed segment is reconstructed at the terminal dimensions it was produced at
+  - Fast window switching (tens of milliseconds), even for panes with large accumulated scrollback
+  - Switching windows or typing in other panes stays responsive even while one pane is producing very high-volume output
   - Clean reattach: device-query response sequences (DA1/DSR/XTWINOPS/DECRPM) recorded in scrollback are stripped before replay, so detach → attach never types stray query text into the shell prompt
-  - `emterm mux upgrade` replaces the running daemon in place via `execve` (Unix only): every pane's shell keeps running through the update; `emterm mux attach` and `emterm mux` auto-recover a stale (protocol-mismatched) daemon via hot upgrade before falling back to a full respawn
+  - `emterm mux upgrade` replaces the running daemon in place via `execve` (Unix only): every pane's shell keeps running through the update, including alt-screen apps (e.g. Claude Code); `emterm mux attach` and `emterm mux` auto-recover a stale (protocol-mismatched) daemon via hot upgrade before falling back to a full respawn; the daemon also detects a binary update automatically on attach or mux start and self-upgrades, no manual `emterm mux upgrade` required
   - Windows support: Named Pipe IPC with daemon process detachment (survives terminal closure)
   - Included in the CLI-only build: `emterm mux --daemon` runs on headless SSH hosts without GUI dependencies
 
@@ -69,6 +73,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
 - **Input and IME**
   - High-throughput key input (direct winit `WindowEvent::KeyboardInput`, no JSON serialization)
   - Native IME via winit `WindowEvent::Ime` (X11 / Wayland / Windows)
+  - Windows IME composition (including third-party IMEs such as CorvusSKK) no longer freezes the application
   - IME position auto-adjustment for TUI applications (cursor-hidden mode positions IME at bottom-left)
   - Capture-phase clipboard shortcuts (Ctrl+Shift+C/V) compatible with IME
   - Middle-click paste (configurable on Windows; fixed native behavior on Linux)
@@ -128,7 +133,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Unrecognized top-level flags print a usage error to stderr and exit with code 2 instead of being silently ignored
 
 - **[Claude Code Plugin](plugins/emterm/README.md)**
-  - Installable Claude Code plugin (Linux) that reports Claude Code's lifecycle (idle/working/blocked) to eMterm's agent-status mechanism via a hook
+  - Installable Claude Code plugin (Linux) that reports Claude Code's lifecycle (working/blocked/done) to eMterm's agent-status mechanism via a hook
   - Exposes eMterm's display commands (`display-markdown`, `display-json`, `display-yaml`, `display-image`) and mux commands (`mux-read`, `mux-send`, `mux-wait`) as Claude Code skills
   - Install steps and hook reference: [plugins/emterm/README.md](plugins/emterm/README.md)
 

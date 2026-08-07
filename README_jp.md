@@ -6,7 +6,8 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
 
 - **コアターミナル**
   - ANSI/VT100/VT220/xterm 制御シーケンス完全対応
-  - 独立したPTYセッションを持つマルチタブターミナル
+  - 独立したPTYセッションを持つマルチタブターミナル（各タブが独立したターミナルグリッドサイズを保持）
+  - デバイスクエリ応答（DA1/DA2/DSR/XTWINOPS）はクエリを発行したアプリケーション（`tmux`など）にそのまま渡され、可視テキストとして描画されない
   - グローバルシェル設定で新規タブを開くショートカット（`Ctrl+Shift+G`、プロファイルセレクタをバイパス）
   - 新規タブチューザーに稼働中のtmuxセッションを一覧表示（Linux/Unix）。行を選ぶとそのセッションにアタッチした新規タブを開く
   - `term_core` Rustクレートによるパーサ・グリッド・Unicode 幅
@@ -36,26 +37,29 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
 
 - **ターミナルマルチプレクサ**
   - `emterm mux` でネイティブマルチプレクサデーモンを起動（GUIが生のPTYバイトを受信、二重パースなし）
-  - デタッチ（`prefix+d`）／リアタッチ（`emterm mux attach`）と画面状態の完全な復元
+  - デタッチ（`prefix+Ctrl+D`）／リアタッチ（`emterm mux attach`）と画面状態の完全な復元
   - セッションあたり複数ウィンドウ（全ウィンドウ同時ストリーミングによる瞬時切り替え）
   - 縦タブサイドバー（egui ネイティブ描画）: ウィンドウ番号・名前・アクティブマークを一覧表示。デフォルトは右端オーバーレイ（アイドル時は不透明度35%に減光、ホバー中またはウィンドウ切替直後は明るく表示）で、キーバインド（`Ctrl+Z Ctrl+W`）でトグル可能。設定で常に不透明な右端固定パネルにも切替可能。アタッチ中はトップタブバーに `mux: <ウィンドウ名>` の単一タブのみ表示
   - ウィンドウ切り替え時にペインごとのスクロール位置とスクロールバック履歴を保持（デタッチ→リアタッチ不要）
-  - ウィンドウ管理: `prefix+c`（新規）、`prefix+n`/`prefix+p`（切替）、`prefix+,`（リネーム）、`prefix+m`（移動/並び替え、`[N]`位置バッジ表示）
+  - ウィンドウ管理: `prefix+Ctrl+C`（新規）、`prefix+Ctrl+N`/`prefix+Ctrl+P`（切替）、`prefix+Ctrl+R`（リネーム）、`prefix+Ctrl+T`（移動/並び替え、`[N]`位置バッジ表示）
   - tmux.conf インポート: プレフィックスキー、キーバインド、マウス
   - インバンドAPCプロトコル: PTYストリーム経由でmux制御メッセージを送受信（SSH透過、追加ソケット転送不要）
   - `emterm mux new-window [-n 名前] [-c コマンド]`: CLIからウィンドウを作成し初期コマンドを実行
   - `emterm mux send-keys [-t ウィンドウ]`: 標準入力のデータをmuxウィンドウにキー入力として送信
   - `emterm mux script`: デーモン起動のみ（アタッチなし）、スクリプトによるワークスペース初期化に使用
   - `emterm mux kill`: IPC経由でデーモンと全PTYセッションをgracefulに終了
-  - エージェント状態: 各ペインがOSC 777または`emterm agent-status`でAIエージェントの状態（idle/working/blocked/done）を報告。タブ/ウィンドウバッジとOS通知に反映
+  - エージェント状態: 各ペインがOSC 777または`emterm agent-status`でAIエージェントの状態（idle/working/blocked/done）を報告。絵文字バッジ（working ⚡、idle 💤、blocked ❓/❔、done ✅/💤）としてタブ/ウィンドウバッジとOS通知に反映。明示的なdone/clear報告がないままシェルがプロンプトに戻った場合（Ctrl+Cなど）はバッジが自動的にクリアされる
+  - 設定 > エージェントカテゴリの通知トグル: ターン終了（done）と質問待ち（blocked）の通知を個別にON/OFF可能（デフォルトともにON）
+  - `next-agent-window`（デフォルト`prefix+Ctrl+A`）: エージェント状態が報告されているウィンドウのみを順に切り替え
   - エージェント向けAPI: `emterm mux read` / `emterm mux send` / `emterm mux wait` で他のペインの読み取り・書き込み・状態待機が可能
   - OSCタイトル伝播: デーモンがシェルのOSC 0/2シーケンスからウィンドウ名を更新（GUI未接続中も有効）
   - デタッチ中のシェル終了を正しくreap; 最後のセッションが空になるとデーモンが自動終了
-  - Muxステータスバー: デーモン側でコマンドを定期実行し、テンプレート変数（`{cmd:name}`、`{hostname}`、`{cwd}`）でステータスバーに反映
   - メインバッファスナップショット修正: メインバッファペインではデーモンvt100スクリーンダンプを省略し、スクロールバックバイトを直接リプレイ（`apt install`などの実行後にスナップショット復元でプログレスバー表示が崩れる問題を解消）
   - リサイズを挟んだ出力もウィンドウ/タブ切り替え後に正しく復元: デーモンがスクロールバックにペインのリサイズマーカーを記録し、各セグメントを記録時の端末サイズでリプレイ
+  - 大量のスクロールバックを持つペインへの切り替えも数十ミリ秒で完了
+  - 一方のペインが大量出力中でも、ウィンドウ切り替えや他ペインへの入力は応答性を維持
   - クリーンな再接続: スクロールバックに残るデバイスクエリの応答シーケンス（DA1/DSR/XTWINOPS/DECRPM）はリプレイ前に除去され、デタッチ→アタッチ後にシェルプロンプトへ余分なクエリ文字列が入力されない
-  - `emterm mux upgrade`: 実行中のデーモンを`execve`でその場で入れ替え（Unixのみ）、更新中も全ペインのシェルを継続動作。`emterm mux attach` / `emterm mux` は互換性のない（バージョン不一致の）デーモンを検出すると、まずホットアップグレードを試み、対応していない場合のみ完全な再起動にフォールバック
+  - `emterm mux upgrade`: 実行中のデーモンを`execve`でその場で入れ替え（Unixのみ）、更新中も全ペインのシェル（Claude Codeなどオルタネートスクリーンのアプリを含む）を継続動作。`emterm mux attach` / `emterm mux` は互換性のない（バージョン不一致の）デーモンを検出すると、まずホットアップグレードを試み、対応していない場合のみ完全な再起動にフォールバック。デーモンはアタッチ時・mux起動時にもバイナリ更新を自動検出し、`emterm mux upgrade`を手動実行しなくても自己アップグレードする
   - Windows対応: Named Pipe IPCとプロセスデタッチ（ターミナル終了後もデーモン継続）
   - CLIのみビルドにも同梱: GUI依存なしで `emterm mux --daemon` がヘッドレスなSSHホスト上で動作
 
@@ -69,6 +73,7 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
 - **入力・IME**
   - 高スループットなキー入力（winit `WindowEvent::KeyboardInput` を直接処理、JSONシリアライズ不要）
   - winit `WindowEvent::Ime` によるネイティブIME（X11 / Wayland / Windows）
+  - Windows IME入力（CorvusSKKなどのサードパーティIMEを含む）でアプリがフリーズしなくなった
   - TUIアプリ使用時のIME位置自動調整（カーソル非表示時は左下に配置）
   - IMEと共存するキャプチャフェーズのクリップボードショートカット（Ctrl+Shift+C/V）
   - ミドルクリックペースト（Windowsは設定で切替可能、Linuxはネイティブ挙動に固定）
@@ -123,7 +128,7 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
   - 未知のトップレベルフラグは無視されず、stderrに使用方法エラーを出力して終了コード2で終了
 
 - **[Claude Codeプラグイン](plugins/emterm/README.md)**
-  - インストール可能なClaude Codeプラグイン（Linux）。フックを通じてClaude Codeのライフサイクル状態（idle/working/blocked）をeMtermのエージェント状態機構に報告
+  - インストール可能なClaude Codeプラグイン（Linux）。フックを通じてClaude Codeのライフサイクル状態（working/blocked/done）をeMtermのエージェント状態機構に報告
   - eMtermの表示コマンド（`display-markdown`、`display-json`、`display-yaml`、`display-image`）とmuxコマンド（`mux-read`、`mux-send`、`mux-wait`）をClaude Codeスキルとして公開
   - インストール手順とフック仕様: [plugins/emterm/README.md](plugins/emterm/README.md)
 
