@@ -1,0 +1,63 @@
+round: 1
+executed_at: "2026-08-07T23:33:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: c9dabbeb6da46ed2ab364985ad50313937454dd9
+  head_commit: 9a143f56dd305ee53df2e7813cbec3d065d6c21e
+  changed_files:
+    - plugins/emterm/hooks/hooks.json
+    - plugins/emterm/hooks/scripts/notify-status.test.ts
+    - test-docs/plugin-stop-hook-done/task0001.tests.yaml
+plan:
+  floor: [comprehensive, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+findings:
+  - stable_id: 31bf31a71d3c78d5
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/README.md
+    line: 75
+    title: "hooks.json の Stop→done 変更にプラグイン README が追従しておらず、既存のガードテストも検知できない"
+    description: >-
+      hooks.json の Stop args が ["idle"] → ["done"] になったが、プラグインの利用者向け
+      ドキュメントは idle のまま残っている。plugins/emterm/README.md:5 / :23 / :75、
+      ルート README.md:131、README_jp.md:126 が該当。加えて
+      plugins/emterm/skills/skills.test.ts:465 のガードテストは README と hooks.json の
+      イベント名しか突き合わせておらず（正規表現が右辺の state 値を捨てている）、
+      state 値のドリフトを検知できない。
+    suggestion: >-
+      README 群を done に更新し、skills.test.ts の抽出正規表現を event→state ペアまで
+      捕捉する形に拡張する。SPEC のスコープ外なので別タスクとして起票するのが妥当。
+    sources: [claude:comprehensive]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix ゲート（critical/high）対象外。SPEC スコープ外のファイル（changed_files 外のため confidence 上限 50）。フォローアップタスク候補"
+  - stable_id: c0c291947794add8
+    severity: medium
+    category: comprehensive
+    file: plugins/emterm/hooks/hooks.json
+    line: 46
+    title: "Stop→done が pane 単位 30 秒のレートリミッタを毎ターン消費し、直後の blocked 通知を握り潰しうる"
+    description: >-
+      src-tauri/src/notifications.rs の AgentNotificationRateLimiter は last_fired を
+      pane 単位で 1 つだけ持ち、状態別ではない。AGENT_NOTIFICATION_RATE_LIMIT は 30 秒で
+      Done と Blocked が同じ窓を共有する。Stop→done により毎ターン窓が re-arm されるため、
+      done 発火から 30 秒以内の PermissionRequest→blocked 通知が抑止されうる。
+    suggestion: >-
+      (a) 影響を許容して Edge Cases に既知事項として明記する、または
+      (b) notifications.rs のレートリミッタのキーを (pane, AgentState) に分離する。
+      後者は NFR2（src-tauri/ 無変更）に抵触するため別タスク。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix ゲート対象外。修正先が NFR2 でスコープ外の src-tauri/ のため別タスク候補"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
