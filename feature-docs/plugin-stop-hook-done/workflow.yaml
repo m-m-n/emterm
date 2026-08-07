@@ -31,7 +31,8 @@ workflow:
     status: completed
     completed_at_commit: 8dd18bbf5984a02192e4cbfe52f0c8edbd028ab8
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 73383b683fd79dfa0313c98b843c95a0055de20a
     base_commit: c9dabbeb6da46ed2ab364985ad50313937454dd9
   - id: review
     status: pending
@@ -53,7 +54,7 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR1, FR2, NFR1, NFR2, NFR3, NFR4, NFR5]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/plugin-stop-hook-done/task0001
 
