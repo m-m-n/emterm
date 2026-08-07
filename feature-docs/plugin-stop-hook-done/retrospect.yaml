@@ -1,0 +1,14 @@
+feature: plugin-stop-hook-done
+collected_at: "2026-08-07T23:34:00+09:00"
+session_ids: [07087b28-920a-440a-bd3a-65647e14c76d]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - "`bunx biome check .` が base commit 時点から既に失敗している（src-tauri/web-shared/settings/types.ts の整形差分、2026-08-06 の agent-desktop-notification feature task0002 由来）。品質コマンドがリポジトリ全体を対象にする場合、feature スコープ外の既存失敗と本 feature 由来の失敗が verify で区別できない。既存失敗の棚卸しか、format_command のスコープ限定を検討する余地がある"
+  - "review comprehensive が README ドリフト（plugins/emterm/README.md ほかが Stop→idle のまま）を検出した。plugins/emterm/skills/skills.test.ts:465 のガードテストは event 名しか突き合わせておらず state 値のドリフトを検知できないため、テスト側の正規表現拡張が候補"
+  - "Notion タスク起点の batch 実行で、既存の em-workflow integration ブランチが 5 本（全て main にマージ済み・worktree 無し）残っていた。batch-mode.md の Step A 表は「引数なし + 複数ブランチ → 中断」だが、完了済みブランチを残す運用（Step C の keep-branch / PR 分岐）では毎回この条件に当たる。live 候補（未マージ or worktree 存在）で絞る規則が要りそう"
