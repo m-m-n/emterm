@@ -28,7 +28,7 @@ workflow:
     skipped_reason: "JSON 設定値 1 箇所とテスト期待値 1 箇所の変更のみで、UI サーフェス・視覚要素・レイアウトへの変更が一切ない。既存の通知/バッジ UI は実装済みで無変更。"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: 33a8f005837d74150956f4831f5feab541540e5f
