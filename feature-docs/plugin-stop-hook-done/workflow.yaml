@@ -28,7 +28,8 @@ workflow:
     skipped_reason: "JSON 設定値 1 箇所とテスト期待値 1 箇所の変更のみで、UI サーフェス・視覚要素・レイアウトへの変更が一切ない。既存の通知/バッジ UI は実装済みで無変更。"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: 8dd18bbf5984a02192e4cbfe52f0c8edbd028ab8
   - id: implement
     status: pending
     base_commit: 33a8f005837d74150956f4831f5feab541540e5f
@@ -41,7 +42,20 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Stop hook state を done に変更しテスト期待値を同期"
+    plan: tasks/task0001.md
+    files:
+      - plugins/emterm/hooks/hooks.json
+      - plugins/emterm/hooks/scripts/notify-status.test.ts
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR1, FR2, NFR1, NFR2, NFR3, NFR4, NFR5]
+    status: pending
+    notes: null
+    branch: em-workflow/plugin-stop-hook-done/task0001
 
 review:
   status: pending
@@ -57,50 +71,50 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2]
   FR2:
     title: "テストの期待値更新"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
   NFR1:
     title: "notify-status.sh は変更不要"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS1]
+    tasks: [task0001]
+    tests: [TS1, TS3]
   NFR2:
     title: "eMterm 本体 (src-tauri/) は変更しない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS3]
   NFR3:
     title: "編集対象はリポジトリ内 plugins/emterm/ のソースのみ"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS3]
   NFR4:
     title: "hooks.json の command 既存形式を維持する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
   NFR5:
     title: "通知経路は変更しない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS2]
+    tasks: [task0001]
+    tests: [TS2, TS3]
 
 batch:
   review_rework_count: 0
