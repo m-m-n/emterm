@@ -35,7 +35,7 @@ workflow:
     completed_at_commit: 73383b683fd79dfa0313c98b843c95a0055de20a
     base_commit: c9dabbeb6da46ed2ab364985ad50313937454dd9
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -59,10 +59,15 @@ tasks:
     branch: em-workflow/plugin-stop-hook-done/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
-  perspectives: {}
+  plan:
+    floor: [comprehensive, spec]
+    discretionary: []
+    cross_validation: false
+  perspectives:
+    comprehensive: pending
+    spec: pending
   residual_critical_high: 0
   needs_rework: false
 
