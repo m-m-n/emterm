@@ -43,7 +43,7 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify-status.sh",
-            "args": ["idle"],
+            "args": ["done"],
             "timeout": 3
           }
         ]
