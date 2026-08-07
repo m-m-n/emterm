@@ -1,0 +1,69 @@
+feature: mux-connection-input-freeze
+collected_at: "2026-08-07T20:05:00+09:00"
+session_ids:
+  - 853105b8-a35d-44a7-b106-8ea1f87ddeac
+  - c5523546-30da-4e78-9282-49171e786e04
+  - abecb782-1eda-45ad-a3f5-12742deba111
+signals:
+  review_critical_high:
+    - stable_id: 63f73db0dc9e06c5
+      category: comprehensive
+      file: src-tauri/src/mux/ipc/connection.rs
+      title: "outbound remainder 保持中はクライアントアームの飢餓ガードが無効化され、PTY 出力が止まる"
+      resolution: fixed
+    - stable_id: 9537da352469bc68
+      category: comprehensive
+      file: src-tauri/src/mux/ipc/connection.rs
+      title: "auto-fix の副作用: remainder 保持中に client アームを除外すると select! が park し、入力が再び凍結する"
+      resolution: fixed
+    - stable_id: 5203c7376189960d
+      category: comprehensive
+      file: src-tauri/src/mux/ipc/connection.rs
+      title: "(round 1 high — auto-fix ループで解決)"
+      resolution: fixed
+    - stable_id: d55d5d410f85e087
+      category: spec
+      file: src-tauri/src/mux/ipc/handlers.rs
+      title: "reply/reattach 経路の admit_blocking が select! ループ全体を停止させ、FR1 が未達のまま残る（task0003 で悪化）"
+      resolution: deferred
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures:
+    - id: baseline-flakes
+      detail: >
+        --lib 実行で tabs::tests の 6 件が失敗（off-thread replay worker
+        did not complete in time ×5、welcome_without_windows_leaves_group_none ×1）。
+        base commit 8e2311c2 の worktree でも同族 6 件が失敗するため
+        pre-existing baseline とみなし、verify は pass とした。
+    - id: TS4-mux-throughput-not-run
+      detail: >
+        mux_throughput の唯一のテストが #[ignore]（--release --ignored かつ
+        実デーモン起動が必要）のため、承認済みコマンドの範囲では実行されない。
+        round 2 finding 2366b01e268f580c が同じ指摘をしている。
+    - id: TS5-manual-unverified
+      detail: >
+        seq 1 10000000 実行中の window 切替という本来の再現手順は release
+        ビルドが要るため未検証。ユーザー手動確認が必要。
+    - id: SC-6-unmet
+      detail: >
+        Success Criteria SC-6 は residual_critical_high == 0 を要求するが
+        1（d55d5d410f85e087, high）。batch rework cap により deferred。
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >
+    floor 4 観点 + cross validation で 2 ラウンド回しても、round 2 で新規の
+    high（d55d5d410f85e087）が出た。round 1 の auto-fix と rework task0003 が
+    同じ self-block パターンを別の階層（reply/reattach の admit_blocking）へ
+    押し出しただけで、根本の「select! ループ内で送信を待つ」形が残っている。
+    この feature 自体が前 feature (mux-window-switch-output-hang) の
+    同型残存の修正であり、2 世代続けて同じ形が生き残っている。
+  - >
+    batch モードの rework cap 1 が、residual high 1 件と medium 21 件の
+    deferred を生んだ。deferred の多くは同一根（admit_blocking / quiesce
+    タイムアウト後の単一ライター不変条件）に収束しているので、
+    次 feature としてまとめて起票する価値がある。
+  - >
+    tabs::tests の baseline flake（off-thread replay の 5 秒待ち）が
+    verify のたびにベースライン比較を強いている。verify の自動判定コストに
+    直結しているので、フレーク自体の修正か ignore 化を検討する余地がある。
