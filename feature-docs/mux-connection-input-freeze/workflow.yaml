@@ -1,0 +1,211 @@
+schema_version: 1
+feature: mux-connection-input-freeze
+created: 2026-08-06
+base_branch: main
+parent_branch: em-workflow/mux-connection-input-freeze/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    rust_cli_features:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --test mux_throughput"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: ded9e7afe03cdff9b45c1199bfb86a6fde0f5805
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Backend concurrency bugfix in the mux daemon connection task and bridge I/O path; no UI surface, no visual or interaction change."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: e973c060685bb56113b6481f4cc7a96d26e6ce82
+  - id: implement
+    status: completed
+    completed_at_commit: cd770ace2598c8336912e4824c729090769e373e
+    base_commit: 8e2311c2ffbb5b07f7f185c0207db5bd18b8c5f8
+  - id: review
+    status: completed
+    completed_at_commit: 05781116e72a699cf0046ff55964cba5e6f77b95
+  - id: verify
+    status: completed
+    result: pass
+    failed_items: []
+    notes: >
+      Build: cargo check (gui) and cargo check --no-default-features both exit 0.
+      Tests: --lib -- --test-threads=1 => 3158 passed / 6 failed, all 6 in
+      tabs::tests (off-thread replay timing flakes + welcome_without_windows_
+      leaves_group_none). The same family fails on the base commit 8e2311c2
+      worktree (6 failed there too), so they are pre-existing baseline failures,
+      not new — per VERIFICATION.md "Coverage target".
+      Feature-owned modules are green: mux::ipc 184 passed / 0 failed,
+      mux::bridge 38 passed / 0 failed (covers TS1, TS2, TS3, TS8, TS9, TS10).
+      mux_throughput: the single test is #[ignore]d by design (needs
+      --release --ignored, spawns a real daemon) — not run here.
+      Format: cargo fmt --check reports drift only in files this feature does
+      not touch (agent_status_*.rs, tabs.rs, etc. — known baseline drift);
+      none of the 6 feature files drift.
+      TS6 (protocol stability): diff touches no crates/mux_ipc and no
+      ipc/codec.rs — only bridge.rs, ipc/{connection,handlers,mod,outbound,
+      reattach}.rs. TS7 (scope boundaries): no GUI event_tx sizing change;
+      bridge_main_loop_windows appears in the diff only inside a doc comment.
+      TS5 is manual (release build, user-initiated) and remains unverified.
+      SC-6 (residual_critical_high == 0) is NOT met: 1 high finding
+      (d55d5d410f85e087) plus several medium findings were deferred with
+      "batch mode: rework cap reached". Recorded, not treated as a verify
+      failure since the review step itself completed.
+  - id: retrospect
+    status: completed
+    completed_at_commit: e86209ffd1a56cb4c59e2439e36974e1fca52c28
+
+tasks:
+  task0001:
+    title: "Connection task: decouple socket sends from the select! loop"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/mux/ipc/connection.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/ipc/reattach.rs
+      - src-tauri/src/mux/ipc/mod.rs
+    skills: [backend-impl]
+    domains: [concurrency, external-io]
+    complexity: high
+    requirements: [FR1, FR3, FR4, FR5, NFR1, NFR4]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-connection-input-freeze/task0001
+  task0002:
+    title: "Bridge: move stdout writes off the tokio runtime thread"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/mux/bridge.rs
+    skills: [backend-impl]
+    domains: [concurrency, external-io]
+    complexity: high
+    requirements: [FR2, FR3, FR4, NFR1, NFR3]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-connection-input-freeze/task0002
+  task0003:
+    title: "Outbound admission path: restore bounded remainder, single ordered admission, and teardown delivery"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/mux/ipc/connection.rs
+      - src-tauri/src/mux/ipc/outbound.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/ipc/reattach.rs
+      - src-tauri/src/mux/ipc/mod.rs
+    skills: [backend-impl]
+    domains: [concurrency, external-io]
+    complexity: high
+    requirements: [FR1, FR3, FR4, NFR1, NFR4]
+    status: merged
+    notes: null
+    branch: em-workflow/mux-connection-input-freeze/task0003
+    provenance:
+      source: review
+      review_round: 1
+      source_ids: [7f9f9ad6fb4dd977, ee54e1d2ff740104, 4e6f23b7d53527e5, f9cde80880407a13, 79d48554f94fd3df, ebb33f43f48f612a, 96633ec8862e6c64, 76e7d90468e859d0]
+
+review:
+  status: completed
+  rounds_completed: 2
+  plan:
+    floor: [comprehensive, performance, architecture, spec]
+    discretionary: []
+    cross_validation: true
+  perspectives:
+    comprehensive: {claude: completed, cross_model: none}
+    performance: {claude: completed, vertex: skipped, codex: skipped}
+    architecture: {claude: completed, vertex: completed}
+    spec: {claude: completed, vertex: skipped, codex: skipped}
+  residual_critical_high: 1
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Daemon connection task: drain arm must not starve select!"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS5]
+  FR2:
+    title: "Bridge: no synchronous stdout syscall on the tokio task"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS3, TS5]
+  FR3:
+    title: "Preserve same-pane FIFO ordering (carried from prior feature)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002, task0003]
+    tests: [TS2, TS4, TS9, TS10]
+  FR4:
+    title: "Preserve backpressure; no unbounded channels (carried from prior feature)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002, task0003]
+    tests: [TS4, TS8]
+  FR5:
+    title: "Regression test for bounded input polling during drain"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0003]
+    tests: [TS1, TS8]
+  NFR1:
+    title: "Protocol stability: no mux protocol change"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002, task0003]
+    tests: [TS6]
+  NFR2:
+    title: "Scope boundary: GUI-side event_tx bounded(4096) sizing out of scope"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS7]
+  NFR3:
+    title: "Scope boundary: Windows bridge same-shape fix out of scope"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS7]
+  NFR4:
+    title: "No regression of PTY-exit reap and Upgrading-ack paths"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0003]
+    tests: [TS4]
+
+batch:
+  review_rework_count: 1
+  verify_rework_count: 0

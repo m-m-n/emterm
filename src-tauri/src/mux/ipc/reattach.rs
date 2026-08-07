@@ -2,14 +2,11 @@
 
 use std::sync::Arc;
 
-use futures::SinkExt;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio_util::codec::Framed;
 
-use super::codec::MuxCodec;
+use super::outbound::OutboundAdmission;
 use super::protocol::*;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
@@ -304,49 +301,60 @@ const REATTACH_CHUNK_SIZE: usize = MAX_SNAPSHOT_FRAME_PAYLOAD;
 /// Large per-pane buffers therefore never produce an oversized single
 /// frame (the codec would fail to encode it, tearing the socket down) —
 /// this size check is what prevents that, not a multi-frame split.
-pub(super) async fn send_reattach_data<S>(
-    framed: &mut Framed<S, MuxCodec>,
+///
+/// `admission` (task0001, task0003 rework): every frame goes through the
+/// GUI loop's SINGLE outbound admission component (module doc "Admission
+/// path"), via [`OutboundAdmission::admit_blocking`] — this replaces the
+/// pre-task0001 direct `framed.send`. Each pane entry's `PaneCreated` (and
+/// its optional `SnapshotRestore`) is admitted together in ONE
+/// `admit_blocking` call: that call drains any remainder already held by
+/// an earlier producer FIRST, so a same-pane `SnapshotRestore` can never
+/// overtake older held `PtyOutput` for that same pane (FR3, the worst-case
+/// scenario the task plan's Design section names) — the exact ordering
+/// hazard chunking into two separate calls per entry would not, by
+/// itself, break (each call drains what's ahead of it either way), but a
+/// single call keeps the pair atomic relative to any OTHER producer that
+/// might interleave between them. Only called from `handle_attach` (GUI
+/// loop), never the CLI-client path, so no [`super::outbound::ReplySink`]
+/// dual-mode is needed here.
+pub(super) async fn send_reattach_data(
+    admission: &mut OutboundAdmission,
     reattach_data: &[(PaneId, Vec<u8>, Vec<(usize, u16, u16)>)],
-) -> Result<(), ()>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+) -> Result<(), ()> {
     for (pane_id, buffered, segments) in reattach_data {
-        let resp = MuxMessage::control(MessageType::PaneCreated, *pane_id, pane_id);
-        if framed.send(resp).await.is_err() {
-            return Err(());
-        }
-        if buffered.is_empty() {
-            continue;
-        }
-        let encoded = crate::mux::session::pane::encode_snapshot_segments(buffered, segments);
-        // D6'' (task0005 rework, review round-4 finding `1d4a0c96821da0ef`):
-        // route through the SAME shared size-policy check
-        // `mux::ipc::handlers::handle_request_pane_snapshot` and the
-        // visibility-resume path now use, rather than each producer
-        // re-deriving its own comparison against `MAX_SNAPSHOT_FRAME_PAYLOAD`
-        // (here via the `REATTACH_CHUNK_SIZE` alias — same value, same
-        // check, one implementation).
-        if mux_ipc::protocol::fits_single_snapshot_frame(encoded.len()) {
-            let msg = MuxMessage {
-                msg_type: MessageType::SnapshotRestore,
-                pane_id: *pane_id,
-                payload: encoded,
-            };
-            if framed.send(msg).await.is_err() {
-                return Err(());
-            }
-            continue;
-        }
-        log::error!(
-            "reattach: pane {} snapshot {}B exceeds the single-frame limit \
-             ({}B); skipping this pane's buffered history rather than \
-             replaying it segment-blind at the client's current dimensions \
-             (D6''')",
+        let mut frames = vec![MuxMessage::control(
+            MessageType::PaneCreated,
+            *pane_id,
             pane_id,
-            encoded.len(),
-            REATTACH_CHUNK_SIZE
-        );
+        )];
+        if !buffered.is_empty() {
+            let encoded = crate::mux::session::pane::encode_snapshot_segments(buffered, segments);
+            // D6'' (task0005 rework, review round-4 finding `1d4a0c96821da0ef`):
+            // route through the SAME shared size-policy check
+            // `mux::ipc::handlers::handle_request_pane_snapshot` and the
+            // visibility-resume path now use, rather than each producer
+            // re-deriving its own comparison against `MAX_SNAPSHOT_FRAME_PAYLOAD`
+            // (here via the `REATTACH_CHUNK_SIZE` alias — same value, same
+            // check, one implementation).
+            if mux_ipc::protocol::fits_single_snapshot_frame(encoded.len()) {
+                frames.push(MuxMessage {
+                    msg_type: MessageType::SnapshotRestore,
+                    pane_id: *pane_id,
+                    payload: encoded,
+                });
+            } else {
+                log::error!(
+                    "reattach: pane {} snapshot {}B exceeds the single-frame limit \
+                     ({}B); skipping this pane's buffered history rather than \
+                     replaying it segment-blind at the client's current dimensions \
+                     (D6''')",
+                    pane_id,
+                    encoded.len(),
+                    REATTACH_CHUNK_SIZE
+                );
+            }
+        }
+        admission.admit_blocking(frames).await?;
     }
     Ok(())
 }
@@ -925,14 +933,18 @@ mod tests {
     /// Confirmed to fail pre-fix: the old fallback emitted 3 `PtyOutput`
     /// chunks reassembling to the original buffer — this test's "no further
     /// frames" assertion would have seen the first chunk instead.
+    ///
+    /// task0001/task0003: `send_reattach_data` now admits through an
+    /// `OutboundAdmission` (the GUI loop's single outbound admission
+    /// component, wrapping a plain channel here) rather than sending over
+    /// a real socket — no codec round-trip is exercised here any more
+    /// (that is covered separately by `codec.rs`'s own tests and the
+    /// connection-level tests in `connection.rs`), so the harness
+    /// simplifies to a plain channel with no spawned task needed.
     #[tokio::test]
     async fn test_send_reattach_data_skips_history_for_oversize_buffer() {
-        use futures::StreamExt;
-        use tokio_util::codec::Framed;
-
-        let (client, server) = tokio::io::duplex(64 * 1024 * 1024);
-        let mut server_framed = Framed::new(server, MuxCodec::new());
-        let client_framed = Framed::new(client, MuxCodec::new());
+        let (tx, mut rx) = mpsc::channel::<MuxMessage>(4);
+        let mut admission = OutboundAdmission::new(tx);
 
         // Payload that spans just over two full chunks — its ENCODED form
         // exceeds `MAX_SNAPSHOT_FRAME_PAYLOAD`.
@@ -940,61 +952,40 @@ mod tests {
         let big: Vec<u8> = (0..payload_len).map(|i| (i % 251) as u8).collect();
         let reattach_data = vec![(42u32, big.clone(), Vec::new())];
 
-        let sender = tokio::spawn(async move {
-            let mut framed = client_framed;
-            send_reattach_data(&mut framed, &reattach_data).await
-        });
+        send_reattach_data(&mut admission, &reattach_data)
+            .await
+            .expect("send_reattach_data ok");
+        drop(admission);
 
         // First (and only) frame: PaneCreated — the pane still attaches.
-        let first = server_framed.next().await.unwrap().unwrap();
+        let first = rx.recv().await.unwrap();
         assert_eq!(first.msg_type, MessageType::PaneCreated);
         assert_eq!(first.pane_id, 42);
 
-        sender.await.unwrap().expect("send_reattach_data ok");
-
-        // No history frames follow — dropping the sender closes the stream.
-        let next =
-            tokio::time::timeout(std::time::Duration::from_millis(50), server_framed.next()).await;
-        match next {
-            Ok(None) | Err(_) => {} // stream closed or timed out: both OK
-            Ok(Some(Ok(frame))) => panic!(
-                "unexpected extra frame for an oversize buffer: {:?}",
-                frame.msg_type
-            ),
-            Ok(Some(Err(e))) => panic!("unexpected stream error: {}", e),
-        }
+        // No history frames follow.
+        assert!(
+            rx.recv().await.is_none(),
+            "unexpected extra frame for an oversize buffer"
+        );
     }
 
     /// Empty buffer emits PaneCreated and nothing else.
     #[tokio::test]
     async fn test_send_reattach_data_empty_buffer_emits_only_pane_created() {
-        use futures::StreamExt;
-        use tokio_util::codec::Framed;
-
-        let (client, server) = tokio::io::duplex(64 * 1024);
-        let mut server_framed = Framed::new(server, MuxCodec::new());
-        let client_framed = Framed::new(client, MuxCodec::new());
+        let (tx, mut rx) = mpsc::channel::<MuxMessage>(4);
+        let mut admission = OutboundAdmission::new(tx);
 
         let reattach_data = vec![(7u32, Vec::<u8>::new(), Vec::new())];
-        let sender = tokio::spawn(async move {
-            let mut framed = client_framed;
-            send_reattach_data(&mut framed, &reattach_data).await
-        });
+        send_reattach_data(&mut admission, &reattach_data)
+            .await
+            .expect("send_reattach_data ok");
+        drop(admission);
 
-        let first = server_framed.next().await.unwrap().unwrap();
+        let first = rx.recv().await.unwrap();
         assert_eq!(first.msg_type, MessageType::PaneCreated);
         assert_eq!(first.pane_id, 7);
 
-        sender.await.unwrap().expect("send_reattach_data ok");
-
-        // No further frames expected — drop the sender so the stream closes.
-        let next =
-            tokio::time::timeout(std::time::Duration::from_millis(50), server_framed.next()).await;
-        match next {
-            Ok(None) | Err(_) => {} // stream closed or timed out: both OK
-            Ok(Some(Ok(frame))) => panic!("unexpected extra frame: {:?}", frame.msg_type),
-            Ok(Some(Err(e))) => panic!("unexpected stream error: {}", e),
-        }
+        assert!(rx.recv().await.is_none(), "unexpected extra frame");
     }
 
     /// review round-1 rework, finding 20b2bed0aaf48f94 / task0002 AC-6: a
@@ -1008,40 +999,33 @@ mod tests {
     /// none).
     #[tokio::test]
     async fn test_send_reattach_data_sends_snapshot_restore_for_normal_sized_buffer() {
-        use futures::StreamExt;
-        use tokio_util::codec::Framed;
-
-        let (client, server) = tokio::io::duplex(64 * 1024);
-        let mut server_framed = Framed::new(server, MuxCodec::new());
-        let client_framed = Framed::new(client, MuxCodec::new());
+        let (tx, mut rx) = mpsc::channel::<MuxMessage>(4);
+        let mut admission = OutboundAdmission::new(tx);
 
         let payload = b"\x1b[3J\x1b[H\x1b[2Jsome scrollback bytes".to_vec();
         let reattach_data = vec![(9u32, payload.clone(), Vec::new())];
-        let sender = tokio::spawn(async move {
-            let mut framed = client_framed;
-            send_reattach_data(&mut framed, &reattach_data).await
-        });
+        send_reattach_data(&mut admission, &reattach_data)
+            .await
+            .expect("send_reattach_data ok");
+        drop(admission);
 
-        let first = server_framed.next().await.unwrap().unwrap();
+        let first = rx.recv().await.unwrap();
         assert_eq!(first.msg_type, MessageType::PaneCreated);
         assert_eq!(first.pane_id, 9);
 
-        let second = server_framed.next().await.unwrap().unwrap();
+        let second = rx.recv().await.unwrap();
         assert_eq!(second.msg_type, MessageType::SnapshotRestore);
         assert_eq!(second.pane_id, 9);
         let (segments, content) = mux_ipc::protocol::decode_snapshot_payload(&second.payload);
         assert!(segments.is_empty());
         assert_eq!(content, payload.as_slice());
-
-        sender.await.unwrap().expect("send_reattach_data ok");
     }
 
     /// End-to-end companion to the above: a reattach snapshot whose
     /// structural segments (task0004 round-4 rework D1') describe a
     /// mid-stream dimension change, sent through `send_reattach_data` and
-    /// decoded on the client side via the SAME `MuxCodec` the real
-    /// connection uses, is recognized as `SnapshotRestore`, decodes back to
-    /// the same segments (`mux_ipc::protocol::decode_snapshot_payload`),
+    /// recognized as `SnapshotRestore`, decodes back to the same segments
+    /// (`mux_ipc::protocol::decode_snapshot_payload`),
     /// and — once fed through `TerminalCore::reset_and_replay_segments`,
     /// mirroring what `apply_mux_message` does for that arm — actually
     /// resizes the replay core mid-drain (witnessed via
@@ -1051,12 +1035,8 @@ mod tests {
     /// live path never calls `reset_and_replay_segments`).
     #[tokio::test]
     async fn test_send_reattach_data_snapshot_restore_payload_is_segment_interpretable() {
-        use futures::StreamExt;
-        use tokio_util::codec::Framed;
-
-        let (client, server) = tokio::io::duplex(64 * 1024);
-        let mut server_framed = Framed::new(server, MuxCodec::new());
-        let client_framed = Framed::new(client, MuxCodec::new());
+        let (tx, mut rx) = mpsc::channel::<MuxMessage>(4);
+        let mut admission = OutboundAdmission::new(tx);
 
         let before = b"before\r\n".to_vec();
         let after = b"after\r\n".to_vec();
@@ -1067,20 +1047,20 @@ mod tests {
             build_snapshot_bytes(&scrollback, &segments, b"", false, (80, 24));
         let reattach_data = vec![(3u32, snapshot, snapshot_segments)];
 
-        let sender = tokio::spawn(async move {
-            let mut framed = client_framed;
-            send_reattach_data(&mut framed, &reattach_data).await
-        });
+        send_reattach_data(&mut admission, &reattach_data)
+            .await
+            .expect("send_reattach_data ok");
+        drop(admission);
 
-        let _pane_created = server_framed.next().await.unwrap().unwrap();
-        let snapshot_frame = server_framed.next().await.unwrap().unwrap();
+        let _pane_created = rx.recv().await.unwrap();
+        let snapshot_frame = rx.recv().await.unwrap();
         assert_eq!(snapshot_frame.msg_type, MessageType::SnapshotRestore);
 
         let (dim_segments, content) =
             mux_ipc::protocol::decode_snapshot_payload(&snapshot_frame.payload);
         assert!(
             !dim_segments.is_empty(),
-            "the mid-stream dimension segment must survive the wire round-trip"
+            "the mid-stream dimension segment must survive encode/decode"
         );
         let replay_segments: Vec<term_core::terminal_core::ReplaySegment> = dim_segments
             .iter()
@@ -1104,8 +1084,6 @@ mod tests {
             "core must end back at the caller's original size"
         );
         assert_eq!(core.rows(), 24);
-
-        sender.await.unwrap().expect("send_reattach_data ok");
     }
 
     /// task0003 AC-5 (D7, review round-2 finding `98eec9bbef67704a`) /
@@ -1122,12 +1100,8 @@ mod tests {
     /// well past the old threshold with plain scrollback content.
     #[tokio::test]
     async fn test_send_reattach_data_above_old_chunking_threshold_still_segment_aware() {
-        use futures::StreamExt;
-        use tokio_util::codec::Framed;
-
-        let (client, server) = tokio::io::duplex(64 * 1024 * 1024);
-        let mut server_framed = Framed::new(server, MuxCodec::new());
-        let client_framed = Framed::new(client, MuxCodec::new());
+        let (tx, mut rx) = mpsc::channel::<MuxMessage>(4);
+        let mut admission = OutboundAdmission::new(tx);
 
         const OLD_CHUNK_THRESHOLD: usize = 8 * 1024 * 1024;
 
@@ -1176,13 +1150,13 @@ mod tests {
         );
 
         let reattach_data = vec![(5u32, snapshot, snapshot_segments)];
-        let sender = tokio::spawn(async move {
-            let mut framed = client_framed;
-            send_reattach_data(&mut framed, &reattach_data).await
-        });
+        send_reattach_data(&mut admission, &reattach_data)
+            .await
+            .expect("send_reattach_data ok");
+        drop(admission);
 
-        let _pane_created = server_framed.next().await.unwrap().unwrap();
-        let frame = server_framed.next().await.unwrap().unwrap();
+        let _pane_created = rx.recv().await.unwrap();
+        let frame = rx.recv().await.unwrap();
         assert_eq!(
             frame.msg_type,
             MessageType::SnapshotRestore,
@@ -1215,8 +1189,6 @@ mod tests {
              its dimension segments honored — zero cross-phase-mixed rows, got \
              {tainted:?}"
         );
-
-        sender.await.unwrap().expect("send_reattach_data ok");
     }
 
     /// Test: session_list reports correct pane_count for multi-window session.

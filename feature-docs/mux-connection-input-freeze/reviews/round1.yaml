@@ -1,0 +1,374 @@
+round: 1
+executed_at: "2026-08-07T00:20:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 8e2311c2ffbb5b07f7f185c0207db5bd18b8c5f8
+  head_commit: 60c38bb6
+  changed_files:
+    - src-tauri/src/mux/bridge.rs
+    - src-tauri/src/mux/ipc/connection.rs
+    - src-tauri/src/mux/ipc/handlers.rs
+    - src-tauri/src/mux/ipc/mod.rs
+    - src-tauri/src/mux/ipc/outbound.rs
+    - src-tauri/src/mux/ipc/reattach.rs
+    - test-docs/mux-connection-input-freeze/task0001.tests.yaml
+    - test-docs/mux-connection-input-freeze/task0002.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: architecture, source: vertex, status: completed}
+  - {perspective: performance, source: vertex, status: skipped, skip_reason: "vertex_error"}
+  - {perspective: spec, source: vertex, status: skipped, skip_reason: "vertex_error"}
+  - {perspective: performance, source: codex, status: skipped, skip_reason: "rate_limited"}
+  - {perspective: spec, source: codex, status: skipped, skip_reason: "rate_limited"}
+
+findings:
+  # --- initial pass ---
+  - stable_id: 63f73db0dc9e06c5
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 515
+    title: "outbound remainder 保持中はクライアントアームの飢餓ガードが無効化され、PTY 出力が止まる"
+    description: "allow_client_arm の `!outbound_remainder.is_empty() ||` 短絡により CLIENT_MSG_STARVATION_QUOTA による 1 イテレーション除外が発動せず、biased select! でクライアントアームが連続して勝つ間 outbound_permit_result アームが一度も poll されない。remainder を消費できるのはそのアームだけなので、クライアント向け PTY 出力が停止する。"
+    suggestion: "outbound_permit_result アームを biased 順でクライアントアームより前に置き、短絡を削除する。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: "auto-applied loop 2"
+  - stable_id: 6ce5c083b8b1f0f0
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 515
+    title: "outbound_remainder が G2 スタベーションガードを無条件にバイパスし、出力側が無期限に飢餓しうる"
+    description: "FR3（既存 deferred-output パスとの一貫性）に対する不整合。63f73db0dc9e06c5 と同一サイトの独立指摘。"
+    suggestion: "短絡を削除し、アーム順で remainder の有界回数内 poll を保証する。"
+    sources: [claude:spec]
+    confidence: 85
+    resolution: fixed
+    resolution_reason: "auto-applied loop 2 (同一サイト)"
+  - stable_id: d8fe7cf5426c4f5f
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 854
+    title: "outbound_remainder を他アームの送信が追い越し、FIFO 順序保証が破れる"
+    description: "drain アームの remainder はキュー外のローカル状態に留まる一方、route_message 返信 / send_reattach_data / notify 転送 / kick の Detached は outbound_tx へ直接 admit するため、未ポーリングの予約を差し置いて後発フレームが先に容量を取る。"
+    suggestion: "drain アーム以外の送信も remainder を経由させ、admit を outbound_permit_result アーム 1 本に集約する。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached — rework は 7f9f9ad6fb4dd977 系の high を優先"
+  - stable_id: bc507346796992e8
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 1014
+    title: "teardown タイムアウトでライタタスクを detach するとソケット write half が解放されない"
+    description: "JoinHandle の drop は abort ではなく detach。ライタが FramedWrite<WriteHalf<S>> を保持し続けるため、split の内部ストリームが閉じず fd とタスクがリークする。"
+    suggestion: "タイムアウト分岐で handle.abort() を呼ぶ、またはライタにシャットダウン要求を渡して sink を drop させる。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: c00f3b2c1b122bdc
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/bridge.rs
+    line: 825
+    title: "quiesce タイムアウトで放置された stdout pump が、後続の出力を追い越して書き込む"
+    description: "spawn_blocking は abort 不能。放棄された pump が残キューを書き出し、finish_bridge_exit の合成 Detached や次接続のフレームに割り込む。"
+    suggestion: "pump に共有キャンセルフラグを持たせ、各 write 前に確認して立っていれば即 return する。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: 6ed0db8b4c6478aa
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/bridge.rs
+    line: 444
+    title: "ブリッジの stdout admission キューがバイト量ではなく件数でしか制限されていない (最悪数百MB滞留)"
+    description: "STDOUT_WRITER_CAPACITY = 64 は件数上限で 1 件あたり最大 16MiB。姉妹実装の OUTBOUND_QUEUE_CAPACITY はバイト会計に基づき 2 に抑えているのに対し、bridge 側だけその推論の外にある。"
+    suggestion: "バイト量ベースの admission に変えるか、capacity を下げて最悪ケースの会計を doc に残す。"
+    sources: [claude:performance]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: fa0338c89c943149
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/bridge.rs
+    line: 444
+    title: "bridge の stdout admission 容量 64 フレームは FR4 の bounded end-to-end の意図から桁が外れている"
+    description: "6ed0db8b4c6478aa と同一サイトの独立指摘。FR4 に対する量的逸脱。"
+    suggestion: "OUTBOUND_QUEUE_CAPACITY と同様のバイト会計で決め直す。"
+    sources: [claude:spec]
+    confidence: 85
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: 605dd62b7b2238ef
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 715
+    title: "outbound remainder が select! 1周につき1フレームしか流れず、書き込みバッチングが失われる"
+    description: "DRAIN_BATCH_LIMIT=64 に対し OUTBOUND_QUEUE_CAPACITY=2 のため、複数ペイン同時出力では ~60 件が remainder に落ち、1 周 1 フレーム排出で余分な select! 周回とヒープ確保が発生する。WRITER_BATCH_LIMIT=32 は実質到達不能。"
+    suggestion: "permit 使用直後に remainder を try_admit で追加投入する、またはバイト量ベースの制限に置き換える。"
+    sources: [claude:performance]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: f0c2c1dd94098bce
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/bridge.rs
+    line: 824
+    title: "stdout の単一ライター不変条件が quiesce タイムアウトで破れる"
+    description: "c00f3b2c1b122bdc と同一サイトの独立指摘。放棄された pump と再接続後の新 pump が同じ stdout を共有する。"
+    suggestion: "pump を bridge 実行全体で 1 本にする、または放棄された pump を kill フラグで無害化する。"
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: 15bfadd20c3a7871
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 245
+    title: "handle_connection が 787 行の god function に肥大化し、5 つ目の並行機構を抱え込んだ"
+    description: "base 596 行 → 787 行。相互作用する並行機構が 5 系統同居し、ガード条件とブックキーピングが 1 関数のローカル変数の暗黙の不変条件として絡み合っている。"
+    suggestion: "outbound 側の状態機械を outbound.rs に型として切り出し、ループ本体は順序付けだけを行う形にする。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: 800a2b3d1ce55913
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/outbound.rs
+    line: 82
+    title: "outbound 送出の抽象が二重化し、安全契約を持つ側（OutboundHandle）を大半の consumer が経由しない"
+    description: "OutboundHandle を経由するのは 2 箇所だけで、残りの producer は生の &mpsc::Sender を直接使う。CONTRACT CORRECTION の記述が多数派の呼び出し側に届かない。"
+    suggestion: "outbound 送出の入口を OutboundHandle に一本化する。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: d730fe0ef003f984
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/reattach.rs
+    line: 316
+    title: "reattach の SnapshotRestore が drain arm の held remainder を追い越し、同一ペインの FIFO が崩れうる"
+    description: "FR3 違反。send_reattach_data は outbound_tx へ直接 admit するため、remainder に残る古い PtyOutput を SnapshotRestore が追い越しうる。"
+    suggestion: "直接 admit の前に remainder を排出しきる、または全 client-bound フレームを remainder 経由に一本化する。"
+    sources: [claude:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+
+  # --- after loop 2 (re-review) ---
+  - stable_id: 9537da352469bc68
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 516
+    title: "auto-fix の副作用: remainder 保持中に client アームを除外すると select! が park し、入力が再び凍結する"
+    description: "loop 2 で短絡を削除した結果、has_pending_output に remainder が含まれるため quota が働き、除外イテレーションで ready になれるアームが 1 つも残らない。drain アームは remainder ゲートで off、permit アームはクライアントが読むまで解決しない。"
+    suggestion: "ガードには remainder を除外した excludable_work 信号を使い、client の読み出し無しでも前進できる work があるときだけ除外する。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: "auto-applied loop 3"
+  - stable_id: 5203c7376189960d
+    severity: high
+    category: spec
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 516
+    title: "スタベーション除外イテレーションで select! が無期限に park し、FR1 の有界遅延ポーリングが破れる"
+    description: "9537da352469bc68 と同一サイトの独立指摘。FR1 / AC-1 違反。"
+    suggestion: "同上。"
+    sources: [claude:spec]
+    confidence: 85
+    resolution: fixed
+    resolution_reason: "auto-applied loop 3 (同一サイト)"
+  - stable_id: 3315b0870407628d
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 867
+    title: "二段キューにより「単一 FIFO の outbound 経路」不変条件が破れ、フレームが追い越される"
+    description: "drain アームだけが remainder を持ち、他の producer は outbound_tx へ直送するため、remainder に滞留した古い PtyOutput を後発の制御フレームが追い越す。"
+    suggestion: "remainder を唯一の順序付きステージングキューに格上げし、全 producer をそこに寄せる。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: "auto-applied loop 3（部分適用: connection.rs 内の kick / notify のみ。reattach.rs / handlers.rs は単一ファイル編集スコープのため未適用 — 79d48554f94fd3df として残存）"
+  - stable_id: c2ca14ea0ae40f43
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 928
+    title: "notify/reply arms await admission on the 2-slot outbound queue, parking the whole connection loop"
+    description: "OUTBOUND_QUEUE_CAPACITY=2 の枠が埋まった時点でブロックするため、変更前（OS ソケットバッファ数百KB）より発火閾値が大幅に下がった。"
+    suggestion: "notify / kick / reply も admission を await せず、drain アームと同じ非ブロッキング機構に載せる。"
+    sources: [claude:performance]
+    confidence: 60
+    resolution: fixed
+    resolution_reason: "auto-applied loop 3（notify / kick のみ。reply 経路は f7fa656b26a25199 として残存）"
+  - stable_id: fac80a5a2b873fc9
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/outbound.rs
+    line: 110
+    title: "fair-reservation 機構が二重実装され、同一の配置不変条件を二箇所で維持する必要がある"
+    description: "PendingOutboundReserve は PendingDeferredReserve とチャネル要素型以外ほぼ同一。片方に入った修正をもう片方へ写す shotgun surgery が既に発生している。"
+    suggestion: "チャネル要素型に対してジェネリックな単一ヘルパへ集約する。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: c3a5f4add69a183c
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 434
+    title: "Framed 分割時に codec のデコード状態を破棄しており、暗黙の「フレーム境界にいる」前提に依存している"
+    description: "parts.codec が破棄され新規 MuxCodec::new() が生成される。現状は framed.next() が Some を返した直後にしか分割しないため到達不能だが、この不変条件はどこにも記述も強制もされていない。"
+    suggestion: "parts.codec を読み側へ移送する、または不変条件をコメント + debug_assert! で明示する。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+  - stable_id: f7fa656b26a25199
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 1403
+    title: "route_message 経由の返信が outbound admission を await し、飽和時に接続ループ全体を止める(FR1 の残存)"
+    description: "handle_create_window / handle_upgrade_request / Detach 返信が OutboundHandle 経由で await するため、飽和時にループ全体が停止する。"
+    suggestion: "drain アームと同じ非ブロッキング admission + remainder 方式に寄せる。"
+    sources: [claude:spec]
+    confidence: 70
+    resolution: deferred
+    resolution_reason: "batch mode: rework cap reached"
+
+  # --- after loop 3 (final re-review; loop cap reached) ---
+  - stable_id: 7f9f9ad6fb4dd977
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 965
+    title: "loop 3 の notification 経路変更で outbound_remainder が無制限に増える（bounded-by-construction が崩壊）"
+    description: "loop 3 で notify アームが outbound_tx.send().await から outbound_remainder.push_back() に変わったが、drain アームと違い `if outbound_remainder.is_empty()` ゲートが無い。クライアント停滞中は排出速度 0 のまま RenameWindow / AgentStatusUpdate / Notify が積まれ続け、connection.rs の Bounded by construction コメントと OUTBOUND_QUEUE_CAPACITY doc のメモリ会計、および FR4 が成立しなくなる。head-of-line blocking で Upgrading ack が UPGRADE_PREPARE_TIMEOUT を突く可能性もある。"
+    suggestion: "notify アームにも drain アームと同じゲートを付ける: `notification = notify_rx.recv(), if outbound_remainder.is_empty() => { ... }`。未受信の通知は broadcast(capacity 16) 側に留まり、溢れれば既存の Lagged 再同期経路が回復する。あわせて bounded by construction の記述を実態に合わせて更新する。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "loop cap 到達のため rework へ送る"
+  - stable_id: ee54e1d2ff740104
+    severity: high
+    category: architecture
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 965
+    title: "loop 3 の remainder 経由化で outbound_remainder の「構造上有界」不変条件が壊れた"
+    description: "7f9f9ad6fb4dd977 と同一サイトの独立指摘。ドレインアームの構造ゲートが不変条件の担保だったのに、それを迂回する producer を追加して代替の担保を置いていない。Lagged 分岐は 1 回の lag ごとに全セッション×全ウィンドウ分の RenameWindow を push するため増幅する。"
+    suggestion: "同上（notify アームへのゲート付与、または remainder への上限長と畳み込み）。"
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "loop cap 到達のため rework へ送る"
+  - stable_id: 4e6f23b7d53527e5
+    severity: medium
+    category: spec
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 976
+    title: "loop 3 のリマインダ経由化で outbound_remainder が無制限に成長しうる (FR4 違反)"
+    description: "7f9f9ad6fb4dd977 の spec 観点からの独立指摘。FR4 および Error Handling の bounded end-to-end に反する。優先度逆転（低レートの制御フレーム流だけで PTY 出力の drain を無期限に後回しにできる）も伴う。"
+    suggestion: "同上。"
+    sources: [claude:spec]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: "loop cap 到達のため rework へ送る"
+  - stable_id: f9cde80880407a13
+    severity: medium
+    category: performance
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 976
+    title: "loop 3 の remainder ルーティングで outbound_remainder が無制限に成長し、ドレインアームを恒久的に閉じうる"
+    description: "7f9f9ad6fb4dd977 の performance 観点からの独立指摘。通知レート > 排出レートが継続すると remainder が空に戻らず、drain アームが再開できず pane_output_tx に詰まった PTY リーダースレッドもブロックしたままになる。"
+    suggestion: "同上。"
+    sources: [claude:performance]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "loop cap 到達のため rework へ送る"
+  - stable_id: 79d48554f94fd3df
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 1466
+    title: "loop 3 の順序修正が reply / reattach 経路に適用されておらず、同じ追い越しが残っている"
+    description: "route_message の返信、Detach の Detached 返信、handle_attach の Error 返信、send_reattach_data の PaneCreated / SnapshotRestore は直接送出のまま。reattach 経路で同一 pane の SnapshotRestore が remainder 内の古い PtyOutput を追い越すと画面が壊れる。"
+    suggestion: "remainder 経由の受理を 1 つのヘルパーに切り出し、全送出点をそこに集約する。少なくとも send_reattach_data を先に寄せる。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "loop cap 到達のため rework へ送る"
+  - stable_id: 96633ec8862e6c64
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 697
+    title: "kick アームの Detached は remainder に積まれた時点で確実に破棄される（到達不能な分岐）"
+    description: "kick アームは直後に break し、teardown は outbound_tx に受理済みのフレームだけを flush して remainder は破棄する。remainder 保持中に kick が発火すると Detached は一度も送信されない。"
+    suggestion: "teardown 側で remainder も有界予算内でベストエフォート admission する、または kick の Detached は順序保証を諦めて直接受理を試みる。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "loop cap 到達のため rework へ送る"
+  - stable_id: 76e7d90468e859d0
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/connection.rs
+    line: 697
+    title: "kick アームの Detached が remainder 保持時に teardown で捨てられ、プロトコル上の通知が失われる"
+    description: "96633ec8862e6c64 と同一サイトの独立指摘。直結 GUI には Detached が届かず、ソケット EOF の暗黙終了に劣化する。"
+    suggestion: "teardown で OUTBOUND_TEARDOWN_FLUSH_TIMEOUT の予算内に remainder を FIFO のまま admission する。"
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "loop cap 到達のため rework へ送る"
+  - stable_id: ebb33f43f48f612a
+    severity: medium
+    category: architecture
+    file: src-tauri/src/mux/ipc/outbound.rs
+    line: 77
+    title: "OutboundHandle / ReplySink の「単一順序パス」契約が実装と乖離し、正しい admission 手順がコピペでしか存在しない"
+    description: "loop 3 後、モジュール doc の宣言が真なのは 5 producer のうち 3 つだけ。正しい admission 手順は handle_connection の 3〜4 箇所にコピーされ、ループローカルを必要とするためモジュール境界を越えて再利用できない。"
+    suggestion: "admission 手順を OutboundQueue 型に閉じ、ReplySink 実装もそれを経由させる。"
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "loop cap 到達のため rework へ送る"
+
+auto_fix:
+  loops_run: 3
+  applied_total: 4
+  termination: loop-cap
+  notes: >
+    loop 1 は前セッション（中断）が適用済みだった編集を回収してコミットしたもの。
+    loop 2 で 63f73db0dc9e06c5 / 6ce5c083b8b1f0f0 を修正したが 9537da352469bc68 /
+    5203c7376189960d を新たに生み、loop 3 でそれを修正したが今度は
+    7f9f9ad6fb4dd977 / ee54e1d2ff740104 を生んだ。同一の並行機構に対する
+    逐次的な単一ファイル編集では収束しないため rework へ送る。
+
+residual_critical_high: 2
+rework_required: true
