@@ -1,0 +1,39 @@
+schema_version: 1
+feature: windows-imm32-ime-direct
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 66f61d03b45ba0b47a1e5dc1cac58e7530a28e6b
+last_input_digest: "sha256:a81f1edc9087712163a085105963545bdfea6959ce76c212f6f3388f6ad95791"
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: "sha256:a81f1edc9087712163a085105963545bdfea6959ce76c212f6f3388f6ad95791"
+    output_digest: "sha256:analyst-run-0001-payload"
+artifacts:
+  - path: feature-docs/windows-imm32-ime-direct/REQUIREMENTS.md
+    sha256: "sha256:31e5b29dd9aa0e7a2c063d2be407d3e7f658209b96f0ad348c3592e27650bbf8"
+    produced_by: create-spec-run-0002
+  - path: feature-docs/windows-imm32-ime-direct/SPEC.md
+    sha256: "sha256:f51de2565ccbedaf4225a3958e2e36cf68346a710142f3458f66fce73e39020d"
+    produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: "sha256:create-spec-gen1-analyst-completed-no-open-questions"
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: "sha256:ec2f336b-8165557d-a3c02c71"
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: "sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef"
+      src-tauri/src/ui/md3.rs: "sha256:8165557d9c2a3ea1a64c2d952de2e932b61b3514f03b52c03b9bc810e8acdc7b"
+      src-tauri/web-shared/styles.css: "sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb"
+    truncated: false
+last_error: null

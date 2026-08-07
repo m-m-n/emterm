@@ -1,0 +1,196 @@
+round: 1
+executed_at: "2026-08-06T22:55:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 48bb0fa8703508d3cf99319e3d000dcac3930162
+  head_commit: b1e80c1cef767022f1b9b452ceb4ba8c13f1813c
+  changed_files:
+    - src-tauri/Cargo.toml
+    - src-tauri/src/ime/winit_bridge.rs
+    - test-docs/windows-imm32-ime-direct/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary:
+    - perspective: license
+      reason: "diff が依存マニフェスト src-tauri/Cargo.toml に触れているため（windows-sys の feature 追加）"
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: skipped, skip_reason: "rate_limited"}
+  - {perspective: security, source: vertex, status: completed, note: "Phase R2b fallback after the codex rate limit"}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: vertex, status: skipped, skip_reason: "HTTP 429 throttled, retries exhausted"}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: vertex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: vertex, status: skipped, skip_reason: "vertex_rate_limited"}
+  - {perspective: license, source: claude, status: completed}
+findings:
+  - stable_id: held-detach-not-windows-gated
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 553
+    title: "deferred detach が全ターゲットに適用され、X11 では解除条件が原理的に成立しない"
+    description: >-
+      flush の hold 判定 `!allowed && self.composition_alive` に cfg!(windows) 相当の
+      ゲートが無く、X11 / Wayland にも無条件で適用されていた。winit-x11 0.31.0-beta.2 では
+      Ime::Disabled を送出する経路が set_ime_allowed(window, false) -> remove_context ->
+      create_context(false) しか無いため、保留中の Disable リクエストの結果としてしか
+      Disabled が届かない。一方 composition_alive は初回 flush の set_ime_allowed(true) 由来の
+      Ime::Enabled で true になり以後固定されるため、X11 ではフォーカス喪失時の detach が
+      永久に配送されない。Wayland は TextInputEvent::Leave 由来の Disabled で解消するが
+      X11 は解消しない。
+    suggestion: >-
+      hold 判定を純関数 hold_pending_detach(allowed, composition_alive, windows_gate) に
+      切り出し、flush から cfg!(windows) を渡す。既存の should_suppress_key と同じ設計。
+      非 Windows で detach が同一 flush で配送されることを固定する回帰テストを追加する。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: fixed
+    resolution_reason: "auto-applied loop 1 (commit b1e80c1c); round 2 の comprehensive / spec 双方が解消を確認"
+  - stable_id: deferred-detach-breaks-fr5
+    severity: high
+    category: spec
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 554
+    title: "Deferred detach が #[cfg(windows)] 未ガードで FR5 / AC6 に反する"
+    description: >-
+      SPEC FR5「Non-Windows path unchanged」および AC6「X11 / Wayland IME behavior is
+      unchanged」に対する違反。held-detach-not-windows-gated と同一の物理的欠陥を
+      仕様準拠観点から独立に検出したもの。
+    suggestion: >-
+      hold 条件を Windows 限定にする。あわせて SPEC の FR3 に「Windows のみ」を明記する
+      ことが望ましい。
+    sources: [claude:spec]
+    confidence: 85
+    resolution: fixed
+    resolution_reason: "loop 1 の同一サイト修正で解消。round 2 の spec 再レビューが FR5 / AC6 の回復を確認"
+  - stable_id: windows-gate-tests-unreachable
+    severity: medium
+    category: spec
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 582
+    title: "AC2 / TS1 / TS2 の「どのホストでも自動化可能」なユニットテストが実際にはどこでも実行されない"
+    description: >-
+      loop 1 の修正で flush が cfg!(windows) をコンパイル時に取り込む形になった結果、
+      AC2 の肯定側を検証するテスト 3 本が #[cfg(windows)] になった。本プロジェクトのテストは
+      Linux ホストで cargo test を回すのみで、Windows ゲート（--all-targets / --tests なしの
+      cargo check）は #[cfg(test)] をコンパイルしない。したがって AC2 / TS1 / TS2 に対応する
+      実行されるテストがゼロになっている。SPEC は AC2 を "automatable on any host" と明記している。
+    suggestion: >-
+      (a) WinitImeBridge に windows_gate: bool フィールドを持たせ、テスト用コンストラクタで
+      true を強制できるようにして flush がそれを読む形にする（should_suppress_key の
+      RULE / WIRING 分割と同じ形）。または (b) #[cfg(windows)] ゲートを意図として確定させ、
+      SPEC AC2 / TS1 / TS2 から "automatable on any host" を落として実機検証項目へ移す。
+    sources: [claude:spec]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: "medium は auto-fix の severity ゲート（critical/high）未満。ラウンド 2 で新規に浮上"
+  - stable_id: windows-gate-not-injectable
+    severity: medium
+    category: architecture
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 581
+    title: "loop-1 auto-fix の副作用: hold の状態遷移がどのゲートでもコンパイル・実行されない位置に落ちた"
+    description: >-
+      hold の効果は flush 内部の状態変更（pending_allow を take しない / cursor-area は流す）
+      であり、flush が cfg!(windows) をコンパイル時に取り込む以上、ホストからは Windows ルール下の
+      ブリッジ挙動を一切観測できない。AC-6 gate 3 は --all-targets も --tests も無いため
+      Windows ターゲットでも #[cfg(test)] 本体は型検査されない。既に BridgeWindow という注入シームを
+      持つ型が、状態を持つ新ルールだけコンパイル時グローバルに直結している点が構造上の齟齬。
+    suggestion: >-
+      windows_gate を WinitImeBridge のフィールドにして with_handle が cfg!(windows) で初期化し、
+      テスト専用コンストラクタで上書き可能にする。ゲートを注入化しない方針なら、最低限 AC-6 gate 3 を
+      cargo check --target x86_64-pc-windows-msvc --all-targets に変えて #[cfg(windows)] テスト本体が
+      型検査されるようにする。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium は auto-fix の severity ゲート未満。windows-gate-tests-unreachable と同一サイトの別観点"
+  - stable_id: tests-yaml-record-mismatch
+    severity: medium
+    category: comprehensive
+    file: test-docs/windows-imm32-ime-direct/task0001.tests.yaml
+    line: 18
+    title: "round1 修正で AC-1/AC-2/AC-5 のテストが #[cfg(windows)] 化され、受入記録が実行不能な証跡を指したままになっている"
+    description: >-
+      tests.yaml は loop 1 の修正で更新されておらず、#[cfg(windows)] になった 4 本を
+      Linux 開発ホストで red -> green 観測した証跡として提示し続けている。結果として
+      (a) 記録上の受入証跡はホスト再実行時に「該当テスト 0 件」で無言に消える、
+      (b) Windows 側 hold の配線を丸ごと削っても Linux 側スイートは全緑のまま。
+    suggestion: >-
+      (a) tests.yaml の AC-1 / AC-2 / AC-5 の red_reason に、これらが #[cfg(windows)] であり
+      ホスト実行スイートに含まれないことを明記する。または (b) windows_gate をフィールド化して
+      4 本から #[cfg(windows)] を外し、どのホストでも hold の配線を実行させる。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium は auto-fix の severity ゲート未満。ラウンド 2 で新規に浮上"
+  - stable_id: keygate-diverges-during-held-detach
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 538
+    title: "detach を hold している間、Windows のキー抑止ゲートだけが composition を「閉じた」と見なす"
+    description: >-
+      notify_focus(false) は ime_enabled を false にするが composition_alive は Ime::Disabled まで
+      true のままで、Windows では flush が detach を hold するため IM サーバは接続されたまま・
+      composition も生きたままになる。この状態で dispatch_key_event は
+      should_suppress_key(has_preedit, ime_enabled=false, true) を評価して Passthrough を返すため、
+      フォーカスが戻った直後の打鍵が IME 側と PTY の双方に流れる（名前付きキーの二重入力）。
+      モジュールドキュメントが「受容された失敗モード」とする期間中ずっとゲートが開きっぱなしになる。
+    suggestion: >-
+      hold 中はキー抑止も維持する。key_gate_open(ime_enabled, composition_alive, pending_allow,
+      windows_gate) 相当のヘルパを should_suppress_key と同じく windows_gate 実行時引数の形で切り出し、
+      真理値表テストを付ける。非 Windows は hold_pending_detach が常に false なので現行挙動が保たれる。
+    sources: [claude:comprehensive, claude:architecture]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium は auto-fix の severity ゲート未満。ラウンド 1・2 の両方で報告"
+  - stable_id: geometry-policy-under-cfg
+    severity: medium
+    category: architecture
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 226
+    title: "ジオメトリ方針が cfg 分岐したエグゼキュータ内に埋まり、二本の実装が既に乖離している"
+    description: >-
+      set_ime_cursor_area は #[cfg(not(windows))] / #[cfg(windows)] の 2 本に分かれ、それぞれが
+      独自にジオメトリ方針を内包している。非 Windows 側は width.max(1) / height.max(1) でサイズを
+      1 以上にクランプするが、Windows 側はクランプが無く、幅・高さ 0 の RECT がそのまま IMM32 に渡る。
+      doc コメントは本メソッドを decision-free executor と称しているが実際には方針がここに存在する。
+      どちらの本体もホスト実行テストから到達できないため乖離を検知する仕組みが無い。
+    suggestion: >-
+      座標算出を cfg から出して純粋関数（あるいは小さな CursorAreaGeometry 構造体）に切り出し、
+      両 cfg 本体はその結果を各プラットフォーム API 型に詰め替えるだけにする。クランプ規則も
+      そこに一本化してホスト実行のユニットテストで固定する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium は auto-fix の severity ゲート未満。ラウンド 1・2 の両方で報告"
+  - stable_id: two-bools-one-lifecycle
+    severity: medium
+    category: architecture
+    file: src-tauri/src/ime/winit_bridge.rs
+    line: 292
+    title: "1 つの IME ライフサイクルを 2 つの独立 bool で表現し、不変条件が 3 箇所の代入規約に依存している"
+    description: >-
+      ime_enabled と composition_alive は同じ Ime::Enabled で立ち同じ Ime::Disabled で落ちるが、
+      notify_focus(false) では ime_enabled だけが落ちる。実体は composition_alive ⊇ ime_enabled という
+      1 本のライフサイクル状態機械であり、それが 3 つの離れた代入サイトの規約としてのみ維持されている。
+      型はこの不変条件を強制しないため、将来 ime_enabled を落とす経路が増えるたびに人手判断が要る。
+    suggestion: >-
+      ライフサイクルを 1 つの型に集約する（例: enum ImeLifecycle { Closed, Open { focused: bool } }）。
+      全面変更が重いなら、composition_alive を落としてよいのは Ime::Disabled だけという不変条件を
+      強制する専用メソッドを用意し、フィールドへの直接代入をそれ経由に限定する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium は auto-fix の severity ゲート未満。ラウンド 1・2 の両方で報告"
+auto_fix:
+  loops_run: 1
+  applied_total: 1
+  termination: clean
+residual_critical_high: 0
+rework_required: false

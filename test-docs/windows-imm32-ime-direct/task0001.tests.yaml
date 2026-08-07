@@ -1,0 +1,108 @@
+task_id: task0001
+baseline_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts11_restore_worker_panic_returns_failed_and_clears_state
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+final_failures:
+  - tabs::tests::ts10_resize_cancels_pending_restore_without_respawn
+  - tabs::tests::ts13_offthread_swap_installs_pending_scrollback_restore
+  - tabs::tests::ts7_offthread_swap_then_restored_scrollback_matches_reference
+  - tabs::tests::ts8_new_offthread_switch_supersedes_in_flight_restore
+  - tabs::tests::ts9_concurrent_live_drain_trims_rebuilt_tail_no_duplicates
+  - tabs::tests::welcome_without_windows_leaves_group_none
+acceptance_tests:
+  AC-1:
+    tests:
+      - ime::winit_bridge::tests::held_detach_delivers_exactly_once_after_disabled
+      - ime::winit_bridge::tests::pending_enable_is_never_held_even_with_live_composition
+    red_confirmed: true
+    red_reason: >
+      held_detach_delivers_exactly_once_after_disabled watched red against a
+      temporarily-reverted flush() (unconditional pending_allow.take()):
+      "panicked ... a detach must be held (not delivered) while the
+      composition is alive". pending_enable_is_never_held_even_with_live_composition
+      passed even under the reverted flush (an enable was never held by the
+      old code either, since the hold condition is `!allowed && alive`) —
+      it is a supplementary guard for the "enable is never held" half of
+      FR3, not independently red-confirmable; recorded honestly rather
+      than claimed red.
+  AC-2:
+    tests:
+      - ime::winit_bridge::tests::focus_in_during_held_detach_overwrites_pending_state_so_detach_never_delivers
+    red_confirmed: true
+    red_reason: >
+      Watched red against the temporarily-reverted flush(): "panicked ...
+      detach must still be held" (the old flush delivered the detach
+      immediately instead of holding it, so the focus-in overwrite never
+      got a chance to matter).
+  AC-3:
+    tests:
+      - ime::winit_bridge::tests::detach_without_live_composition_delivers_on_same_flush
+      - ime::winit_bridge::tests::focus_loss_after_composition_already_closed_delivers_detach_immediately
+    red_confirmed: false
+    red_reason: >
+      AC-3 is a regression-guard criterion ("current behavior of the
+      non-composing path is preserved") — both tests passed even against
+      the temporarily-reverted pre-hold-logic flush() (verified during the
+      4b red-check), because composition_alive is false in both scenarios
+      (no Enabled ever observed / Enabled already closed by Disabled), so
+      the hold condition `!allowed && composition_alive` was already false
+      under both the old and new flush bodies. The criterion's job is to
+      catch a future regression, not to prove new behavior; it cannot be
+      driven red by this task's own implementation.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Verified by running the full existing suite unmodified (AC-6 gate
+      1) rather than by a single test: 3171 passed / 6 failed on the
+      post-implementation run vs 3164 passed / 7 failed on the 4a
+      baseline, with final_failures a strict subset of baseline_failures
+      (ts11_restore_worker_panic_returns_failed_and_clears_state flipped
+      from fail to pass between runs — a known flaky off-thread-worker
+      timing test per project memory, not caused by this task). No
+      pre-existing winit_bridge test body was edited.
+  AC-5:
+    tests:
+      - ime::winit_bridge::tests::held_detach_does_not_block_pending_cursor_area_delivery
+    red_confirmed: true
+    red_reason: >
+      Watched red against the temporarily-reverted flush(): "panicked ...
+      the detach must stay held" (the old flush delivered the detach
+      immediately, failing the first assertion before the cursor-area
+      assertion was even reached).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Build/gate criterion, not a single red/green unit test. Verified by
+      running the three approved gate commands directly after
+      implementation: (1) `... cargo test ... --lib -- --test-threads=1`
+      — 3171 passed, 6 failed (all baseline), 3 ignored; (2)
+      `cargo check ... --no-default-features` — clean; (3)
+      `... cargo check ... --target x86_64-pc-windows-msvc` — clean
+      (compiles the new #[cfg(windows)] IMM32 sink and the
+      Win32_UI_Input_Ime manifest feature). Gate 3 was never run against
+      a "before" state, since there is no reasonable red state for a
+      cross-target compile gate whose only job is to compile code that
+      does not exist yet on the parent branch — recorded honestly rather
+      than claimed red.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Review-verifiable criterion per the task plan (not test-covered by
+      design). Self-verified by re-reading the implemented
+      #[cfg(windows)] set_ime_cursor_area against the FR2 recipe table
+      (call order ImmGetContext -> ImmSetCompositionWindow ->
+      ImmSetCandidateWindow -> ImmReleaseContext; CFS_POINT at
+      (x, y+height) for composition, CFS_EXCLUDE at (x, y) for candidate,
+      shared rect (x, y, x+width, y+height); null-context no-op;
+      non-Win32/unavailable-handle no-op; ImmReleaseContext always paired
+      with a successful ImmGetContext) and against `git diff` on
+      Cargo.toml (single feature-list addition, no winit version change,
+      no [patch.crates-io] section).
