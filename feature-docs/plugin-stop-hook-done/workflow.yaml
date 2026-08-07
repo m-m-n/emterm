@@ -38,9 +38,16 @@ workflow:
     status: completed
     completed_at_commit: 9a143f56dd305ee53df2e7813cbec3d065d6c21e
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 6facc018d2aad59adbb804e9899078bad449ab55
+    result: pass
     failed_items: []
+    notes: >-
+      bun run typecheck 通過 / bun test 328 pass 0 fail / TS3 差分スコープ確認済み
+      （SC1: Stop args=["done"]、他5イベント不変）。TS2（実機 OS 通知確認）は手動未実施。
+      bunx biome check . は src-tauri/web-shared/settings/types.ts の整形差分 1 件で
+      非ゼロ終了するが、本 feature の base commit 時点と同一内容の既存問題であり
+      変更対象外（NFR2/NFR3 によりこの feature では触らない）。
   - id: retrospect
     status: pending
 
