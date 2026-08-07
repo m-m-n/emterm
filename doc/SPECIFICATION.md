@@ -92,6 +92,7 @@ Full-featured VT100/VT220/xterm ANSI escape sequence parser implemented as a pur
 - Bracketed paste mode (DECSET 2004)
 - Application cursor keys (DECCKM), alternate screen (DECSET 47/1047/1049)
 - Device attributes: DA1 (`CSI c`) and DA2 (`CSI > c`) report a VT500 conformance level, reflecting implemented capabilities (132-column mode, Sixel graphics, ANSI color)
+- Device-query responses (DA1/DA2/DSR/XTWINOPS) are delivered back to the application that issued the query rather than rendered as visible text, including at `tmux` startup and during tab-switch-triggered resizes
 
 **Handler Architecture:**
 - `TerminalStateAccessor` trait provides a clean interface for handler access
@@ -494,6 +495,16 @@ A horizontal tab bar for managing multiple terminal sessions.
 
 ---
 
+#### Per-Tab Independent Grid Size
+
+Each tab holds its own PTY/core grid size independently, instead of a single app-wide grid size being force-distributed to every tab.
+
+**Key Functionality:**
+- Switching tabs, attaching/detaching mux, or toggling cell-area-affecting UI (sidebar persistent mode) resizes only the visible tab's PTY, not other tabs
+- Prevents resize-response fragments (e.g. XTWINOPS text-area replies) from leaking into other tabs' shells, including tmux-hosted shells
+
+---
+
 #### Toggle Tab Bar
 
 The tab bar visibility can be toggled to maximize terminal space.
@@ -601,6 +612,7 @@ Japanese and other CJK input via IME is fully supported through the native winit
 - Windows IME support
 - IME position auto-adjustment for TUI applications: when cursor is hidden (as in Claude Code), the IME candidate window is repositioned to the bottom-left of the terminal
 - SKK input works correctly
+- Windows IME composition (including third-party IMEs such as CorvusSKK) no longer freezes the application; the Windows IME-cursor-position path calls IMM32 directly instead of routing through winit
 
 ---
 
@@ -1035,30 +1047,32 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 
 **Key Functionality:**
 - `emterm mux` starts the daemon (if not running) and switches the GUI to mux mode
-- Detach (`prefix+d`) returns to host shell; daemon and PTYs survive
+- Detach (`prefix+Ctrl+D`) returns to host shell; daemon and PTYs survive
 - `emterm mux attach` restores session with full screen state and scrollback replay
-- Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename), `prefix+m` (move/reorder with `[N]` position badge)
+- Window management: `prefix+Ctrl+C` (new), `prefix+Ctrl+N`/`prefix+Ctrl+P` (navigate), `prefix+Ctrl+R` (rename), `prefix+Ctrl+T` (move/reorder with `[N]` position badge)
+- `next-agent-window` (`prefix+Ctrl+A` by default) cycles the active window through only the windows with a reported (uncleared) agent status, in display order with wrap-around; no-op when the current tab isn't mux-attached or no window qualifies
 - tmux.conf import: prefix key, keybindings, mouse
 - Nesting prevention via `EMTERM_MUX=1` environment variable
 
 **Retained prefix key actions:**
 | Action | Default key (after prefix) |
 |--------|---------------------------|
-| `detach` | `d` |
-| `new-window` | `c` |
-| `next-window` | `n` |
-| `prev-window` | `p` |
-| `rename-window` | `,` |
-| `move-window` | `m` |
-| `paste` | `]` |
-| `toggle-window-sidebar` | `w` |
+| `detach` | `Ctrl+D` |
+| `new-window` | `Ctrl+C` |
+| `next-window` | `Ctrl+N` |
+| `prev-window` | `Ctrl+P` |
+| `rename-window` | `Ctrl+R` |
+| `move-window` | `Ctrl+T` |
+| `toggle-window-sidebar` | `Ctrl+W` |
+| `next-agent-window` | `Ctrl+A` |
+| select window by index | `0`–`9` (not configurable) |
 | `prefix-passthrough` | (prefix key again) |
 
 **IPC Protocol:**
 - Frame format: `[length: u32][type: u8][pane_id: u32][payload: variable]`
 - PTY data transferred as raw bytes (no serialization)
 - Control messages via bincode
-- Message types: PtyOutput, PtyInput, Hello/Welcome, PaneCreated, DestroyPane, Resize, Attach/Detach/Detached, Snapshot, SnapshotRestore, SessionList, Error, PtyExited, CreateWindow, SwitchWindow, RenameWindow, DestroyWindow, StatusUpdate, Shutdown
+- Message types: PtyOutput, PtyInput, Hello/Welcome, PaneCreated, DestroyPane, Resize, Attach/Detach/Detached, Snapshot, SnapshotRestore, SessionList, Error, PtyExited, CreateWindow, SwitchWindow, RenameWindow, DestroyWindow, Shutdown
 
 **Window Management:**
 - While attached to mux, the entire session occupies a single top tab (title `mux: <active window name>`); windows are listed in a vertical tab sidebar rather than one top tab per window (see Mux Vertical Tabs)
@@ -1086,7 +1100,7 @@ The mux window list is rendered as a vertical tab sidebar (native egui) instead 
 - Sidebar is shown only while the mux-attached top tab is active; local (non-mux) tabs are unaffected
 - Sidebar width is a dynamically computed fixed value (roughly 20-25% of the app width, no drag resize); the list scrolls when entries exceed the available height
 - Persistent mode: fixed panel on the right edge of the terminal area, always fully opaque; window switching and its own presence cause no PTY resize beyond the one triggered by switching between a mux-attached tab and a local tab (all tabs share one terminal grid)
-- Overlay mode (default): right-edge overlay open on startup, toggled by the `toggle-window-sidebar` mux prefix action (default `Ctrl+Z Ctrl+W`), rebindable via `settings.mux.keybinds`; toggling causes no PTY resize
+- Overlay mode (default): right-edge overlay open on startup and again after any detach → reattach, toggled by the `toggle-window-sidebar` mux prefix action (default `Ctrl+Z Ctrl+W`), rebindable via `settings.mux.keybinds`; toggling causes no PTY resize
 - Overlay auto-dim: the overlay card (fill, row text, badges, icons, and shadow together) renders at full opacity while the pointer hovers it or within 3 seconds of a mux window switch (keyboard or row click), and fades to 35% opacity over 200ms once neither condition holds; no repaint is requested once settled at either opacity
 - Placement setting `mux.window_sidebar_overlay` (default `true` = overlay, `false` = persistent); switching the setting triggers exactly one PTY resize
 
@@ -1175,9 +1189,11 @@ Panes report the state of an AI agent running in them via an OSC 777 sequence; e
 - CLI: `emterm agent-status <idle|working|blocked|done> [--name <name>]` and `emterm agent-status clear`; available in both the GUI and CLI-only build
 - Daemon stores per-pane `state`, `name`, and a monotonically increasing `revision`; state is discarded on pane exit and never persisted
 - Agent-status OSC is stripped from scrollback/snapshot replay; states resync after reattach via replay-derived updates without firing a notification
-- Tab/window list badges aggregate per-pane state with priority: blocked > unseen done > working > seen done > idle
+- Tab/window list badges aggregate per-pane state with priority: blocked > unseen done > working > seen done > idle; each state renders as an emoji badge — working ⚡, idle 💤, blocked ❓ (unseen) / ❔ (seen), done ✅ (unseen) / 💤 (seen, same badge as idle) — falling back to a plain circle indicator if the emoji texture fails to load
+- Badge auto-clear: if a pane's shell returns to an interactive prompt (detected via an OSC 133 command-end mark followed by a prompt-start mark) after a status was set without an explicit `clear`/`done` report, the badge clears automatically; applies to both plain tabs and mux panes; panes whose shell does not emit OSC 133 do not auto-clear
 - The status bar carries no agent-status summary; badges are the only always-visible surface
 - OS notification on real transitions to blocked/done for non-visible panes; suppressed for same-state re-reports, name-only changes, and replay; rate-limited; gated by a dedicated agent-notification setting (default on) plus the global notification setting
+- Settings > Agent category holds independent per-event notification toggles (`agent_notify_on_done`, `agent_notify_on_blocked`), both default on; existing `settings.json` files without these keys deserialize with the defaults
 - Public opaque, non-reusable pane IDs; `EMTERM_PANE_ID` is injected into each mux pane's environment for `--pane current` resolution
 
 **Agent-Facing CLI Commands:**
@@ -1210,6 +1226,7 @@ Batch processing optimizations for high-frequency PTY output in the mux pipeline
 - Control messages flush the buffer before handling (preserves ordering)
 - Device-query frames (DSR, DA, XTWINOPS) are excluded from coalescing to preserve response ordering
 - Non-active-pane frames and frames arriving during a pending switch use the legacy per-frame path
+- Switching mux windows/tabs while another pane produces very high-volume output (e.g. `seq 1 10000000`) no longer deadlocks the daemon connection; input keeps working for every pane on that connection, and a stalled high-output window no longer drags down others sharing its connection
 
 ---
 
@@ -1298,6 +1315,8 @@ Fixes line-content mixing that could appear after a mux window/tab switch when a
 - Client replay resizes the reconstruction core to each segment's dimensions before replaying that segment's bytes, keeping the coordinate system consistent with how the bytes were produced
 - Marker count and cumulative replay cost are capped so a resize storm cannot make replay latency or snapshot size unbounded
 - Bounded trade-off: once more resizes occur between switches than the marker cap holds, the oldest excess markers are evicted and their span replays at the caller's target dimensions instead of its own, which can still mix a small number of rows in that specific scenario
+- A bypass fast path applies when the scrollback's marker-cluster shape stays within a bounded segment count, restoring tens-of-milliseconds replay latency for panes with large accumulated scrollback and near-tail resize markers instead of an ~800-1000ms full reconstruction; ordinary switches, a resize racing an in-flight switch, and repeated switches to the same pane are unaffected
+- Mux panes are not resized as a group before the status bar's row count has settled on GUI startup/reattach, removing an upstream cause of resize-marker accumulation near the scrollback tail
 
 ---
 
@@ -1339,6 +1358,8 @@ Pane cleanup (reap) is performed whenever the PTY dies, regardless of attach sta
 - If `execve` itself fails, the process restores from the handoff document it just wrote and keeps serving in place
 - Attached clients receive an `Upgrading` notice and reconnect automatically to the same session
 - `emterm mux attach` and plain `emterm mux` both recover from a protocol-mismatched (legacy) running daemon by attempting a hot upgrade first, falling back to shutdown-then-respawn only when the running daemon does not support it
+- The daemon also detects a binary-version mismatch automatically on `emterm mux attach` and on `emterm mux` startup, by comparing its running binary identity against the currently installed binary (including when `/proc/<pid>/exe` reads as deleted), and self-triggers the same hot-upgrade path with no manual `emterm mux upgrade` needed; an identical binary triggers no replacement; against an older daemon that lacks hot-upgrade support, a warning is shown before falling back to the existing (pane-destroying) recovery path
+- Alt-screen state (e.g. Claude Code, other ncurses TUIs) is carried across the hot-upgrade handoff, so a reattach after upgrade replays the actual alternate-screen content instead of pre-alt-screen scrollback fragments; hot-upgrade also succeeds when the install directory is group-writable by a private per-user group (e.g. the default Debian/Ubuntu umask), while remaining refused for any world-writable or shared-group path
 - Unix-only; `emterm mux upgrade` reports hot-upgrade as unsupported on Windows
 
 ---
@@ -1353,38 +1374,6 @@ Mux functionality on Windows using Named Pipes for IPC, replacing Unix domain so
 - Bridge sets console to `ENABLE_VIRTUAL_TERMINAL_INPUT` via Windows Console API
 - Stale pipe detection via connection attempt to verify daemon liveness
 - All shared logic (session management, IPC protocol, handlers, reattach) remains platform-agnostic
-
----
-
-#### Mux Status Bar
-
-The mux daemon executes registered commands periodically and pushes resolved template output to the GUI status bar's OSC layer.
-
-**Key Functionality:**
-- `mux.statusbar` settings section: `enabled`, `left`/`right` templates, `commands` map
-- Template variables: `{cmd:name}` (command stdout), `{hostname}`, `{cwd}` (active pane OSC 7)
-- Each command runs on its own independent timer (`interval_ms`, minimum 1000ms, clamped)
-- Single-flight control: skips tick if previous execution is still running
-- Commands timeout after 5 seconds (killed, previous value retained)
-- Render timer (1-second fixed interval): resolves templates and sends `StatusUpdate` only if content changed
-- OSC 7 detection per pane: scans raw PTY bytes for `ESC ] 7 ; file://host/path ST`
-- Auto-clears OSC layer when exiting mux mode
-
-**Settings (JSON):**
-```json
-{
-  "mux": {
-    "statusbar": {
-      "enabled": false,
-      "left": "{time}",
-      "right": "{cwd}",
-      "commands": {
-        "mystat": { "executable": "~/scripts/status.sh", "interval_ms": 5000 }
-      }
-    }
-  }
-}
-```
 
 ---
 
@@ -1561,7 +1550,7 @@ eMterm ships a Claude Code plugin, installed via a marketplace manifest at the r
 **Key Functionality:**
 - Installed via `/plugin marketplace add` + `/plugin install` against the eMterm repository
 - Lifecycle hook reports state through Claude Code's `terminalSequence` hook-output field (an eMterm agent-status OSC 777 sequence embedded in the hook's JSON stdout); requires Claude Code v2.1.141 or later
-- Hook wiring: `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure` set `working`; `Stop` sets `idle`; unmatched `PermissionRequest` and a `Notification` matcher restricted to `elicitation_dialog`/`agent_needs_input` set `blocked`
+- Hook wiring: `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure` set `working`; `Stop` sets `done`; unmatched `PermissionRequest` and a `Notification` matcher restricted to `elicitation_dialog`/`agent_needs_input` set `blocked`
 - Four display skills — `display-markdown`, `display-json`, `display-yaml`, `display-image` — invoke the matching `emterm markdown|json|yaml|image` CLI subcommand on a given file (`display-image` accepts an optional `--protocol kitty|sixel` argument)
 - Three mux skills — `mux-read`, `mux-send`, `mux-wait` — invoke the matching `emterm mux read|send|wait` subcommand; `--pane current` resolution delegates to the eMterm CLI via `EMTERM_PANE_ID`
 - `mux-send`'s primary form for untrusted text is file redirection (`--stdin < '<file>'`) rather than inline text, keeping untrusted bytes off the command line
