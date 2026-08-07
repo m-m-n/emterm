@@ -1,0 +1,65 @@
+feature: windows-imm32-ime-direct
+collected_at: "2026-08-06T23:20:00+09:00"
+session_ids: [f38a32f8-cc25-4929-aa84-e6f5e9430f46]
+signals:
+  review_critical_high:
+    - stable_id: held-detach-not-windows-gated
+      category: comprehensive
+      file: src-tauri/src/ime/winit_bridge.rs
+      title: "deferred detach が全ターゲットに適用され、X11 では解除条件が原理的に成立しない"
+      resolution: fixed
+    - stable_id: deferred-detach-breaks-fr5
+      category: spec
+      file: src-tauri/src/ime/winit_bridge.rs
+      title: "Deferred detach が #[cfg(windows)] 未ガードで FR5 / AC6 に反する"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: license
+      reason: "diff が依存マニフェスト src-tauri/Cargo.toml に触れているため（windows-sys の feature 追加）"
+  declined_findings: []
+lessons_candidates:
+  - id: L1
+    note: >-
+      同一の欠陥を spec と comprehensive の 2 観点が独立に検出した。実装側は SPEC の
+      「FR5: 非 Windows は不変」を読んだうえで、新しい状態（composition_alive）と
+      hold ロジックにプラットフォームゲートを付け忘れた。原因は「変更の主目的が Windows 向けである」
+      という文脈が、実際に書いたコードのスコープに反映されていなかったこと。
+      プラットフォーム固有の修正では、新規に追加する分岐すべてに対して
+      「これは cfg ゲートが要るか」を明示的にチェックする観点が有効かもしれない。
+  - id: L2
+    note: >-
+      auto-fix が high を解消した一方で、新しい medium を 3 件生んだ（テストが
+      #[cfg(windows)] 化されてどのホストでも実行されなくなった / tests.yaml の受入記録が
+      実行不能な証跡を指したまま / hold の配線に退行ガードが残っていない）。
+      review-editor は 1 ファイル内では正しく動いたが、「テストが実際に実行されるか」という
+      検証パイプライン全体の性質までは考慮できない。auto-fix 後に「このテストは実行されるか」を
+      機械的に確認する手立て（例: cargo test の実行本数の差分）があると再発を防げる可能性がある。
+  - id: L3
+    note: >-
+      worktree ではバンドルフォント（*.ttf は gitignore）と web バンドルが未取得のため
+      GUI ビルドが通らない。project.components のコマンド文字列に
+      `bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings`
+      を前置して解決した。同種の「gitignored な生成物に依存するビルド」を持つプロジェクトでは
+      create-spec のコマンド検出時にこの前置きが必要かを確認する価値がある。
+  - id: L4
+    note: >-
+      `cargo check --target x86_64-pc-windows-msvc` が Linux ホストで動く（windows-msvc の std が
+      rustup で導入済みで、cargo check はリンクしないため cargo-xwin 不要）。
+      CLAUDE.md は Windows ビルドを `make win-build`（cargo-xwin 必須）としてのみ記載しているが、
+      型検査だけなら xwin なしで回せる。#[cfg(windows)] コードを含む変更では、この軽量ゲートが
+      唯一の自動コンパイル検証になるため、プロジェクトの検証コマンドとして常設する価値がある。
+  - id: L5
+    note: >-
+      その windows ゲートは `--all-targets` / `--tests` を持たないため #[cfg(test)] を
+      コンパイルしない。今回はまさにそれが原因で「Windows 限定テストがどこでも型検査すらされない」
+      という medium 指摘につながった。cfg 固有テストを持つプロジェクトでは
+      クロスターゲットゲートに --all-targets を付けるのが既定として妥当かもしれない。
+  - id: L6
+    note: >-
+      cross-validation は 4 観点に対して発火したが、Codex はレート制限、Vertex は
+      performance / spec が HTTP 429 でスキップされ、実際にクロスモデル検証が成立したのは
+      security（R2b フォールバック経由）と architecture の 2 観点のみ。
+      レート制限が重なると cross-validation の実効カバレッジが大きく落ちる。

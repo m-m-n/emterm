@@ -1,0 +1,176 @@
+schema_version: 1
+feature: windows-imm32-ime-direct
+created: 2026-08-06
+base_branch: main
+parent_branch: em-workflow/windows-imm32-ime-direct/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check"
+      e2e_test_command: ""
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    windows:
+      language: rust
+      build_command: "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target-win cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 7a3366990e40a853f2319363328fb1e29f17fa2c
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "IME plumbing bug fix (IMM32 call routing inside the winit bridge). No visual or UI surface is added or changed, so there is nothing for a design step to specify."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: a5ab379bc9715463d4a7e23aab655a04f3859cf1
+  - id: implement
+    status: completed
+    completed_at_commit: d6afea5134d6dbd31d16c5af357ee1033ce35694
+    base_commit: 48bb0fa8703508d3cf99319e3d000dcac3930162
+  - id: review
+    status: completed
+    completed_at_commit: b1e80c1cef767022f1b9b452ceb4ba8c13f1813c
+  - id: verify
+    status: completed
+    completed_at_commit: 9065c1356a686a4bcc64fa3e366971cfa2c34a85
+    result: pass
+    failed_items: []
+    manual_pending:
+      - "AC3 / TS5-a: Windows + CorvusSKK 実機での変換確定連打（この Linux ホストでは実行不能）"
+      - "AC4 / TS5-b: 実機での変換中 Alt+Tab フォーカスアウト（同上）"
+      - "AC5 / TS5-c: 実機での候補ウィンドウのカーソル追従（同上）"
+      - "AC6 / TS6: Linux ホストでの X11 / Wayland composition 往復の手動スポットチェック（GUI 起動が必要）"
+    notes: >-
+      自動ゲートは全通過。main build / cli check / windows cross-target check の 3 コンポーネントが
+      exit 0、winit_bridge.rs の fmt ドリフトはゼロ。ユニットテストは 3169 passed / 6 failed で、
+      失敗はすべて tabs::tests。feature を含まない main (b98f5373) で同じテストを実行したところ
+      同一の 7 件が失敗したため（今回の 6 件はその部分集合）、既存の不安定テストと確定。
+      IME 関連テストの失敗はゼロ。
+  - id: retrospect
+    status: completed
+    completed_at_commit: 2facdc9f7a697dd1b6d138e2d11b7af369954fdf
+
+tasks:
+  task0001:
+    title: IMM32-direct cursor area on Windows + deferred IME detach
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/ime/winit_bridge.rs
+      - src-tauri/Cargo.toml
+    skills: []
+    domains: [input-handling, concurrency, external-io]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3]
+    status: merged
+    notes: null
+    branch: em-workflow/windows-imm32-ime-direct/task0001
+
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary:
+      - perspective: license
+        reason: "diff が依存マニフェスト src-tauri/Cargo.toml に触れているため（windows-sys の feature 追加）"
+    cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+    license: completed
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: Windows cursor-area path bypasses winit
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS3, TS4, TS5]
+  FR2:
+    title: IMM32 call sequence and window forms match winit
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS4, TS5]
+  FR3:
+    title: Deferred IME detach
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS2, TS5]
+  FR4:
+    title: Enable stays winit-routed
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS3]
+  FR5:
+    title: Non-Windows path unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS3, TS6]
+  FR6:
+    title: HWND acquisition and dependency
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS4]
+  NFR1:
+    title: No winit modification
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS4]
+  NFR2:
+    title: CLI-only build unaffected
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS4]
+  NFR3:
+    title: IMM32 thread requirement satisfied by existing flush
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS5]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
