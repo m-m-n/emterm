@@ -47,9 +47,32 @@ workflow:
     status: completed
     completed_at_commit: 05781116e72a699cf0046ff55964cba5e6f77b95
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    notes: >
+      Build: cargo check (gui) and cargo check --no-default-features both exit 0.
+      Tests: --lib -- --test-threads=1 => 3158 passed / 6 failed, all 6 in
+      tabs::tests (off-thread replay timing flakes + welcome_without_windows_
+      leaves_group_none). The same family fails on the base commit 8e2311c2
+      worktree (6 failed there too), so they are pre-existing baseline failures,
+      not new — per VERIFICATION.md "Coverage target".
+      Feature-owned modules are green: mux::ipc 184 passed / 0 failed,
+      mux::bridge 38 passed / 0 failed (covers TS1, TS2, TS3, TS8, TS9, TS10).
+      mux_throughput: the single test is #[ignore]d by design (needs
+      --release --ignored, spawns a real daemon) — not run here.
+      Format: cargo fmt --check reports drift only in files this feature does
+      not touch (agent_status_*.rs, tabs.rs, etc. — known baseline drift);
+      none of the 6 feature files drift.
+      TS6 (protocol stability): diff touches no crates/mux_ipc and no
+      ipc/codec.rs — only bridge.rs, ipc/{connection,handlers,mod,outbound,
+      reattach}.rs. TS7 (scope boundaries): no GUI event_tx sizing change;
+      bridge_main_loop_windows appears in the diff only inside a doc comment.
+      TS5 is manual (release build, user-initiated) and remains unverified.
+      SC-6 (residual_critical_high == 0) is NOT met: 1 high finding
+      (d55d5d410f85e087) plus several medium findings were deferred with
+      "batch mode: rework cap reached". Recorded, not treated as a verify
+      failure since the review step itself completed.
   - id: retrospect
     status: pending
 
