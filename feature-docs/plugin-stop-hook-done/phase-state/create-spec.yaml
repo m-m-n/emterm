@@ -1,0 +1,37 @@
+schema_version: 1
+feature: plugin-stop-hook-done
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 6aac584ff426df302876ee76592015c17a1f2e50
+last_input_digest: "sha256:orchestrator-computed-0002"
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: "sha256:pending-orchestrator-computed"
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:orchestrator-computed-0002"
+    output_digest: null
+artifacts:
+  - path: feature-docs/plugin-stop-hook-done/REQUIREMENTS.md
+    sha256: null
+    produced_by: create-spec-run-0002
+  - path: feature-docs/plugin-stop-hook-done/SPEC.md
+    sha256: null
+    produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+last_error: null

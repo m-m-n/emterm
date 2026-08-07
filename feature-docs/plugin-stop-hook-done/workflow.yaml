@@ -1,0 +1,107 @@
+schema_version: 1
+feature: plugin-stop-hook-done
+created: 2026-08-07
+base_branch: main
+parent_branch: em-workflow/plugin-stop-hook-done/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: none
+    paths: []
+  components:
+    main:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: "bunx biome check ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 6aac584ff426df302876ee76592015c17a1f2e50
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "JSON 設定値 1 箇所とテスト期待値 1 箇所の変更のみで、UI サーフェス・視覚要素・レイアウトへの変更が一切ない。既存の通知/バッジ UI は実装済みで無変更。"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: 33a8f005837d74150956f4831f5feab541540e5f
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Stop hook が done を送る"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS2]
+  FR2:
+    title: "テストの期待値更新"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  NFR1:
+    title: "notify-status.sh は変更不要"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  NFR2:
+    title: "eMterm 本体 (src-tauri/) は変更しない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "編集対象はリポジトリ内 plugins/emterm/ のソースのみ"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "hooks.json の command 既存形式を維持する"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  NFR5:
+    title: "通知経路は変更しない"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
