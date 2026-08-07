@@ -13,7 +13,13 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -417,7 +423,7 @@ describe("hooks.json shape (AC-7)", () => {
     ["UserPromptSubmit", "working"],
     ["PostToolUse", "working"],
     ["PostToolUseFailure", "working"],
-    ["Stop", "idle"],
+    ["Stop", "done"],
     ["PermissionRequest", "blocked"],
     ["Notification", "blocked"],
   ])(

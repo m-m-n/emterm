@@ -1,0 +1,57 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - "hooks.json shape (AC-7) > Stop hook: exec form, command has no state appended, args=[done], timeout 3"
+      - "hooks.json shape (AC-7) > declares exactly UserPromptSubmit, PostToolUse, PostToolUseFailure, Stop, PermissionRequest, Notification; no SubagentStop, no StopFailure"
+    red_confirmed: true
+    red_reason: >-
+      Changed the test.each row to ["Stop", "done"] before touching
+      hooks.json; the run against the still-"idle" hooks.json failed with
+      "expect(received).toEqual(expected) - [\"done\"] + [\"idle\"]" at
+      notify-status.test.ts:439. Editing hooks.json's Stop args to ["done"]
+      turned it green, which is the direct evidence for AC-1 (args is
+      exactly ["done"]; the other five event rows in the same table were
+      untouched and stayed green throughout, evidencing "every other event
+      entry's args value is unchanged").
+  AC-2:
+    tests:
+      - "hooks.json shape (AC-7) > Stop hook: exec form, command has no state appended, args=[done], timeout 3"
+    red_confirmed: true
+    red_reason: >-
+      Same edit/observation as AC-1 (single atomic change, D1): the
+      test.each table row binding Stop is now ["Stop", "done"], confirmed
+      red against the pre-edit hooks.json (see AC-1 red_reason) then green
+      after hooks.json changed. A full-file grep for "idle" run after the
+      edit shows no remaining Stop-idle binding (only the unrelated
+      ALLOWED_STATES array and the shell-script AC-2 test whose state is
+      not "idle", both explicitly out of scope).
+  AC-3:
+    tests: []
+    red_reason: >-
+      Verifiable outcome is `bun test` exit code, not an individual test.
+      Full-suite run after both edits: "328 pass / 0 fail" (matches the
+      pre-implementation baseline of 328 pass / 0 fail), exit code 0. The
+      hooks.json shape describe block (format-validation tests, including
+      the ${CLAUDE_PLUGIN_ROOT}-prefix / timeout=3 / no-".." assertions at
+      lines 424-450) passed as part of this run, confirming the command
+      form was preserved.
+  AC-4:
+    tests: []
+    red_reason: >-
+      Verifiable outcome is `bun run typecheck` exit code, not an
+      individual test. Ran `bun run typecheck`; output was `$ tsc --noEmit`
+      with exit code 0 (no diagnostics).
+  AC-5:
+    tests: []
+    red_reason: >-
+      Verifiable outcome is the change-set diff, not a test. `git status
+      --porcelain` after implementation shows exactly two modified paths:
+      plugins/emterm/hooks/hooks.json and
+      plugins/emterm/hooks/scripts/notify-status.test.ts (the latter
+      additionally reformatted by the project's PostToolUse Biome hook on
+      an unrelated import statement, not a manual edit). Nothing under
+      src-tauri/, no edit to notify-status.sh, no edit outside the
+      repository.
