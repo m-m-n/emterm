@@ -53,7 +53,7 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR1, FR2, NFR1, NFR2, NFR3, NFR4, NFR5]
-    status: pending
+    status: in_progress
     notes: null
     branch: em-workflow/plugin-stop-hook-done/task0001
 
