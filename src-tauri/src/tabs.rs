@@ -3560,19 +3560,27 @@ impl Tab {
 
     /// Test-only: spin on [`Self::poll_pending_switch`] until the worker
     /// finishes and the swap completes (or there is no pending switch),
-    /// returning the final outcome. Bounded spin so a stuck worker fails the
-    /// test instead of hanging. Mirrors what `pump_all` does across many
-    /// frames, collapsed into one synchronous call for unit tests (no real
+    /// returning the final outcome. Bounded by a wall-clock deadline so a
+    /// stuck worker fails the test instead of hanging — a fixed iteration
+    /// count is machine-speed dependent (10k yields burn ~1ms on an idle
+    /// multicore host, far less than a debug-build replay of a 64KB+
+    /// snapshot needs). Mirrors what `pump_all` does across many frames,
+    /// collapsed into one synchronous call for unit tests (no real
     /// `pump_all` async loop — NFR2).
     #[cfg(test)]
     pub(crate) fn test_poll_until_swapped(&mut self) -> SwapOutcome {
-        for _ in 0..10_000 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
             match self.poll_pending_switch() {
-                SwapOutcome::Pending => std::thread::yield_now(),
+                SwapOutcome::Pending => {
+                    if std::time::Instant::now() >= deadline {
+                        panic!("off-thread replay worker did not complete in time");
+                    }
+                    std::thread::yield_now();
+                }
                 other => return other,
             }
         }
-        panic!("off-thread replay worker did not complete in time");
     }
 
     /// Test-only: block until the in-flight worker has produced its result,
@@ -3820,7 +3828,9 @@ impl Tab {
         // in-flight worker's own build target clears any previously
         // deferred resize (nothing left to apply once swapped in).
         if let Some(pending) = self.pending_switch.as_mut() {
-            let effective_target = pending.pending_resize.unwrap_or((pending.cols, pending.rows));
+            let effective_target = pending
+                .pending_resize
+                .unwrap_or((pending.cols, pending.rows));
             if effective_target != (cols, rows) {
                 pending.pending_resize = if (cols, rows) == (pending.cols, pending.rows) {
                     None
@@ -5048,10 +5058,15 @@ mod tests {
     }
 
     #[test]
-    fn welcome_without_windows_leaves_group_none() {
+    fn welcome_without_windows_preinstalls_empty_group_for_fresh_start() {
+        // Fresh-start mux (`pane_count == 0`, `windows == []`): the Welcome
+        // handler pre-installs an empty group and dispatches CreateWindow so
+        // the daemon's PaneCreated reply can land (1d9ec548 — before that
+        // fix, `mux_group` stayed `None` and every keystroke was dropped).
         let mut tab = test_tab();
         tab.apply_mux_message(welcome_msg(&[], 0));
-        assert!(tab.mux_group.is_none());
+        let g = tab.mux_group.as_ref().expect("empty group pre-installed");
+        assert_eq!(g.len(), 0);
         assert_eq!(tab.mux_session_name.as_deref(), Some("main"));
     }
 
@@ -5279,9 +5294,7 @@ mod tests {
         // moved WHERE `pending_agent_status` is drained within
         // `process_combined`, not WHETHER a plain tab's events are drained.
         let mut tab = test_tab();
-        tab.test_process_combined(
-            b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\".to_vec(),
-        );
+        tab.test_process_combined(b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\".to_vec());
         assert_eq!(
             tab.take_pending_agent_status_events(),
             vec![crate::agent_status::AgentStatusEvent::Set {
@@ -5300,8 +5313,7 @@ mod tests {
         // per-pump-delayed drain of the same stale queue is just as much a
         // leak, only postponed).
         let mut tab = mux_tab_active_pane(10);
-        let combined =
-            pty_output_apc(10, b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\");
+        let combined = pty_output_apc(10, b"\x1b]777;emterm;agent-status;v=1;state=working\x1b\\");
         tab.test_process_combined(combined);
         // A second, still-mux pump with no new bytes: proves the mux-inner
         // Set from the first pump cannot surface on a later drain either.
@@ -7883,7 +7895,11 @@ mod tests {
         tab.apply_mux_message(snapshot_msg(10, large_scrollable_payload()));
         let _ = tab.test_poll_until_swapped();
         assert!(tab.test_has_pending_scrollback_restore());
-        // New off-thread switch to a different pane.
+        // New off-thread switch to a different pane. Since task0003 D3 the
+        // Snapshot arm drops frames for non-active panes, so make pane 20
+        // active first — matching the real switch flow (SwitchWindow, then
+        // the reconciling per-pane snapshot).
+        tab.apply_mux_message(switch_window(20));
         tab.apply_mux_message(snapshot_msg(20, large_scrollable_payload()));
         // The prior restore is cleared immediately on the supersede arm
         // inside `dispatch_offthread_replay`.
@@ -8329,7 +8345,10 @@ mod tests {
     /// dispatch-consistent-target-and-segments regression guard (AC-2), and
     /// a target-mismatch-after-the-fact case (AC-1) that must not pay for
     /// more than one wasted rebuild.
-    fn many_segment_payload_at(cols: u16, rows: u16) -> (Vec<mux_ipc::protocol::DimSegment>, Vec<u8>) {
+    fn many_segment_payload_at(
+        cols: u16,
+        rows: u16,
+    ) -> (Vec<mux_ipc::protocol::DimSegment>, Vec<u8>) {
         let content = b"content\r\n".to_vec();
         let segments: Vec<mux_ipc::protocol::DimSegment> = (0..OFFTHREAD_REPLAY_SEGMENT_THRESHOLD)
             .map(|_| mux_ipc::protocol::DimSegment {
@@ -8661,9 +8680,17 @@ mod tests {
         // Resolve: the fresh worker for P2 completes, L2 replays on top.
         assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
         assert_eq!(tab.test_row_text(0), "FIRST");
-        assert_eq!(tab.test_row_text(1), "L1", "L1 applied exactly once, via P2's own content");
+        assert_eq!(
+            tab.test_row_text(1),
+            "L1",
+            "L1 applied exactly once, via P2's own content"
+        );
         assert_eq!(tab.test_row_text(2), "L2", "L2 must not be lost");
-        assert_eq!(tab.test_row_text(3), "", "nothing duplicately applied past L2");
+        assert_eq!(
+            tab.test_row_text(3),
+            "",
+            "nothing duplicately applied past L2"
+        );
     }
 
     /// task0006 AC-4 (live-output correctness, resize-driven case): a
