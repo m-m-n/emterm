@@ -1,5 +1,5 @@
 {
   "name": "emterm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "eMterm agent-status hook + rich-display skills + mux API skills"
 }
