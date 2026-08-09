@@ -7,9 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use term_core::terminal_core::ReplaySegment;
 
+use super::marks_fold::drain_marks;
 use super::{
     PendingScrollbackRestore, PendingSwitch, ScrollbackBuild, ScrollbackRestoreOutcome,
-    SwapOutcome, Tab, drain_marks,
+    SwapOutcome, Tab,
 };
 
 impl Tab {
