@@ -18,7 +18,7 @@ static ORIGINAL_TERMIOS: std::sync::OnceLock<libc::termios> = std::sync::OnceLoc
 
 /// Restore stdin from the global original termios (safe to call from any context).
 #[cfg(unix)]
-fn restore_stdin_global() {
+pub(in crate::mux::bridge) fn restore_stdin_global() {
     if let Some(orig) = ORIGINAL_TERMIOS.get() {
         unsafe {
             libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, orig);
@@ -108,7 +108,7 @@ fn restore_stdin(orig: &libc::termios) {
 
 /// RAII guard that restores terminal settings on drop.
 #[cfg(unix)]
-struct RawModeGuard(Option<libc::termios>);
+pub(in crate::mux::bridge) struct RawModeGuard(Option<libc::termios>);
 
 #[cfg(unix)]
 impl Drop for RawModeGuard {
@@ -125,7 +125,7 @@ static ORIGINAL_CONSOLE_MODE: std::sync::OnceLock<u32> = std::sync::OnceLock::ne
 
 /// Restore stdin from the global console mode (Windows).
 #[cfg(windows)]
-fn restore_stdin_windows_global() {
+pub(in crate::mux::bridge) fn restore_stdin_windows_global() {
     if let Some(&mode) = ORIGINAL_CONSOLE_MODE.get() {
         restore_stdin_windows(mode);
         log::info!("stdin restored from global console mode");
@@ -172,7 +172,7 @@ fn restore_stdin_windows(original_mode: u32) {
 
 /// RAII guard that restores console mode on drop (Windows).
 #[cfg(windows)]
-struct RawModeGuardWindows(Option<u32>);
+pub(in crate::mux::bridge) struct RawModeGuardWindows(Option<u32>);
 
 #[cfg(windows)]
 impl Drop for RawModeGuardWindows {
@@ -441,7 +441,7 @@ fn conclude_connection(announced: bool) -> ConnectionEnded {
 /// `daemon_to_stdout`'s admission suspends. Keeps memory growth capped and
 /// gives the socket-drain direction a bounded amount of slack before its
 /// own backpressure (not reading more from the socket) kicks in.
-const STDOUT_WRITER_CAPACITY: usize = 64;
+pub(in crate::mux::bridge) const STDOUT_WRITER_CAPACITY: usize = 64;
 
 /// How long `forward_loop` waits for the stdout writer to drain its queue
 /// after the connection ends, before giving up and returning anyway
@@ -455,7 +455,7 @@ const STDOUT_WRITER_QUIESCE_TIMEOUT: std::time::Duration = std::time::Duration::
 /// `StdoutLock` cannot be constructed elsewhere and then moved in); tests
 /// inject a controllable sink that can block until released, fail on
 /// demand, and record write order (Test Notes: testability seam).
-trait StdoutSink {
+pub(in crate::mux::bridge) trait StdoutSink {
     fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()>;
     fn flush(&mut self) -> std::io::Result<()>;
 }
@@ -533,7 +533,7 @@ fn stdout_writer_pump<S: StdoutSink>(
 /// ON the blocking thread (not here), so a non-`Send` sink like
 /// `ProcessStdout` never has to cross the thread boundary itself — only
 /// the zero/small-capture constructor does.
-fn spawn_stdout_writer<S, F>(
+pub(in crate::mux::bridge) fn spawn_stdout_writer<S, F>(
     transport: Arc<AtomicU8>,
     make_sink: F,
 ) -> (
@@ -584,7 +584,7 @@ where
 /// including `bridge_main_loop_windows`, which task0002 must leave
 /// textually untouched (NFR3) — keeps compiling unchanged; tests call
 /// `forward_loop_inner` directly with an injected sink instead.
-async fn forward_loop<R, W, I>(
+pub(in crate::mux::bridge) async fn forward_loop<R, W, I>(
     sock_reader: &mut R,
     sock_writer: &mut W,
     transport: &Arc<AtomicU8>,
@@ -624,7 +624,7 @@ enum ForwardEnd {
 /// is invoked on the writer's own blocking-thread context, never here
 /// (see [`spawn_stdout_writer`]).
 #[allow(clippy::too_many_arguments)]
-async fn forward_loop_inner<R, W, I, S, F>(
+pub(in crate::mux::bridge) async fn forward_loop_inner<R, W, I, S, F>(
     sock_reader: &mut R,
     sock_writer: &mut W,
     transport: &Arc<AtomicU8>,
@@ -840,7 +840,7 @@ where
 /// calls this only once reconnecting is not attempted or has been
 /// exhausted; Windows calls it unconditionally (reconnect-after-upgrade is
 /// Unix-only).
-fn finish_bridge_exit(transport: &Arc<AtomicU8>) -> ! {
+pub(in crate::mux::bridge) fn finish_bridge_exit(transport: &Arc<AtomicU8>) -> ! {
     // Write synthetic Detached message so the GUI exits mux mode.
     // When the daemon dies, no explicit Detached is sent — the bridge
     // must synthesise one before exiting.
@@ -896,7 +896,7 @@ fn finish_bridge_exit(transport: &Arc<AtomicU8>) -> ! {
 #[cfg(unix)]
 const RECONNECT_MAX_ATTEMPTS: u32 = 5;
 #[cfg(unix)]
-const RECONNECT_INITIAL_BACKOFF: std::time::Duration = std::time::Duration::from_millis(50);
+pub(in crate::mux::bridge) const RECONNECT_INITIAL_BACKOFF: std::time::Duration = std::time::Duration::from_millis(50);
 #[cfg(unix)]
 const RECONNECT_MAX_BACKOFF: std::time::Duration = std::time::Duration::from_millis(800);
 
@@ -919,7 +919,7 @@ async fn try_reconnect_once(sock_path: &std::path::Path) -> Result<UnixStream, S
 /// `RECONNECT_MAX_ATTEMPTS` (AC-5). Sleeps between attempts rather than
 /// spinning (AC-6). Returns `None` once the window is exhausted.
 #[cfg(unix)]
-async fn reconnect_with_backoff(sock_path: &std::path::Path) -> Option<UnixStream> {
+pub(in crate::mux::bridge) async fn reconnect_with_backoff(sock_path: &std::path::Path) -> Option<UnixStream> {
     let mut backoff = RECONNECT_INITIAL_BACKOFF;
     for attempt in 1..=RECONNECT_MAX_ATTEMPTS {
         match try_reconnect_once(sock_path).await {
@@ -971,7 +971,7 @@ async fn resend_frame<W: tokio::io::AsyncWrite + Unpin>(
 /// machinery repaint the panes (AC-4). Returns the new connection, or
 /// `None` once the reconnect window is exhausted (AC-5).
 #[cfg(unix)]
-async fn reconnect_and_reattach(
+pub(in crate::mux::bridge) async fn reconnect_and_reattach(
     sock_path: &std::path::Path,
     last_attach: &Arc<Mutex<Option<Vec<u8>>>>,
 ) -> Option<UnixStream> {
