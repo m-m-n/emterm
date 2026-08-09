@@ -3,6 +3,14 @@
 
 use super::*;
 
+// ============================================================================
+// Agent-facing API: `emterm mux read|send|wait` (task0004)
+//
+// Exit codes per IMPLEMENTATION.md "Conventions": 0 success; 2 usage/invalid
+// input; 3 wait timeout (dedicated); 4 unknown pane / pane gone; 5
+// not_mux_pane; 1 all other errors (connection failure etc.).
+// ============================================================================
+
 /// Default `--lines` for `emterm mux read` when omitted.
 const READ_DEFAULT_LINES: u32 = 100;
 /// Default `--timeout` (seconds) for `emterm mux wait` when omitted.
