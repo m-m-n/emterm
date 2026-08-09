@@ -179,7 +179,7 @@ pub fn default_mux_action_chord(action: &str) -> Option<crate::mux::prefix::Pref
 /// removed them from [`MUX_ACTION_NAMES`]. The loader drops these
 /// without emitting a warn so a normal launch isn't spammed once per
 /// legacy entry — the entries are dead either way.
-fn is_legacy_mux_action(action: &str) -> bool {
+pub(in crate::settings) fn is_legacy_mux_action(action: &str) -> bool {
     matches!(
         action,
         "split-vertical"
@@ -1233,7 +1233,7 @@ where
 
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(default)]
-struct RawSettings {
+pub(in crate::settings) struct RawSettings {
     // ── src-tauri / WebView build compatible (flat keys) ──
     scrollback_lines: Option<u32>,
     clipboard_read_osc52: Option<bool>,
@@ -1420,7 +1420,7 @@ impl RawSettings {
     /// Apply every present field onto `dst`. Absent fields leave the
     /// corresponding `Settings` field at its prior value (typically the
     /// default that `dst` was seeded with).
-    fn merge_into(self, dst: &mut Settings) {
+    pub(in crate::settings) fn merge_into(self, dst: &mut Settings) {
         // ── flat keys (src-tauri compatible) ──
         if let Some(v) = self.scrollback_lines {
             dst.scrollback_lines = v;
