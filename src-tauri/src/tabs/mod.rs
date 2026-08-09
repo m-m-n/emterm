@@ -690,7 +690,7 @@ impl Tab {
     /// that state through `set_enabled(false)` (which also `unfold_all`s,
     /// a no-op on the empty registry). Centralized so the construction site
     /// and the two reset/replay rebuild sites stay in sync.
-    fn new_fold_manager(enabled: bool) -> crate::fold::FoldManager {
+    pub(super) fn new_fold_manager(enabled: bool) -> crate::fold::FoldManager {
         let mut fm = crate::fold::FoldManager::new();
         fm.set_enabled(enabled);
         fm
@@ -875,7 +875,11 @@ impl Tab {
     /// slice (a `PaneCreated` blank-reset call, or an older daemon's
     /// snapshot with no segment field) degrades to single-dimension replay
     /// (AC-11).
-    fn reset_frame_for_replay(&mut self, payload: &[u8], segments: &[ReplaySegment]) -> Vec<u8> {
+    pub(super) fn reset_frame_for_replay(
+        &mut self,
+        payload: &[u8],
+        segments: &[ReplaySegment],
+    ) -> Vec<u8> {
         self.reset_frame_prompts_folds();
         let (actions, evicted_total, pending_marks, pending_fold_marks) = {
             let mut c = self.core.lock();
@@ -938,7 +942,7 @@ impl Tab {
     /// (review round-1 finding `64baa639d71792f9`) — see
     /// `PendingSwitch::pending_resize`'s doc for why re-dispatching a
     /// resize through here defeated the bypass split.
-    fn dispatch_offthread_replay(
+    pub(super) fn dispatch_offthread_replay(
         &mut self,
         target_pane: u32,
         payload: Vec<u8>,
@@ -1516,7 +1520,7 @@ impl Tab {
     /// swapped or reparsed) displayed core, in arrival order, exactly as the
     /// `PtyOutput` arm would have for each chunk: feed the bytes, route any
     /// device response, backfill marks.
-    fn apply_queued_live_output(&mut self, live_queue: Vec<Vec<u8>>) {
+    pub(super) fn apply_queued_live_output(&mut self, live_queue: Vec<Vec<u8>>) {
         for payload in live_queue {
             let (evicted_total, prompt_marks, fold_marks, device_response) = {
                 let mut c = self.core.lock();
@@ -1569,7 +1573,7 @@ impl Tab {
     /// active pane id is `None`, which also yields `None` (FR3, no request). A
     /// genuine active-window close (FR1) produces a different post-removal pane
     /// id and returns it.
-    fn close_reconcile_target(
+    pub(super) fn close_reconcile_target(
         before_active: Option<u32>,
         after_active: Option<u32>,
     ) -> Option<u32> {
@@ -2611,7 +2615,7 @@ impl Tab {
     /// `process_pty_data_fully` call, writes back any device-status reply
     /// (`take_response`), and drains + backfills OSC 133 / fold marks. Always
     /// returns `true` (the bytes reached the core).
-    fn apply_active_pane_output(&mut self, bytes: &[u8]) -> bool {
+    pub(super) fn apply_active_pane_output(&mut self, bytes: &[u8]) -> bool {
         let (evicted_total, pending_marks, pending_fold_marks, device_response) = {
             let mut c = self.core.lock();
             c.process_pty_data_fully(bytes);
@@ -2659,7 +2663,7 @@ impl Tab {
         applied
     }
 
-    fn process_combined(&mut self, combined: Vec<u8>) -> bool {
+    pub(super) fn process_combined(&mut self, combined: Vec<u8>) -> bool {
         let mut changed = false;
         // Mux-transport frames extracted from the coalesced PTS bytes this
         // pump (mux branch only), each paired with its end offset in `combined`
@@ -2963,7 +2967,7 @@ impl Tab {
     /// and drop the core borrow before calling — `backfill` needs
     /// `&mut self`, which would otherwise conflict with the guard's borrow of
     /// `self.core`.
-    fn backfill_prompt_marks(
+    pub(super) fn backfill_prompt_marks(
         &mut self,
         evicted_total: u64,
         marks: Vec<term_core::terminal_core::PendingPromptMark>,
@@ -3137,7 +3141,7 @@ impl Tab {
     /// A `begin` whose row was evicted out of the frame within this same drain
     /// is dropped (no pending begin recorded), matching the prompt-mark
     /// `checked_sub` guard.
-    fn backfill_fold_marks(
+    pub(super) fn backfill_fold_marks(
         &mut self,
         evicted_total: u64,
         marks: Vec<term_core::terminal_core::PendingFoldMark>,
@@ -3182,7 +3186,7 @@ impl Tab {
     /// leaving every drain site (`pump`, `Snapshot`, `PtyOutput`) to repeat —
     /// and risk reordering — the two calls. Drain the inputs with
     /// [`drain_marks`] under the core guard, drop the guard, then call this.
-    fn backfill_marks(
+    pub(super) fn backfill_marks(
         &mut self,
         evicted_total: u64,
         prompt_marks: Vec<term_core::terminal_core::PendingPromptMark>,
@@ -3305,7 +3309,7 @@ impl Tab {
     ///
     /// Returns true when anything was decoded (caller can request a
     /// redraw).
-    fn drain_and_decode_images(&mut self, apc: &[Vec<u8>], dcs: &[Vec<u8>]) -> bool {
+    pub(super) fn drain_and_decode_images(&mut self, apc: &[Vec<u8>], dcs: &[Vec<u8>]) -> bool {
         if apc.is_empty() && dcs.is_empty() {
             return false;
         }
@@ -3409,7 +3413,7 @@ impl Tab {
     /// but no active pane id is yet available the bytes are dropped with a
     /// warning (observable failure mode) rather than falling back to a raw
     /// write that the bridge would silently discard anyway.
-    fn write_device_response(&self, bytes: Vec<u8>) {
+    pub(super) fn write_device_response(&self, bytes: Vec<u8>) {
         if self.mux_session_name.is_some() {
             match self.mux_group.as_ref().and_then(|g| g.active_pane_id()) {
                 Some(pane_id) => {
@@ -3930,7 +3934,7 @@ impl Tab {
 /// keeps accumulating). A CSI left incomplete at the end of the payload is NOT a
 /// complete query (it would complete in a later frame, where it still yields a
 /// single reply — no loss), so it does not force a split.
-fn payload_has_device_query(payload: &[u8]) -> bool {
+pub(super) fn payload_has_device_query(payload: &[u8]) -> bool {
     let n = payload.len();
     let mut i = 0;
     while i + 1 < n {
@@ -3989,7 +3993,7 @@ fn payload_has_device_query(payload: &[u8]) -> bool {
 /// the existing Kitty Graphics decoder. Decode failures on a clearly
 /// mux-prefixed payload are dropped (the helper already logs at `warn`)
 /// rather than fed to the image pipeline — they cannot be valid Kitty.
-fn partition_apc_for_mux(apc: Vec<Vec<u8>>) -> (Vec<Vec<u8>>, Vec<MuxMessage>) {
+pub(super) fn partition_apc_for_mux(apc: Vec<Vec<u8>>) -> (Vec<Vec<u8>>, Vec<MuxMessage>) {
     let mut images: Vec<Vec<u8>> = Vec::with_capacity(apc.len());
     let mut mux: Vec<MuxMessage> = Vec::new();
     for payload in apc {
@@ -4013,7 +4017,7 @@ fn partition_apc_for_mux(apc: Vec<Vec<u8>>) -> (Vec<Vec<u8>>, Vec<MuxMessage>) {
 /// the guard before handing the values to [`Tab::backfill_marks`] (which needs
 /// `&mut self` and would otherwise conflict with the guard's borrow of
 /// `self.core`). The three reads are independent, so their order is immaterial.
-fn drain_marks(
+pub(super) fn drain_marks(
     c: &mut TerminalCore,
 ) -> (
     u64,
