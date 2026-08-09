@@ -648,7 +648,7 @@ pub(super) struct AgentStatusFeedScanner {
 }
 
 impl AgentStatusFeedScanner {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             state: AgentStatusFeedScanState::Idle,
             body: Vec::new(),
@@ -662,7 +662,7 @@ impl AgentStatusFeedScanner {
     /// during this call, in the exact order their terminator appeared in
     /// `chunk`. Any trailing incomplete OSC sequence is retained in `self`
     /// and resumed on the next `feed` call.
-    fn feed(
+    pub(super) fn feed(
         &mut self,
         chunk: &[u8],
         live_spans: &[std::ops::Range<usize>],
