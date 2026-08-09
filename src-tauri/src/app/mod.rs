@@ -225,7 +225,7 @@ pub enum MuxActionOutcome {
 /// Build the mux prefix latch from settings: the prefix chord
 /// (`mux_prefix_key`, falling back to `Ctrl+Z` on a parse error) and the
 /// action bindings (`mux.keybinds`).
-fn build_mux_latch(settings: &Settings) -> crate::mux::prefix::Latch {
+pub(super) fn build_mux_latch(settings: &Settings) -> crate::mux::prefix::Latch {
     use crate::mux::prefix::{ActionBindings, Latch, PrefixChord, parse_prefix_key};
     let chord = parse_prefix_key(&settings.mux_prefix_key).unwrap_or_else(|| {
         log::warn!(
@@ -244,7 +244,7 @@ fn build_mux_latch(settings: &Settings) -> crate::mux::prefix::Latch {
 /// pane in its window group, if attached (task0005). Shared by the
 /// tab-close (AC-6) and mark_seen-on-foreground-display (AC-5) call sites so
 /// "which panes belong to this tab" is defined in exactly one place.
-fn agent_status_keys_for_tab(tab: &crate::tabs::Tab) -> Vec<crate::agent_status_model::PaneKey> {
+pub(super) fn agent_status_keys_for_tab(tab: &crate::tabs::Tab) -> Vec<crate::agent_status_model::PaneKey> {
     use crate::agent_status_model::PaneKey;
     let mut keys = vec![PaneKey::Tab(tab.stable_id)];
     if let Some(group) = tab.mux_group.as_ref() {
@@ -262,7 +262,7 @@ fn agent_status_keys_for_tab(tab: &crate::tabs::Tab) -> Vec<crate::agent_status_
 /// tab is active/focused, not just the group's currently-active window.
 /// Free function (not an `App` method) so the visibility rule is testable
 /// against arbitrary tab fixtures without constructing a full `App`.
-fn agent_status_pane_visible(
+pub(super) fn agent_status_pane_visible(
     window_focused: bool,
     active_tab: Option<&crate::tabs::Tab>,
     pane: &crate::agent_status_model::PaneKey,
@@ -281,7 +281,7 @@ fn agent_status_pane_visible(
 /// transition's pane by locating its containing tab"). `None` when no
 /// tracked tab currently owns `pane` (it closed between the transition
 /// firing and this drain — the caller falls back to an empty title).
-fn agent_status_pane_tab_title<'a>(
+pub(super) fn agent_status_pane_tab_title<'a>(
     tabs: &'a [crate::tabs::Tab],
     pane: &crate::agent_status_model::PaneKey,
 ) -> Option<&'a str> {
@@ -310,7 +310,7 @@ fn agent_status_pane_tab_title<'a>(
 /// and the transition-drain loop so all four derive the same key. Takes
 /// `mux_public_pane_ids` explicitly (rather than `&App`) so it is testable
 /// without constructing a full `App`.
-fn agent_notification_rate_limit_key(
+pub(super) fn agent_notification_rate_limit_key(
     mux_public_pane_ids: &std::collections::HashMap<u32, String>,
     pane: &crate::agent_status_model::PaneKey,
 ) -> String {
@@ -980,7 +980,7 @@ impl App {
     /// The rasterizer in the returned tuple is fully initialized:
     /// `set_base_font` has already been called with `base_id` before
     /// returning, so callers do not need to call it again.
-    fn build_font_stack(
+    pub(super) fn build_font_stack(
         settings: &Settings,
     ) -> (
         Arc<Resolver>,
@@ -1767,7 +1767,7 @@ impl App {
     /// (profiles-empty × entries-empty/non-empty) is unit-testable
     /// without touching the real socket directory (`tdd-testing`: "test
     /// the pure decision core").
-    fn open_new_tab_chooser_with_entries(
+    pub(super) fn open_new_tab_chooser_with_entries(
         &mut self,
         entries: Vec<crate::ui::profile_selector::TmuxRow>,
     ) {
@@ -1994,7 +1994,7 @@ impl App {
     /// [`Self::execute_pending_reconcile`], invoked by `window_host::render`
     /// once insets for the NEW active tab have settled. Consecutive
     /// requests before that point collapse into one.
-    fn request_active_tab_reconcile(&mut self) {
+    pub(super) fn request_active_tab_reconcile(&mut self) {
         self.pending_active_tab_reconcile = true;
     }
 
@@ -2040,7 +2040,7 @@ impl App {
     /// which activation path (or `set_grid_size`) triggered it — it is
     /// never left to caller preconditions (round-1 findings
     /// a172de726b3cbc29 / d39a6a9468ff892e).
-    fn apply_tab_resize(&mut self, idx: usize, cols: u16, rows: u16) {
+    pub(super) fn apply_tab_resize(&mut self, idx: usize, cols: u16, rows: u16) {
         let Some(tab) = self.tabs.get_mut(idx) else {
             return;
         };
@@ -2700,7 +2700,7 @@ impl App {
     /// [`Self::dispatch_mux_action`]'s `NextWindow` / `PrevWindow` /
     /// `SelectWindow` arms and from [`Self::apply_tab_event`]'s
     /// `MuxSwitch` arm (the sidebar-row-click path) — AC-6.
-    fn record_mux_window_switch(&mut self) {
+    pub(super) fn record_mux_window_switch(&mut self) {
         self.mux_sidebar_last_switch = Some(Instant::now());
     }
 
@@ -3429,7 +3429,7 @@ impl App {
     /// per-pane slot, then reloads the incoming pane's saved position into
     /// `scroll` after the snapshot request (FR3 pane wiring). A failed send or
     /// empty group leaves `scroll` untouched.
-    fn switch_to(
+    pub(super) fn switch_to(
         tab: &mut Tab,
         target: Option<usize>,
         scroll: &mut crate::app::ScrollPosition,
