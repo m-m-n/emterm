@@ -126,7 +126,7 @@ pub fn execute_kill(_session: Option<&str>) -> Result<(), Box<dyn std::error::Er
 /// `daemon::socket_path()` (mirrors [`resolve_attach_socket_with`]'s
 /// existing test-injection shape).
 #[cfg(unix)]
-fn execute_upgrade_at(sock_path: &std::path::Path) -> i32 {
+pub(in crate::mux::cli) fn execute_upgrade_at(sock_path: &std::path::Path) -> i32 {
     if !daemon::is_daemon_running(sock_path) {
         eprintln!("No mux daemon running (nothing to upgrade)");
         return 1;
