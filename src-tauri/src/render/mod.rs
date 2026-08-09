@@ -1008,7 +1008,7 @@ pub fn apply_preedit_overlay(
 /// Pack an `egui::Color32` (already non-premultiplied RGBA8) into the
 /// little-endian `[r, g, b, a]` layout the `CellInput` carries. The shader
 /// re-expands this via `unpack4x8unorm`.
-fn color32_to_rgba(c: Color32) -> [u8; 4] {
+pub(in crate::render) fn color32_to_rgba(c: Color32) -> [u8; 4] {
     [c.r(), c.g(), c.b(), c.a()]
 }
 
@@ -1019,7 +1019,7 @@ fn color32_to_rgba(c: Color32) -> [u8; 4] {
 /// scheme's cursor color, or an OSC 12 override while one is active;
 /// never `TerminalCore::get_cursor_fg()` (the unrelated SGR pen
 /// foreground).
-fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App) {
+pub(in crate::render) fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App) {
     if !core.get_cursor_visible() {
         return;
     }
@@ -1138,7 +1138,7 @@ const SEARCH_OTHER_FILL: Color32 = Color32::from_rgba_premultiplied(69, 69, 15, 
 /// of the linear `abs_row - visible_start`. This mirrors the WebView's
 /// `renderSearchHighlights` fold branch (`getRegionAtLine` collapsed-skip +
 /// `actualLineToDisplay`). Without a layout the linear path runs unchanged.
-fn draw_search_highlights(ui: &mut egui::Ui, core: &TerminalCore, app: &App) {
+pub(in crate::render) fn draw_search_highlights(ui: &mut egui::Ui, core: &TerminalCore, app: &App) {
     if !app.search.visible || app.search.matches.is_empty() {
         return;
     }
@@ -1224,7 +1224,7 @@ const FOLD_SUMMARY_MAX_NAME: usize = 80;
 /// and whether the region is an error (exit != 0). Split out from
 /// [`draw_fold_summaries`] so the logic is unit-testable without an egui
 /// context. Mirrors `renderSummaryLine` (renderer-fold.ts).
-fn fold_summary_texts(region: &crate::fold::FoldRegion) -> (String, String, bool) {
+pub(in crate::render) fn fold_summary_texts(region: &crate::fold::FoldRegion) -> (String, String, bool) {
     use crate::fold::FoldSource;
     let name = match region.source {
         FoldSource::Custom => region.label.as_deref().unwrap_or("..."),
@@ -1263,7 +1263,7 @@ fn fold_summary_texts(region: &crate::fold::FoldRegion) -> (String, String, bool
 /// `collect_cell_inputs` left blank. Mirrors `renderSummaryLine`
 /// (renderer-fold.ts): bg, ▶ icon, truncated name on the left, "— N lines"
 /// (+ "(exit N)" for OSC 133) right-aligned, error rows in `#ff6b6b`.
-fn draw_fold_summaries(ui: &mut egui::Ui, app: &App) {
+pub(in crate::render) fn draw_fold_summaries(ui: &mut egui::Ui, app: &App) {
     let Some(layout) = app.fold_layout() else {
         return;
     };
@@ -1345,7 +1345,7 @@ pub fn draw_search_overlay(
 /// `selected` is computed by the caller against the cell's on-screen viewport
 /// row (the PoC selection model is viewport-coordinate-based and has no
 /// absolute-row notion; see the selection coordinate-system note in `app.rs`).
-fn resolve_cell_style_from_packed(
+pub(in crate::render) fn resolve_cell_style_from_packed(
     theme: &Theme,
     packed_fg: u32,
     packed_bg: u32,
@@ -1438,7 +1438,7 @@ fn resolve_cell_style_from_packed(
 
 /// Linear blend two RGBA colors. `t = 0.0` returns `a`; `t = 1.0` returns
 /// `b`. Used for the dim attribute fallback.
-fn blend_toward(a: Color32, b: Color32, t: f32) -> Color32 {
+pub(in crate::render) fn blend_toward(a: Color32, b: Color32, t: f32) -> Color32 {
     let lerp = |x: u8, y: u8| -> u8 {
         let f = x as f32 + (y as f32 - x as f32) * t;
         f.round().clamp(0.0, 255.0) as u8
@@ -1453,7 +1453,7 @@ fn blend_toward(a: Color32, b: Color32, t: f32) -> Color32 {
 
 /// Compute display width of a grapheme under the active ambiguous-width
 /// policy. Returns at least 1 so the iterator never wedges.
-fn visible_width(ch: &str, mode: AmbiguousWidthMode) -> u8 {
+pub(in crate::render) fn visible_width(ch: &str, mode: AmbiguousWidthMode) -> u8 {
     let mut chars = ch.chars();
     let cp = chars.next().map(|c| c as u32).unwrap_or(0);
     if cp == 0 {
@@ -1492,7 +1492,7 @@ fn visible_width(ch: &str, mode: AmbiguousWidthMode) -> u8 {
 /// Promote indexed-color packed value 0-7 → 8-15 (xterm "bold brightens"
 /// behavior). Truecolor / default-tag values pass through unchanged so
 /// the caller can apply this unconditionally to bolded foregrounds.
-fn bold_brighten_packed(packed: u32) -> u32 {
+pub(in crate::render) fn bold_brighten_packed(packed: u32) -> u32 {
     let tag = (packed >> 24) as u8;
     if tag != 1 {
         return packed;
@@ -1505,7 +1505,7 @@ fn bold_brighten_packed(packed: u32) -> u32 {
     (packed & 0xFF00_FFFF) | ((idx as u32 + 8) << 16)
 }
 
-fn packed_to_egui(packed: u32, _fallback: Rgb, theme: &Theme) -> Option<Color32> {
+pub(in crate::render) fn packed_to_egui(packed: u32, _fallback: Rgb, theme: &Theme) -> Option<Color32> {
     let tag = (packed >> 24) as u8;
     let r = (packed >> 16) as u8;
     let g = (packed >> 8) as u8;
@@ -1518,7 +1518,7 @@ fn packed_to_egui(packed: u32, _fallback: Rgb, theme: &Theme) -> Option<Color32>
     }
 }
 
-fn rgb_to_egui(rgb: Rgb) -> Color32 {
+pub(in crate::render) fn rgb_to_egui(rgb: Rgb) -> Color32 {
     Color32::from_rgb(rgb.0, rgb.1, rgb.2)
 }
 
