@@ -749,6 +749,9 @@ fn set_alt_screen_true_clears_selection_and_anchor() {
     );
 }
 
+// Known flaky when the full suite runs in parallel (host-load dependent);
+// passes in isolation and with --test-threads=1. Rerun this test alone
+// before treating a failure as a regression.
 #[test]
 fn pump_all_shifts_pending_anchor_by_eviction_delta() {
     // A pending press anchor in absolute rows is shifted down by the

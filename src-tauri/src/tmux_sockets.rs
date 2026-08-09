@@ -362,7 +362,9 @@ fn spawn_bounded(mut cmd: Command, timeout: Duration) -> Option<BoundedOutput> {
                 // about to be); the reader thread finishes almost
                 // immediately. The timeout here only guards against a
                 // pathological reader stall, not normal operation.
-                let stdout = rx.recv_timeout(Duration::from_millis(500)).unwrap_or_default();
+                let stdout = rx
+                    .recv_timeout(Duration::from_millis(500))
+                    .unwrap_or_default();
                 return Some(BoundedOutput::Exited {
                     success: status.success(),
                     stdout,
@@ -661,7 +663,8 @@ esac
                 path: dir.path().join("zulu"),
             },
         ];
-        let entries = enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
+        let entries =
+            enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
         assert_eq!(
             entries,
             vec![
@@ -716,7 +719,8 @@ esac
                 path: dir.path().join("blank"),
             },
         ];
-        let entries = enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
+        let entries =
+            enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
         assert_eq!(
             entries,
             vec![
@@ -748,7 +752,11 @@ esac
             name: "dev".to_string(),
             path: dir.path().join("dev"),
         }];
-        let entries = enumerate_sockets(&sockets, "emterm-test-nonexistent-tmux-binary-xyz", TEST_TIMEOUT);
+        let entries = enumerate_sockets(
+            &sockets,
+            "emterm-test-nonexistent-tmux-binary-xyz",
+            TEST_TIMEOUT,
+        );
         assert_eq!(
             entries,
             vec![TmuxEntry {
@@ -770,7 +778,11 @@ esac
             name: "dev".to_string(),
             path: dir.path().join("dev"),
         }];
-        let entries = enumerate_sockets(&sockets, not_executable.to_str().expect("utf8 path"), TEST_TIMEOUT);
+        let entries = enumerate_sockets(
+            &sockets,
+            not_executable.to_str().expect("utf8 path"),
+            TEST_TIMEOUT,
+        );
         assert_eq!(
             entries,
             vec![TmuxEntry {
@@ -797,7 +809,8 @@ esac
                 path: dir.path().join("beta"),
             },
         ];
-        let entries = enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
+        let entries =
+            enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
         assert_eq!(
             entries,
             vec![
@@ -819,6 +832,10 @@ esac
 
     // Edge case: a session name containing a space survives enumeration
     // verbatim (parsing must not split on internal whitespace).
+    //
+    // Known flaky when the full suite runs in parallel (host-load
+    // dependent); passes in isolation and with --test-threads=1. Rerun
+    // this test alone before treating a failure as a regression.
     #[test]
     fn enumerate_session_name_with_embedded_space_preserved() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -831,7 +848,8 @@ esac
             name: "alpha".to_string(),
             path: dir.path().join("alpha"),
         }];
-        let entries = enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
+        let entries =
+            enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
         assert_eq!(entries[0].session.as_deref(), Some("my session"));
     }
 
