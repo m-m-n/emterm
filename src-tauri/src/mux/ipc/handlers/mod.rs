@@ -620,7 +620,7 @@ pub(super) async fn handle_request_pane_snapshot(
 /// reattach's `PaneCreated`/`SnapshotRestore` can never overtake older
 /// held `PtyOutput` (FR3, the worst case Design "Problem" names).
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn handle_attach(
+pub(in crate::mux::ipc) async fn handle_attach(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
     admission: &mut OutboundAdmission,
@@ -741,7 +741,7 @@ pub(super) async fn handle_attach(
 /// `flush_deferred_output` below for the retry, which re-validates
 /// `visible_state` fresh at flush time so a pane hidden again in the interim
 /// is never resumed incorrectly, AC-1/F1/F2/F3).
-pub(super) async fn handle_set_visibility(
+pub(in crate::mux::ipc) async fn handle_set_visibility(
     visible: bool,
     session_manager: &Arc<Mutex<SessionManager>>,
     active_session_id: u32,
@@ -899,7 +899,7 @@ async fn resolve_pane_and_resume(
 ///
 /// A `Closed` channel drops the ENTIRE remaining backlog (every future send
 /// would fail identically, so there is nothing to gain by retaining it).
-pub(super) async fn flush_deferred_output(
+pub(in crate::mux::ipc) async fn flush_deferred_output(
     deferred_output: &mut DeferredOutputQueue,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     session_manager: &Arc<Mutex<SessionManager>>,
@@ -981,7 +981,7 @@ pub(super) async fn flush_deferred_output(
 /// already empty by the time this runs — e.g. another path (the ordinary
 /// `try_send`-based flush) already drained it between the reservation being
 /// armed and it resolving.
-pub(super) async fn apply_fair_permit_to_front_deferred_item(
+pub(in crate::mux::ipc) async fn apply_fair_permit_to_front_deferred_item(
     deferred_output: &mut DeferredOutputQueue,
     permit: mpsc::OwnedPermit<PtyOutputChunk>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
@@ -1162,7 +1162,7 @@ pub(super) fn render_pane_tail(
 /// Handle `ReadPane`: return the tail `lines` RENDERED rows of a mux pane
 /// (current screen + rendered scrollback tail), plain text with no
 /// formatting/escape bytes (AC-1, FR10).
-pub(super) async fn handle_read_pane(
+pub(in crate::mux::ipc) async fn handle_read_pane(
     msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
 ) -> Result<ReadPaneResultMsg, AgentApiError> {
@@ -1197,7 +1197,7 @@ pub(super) async fn handle_read_pane(
 /// Handle `SendText`: write `bytes` verbatim to a mux pane's PTY (no
 /// implicit Enter), rejecting NUL / oversize without writing, and
 /// returning the pre-write revision watermark (AC-2, FR11).
-pub(super) async fn handle_send_text(
+pub(in crate::mux::ipc) async fn handle_send_text(
     msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
 ) -> Result<SendTextResultMsg, AgentApiError> {
@@ -1341,7 +1341,7 @@ pub(in crate::mux) fn fail_agent_waiters_pane_gone(pane: &MuxPane) {
 /// the immediate check and the waiter registration both run while holding
 /// the pane's `agent_status` lock, so a state change landing between "check"
 /// and "register" cannot be missed (any mutator must also take that lock).
-pub(super) async fn handle_wait_agent_state(
+pub(in crate::mux::ipc) async fn handle_wait_agent_state(
     msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
 ) -> Result<WaitAgentStateResultMsg, AgentApiError> {
