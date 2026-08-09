@@ -1001,7 +1001,7 @@ fn trigger_binary_update_if_detected<S: std::io::Read + std::io::Write>(
 /// inode)` plus the refusal reason it produced. In-memory only -- owned by a
 /// local in `run_daemon`, so a daemon restart naturally clears it.
 #[cfg(unix)]
-type RefusedCandidate = ((u64, u64), String, RefusalStage);
+pub(super) type RefusedCandidate = ((u64, u64), String, RefusalStage);
 
 /// Which stage of [`admit_upgrade_candidate`] produced a recorded refusal
 /// (sid-validate-failure-suppression-regression fix): a `validate` failure
@@ -1014,7 +1014,7 @@ type RefusedCandidate = ((u64, u64), String, RefusalStage);
 /// post-probe re-check, matching the pre-existing behavior.
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RefusalStage {
+pub(super) enum RefusalStage {
     /// Recorded when `validate` itself rejected the candidate.
     Validation,
     /// Recorded by [`record_post_probe_refusal`]: a probe spawn failure,
@@ -1029,7 +1029,7 @@ enum RefusalStage {
 /// [`admit_upgrade_candidate`]) and the trigger-side consumer
 /// (`trigger_binary_update_if_detected`'s rejected-reply arm, above).
 #[cfg(unix)]
-const UPGRADE_SUPPRESSED_MARKER: &str = "upgrade-suppressed: ";
+pub(super) const UPGRADE_SUPPRESSED_MARKER: &str = "upgrade-suppressed: ";
 
 /// Build the pinned suppression-marker rejection reason (Design "Pinned
 /// suppression reason"): the exact marker, the ORIGINAL refusal reason, and
@@ -1048,7 +1048,7 @@ fn suppression_reason(original_reason: &str) -> String {
 /// may proceed to the compatibility probe.
 #[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
-enum UpgradeAdmission {
+pub(super) enum UpgradeAdmission {
     /// Proceed to the compatibility probe. Carries the candidate's captured
     /// `(device, inode)` (if any), so the caller can record a POST-probe
     /// refusal (a probe spawn failure, timeout, or schema-range rejection)
@@ -1080,7 +1080,7 @@ enum UpgradeAdmission {
 /// repeat (Design: "If it differs, or the capture fails -> clear the
 /// state").
 #[cfg(unix)]
-fn admit_upgrade_candidate(
+pub(super) fn admit_upgrade_candidate(
     candidate: &Path,
     last_refused: &mut Option<RefusedCandidate>,
     capture_id: impl Fn(&Path) -> Option<(u64, u64)>,
@@ -1151,7 +1151,7 @@ fn admit_upgrade_candidate(
 /// "Recording"). Keyed on the SAME `candidate_id` [`admit_upgrade_candidate`]
 /// already captured, so this never re-stats the candidate.
 #[cfg(unix)]
-fn record_post_probe_refusal(
+pub(super) fn record_post_probe_refusal(
     last_refused: &mut Option<RefusedCandidate>,
     candidate_id: Option<(u64, u64)>,
     reason: &str,
@@ -1312,7 +1312,7 @@ pub enum DaemonRunOutcome {
 /// `deadline` passes before it exits, so a hung candidate binary is
 /// terminated rather than merely abandoned.
 #[cfg(unix)]
-fn probe_candidate_handoff_range(
+pub(super) fn probe_candidate_handoff_range(
     candidate: &Path,
     deadline: std::time::Instant,
 ) -> Result<std::ops::RangeInclusive<u32>, String> {
@@ -1412,7 +1412,7 @@ fn handoff_counts_of(document: &mux_ipc::handoff::HandoffDocument) -> HandoffCou
 /// Adapter matching [`prepare_upgrade`]'s substitutable `snapshot` parameter
 /// shape to the real `crate::mux::upgrade::snapshot` contract (task0003).
 #[cfg(unix)]
-fn real_snapshot(
+pub(super) fn real_snapshot(
     manager: &SessionManager,
     listen_fd: RawFd,
     socket_path: &Path,
@@ -1447,7 +1447,7 @@ const UPGRADE_ANNOUNCE_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 /// refused upgrade gets misreported as a successful in-place replacement
 /// (the AC-10 same-daemon-reachability trap documented in cli.rs).
 #[cfg(unix)]
-const UPGRADE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+pub(super) const UPGRADE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Perform upgrade preparation (design steps 1-3): probe compatibility,
 /// snapshot the live session tree to the handoff file next to `socket_path`
@@ -1465,7 +1465,7 @@ const UPGRADE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// shutdown path in [`run_daemon`], never invoked from here.
 #[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
-async fn prepare_upgrade(
+pub(super) async fn prepare_upgrade(
     session_manager: &Arc<Mutex<SessionManager>>,
     listen_fd: RawFd,
     candidate: &Path,
@@ -1631,7 +1631,7 @@ async fn prepare_upgrade(
 /// back to a fresh bind in that case).
 #[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
-fn start_from_handoff(
+pub(super) fn start_from_handoff(
     handoff_path: &Path,
     title_tx: &TitleChangeSender,
     notification_tx: &NotificationSender,
@@ -1684,7 +1684,7 @@ fn bind_fresh_listener(sock_path: &Path) -> anyhow::Result<UnixListener> {
 /// pane's reader thread is re-wired to (`crate::mux::upgrade::restore`) --
 /// [`run_daemon`] therefore creates them BEFORE calling this function.
 #[cfg(unix)]
-fn startup(
+pub(super) fn startup(
     sock_path: &Path,
     title_tx: &TitleChangeSender,
     notification_tx: &NotificationSender,
@@ -2210,7 +2210,7 @@ pub async fn run_daemon() -> anyhow::Result<DaemonRunOutcome> {
 ///
 /// Returns `true` when `window.name` was updated and a broadcast was sent;
 /// `false` when the pane was not found or the title was unchanged.
-async fn apply_title_change(
+pub(super) async fn apply_title_change(
     session_manager: &Arc<Mutex<SessionManager>>,
     pane_id: u32,
     new_title: String,
@@ -2248,7 +2248,7 @@ async fn apply_title_change(
 /// Run the daemon-level title update task.
 ///
 /// Exits when all senders are dropped (daemon shutdown).
-async fn run_title_update_task(
+pub(super) async fn run_title_update_task(
     session_manager: Arc<Mutex<SessionManager>>,
     mut title_rx: mpsc::Receiver<(u32, String)>,
 ) {
@@ -2287,7 +2287,7 @@ async fn relay_notification(
 /// Consumes `(pane_id, message)` from Detached pane reader threads and
 /// broadcasts each as a `Notify` control message to GUI clients. Exits when
 /// all senders are dropped (daemon shutdown).
-async fn run_notification_task(
+pub(super) async fn run_notification_task(
     session_manager: Arc<Mutex<SessionManager>>,
     mut notification_rx: mpsc::Receiver<(u32, String)>,
 ) {
@@ -2378,7 +2378,7 @@ fn build_agent_status_update_message(
 /// An accepted event is applied to the pane (revision increments) and
 /// exactly one `AgentStatusUpdate` (`replay_derived: false`) is broadcast
 /// with the pane's current public ID (AC-4).
-async fn apply_agent_status_report(
+pub(super) async fn apply_agent_status_report(
     session_manager: &Arc<Mutex<SessionManager>>,
     pane_id: u32,
     raw_payload: String,
@@ -2425,7 +2425,7 @@ async fn apply_agent_status_report(
 /// produced the clear. A mark that produces no clear (AC-2: `A` with no
 /// preceding `D`; AC-3: disarmed after an explicit `Clear`) broadcasts
 /// nothing and leaves state untouched.
-async fn apply_live_osc133_mark(
+pub(super) async fn apply_live_osc133_mark(
     session_manager: &Arc<Mutex<SessionManager>>,
     pane_id: u32,
     kind: PromptMarkKind,
@@ -2465,7 +2465,7 @@ async fn apply_live_osc133_mark(
 /// ORDER — a single sequential `while let` loop over one channel, never two
 /// independently-scheduled queues, is what gives SPEC FR4 its ordering
 /// guarantee. Exits when all senders are dropped (daemon shutdown).
-async fn run_agent_status_task(
+pub(super) async fn run_agent_status_task(
     session_manager: Arc<Mutex<SessionManager>>,
     mut agent_status_rx: mpsc::Receiver<(u32, AgentStatusFeedItem)>,
 ) {
@@ -2595,7 +2595,7 @@ pub(in crate::mux) async fn sync_agent_status_after_pane_snapshot(
 /// reaped pane is the last one, `handle_destroy_pane` fires
 /// `shutdown_tx.send(true)` (FR5). Exits when all senders are dropped (daemon
 /// shutdown).
-async fn run_pane_exit_task(
+pub(super) async fn run_pane_exit_task(
     session_manager: Arc<Mutex<SessionManager>>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     mut pane_exit_rx: mpsc::Receiver<PaneId>,
@@ -2608,7 +2608,7 @@ async fn run_pane_exit_task(
 }
 
 /// Close all PTYs in all sessions for graceful daemon shutdown.
-async fn graceful_shutdown(session_manager: &Arc<Mutex<SessionManager>>) {
+pub(super) async fn graceful_shutdown(session_manager: &Arc<Mutex<SessionManager>>) {
     let mut mgr = session_manager.lock().await;
     let mut pane_count = 0u32;
     let session_ids: Vec<u32> = mgr.sessions_iter().map(|s| s.id).collect();
