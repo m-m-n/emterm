@@ -54,7 +54,7 @@ use crate::settings::ShiftEnterBehavior;
 /// module no longer has to `use crate::app::App` (otherwise the UI layer
 /// imports App, and App imports UI types like `TabEvent` — a cycle).
 /// `window_host` already owns `App`, so dispatch lives at this boundary.
-fn drive_mux_dialogs(app: &mut App, ctx: &egui::Context) -> bool {
+pub(super) fn drive_mux_dialogs(app: &mut App, ctx: &egui::Context) -> bool {
     if !app.mux_dialog.is_open() {
         return false;
     }
@@ -89,7 +89,7 @@ fn drive_mux_dialogs(app: &mut App, ctx: &egui::Context) -> bool {
 /// pipeline into the framework-agnostic [`MuxKeyInput`] the mux prefix
 /// latch consumes. Keeps the egui→domain translation pinned to this
 /// single boundary site (gpt-architecture #4).
-fn egui_to_mux_input(mods: Modifiers, key: egui::Key) -> MuxKeyInput {
+pub(super) fn egui_to_mux_input(mods: Modifiers, key: egui::Key) -> MuxKeyInput {
     let sym = match key {
         egui::Key::A => KeySym::Letter('a'),
         egui::Key::B => KeySym::Letter('b'),
@@ -149,14 +149,14 @@ use crate::ui::keybinds::Chord;
 /// Maximum time between successive clicks that still counts as a "multi-click".
 /// Within this window the click counter increments; beyond it the counter
 /// resets to 1. 500 ms matches xterm's `multiClickTime` default.
-const MULTI_CLICK_WINDOW_MS: u128 = 500;
+pub(super) const MULTI_CLICK_WINDOW_MS: u128 = 500;
 
 use crate::ui::chrome::{RESIZE_EDGE_PX, classify_resize_edge, configure_egui_fonts};
 
 /// Tracks last-click metadata so a double / triple click can be detected by
 /// comparing time + position against the next press.
 #[derive(Debug, Clone, Copy, Default)]
-struct ClickTracker {
+pub(super) struct ClickTracker {
     last_press_at: Option<Instant>,
     /// Last press cell as `(abs_row, col)`. Using the absolute row keeps a
     /// double / triple click from spuriously matching when the viewport
@@ -171,15 +171,15 @@ struct ClickTracker {
 /// Output of the click classifier: the click count and the matching
 /// selection mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ClickClassification {
-    count: u32,
-    mode: SelectionMode,
+pub(super) struct ClickClassification {
+    pub(super) count: u32,
+    pub(super) mode: SelectionMode,
 }
 
 impl ClickTracker {
     /// Classify a new press at absolute `(row, col)` happening at `now`. The
     /// internal state is updated for the next call.
-    fn classify(&mut self, now: Instant, row: u32, col: u16) -> ClickClassification {
+    pub(super) fn classify(&mut self, now: Instant, row: u32, col: u16) -> ClickClassification {
         let mut count = 1u32;
         if let (Some(prev_at), Some(prev_pos)) = (self.last_press_at, self.last_press_pos) {
             let elapsed_ms = now.duration_since(prev_at).as_millis();
@@ -396,7 +396,7 @@ pub struct WindowHost {
 /// turns into a hand cursor while Ctrl is held over a link (Ctrl is what
 /// arms the click-to-open).
 #[derive(Default)]
-struct HoverState {
+pub(super) struct HoverState {
     /// Grid cell the last detection ran for (`None` = pointer outside the
     /// grid / no detection yet). Used to skip re-running detection on
     /// sub-cell pointer motion.
@@ -404,7 +404,7 @@ struct HoverState {
     /// Physical cell spans of the link currently under the pointer
     /// (`(row, col_start, col_end)`), empty when no link is hovered. Read
     /// by the grid pass to underline the matched cells.
-    link_cells: Vec<(u16, u16, u16)>,
+    pub(super) link_cells: Vec<(u16, u16, u16)>,
     /// The detected link itself, reused by the Ctrl+click handler so the
     /// click doesn't have to re-run detection for the same cell.
     link: Option<crate::links::DetectedLink>,
@@ -799,7 +799,7 @@ impl WindowHost {
     /// No-op for detection when both `url_detection` and
     /// `file_path_detection` are off, but the cursor icon is still
     /// reset so a stale hand cursor doesn't linger.
-    fn refresh_link_hover(&mut self, app: &App) {
+    pub(super) fn refresh_link_hover(&mut self, app: &App) {
         let detect_urls = app.settings.url_detection;
         let detect_paths = app.settings.file_path_detection;
 
@@ -879,7 +879,7 @@ impl WindowHost {
     /// screen) before doing any per-frame work, so high-throughput PTY
     /// output under a stationary pointer skips the `logical_line_text`
     /// allocation entirely when detection is disabled.
-    fn refresh_link_hover_on_pty_change(&mut self, app: &App) {
+    pub(super) fn refresh_link_hover_on_pty_change(&mut self, app: &App) {
         // Alt-screen: clear any underline cache carried over from the normal
         // screen to prevent hover-underline bleed onto alt-screen content.
         // invalidate_link_hover is a no-op when link_cells is already empty,
@@ -948,7 +948,7 @@ impl WindowHost {
     /// default arrow. Skips the `set_cursor` IPC when the icon is
     /// unchanged. The hand is gated on Ctrl to match the WebView build,
     /// where Ctrl/Meta arms the click-to-open.
-    fn update_link_cursor(&mut self) {
+    pub(super) fn update_link_cursor(&mut self) {
         let icon = if self.current_resize_dir.is_some() {
             self.current_cursor // leave resize-hint icon untouched
         } else if self.current_mods.ctrl && self.hover.link.is_some() {
@@ -966,7 +966,7 @@ impl WindowHost {
     /// when the grid content shifts under the pointer (scroll) or the
     /// pointer leaves the window, so a stale underline / cursor doesn't
     /// survive. Requests a redraw when an underline was showing.
-    fn invalidate_link_hover(&mut self) {
+    pub(super) fn invalidate_link_hover(&mut self) {
         self.hover.cell = None;
         self.hover.link = None;
         self.hover.last_line_text = None;
@@ -994,7 +994,7 @@ impl WindowHost {
     /// hover-cache staleness (terminal output, tab switches, alt-screen
     /// transitions, or settings changes since the last pointer-move can
     /// all mutate the visible content under a stationary pointer).
-    fn try_open_link_at_pointer(&mut self, app: &App) -> bool {
+    pub(super) fn try_open_link_at_pointer(&mut self, app: &App) -> bool {
         let detect_urls = app.settings.url_detection;
         let detect_paths = app.settings.file_path_detection;
         let click_cell = self.pixel_to_grid_cell(self.cursor_pos, app);
@@ -1234,7 +1234,7 @@ impl WindowHost {
     /// `status_bar_bot_inset_logical`, so whichever source triggered this
     /// call, the size actually applied and broadcast is always derived
     /// from a settler-forwarded inset.
-    fn apply_pending_resize(&mut self, app: &mut App) {
+    pub(super) fn apply_pending_resize(&mut self, app: &mut App) {
         if !self.pending_resize {
             return;
         }
@@ -1322,7 +1322,7 @@ impl WindowHost {
     /// logical`], advanced below via [`resolve_grid_bot_inset`] exactly
     /// when the settler is not withholding judgment — never on a bare
     /// `pending_resize` flip from a non-settler source.
-    fn refresh_status_bar_insets(&mut self, app: &App) {
+    pub(super) fn refresh_status_bar_insets(&mut self, app: &App) {
         // FR5 (mux-status-bar-removal task0001): `vm` — and therefore
         // `height`, the bottom inset, and the grid-size candidate computed
         // below — is a pure function of `app.settings.statusbar` and the
@@ -1402,7 +1402,7 @@ impl WindowHost {
     /// open/close never changes this value (overlay always resolves to 0
     /// inset — [`crate::app::mux_sidebar_grid_inset`]), so toggling it never
     /// touches `pending_resize` here.
-    fn refresh_mux_sidebar_inset(&mut self, app: &App) {
+    pub(super) fn refresh_mux_sidebar_inset(&mut self, app: &App) {
         let scale = self.pixels_per_point.max(1.0) as f64;
         let window_width_logical = (self.surface_config.width.max(1) as f64 / scale) as f32;
         let inset =
@@ -1425,7 +1425,7 @@ impl WindowHost {
     /// test to drift further from the visual cell every row, which is
     /// exactly the bug `pixel_to_cell` used to hit by dividing by 18
     /// while cells were drawn at 17 px.
-    fn cell_metrics_px(&self, app: &App) -> (f64, f64, f64, f64) {
+    pub(super) fn cell_metrics_px(&self, app: &App) -> (f64, f64, f64, f64) {
         let scale = self.pixels_per_point.max(1.0) as f64;
         // Cell dims come from the App's startup measurement of the
         // base font (see `App::with_settings` → `compute_cell_dims`)
@@ -1480,7 +1480,7 @@ impl WindowHost {
     /// settled inset through unchanged (task0005), so its behavior is
     /// identical to before this refactor except for WHICH inset field
     /// that is.
-    fn grid_size_for_bot_inset(&self, app: &App, bot_inset_logical: f32) -> (u16, u16) {
+    pub(super) fn grid_size_for_bot_inset(&self, app: &App, bot_inset_logical: f32) -> (u16, u16) {
         let w = self.surface_config.width.max(1) as f64;
         let h = self.surface_config.height.max(1) as f64;
         let (cell_w, cell_h, origin_x, origin_y) = self.cell_metrics_px(app);
@@ -1508,7 +1508,7 @@ impl WindowHost {
 
     /// Map a physical pixel position to a grid cell `(row, col)`,
     /// honoring the same origin + cell metrics the renderer uses.
-    fn pixel_to_cell(&self, pos: PhysicalPosition<f64>, app: &App) -> (u16, u16) {
+    pub(super) fn pixel_to_cell(&self, pos: PhysicalPosition<f64>, app: &App) -> (u16, u16) {
         let (cell_w, cell_h, origin_x, origin_y) = self.cell_metrics_px(app);
         let x = ((pos.x - origin_x).max(0.0)) / cell_w;
         let y = ((pos.y - origin_y).max(0.0)) / cell_h;
@@ -1522,7 +1522,7 @@ impl WindowHost {
     /// Resolve the absolute buffer row shown at `screen_row`, honoring the
     /// current fold layout (collapsed bodies skew the linear mapping; a
     /// summary row maps to its region's start line).
-    fn screen_row_to_abs(&self, screen_row: u16, app: &App) -> u32 {
+    pub(super) fn screen_row_to_abs(&self, screen_row: u16, app: &App) -> u32 {
         if let Some(layout) = app.fold_layout() {
             match layout.rows.get(screen_row as usize) {
                 Some(crate::fold::FoldRowKind::Cells { actual_line }) => return *actual_line,
@@ -2515,7 +2515,7 @@ impl WindowHost {
 
     /// Translate winit state into a minimal `egui::RawInput`. Phase 1 only
     /// needs screen-rect + pixels-per-point; later phases populate events.
-    fn build_raw_input(&mut self) -> egui::RawInput {
+    pub(super) fn build_raw_input(&mut self) -> egui::RawInput {
         let size = self.window.surface_size();
         let logical = size.to_logical::<f32>(self.pixels_per_point as f64);
         egui::RawInput {
@@ -2560,7 +2560,10 @@ impl WindowHost {
 /// `refresh_link_hover` / `invalidate_link_hover`'s latch-setting logic is
 /// directly unit-testable without a window (mirrors `should_skip_frame`
 /// below).
-fn hover_link_cells_changed(prev_cells: &[(u16, u16, u16)], new_cells: &[(u16, u16, u16)]) -> bool {
+pub(super) fn hover_link_cells_changed(
+    prev_cells: &[(u16, u16, u16)],
+    new_cells: &[(u16, u16, u16)],
+) -> bool {
     prev_cells != new_cells
 }
 
@@ -2595,7 +2598,7 @@ fn hover_link_cells_changed(prev_cells: &[(u16, u16, u16)], new_cells: &[(u16, u
 /// be exactly zero AND the status bar did not change AND there is no
 /// pending overlay work AND no egui input is waiting; every other
 /// combination proceeds to a full frame.
-fn should_skip_frame(
+pub(super) fn should_skip_frame(
     dirty_count: Option<usize>,
     status_bar_changed: bool,
     overlay_work: bool,
@@ -2613,7 +2616,11 @@ fn should_skip_frame(
 /// speed under a non-blocking present mode. Extracted as a pure function —
 /// plain values in, plain bool out — so it is directly unit-testable
 /// (mirrors [`should_skip_frame`] above).
-fn toast_redraw_due(toast_pending: bool, last_redraw: Option<Instant>, now: Instant) -> bool {
+pub(super) fn toast_redraw_due(
+    toast_pending: bool,
+    last_redraw: Option<Instant>,
+    now: Instant,
+) -> bool {
     toast_pending
         && last_redraw.is_none_or(|last| {
             now.duration_since(last) >= Duration::from_millis(crate::app::TOAST_POLL_MS)
@@ -2632,7 +2639,7 @@ fn toast_redraw_due(toast_pending: bool, last_redraw: Option<Instant>, now: Inst
 /// display's full frame rate (NFR2) while still letting the settler
 /// observe a stable candidate long enough to detect quiescence well
 /// within `RESIZE_SETTLE_MAX_DURATION`.
-const RESIZE_SETTLE_SELF_WAKE_INTERVAL: Duration = RESIZE_SETTLE_QUIET_DURATION;
+pub(super) const RESIZE_SETTLE_SELF_WAKE_INTERVAL: Duration = RESIZE_SETTLE_QUIET_DURATION;
 
 /// Whether the render loop should request another redraw on behalf of an
 /// open [`ResizeSettler`] settling window this turn: the window is still
@@ -2647,7 +2654,7 @@ const RESIZE_SETTLE_SELF_WAKE_INTERVAL: Duration = RESIZE_SETTLE_QUIET_DURATION;
 /// is what re-enters the loop with no other activity at all) — both read
 /// the same `last_resize_settle_wake` state, so whichever runs first for a
 /// given tick naturally gates the other out.
-fn resize_settle_self_wake_due(
+pub(super) fn resize_settle_self_wake_due(
     awaiting_decision: bool,
     last_self_wake: Option<Instant>,
     now: Instant,
@@ -2670,7 +2677,10 @@ fn resize_settle_self_wake_due(
 /// `02546e5e10deb500` / `5b1878c41d3e02d6-perf-P2` — which this must not
 /// reintroduce. `None` when the settling window is already closed (nothing
 /// to wake for).
-fn next_resize_settle_wake_deadline(awaiting_decision: bool, now: Instant) -> Option<Instant> {
+pub(super) fn next_resize_settle_wake_deadline(
+    awaiting_decision: bool,
+    now: Instant,
+) -> Option<Instant> {
     awaiting_decision.then(|| now + RESIZE_SETTLE_SELF_WAKE_INTERVAL)
 }
 
@@ -2694,7 +2704,7 @@ fn next_resize_settle_wake_deadline(awaiting_decision: bool, now: Instant) -> Op
 /// band and the comparison was already exact in practice. This makes the
 /// exactness explicit instead of carrying a threshold that never
 /// triggers.
-fn status_bar_insets_changed(
+pub(super) fn status_bar_insets_changed(
     current_top: f32,
     current_bot: f32,
     candidate_top: f32,
@@ -2718,7 +2728,7 @@ fn status_bar_insets_changed(
 /// reorder) live entirely in the press→release motion stream, and
 /// skipping those frames would freeze the drag's live tracking on an
 /// idle terminal until the release finally vetoes.
-fn has_actionable_egui_input(events: &[egui::Event], pointer_button_held: bool) -> bool {
+pub(super) fn has_actionable_egui_input(events: &[egui::Event], pointer_button_held: bool) -> bool {
     if pointer_button_held {
         !events.is_empty()
     } else {
@@ -2748,7 +2758,7 @@ fn has_actionable_egui_input(events: &[egui::Event], pointer_button_held: bool) 
 /// the mid-frame flag at end of frame — leaving the mixed content on
 /// screen indefinitely (the post-merge "switching tabs keeps the old
 /// tab's output, only the prompt row updates" report).
-fn resolve_build_dirty_rows(
+pub(super) fn resolve_build_dirty_rows(
     snapshot: Option<Vec<u16>>,
     full_redraw_pending: bool,
 ) -> Option<Vec<u16>> {
@@ -2774,7 +2784,10 @@ fn resolve_build_dirty_rows(
 /// regardless of this function's answer (task0006 Design:
 /// "needs_full_redraw frames: full rebuild already; just clear the
 /// event") — this function only gates the rotation itself.
-fn should_rotate_row_cache_for_scroll_event(scroll_count: u16, partial_dirty_rows: bool) -> bool {
+pub(super) fn should_rotate_row_cache_for_scroll_event(
+    scroll_count: u16,
+    partial_dirty_rows: bool,
+) -> bool {
     scroll_count > 0 && partial_dirty_rows
 }
 
@@ -2793,7 +2806,7 @@ fn should_rotate_row_cache_for_scroll_event(scroll_count: u16, partial_dirty_row
 /// keep whatever content those rows had *before* preedit started, one
 /// frame stale, the moment preedit ends. The result is sorted ascending
 /// and deduplicated, matching the invariant `rebuild_dirty_rows` requires.
-fn preedit_effective_dirty_rows(
+pub(super) fn preedit_effective_dirty_rows(
     frame_dirty_rows: Option<Vec<u16>>,
     row_count: u16,
     anchor_row: u16,
@@ -2829,7 +2842,7 @@ fn preedit_effective_dirty_rows(
 /// `ControlFlow::Wait` (AC-2: an idle terminal, e.g. blink disabled, never
 /// reschedules a periodic wakeup). Returns the earliest deadline otherwise —
 /// the caller maps this to `ControlFlow::WaitUntil`.
-fn next_wait_deadline(
+pub(super) fn next_wait_deadline(
     blink_deadline: Option<Instant>,
     bell_deadline: Option<Instant>,
     toast_deadline: Option<Instant>,
@@ -2863,7 +2876,7 @@ fn next_wait_deadline(
 /// cadence even when every other concern (blink/bell/toast/mux-sidebar-dim)
 /// is quiescent — see [`resize_settle_self_wake_due`]'s doc comment for why
 /// this deadline, not just a rate-limited gate, is required.
-fn control_flow_for(app: &App, resize_settle_deadline: Option<Instant>) -> ControlFlow {
+pub(super) fn control_flow_for(app: &App, resize_settle_deadline: Option<Instant>) -> ControlFlow {
     let now = Instant::now();
     let app_deadline = next_wait_deadline(
         app.next_blink_deadline(),
@@ -2886,7 +2899,7 @@ fn control_flow_for(app: &App, resize_settle_deadline: Option<Instant>) -> Contr
 /// running total at most once per second of activity, so an idle host
 /// logging at 60 Hz doesn't flood `emterm.log`.
 #[derive(Debug, Default)]
-struct FrameCounter {
+pub(super) struct FrameCounter {
     drawn: u64,
     last_log_at: Option<Instant>,
 }
@@ -2916,7 +2929,11 @@ impl FrameCounter {
 /// counting side effects" half), otherwise delegates to
 /// `FrameCounter::record_draw`. Kept separate from `WindowHost::render`
 /// so both halves of AC-6 are unit-testable without a window.
-fn record_drawn_frame(enabled: bool, counter: &mut FrameCounter, now: Instant) -> Option<u64> {
+pub(super) fn record_drawn_frame(
+    enabled: bool,
+    counter: &mut FrameCounter,
+    now: Instant,
+) -> Option<u64> {
     if !enabled {
         return None;
     }
@@ -2928,7 +2945,7 @@ fn record_drawn_frame(enabled: bool, counter: &mut FrameCounter, now: Instant) -
 /// and reports the running total at most once per second of activity, so
 /// an idle host doesn't flood `emterm.log`.
 #[derive(Debug, Default)]
-struct RowsRebuiltCounter {
+pub(super) struct RowsRebuiltCounter {
     rebuilt: u64,
     last_log_at: Option<Instant>,
 }
@@ -2960,7 +2977,7 @@ impl RowsRebuiltCounter {
 /// `RowsRebuiltCounter::record_rebuilt`. Kept separate from
 /// `WindowHost::render` so both halves of AC-5 are unit-testable without a
 /// window, mirroring `record_drawn_frame`.
-fn record_rebuilt_rows(
+pub(super) fn record_rebuilt_rows(
     enabled: bool,
     counter: &mut RowsRebuiltCounter,
     rows: u64,
@@ -2988,7 +3005,7 @@ fn record_rebuilt_rows(
 /// the ~2-frame window the round-1 review measured the old bug forwarding
 /// within, while still being imperceptible as a one-off startup/reattach
 /// delay.
-const RESIZE_SETTLE_QUIET_DURATION: Duration = Duration::from_millis(64);
+pub(super) const RESIZE_SETTLE_QUIET_DURATION: Duration = Duration::from_millis(64);
 
 /// Hard backstop on how long [`ResizeSettler`]'s settling window may stay
 /// open before forwarding the latest candidate regardless of whether it
@@ -3003,7 +3020,7 @@ const RESIZE_SETTLE_QUIET_DURATION: Duration = Duration::from_millis(64);
 /// pathological, never-quite-settling stream cannot withhold a resize
 /// forever — every daemon-side pane must eventually learn the (possibly
 /// still-transient) latest size rather than be stuck at a stale one.
-const RESIZE_SETTLE_MAX_DURATION: Duration = Duration::from_secs(1);
+pub(super) const RESIZE_SETTLE_MAX_DURATION: Duration = Duration::from_secs(1);
 
 /// Bounds how often a status-bar-height-driven grid-size candidate reaches
 /// [`Tab::resize`](crate::tabs::Tab::resize)'s group-wide `Resize`
@@ -3057,7 +3074,7 @@ const RESIZE_SETTLE_MAX_DURATION: Duration = Duration::from_secs(1);
 /// cleared by `reset` — it still reflects the last size actually applied,
 /// and a fresh storm is judged against that, not against nothing.
 #[derive(Debug)]
-struct ResizeSettler {
+pub(super) struct ResizeSettler {
     /// `Some(instant)` while the settling window is open, holding the
     /// wall-clock instant it opened (for [`RESIZE_SETTLE_MAX_DURATION`]'s
     /// backstop); `None` once closed (normal, immediate-forwarding mode).
@@ -3077,7 +3094,7 @@ struct ResizeSettler {
 }
 
 impl ResizeSettler {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             window_opened_at: Some(Instant::now()),
             candidate: None,
@@ -3087,7 +3104,7 @@ impl ResizeSettler {
     }
 
     /// Reopen the settling window (a fresh mux attach/reattach).
-    fn reset(&mut self) {
+    pub(super) fn reset(&mut self) {
         self.window_opened_at = Some(Instant::now());
         self.candidate = None;
         self.stable_since = None;
@@ -3100,7 +3117,7 @@ impl ResizeSettler {
     /// `Some(size)` exactly when `size` should now reach `Tab::resize`;
     /// `None` while still absorbing transient churn, or when `size` is a
     /// no-op repeat of what is already applied.
-    fn observe(&mut self, candidate: (u16, u16), now: Instant) -> Option<(u16, u16)> {
+    pub(super) fn observe(&mut self, candidate: (u16, u16), now: Instant) -> Option<(u16, u16)> {
         let Some(opened_at) = self.window_opened_at else {
             // Closed: forward only genuine changes, so a steady-state
             // repeat of the already-applied size never re-triggers
@@ -3138,7 +3155,7 @@ impl ResizeSettler {
     /// redraw so this settler keeps getting observations even if nothing
     /// else would wake the render loop (task0005 findings
     /// 02546e5e10deb500 / 5b1878c41d3e02d6-perf-P2).
-    fn awaiting_decision(&self) -> bool {
+    pub(super) fn awaiting_decision(&self) -> bool {
         self.window_opened_at.is_some()
     }
 }
@@ -3178,7 +3195,7 @@ impl ResizeSettler {
 ///   lock-in across a run of inset changes whose derived grid-size
 ///   candidate happens not to move — the FR4 case `status_bar_insets_
 ///   changed` alone already applies for drawing).
-fn resolve_grid_bot_inset(
+pub(super) fn resolve_grid_bot_inset(
     previously_settled: f32,
     transient: f32,
     settler_awaiting_decision: bool,
@@ -3193,7 +3210,7 @@ fn resolve_grid_bot_inset(
 /// Translate a winit `MouseButton` to its `egui::PointerButton`
 /// equivalent. Returns `None` for buttons egui does not model (e.g.
 /// extra side buttons).
-fn winit_to_egui_button(b: MouseButton) -> Option<egui::PointerButton> {
+pub(super) fn winit_to_egui_button(b: MouseButton) -> Option<egui::PointerButton> {
     match b {
         MouseButton::Left => Some(egui::PointerButton::Primary),
         MouseButton::Right => Some(egui::PointerButton::Secondary),
@@ -3214,7 +3231,7 @@ fn winit_to_egui_button(b: MouseButton) -> Option<egui::PointerButton> {
 /// contiguous cells on the same row carrying the same `hyperlink_id`,
 /// so the renderer underlines the whole OSC 8 run instead of a single
 /// cell. The bound is the row width, which is small (≤ a few hundred).
-fn detect_osc8_link_at(
+pub(super) fn detect_osc8_link_at(
     core: &term_core::terminal_core::TerminalCore,
     row: u16,
     col: u16,
@@ -3303,7 +3320,7 @@ fn open_url(url: &str) {
 /// The mapped set covers every main key the settings-driven keybind
 /// parser can produce (`parse_main_key`): ASCII letters / digits, the
 /// symbol keys, the navigation / editing named keys, and F1..F12.
-fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
+pub(super) fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
     match logical {
         WinitKey::Character(s) => {
             let mut chars = s.chars();
@@ -3421,7 +3438,7 @@ fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
 /// real X11 keycode reconstruct it from their own platform layer. The
 /// Phase 4-G-3 `WinitImeBridge` ignores this field — winit hands `KeyEvent`
 /// directly through `dispatch_key_event_via_ime` if/when needed.
-fn winit_physical_key_code(event: &KeyEvent) -> u32 {
+pub(super) fn winit_physical_key_code(event: &KeyEvent) -> u32 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
@@ -3439,7 +3456,7 @@ fn winit_physical_key_code(event: &KeyEvent) -> u32 {
 /// forwarding, or PTY write. Applies identically at both call sites (the
 /// `Pressed` and `Released` `KeyboardInput` arms): a synthetic release is
 /// dropped by the same rule as a synthetic press.
-fn should_drop_synthetic_key_event(is_synthetic: bool) -> bool {
+pub(super) fn should_drop_synthetic_key_event(is_synthetic: bool) -> bool {
     is_synthetic
 }
 
@@ -3459,7 +3476,7 @@ fn should_drop_synthetic_key_event(is_synthetic: bool) -> bool {
 /// unwanted newlines. Mirrors the WebView build's keyboard-handler skip
 /// (`src/terminal-app/handlers/keyboard.ts`): Ctrl held, no Alt/Shift, key
 /// `j` (case-insensitive).
-fn is_skk_swallowed_chord(logical_key: &WinitKey, mods: Modifiers) -> bool {
+pub(super) fn is_skk_swallowed_chord(logical_key: &WinitKey, mods: Modifiers) -> bool {
     mods.ctrl
         && !mods.alt
         && !mods.shift
@@ -3468,7 +3485,7 @@ fn is_skk_swallowed_chord(logical_key: &WinitKey, mods: Modifiers) -> bool {
 
 /// Outcome of the [`shift_enter_rewrite`] decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ShiftEnterRewrite {
+pub(super) enum ShiftEnterRewrite {
     /// Not a bare Shift+Enter press (or the behavior is out of scope):
     /// encode normally with the original modifiers.
     Unchanged,
@@ -3495,7 +3512,7 @@ const LF_SHIFT_ENTER: [u8; 1] = [0x0A];
 /// the call site only reaches this after UI-layer handlers (search bar,
 /// keybind dispatch, SKK swallow) have already run. Rewrite applies only
 /// when the modifier state is exactly Shift (no Ctrl, no Alt).
-fn shift_enter_rewrite(
+pub(super) fn shift_enter_rewrite(
     is_enter: bool,
     mods: Modifiers,
     behavior: ShiftEnterBehavior,
@@ -3518,7 +3535,11 @@ fn shift_enter_rewrite(
     }
 }
 
-fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers, target: EncodeTarget) -> Option<Vec<u8>> {
+pub(super) fn winit_key_to_bytes(
+    event: &KeyEvent,
+    mods: Modifiers,
+    target: EncodeTarget,
+) -> Option<Vec<u8>> {
     // Named keys take precedence over the printable fast path. winit on
     // Windows fills `event.text` for Backspace with `"\x7f"` (DEL); if we
     // routed that through the fast path the PTY would receive DEL, which
@@ -3587,7 +3608,7 @@ fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers, target: EncodeTarget) -
 }
 
 /// Upper bound for a single wheel event's arrow-key emission; protects against runaway/non-finite delta inputs.
-const MAX_ALT_SCROLL_NOTCHES: u32 = 100;
+pub(super) const MAX_ALT_SCROLL_NOTCHES: u32 = 100;
 
 /// Accumulate a fractional wheel delta `lines` into `acc` and return
 /// `(consumed_whole, new_accum)`. `consumed_whole` is the integer
@@ -3595,7 +3616,7 @@ const MAX_ALT_SCROLL_NOTCHES: u32 = 100;
 /// is the leftover fractional remainder the caller should store back.
 /// Both signs are preserved: a downward scroll accumulates a negative
 /// whole and returns a negative `consumed_whole`.
-fn accumulate_alt_scroll_lines(acc: f32, lines: f32) -> (f32, f32) {
+pub(super) fn accumulate_alt_scroll_lines(acc: f32, lines: f32) -> (f32, f32) {
     let new_acc = acc + lines;
     let whole = if new_acc >= 0.0 {
         new_acc.floor()
@@ -3616,7 +3637,7 @@ fn accumulate_alt_scroll_lines(acc: f32, lines: f32) -> (f32, f32) {
 /// fractional pixel deltas (|lines| < 1.0) are treated as no-ops to
 /// match a discrete wheel click. xterm convention: 3 arrow bytes per
 /// notch, Shift modifier is intentionally ignored at the call site.
-fn alternate_scroll_wheel_bytes(
+pub(super) fn alternate_scroll_wheel_bytes(
     lines: f32,
     alt_screen: bool,
     mode_bit_on: bool,
@@ -3650,9 +3671,9 @@ fn alternate_scroll_wheel_bytes(
 /// inner `match event` arm, and `about_to_wait` does the periodic pump
 /// (PTY drain, IME pump, cursor-rect notification) that the old
 /// `StartCause::Poll` path handled.
-struct PocApp {
-    app: App,
-    host: Option<WindowHost>,
+pub(super) struct PocApp {
+    pub(super) app: App,
+    pub(super) host: Option<WindowHost>,
 }
 
 impl ApplicationHandler for PocApp {
@@ -4930,7 +4951,7 @@ impl Drop for PocApp {
 /// instantiating a real winit window (which requires an active
 /// event loop and a display). The `redraw` callback is invoked at
 /// most once, and only when `host` is `Some`.
-fn request_redraw_on_user_event<H, F>(host: Option<&H>, redraw: F)
+pub(super) fn request_redraw_on_user_event<H, F>(host: Option<&H>, redraw: F)
 where
     F: FnOnce(&H),
 {
@@ -4958,7 +4979,7 @@ pub fn run(event_loop: EventLoop, app: App) -> ! {
 /// `egui_key` is the pre-computed result of `winit_key_to_egui` for this
 /// event, passed in so the caller can reuse the same value for the
 /// keybinds dispatch path without a second translation.
-fn handle_special_chord(
+pub(super) fn handle_special_chord(
     event: &KeyEvent,
     mods: Modifiers,
     egui_key: Option<egui::Key>,
@@ -5032,7 +5053,7 @@ fn handle_special_chord(
 /// Convert the PTY-side [`Modifiers`] (`input::Modifiers`) into the
 /// `egui::Modifiers` shape egui events / `RawInput` expect. `command` /
 /// `mac_cmd` are always false — native-poc targets Linux + Windows only.
-fn input_mods_to_egui(mods: Modifiers) -> egui::Modifiers {
+pub(super) fn input_mods_to_egui(mods: Modifiers) -> egui::Modifiers {
     egui::Modifiers {
         ctrl: mods.ctrl,
         shift: mods.shift,
@@ -5062,7 +5083,7 @@ fn input_mods_to_egui(mods: Modifiers) -> egui::Modifiers {
 /// on the selector state, every other key is swallowed (never encoded to
 /// the PTY). Port of `profile-selector.ts::handleKeydown` (ArrowUp /
 /// ArrowDown wrap, Home / End, Enter / Space confirm, Escape cancel).
-fn handle_profile_selector_key(event: &KeyEvent, app: &mut App) {
+pub(super) fn handle_profile_selector_key(event: &KeyEvent, app: &mut App) {
     use winit::keyboard::NamedKey;
 
     // Row count includes the synthetic "Global Settings" row in new-tab
@@ -5095,7 +5116,7 @@ fn handle_profile_selector_key(event: &KeyEvent, app: &mut App) {
 /// Enter-confirm / Escape-cancel handling work. The terminal IME backend,
 /// the keybind dispatcher, and the PTY encoder never see the key — without
 /// this gate, typing in the dialog would leak into the running shell.
-fn handle_mux_dialog_key(event: &KeyEvent, mods: Modifiers, host: &mut WindowHost) {
+pub(super) fn handle_mux_dialog_key(event: &KeyEvent, mods: Modifiers, host: &mut WindowHost) {
     if let Some(key) = winit_key_to_egui(&event.logical_key) {
         host.pending_egui_events.push(egui::Event::Key {
             key,
@@ -5117,7 +5138,12 @@ fn handle_mux_dialog_key(event: &KeyEvent, mods: Modifiers, host: &mut WindowHos
     }
 }
 
-fn handle_search_key(event: &KeyEvent, mods: Modifiers, host: &mut WindowHost, app: &mut App) {
+pub(super) fn handle_search_key(
+    event: &KeyEvent,
+    mods: Modifiers,
+    host: &mut WindowHost,
+    app: &mut App,
+) {
     use winit::keyboard::NamedKey;
 
     // 1. Esc closes the overlay.
