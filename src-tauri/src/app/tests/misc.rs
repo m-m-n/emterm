@@ -75,6 +75,9 @@ fn select_all_uses_visible_start_when_scrolled() {
     assert_eq!(sel.extent.row, visible_start + (rows - 1) as u32);
 }
 
+// Known flaky when the full suite runs in parallel (host-load dependent);
+// passes in isolation and with --test-threads=1. Rerun this test alone
+// before treating a failure as a regression.
 #[test]
 fn pump_all_shifts_selection_by_eviction_delta() {
     // A selection in absolute rows is shifted down by the active tab's
