@@ -33,11 +33,13 @@ use tokio::sync::oneshot;
 
 mod connect;
 mod control_client;
+#[cfg(unix)]
 mod handoff;
 mod tasks;
 
 pub use connect::*;
 pub use control_client::*;
+#[cfg(unix)]
 pub use handoff::*;
 pub(in crate::mux) use tasks::*;
 
