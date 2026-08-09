@@ -52,8 +52,8 @@ pub const DONE_BADGE_EMOJI_UNSEEN: &str = "\u{2705}";
 /// Color role for a semantic agent state (task0006 AC-4, `IMPLEMENTATION.md`
 /// Conventions): blocked -> `on_error_container`, working -> `primary`,
 /// done -> `on_secondary_container`, idle -> `on_surface_variant`. Shared by
-/// [`ui::mux_sidebar`](super::mux_sidebar) and
-/// [`ui::status_bar`](super::status_bar) so the mapping lives in one place.
+/// [`ui::mux_sidebar`](crate::ui::mux_sidebar) and
+/// [`ui::status_bar`](crate::ui::status_bar) so the mapping lives in one place.
 pub fn agent_state_color(state: AgentState) -> Color32 {
     match state {
         AgentState::Blocked => md3::on_error_container(),
