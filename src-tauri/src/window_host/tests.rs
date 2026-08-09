@@ -11,7 +11,7 @@ use std::time::Duration;
 /// edit that moves the sidebar term back onto `origin_x` fails loudly.
 #[test]
 fn cell_metrics_px_origin_x_has_no_sidebar_term() {
-    let src = include_str!("mod.rs");
+    let src = include_str!("resize_layout.rs");
     let start = src
         .find("fn cell_metrics_px(&self, app: &App)")
         .expect("marker `fn cell_metrics_px` not found in window_host.rs");
