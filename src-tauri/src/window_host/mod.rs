@@ -2912,7 +2912,7 @@ pub(super) fn control_flow_for(app: &App, resize_settle_deadline: Option<Instant
 /// logging at 60 Hz doesn't flood `emterm.log`.
 #[derive(Debug, Default)]
 pub(super) struct FrameCounter {
-    drawn: u64,
+    pub(super) drawn: u64,
     last_log_at: Option<Instant>,
 }
 
@@ -2921,7 +2921,7 @@ impl FrameCounter {
     /// at least a second has passed since the last reported log point
     /// (or this is the first call ever), `None` otherwise. The count
     /// itself always advances regardless of the return value.
-    fn record_draw(&mut self, now: Instant) -> Option<u64> {
+    pub(super) fn record_draw(&mut self, now: Instant) -> Option<u64> {
         self.drawn += 1;
         let should_log = match self.last_log_at {
             None => true,
@@ -2958,7 +2958,7 @@ pub(super) fn record_drawn_frame(
 /// an idle host doesn't flood `emterm.log`.
 #[derive(Debug, Default)]
 pub(super) struct RowsRebuiltCounter {
-    rebuilt: u64,
+    pub(super) rebuilt: u64,
     last_log_at: Option<Instant>,
 }
 
@@ -2967,7 +2967,7 @@ impl RowsRebuiltCounter {
     /// least a second has passed since the last reported log point (or
     /// this is the first call ever), `None` otherwise. The running total
     /// always advances regardless of the return value.
-    fn record_rebuilt(&mut self, rows: u64, now: Instant) -> Option<u64> {
+    pub(super) fn record_rebuilt(&mut self, rows: u64, now: Instant) -> Option<u64> {
         self.rebuilt += rows;
         let should_log = match self.last_log_at {
             None => true,
@@ -3090,19 +3090,19 @@ pub(super) struct ResizeSettler {
     /// `Some(instant)` while the settling window is open, holding the
     /// wall-clock instant it opened (for [`RESIZE_SETTLE_MAX_DURATION`]'s
     /// backstop); `None` once closed (normal, immediate-forwarding mode).
-    window_opened_at: Option<Instant>,
+    pub(super) window_opened_at: Option<Instant>,
     /// The candidate currently accumulating wall-clock stability while the
     /// window is open.
-    candidate: Option<(u16, u16)>,
+    pub(super) candidate: Option<(u16, u16)>,
     /// The wall-clock instant `candidate` was last seen to CHANGE — i.e.
     /// the instant since which it has held. Reset whenever a new,
     /// distinct candidate arrives.
-    stable_since: Option<Instant>,
+    pub(super) stable_since: Option<Instant>,
     /// The most recently forwarded (or otherwise already-applied) grid
     /// size — compared against every observed candidate, even while the
     /// window is open, so a render that merely repeats the value already
     /// applied is never re-forwarded (02546e5e10deb500-c).
-    last_forwarded: Option<(u16, u16)>,
+    pub(super) last_forwarded: Option<(u16, u16)>,
 }
 
 impl ResizeSettler {
