@@ -4,6 +4,9 @@
 
 use super::*;
 
+/// Draw the modal profile selector when it is open. Runs as a separate
+/// pass after `draw_terminal` (same `&mut App` split as
+/// [`draw_search_overlay`]) so the modal floats above the chrome.
 pub fn draw_profile_selector_overlay(
     ctx: &egui::Context,
     app: &mut App,
@@ -212,7 +215,12 @@ fn sftp_status_label(
 /// scheme's cursor color, or an OSC 12 override while one is active;
 /// never `TerminalCore::get_cursor_fg()` (the unrelated SGR pen
 /// foreground).
-pub(in crate::render) fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App) {
+pub(in crate::render) fn draw_cursor(
+    ui: &mut egui::Ui,
+    core: &TerminalCore,
+    theme: &Theme,
+    app: &App,
+) {
     if !core.get_cursor_visible() {
         return;
     }
@@ -417,7 +425,9 @@ const FOLD_SUMMARY_MAX_NAME: usize = 80;
 /// and whether the region is an error (exit != 0). Split out from
 /// [`draw_fold_summaries`] so the logic is unit-testable without an egui
 /// context. Mirrors `renderSummaryLine` (renderer-fold.ts).
-pub(in crate::render) fn fold_summary_texts(region: &crate::fold::FoldRegion) -> (String, String, bool) {
+pub(in crate::render) fn fold_summary_texts(
+    region: &crate::fold::FoldRegion,
+) -> (String, String, bool) {
     use crate::fold::FoldSource;
     let name = match region.source {
         FoldSource::Custom => region.label.as_deref().unwrap_or("..."),

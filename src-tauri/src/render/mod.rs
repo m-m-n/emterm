@@ -481,9 +481,6 @@ pub fn draw_terminal(
     }
 }
 
-/// Draw the modal profile selector when it is open. Runs as a separate
-/// pass after `draw_terminal` (same `&mut App` split as
-/// [`draw_search_overlay`]) so the modal floats above the chrome.
 mod overlays;
 pub use overlays::*;
 
@@ -984,7 +981,11 @@ pub(in crate::render) fn bold_brighten_packed(packed: u32) -> u32 {
     (packed & 0xFF00_FFFF) | ((idx as u32 + 8) << 16)
 }
 
-pub(in crate::render) fn packed_to_egui(packed: u32, _fallback: Rgb, theme: &Theme) -> Option<Color32> {
+pub(in crate::render) fn packed_to_egui(
+    packed: u32,
+    _fallback: Rgb,
+    theme: &Theme,
+) -> Option<Color32> {
     let tag = (packed >> 24) as u8;
     let r = (packed >> 16) as u8;
     let g = (packed >> 8) as u8;
