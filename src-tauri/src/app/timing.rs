@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use super::App;
 
-
 /// Cursor blink half-period in milliseconds. 530 ms matches xterm's
 /// `cursorBlinkXOR` interval; one full on/off cycle is `2 * BLINK_HALF_MS`.
 pub const BLINK_HALF_MS: u128 = 530;

@@ -12,7 +12,9 @@ use super::App;
 /// pane in its window group, if attached (task0005). Shared by the
 /// tab-close (AC-6) and mark_seen-on-foreground-display (AC-5) call sites so
 /// "which panes belong to this tab" is defined in exactly one place.
-pub(super) fn agent_status_keys_for_tab(tab: &crate::tabs::Tab) -> Vec<crate::agent_status_model::PaneKey> {
+pub(super) fn agent_status_keys_for_tab(
+    tab: &crate::tabs::Tab,
+) -> Vec<crate::agent_status_model::PaneKey> {
     use crate::agent_status_model::PaneKey;
     let mut keys = vec![PaneKey::Tab(tab.stable_id)];
     if let Some(group) = tab.mux_group.as_ref() {
