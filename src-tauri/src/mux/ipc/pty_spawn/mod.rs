@@ -530,7 +530,7 @@ const ALT_SCREEN_TOGGLES: [(&[u8], bool); 6] = [
 /// OTHER per-byte-position decisions (e.g. [`AgentStatusFeedScanner`]'s OSC
 /// 133 mark eligibility) against the exact same main-buffer spans without
 /// re-deriving them.
-fn extract_main_buffer_bytes(
+pub(super) fn extract_main_buffer_bytes(
     data: &[u8],
     alt_at_start: bool,
 ) -> (Cow<'_, [u8]>, bool, Vec<std::ops::Range<usize>>) {
@@ -638,7 +638,7 @@ const AGENT_STATUS_FEED_SCANNER_CARRY_OVER_CAP: usize = 8 * 1024;
 /// computes for the scrollback-write path) — a mark is only emitted when
 /// its completing byte falls inside one of those spans. Reports remain
 /// unconditional (their validity never depended on screen content).
-struct AgentStatusFeedScanner {
+pub(super) struct AgentStatusFeedScanner {
     state: AgentStatusFeedScanState,
     /// Body bytes accumulated for the in-flight OSC (introducer and
     /// terminator excluded).
