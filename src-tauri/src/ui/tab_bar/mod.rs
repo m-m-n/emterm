@@ -97,7 +97,7 @@ const ICON_BUTTON_RADIUS: f32 = NEW_TAB_BUTTON_SIZE / 2.0;
 /// D3); the badge *slot* itself is [`AGENT_BADGE_SLOT_WIDTH`]
 /// (agent-badge-emoji-distinction task0001 Design 4 — the slot widened
 /// to fit the emoji forms, the dot stays 8px and centers within it).
-const AGENT_BADGE_DIAMETER: f32 = 8.0;
+pub(in crate::ui::tab_bar) const AGENT_BADGE_DIAMETER: f32 = 8.0;
 /// Unified badge slot width when any badge is present (task0001 Design 4:
 /// "Unified badge slot") — the reserved layout width for ALL agent
 /// states, in both the tab bar and the mux sidebar, so a state
@@ -108,7 +108,7 @@ const AGENT_BADGE_DIAMETER: f32 = 8.0;
 pub const AGENT_BADGE_SLOT_WIDTH: f32 = 12.0;
 /// Gap between the agent badge and whatever follows it (the activity dot,
 /// or directly the title when no activity dot is present).
-const AGENT_BADGE_GAP: f32 = 6.0;
+pub(in crate::ui::tab_bar) const AGENT_BADGE_GAP: f32 = 6.0;
 /// Ring stroke width for a *seen* blocked/done badge's fallback circle
 /// (AC-1: "seen render as ring"). `IMPLEMENTATION.md` Conventions pins
 /// 1.5px.
@@ -638,7 +638,7 @@ enum Visual {
 /// mux group expands to its cell count (compact → 1, expanded → header +
 /// one per window). Used so the equal-width layout math accounts for the
 /// expansion. With no mux groups this equals `items.len()`.
-fn visual_cell_count(items: &[TabBarItem]) -> usize {
+pub(in crate::ui::tab_bar) fn visual_cell_count(items: &[TabBarItem]) -> usize {
     items
         .iter()
         .map(|it| match &it.mux_cells {
@@ -1061,7 +1061,7 @@ fn layout_tab_strip(
 /// cell if it sits in that cell's left half, and "after" if it sits
 /// in the right half. Outside the strip, drops clamp to the closest
 /// edge.
-fn drop_target_index(cells: &[Rect], pointer_x: f32) -> usize {
+pub(in crate::ui::tab_bar) fn drop_target_index(cells: &[Rect], pointer_x: f32) -> usize {
     if cells.is_empty() {
         return 0;
     }
@@ -1083,7 +1083,7 @@ fn drop_target_index(cells: &[Rect], pointer_x: f32) -> usize {
 /// `index == 0` → left edge of the first cell; `index == cells.len()`
 /// → right edge of the last cell; otherwise the boundary between
 /// `cells[index - 1]` and `cells[index]`.
-fn drop_indicator_x(cells: &[Rect], index: usize) -> Option<f32> {
+pub(in crate::ui::tab_bar) fn drop_indicator_x(cells: &[Rect], index: usize) -> Option<f32> {
     if cells.is_empty() {
         return None;
     }
