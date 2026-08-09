@@ -388,7 +388,7 @@ fn perform_upgrade_replacement(mut req: daemon::UpgradeRequest) {
 /// without a real exec.
 #[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
-enum ReplacementDecision {
+pub(in crate::mux::cli) enum ReplacementDecision {
     /// Validation passed: attempt the exec.
     Attempt,
     /// Validation failed: skip the exec attempt and re-enter service
@@ -398,7 +398,7 @@ enum ReplacementDecision {
 }
 
 #[cfg(unix)]
-fn decide_replacement(validation: Result<(), String>) -> ReplacementDecision {
+pub(in crate::mux::cli) fn decide_replacement(validation: Result<(), String>) -> ReplacementDecision {
     match validation {
         Ok(()) => ReplacementDecision::Attempt,
         Err(reason) => ReplacementDecision::Reenter { reason },
@@ -524,7 +524,7 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
 /// respawn -> handshake accepted" path deterministically (task0001 Test
 /// Notes). [`resolve_attach_socket`] is the production entry point, wired
 /// to the real `daemon::spawn_daemon`.
-fn resolve_attach_socket_with(
+pub(in crate::mux::cli) fn resolve_attach_socket_with(
     sock_path: &std::path::Path,
     spawn: impl FnOnce(&std::path::Path) -> Result<(), String>,
 ) -> Result<std::path::PathBuf, String> {
@@ -577,7 +577,7 @@ pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::
 /// Connect to the daemon, perform handshake, and return session list.
 /// Uses blocking I/O since CLI commands run in a synchronous context.
 #[cfg(unix)]
-fn cli_handshake()
+pub(in crate::mux::cli) fn cli_handshake()
 -> Result<(std::os::unix::net::UnixStream, Vec<SessionInfo>), Box<dyn std::error::Error>> {
     use std::io::{Read, Write};
 
@@ -628,7 +628,7 @@ fn cli_handshake()
 /// Connect to the daemon via Named Pipe, perform handshake, and return session list.
 /// Uses blocking I/O since CLI commands run in a synchronous context.
 #[cfg(windows)]
-fn cli_handshake() -> Result<(std::fs::File, Vec<SessionInfo>), Box<dyn std::error::Error>> {
+pub(in crate::mux::cli) fn cli_handshake() -> Result<(std::fs::File, Vec<SessionInfo>), Box<dyn std::error::Error>> {
     use std::io::{Read, Write};
 
     let pipe_name = daemon::pipe_name();
@@ -868,7 +868,7 @@ pub fn execute_switch_window(_target: u32) -> Result<(), Box<dyn std::error::Err
 /// Resolve the target pane ID from sessions and optional window index.
 ///
 /// Returns the active pane ID of the resolved window.
-fn resolve_target_pane(
+pub(in crate::mux::cli) fn resolve_target_pane(
     sessions: &[SessionInfo],
     target: Option<u32>,
 ) -> Result<u32, Box<dyn std::error::Error>> {
@@ -1018,7 +1018,7 @@ const WAIT_CLIENT_TIMEOUT_MARGIN_MS: u64 = 5000;
 /// Map an `AgentApiErrorKind` to the CLI exit-code convention
 /// (IMPLEMENTATION.md "Conventions"). Pure — testable without a live daemon
 /// (AC-7).
-fn agent_api_error_exit_code(kind: AgentApiErrorKind) -> i32 {
+pub(in crate::mux::cli) fn agent_api_error_exit_code(kind: AgentApiErrorKind) -> i32 {
     match kind {
         AgentApiErrorKind::InvalidInput => 2,
         AgentApiErrorKind::Timeout => 3,
@@ -1031,7 +1031,7 @@ fn agent_api_error_exit_code(kind: AgentApiErrorKind) -> i32 {
 /// (a missing variable is a usage error per FR13); any other value passes
 /// through verbatim as the public pane ID. Pure aside from the env read —
 /// testable via `temp_env` (AC-8).
-fn resolve_pane_arg(pane_arg: &str) -> Result<String, String> {
+pub(in crate::mux::cli) fn resolve_pane_arg(pane_arg: &str) -> Result<String, String> {
     if pane_arg == "current" {
         std::env::var("EMTERM_PANE_ID")
             .map_err(|_| "EMTERM_PANE_ID is not set (required for --pane current)".to_string())
@@ -1052,7 +1052,7 @@ fn parse_agent_state_str(s: &str) -> Option<AgentState> {
 
 /// Parse a comma-separated `--state` value (e.g. `"done,blocked"`) into the
 /// wire `Vec<AgentState>`. Pure — testable without a live daemon.
-fn parse_agent_states(s: &str) -> Result<Vec<AgentState>, String> {
+pub(in crate::mux::cli) fn parse_agent_states(s: &str) -> Result<Vec<AgentState>, String> {
     let mut states = Vec::new();
     for part in s.split(',') {
         let part = part.trim();
@@ -1558,7 +1558,7 @@ pub fn execute_upgrade() -> i32 {
 /// `crate::mux::upgrade::read_and_remove_handoff_file` actually decodes
 /// against — this used to be a local literal that could silently drift from
 /// it.
-fn handoff_schema_range_line() -> String {
+pub(in crate::mux::cli) fn handoff_schema_range_line() -> String {
     let range = mux_ipc::handoff::SUPPORTED_HANDOFF_SCHEMA_VERSIONS;
     format!("{} {}", range.start(), range.end())
 }
