@@ -6,7 +6,6 @@ use crate::scroll::ScrollPosition;
 
 use super::App;
 
-
 /// Minimum wall-clock gap between two automatic (per-frame) search
 /// re-resolves. A burst of PTY output flags the search document dirty on
 /// every chunk; without this throttle [`App::auto_research_if_dirty`] would

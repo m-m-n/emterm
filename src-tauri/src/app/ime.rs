@@ -220,7 +220,6 @@ impl App {
             self.needs_full_redraw = true;
         }
     }
-
 }
 
 /// Phase 4-G-E performance instrumentation gate. Returns `true` when

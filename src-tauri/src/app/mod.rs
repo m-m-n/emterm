@@ -39,11 +39,13 @@ use agent_status::{
     agent_notification_rate_limit_key, agent_status_keys_for_tab, agent_status_pane_tab_title,
     agent_status_pane_visible,
 };
-pub use font_settings::{FONT_SIZE_PT_MAX, FONT_SIZE_PT_MIN, FONT_SIZE_PT_STEP, clamp_font_size_pt};
+pub use font_settings::{
+    FONT_SIZE_PT_MAX, FONT_SIZE_PT_MIN, FONT_SIZE_PT_STEP, clamp_font_size_pt,
+};
 pub use scroll_search_fold::{AUTO_RESEARCH_THROTTLE, JumpDirection, auto_research_allowed};
-pub use timing::{BELL_FLASH_MS, BLINK_HALF_MS, RestartToast, TOAST_POLL_MS};
 #[cfg(test)]
 use timing::RESTART_TOAST_LINGER_SECS;
+pub use timing::{BELL_FLASH_MS, BLINK_HALF_MS, RestartToast, TOAST_POLL_MS};
 // ── task0002: mux sidebar overlay auto-dim ──────────────────────────────
 //
 // Three named constants (IMPLEMENTATION.md conventions, NFR2 — single
@@ -2672,6 +2674,7 @@ impl App {
         self.needs_full_redraw = false;
     }
 
+    /// Phase 4-C (APC redesign): route one decoded `MuxMessage` to the
     /// tab at `tab_idx`. The actual routing logic lives on `Tab` so the
     /// tab can mutate its own grid / status state directly — this
     /// wrapper exists primarily as the test seam and as a stable name

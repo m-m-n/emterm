@@ -2,8 +2,8 @@
 
 use crate::tabs::Tab;
 
-use super::{App, MuxActionOutcome};
 use super::agent_status::{agent_notification_rate_limit_key, agent_status_keys_for_tab};
+use super::{App, MuxActionOutcome};
 
 impl App {
     /// Spawn the initial shell tab. Called once at startup.
