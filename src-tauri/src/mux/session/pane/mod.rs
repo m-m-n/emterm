@@ -252,7 +252,7 @@ impl PaneDims {
         ((packed >> 16) as u16, packed as u16)
     }
 
-    fn new(cols: u16, rows: u16) -> Self {
+    pub(super) fn new(cols: u16, rows: u16) -> Self {
         Self {
             packed: std::sync::atomic::AtomicU32::new(Self::pack(cols, rows)),
         }
@@ -265,7 +265,7 @@ impl PaneDims {
         Self::unpack(self.packed.load(std::sync::atomic::Ordering::Acquire))
     }
 
-    fn set(&self, cols: u16, rows: u16) {
+    pub(super) fn set(&self, cols: u16, rows: u16) {
         self.packed
             .store(Self::pack(cols, rows), std::sync::atomic::Ordering::Release);
     }
