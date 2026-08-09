@@ -100,7 +100,7 @@ const CLIENT_MSG_STARVATION_QUOTA: u32 = 8;
 /// `consecutive_client_msgs_while_deferred` is the running count of how
 /// many iterations in a row the client arm has already won while deferred
 /// work was outstanding.
-fn allow_client_message_arm(
+pub(super) fn allow_client_message_arm(
     has_deferred_work: bool,
     consecutive_client_msgs_while_deferred: u32,
 ) -> bool {
@@ -146,7 +146,7 @@ fn allow_client_message_arm(
 /// protection under continuous client traffic — not just this feature's own
 /// deferred-snapshot path — which is the correct, broader reading of "queued
 /// output must not be starved" this whole feature exists to establish.
-fn has_unforwarded_pane_output(
+pub(super) fn has_unforwarded_pane_output(
     has_deferred_work: bool,
     pane_output_rx: &mpsc::Receiver<PtyOutputChunk>,
 ) -> bool {
@@ -167,7 +167,7 @@ fn has_unforwarded_pane_output(
 /// one-iteration exclusion `allow_client_message_arm` applies once the quota
 /// is hit never compounds, and ordinary traffic (no pending output) is never
 /// penalized.
-fn next_client_msg_starvation_count(
+pub(super) fn next_client_msg_starvation_count(
     took_client_arm: bool,
     has_pending_output: bool,
     previous_count: u32,
@@ -189,7 +189,7 @@ fn next_client_msg_starvation_count(
 /// differs at every construction site; erasing it lets this live in a
 /// plain `Option` field across `select!` iterations. `Send` is required
 /// because `handle_connection` itself is spawned via `tokio::spawn`.
-type PendingDeferredReserve = std::pin::Pin<
+pub(super) type PendingDeferredReserve = std::pin::Pin<
     Box<
         dyn std::future::Future<
                 Output = Result<mpsc::OwnedPermit<PtyOutputChunk>, mpsc::error::SendError<()>>,
@@ -230,7 +230,7 @@ type PendingDeferredReserve = std::pin::Pin<
 /// caught exactly this ordering bug during development — the mechanism
 /// below is correct, but was originally wired up AFTER the drain arm and
 /// therefore never actually ran.
-fn arm_pending_deferred_reserve(
+pub(super) fn arm_pending_deferred_reserve(
     pending: &mut Option<PendingDeferredReserve>,
     deferred_output: &DeferredOutputQueue,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
@@ -1065,7 +1065,7 @@ pub async fn handle_connection<S>(
 /// sends a response, and disconnects. If no message arrives within 5 seconds,
 /// disconnects gracefully (this is the normal `mux ls` path).
 #[allow(clippy::too_many_arguments)]
-async fn handle_cli_client<S>(
+pub(super) async fn handle_cli_client<S>(
     framed: &mut Framed<S, MuxCodec>,
     session_manager: &Arc<Mutex<SessionManager>>,
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
@@ -1247,7 +1247,7 @@ async fn handle_cli_client<S>(
 ///
 /// Extracted as a pure function so the CLI-client wiring's translation
 /// logic is unit-testable without a live connection or a real accept loop.
-fn upgrade_reply_to_message(
+pub(super) fn upgrade_reply_to_message(
     result: Result<Result<(), String>, oneshot::error::RecvError>,
 ) -> Option<MuxMessage> {
     let reason = match result {
@@ -1393,7 +1393,7 @@ async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, s
 /// carve-out (task0001 invariant 1) rather than the point-position
 /// capacity-await Convention 1 forbids elsewhere.
 #[allow(clippy::too_many_arguments)]
-async fn route_message(
+pub(super) async fn route_message(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
     admission: &mut OutboundAdmission,
@@ -1557,7 +1557,7 @@ async fn route_message(
 /// routing to `apply_mux_message::Snapshot`. Two consecutive `Snapshot`
 /// chunks for the same pane also stay separate so each snapshot reply is one
 /// IPC frame.
-fn merge_consecutive_chunks(chunks: Vec<PtyOutputChunk>) -> Vec<PtyOutputChunk> {
+pub(super) fn merge_consecutive_chunks(chunks: Vec<PtyOutputChunk>) -> Vec<PtyOutputChunk> {
     if chunks.len() <= 1 {
         return chunks;
     }

@@ -1026,8 +1026,8 @@ pub(super) async fn apply_fair_permit_to_front_deferred_item(
 // ============================================================================
 
 /// Caps and defaults for `ReadPane` (NFR3: read responses are size-capped).
-const READ_LINES_MAX: u32 = 2000;
-const READ_MAX_BYTES: usize = 256 * 1024;
+pub(super) const READ_LINES_MAX: u32 = 2000;
+pub(super) const READ_MAX_BYTES: usize = 256 * 1024;
 /// Raw scrollback bytes considered for the tail before VT100 rendering
 /// (see `render_scrollback_rows`). Sized generously above `READ_LINES_MAX`
 /// lines worth of typical terminal output so the rendered tail rarely
@@ -1035,7 +1035,7 @@ const READ_MAX_BYTES: usize = 256 * 1024;
 const SCROLLBACK_READ_TAIL_BYTES: usize = 512 * 1024;
 
 /// Cap on `SendText` payload size (NFR1: request validation).
-const SEND_MAX_BYTES: usize = 1024 * 1024;
+pub(super) const SEND_MAX_BYTES: usize = 1024 * 1024;
 
 fn unknown_pane_error(public_pane_id: &str) -> AgentApiError {
     AgentApiError {
@@ -1134,7 +1134,7 @@ fn render_scrollback_rows(scrollback_tail: &[u8], lines: u32, cols: u16) -> Vec<
 /// previous implementation truncated from the end, keeping the oldest
 /// prefix and dropping the newest output, which is backwards for a "tail"
 /// read.
-fn render_pane_tail(
+pub(super) fn render_pane_tail(
     scrollback_tail: &[u8],
     screen_contents: &str,
     lines: u32,
