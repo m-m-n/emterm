@@ -2036,7 +2036,7 @@ impl TerminalCore {
 /// (it clamps at the same point, D1''): an out-of-domain wire dimension
 /// cannot make this predicate see a "change" that replay itself would
 /// clamp away to a no-op, or vice versa.
-fn stable_target_suffix_start(
+pub(in crate::terminal_core) fn stable_target_suffix_start(
     target_cols: u16,
     target_rows: u16,
     segments: &[ReplaySegment],
@@ -2084,7 +2084,7 @@ fn stable_target_suffix_start(
 /// `clamp_resize_dims` is applied per segment for the same reason
 /// [`stable_target_suffix_start`] applies it: agreement with what
 /// `TerminalCore::replay_segments` will actually decide.
-fn leading_uniform_run_len(target_cols: u16, segments: &[ReplaySegment]) -> (usize, u16) {
+pub(in crate::terminal_core) fn leading_uniform_run_len(target_cols: u16, segments: &[ReplaySegment]) -> (usize, u16) {
     let Some(first) = segments.first() else {
         return (0, 0);
     };
@@ -2130,7 +2130,7 @@ fn leading_uniform_run_len(target_cols: u16, segments: &[ReplaySegment]) -> (usi
 ///
 /// Returns `false` (unsafe to fold the head in) the moment either condition
 /// is violated by any segment in `middle`.
-fn middle_is_row_bounded(target_cols: u16, head_rows: u16, middle: &[ReplaySegment]) -> bool {
+pub(in crate::terminal_core) fn middle_is_row_bounded(target_cols: u16, head_rows: u16, middle: &[ReplaySegment]) -> bool {
     middle.iter().all(|s| {
         let (c, r) = clamp_resize_dims(s.cols, s.rows);
         c == target_cols && r <= head_rows
@@ -2147,7 +2147,7 @@ fn middle_is_row_bounded(target_cols: u16, head_rows: u16, middle: &[ReplaySegme
 /// behavior. A real "ordinary switch" suffix (the pane's actual history)
 /// is orders of magnitude larger than this, so the gate never affects the
 /// case NFR1 targets.
-const BYPASS_SUFFIX_MIN_BYTES: usize = 4096;
+pub(in crate::terminal_core) const BYPASS_SUFFIX_MIN_BYTES: usize = 4096;
 
 /// Maximum prefix size (bytes) for which `build_from_snapshot_inner`'s
 /// D1''' prefix/suffix split is worth engaging (D5'''', round-7 rework,
@@ -2192,7 +2192,7 @@ const BYPASS_SUFFIX_MIN_BYTES: usize = 4096;
 /// changes what a single reflow at the segment bounds' worst case costs.
 /// Re-measure both together (a release bench in `bench.rs`) before
 /// changing either.
-const BYPASS_PREFIX_MAX_BYTES: usize = 64 * 1024;
+pub(in crate::terminal_core) const BYPASS_PREFIX_MAX_BYTES: usize = 64 * 1024;
 
 /// Maximum number of segments the MIDDLE (`segments[h..k]`, per
 /// [`leading_uniform_run_len`]) may contain for
@@ -2295,7 +2295,7 @@ const BYPASS_PREFIX_MAX_BYTES: usize = 64 * 1024;
 /// total byte cost regardless of how many segments it is split across, so
 /// a genuinely expensive MIDDLE/prefix is rejected by those gates
 /// independent of this one.
-const BYPASS_PREFIX_MAX_SEGMENTS: usize = 62;
+pub(in crate::terminal_core) const BYPASS_PREFIX_MAX_SEGMENTS: usize = 62;
 
 /// Maximum number of segments the MIDDLE may contain when the HEAD fold
 /// did NOT succeed (`h == 0` — D9's fold-degradation path in
@@ -2333,7 +2333,7 @@ const BYPASS_PREFIX_MAX_SEGMENTS: usize = 62;
 /// true: the "this gate never rejects a shape the daemon itself could
 /// have produced" invariant holds only for the `h > 0` tier above, not
 /// this one).
-const BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD: usize = 24;
+pub(in crate::terminal_core) const BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD: usize = 24;
 
 /// Test-time pin: `BYPASS_PREFIX_MAX_SEGMENTS` — the `h > 0` (fold-
 /// succeeded) tier's bound ONLY (see that constant's D11 doc) — must equal
