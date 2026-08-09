@@ -76,14 +76,17 @@ fn ac4_frame_events_any_false_for_default_true_for_each_remaining_field() {
 /// elsewhere in this module for drawing the widget itself.
 #[test]
 fn draw_cursor_and_search_highlights_origin_have_no_sidebar_term() {
-    let src = include_str!("mod.rs");
+    let src = include_str!("overlays.rs");
     let extract_fn_source = |signature: &str| -> String {
         let start = src
             .find(signature)
-            .unwrap_or_else(|| panic!("marker `{signature}` not found in mod.rs"));
+            .unwrap_or_else(|| panic!("marker `{signature}` not found in overlays.rs"));
         let body = &src[start..];
-        let end = body[signature.len()..]
-            .find("\nfn ")
+        let tail = &body[signature.len()..];
+        let end = [tail.find("\nfn "), tail.find("\npub(in crate::render) fn ")]
+            .into_iter()
+            .flatten()
+            .min()
             .map(|i| i + signature.len())
             .unwrap_or(body.len());
         body[..end].to_string()
