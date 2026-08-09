@@ -216,7 +216,7 @@ const BUFFER_GROWTH_FACTOR: f64 = 1.5;
 /// Minimum buffer capacity in bytes. Keeps a small grid (a handful of
 /// instances) from reallocating on every single-cell change by giving a
 /// freshly created buffer reasonable headroom up front.
-const MIN_BUFFER_CAPACITY_BYTES: u64 = 4096;
+pub(in crate::render::terminal_grid_pass) const MIN_BUFFER_CAPACITY_BYTES: u64 = 4096;
 
 /// Pure growth-policy function for the persistent GPU buffers (task0003
 /// AC-4): given a buffer's current capacity and the byte size actually
@@ -231,7 +231,7 @@ const MIN_BUFFER_CAPACITY_BYTES: u64 = 4096;
 ///   `MIN_BUFFER_CAPACITY_BYTES`) rather than to the exact `required` size,
 ///   so a monotonically growing grid triggers `O(log n)` reallocations
 ///   instead of one every frame.
-fn grow_capacity(current_capacity: u64, required: u64) -> u64 {
+pub(in crate::render::terminal_grid_pass) fn grow_capacity(current_capacity: u64, required: u64) -> u64 {
     if required <= current_capacity {
         return current_capacity;
     }
@@ -254,9 +254,9 @@ fn grow_capacity(current_capacity: u64, required: u64) -> u64 {
 /// `build_instances`'s two-pass ordering was written to prevent (see its
 /// doc comment).
 #[derive(Debug, Clone, Default)]
-struct RowInstances {
-    bg: Vec<CellInstance>,
-    fg: Vec<CellInstance>,
+pub(in crate::render::terminal_grid_pass) struct RowInstances {
+    pub(in crate::render::terminal_grid_pass) bg: Vec<CellInstance>,
+    pub(in crate::render::terminal_grid_pass) fg: Vec<CellInstance>,
 }
 
 /// Per-row instance cache (task0003 FR3/FR4). Keyed by screen row index
@@ -272,15 +272,15 @@ struct RowInstances {
 /// is needed here — rebuilding every row via [`RowCache::resize`] +
 /// [`GridInstanceBuilder::rebuild_dirty_rows`] IS the cache drop.
 #[derive(Debug, Default)]
-struct RowCache {
-    rows: Vec<Option<RowInstances>>,
+pub(in crate::render::terminal_grid_pass) struct RowCache {
+    pub(in crate::render::terminal_grid_pass) rows: Vec<Option<RowInstances>>,
 }
 
 impl RowCache {
     /// Ensure the cache has exactly `row_count` slots. A size change (grid
     /// resize) drops every existing entry — positions and glyph metrics
     /// baked into old entries no longer apply to the new dimensions.
-    fn resize(&mut self, row_count: usize) {
+    pub(in crate::render::terminal_grid_pass) fn resize(&mut self, row_count: usize) {
         if self.rows.len() != row_count {
             self.rows = vec![None; row_count];
         }
@@ -288,7 +288,7 @@ impl RowCache {
 
     /// Store freshly rebuilt instance data for `row`. No-op if `row` is
     /// out of range (defensive; callers keep `row < row_count`).
-    fn set(&mut self, row: u16, instances: RowInstances) {
+    pub(in crate::render::terminal_grid_pass) fn set(&mut self, row: u16, instances: RowInstances) {
         if let Some(slot) = self.rows.get_mut(row as usize) {
             *slot = Some(instances);
         }
@@ -301,7 +301,7 @@ impl RowCache {
     /// before calling this, guaranteeing full population; the permissive
     /// behavior here just keeps this method panic-free for tests that
     /// exercise a partially populated cache.
-    fn concat_all(&self) -> Vec<CellInstance> {
+    pub(in crate::render::terminal_grid_pass) fn concat_all(&self) -> Vec<CellInstance> {
         let mut bgs: Vec<CellInstance> = Vec::new();
         let mut fg: Vec<CellInstance> = Vec::new();
         for row in self.rows.iter().flatten() {
@@ -349,7 +349,7 @@ impl RowCache {
     /// the row count degenerates to dropping every cached entry —
     /// correctness over the optimization when the up-shift assumption
     /// cannot be trusted.
-    fn rotate_for_scroll_event(&mut self, direction: u8, count: u16, cell_h: f32) {
+    pub(in crate::render::terminal_grid_pass) fn rotate_for_scroll_event(&mut self, direction: u8, count: u16, cell_h: f32) {
         if count == 0 {
             return;
         }
@@ -384,7 +384,7 @@ impl RowCache {
 /// [`RowCache::rotate_for_scroll_event`] treats anything else as
 /// untrusted and degenerates to a full cache drop rather than silently
 /// assuming "Up" semantics for an unrecognized encoding (task0006 AC-2).
-const SCROLL_DIRECTION_UP: u8 = 1;
+pub(in crate::render::terminal_grid_pass) const SCROLL_DIRECTION_UP: u8 = 1;
 
 /// CPU-side (device-free) half of [`TerminalGridPass`]: glyph shaping plus
 /// the task0003 per-row instance cache. Split out from the GPU-owning
@@ -392,7 +392,7 @@ const SCROLL_DIRECTION_UP: u8 = 1;
 /// TS-5) directly against the real implementation instead of a hand-
 /// maintained mirror — `TerminalGridPass::new` is the only piece that
 /// actually needs a wgpu device (pipeline + bind-group-layout + sampler).
-struct GridInstanceBuilder {
+pub(in crate::render::terminal_grid_pass) struct GridInstanceBuilder {
     /// Cache + atlas live behind a mutex so the App can hand the same Arc
     /// to multiple consumers (Phase 5+). Rasterization calls
     /// `cache.get_or_rasterize` during a row (re)build.
@@ -407,7 +407,7 @@ struct GridInstanceBuilder {
 }
 
 impl GridInstanceBuilder {
-    fn new(
+    pub(in crate::render::terminal_grid_pass) fn new(
         cache: Arc<Mutex<GlyphCache>>,
         fallback: Arc<FallbackChain>,
         rasterizer: Arc<dyn GlyphRasterizer>,
@@ -425,7 +425,7 @@ impl GridInstanceBuilder {
     ///
     /// This split exists so unit tests can exercise the per-cell pipeline
     /// (TS-font-13 / TS-font-14) without standing up a wgpu device.
-    fn build_instances(&self, cells: &[CellInput], metrics: CellMetrics) -> Vec<CellInstance> {
+    pub(in crate::render::terminal_grid_pass) fn build_instances(&self, cells: &[CellInput], metrics: CellMetrics) -> Vec<CellInstance> {
         let (mut bgs, fg) = self.build_instances_split(cells, metrics);
         bgs.extend(fg);
         bgs
@@ -626,7 +626,7 @@ impl GridInstanceBuilder {
     /// rebuild exactly the dirty rows, then concatenate the full per-row
     /// cache into one instance sequence. Returns `(instances,
     /// rows_rebuilt)`.
-    fn rebuild_and_collect(
+    pub(in crate::render::terminal_grid_pass) fn rebuild_and_collect(
         &mut self,
         dirty_rows: &[u16],
         dirty_cells: &[CellInput],
@@ -645,7 +645,7 @@ impl GridInstanceBuilder {
     /// `cell_h` must be the same value the caller's `CellMetrics` uses
     /// this frame — see [`RowCache::rotate_for_scroll_event`] for why the
     /// rotation needs it.
-    fn apply_scroll_event(&mut self, direction: u8, count: u16, cell_h: f32) {
+    pub(in crate::render::terminal_grid_pass) fn apply_scroll_event(&mut self, direction: u8, count: u16, cell_h: f32) {
         self.row_cache
             .rotate_for_scroll_event(direction, count, cell_h);
     }
