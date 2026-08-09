@@ -268,13 +268,5 @@ fn init_mux_logger(component: &'static str) {
         .init();
 }
 
-// ============================================================================
-// Agent-facing API: `emterm mux read|send|wait` (task0004)
-//
-// Exit codes per IMPLEMENTATION.md "Conventions": 0 success; 2 usage/invalid
-// input; 3 wait timeout (dedicated); 4 unknown pane / pane gone; 5
-// not_mux_pane; 1 all other errors (connection failure etc.).
-// ============================================================================
-
 #[cfg(test)]
 mod tests;
