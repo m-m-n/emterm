@@ -1,6 +1,25 @@
+use super::event_loop::request_redraw_on_user_event;
+use super::frame_pacing::{
+    RESIZE_SETTLE_MAX_DURATION, RESIZE_SETTLE_QUIET_DURATION, RESIZE_SETTLE_SELF_WAKE_INTERVAL,
+    has_actionable_egui_input, next_resize_settle_wake_deadline, next_wait_deadline,
+    preedit_effective_dirty_rows, record_drawn_frame, record_rebuilt_rows,
+    resize_settle_self_wake_due, resolve_build_dirty_rows,
+    should_rotate_row_cache_for_scroll_event, should_skip_frame, status_bar_insets_changed,
+    toast_redraw_due,
+};
+use super::input_translate::{
+    MAX_ALT_SCROLL_NOTCHES, ShiftEnterRewrite, accumulate_alt_scroll_lines,
+    alternate_scroll_wheel_bytes, is_skk_swallowed_chord, shift_enter_rewrite,
+    should_drop_synthetic_key_event, winit_key_to_egui,
+};
+use super::link_hover::{detect_osc8_link_at, hover_link_cells_changed};
+use super::resize_layout::resolve_grid_bot_inset;
 use super::*;
+use crate::selection::SelectionMode;
+use crate::settings::ShiftEnterBehavior;
 use crate::ui::chrome::build_egui_fonts;
 use std::time::Duration;
+use winit::keyboard::{Key as WinitKey, NamedKey};
 
 // ── task0006 AC-2: grid x-origin carries no sidebar term ───────────
 
