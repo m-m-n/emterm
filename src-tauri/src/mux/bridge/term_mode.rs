@@ -1,8 +1,6 @@
 //! Terminal raw-mode control for the bridge process: termios (Unix) /
 //! console-mode (Windows) save, raw switch, and RAII restore guards.
 
-use super::*;
-
 /// Global storage for original termios, so we can restore it before process::exit().
 #[cfg(unix)]
 static ORIGINAL_TERMIOS: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
