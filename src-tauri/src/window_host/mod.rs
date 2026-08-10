@@ -43,6 +43,7 @@ mod frame_pacing;
 mod input_translate;
 mod key_routing;
 mod link_hover;
+mod pointer_routing;
 mod render_surface;
 mod resize_layout;
 
