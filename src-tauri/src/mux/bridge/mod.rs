@@ -7,7 +7,7 @@ use super::ipc::protocol::*;
 
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::AtomicU8;
 
 #[cfg(unix)]
 use tokio::net::UnixStream;
