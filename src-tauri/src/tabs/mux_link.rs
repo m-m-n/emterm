@@ -3,8 +3,6 @@
 //! frames (`request_pane_snapshot` / `send_attach`), and the APC
 //! partitioning between the image pipeline and the mux decoder.
 
-use std::sync::atomic::Ordering;
-
 use mux_ipc::protocol::{
     DecodedSnapshotPayload, MessageType, MuxMessage, RenameWindowMsg, ResizeMsg, WelcomeMsg,
     decode_snapshot_payload_typed,
@@ -154,23 +152,13 @@ impl Tab {
                     // owns the recipe (prompt clear, fold rebuild, drain +
                     // backfill marks so `pending_frame_reset` latches) so the
                     // PaneCreated path stays in lockstep. A pending off-thread
-                    // switch (if any) is
-                    // superseded by this newer, now-applied switch — signal
-                    // its worker to bail before dropping it.
-                    if let Some(old) = self.pending_switch.take() {
-                        old.cancel.store(true, Ordering::Relaxed);
-                    }
-                    // FR7/FR8 (task0003): a coalesced same-pane re-dispatch
-                    // (if any) is now moot too — this sync application is
-                    // itself the newest, now-applied switch.
-                    self.pending_redispatch = None;
-                    if let Some(old) = self.pending_scrollback_restore.take() {
-                        old.cancel.store(true, Ordering::Relaxed);
-                        log::warn!(
-                            "scrollback restore cancelled (superseded by sync switch) for tab {:?}",
-                            self.title
-                        );
-                    }
+                    // switch (if any) is superseded by this newer, now-applied
+                    // switch — `supersede_pending_replay` signals its worker
+                    // to bail before dropping it, drops any coalesced
+                    // same-pane re-dispatch (FR7/FR8, task0003 — now moot,
+                    // this sync application is itself the newest switch), and
+                    // cancels any in-flight 2nd-pass scrollback restore.
+                    let _ = self.supersede_pending_replay("superseded by sync switch");
                     let _actions = self.reset_frame_for_replay(&content_bytes, &segments);
                     log::debug!(
                         "mux apc: applied {:?} ({} bytes, {} segments, sync) for tab {:?}",
@@ -289,18 +277,15 @@ impl Tab {
                         // This caps both the swap-time replay burst and the
                         // memory a fast pane can accumulate during a slow parse.
                         if pending.queued_bytes > OFFTHREAD_LIVE_QUEUE_CAP_BYTES {
+                            // Take the coalesced re-dispatch (if any) BEFORE
+                            // superseding — `supersede_pending_replay` drops
+                            // `pending_redispatch`, but this fallback still
+                            // needs it as the latest known content for the
+                            // pane (see the payload selection below).
+                            let redispatch = self.pending_redispatch.take();
                             let pending = self
-                                .pending_switch
-                                .take()
+                                .supersede_pending_replay("live-queue overflow sync reparse")
                                 .expect("pending_switch is Some in this arm");
-                            pending.cancel.store(true, Ordering::Relaxed);
-                            if let Some(old) = self.pending_scrollback_restore.take() {
-                                old.cancel.store(true, Ordering::Relaxed);
-                                log::warn!(
-                                    "scrollback restore cancelled (live-queue overflow sync reparse) for tab {:?}",
-                                    self.title
-                                );
-                            }
                             log::warn!(
                                 "mux off-thread replay live-queue exceeded {} bytes for tab {:?}; \
                                  synchronous reparse fallback",
@@ -331,7 +316,7 @@ impl Tab {
                             // queued since that coalesce" either way —
                             // never a stale prefix the new payload might
                             // already contain.
-                            let (payload, segments) = match self.pending_redispatch.take() {
+                            let (payload, segments) = match redispatch {
                                 Some((_, payload, segments)) => (payload, segments),
                                 None => (pending.payload, pending.segments),
                             };
@@ -857,21 +842,13 @@ impl Tab {
                 // the worker-built core (the detached window's content) back
                 // over the grid we clear below. Mirrors the synchronous
                 // `Snapshot` arm's supersede-the-pending-switch step.
-                if let Some(old) = self.pending_switch.take() {
-                    old.cancel.store(true, Ordering::Relaxed);
-                }
-                // FR7/FR8 (task0003): a coalesced same-pane re-dispatch (if
-                // any) belonged to the pane being cleared above too — drop
-                // it rather than let a later `poll_pending_switch` dispatch
-                // a stale request for a pane this tab no longer shows.
-                self.pending_redispatch = None;
-                if let Some(old) = self.pending_scrollback_restore.take() {
-                    old.cancel.store(true, Ordering::Relaxed);
-                    log::warn!(
-                        "scrollback restore cancelled (mux detached) for tab {:?}",
-                        self.title
-                    );
-                }
+                // `supersede_pending_replay` also drops any coalesced
+                // same-pane re-dispatch (FR7/FR8, task0003 — it belonged to
+                // the pane being cleared too, and letting a later
+                // `poll_pending_switch` dispatch it would revive a stale
+                // request for a pane this tab no longer shows) and cancels
+                // any in-flight 2nd-pass scrollback restore.
+                let _ = self.supersede_pending_replay("mux detached");
                 // The displayed grid still holds the detached mux window's
                 // content. The bridge process exits right after this Detached
                 // frame (mux::bridge → process::exit), handing the PTY back to
