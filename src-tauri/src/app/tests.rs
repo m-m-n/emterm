@@ -27,6 +27,29 @@ fn app_with_cleared_state(core: &mut TerminalCore) -> App {
     app
 }
 
+/// Build an `App` whose single tab spawned NO real shell process
+/// ([`crate::tabs::Tab::test_shell_less`]): its PTY is absent and its
+/// event channel starts disconnected, so `pump_all` sees only the
+/// state the test itself injects. The `pump_all_*` eviction/anchor
+/// tests need this determinism — with a real shell, startup output
+/// draining mid-`pump_all` under host load perturbed the eviction
+/// counters they assert on (their historical parallel-suite flakiness).
+fn app_with_shell_less_tab() -> App {
+    let mut app = App::new();
+    let dims = app.cell_size;
+    let tab = crate::tabs::Tab::test_shell_less(
+        "shell",
+        dims.cols,
+        dims.rows,
+        app.settings.scrollback_lines,
+        app.settings.clone(),
+        app.notification_sink.clone(),
+    );
+    app.tabs.push(tab);
+    app.active = 0;
+    app
+}
+
 /// Build an `App` with one initial tab whose core has `scrollback`
 /// rows pushed into scrollback (so absolute rows 0..scrollback are
 /// scrollback and scrollback.. is viewport), and the given prompt-start

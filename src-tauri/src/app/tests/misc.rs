@@ -75,15 +75,11 @@ fn select_all_uses_visible_start_when_scrolled() {
     assert_eq!(sel.extent.row, visible_start + (rows - 1) as u32);
 }
 
-// Known flaky when the full suite runs in parallel (host-load dependent);
-// passes in isolation and with --test-threads=1. Rerun this test alone
-// before treating a failure as a regression.
 #[test]
 fn pump_all_shifts_selection_by_eviction_delta() {
     // A selection in absolute rows is shifted down by the active tab's
     // accumulated eviction delta when `pump_all` runs.
-    let mut app = App::new();
-    app.spawn_initial_tab();
+    let mut app = app_with_shell_less_tab();
     app.selection = Some(Selection {
         anchor: Pos { row: 20, col: 0 },
         extent: Pos { row: 24, col: 3 },
@@ -104,8 +100,7 @@ fn pump_all_shifts_selection_by_eviction_delta() {
 fn pump_all_drops_selection_when_fully_evicted() {
     // When the eviction delta exceeds both endpoints, the selection is
     // dropped entirely.
-    let mut app = App::new();
-    app.spawn_initial_tab();
+    let mut app = app_with_shell_less_tab();
     app.selection = Some(Selection {
         anchor: Pos { row: 2, col: 0 },
         extent: Pos { row: 6, col: 3 },
@@ -124,8 +119,7 @@ fn pump_all_drops_selection_when_fully_evicted() {
 fn pump_all_clears_selection_on_frame_reset() {
     // A core reset (RIS) makes the eviction counter go backwards, latching
     // a frame reset that drops the absolute-row selection.
-    let mut app = App::new();
-    app.spawn_initial_tab();
+    let mut app = app_with_shell_less_tab();
     // Establish a non-zero eviction baseline first.
     app.tabs[0].test_backfill_eviction(8);
     // Drain the resulting delta so it does not also shift the selection.
