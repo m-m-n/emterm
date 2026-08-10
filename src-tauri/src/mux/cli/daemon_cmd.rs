@@ -1,7 +1,8 @@
 //! The `--daemon` subcommand: daemon runtime entry and the hot-upgrade
 //! replacement decision it acts on.
 
-use super::*;
+use super::init_mux_logger;
+use crate::mux::daemon;
 
 /// Bound on [`execute_daemon`]'s runtime shutdown (task0009 rework, Design
 /// "Announcement delivery"): `prepare_upgrade` already waits for connected

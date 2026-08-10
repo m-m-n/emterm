@@ -2,7 +2,20 @@
 //! `attach`, plus attach-socket resolution and the CLI handshake
 //! shared by every daemon-connecting subcommand.
 
-use super::*;
+use mux_ipc::protocol::{
+    ClientType, HelloMsg, MAX_FRAME_LENGTH, MessageType, MuxMessage, PROTOCOL_VERSION, SessionInfo,
+    WelcomeMsg,
+};
+
+use super::check_nesting;
+use crate::mux::bridge::run_bridge;
+use crate::mux::daemon;
+// `tmux_import` writes to GUI-only `settings_store`, so it is reachable only
+// in the GUI build. The mux-only deb (`emterm-mux`) is intended for
+// headless SSH hosts where `settings.json` is hand-managed; auto-importing
+// `~/.tmux.conf` into it is meaningless there.
+#[cfg(feature = "gui")]
+use crate::mux::tmux_import::import_tmux_conf_if_needed;
 
 /// Initialize bridge logger, writing to mux-bridge.log (same directory as daemon log).
 ///

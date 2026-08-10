@@ -1,7 +1,11 @@
 //! Window / pane subcommands: `new-window` / `switch-window` /
 //! `send-keys`, plus the target-pane resolver they share.
 
-use super::*;
+use mux_ipc::protocol::{
+    CreateWindowPayload, ErrorMsg, MAX_FRAME_LENGTH, MessageType, MuxMessage, SessionInfo,
+};
+
+use super::connect::cli_handshake;
 
 /// Execute the `emterm mux new-window` command.
 ///

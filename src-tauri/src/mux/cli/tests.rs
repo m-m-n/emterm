@@ -1,4 +1,9 @@
 use super::*;
+use crate::mux::daemon;
+use mux_ipc::protocol::{
+    AgentApiErrorKind, AgentState, ClientType, ErrorMsg, HelloMsg, MessageType, MuxMessage,
+    PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, SessionInfo, WelcomeMsg,
+};
 
 #[test]
 fn test_check_nesting_not_set() {
