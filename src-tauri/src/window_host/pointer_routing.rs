@@ -31,12 +31,10 @@ pub(super) fn handle_pointer_left(host: &mut WindowHost, app: &mut App) {
     // through a non-edge route keeps the last edge's
     // cursor + direction stuck (since `update_resize_hint`
     // short-circuits when the new dir matches the cached
-    // one).
-    if host.current_resize_dir.is_some() || host.current_cursor != CursorIcon::Default {
-        host.current_resize_dir = None;
-        host.current_cursor = CursorIcon::Default;
-        host.window.set_cursor(CursorIcon::Default.into());
-    }
+    // one). `apply_cursor_icon` skips the IPC when the
+    // arrow is already showing.
+    host.current_resize_dir = None;
+    host.apply_cursor_icon(CursorIcon::Default);
     // Drop any link-hover underline + hand cursor when the
     // pointer leaves the window.
     host.invalidate_link_hover();

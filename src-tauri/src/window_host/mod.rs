@@ -202,8 +202,9 @@ pub struct WindowHost {
     /// `None` means the pointer is in the window interior — a press
     /// falls through to the existing selection / tab-bar handlers.
     current_resize_dir: Option<ResizeDirection>,
-    /// Last cursor icon pushed to winit. Cached so [`update_resize_hint`]
-    /// can skip the IPC round-trip when the icon would not change —
+    /// Last cursor icon pushed to winit. Written only by
+    /// [`WindowHost::apply_cursor_icon`] — the single arbitration point —
+    /// which skips the IPC round-trip when the icon would not change;
     /// `set_cursor` is otherwise called on every `PointerMoved`, which
     /// floods the compositor with redundant requests.
     current_cursor: CursorIcon,
@@ -565,6 +566,23 @@ impl WindowHost {
         Some(dir)
     }
 
+    /// Single arbitration point for the pointer icon: an active CSD
+    /// resize zone always wins over the caller's wish (`want`), so the
+    /// resize-hint / link-hover writers can each ask for their icon
+    /// without knowing about the other. Skips the `set_cursor` IPC
+    /// round-trip when the icon is unchanged.
+    pub(super) fn apply_cursor_icon(&mut self, want: CursorIcon) {
+        let icon = self
+            .current_resize_dir
+            .map(CursorIcon::from)
+            .unwrap_or(want);
+        if icon == self.current_cursor {
+            return;
+        }
+        self.current_cursor = icon;
+        self.window.set_cursor(icon.into());
+    }
+
     /// Refresh the cached resize direction + pointer icon for a new
     /// pointer position. Cheap to call on every `PointerMoved`: skips
     /// the `set_cursor` IPC round-trip when the resulting icon would
@@ -575,12 +593,10 @@ impl WindowHost {
             return;
         }
         self.current_resize_dir = dir;
-        let icon = dir.map(CursorIcon::from).unwrap_or(CursorIcon::Default);
-        if icon == self.current_cursor {
-            return;
-        }
-        self.current_cursor = icon;
-        self.window.set_cursor(icon.into());
+        // Leaving the resize zone falls back to the default arrow; the
+        // link-hover refresh that follows on the same `PointerMoved`
+        // (`update_link_cursor`) upgrades it to a hand when applicable.
+        self.apply_cursor_icon(CursorIcon::Default);
     }
 
     /// Map a physical pixel position to a grid cell, returning `None`
