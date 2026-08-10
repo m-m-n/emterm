@@ -1,6 +1,18 @@
 use super::*;
+#[cfg(unix)]
+use std::os::unix::io::RawFd;
 #[allow(unused_imports)]
 use std::path::PathBuf;
+
+#[cfg(unix)]
+use crate::mux::identity;
+use crate::mux::ipc::handlers::handle_destroy_pane;
+use crate::mux::session::manager::SessionManager;
+use crate::prompts::PromptMarkKind;
+use mux_ipc::protocol::{
+    AgentStatusUpdateMsg, ClientType, ErrorMsg, HelloMsg, MessageType, MuxMessage,
+    PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, RenameWindowMsg, WelcomeMsg,
+};
 
 #[test]
 fn test_socket_path_not_empty() {

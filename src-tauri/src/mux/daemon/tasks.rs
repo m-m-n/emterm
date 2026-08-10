@@ -2,7 +2,18 @@
 //! notification relay, agent-status ingestion / broadcast, pane-exit
 //! reaping, and the graceful shutdown sweep.
 
-use super::*;
+use std::sync::Arc;
+
+use mux_ipc::protocol::{
+    AgentStatusUpdateMsg, MessageType, MuxMessage, NotifyMsg, RenameWindowMsg,
+};
+use tokio::sync::{Mutex, mpsc};
+
+use crate::mux::ipc::handlers::{handle_destroy_pane, reevaluate_agent_waiters};
+use crate::mux::session::manager::SessionManager;
+use crate::mux::session::pane::{AgentStatusFeedItem, MuxPane, PaneId};
+use crate::prompts::PromptMarkKind;
+
 /// Apply a title change to the SessionManager with diff detection.
 ///
 /// Returns `true` when `window.name` was updated and a broadcast was sent;

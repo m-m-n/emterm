@@ -2,7 +2,21 @@
 //! upgrade requests over the socket, reachability polling, legacy-daemon
 //! recovery, and upgrade admission bookkeeping.
 
-use super::*;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use mux_ipc::protocol::{
+    ErrorMsg, MAX_FRAME_LENGTH, MessageType, MuxMessage, PREVIOUS_PROTOCOL_VERSION,
+    PROTOCOL_VERSION, WelcomeMsg, parse_rejected_server_version,
+};
+
+use super::connect::{
+    cleanup_stale_socket, connect_daemon, handshake_with_version, is_daemon_running, socket_path,
+    spawn_daemon,
+};
+#[cfg(unix)]
+use crate::mux::identity;
+
 /// Send a bare `Shutdown` control message. `Shutdown`'s wire shape (message
 /// type only, empty payload) has never changed, which is what lets a v2
 /// client ask an adjacent-version daemon to exit once the Hello handshake

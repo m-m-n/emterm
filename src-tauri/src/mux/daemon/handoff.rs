@@ -2,7 +2,22 @@
 //! candidate probing, session-tree snapshot assembly, the announce / ack
 //! round, and starting from a handoff document written by the old daemon.
 
-use super::*;
+use std::os::unix::io::RawFd;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use mux_ipc::protocol::{MessageType, MuxMessage};
+use tokio::net::UnixListener;
+use tokio::sync::{Mutex, mpsc};
+
+use super::connect::cleanup_stale_socket;
+use super::{DaemonRunOutcome, HANDOFF_ENV_VAR, SharedUpgradeAckSlot, UpgradeRequest, run_daemon};
+use crate::mux::session::manager::SessionManager;
+use crate::mux::session::pane::{
+    AgentStatusReportSender, NotificationSender, SharedPaneExitSender, TitleChangeSender,
+};
+
 // ============================================================================
 // mux-daemon-hot-upgrade task0009 (rework): upgrade preparation and
 // handoff-mode startup, wired to the REAL implementation.
