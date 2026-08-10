@@ -31,20 +31,14 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::cursor::CursorIcon;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-#[cfg(test)]
-use winit::keyboard::{Key as WinitKey, NamedKey};
 use winit::window::{ResizeDirection, Window, WindowAttributes};
 
 use crate::app::App;
 use crate::pty::input::Modifiers;
-#[cfg(test)]
-use crate::settings::ShiftEnterBehavior;
 
 mod event_loop;
 
 use event_loop::PocApp;
-#[cfg(test)]
-use event_loop::request_redraw_on_user_event;
 mod frame_pacing;
 mod input_translate;
 mod key_routing;
@@ -52,38 +46,11 @@ mod link_hover;
 mod render_surface;
 mod resize_layout;
 
-#[cfg(test)]
-use resize_layout::resolve_grid_bot_inset;
-
 use link_hover::{ClickTracker, HoverState};
-#[cfg(test)]
-use link_hover::{detect_osc8_link_at, hover_link_cells_changed};
 
 use frame_pacing::{FrameCounter, ResizeSettler, RowsRebuiltCounter};
-#[cfg(test)]
-use frame_pacing::{
-    RESIZE_SETTLE_MAX_DURATION, RESIZE_SETTLE_QUIET_DURATION, RESIZE_SETTLE_SELF_WAKE_INTERVAL,
-    has_actionable_egui_input, next_wait_deadline, preedit_effective_dirty_rows,
-    record_drawn_frame, record_rebuilt_rows, resolve_build_dirty_rows,
-    should_rotate_row_cache_for_scroll_event, should_skip_frame, status_bar_insets_changed,
-};
-#[cfg(test)]
-use frame_pacing::{
-    next_resize_settle_wake_deadline, resize_settle_self_wake_due, toast_redraw_due,
-};
-
-#[cfg(test)]
-use input_translate::MAX_ALT_SCROLL_NOTCHES;
-#[cfg(test)]
-use input_translate::{
-    ShiftEnterRewrite, accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes,
-    is_skk_swallowed_chord, shift_enter_rewrite, should_drop_synthetic_key_event,
-    winit_key_to_egui,
-};
 
 use crate::render::terminal_grid_pass::TerminalGridPass;
-#[cfg(test)]
-use crate::selection::SelectionMode;
 
 use crate::ui::chrome::{RESIZE_EDGE_PX, classify_resize_edge, configure_egui_fonts};
 
