@@ -48,9 +48,7 @@ impl WindowHost {
         if size.width == 0 || size.height == 0 {
             return;
         }
-        self.surface_config.width = size.width;
-        self.surface_config.height = size.height;
-        self.surface.configure(&self.device, &self.surface_config);
+        self.configure_surface_to(size.width, size.height);
         let (cols, rows) = self.grid_size(app);
         app.set_grid_size(cols, rows);
     }

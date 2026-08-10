@@ -252,23 +252,17 @@ impl WindowHost {
         }
     }
 
-    /// Set the pointer icon by precedence: an active CSD resize zone wins,
-    /// then a hand cursor when Ctrl is held over a detected link, else the
-    /// default arrow. Skips the `set_cursor` IPC when the icon is
-    /// unchanged. The hand is gated on Ctrl to match the WebView build,
-    /// where Ctrl/Meta arms the click-to-open.
+    /// Ask [`WindowHost::apply_cursor_icon`] for a hand cursor when Ctrl
+    /// is held over a detected link, else the default arrow. The hand is
+    /// gated on Ctrl to match the WebView build, where Ctrl/Meta arms the
+    /// click-to-open. Resize-zone precedence lives in `apply_cursor_icon`.
     pub(super) fn update_link_cursor(&mut self) {
-        let icon = if self.current_resize_dir.is_some() {
-            self.current_cursor // leave resize-hint icon untouched
-        } else if self.current_mods.ctrl && self.hover.link.is_some() {
+        let want = if self.current_mods.ctrl && self.hover.link.is_some() {
             CursorIcon::Pointer
         } else {
             CursorIcon::Default
         };
-        if icon != self.current_cursor {
-            self.current_cursor = icon;
-            self.window.set_cursor(icon.into());
-        }
+        self.apply_cursor_icon(want);
     }
 
     /// Drop any cached link-hover state and clear a hand cursor. Called

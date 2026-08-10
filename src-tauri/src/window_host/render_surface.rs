@@ -20,13 +20,23 @@ use super::frame_pacing::{
 use super::input_translate::input_mods_to_egui;
 
 impl WindowHost {
+    /// Configure the wgpu surface to `width` × `height` (physical pixels).
+    /// The ONLY `surface.configure` call site: bundling the
+    /// `surface_config` update, the configure, and the `surface_dirty`
+    /// reset keeps the "a configure clears `surface_dirty`" invariant
+    /// inside this method instead of relying on every caller (and every
+    /// future caller) to restore it.
+    pub(super) fn configure_surface_to(&mut self, width: u32, height: u32) {
+        self.surface_config.width = width;
+        self.surface_config.height = height;
+        self.surface.configure(&self.device, &self.surface_config);
+        self.surface_dirty = false;
+    }
+
     /// Reconfigure the wgpu surface for the current window size.
     fn reconfigure_surface(&mut self) {
         let size = self.window.surface_size();
-        self.surface_config.width = size.width.max(1);
-        self.surface_config.height = size.height.max(1);
-        self.surface.configure(&self.device, &self.surface_config);
-        self.surface_dirty = false;
+        self.configure_surface_to(size.width.max(1), size.height.max(1));
     }
 
     /// Acquire the next swapchain texture, transparently recovering from
@@ -135,15 +145,15 @@ impl WindowHost {
         // PTY-resize per frame, and keeps `surface.configure()` paired with
         // the swapchain acquire that follows so Wayland / X11 don't lock
         // the back buffer between the two calls. Done before `surface_dirty`
-        // so a pending resize subsumes any prior Lost/Outdated reconfigure.
+        // so a pending resize subsumes any prior Lost/Outdated reconfigure —
+        // `configure_surface_to` clears `surface_dirty` as part of the
+        // configure itself (a zero-sized resize configures nothing and so
+        // leaves any pending recovery armed).
         let had_pending_resize = self.pending_resize;
         self.apply_pending_resize(app);
         if had_pending_resize {
             // Resize changes the swapchain extent; everything must repaint.
             app.mark_full_redraw();
-            // We just reconfigured to the new size, so any earlier
-            // Lost/Outdated recovery request is now redundant.
-            self.surface_dirty = false;
         }
 
         // task0003 rework (D2, activation-reconcile request/execute split):
