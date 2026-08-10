@@ -174,6 +174,17 @@ fn probe_unix_socket(path: &Path, timeout: Duration) -> bool {
 /// left running or as a zombie.
 const ENUMERATE_TIMEOUT: Duration = Duration::from_millis(300);
 
+/// Post-exit grace period for the stdout reader thread: how long
+/// [`spawn_bounded`] waits, after the child has already exited, for the
+/// reader to deliver the collected output. Normal operation completes in
+/// microseconds — this only bounds the pathological case where the pipe
+/// never reaches EOF (a grandchild inherited its write end) or the
+/// reader thread is starved, keeping the chooser-open path responsive.
+/// Parameterized through [`enumerate_sockets`] for the same reason as
+/// the per-socket timeout: tests not exercising the stall itself pass a
+/// generous margin so host load cannot fake a stall.
+const READER_GRACE: Duration = Duration::from_millis(500);
+
 /// tmux format string selecting only the session name, one per line
 /// (`tmux list-sessions -F <fmt>`; see `tmux(1)` FORMATS).
 const SESSION_NAME_FORMAT: &str = "#{session_name}";
@@ -206,7 +217,7 @@ pub struct TmuxEntry {
 /// tmux installed, a hung server, sessions mid-crash, ...) — this
 /// module's existing "never fails" contract, extended to enumeration.
 pub fn enumerate() -> Vec<TmuxEntry> {
-    enumerate_sockets(&discover(), "tmux", ENUMERATE_TIMEOUT)
+    enumerate_sockets(&discover(), "tmux", ENUMERATE_TIMEOUT, READER_GRACE)
 }
 
 /// Turn one entry into the text the chooser row shows (AC-4): `tmux:
@@ -243,14 +254,20 @@ pub fn attach_args(entry: &TmuxEntry) -> Vec<String> {
 
 /// Core of [`enumerate`], parameterized over the tmux binary (Test
 /// Notes: exercising "tmux binary absent" via an unresolvable command
-/// name rather than mutating the process search path globally) and the
-/// per-socket timeout (tests that are not themselves exercising AC-3's
-/// bound pass a generous margin so a loaded test machine can never turn
-/// a fast, well-behaved stand-in script into a false timeout).
-fn enumerate_sockets(sockets: &[TmuxSocket], tmux_bin: &str, timeout: Duration) -> Vec<TmuxEntry> {
+/// name rather than mutating the process search path globally), the
+/// per-socket timeout, and the post-exit reader grace (for both bounds,
+/// tests that are not themselves exercising them pass a generous margin
+/// so a loaded test machine can never turn a fast, well-behaved
+/// stand-in script into a false timeout or a false reader stall).
+fn enumerate_sockets(
+    sockets: &[TmuxSocket],
+    tmux_bin: &str,
+    timeout: Duration,
+    reader_grace: Duration,
+) -> Vec<TmuxEntry> {
     let mut out = Vec::new();
     for socket in sockets {
-        match list_sessions(tmux_bin, &socket.path, timeout) {
+        match list_sessions(tmux_bin, &socket.path, timeout, reader_grace) {
             Some(mut names) if !names.is_empty() => {
                 names.sort();
                 out.extend(names.into_iter().map(|session| TmuxEntry {
@@ -271,11 +288,17 @@ fn enumerate_sockets(sockets: &[TmuxSocket], tmux_bin: &str, timeout: Duration) 
 
 /// Ask `tmux_bin`'s server on `socket_path` for its session names,
 /// bounded by `timeout` (AC-2 / AC-3). `None` covers every failure mode
-/// (binary absent, spawn failure, non-zero exit, timeout) — the caller
-/// ([`enumerate_sockets`]) degrades all of them to the fallback entry
-/// alike. `Some(names)` may itself be empty when the server answered
+/// (binary absent, spawn failure, non-zero exit, timeout, reader
+/// stall) — the caller ([`enumerate_sockets`]) degrades all of them to
+/// the fallback entry alike, each behind its own `log::debug!` line.
+/// `Some(names)` may itself be empty when the server answered
 /// but named no sessions; the caller treats that the same as `None`.
-fn list_sessions(tmux_bin: &str, socket_path: &Path, timeout: Duration) -> Option<Vec<String>> {
+fn list_sessions(
+    tmux_bin: &str,
+    socket_path: &Path,
+    timeout: Duration,
+    reader_grace: Duration,
+) -> Option<Vec<String>> {
     let mut cmd = Command::new(tmux_bin);
     cmd.arg("-S")
         .arg(socket_path)
@@ -285,7 +308,7 @@ fn list_sessions(tmux_bin: &str, socket_path: &Path, timeout: Duration) -> Optio
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    match spawn_bounded(cmd, timeout) {
+    match spawn_bounded(cmd, timeout, reader_grace) {
         Some(BoundedOutput::Exited {
             success: true,
             stdout,
@@ -299,6 +322,14 @@ fn list_sessions(tmux_bin: &str, socket_path: &Path, timeout: Duration) -> Optio
         }
         Some(BoundedOutput::TimedOut { .. }) => {
             log::debug!("tmux list-sessions on {socket_path:?} exceeded {timeout:?}");
+            None
+        }
+        Some(BoundedOutput::ReaderStalled) => {
+            // Intentional degrade: the server may well be alive, but its
+            // output never arrived, so the fallback `session: None` entry
+            // is shown. Distinct from the success path's "answered with
+            // zero sessions" (`Exited` + empty stdout).
+            log::debug!("tmux list-sessions on {socket_path:?} stdout reader stalled");
             None
         }
         None => None,
@@ -328,15 +359,28 @@ enum BoundedOutput {
         #[allow(dead_code)]
         pid: u32,
     },
+    /// The child exited, but its stdout never reached EOF within the
+    /// post-exit grace period (e.g. a grandchild inherited the pipe's
+    /// write end, or the reader thread was starved on a loaded host).
+    /// Whatever the child wrote is discarded; distinct from `Exited`
+    /// with empty stdout so callers can degrade loudly instead of
+    /// mistaking the stall for "ran fine, printed nothing".
+    ReaderStalled,
 }
 
 /// Spawn `cmd` and wait up to `timeout` for it to exit, collecting its
 /// stdout on a background thread so a chatty child can never deadlock
 /// the bounded wait by filling its pipe before this function drains it.
-/// On expiry the child is killed AND reaped (`Child::wait`), so no
-/// zombie remains (AC-3). `None` only when the spawn itself failed
-/// (binary absent, permission denied, ...).
-fn spawn_bounded(mut cmd: Command, timeout: Duration) -> Option<BoundedOutput> {
+/// After the child exits, wait up to `reader_grace` for the reader
+/// thread to hand over the collected output ([`BoundedOutput::ReaderStalled`]
+/// past that). On expiry the child is killed AND reaped (`Child::wait`),
+/// so no zombie remains (AC-3). `None` only when the spawn itself
+/// failed (binary absent, permission denied, ...).
+fn spawn_bounded(
+    mut cmd: Command,
+    timeout: Duration,
+    reader_grace: Duration,
+) -> Option<BoundedOutput> {
     let mut child = cmd.spawn().ok()?;
     let pid = child.id();
 
@@ -360,15 +404,18 @@ fn spawn_bounded(mut cmd: Command, timeout: Duration) -> Option<BoundedOutput> {
             Ok(Some(status)) => {
                 // The child has exited, so its stdout is at EOF (or
                 // about to be); the reader thread finishes almost
-                // immediately. The timeout here only guards against a
+                // immediately. The grace period only guards against a
                 // pathological reader stall, not normal operation.
-                let stdout = rx
-                    .recv_timeout(Duration::from_millis(500))
-                    .unwrap_or_default();
-                return Some(BoundedOutput::Exited {
-                    success: status.success(),
-                    stdout,
-                });
+                return match rx.recv_timeout(reader_grace) {
+                    Ok(stdout) => Some(BoundedOutput::Exited {
+                        success: status.success(),
+                        stdout,
+                    }),
+                    Err(_) => {
+                        log::debug!("stdout reader stalled for pid {pid}");
+                        Some(BoundedOutput::ReaderStalled)
+                    }
+                };
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
@@ -640,6 +687,14 @@ mod tests {
     /// false timeout unrelated to what the test is checking.
     const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+    /// The reader-grace analogue of [`TEST_TIMEOUT`]: production's
+    /// 500ms [`READER_GRACE`] is enough scheduling headroom for a
+    /// lightly loaded host, but the full suite running in parallel can
+    /// starve the reader thread past it, faking a stall and making
+    /// enumeration tests flaky. Tests not exercising the stall itself
+    /// pass this instead.
+    const TEST_READER_GRACE: Duration = Duration::from_secs(5);
+
     #[test]
     fn enumerate_orders_by_socket_then_session_and_skips_blank_lines() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -663,8 +718,12 @@ esac
                 path: dir.path().join("zulu"),
             },
         ];
-        let entries =
-            enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
+        let entries = enumerate_sockets(
+            &sockets,
+            script.to_str().expect("utf8 path"),
+            TEST_TIMEOUT,
+            TEST_READER_GRACE,
+        );
         assert_eq!(
             entries,
             vec![
@@ -719,8 +778,12 @@ esac
                 path: dir.path().join("blank"),
             },
         ];
-        let entries =
-            enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
+        let entries = enumerate_sockets(
+            &sockets,
+            script.to_str().expect("utf8 path"),
+            TEST_TIMEOUT,
+            TEST_READER_GRACE,
+        );
         assert_eq!(
             entries,
             vec![
@@ -756,6 +819,7 @@ esac
             &sockets,
             "emterm-test-nonexistent-tmux-binary-xyz",
             TEST_TIMEOUT,
+            TEST_READER_GRACE,
         );
         assert_eq!(
             entries,
@@ -782,6 +846,7 @@ esac
             &sockets,
             not_executable.to_str().expect("utf8 path"),
             TEST_TIMEOUT,
+            TEST_READER_GRACE,
         );
         assert_eq!(
             entries,
@@ -809,8 +874,12 @@ esac
                 path: dir.path().join("beta"),
             },
         ];
-        let entries =
-            enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
+        let entries = enumerate_sockets(
+            &sockets,
+            script.to_str().expect("utf8 path"),
+            TEST_TIMEOUT,
+            TEST_READER_GRACE,
+        );
         assert_eq!(
             entries,
             vec![
@@ -833,9 +902,11 @@ esac
     // Edge case: a session name containing a space survives enumeration
     // verbatim (parsing must not split on internal whitespace).
     //
-    // Known flaky when the full suite runs in parallel (host-load
-    // dependent); passes in isolation and with --test-threads=1. Rerun
-    // this test alone before treating a failure as a regression.
+    // Historically flaky under a parallel full suite: production's tight
+    // 500ms reader grace let host load starve the reader thread past it,
+    // degrading the exit to a stall (`session: None`). Deterministic
+    // since [`TEST_READER_GRACE`] carved that bound out of what this
+    // test checks.
     #[test]
     fn enumerate_session_name_with_embedded_space_preserved() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -848,8 +919,12 @@ esac
             name: "alpha".to_string(),
             path: dir.path().join("alpha"),
         }];
-        let entries =
-            enumerate_sockets(&sockets, script.to_str().expect("utf8 path"), TEST_TIMEOUT);
+        let entries = enumerate_sockets(
+            &sockets,
+            script.to_str().expect("utf8 path"),
+            TEST_TIMEOUT,
+            TEST_READER_GRACE,
+        );
         assert_eq!(entries[0].session.as_deref(), Some("my session"));
     }
 
@@ -865,7 +940,7 @@ esac
             .stderr(Stdio::null());
 
         let start = Instant::now();
-        let outcome = spawn_bounded(cmd, Duration::from_millis(300));
+        let outcome = spawn_bounded(cmd, Duration::from_millis(300), TEST_READER_GRACE);
         let elapsed = start.elapsed();
 
         assert!(
@@ -886,6 +961,44 @@ esac
         assert_eq!(err.raw_os_error(), Some(libc::ESRCH));
     }
 
+    // A reader stall — the child exits but its stdout never reaches EOF
+    // because a grandchild inherited the pipe's write end — must surface
+    // as `ReaderStalled`, not as a clean exit with empty stdout. The
+    // `sleep 2 &` grandchild keeps the pipe open 4× past production's
+    // `READER_GRACE` (passed explicitly — this test IS the stall case),
+    // then dies on its own (no cleanup needed).
+    #[test]
+    fn spawn_bounded_reports_a_reader_stall_distinct_from_empty_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = write_script(dir.path(), "stall.sh", "#!/bin/sh\nsleep 2 &\nexit 0\n");
+        let mut cmd = Command::new(&script);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+
+        let outcome = spawn_bounded(cmd, TEST_TIMEOUT, READER_GRACE);
+        assert!(
+            matches!(outcome, Some(BoundedOutput::ReaderStalled)),
+            "a stalled reader must not be mistaken for an exit with no output"
+        );
+    }
+
+    // The same stall through the call path enumeration actually uses:
+    // `list_sessions` degrades it to `None` (→ the fallback entry), like
+    // every other failure mode.
+    #[test]
+    fn list_sessions_on_a_reader_stall_returns_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = write_script(dir.path(), "stall.sh", "#!/bin/sh\nsleep 2 &\nexit 0\n");
+        let result = list_sessions(
+            script.to_str().expect("utf8 path"),
+            Path::new("/nonexistent-socket"),
+            TEST_TIMEOUT,
+            READER_GRACE,
+        );
+        assert!(result.is_none());
+    }
+
     // AC-3 at the `list_sessions` level: a hung server yields `None`
     // (fallback) within the bound, exercised through the call path
     // enumeration actually uses.
@@ -898,6 +1011,7 @@ esac
             script.to_str().expect("utf8 path"),
             Path::new("/nonexistent-socket"),
             Duration::from_millis(300),
+            TEST_READER_GRACE,
         );
         let elapsed = start.elapsed();
         assert!(result.is_none());
