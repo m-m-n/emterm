@@ -2,7 +2,11 @@
 //! client-message starvation guard, drain-batch arming, and coalescing
 //! of consecutive PTY output chunks.
 
-use super::*;
+use tokio::sync::mpsc;
+
+use super::CLIENT_MSG_STARVATION_QUOTA;
+use crate::mux::session::pane::{ChunkKind, DeferredOutputQueue, PtyOutputChunk};
+
 /// Pure decision function for the G2 starvation guard: whether the
 /// client-message arm (`client_reader.next()`) is allowed to be included in
 /// THIS `select!` iteration.

@@ -1,7 +1,11 @@
 //! Scrollback write filtering on the reader path: rich-content
 //! stripping, alt-screen exclusion, and the agent-status feed scanner.
 
-use super::*;
+use std::borrow::Cow;
+
+use crate::mux::scrollback_filter::strip_pty_output_for_scrollback_write;
+use crate::mux::session::pane::AgentStatusFeedItem;
+
 /// Read PTY output in a blocking loop and forward to the output target.
 /// Runs in a dedicated std::thread since PTY reads are blocking I/O.
 ///

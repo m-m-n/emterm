@@ -1,6 +1,5 @@
 //! PTY spawning and reader loop for mux panes.
 
-use std::borrow::Cow;
 use std::io::Read;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -8,7 +7,6 @@ use std::sync::Mutex as StdMutex;
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
-use crate::mux::scrollback_filter::strip_pty_output_for_scrollback_write;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatusFeedItem, AgentStatusReportSender, DetachReason, MuxPane, NotificationSender,

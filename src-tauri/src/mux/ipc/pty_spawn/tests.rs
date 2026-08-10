@@ -1,5 +1,7 @@
 use super::*;
+use crate::mux::scrollback_filter::strip_pty_output_for_scrollback_write;
 use crate::pty::visibility::HIDDEN_PASSTHROUGH_CAPACITY_MUX;
+use std::borrow::Cow;
 use term_core::terminal_core::ReplaySegment;
 
 /// Convert term_core's `ReplaySegment` (used by test-side recording
