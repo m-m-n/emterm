@@ -133,15 +133,6 @@ impl App {
         self.mux_public_pane_ids.get(&pane_id).map(String::as_str)
     }
 
-    /// ユーザーにデスクトップ通知を送る。
-    ///
-    /// `notification_sink` フィールドの直接アクセスを避け、通知送信を
-    /// アプリケーションドメインにカプセル化するためのメソッド。
-    /// ウィンドウ層など外部からの通知送信はこのメソッドを経由すること。
-    pub fn notify(&self, title: &str, body: &str) {
-        self.notification_sink.send(title, body);
-    }
-
     /// Fire (or suppress) a desktop notification for one drained
     /// agent-status transition (task0007 / FR9; task0001's event-type
     /// toggles).

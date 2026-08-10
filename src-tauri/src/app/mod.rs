@@ -36,6 +36,13 @@ mod sftp;
 mod tab_lifecycle;
 mod timing;
 
+/// Where the viewport currently sits relative to the live tail.
+///
+/// Scrollback position. Defined in [`crate::scroll`] as a layer-free value
+/// type and re-exported here for backward compatibility; `mux::window_group`
+/// imports it from `crate::scroll` so the pure mux model does not depend on
+/// the `app` layer (no `app ↔ mux` cycle).
+pub use crate::scroll::ScrollPosition;
 use agent_status::{
     agent_notification_rate_limit_key, agent_status_keys_for_tab, agent_status_pane_tab_title,
     agent_status_pane_visible,
@@ -53,13 +60,6 @@ pub use scroll_search_fold::{AUTO_RESEARCH_THROTTLE, JumpDirection, auto_researc
 #[cfg(test)]
 use timing::RESTART_TOAST_LINGER_SECS;
 pub use timing::{BELL_FLASH_MS, BLINK_HALF_MS, RestartToast, TOAST_POLL_MS};
-/// Where the viewport currently sits relative to the live tail.
-///
-/// Scrollback position. Defined in [`crate::scroll`] as a layer-free value
-/// type and re-exported here for backward compatibility; `mux::window_group`
-/// imports it from `crate::scroll` so the pure mux model does not depend on
-/// the `app` layer (no `app ↔ mux` cycle).
-pub use crate::scroll::ScrollPosition;
 
 pub struct App {
     pub tabs: Vec<Tab>,
@@ -810,6 +810,15 @@ impl App {
             },
         });
         self.needs_full_redraw = true;
+    }
+
+    /// ユーザーにデスクトップ通知を送る。
+    ///
+    /// `notification_sink` フィールドの直接アクセスを避け、通知送信を
+    /// アプリケーションドメインにカプセル化するためのメソッド。
+    /// ウィンドウ層など外部からの通知送信はこのメソッドを経由すること。
+    pub fn notify(&self, title: &str, body: &str) {
+        self.notification_sink.send(title, body);
     }
 
     #[allow(dead_code)] // retained for window_host / tests
