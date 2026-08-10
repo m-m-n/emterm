@@ -749,15 +749,11 @@ fn set_alt_screen_true_clears_selection_and_anchor() {
     );
 }
 
-// Known flaky when the full suite runs in parallel (host-load dependent);
-// passes in isolation and with --test-threads=1. Rerun this test alone
-// before treating a failure as a regression.
 #[test]
 fn pump_all_shifts_pending_anchor_by_eviction_delta() {
     // A pending press anchor in absolute rows is shifted down by the
     // active tab's accumulated eviction delta, exactly like `selection`.
-    let mut app = App::new();
-    app.spawn_initial_tab();
+    let mut app = app_with_shell_less_tab();
     app.pending_selection_anchor = Some(Pos { row: 20, col: 4 });
     app.tabs[0].test_backfill_eviction(5);
     app.pump_all();
@@ -772,8 +768,7 @@ fn pump_all_shifts_pending_anchor_by_eviction_delta() {
 fn pump_all_drops_pending_anchor_when_scrolled_off_top() {
     // When the eviction delta exceeds the anchor's row, the anchor scrolled
     // off the top of scrollback and is dropped.
-    let mut app = App::new();
-    app.spawn_initial_tab();
+    let mut app = app_with_shell_less_tab();
     app.pending_selection_anchor = Some(Pos { row: 3, col: 0 });
     app.tabs[0].test_backfill_eviction(10);
     app.pump_all();
@@ -787,8 +782,7 @@ fn pump_all_drops_pending_anchor_when_scrolled_off_top() {
 fn pump_all_clears_pending_anchor_on_frame_reset() {
     // A frame reset (RIS) drops the absolute-row pending anchor alongside
     // the selection.
-    let mut app = App::new();
-    app.spawn_initial_tab();
+    let mut app = app_with_shell_less_tab();
     app.tabs[0].test_backfill_eviction(8);
     let _ = app.tabs[0].take_eviction_delta();
     app.pending_selection_anchor = Some(Pos { row: 4, col: 0 });

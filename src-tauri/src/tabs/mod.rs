@@ -540,6 +540,70 @@ impl Tab {
         notification_sink: Arc<dyn crate::callbacks::NotificationSink>,
         spawn_overrides: Option<crate::profiles::SpawnOverrides>,
     ) -> Self {
+        Self::build(
+            title,
+            cols,
+            rows,
+            scrollback_lines,
+            settings,
+            statusbar_dispatcher,
+            cwd_provider,
+            notification_sink,
+            spawn_overrides,
+            true,
+        )
+    }
+
+    /// Test-only: a tab built exactly like [`Self::spawn_shell`] except
+    /// that no real shell process is spawned — `pty` stays `None` and
+    /// the event channel starts disconnected, so `pump` drains nothing
+    /// but the state the test itself injects. Tests that drive
+    /// `App::pump_all` over injected eviction deltas need this: a real
+    /// shell's startup output arriving mid-pump under host load shifts
+    /// the counters those tests assert on (the historical flakiness of
+    /// the `pump_all_*` selection/anchor tests).
+    #[cfg(test)]
+    pub(crate) fn test_shell_less(
+        title: impl Into<String>,
+        cols: u16,
+        rows: u16,
+        scrollback_lines: u32,
+        settings: Arc<Settings>,
+        notification_sink: Arc<dyn crate::callbacks::NotificationSink>,
+    ) -> Self {
+        Self::build(
+            title,
+            cols,
+            rows,
+            scrollback_lines,
+            settings,
+            None,
+            None,
+            notification_sink,
+            None,
+            false,
+        )
+    }
+
+    /// Shared constructor behind [`Self::spawn_shell`] (production,
+    /// `spawn_pty: true`) and [`Self::test_shell_less`] (tests,
+    /// `spawn_pty: false`). Identical in every respect except whether a
+    /// real PTY child is spawned.
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        title: impl Into<String>,
+        cols: u16,
+        rows: u16,
+        scrollback_lines: u32,
+        settings: Arc<Settings>,
+        statusbar_dispatcher: Option<
+            Arc<crate::status_bar::osc_dispatcher::StatusBarOscDispatcher>,
+        >,
+        cwd_provider: Option<Arc<crate::status_bar::providers::CwdProvider>>,
+        notification_sink: Arc<dyn crate::callbacks::NotificationSink>,
+        spawn_overrides: Option<crate::profiles::SpawnOverrides>,
+        spawn_pty: bool,
+    ) -> Self {
         // D3'''''' (round-9 rework, review round-8 finding
         // `1e7e069001cf22dc`): clamp to the SAME wire domain `Tab::resize` /
         // `MuxPane::new` apply, BEFORE spawning the local PTY or
@@ -573,20 +637,29 @@ impl Tab {
         let ssh_connection_name = ov.ssh_connection_name.clone();
         let shell_path = ov.shell_path.as_deref().unwrap_or(&settings.shell_path);
         let shell_args = ov.shell_args.as_deref().unwrap_or(&settings.shell_args);
-        let pty = match PtySession::spawn(
-            cols,
-            rows,
-            tx,
-            shell_path,
-            shell_args,
-            &ov.env_vars,
-            ov.working_directory.as_deref(),
-        ) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                log::error!("failed to spawn shell PTY: {e}");
-                None
+        let pty = if spawn_pty {
+            match PtySession::spawn(
+                cols,
+                rows,
+                tx,
+                shell_path,
+                shell_args,
+                &ov.env_vars,
+                ov.working_directory.as_deref(),
+            ) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    log::error!("failed to spawn shell PTY: {e}");
+                    None
+                }
             }
+        } else {
+            // Test-only route (`test_shell_less`): dropping `tx` here
+            // leaves the event channel disconnected, so `pump`'s
+            // `try_recv` loop drains nothing — the same shape as a
+            // spawn failure, minus the error log.
+            drop(tx);
+            None
         };
 
         // Capture the fold-enable preference before `settings` is moved into
