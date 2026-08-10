@@ -2,7 +2,12 @@
 //! dot presentation resolution, and the badge painter shared by the
 //! tab strip.
 
-use super::*;
+use egui::{Color32, Image, Rect, Stroke, Ui};
+
+use crate::agent_status::AgentState;
+use crate::agent_status_model::Aggregated;
+use crate::ui::emoji_cache::EmojiResources;
+use crate::ui::md3;
 
 /// Agent-status badge dot diameter (task0006, `IMPLEMENTATION.md`
 /// Conventions: "Badge: 8px dot, 6px gap before title"). Still the size
