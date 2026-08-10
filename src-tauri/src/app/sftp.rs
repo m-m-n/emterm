@@ -10,9 +10,7 @@ impl App {
     /// Returns true when any toast/dialog state changed (so the caller can
     /// request a redraw).
     pub fn pump_sftp(&mut self, now: f64) -> bool {
-        // The binary-mismatch restart toast shares this per-frame pump but is
-        // an independent concern (see `pump_restart_toast`).
-        let mut changed = self.pump_restart_toast(now);
+        let mut changed = false;
 
         // Progress events → toasts.
         while let Ok(progress) = self.sftp_progress_rx.try_recv() {

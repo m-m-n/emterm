@@ -12,16 +12,6 @@ pub const BLINK_HALF_MS: u128 = 530;
 /// `.terminal-bell-flash` animation (150 ms ease-out, `src/styles.css`).
 pub const BELL_FLASH_MS: u64 = 150;
 
-/// Bounded poll interval the event loop keeps waking on while a restart or
-/// SFTP toast is active (task0004 D4, [`App::next_toast_deadline`]). Toast
-/// auto-dismiss (`pump_sftp` / `pump_restart_toast`) runs on egui's own
-/// frame-time clock, which only advances when a frame actually paints;
-/// nothing else schedules those intermediate frames, so this bounds the cost
-/// of keeping them flowing. Matches the interval `about_to_wait`
-/// unconditionally rearmed before task0004 — now scoped to only apply while
-/// a toast is actually pending.
-pub const TOAST_POLL_MS: u64 = 16;
-
 /// How long (in egui frame-time seconds) the binary-mismatch restart toast
 /// lingers before it auto-dismisses. Owned by this feature (deliberately NOT
 /// the SFTP `TOAST_LINGER_SECS`) so the two toasts can diverge.
@@ -184,16 +174,6 @@ impl App {
     pub fn next_bell_deadline(&self) -> Option<Instant> {
         let started = self.visual_bell_started?;
         Some(started + std::time::Duration::from_millis(BELL_FLASH_MS))
-    }
-
-    /// Next `Instant` the event loop must wake while a restart or SFTP toast
-    /// is active (task0004 D4). See [`TOAST_POLL_MS`] for why this is a
-    /// bounded poll rather than an exact deadline. `None` once no toast is
-    /// active — the loop then only wakes on other timed work (blink/bell)
-    /// or an event.
-    pub fn next_toast_deadline(&self) -> Option<Instant> {
-        let toast_pending = self.restart_toast.active() || !self.sftp_ui.toasts.toasts.is_empty();
-        toast_pending.then(|| Instant::now() + std::time::Duration::from_millis(TOAST_POLL_MS))
     }
 
     /// Binary-mismatch restart toast: a failed self-spawn (possibly off the
