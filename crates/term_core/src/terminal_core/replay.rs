@@ -2,7 +2,12 @@
 //! points, structural segment replay, snapshot builds, snapshot-bypass
 //! control, and detach-time scrollback merge.
 
-use super::*;
+use super::replay_plan::{
+    BYPASS_PREFIX_MAX_BYTES, BYPASS_PREFIX_MAX_SEGMENTS, BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD,
+    BYPASS_SUFFIX_MIN_BYTES, leading_uniform_run_len, middle_is_row_bounded,
+    stable_target_suffix_start,
+};
+use super::{ReplaySegment, SnapshotReplay, TerminalCore, clamp_resize_dims};
 
 impl TerminalCore {
     /// Reset the grid + parser to the post-construction state, then replay

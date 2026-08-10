@@ -17,7 +17,6 @@ pub use types::*;
 mod replay;
 
 mod replay_plan;
-use replay_plan::*;
 
 // ── TerminalCore ─────────────────────────────────────────
 
@@ -913,7 +912,8 @@ impl TerminalCore {
 /// derivation this pin actually enforces.
 ///
 /// This pin covers ONLY `BYPASS_PREFIX_MAX_SEGMENTS`.
-/// [`BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD`] (the `h == 0` tier) is a
+/// [`BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD`](replay_plan::BYPASS_PREFIX_MAX_SEGMENTS_UNFOLDED_HEAD)
+/// (the `h == 0` tier) is a
 /// genuinely independent cost-policy value — see its own doc — and
 /// deliberately carries NO such pin: changing it, in either direction, is
 /// a design decision, not drift, and must not fail this test
