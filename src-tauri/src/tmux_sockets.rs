@@ -381,7 +381,18 @@ fn spawn_bounded(
     timeout: Duration,
     reader_grace: Duration,
 ) -> Option<BoundedOutput> {
-    let mut child = cmd.spawn().ok()?;
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            // Covers the persistent shapes (binary absent, permission
+            // denied) AND transient process-spawn exhaustion under
+            // host load; the latter otherwise degrades a live session
+            // to the fallback row with no trace, like the reader stall
+            // used to.
+            log::debug!("spawning {:?} failed: {e}", cmd.get_program());
+            return None;
+        }
+    };
     let pid = child.id();
 
     let (tx, rx) = std::sync::mpsc::channel();
@@ -681,11 +692,16 @@ mod tests {
 
     /// A generous per-socket timeout for tests that are not themselves
     /// exercising AC-3's bound: these stand-in scripts respond almost
-    /// instantly under normal conditions, but a heavily loaded test
-    /// machine running the full suite in parallel can occasionally delay
-    /// scheduling past a tight bound, which would otherwise turn into a
-    /// false timeout unrelated to what the test is checking.
-    const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+    /// instantly under normal conditions, so this bound exists ONLY as
+    /// a hang backstop and never gates a passing run's duration — but a
+    /// heavily loaded test machine running the full suite in parallel
+    /// can delay a whole script run past a tight bound, which would
+    /// turn into a false timeout unrelated to what the test is
+    /// checking. 5s was observed to be NOT generous enough for exactly
+    /// that reason (whole-suite runs stretching 17s → 67s under host
+    /// load flaked these tests), hence a bound far above any plausible
+    /// scheduling delay.
+    const TEST_TIMEOUT: Duration = Duration::from_secs(60);
 
     /// The reader-grace analogue of [`TEST_TIMEOUT`]: production's
     /// 500ms [`READER_GRACE`] is enough scheduling headroom for a
@@ -693,7 +709,56 @@ mod tests {
     /// starve the reader thread past it, faking a stall and making
     /// enumeration tests flaky. Tests not exercising the stall itself
     /// pass this instead.
-    const TEST_READER_GRACE: Duration = Duration::from_secs(5);
+    const TEST_READER_GRACE: Duration = Duration::from_secs(60);
+
+    /// Generous bounds handle slow scheduling, but a parallel full
+    /// suite can also make the spawn itself fail transiently
+    /// (process-spawn resource exhaustion — observed as
+    /// `spawn_bounded` returning `None` on a script that plainly
+    /// exists and executes). Tests whose expectation would be
+    /// corrupted by that retry through these helpers; a genuine
+    /// regression reproduces on every attempt and still fails the
+    /// final assert on the returned value.
+    const SPAWN_RETRIES: u32 = 20;
+    const SPAWN_RETRY_PAUSE: Duration = Duration::from_millis(50);
+
+    /// [`enumerate_sockets`] for tests expecting NO fallback rows: a
+    /// fallback (`session: None`) in the result means some socket's
+    /// child could not deliver — under these tests' generous bounds,
+    /// transient spawn failure — so retry rather than hand the
+    /// corrupted roster to the assert. The last attempt's result is
+    /// returned as-is: a real fallback-producing regression still
+    /// fails loudly, just after the retry budget.
+    fn enumerate_sockets_expecting_sessions(
+        sockets: &[TmuxSocket],
+        tmux_bin: &str,
+    ) -> Vec<TmuxEntry> {
+        for _ in 0..SPAWN_RETRIES {
+            let entries = enumerate_sockets(sockets, tmux_bin, TEST_TIMEOUT, TEST_READER_GRACE);
+            if entries.iter().all(|e| e.session.is_some()) {
+                return entries;
+            }
+            std::thread::sleep(SPAWN_RETRY_PAUSE);
+        }
+        enumerate_sockets(sockets, tmux_bin, TEST_TIMEOUT, TEST_READER_GRACE)
+    }
+
+    /// [`spawn_bounded`] for tests that need the spawn itself to
+    /// succeed (`None` would fail them for a reason they are not
+    /// checking). The final attempt's outcome is returned as-is.
+    fn spawn_bounded_retrying(
+        mut make_cmd: impl FnMut() -> Command,
+        timeout: Duration,
+        reader_grace: Duration,
+    ) -> Option<BoundedOutput> {
+        for _ in 0..SPAWN_RETRIES {
+            if let Some(outcome) = spawn_bounded(make_cmd(), timeout, reader_grace) {
+                return Some(outcome);
+            }
+            std::thread::sleep(SPAWN_RETRY_PAUSE);
+        }
+        spawn_bounded(make_cmd(), timeout, reader_grace)
+    }
 
     #[test]
     fn enumerate_orders_by_socket_then_session_and_skips_blank_lines() {
@@ -718,12 +783,8 @@ esac
                 path: dir.path().join("zulu"),
             },
         ];
-        let entries = enumerate_sockets(
-            &sockets,
-            script.to_str().expect("utf8 path"),
-            TEST_TIMEOUT,
-            TEST_READER_GRACE,
-        );
+        let entries =
+            enumerate_sockets_expecting_sessions(&sockets, script.to_str().expect("utf8 path"));
         assert_eq!(
             entries,
             vec![
@@ -874,12 +935,8 @@ esac
                 path: dir.path().join("beta"),
             },
         ];
-        let entries = enumerate_sockets(
-            &sockets,
-            script.to_str().expect("utf8 path"),
-            TEST_TIMEOUT,
-            TEST_READER_GRACE,
-        );
+        let entries =
+            enumerate_sockets_expecting_sessions(&sockets, script.to_str().expect("utf8 path"));
         assert_eq!(
             entries,
             vec![
@@ -902,11 +959,11 @@ esac
     // Edge case: a session name containing a space survives enumeration
     // verbatim (parsing must not split on internal whitespace).
     //
-    // Historically flaky under a parallel full suite: production's tight
-    // 500ms reader grace let host load starve the reader thread past it,
-    // degrading the exit to a stall (`session: None`). Deterministic
-    // since [`TEST_READER_GRACE`] carved that bound out of what this
-    // test checks.
+    // Historically flaky under a parallel full suite, via two
+    // load-induced mechanisms this module's tests now neutralize for
+    // everyone: production's tight 500ms reader grace starving the
+    // reader thread ([`TEST_READER_GRACE`]) and transient spawn
+    // failure ([`enumerate_sockets_expecting_sessions`]).
     #[test]
     fn enumerate_session_name_with_embedded_space_preserved() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -919,12 +976,8 @@ esac
             name: "alpha".to_string(),
             path: dir.path().join("alpha"),
         }];
-        let entries = enumerate_sockets(
-            &sockets,
-            script.to_str().expect("utf8 path"),
-            TEST_TIMEOUT,
-            TEST_READER_GRACE,
-        );
+        let entries =
+            enumerate_sockets_expecting_sessions(&sockets, script.to_str().expect("utf8 path"));
         assert_eq!(entries[0].session.as_deref(), Some("my session"));
     }
 
@@ -934,17 +987,24 @@ esac
     fn spawn_bounded_kills_and_reaps_a_child_that_never_answers() {
         let dir = tempfile::tempdir().expect("tempdir");
         let script = write_script(dir.path(), "hang.sh", "#!/bin/sh\nsleep 5\n");
-        let mut cmd = Command::new(&script);
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+        let make_cmd = || {
+            let mut cmd = Command::new(&script);
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            cmd
+        };
 
         let start = Instant::now();
-        let outcome = spawn_bounded(cmd, Duration::from_millis(300), TEST_READER_GRACE);
+        let outcome =
+            spawn_bounded_retrying(make_cmd, Duration::from_millis(300), TEST_READER_GRACE);
         let elapsed = start.elapsed();
 
+        // Well under hang.sh's 5s sleep even with the transient-spawn
+        // retry budget on top of the 300ms bound: the bound, not the
+        // child, decided when to return.
         assert!(
-            elapsed < Duration::from_millis(1_000),
+            elapsed < Duration::from_millis(3_000),
             "took too long: {elapsed:?}"
         );
         let BoundedOutput::TimedOut { pid } = outcome.expect("spawn succeeded") else {
@@ -963,24 +1023,35 @@ esac
 
     // A reader stall — the child exits but its stdout never reaches EOF
     // because a grandchild inherited the pipe's write end — must surface
-    // as `ReaderStalled`, not as a clean exit with empty stdout. The
-    // `sleep 2 &` grandchild keeps the pipe open 4× past production's
-    // `READER_GRACE` (passed explicitly — this test IS the stall case),
+    // as `ReaderStalled`, not as a clean exit with empty stdout.
+    // Production's `READER_GRACE` is passed explicitly (this test IS the
+    // stall case), so the call returns at the 500ms grace expiry; the
+    // grandchild sleeps far longer than that so that even a
+    // load-delayed exit *detection* still finds the pipe held open, and
     // then dies on its own (no cleanup needed).
     #[test]
     fn spawn_bounded_reports_a_reader_stall_distinct_from_empty_output() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let script = write_script(dir.path(), "stall.sh", "#!/bin/sh\nsleep 2 &\nexit 0\n");
-        let mut cmd = Command::new(&script);
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+        let script = write_script(dir.path(), "stall.sh", "#!/bin/sh\nsleep 30 &\nexit 0\n");
+        let make_cmd = || {
+            let mut cmd = Command::new(&script);
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            cmd
+        };
 
-        let outcome = spawn_bounded(cmd, TEST_TIMEOUT, READER_GRACE);
-        assert!(
-            matches!(outcome, Some(BoundedOutput::ReaderStalled)),
-            "a stalled reader must not be mistaken for an exit with no output"
-        );
+        match spawn_bounded_retrying(make_cmd, TEST_TIMEOUT, READER_GRACE) {
+            Some(BoundedOutput::ReaderStalled) => {}
+            Some(BoundedOutput::Exited { success, stdout }) => panic!(
+                "a stalled reader must not be mistaken for a clean exit \
+                 (success={success}, stdout={stdout:?})"
+            ),
+            Some(BoundedOutput::TimedOut { .. }) => {
+                panic!("the child did not exit within the bound")
+            }
+            None => panic!("spawn failed on every retry"),
+        }
     }
 
     // The same stall through the call path enumeration actually uses:
@@ -989,7 +1060,7 @@ esac
     #[test]
     fn list_sessions_on_a_reader_stall_returns_none() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let script = write_script(dir.path(), "stall.sh", "#!/bin/sh\nsleep 2 &\nexit 0\n");
+        let script = write_script(dir.path(), "stall.sh", "#!/bin/sh\nsleep 30 &\nexit 0\n");
         let result = list_sessions(
             script.to_str().expect("utf8 path"),
             Path::new("/nonexistent-socket"),
