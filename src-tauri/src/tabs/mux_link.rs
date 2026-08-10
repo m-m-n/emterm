@@ -70,81 +70,7 @@ impl Tab {
             MessageType::PaneCreated => self.handle_pane_created(msg.pane_id),
             MessageType::SwitchWindow => self.handle_switch_window(msg.pane_id),
             MessageType::RenameWindow => self.handle_rename_window(&msg),
-            MessageType::PtyExited => {
-                // A window's shell exited: remove its window/pane. The group
-                // keeps rendering sub-tabs down to a single window; only
-                // dropping to zero ends the mux session for this tab. Unlike an
-                // explicit `Detach` (which reverts to a plain tab), the last
-                // window's shell exiting means there is nothing left to show, so
-                // the tab itself is closed — `exited` makes `App::pump_all` reap
-                // it just like a local shell that ran out (otherwise the empty
-                // mux tab lingers and blocks `mux kill`).
-                // Capture the displayed (active) pane id before removal so the
-                // close-reconcile decision can tell "active window closed"
-                // (redraw needed) from "non-active window closed, indices
-                // shifted but the displayed pane is unchanged" (no redraw).
-                let before_active = self.mux_group.as_ref().and_then(|g| g.active_pane_id());
-                let reconcile_target = match self.mux_group.as_mut() {
-                    Some(group) => match group.remove_pane(msg.pane_id) {
-                        Some(idx) => {
-                            log::info!(
-                                "mux apc: pane {} exited (window {}) for tab {:?}",
-                                msg.pane_id,
-                                idx,
-                                self.title
-                            );
-                            // task0005 AC-6: latch the removed pane id for
-                            // `App::pump_all` to discard the matching
-                            // `App::agent_status` entry (this method has no
-                            // `&mut App` access).
-                            self.pending_closed_agent_status_panes.push(msg.pane_id);
-                            if group.is_empty() {
-                                self.mux_group = None;
-                                self.exited = true;
-                                // Group emptied: nothing to redraw (FR3).
-                                None
-                            } else {
-                                // Active window may have changed; decide by pane
-                                // id whether the screen needs a reconcile.
-                                let after_active = group.active_pane_id();
-                                Tab::close_reconcile_target(before_active, after_active)
-                            }
-                        }
-                        // Unknown pane id: no removal, no reconcile.
-                        None => return false,
-                    },
-                    None => {
-                        log::info!(
-                            "mux apc: remote pane {} exited for tab {:?}",
-                            msg.pane_id,
-                            self.title
-                        );
-                        return false;
-                    }
-                };
-                // Reconcile the screen with the now-active window (parity with
-                // the inbound `SwitchWindow` reconcile). `request_pane_snapshot`
-                // is a fire-and-forget PTY write, so this is gated on the
-                // decision rather than asserted directly in unit tests (FR1).
-                if let Some(pane_id) = reconcile_target {
-                    // Latch the outgoing (exited) pane id so App::pump_all's
-                    // existing per-pane scroll save/restore block runs for this
-                    // close path, mirroring the SwitchWindow arm. First-latch-
-                    // only: if several PtyExited drain in one pump we keep the
-                    // genuinely-displayed outgoing pane (intermediate panes were
-                    // never rendered). The exited pane is already removed by
-                    // remove_pane above, so App::index_of_pane_id returns None
-                    // for it — the park is correctly skipped and only the new
-                    // active pane's active_pane_scroll() is reloaded.
-                    if let Some(before) = before_active {
-                        if self.pending_pane_switch_from.is_none() {
-                            self.pending_pane_switch_from = Some(before);
-                        }
-                    }
-                    self.request_pane_snapshot(pane_id);
-                }
-                true
-            }
+            MessageType::PtyExited => self.handle_pty_exited(msg.pane_id),
             MessageType::Detached => {
                 // The daemon confirmed our `Detach`: exit mux mode. Clear the
                 // window group (the tab reverts to a plain tab) and the
@@ -892,6 +818,84 @@ impl Tab {
                 false
             }
         }
+    }
+
+    /// `PtyExited` arm of [`Self::apply_mux_message`]: remove the exited
+    /// window/pane and reconcile the screen when the active window closed.
+    fn handle_pty_exited(&mut self, pane_id: u32) -> bool {
+        // A window's shell exited: remove its window/pane. The group
+        // keeps rendering sub-tabs down to a single window; only
+        // dropping to zero ends the mux session for this tab. Unlike an
+        // explicit `Detach` (which reverts to a plain tab), the last
+        // window's shell exiting means there is nothing left to show, so
+        // the tab itself is closed — `exited` makes `App::pump_all` reap
+        // it just like a local shell that ran out (otherwise the empty
+        // mux tab lingers and blocks `mux kill`).
+        // Capture the displayed (active) pane id before removal so the
+        // close-reconcile decision can tell "active window closed"
+        // (redraw needed) from "non-active window closed, indices
+        // shifted but the displayed pane is unchanged" (no redraw).
+        let before_active = self.mux_group.as_ref().and_then(|g| g.active_pane_id());
+        let reconcile_target = match self.mux_group.as_mut() {
+            Some(group) => match group.remove_pane(pane_id) {
+                Some(idx) => {
+                    log::info!(
+                        "mux apc: pane {} exited (window {}) for tab {:?}",
+                        pane_id,
+                        idx,
+                        self.title
+                    );
+                    // task0005 AC-6: latch the removed pane id for
+                    // `App::pump_all` to discard the matching
+                    // `App::agent_status` entry (this method has no
+                    // `&mut App` access).
+                    self.pending_closed_agent_status_panes.push(pane_id);
+                    if group.is_empty() {
+                        self.mux_group = None;
+                        self.exited = true;
+                        // Group emptied: nothing to redraw (FR3).
+                        None
+                    } else {
+                        // Active window may have changed; decide by pane
+                        // id whether the screen needs a reconcile.
+                        let after_active = group.active_pane_id();
+                        Tab::close_reconcile_target(before_active, after_active)
+                    }
+                }
+                // Unknown pane id: no removal, no reconcile.
+                None => return false,
+            },
+            None => {
+                log::info!(
+                    "mux apc: remote pane {} exited for tab {:?}",
+                    pane_id,
+                    self.title
+                );
+                return false;
+            }
+        };
+        // Reconcile the screen with the now-active window (parity with
+        // the inbound `SwitchWindow` reconcile). `request_pane_snapshot`
+        // is a fire-and-forget PTY write, so this is gated on the
+        // decision rather than asserted directly in unit tests (FR1).
+        if let Some(pane_id) = reconcile_target {
+            // Latch the outgoing (exited) pane id so App::pump_all's
+            // existing per-pane scroll save/restore block runs for this
+            // close path, mirroring the SwitchWindow arm. First-latch-
+            // only: if several PtyExited drain in one pump we keep the
+            // genuinely-displayed outgoing pane (intermediate panes were
+            // never rendered). The exited pane is already removed by
+            // remove_pane above, so App::index_of_pane_id returns None
+            // for it — the park is correctly skipped and only the new
+            // active pane's active_pane_scroll() is reloaded.
+            if let Some(before) = before_active {
+                if self.pending_pane_switch_from.is_none() {
+                    self.pending_pane_switch_from = Some(before);
+                }
+            }
+            self.request_pane_snapshot(pane_id);
+        }
+        true
     }
 
     /// Request an on-demand screen snapshot for `pane_id`. The daemon replies
