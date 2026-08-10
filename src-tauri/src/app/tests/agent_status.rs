@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::agent_status::{agent_status_pane_tab_title, agent_status_pane_visible};
 use mux_ipc::protocol::{MessageType, MuxMessage, SessionInfo, WelcomeMsg, WindowInfo};
 
 // ── Agent-status notifications (task0007) ───────────────────────

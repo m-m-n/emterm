@@ -43,10 +43,7 @@ mod timing;
 /// imports it from `crate::scroll` so the pure mux model does not depend on
 /// the `app` layer (no `app ↔ mux` cycle).
 pub use crate::scroll::ScrollPosition;
-use agent_status::{
-    agent_notification_rate_limit_key, agent_status_keys_for_tab, agent_status_pane_tab_title,
-    agent_status_pane_visible,
-};
+use agent_status::{agent_notification_rate_limit_key, agent_status_keys_for_tab};
 pub use font_settings::{
     FONT_SIZE_PT_MAX, FONT_SIZE_PT_MIN, FONT_SIZE_PT_STEP, clamp_font_size_pt,
 };
@@ -1203,135 +1200,16 @@ impl App {
             self.image_viewer.handle_events(image_events);
         }
         // Apply this pass' collected agent-status inputs now that the
-        // `&mut self.tabs` borrow has ended (task0005). FR4 requires a tab's
-        // real-status events and its latch inputs to be applied as ONE
-        // ordered stream: `reconcile_latch_feed` derives both lists from the
-        // same `pending_latch_feed` in order, so within a single tab each
-        // `Set`/`Clear` latch input corresponds 1:1 and same-order with one
-        // `AgentStatusEvent`. Walking the latch inputs and pulling that tab's
-        // next unconsumed plain event per `Set`/`Clear` reconstructs the true
-        // order; a bare `Mark` consumes no plain event (it only ever applies
-        // a real change indirectly, via `record_live_prompt_mark`'s own
-        // inferred `apply_plain_tab_event(Clear)` when the latch fires).
-        //
-        // The pairing MUST be per tab, never positional across the flattened
-        // lists: the two lists are filled by the same tab loop but a tab can
-        // contribute to one and not the other. A mux-connected tab still
-        // pushes real-status events while `process_combined` discards its
-        // latch feed (that tab's pane status is daemon-authoritative), so it
-        // contributes plain events and zero latch inputs. Consuming
-        // positionally would let that tab's events satisfy ANOTHER tab's
-        // `Set`/`Clear` and push the real events after the latch bookkeeping
-        // they belong with — reintroducing the very reordering this loop
-        // exists to prevent. Events with no matching latch input are applied
-        // afterwards, in their original order.
-        let mut agent_status_plain_events: Vec<
-            Option<(u64, crate::agent_status::AgentStatusEvent)>,
-        > = agent_status_plain_events.into_iter().map(Some).collect();
-        for (tab_stable_id, input) in agent_status_latch_inputs {
-            match input {
-                crate::agent_status_model::ResolvedLatchInput::Set
-                | crate::agent_status_model::ResolvedLatchInput::Clear => {
-                    let paired = agent_status_plain_events
-                        .iter_mut()
-                        .find(|slot| matches!(slot, Some((id, _)) if *id == tab_stable_id))
-                        .and_then(Option::take);
-                    if let Some((_, event)) = paired {
-                        self.agent_status
-                            .apply_plain_tab_event(tab_stable_id, event);
-                    }
-                    if matches!(input, crate::agent_status_model::ResolvedLatchInput::Set) {
-                        self.agent_status.record_latch_set(tab_stable_id);
-                    } else {
-                        self.agent_status.record_latch_clear(tab_stable_id);
-                    }
-                }
-                crate::agent_status_model::ResolvedLatchInput::Mark(kind) => {
-                    self.agent_status
-                        .record_live_prompt_mark(tab_stable_id, kind);
-                }
-            }
-        }
-        for (tab_stable_id, event) in agent_status_plain_events.into_iter().flatten() {
-            self.agent_status
-                .apply_plain_tab_event(tab_stable_id, event);
-        }
-        for update in agent_status_updates {
-            // task0006 AC-5: learn/refresh this pane's public ID from the
-            // same message before applying it to the model — the daemon is
-            // the only source for it (see `Self::mux_public_pane_ids`).
-            self.mux_public_pane_ids
-                .insert(update.pane_id, update.public_pane_id.clone());
-            self.agent_status.apply_daemon_update(
-                update.pane_id,
-                update.state.map(crate::agent_status_model::state_from_wire),
-                update.name,
-                update.revision,
-                update.replay_derived,
-            );
-        }
-        for pane_id in agent_status_closed_panes {
-            // task0009 AC-4: resolve the rate-limit key from the still-
-            // present public-id mapping BEFORE removing it below.
-            let key = crate::agent_status_model::PaneKey::MuxPane(pane_id);
-            let rate_limit_key = agent_notification_rate_limit_key(&self.mux_public_pane_ids, &key);
-            self.mux_public_pane_ids.remove(&pane_id);
-            self.discard_agent_notification_state(&rate_limit_key);
-            self.agent_status.discard(&key);
-        }
-        // task0009: drain queued real-transition events (task0005's
-        // `AgentStatusModel::drain_transitions`) and dispatch qualifying
-        // ones to the notification layer. Runs unconditionally — even
-        // while `settings.agent_status_notifications` is off — so the
-        // transition queue never grows unbounded while the setting is
-        // toggled off (NFR3); the settings gate lives inside
-        // `maybe_notify_agent_transition`. Must run BEFORE mark_seen below:
-        // mark_seen would otherwise flip a freshly-arrived transition's
-        // pane to "seen" before its own visibility is evaluated here (the
-        // two operate on independent flags today, but ordering keeps the
-        // gating and mark_seen concerns from becoming coupled).
-        for transition in self.agent_status.drain_transitions() {
-            let crate::agent_status_model::Transition {
-                pane,
-                old_state,
-                new_state,
-                name,
-            } = transition;
-            // AC-2: Clear transitions (new_state: None) are never
-            // notification-eligible — only Set into blocked/done qualifies.
-            let Some(new_state) = new_state else {
-                continue;
-            };
-            let pane_visible =
-                agent_status_pane_visible(self.window_focused, self.tabs.get(self.active), &pane);
-            let rate_limit_key =
-                agent_notification_rate_limit_key(&self.mux_public_pane_ids, &pane);
-            let tab_title = agent_status_pane_tab_title(&self.tabs, &pane)
-                .unwrap_or_default()
-                .to_string();
-            let agent_transition = crate::notifications::AgentTransition {
-                old_state: old_state.map(crate::agent_status_model::state_to_wire),
-                new_state: crate::agent_status_model::state_to_wire(new_state),
-                name,
-            };
-            self.maybe_notify_agent_transition(
-                rate_limit_key,
-                pane_visible,
-                &agent_transition,
-                &tab_title,
-            );
-        }
-        // mark_seen (task0005 AC-5): the active tab's panes are "displayed"
-        // whenever the OS window is focused, regardless of whether this
-        // pump produced any other change — the user could simply be looking
-        // at an already-idle screen. Re-running every pump is intentionally
-        // idempotent (`mark_seen` on an already-seen entry is a no-op).
-        if self.window_focused {
-            if let Some(active_tab) = self.tabs.get(self.active) {
-                let panes = agent_status_keys_for_tab(active_tab);
-                self.agent_status.mark_seen(panes.iter());
-            }
-        }
+        // `&mut self.tabs` borrow has ended (task0005/task0009): latch
+        // pairing, daemon updates, closed-pane discard, transition
+        // notifications, mark_seen. See `apply_agent_status_batch`'s doc
+        // for the per-tab pairing invariant.
+        self.apply_agent_status_batch(
+            agent_status_plain_events,
+            agent_status_latch_inputs,
+            agent_status_updates,
+            agent_status_closed_panes,
+        );
         // Apply the active tab's absolute-row selection bookkeeping now that
         // the `&mut self.tabs` borrow has ended. A frame reset drops the
         // selection outright (its rows belong to the discarded frame); an
