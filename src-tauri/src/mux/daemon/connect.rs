@@ -2,7 +2,16 @@
 //! pipe naming, liveness probing, stale-socket cleanup, daemon spawning,
 //! and the version handshake.
 
-use super::*;
+use std::path::{Path, PathBuf};
+// The socket read/write timeouts exist only on the unix connect path; the
+// Windows connect_daemon stub takes no timeouts.
+#[cfg(unix)]
+use std::time::Duration;
+
+use mux_ipc::protocol::{
+    ClientType, HelloMsg, MAX_FRAME_LENGTH, MessageType, MuxMessage, WelcomeMsg,
+};
+
 /// Get the socket path for the mux daemon.
 ///
 /// Linux: `$XDG_RUNTIME_DIR/emterm/mux-default.sock`

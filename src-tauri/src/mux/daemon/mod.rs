@@ -4,28 +4,20 @@
 //! and manages PTY sessions. Auto-exits when all sessions end.
 
 #[cfg(unix)]
-use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-// mux-daemon-binary-update-detect task0002 (D5): the binary-update identity
-// check, consumed only by the Unix-only recovery-probe trigger below.
+use std::os::unix::io::{AsRawFd, IntoRawFd};
 #[cfg(unix)]
-use crate::mux::identity;
+use std::path::Path;
+use std::path::PathBuf;
 
 use super::ipc::connection::handle_connection;
-use super::ipc::handlers::{handle_destroy_pane, reevaluate_agent_waiters};
-use super::ipc::protocol::{
-    AgentStatusUpdateMsg, ClientType, ErrorMsg, HelloMsg, MAX_FRAME_LENGTH, MessageType,
-    MuxMessage, NotifyMsg, PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, RenameWindowMsg,
-    WelcomeMsg, parse_rejected_server_version,
-};
+// The unix run_daemon builds its SessionManager inside handoff's startup
+// path; only the Windows run_daemon constructs one here directly.
+#[cfg(windows)]
 use super::session::manager::SessionManager;
 use super::session::pane::{
-    AgentStatusFeedItem, AgentStatusReportSender, MuxPane, NotificationSender, PaneExitSender,
-    PaneId, SharedPaneExitSender, TitleChangeSender,
+    AgentStatusFeedItem, AgentStatusReportSender, NotificationSender, PaneExitSender, PaneId,
+    SharedPaneExitSender, TitleChangeSender,
 };
-use crate::prompts::PromptMarkKind;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -65,9 +57,6 @@ const PANE_EXIT_CHANNEL_CAPACITY: usize = 64;
 /// run it synchronously before resuming -- so a second concurrent request
 /// simply waits for room rather than needing an unbounded queue.
 const UPGRADE_SIGNAL_CHANNEL_CAPACITY: usize = 1;
-
-#[cfg(unix)]
-use tokio::net::UnixListener;
 
 /// Environment variable naming the handoff state file's absolute path
 /// (IMPLEMENTATION.md Shared Components, "Handoff environment contract" --
