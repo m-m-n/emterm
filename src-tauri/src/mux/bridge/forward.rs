@@ -2,7 +2,27 @@
 //! stdin/daemon/stdout forward loop, bridge exit, and the
 //! post-upgrade reconnect-with-backoff path.
 
-use super::*;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+use mux_ipc::protocol::{MAX_FRAME_LENGTH, MessageType, MuxMessage};
+#[cfg(unix)]
+use tokio::net::UnixStream;
+
+// The post-upgrade reconnect path (and its handshake) is unix-only, like
+// the daemon socket itself; stdin restore is per-OS in term_mode.
+#[cfg(unix)]
+use super::perform_handshake;
+use super::stdin_parser::{StdinAction, StdinApcParser};
+#[cfg(unix)]
+use super::term_mode::restore_stdin_global;
+#[cfg(windows)]
+use super::term_mode::restore_stdin_windows_global;
+use super::{
+    ConnectionEnded, DaemonFrameEffect, TRANSPORT_UNDETECTED, Transport, capture_if_attach,
+    conclude_connection, decide_daemon_frame_effect,
+};
 
 // ---- stdout writer: the only place forwarded frames reach stdout ----
 //

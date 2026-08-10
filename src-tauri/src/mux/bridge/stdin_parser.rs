@@ -2,7 +2,9 @@
 //! mux frames (APC and Plaintext `EMUX;` transports) from the raw
 //! stdin byte stream and classifies everything else as passthrough.
 
-use super::*;
+use mux_ipc::protocol::{APC_PREFIX, MUX_OSC_PARAM, MuxMessage, PLAINTEXT_PREFIX};
+
+use super::Transport;
 
 /// Actions produced by the stdin mux parser.
 #[derive(Debug)]
