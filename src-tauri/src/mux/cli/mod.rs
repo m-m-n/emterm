@@ -11,18 +11,6 @@
 //! subcommand-argument parsing for the mux CLI so the binary entry point
 //! stays a one-liner.
 
-use serde::{Deserialize, Serialize};
-
-use super::bridge::run_bridge;
-use super::daemon;
-use super::ipc::protocol::*;
-// `tmux_import` writes to GUI-only `settings_store`, so it is reachable only
-// in the GUI build. The mux-only deb (`emterm-mux`) is intended for
-// headless SSH hosts where `settings.json` is hand-managed; auto-importing
-// `~/.tmux.conf` into it is meaningless there.
-#[cfg(feature = "gui")]
-use super::tmux_import::import_tmux_conf_if_needed;
-
 mod admin;
 pub use admin::*;
 

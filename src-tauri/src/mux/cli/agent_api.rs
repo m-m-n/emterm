@@ -1,7 +1,15 @@
 //! Agent-API subcommands: `read` / `send` / `wait`, plus the shared
 //! request / response plumbing and pane-argument parsing they use.
 
-use super::*;
+use serde::{Deserialize, Serialize};
+
+use mux_ipc::protocol::{
+    AgentApiError, AgentApiErrorKind, AgentState, MAX_FRAME_LENGTH, MessageType, MuxMessage,
+    ReadPaneMsg, ReadPaneResultMsg, SendTextMsg, SendTextResultMsg, WaitAgentStateMsg,
+    WaitAgentStateResultMsg,
+};
+
+use super::connect::cli_handshake;
 
 // ============================================================================
 // Agent-facing API: `emterm mux read|send|wait` (task0004)

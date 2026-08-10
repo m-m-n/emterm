@@ -1,7 +1,13 @@
 //! Session-management subcommands: `ls` / `kill` / `upgrade` /
 //! `probe-handoff`.
 
-use super::*;
+// The daemon-connecting subcommands (`upgrade` / `probe-handoff`) are
+// unix-only, so their protocol imports are too.
+#[cfg(unix)]
+use mux_ipc::protocol::{PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, WelcomeMsg};
+
+use super::connect::cli_handshake;
+use crate::mux::daemon;
 
 /// Execute the `emterm mux ls` command.
 #[cfg(unix)]
