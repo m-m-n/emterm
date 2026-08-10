@@ -1,7 +1,19 @@
 //! CPU-side instance building: glyph shaping into `CellInstance`
 //! lists, the per-row instance cache, and its scroll-event rotation.
 
-use super::*;
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+
+use super::{
+    CellInput, CellInstance, CellMetrics, FLAG_FG_FILL, FLAG_STRIKETHROUGH, FLAG_UNDERLINE,
+    GlyphFit, PAGE_ALPHA, PAGE_RGBA, PAGE_SOLID, PAGE_SUBPIXEL, clip_quad_to_cell_x,
+    clip_quad_to_cell_y, pack_rgba,
+};
+use crate::render::font::cache::{GlyphCache, GlyphKey};
+use crate::render::font::compute_v_pad;
+use crate::render::font::fallback::FallbackChain;
+use crate::render::font::traits::{AtlasFormat, GlyphRasterizer};
 
 /// Growth factor applied to the persistent instance / uniform GPU buffers
 /// (task0003 FR4/AC-4) when the required upload size exceeds the buffer's
@@ -28,7 +40,10 @@ pub(in crate::render::terminal_grid_pass) const MIN_BUFFER_CAPACITY_BYTES: u64 =
 ///   `MIN_BUFFER_CAPACITY_BYTES`) rather than to the exact `required` size,
 ///   so a monotonically growing grid triggers `O(log n)` reallocations
 ///   instead of one every frame.
-pub(in crate::render::terminal_grid_pass) fn grow_capacity(current_capacity: u64, required: u64) -> u64 {
+pub(in crate::render::terminal_grid_pass) fn grow_capacity(
+    current_capacity: u64,
+    required: u64,
+) -> u64 {
     if required <= current_capacity {
         return current_capacity;
     }
@@ -146,7 +161,12 @@ impl RowCache {
     /// the row count degenerates to dropping every cached entry —
     /// correctness over the optimization when the up-shift assumption
     /// cannot be trusted.
-    pub(in crate::render::terminal_grid_pass) fn rotate_for_scroll_event(&mut self, direction: u8, count: u16, cell_h: f32) {
+    pub(in crate::render::terminal_grid_pass) fn rotate_for_scroll_event(
+        &mut self,
+        direction: u8,
+        count: u16,
+        cell_h: f32,
+    ) {
         if count == 0 {
             return;
         }
@@ -222,7 +242,11 @@ impl GridInstanceBuilder {
     ///
     /// This split exists so unit tests can exercise the per-cell pipeline
     /// (TS-font-13 / TS-font-14) without standing up a wgpu device.
-    pub(in crate::render::terminal_grid_pass) fn build_instances(&self, cells: &[CellInput], metrics: CellMetrics) -> Vec<CellInstance> {
+    pub(in crate::render::terminal_grid_pass) fn build_instances(
+        &self,
+        cells: &[CellInput],
+        metrics: CellMetrics,
+    ) -> Vec<CellInstance> {
         let (mut bgs, fg) = self.build_instances_split(cells, metrics);
         bgs.extend(fg);
         bgs
@@ -442,7 +466,12 @@ impl GridInstanceBuilder {
     /// `cell_h` must be the same value the caller's `CellMetrics` uses
     /// this frame — see [`RowCache::rotate_for_scroll_event`] for why the
     /// rotation needs it.
-    pub(in crate::render::terminal_grid_pass) fn apply_scroll_event(&mut self, direction: u8, count: u16, cell_h: f32) {
+    pub(in crate::render::terminal_grid_pass) fn apply_scroll_event(
+        &mut self,
+        direction: u8,
+        count: u16,
+        cell_h: f32,
+    ) {
         self.row_cache
             .rotate_for_scroll_event(direction, count, cell_h);
     }

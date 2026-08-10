@@ -2,7 +2,18 @@
 //! `Vec<CellInput>` consumed by `terminal_grid_pass`, the IME preedit
 //! overlay, and the packed-color / cell-style resolution helpers.
 
-use super::*;
+use egui::Color32;
+use term_core::cell::{
+    STYLE_BLINK, STYLE_BOLD, STYLE_DIM, STYLE_HIDDEN, STYLE_ITALIC, STYLE_REVERSE,
+    STYLE_STRIKETHROUGH, STYLE_UNDERLINE,
+};
+use term_core::terminal_core::TerminalCore;
+use term_core::{char_width, is_ambiguous_width};
+
+use crate::render::terminal_grid_pass::{CellInput, GlyphFit};
+use crate::render::theme::{Rgb, Theme};
+use crate::selection::Selection;
+use crate::settings::AmbiguousWidthMode;
 
 /// Per-cell paint parameters resolved from a `term_core` cell + active
 /// palette + selection state.

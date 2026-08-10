@@ -1,4 +1,6 @@
 use super::*;
+use crate::render::font::cache::GlyphKey;
+use crate::render::font::compute_v_pad;
 use crate::render::font::resolver::Resolver;
 use crate::render::font::swash_adapter::SwashRasterizer;
 use crate::render::font::traits::{AtlasFormat, FontId, GlyphBitmap, ShapedGlyph};

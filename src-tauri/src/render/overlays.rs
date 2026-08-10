@@ -2,7 +2,14 @@
 //! SFTP progress, cursor, search highlights / search bar, and fold
 //! summaries.
 
-use super::*;
+use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
+use term_core::terminal_core::TerminalCore;
+
+use super::SftpFrameEvent;
+use super::cell_inputs::rgb_to_egui;
+use crate::app::App;
+use crate::render::cursor;
+use crate::render::theme::Theme;
 
 /// Draw the modal profile selector when it is open. Runs as a separate
 /// pass after `draw_terminal` (same `&mut App` split as

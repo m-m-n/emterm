@@ -1,4 +1,9 @@
 use super::*;
+use crate::render::terminal_grid_pass::CellInput;
+use crate::render::theme::Rgb;
+use crate::settings::AmbiguousWidthMode;
+use term_core::cell::{STYLE_BOLD, STYLE_REVERSE};
+use term_core::terminal_core::TerminalCore;
 
 // ── task0001 AC-4: frame-event "any fired" predicate ────────────────
 
