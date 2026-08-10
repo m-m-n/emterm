@@ -1,7 +1,19 @@
 //! Tab-strip inner layout: per-item cell layout, drag-and-drop state
 //! and drop-position resolution.
 
-use super::*;
+use egui::{FontId, Rect, Rounding, Sense, Stroke, Ui, Vec2};
+
+use super::badge::{AGENT_BADGE_GAP, AGENT_BADGE_SLOT_WIDTH, paint_agent_badge};
+#[cfg(test)]
+use super::tests;
+use super::{
+    ACTIVITY_DOT_ANIM_SECS, ACTIVITY_DOT_DIAMETER, ACTIVITY_DOT_MARGIN, HAIRLINE_HEIGHT,
+    TAB_BAR_HEIGHT, TAB_FONT_SIZE, TAB_HORIZONTAL_PAD, TabBarItem, layout_ellipsized,
+    mux_sub_tab_label, paint_active_indicator, paint_centered_label, render_label,
+};
+use crate::ui::TabEvent;
+use crate::ui::emoji_cache::EmojiResources;
+use crate::ui::md3;
 
 /// Persistent key under which the current drag origin (`Option<usize>`)
 /// is stored in egui's frame memory. Survives across frames so the

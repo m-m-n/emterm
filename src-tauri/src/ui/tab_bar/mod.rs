@@ -26,11 +26,8 @@
 //! drawn with `Painter::line_segment` so the visual is font-independent.
 
 use egui::scroll_area::ScrollBarVisibility;
-use egui::{
-    Align, Color32, FontId, Image, Layout, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2,
-};
+use egui::{Align, FontId, Layout, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2};
 
-use crate::agent_status::AgentState;
 use crate::agent_status_model::Aggregated;
 
 use super::TabEvent;

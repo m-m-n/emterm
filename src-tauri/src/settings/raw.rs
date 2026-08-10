@@ -2,7 +2,13 @@
 //! [`RawSettings::merge_into`], which folds a parsed file into
 //! [`Settings`], plus the parse-or-warn helpers only this layer uses.
 
-use super::*;
+use super::Settings;
+use super::types::{
+    AmbiguousWidthMode, BellAction, CursorStyle, CustomCommand, DEFAULT_FONT_SIZE_PT, FontEngine,
+    ScrollbarMode, ShiftEnterBehavior, UiTheme, UiThemePreset, UserColorScheme,
+    default_mux_action_chord, is_legacy_mux_action, parse_mux_action_chord,
+};
+use crate::settings_core::Language;
 
 // ============================================================
 // settings.json schema (deserialize side)
