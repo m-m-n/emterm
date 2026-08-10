@@ -65,24 +65,7 @@ impl Tab {
             // `mux_ipc::protocol::MessageType::from_u8`), so it falls
             // through to the wildcard arm below like any other
             // unrecognized message type.
-            MessageType::AgentStatusUpdate => {
-                // Daemon → GUI unsolicited push (task0005 AC-2). Applying it
-                // to `App::agent_status` needs `&mut App`, which this method
-                // does not have — latch the decoded payload for
-                // `App::pump_all` to apply after the per-tab loop, mirroring
-                // the `pending_pane_switch_from` / `pending_window_appended`
-                // latch pattern used elsewhere in this match.
-                match msg.decode_payload::<mux_ipc::protocol::AgentStatusUpdateMsg>() {
-                    Some(update) => {
-                        self.pending_agent_status_updates.push(update);
-                        true
-                    }
-                    None => {
-                        log::warn!("mux apc: malformed AgentStatusUpdate payload");
-                        false
-                    }
-                }
-            }
+            MessageType::AgentStatusUpdate => self.handle_agent_status_update(&msg),
             MessageType::Welcome => match msg.decode_payload::<WelcomeMsg>() {
                 Some(WelcomeMsg::Accepted { sessions, .. }) => {
                     match sessions.first() {
@@ -875,6 +858,27 @@ impl Tab {
         // is captured before the next query overwrites the core's
         // single-slot response buffer.
         self.apply_active_pane_output(&payload)
+    }
+
+    /// `AgentStatusUpdate` arm of [`Self::apply_mux_message`]: latch the
+    /// decoded update for `App::pump_all`.
+    fn handle_agent_status_update(&mut self, msg: &MuxMessage) -> bool {
+        // Daemon → GUI unsolicited push (task0005 AC-2). Applying it
+        // to `App::agent_status` needs `&mut App`, which this method
+        // does not have — latch the decoded payload for
+        // `App::pump_all` to apply after the per-tab loop, mirroring
+        // the `pending_pane_switch_from` / `pending_window_appended`
+        // latch pattern used elsewhere in this match.
+        match msg.decode_payload::<mux_ipc::protocol::AgentStatusUpdateMsg>() {
+            Some(update) => {
+                self.pending_agent_status_updates.push(update);
+                true
+            }
+            None => {
+                log::warn!("mux apc: malformed AgentStatusUpdate payload");
+                false
+            }
+        }
     }
 
     /// Request an on-demand screen snapshot for `pane_id`. The daemon replies
