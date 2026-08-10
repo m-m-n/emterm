@@ -3,7 +3,7 @@
 //! (stable-suffix / uniform-head / row-bounded-middle) and the
 //! BYPASS_* budget constants that bound the bypass prefix.
 
-use super::*;
+use super::{ReplaySegment, clamp_resize_dims};
 
 // ── Structural resize-segment replay (task0004 round-4 rework, D1') ────
 //
@@ -33,7 +33,7 @@ use super::*;
 /// call site for how that degenerates to the pre-round-6 no-transition
 /// fast path).
 ///
-/// Used by [`TerminalCore::build_from_snapshot_inner`] to split a replay
+/// Used by [`TerminalCore::build_from_snapshot_inner`](super::TerminalCore::build_from_snapshot_inner) to split a replay
 /// into a (possibly empty) non-bypass PREFIX — up to and including the
 /// resize that reaches the target — and a bypass-eligible SUFFIX that, by
 /// this function's own definition, contains no further resize. `k == 0`
@@ -42,7 +42,7 @@ use super::*;
 /// opens at the target, so the whole thing is "suffix".
 ///
 /// `clamp_resize_dims` is applied per segment here so this predicate
-/// agrees with what [`TerminalCore::replay_segments`] will actually decide
+/// agrees with what [`TerminalCore::replay_segments`](super::TerminalCore::replay_segments) will actually decide
 /// (it clamps at the same point, D1''): an out-of-domain wire dimension
 /// cannot make this predicate see a "change" that replay itself would
 /// clamp away to a no-op, or vice versa.

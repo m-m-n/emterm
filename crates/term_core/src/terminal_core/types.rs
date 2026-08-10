@@ -1,9 +1,11 @@
 //! Mode-bit constants and the data types carried alongside
-//! [`TerminalCore`](super::TerminalCore): pending prompt / fold marks,
+//! [`TerminalCore`]: pending prompt / fold marks,
 //! structural replay segments, snapshot-replay input, and the
 //! saved-cursor state.
 
-use super::*;
+use crate::cell::PackedColor;
+
+use super::TerminalCore;
 
 // ── Mode bit positions (matches SPEC.md) ─────────────────
 

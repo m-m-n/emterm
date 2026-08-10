@@ -1,4 +1,4 @@
-use super::BYPASS_PREFIX_MAX_SEGMENTS;
+use super::replay_plan::BYPASS_PREFIX_MAX_SEGMENTS;
 
 /// The two segments a fold-succeeded (`h > 0`) MIDDLE can never itself
 /// claim from the wire cap: the mandatory HEAD (`candidate_h > 0`) and
