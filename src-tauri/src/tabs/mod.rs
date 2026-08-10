@@ -1190,54 +1190,16 @@ impl Tab {
         // mismatch is a noop), and re-dispatching a 2nd-pass at the new
         // grid is abandoned for history-restore (the user's intent during
         // a resize is the visible frame, not the discarded history). The
-        // 1st-pass switch's own resize-supersede arm below handles the
+        // 1st-pass switch's own resize-defer step below handles the
         // visible-frame side.
-        if let Some(old) = self.pending_scrollback_restore.take() {
-            old.cancel.store(true, Ordering::Relaxed);
-            log::warn!(
-                "scrollback restore cancelled (resize) for tab {:?}",
-                self.title
-            );
-        }
+        self.supersede_pending_scrollback_restore("resize");
 
-        // FR5/FR7 (task0006 redesign, review round-1 finding
-        // `64baa639d71792f9`): a grid resize during a pending off-thread
-        // replay must not let the swapped-in core end up at the wrong
-        // (stale) size — but re-dispatching the in-flight payload/segments
-        // at the NEW target (task0003's original fix) defeats the bypass
-        // split gate: `payload`'s own recorded resize-marker `segments`
-        // reflect whatever grid the daemon had captured them at (the
-        // switch's ORIGINAL dispatch-time target), never this racing
-        // resize's target, so `stable_target_suffix_start` finds no
-        // matching trailing run against the NEW target and the whole
-        // replay falls back to the expensive non-bypass path for the one
-        // build that completes.
-        //
-        // Fix: let the in-flight worker keep building at its ORIGINAL
-        // target (where its bypass split, if any, is valid) and defer this
-        // resize instead — `PendingSwitch::pending_resize` records the
-        // latest requested grid; `poll_pending_switch`/`apply_offthread_swap`
-        // apply it, via a normal already-bypass-aware `TerminalCore::resize`
-        // call, to the core right after it swaps in. Multiple resizes
-        // before the swap just overwrite `pending_resize` with the latest
-        // target — one deferred resize regardless of how many landed, and
-        // (review round-1 finding `34a708465d04f983`) no payload/segments
-        // clone per resize event either, unlike the coalesce-based
-        // re-dispatch this replaces. A resize that lands back on the
-        // in-flight worker's own build target clears any previously
-        // deferred resize (nothing left to apply once swapped in).
-        if let Some(pending) = self.pending_switch.as_mut() {
-            let effective_target = pending
-                .pending_resize
-                .unwrap_or((pending.cols, pending.rows));
-            if effective_target != (cols, rows) {
-                pending.pending_resize = if (cols, rows) == (pending.cols, pending.rows) {
-                    None
-                } else {
-                    Some((cols, rows))
-                };
-            }
-        }
+        // FR5/FR7 (task0006 redesign): a grid resize during a pending
+        // off-thread replay is deferred into the in-flight switch rather
+        // than re-dispatched at the new target — see
+        // `defer_resize_into_pending_switch`'s doc for why re-dispatching
+        // would defeat the bypass split.
+        self.defer_resize_into_pending_switch(cols, rows);
 
         // In mux mode the local PTY is the bridge's stdin pipe, so the
         // resize above only stretches the bridge-facing FD — the daemon's

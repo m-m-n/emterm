@@ -87,6 +87,99 @@ impl Tab {
         self.pending_fold_begin = None;
     }
 
+    /// Owning API for the replay-supersede invariant. Discarding an
+    /// in-flight switch is always a three-point set:
+    ///
+    /// 1. take `pending_switch` and fire its cancel flag, so the 1st-pass
+    ///    worker bails at the next chunk boundary instead of piling up;
+    /// 2. drop any coalesced same-pane `pending_redispatch` — it belonged
+    ///    to the switch being discarded, and leaving it would let a later
+    ///    `poll_pending_switch` revive a stale request;
+    /// 3. take + cancel `pending_scrollback_restore` (via
+    ///    [`Self::supersede_pending_scrollback_restore`]) — otherwise the
+    ///    2nd-pass worker survives, completes, and
+    ///    `apply_scrollback_restore` prepends a stale pane's scrollback
+    ///    onto the live core.
+    ///
+    /// Every code path that abandons an in-flight switch (the sync
+    /// `Snapshot` arm, the live-queue overflow fallback, `Detached`, and a
+    /// new off-thread dispatch for a different pane) funnels through here
+    /// so the three fields can never fall out of lockstep.
+    ///
+    /// Returns the discarded [`PendingSwitch`] (if any) because the
+    /// live-queue overflow fallback still needs its `payload` /
+    /// `live_queue` for the synchronous reparse; other callers just drop
+    /// it, which also drops the worker's `done` receiver.
+    ///
+    /// `reason` feeds the scrollback-restore cancel log, preserving each
+    /// call site's historical wording.
+    pub(super) fn supersede_pending_replay(&mut self, reason: &str) -> Option<PendingSwitch> {
+        let old = self.pending_switch.take();
+        if let Some(old) = old.as_ref() {
+            old.cancel.store(true, Ordering::Relaxed);
+        }
+        self.pending_redispatch = None;
+        self.supersede_pending_scrollback_restore(reason);
+        old
+    }
+
+    /// Scrollback-restore third of [`Self::supersede_pending_replay`]:
+    /// take + cancel any in-flight 2nd-pass restore so its worker bails at
+    /// the next chunk boundary and its receiver is dropped before this fn
+    /// returns. Also called on its own by `Tab::resize`, which cancels
+    /// ONLY the 2nd-pass restore (the rebuilt scrollback would be at the
+    /// old grid width) while the 1st-pass switch survives via
+    /// [`Self::defer_resize_into_pending_switch`].
+    pub(super) fn supersede_pending_scrollback_restore(&mut self, reason: &str) {
+        if let Some(old) = self.pending_scrollback_restore.take() {
+            old.cancel.store(true, Ordering::Relaxed);
+            log::warn!(
+                "scrollback restore cancelled ({reason}) for tab {:?}",
+                self.title
+            );
+        }
+    }
+
+    /// FR5/FR7 (task0006 redesign, review round-1 finding
+    /// `64baa639d71792f9`): record a grid resize that raced a pending
+    /// off-thread replay. The swapped-in core must not end up at the wrong
+    /// (stale) size — but re-dispatching the in-flight payload/segments at
+    /// the NEW target (task0003's original fix) defeats the bypass split
+    /// gate: `payload`'s own recorded resize-marker `segments` reflect
+    /// whatever grid the daemon had captured them at (the switch's
+    /// ORIGINAL dispatch-time target), never this racing resize's target,
+    /// so `stable_target_suffix_start` finds no matching trailing run
+    /// against the NEW target and the whole replay falls back to the
+    /// expensive non-bypass path for the one build that completes.
+    ///
+    /// Instead the in-flight worker keeps building at its ORIGINAL target
+    /// (where its bypass split, if any, is valid) and the resize is
+    /// deferred — `PendingSwitch::pending_resize` records the latest
+    /// requested grid; `poll_pending_switch`/`apply_offthread_swap` apply
+    /// it, via a normal already-bypass-aware `TerminalCore::resize` call,
+    /// to the core right after it swaps in. Multiple resizes before the
+    /// swap just overwrite `pending_resize` with the latest target — one
+    /// deferred resize regardless of how many landed, and (review round-1
+    /// finding `34a708465d04f983`) no payload/segments clone per resize
+    /// event either, unlike the coalesce-based re-dispatch this replaces.
+    /// A resize that lands back on the in-flight worker's own build target
+    /// clears any previously deferred resize (nothing left to apply once
+    /// swapped in). No-op when no switch is in flight.
+    pub(super) fn defer_resize_into_pending_switch(&mut self, cols: u16, rows: u16) {
+        if let Some(pending) = self.pending_switch.as_mut() {
+            let effective_target = pending
+                .pending_resize
+                .unwrap_or((pending.cols, pending.rows));
+            if effective_target != (cols, rows) {
+                pending.pending_resize = if (cols, rows) == (pending.cols, pending.rows) {
+                    None
+                } else {
+                    Some((cols, rows))
+                };
+            }
+        }
+    }
+
     /// Dispatch an off-thread snapshot replay for `target_pane`: do the
     /// frame-discard portion now (so the stale prompt/fold trackers don't
     /// outlive the dispatch), read the displayed core's current grid size,
@@ -124,9 +217,10 @@ impl Tab {
     ) {
         // Supersede any in-flight worker: signal it to bail at the next chunk
         // boundary so workers do not pile up under a rapid switch / resize
-        // storm. The old `PendingSwitch` (and its receiver) is dropped when
-        // `self.pending_switch` is overwritten below (or, for the same-pane
-        // coalesce case, when `poll_pending_switch` later takes it).
+        // storm. For the same-pane coalesce case the cancelled
+        // `PendingSwitch` stays installed (its receiver is dropped when
+        // `poll_pending_switch` later takes it); for a different pane it is
+        // taken + dropped by `supersede_pending_replay` below.
         let same_pane_in_flight = if let Some(old) = self.pending_switch.as_ref() {
             old.cancel.store(true, Ordering::Relaxed);
             old.target_pane == target_pane
@@ -159,21 +253,16 @@ impl Tab {
             return;
         }
         // A dispatch for a different pane (or no in-flight switch at all)
-        // supersedes any coalesced same-pane request outright — it belonged
-        // to a switch this tab is no longer completing.
-        self.pending_redispatch = None;
-        // FR5 / NFR4: a new off-thread switch makes any in-flight 2nd-pass
-        // scrollback restore stale (the live core is about to be reset to a
-        // different snapshot, so the rebuilt scrollback would be against an
-        // unrelated baseline). Cancel + drop so the worker bails at the next
-        // chunk boundary and the receiver is gone before this fn returns.
-        if let Some(old) = self.pending_scrollback_restore.take() {
-            old.cancel.store(true, Ordering::Relaxed);
-            log::warn!(
-                "scrollback restore cancelled (superseded by new switch) for tab {:?}",
-                self.title
-            );
-        }
+        // supersedes the (already cancelled) in-flight switch outright,
+        // along with any coalesced same-pane request — it belonged to a
+        // switch this tab is no longer completing — and (FR5 / NFR4) any
+        // in-flight 2nd-pass scrollback restore: the live core is about to
+        // be reset to a different snapshot, so the rebuilt scrollback would
+        // be against an unrelated baseline. `supersede_pending_replay` owns
+        // the take+cancel three-point set; both workers bail at the next
+        // chunk boundary and their receivers are gone before this fn
+        // returns.
+        let _ = self.supersede_pending_replay("superseded by new switch");
         self.reset_frame_prompts_folds();
         let (cols, rows, scrollback_lines) = {
             let c = self.core.lock();
@@ -234,8 +323,9 @@ impl Tab {
                 // Spawn failure (thread/resource exhaustion) must not crash
                 // the UI thread (the synchronous path it replaces never did).
                 // Reparse synchronously now — a one-off block, accepted — and
-                // install no pending switch. `reset_frame_prompts_folds` above
-                // already cleared the trackers; `reset_frame_for_replay`
+                // install no pending switch (`supersede_pending_replay` above
+                // already took any prior one). `reset_frame_prompts_folds`
+                // above already cleared the trackers; `reset_frame_for_replay`
                 // repeats that (a no-op on the now-empty state) plus replays.
                 log::warn!(
                     "mux off-thread replay worker spawn failed ({e}); \
@@ -243,7 +333,6 @@ impl Tab {
                     self.title
                 );
                 self.reset_frame_for_replay(&payload, &segments);
-                self.pending_switch = None;
             }
         }
     }
