@@ -59,7 +59,17 @@ pub use mux_ui::{
 pub use scroll_search_fold::{AUTO_RESEARCH_THROTTLE, JumpDirection, auto_research_allowed};
 #[cfg(test)]
 use timing::RESTART_TOAST_LINGER_SECS;
-pub use timing::{BELL_FLASH_MS, BLINK_HALF_MS, RestartToast, TOAST_POLL_MS};
+pub use timing::{BELL_FLASH_MS, BLINK_HALF_MS, RestartToast};
+
+/// Bounded poll interval the event loop keeps waking on while a restart or
+/// SFTP toast is active (task0004 D4, [`App::next_toast_deadline`]). Toast
+/// auto-dismiss (`pump_sftp` / `pump_restart_toast`) runs on egui's own
+/// frame-time clock, which only advances when a frame actually paints;
+/// nothing else schedules those intermediate frames, so this bounds the cost
+/// of keeping them flowing. Matches the interval `about_to_wait`
+/// unconditionally rearmed before task0004 — now scoped to only apply while
+/// a toast is actually pending.
+pub const TOAST_POLL_MS: u64 = 16;
 
 pub struct App {
     pub tabs: Vec<Tab>,
@@ -873,6 +883,19 @@ impl App {
     }
     pub fn active_tab(&self) -> Option<&Tab> {
         self.tabs.get(self.active)
+    }
+
+    /// Next `Instant` the event loop must wake while a restart or SFTP toast
+    /// is active (task0004 D4). See [`TOAST_POLL_MS`] for why this is a
+    /// bounded poll rather than an exact deadline. `None` once no toast is
+    /// active — the loop then only wakes on other timed work (blink/bell)
+    /// or an event.
+    ///
+    /// Lives here (not `timing.rs`) because it spans both toast owners:
+    /// timing owns the restart toast, sftp owns the SFTP toasts.
+    pub fn next_toast_deadline(&self) -> Option<Instant> {
+        let toast_pending = self.restart_toast.active() || !self.sftp_ui.toasts.toasts.is_empty();
+        toast_pending.then(|| Instant::now() + std::time::Duration::from_millis(TOAST_POLL_MS))
     }
 
     #[allow(dead_code)] // retained for future mutation paths / tests

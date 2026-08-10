@@ -366,8 +366,13 @@ impl WindowHost {
             // SFTP: drain progress + duplicate-check channels using the egui
             // frame time (monotonic, wall-clock-free) so terminal toasts can
             // schedule their auto-dismiss, then draw the overlay/dialogs/toasts.
+            // The binary-mismatch restart toast is pumped as its own call so
+            // its auto-dismiss never depends on the SFTP pump staying
+            // unconditional.
             let now = ctx.input(|i| i.time);
-            if app.pump_sftp(now) {
+            let mut toasts_changed = app.pump_restart_toast(now);
+            toasts_changed |= app.pump_sftp(now);
+            if toasts_changed {
                 ctx.request_repaint();
             }
             frame_events.sftp = crate::render::draw_sftp_overlay(ctx, app);
