@@ -1280,46 +1280,10 @@ impl App {
         if active_mux_window_added {
             self.scroll_active_tab_into_view = true;
         }
-        // Reset the mux sidebar overlay flag when the FOCUSED tab's mux
-        // group tore down this pump (a `Detached` reply, or the last
-        // window's `PtyExited` emptying the group — both routed into
-        // `tab.mux_group` by `Tab::pump` above, before this read). Compared
-        // against `self.active` before the exited-tab reap below (which can
-        // renumber it, mirroring the before/after-scrollback sampling
-        // rationale above the tab loop): the reap only runs when a tab is
-        // fully removed, which already implies its mux group (if any) went
-        // to `None` earlier in this same pass, so reading here still
-        // targets the right tab. A changed `self.active` between pumps
-        // (the user just switched tabs) intentionally does NOT reset the
-        // flag — see the field doc on `active_mux_attached_prev_pump`.
-        let active_mux_attached_now = self
-            .tabs
-            .get(self.active)
-            .is_some_and(|t| t.mux_group.is_some());
-        if self.active_mux_attached_prev_pump == Some(self.active) && !active_mux_attached_now {
-            self.mux_sidebar_overlay_open = false;
-        }
-        // task0001 FR1/FR2/FR3: open the overlay flag on the
-        // not-attached -> attached transition (bookkeeping field held no
-        // value at the end of the previous pump, AND the active tab is
-        // mux-attached now). Restores the AC-7 "default open" guarantee at
-        // startup and on reattach, since the runtime flag only starts open
-        // at construction — a later attach (the common case: the mux
-        // daemon connection completes asynchronously after `App::new`)
-        // would otherwise leave a stale `false` from an earlier detach.
-        // Unconditional, no gate on `window_sidebar_overlay` (mirrors the
-        // detach guard above): in persistent mode the flag drives no
-        // rendering, so the assignment is inert there. Read BEFORE the
-        // bookkeeping reassignment below, mirroring the detach guard.
-        // Reattach after an explicit close re-opens the sidebar (FR3,
-        // accepted) and switching the active tab onto an already-attached
-        // mux tab also satisfies this transition and reopens the sidebar —
-        // both accepted per IMPLEMENTATION.md D2 (the single-slot
-        // bookkeeping cannot distinguish the two cases).
-        if self.active_mux_attached_prev_pump.is_none() && active_mux_attached_now {
-            self.mux_sidebar_overlay_open = true;
-        }
-        self.active_mux_attached_prev_pump = active_mux_attached_now.then_some(self.active);
+        // Reconcile the mux sidebar overlay flag against the active tab's
+        // attach state (detach reset / attach re-open + bookkeeping). Must
+        // stay before the exited-tab reap below — see the method doc.
+        self.reconcile_mux_sidebar_overlay();
         for (sanitized_title, kind) in pending_notifications {
             let body = crate::notifications::notification_body(&sanitized_title, kind, self.locale);
             self.notify(crate::notifications::NOTIFICATION_TITLE, &body);
