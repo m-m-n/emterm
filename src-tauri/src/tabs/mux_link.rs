@@ -68,89 +68,8 @@ impl Tab {
             MessageType::AgentStatusUpdate => self.handle_agent_status_update(&msg),
             MessageType::Welcome => self.handle_welcome(&msg),
             MessageType::PaneCreated => self.handle_pane_created(msg.pane_id),
-            MessageType::SwitchWindow => {
-                // Daemon-initiated switch (e.g. CLI `switch-window`): sync the
-                // active index to the window owning this pane. Port of
-                // `handleRemoteSwitchWindow`'s index resolution.
-                //
-                // Capture the outgoing active pane id before the sync so the
-                // App-side per-pane scroll save/restore (FR3) can park the
-                // outgoing pane's position — the daemon handler runs inside
-                // `pump`, with no access to `App::scroll_position`, so it
-                // latches the transition for `App::pump_all` to apply.
-                let from_pane = self.mux_group.as_ref().and_then(|g| g.active_pane_id());
-                let synced = self
-                    .mux_group
-                    .as_mut()
-                    .map(|g| g.set_active_by_pane(msg.pane_id))
-                    .unwrap_or(false);
-                if synced {
-                    log::info!(
-                        "mux apc: remote switch to pane {} for tab {:?}",
-                        msg.pane_id,
-                        self.title
-                    );
-                    // Latch the outgoing pane id only when the switch actually
-                    // moved the active pane (a no-op switch onto the current
-                    // pane must not park/reload scroll or force a redraw), and
-                    // only for the FIRST move in this pump. Several SwitchWindow
-                    // messages can drain in one `pump` (A→B→C); only A is the
-                    // genuinely-displayed outgoing pane whose live scroll must be
-                    // parked — intermediate panes were never rendered. Keeping
-                    // the first `from` avoids parking the live scroll into a
-                    // wrong (intermediate) slot.
-                    let to_pane = self.mux_group.as_ref().and_then(|g| g.active_pane_id());
-                    if let (Some(from), Some(to)) = (from_pane, to_pane) {
-                        if from != to && self.pending_pane_switch_from.is_none() {
-                            self.pending_pane_switch_from = Some(from);
-                        }
-                    }
-                    // Reconcile the screen with the now-active window (parity
-                    // with the WebView remote-switch path's `requestPaneSnapshot`).
-                    self.request_pane_snapshot(msg.pane_id);
-                }
-                synced
-            }
-            MessageType::RenameWindow => {
-                // Daemon-broadcast rename. The wire field is the *pane id* —
-                // `confirm_mux_rename` sends `pane_ids()[idx]`, and the daemon
-                // re-broadcasts the frame with the same field unchanged. The
-                // earlier code interpreted `msg.pane_id` directly as a window
-                // id (commented "WebView `const windowId = paneId`"), which
-                // only worked when window ids and pane ids happened to
-                // coincide; for windows where they differ (locally-created
-                // windows get a synthetic window id from `fresh_window_id`
-                // while the daemon assigns its own pane id), the daemon's
-                // broadcast targeted the wrong window or no window at all.
-                // Resolve by pane id so producer and consumer agree on the
-                // contract (gpt-architecture + gpt-spec cross-model finding).
-                match msg.decode_payload::<RenameWindowMsg>() {
-                    Some(rename) => {
-                        let renamed = self
-                            .mux_group
-                            .as_mut()
-                            .and_then(|g| {
-                                let idx = g.index_of_pane_id(msg.pane_id)?;
-                                let window_id = g.windows().get(idx)?.id;
-                                Some(g.rename_window_id(window_id, rename.name.clone()))
-                            })
-                            .unwrap_or(false);
-                        if renamed {
-                            log::info!(
-                                "mux apc: pane {} renamed to {:?} for tab {:?}",
-                                msg.pane_id,
-                                rename.name,
-                                self.title
-                            );
-                        }
-                        renamed
-                    }
-                    None => {
-                        log::warn!("mux apc: malformed RenameWindow payload");
-                        false
-                    }
-                }
-            }
+            MessageType::SwitchWindow => self.handle_switch_window(msg.pane_id),
+            MessageType::RenameWindow => self.handle_rename_window(&msg),
             MessageType::PtyExited => {
                 // A window's shell exited: remove its window/pane. The group
                 // keeps rendering sub-tabs down to a single window; only
@@ -884,6 +803,95 @@ impl Tab {
             });
         }
         true
+    }
+
+    /// `SwitchWindow` arm of [`Self::apply_mux_message`]: sync the active
+    /// window to the daemon-initiated switch and reconcile the screen.
+    fn handle_switch_window(&mut self, pane_id: u32) -> bool {
+        // Daemon-initiated switch (e.g. CLI `switch-window`): sync the
+        // active index to the window owning this pane. Port of
+        // `handleRemoteSwitchWindow`'s index resolution.
+        //
+        // Capture the outgoing active pane id before the sync so the
+        // App-side per-pane scroll save/restore (FR3) can park the
+        // outgoing pane's position — the daemon handler runs inside
+        // `pump`, with no access to `App::scroll_position`, so it
+        // latches the transition for `App::pump_all` to apply.
+        let from_pane = self.mux_group.as_ref().and_then(|g| g.active_pane_id());
+        let synced = self
+            .mux_group
+            .as_mut()
+            .map(|g| g.set_active_by_pane(pane_id))
+            .unwrap_or(false);
+        if synced {
+            log::info!(
+                "mux apc: remote switch to pane {} for tab {:?}",
+                pane_id,
+                self.title
+            );
+            // Latch the outgoing pane id only when the switch actually
+            // moved the active pane (a no-op switch onto the current
+            // pane must not park/reload scroll or force a redraw), and
+            // only for the FIRST move in this pump. Several SwitchWindow
+            // messages can drain in one `pump` (A→B→C); only A is the
+            // genuinely-displayed outgoing pane whose live scroll must be
+            // parked — intermediate panes were never rendered. Keeping
+            // the first `from` avoids parking the live scroll into a
+            // wrong (intermediate) slot.
+            let to_pane = self.mux_group.as_ref().and_then(|g| g.active_pane_id());
+            if let (Some(from), Some(to)) = (from_pane, to_pane) {
+                if from != to && self.pending_pane_switch_from.is_none() {
+                    self.pending_pane_switch_from = Some(from);
+                }
+            }
+            // Reconcile the screen with the now-active window (parity
+            // with the WebView remote-switch path's `requestPaneSnapshot`).
+            self.request_pane_snapshot(pane_id);
+        }
+        synced
+    }
+
+    /// `RenameWindow` arm of [`Self::apply_mux_message`]: apply the
+    /// daemon-broadcast rename, resolved by pane id.
+    fn handle_rename_window(&mut self, msg: &MuxMessage) -> bool {
+        // Daemon-broadcast rename. The wire field is the *pane id* —
+        // `confirm_mux_rename` sends `pane_ids()[idx]`, and the daemon
+        // re-broadcasts the frame with the same field unchanged. The
+        // earlier code interpreted `msg.pane_id` directly as a window
+        // id (commented "WebView `const windowId = paneId`"), which
+        // only worked when window ids and pane ids happened to
+        // coincide; for windows where they differ (locally-created
+        // windows get a synthetic window id from `fresh_window_id`
+        // while the daemon assigns its own pane id), the daemon's
+        // broadcast targeted the wrong window or no window at all.
+        // Resolve by pane id so producer and consumer agree on the
+        // contract (gpt-architecture + gpt-spec cross-model finding).
+        match msg.decode_payload::<RenameWindowMsg>() {
+            Some(rename) => {
+                let renamed = self
+                    .mux_group
+                    .as_mut()
+                    .and_then(|g| {
+                        let idx = g.index_of_pane_id(msg.pane_id)?;
+                        let window_id = g.windows().get(idx)?.id;
+                        Some(g.rename_window_id(window_id, rename.name.clone()))
+                    })
+                    .unwrap_or(false);
+                if renamed {
+                    log::info!(
+                        "mux apc: pane {} renamed to {:?} for tab {:?}",
+                        msg.pane_id,
+                        rename.name,
+                        self.title
+                    );
+                }
+                renamed
+            }
+            None => {
+                log::warn!("mux apc: malformed RenameWindow payload");
+                false
+            }
+        }
     }
 
     /// Request an on-demand screen snapshot for `pane_id`. The daemon replies
