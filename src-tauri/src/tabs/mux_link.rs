@@ -66,171 +66,7 @@ impl Tab {
             // through to the wildcard arm below like any other
             // unrecognized message type.
             MessageType::AgentStatusUpdate => self.handle_agent_status_update(&msg),
-            MessageType::Welcome => match msg.decode_payload::<WelcomeMsg>() {
-                Some(WelcomeMsg::Accepted { sessions, .. }) => {
-                    match sessions.first() {
-                        Some(session) => {
-                            log::info!(
-                                "mux apc: tab {:?} attached to session {}",
-                                self.title,
-                                session.name
-                            );
-                            // Detect the first Welcome of this attach *before*
-                            // recording the session name. The bridge/daemon can
-                            // deliver Welcome twice (a known duplication); a
-                            // second Attach would make the daemon replay its
-                            // buffered output a second time, interleaving two
-                            // large base64 APC frames into a stream that no
-                            // longer decodes ("invalid base64 encoding").
-                            // `mux_session_name` is None before the first
-                            // Welcome and cleared again on Detach, so it doubles
-                            // as the per-attach guard without a new field.
-                            let first_welcome = self.mux_session_name.is_none();
-                            // Keep the existing session-name extraction intact
-                            // (F3): the status bar badge reads it.
-                            self.mux_session_name = Some(session.name.clone());
-                            // Become the live-output owner so continuous PTY
-                            // output (e.g. `top`) streams to native instead of
-                            // only on-demand snapshots. The daemon delivers its
-                            // live stream to a pane's single owning connection;
-                            // native must Attach to take ownership, exactly as
-                            // the WebView reattach path does (`mux-session.ts`).
-                            // Gate on the *targeted* session's pane_count so
-                            // when (in a future multi-session daemon)
-                            // `sessions[0].pane_count == 0` and a later session
-                            // has panes, we don't send an Attach to the empty
-                            // session — the WebView `existingPanes > 0` check
-                            // applies to the session being attached, not the
-                            // sum across every session.
-                            if first_welcome && session.pane_count > 0 {
-                                self.send_attach(session.id);
-                            }
-                            // Seed the window group from the session's window
-                            // list (additive). `windows` carries the daemon
-                            // window id / name / active pane id; the pane ids
-                            // are the per-window active panes, parallel to the
-                            // window list (F1). When the daemon omits the
-                            // window list (older daemon), leave the group
-                            // unseeded — it stays a plain tab.
-                            //
-                            // Gate the entire seed + snapshot block behind
-                            // `first_welcome` for the same reason as the Attach
-                            // guard above. On the (known) duplicate Welcome
-                            // delivery, replaying `group.seed(...)` would wipe
-                            // out anything accumulated between the two Welcomes
-                            // — a window appended from `PaneCreated`, an
-                            // optimistic `confirm_mux_rename`/`confirm_mux_move`
-                            // edit, an inbound `SwitchWindow` that moved
-                            // `active` — and a second `request_pane_snapshot`
-                            // would race the user's just-applied local change.
-                            if first_welcome && !session.windows.is_empty() {
-                                let (active_pane_id, seeded_pane_ids) = {
-                                    let group =
-                                        self.mux_group.get_or_insert_with(MuxWindowGroup::new);
-                                    let windows: Vec<MuxWindow> = session
-                                        .windows
-                                        .iter()
-                                        .map(|w| MuxWindow {
-                                            id: w.id,
-                                            name: w.name.clone(),
-                                        })
-                                        .collect();
-                                    let pane_ids: Vec<u32> =
-                                        session.windows.iter().map(|w| w.active_pane_id).collect();
-                                    group.seed(
-                                        windows,
-                                        pane_ids,
-                                        session.active_window_index as usize,
-                                    );
-                                    (group.active_pane_id(), group.pane_ids().to_vec())
-                                };
-                                // Tell the daemon every seeded pane's PTY size
-                                // up front, so a freshly attached client picks
-                                // up the GUI's current grid dimensions instead
-                                // of inheriting whatever the previous owner
-                                // (or the daemon's 80x24 default) left behind.
-                                // Without this the daemon-side wrap column
-                                // stays mismatched until the user happens to
-                                // resize the window.
-                                let (cols, rows) = {
-                                    let core = self.core.lock();
-                                    (core.cols(), core.rows())
-                                };
-                                for pane_id in &seeded_pane_ids {
-                                    self.send_control(&MuxMessage::control(
-                                        MessageType::Resize,
-                                        *pane_id,
-                                        &ResizeMsg { cols, rows },
-                                    ));
-                                    // task0003 AC-6: record this emission (mux
-                                    // attach/Welcome pane seeding site — see
-                                    // `ResizeFrameRecord`).
-                                    #[cfg(test)]
-                                    {
-                                        self.resize_frame_log.push(ResizeFrameRecord {
-                                            tab_stable_id: self.stable_id,
-                                            pane_id: *pane_id,
-                                            cols,
-                                            rows,
-                                        });
-                                    }
-                                }
-                                // Pull the active window's screen on attach — the
-                                // daemon does not push it unprompted, so without
-                                // this the freshly attached tab stays blank
-                                // (parity with the WebView reattach path's
-                                // `requestPaneSnapshot`).
-                                if let Some(pane_id) = active_pane_id {
-                                    self.request_pane_snapshot(pane_id);
-                                }
-                            } else if first_welcome && session.pane_count == 0 {
-                                // Fresh-start mux: the daemon has no panes yet,
-                                // so `windows` is empty and the seed/attach
-                                // branches above don't run. Legacy webview's
-                                // `enterMuxMode` sent CreateWindow on this path
-                                // to bootstrap the initial window — the native
-                                // port was missing that step, which is the
-                                // upstream cause of "shell freezes / status bar
-                                // alive": with no seeded pane, `mux_group` stays
-                                // `None`, `active_pane_id()` is `None`, and every
-                                // keystroke gets dropped in `write_input` while
-                                // the (historical, now-removed) mux status-bar
-                                // daemon push kept the status bar updating
-                                // regardless.
-                                //
-                                // Pre-install an empty group so the daemon's
-                                // subsequent `PaneCreated` reply can land — the
-                                // PaneCreated handler intentionally refuses to
-                                // install a group on its own (M4 guard against
-                                // pre-Welcome leakage).
-                                //
-                                // Send CreateWindow with an empty payload to
-                                // match legacy's `sendControl(CreateWindow, 0)`
-                                // wire form exactly — the daemon's
-                                // empty-payload backward-compat path (pinned by
-                                // `test_create_window_payload_empty_payload_backward_compat`)
-                                // applies CreateWindowPayload defaults.
-                                self.mux_group.get_or_insert_with(MuxWindowGroup::new);
-                                self.send_control(&MuxMessage {
-                                    msg_type: MessageType::CreateWindow,
-                                    pane_id: 0,
-                                    payload: Vec::new(),
-                                });
-                            }
-                            true
-                        }
-                        None => false,
-                    }
-                }
-                Some(WelcomeMsg::Rejected { reason }) => {
-                    log::warn!("mux apc: handshake rejected: {reason}");
-                    false
-                }
-                None => {
-                    log::warn!("mux apc: malformed Welcome payload");
-                    false
-                }
-            },
+            MessageType::Welcome => self.handle_welcome(&msg),
             MessageType::PaneCreated => {
                 // SPEC FR4 / Message Mapping: the daemon's PaneCreated is the
                 // authoritative "append window" signal — it fires for every
@@ -876,6 +712,171 @@ impl Tab {
             }
             None => {
                 log::warn!("mux apc: malformed AgentStatusUpdate payload");
+                false
+            }
+        }
+    }
+
+    /// `Welcome` arm of [`Self::apply_mux_message`]: attach handshake,
+    /// window-group seeding, and the fresh-start CreateWindow bootstrap.
+    fn handle_welcome(&mut self, msg: &MuxMessage) -> bool {
+        match msg.decode_payload::<WelcomeMsg>() {
+            Some(WelcomeMsg::Accepted { sessions, .. }) => {
+                match sessions.first() {
+                    Some(session) => {
+                        log::info!(
+                            "mux apc: tab {:?} attached to session {}",
+                            self.title,
+                            session.name
+                        );
+                        // Detect the first Welcome of this attach *before*
+                        // recording the session name. The bridge/daemon can
+                        // deliver Welcome twice (a known duplication); a
+                        // second Attach would make the daemon replay its
+                        // buffered output a second time, interleaving two
+                        // large base64 APC frames into a stream that no
+                        // longer decodes ("invalid base64 encoding").
+                        // `mux_session_name` is None before the first
+                        // Welcome and cleared again on Detach, so it doubles
+                        // as the per-attach guard without a new field.
+                        let first_welcome = self.mux_session_name.is_none();
+                        // Keep the existing session-name extraction intact
+                        // (F3): the status bar badge reads it.
+                        self.mux_session_name = Some(session.name.clone());
+                        // Become the live-output owner so continuous PTY
+                        // output (e.g. `top`) streams to native instead of
+                        // only on-demand snapshots. The daemon delivers its
+                        // live stream to a pane's single owning connection;
+                        // native must Attach to take ownership, exactly as
+                        // the WebView reattach path does (`mux-session.ts`).
+                        // Gate on the *targeted* session's pane_count so
+                        // when (in a future multi-session daemon)
+                        // `sessions[0].pane_count == 0` and a later session
+                        // has panes, we don't send an Attach to the empty
+                        // session — the WebView `existingPanes > 0` check
+                        // applies to the session being attached, not the
+                        // sum across every session.
+                        if first_welcome && session.pane_count > 0 {
+                            self.send_attach(session.id);
+                        }
+                        // Seed the window group from the session's window
+                        // list (additive). `windows` carries the daemon
+                        // window id / name / active pane id; the pane ids
+                        // are the per-window active panes, parallel to the
+                        // window list (F1). When the daemon omits the
+                        // window list (older daemon), leave the group
+                        // unseeded — it stays a plain tab.
+                        //
+                        // Gate the entire seed + snapshot block behind
+                        // `first_welcome` for the same reason as the Attach
+                        // guard above. On the (known) duplicate Welcome
+                        // delivery, replaying `group.seed(...)` would wipe
+                        // out anything accumulated between the two Welcomes
+                        // — a window appended from `PaneCreated`, an
+                        // optimistic `confirm_mux_rename`/`confirm_mux_move`
+                        // edit, an inbound `SwitchWindow` that moved
+                        // `active` — and a second `request_pane_snapshot`
+                        // would race the user's just-applied local change.
+                        if first_welcome && !session.windows.is_empty() {
+                            let (active_pane_id, seeded_pane_ids) = {
+                                let group = self.mux_group.get_or_insert_with(MuxWindowGroup::new);
+                                let windows: Vec<MuxWindow> = session
+                                    .windows
+                                    .iter()
+                                    .map(|w| MuxWindow {
+                                        id: w.id,
+                                        name: w.name.clone(),
+                                    })
+                                    .collect();
+                                let pane_ids: Vec<u32> =
+                                    session.windows.iter().map(|w| w.active_pane_id).collect();
+                                group.seed(windows, pane_ids, session.active_window_index as usize);
+                                (group.active_pane_id(), group.pane_ids().to_vec())
+                            };
+                            // Tell the daemon every seeded pane's PTY size
+                            // up front, so a freshly attached client picks
+                            // up the GUI's current grid dimensions instead
+                            // of inheriting whatever the previous owner
+                            // (or the daemon's 80x24 default) left behind.
+                            // Without this the daemon-side wrap column
+                            // stays mismatched until the user happens to
+                            // resize the window.
+                            let (cols, rows) = {
+                                let core = self.core.lock();
+                                (core.cols(), core.rows())
+                            };
+                            for pane_id in &seeded_pane_ids {
+                                self.send_control(&MuxMessage::control(
+                                    MessageType::Resize,
+                                    *pane_id,
+                                    &ResizeMsg { cols, rows },
+                                ));
+                                // task0003 AC-6: record this emission (mux
+                                // attach/Welcome pane seeding site — see
+                                // `ResizeFrameRecord`).
+                                #[cfg(test)]
+                                {
+                                    self.resize_frame_log.push(ResizeFrameRecord {
+                                        tab_stable_id: self.stable_id,
+                                        pane_id: *pane_id,
+                                        cols,
+                                        rows,
+                                    });
+                                }
+                            }
+                            // Pull the active window's screen on attach — the
+                            // daemon does not push it unprompted, so without
+                            // this the freshly attached tab stays blank
+                            // (parity with the WebView reattach path's
+                            // `requestPaneSnapshot`).
+                            if let Some(pane_id) = active_pane_id {
+                                self.request_pane_snapshot(pane_id);
+                            }
+                        } else if first_welcome && session.pane_count == 0 {
+                            // Fresh-start mux: the daemon has no panes yet,
+                            // so `windows` is empty and the seed/attach
+                            // branches above don't run. Legacy webview's
+                            // `enterMuxMode` sent CreateWindow on this path
+                            // to bootstrap the initial window — the native
+                            // port was missing that step, which is the
+                            // upstream cause of "shell freezes / status bar
+                            // alive": with no seeded pane, `mux_group` stays
+                            // `None`, `active_pane_id()` is `None`, and every
+                            // keystroke gets dropped in `write_input` while
+                            // the (historical, now-removed) mux status-bar
+                            // daemon push kept the status bar updating
+                            // regardless.
+                            //
+                            // Pre-install an empty group so the daemon's
+                            // subsequent `PaneCreated` reply can land — the
+                            // PaneCreated handler intentionally refuses to
+                            // install a group on its own (M4 guard against
+                            // pre-Welcome leakage).
+                            //
+                            // Send CreateWindow with an empty payload to
+                            // match legacy's `sendControl(CreateWindow, 0)`
+                            // wire form exactly — the daemon's
+                            // empty-payload backward-compat path (pinned by
+                            // `test_create_window_payload_empty_payload_backward_compat`)
+                            // applies CreateWindowPayload defaults.
+                            self.mux_group.get_or_insert_with(MuxWindowGroup::new);
+                            self.send_control(&MuxMessage {
+                                msg_type: MessageType::CreateWindow,
+                                pane_id: 0,
+                                payload: Vec::new(),
+                            });
+                        }
+                        true
+                    }
+                    None => false,
+                }
+            }
+            Some(WelcomeMsg::Rejected { reason }) => {
+                log::warn!("mux apc: handshake rejected: {reason}");
+                false
+            }
+            None => {
+                log::warn!("mux apc: malformed Welcome payload");
                 false
             }
         }
