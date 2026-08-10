@@ -2,7 +2,15 @@
 //! state and waiters, the title-sink shadow parser, and pane dimension
 //! bookkeeping.
 
-use super::*;
+use std::io::Write;
+use std::sync::{Arc, Mutex as StdMutex};
+
+use tokio::sync::mpsc;
+
+use crate::agent_status::AgentState;
+use crate::agent_status_exit_latch::AgentStatusExitLatch;
+use crate::prompts::PromptMarkKind;
+
 /// Pane identifier.
 pub type PaneId = u32;
 

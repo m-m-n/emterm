@@ -2,7 +2,10 @@
 //! and the deferred-output queue that absorbs bursts while a pane is
 //! detached or backpressured.
 
-use super::*;
+use tokio::sync::mpsc;
+
+use super::handles::PaneId;
+
 /// Discriminator on `PtyOutputChunk` distinguishing live PTY bytes from a
 /// `RequestPaneSnapshot` reply payload routed through the same per-pane
 /// channel.

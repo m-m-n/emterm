@@ -4,15 +4,13 @@ use std::io::Write;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use portable_pty::MasterPty;
-use tokio::sync::mpsc;
 
-use crate::agent_status::{AgentState, AgentStatusEvent};
+use crate::agent_status::AgentStatusEvent;
 use crate::agent_status_exit_latch::AgentStatusExitLatch;
 use crate::mux::scrollback_buffer::{
     DEFAULT_SCROLLBACK_CAPACITY, MAX_DIM_MARKERS, ScrollbackRingBuffer,
 };
 use crate::mux::session::child_reaper;
-use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
 use crate::prompts::PromptMarkKind;
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
