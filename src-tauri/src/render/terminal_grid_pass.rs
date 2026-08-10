@@ -20,10 +20,9 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use super::font::cache::{GlyphCache, GlyphKey};
-use super::font::compute_v_pad;
+use super::font::cache::GlyphCache;
 use super::font::fallback::FallbackChain;
-use super::font::traits::{AtlasFormat, GlyphRasterizer};
+use super::font::traits::GlyphRasterizer;
 
 /// Page index encoded into each instance for the WGSL shader. 0 == Alpha
 /// (R8, modulated by fg), 1 == Rgba (RGBA8, sampled as-is), 2 == solid

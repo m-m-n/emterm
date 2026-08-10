@@ -38,19 +38,10 @@ pub mod theme;
 
 use std::time::Duration;
 
-use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
-use term_core::cell::{
-    STYLE_BLINK, STYLE_BOLD, STYLE_DIM, STYLE_HIDDEN, STYLE_ITALIC, STYLE_REVERSE,
-    STYLE_STRIKETHROUGH, STYLE_UNDERLINE,
-};
-use term_core::terminal_core::TerminalCore;
-use term_core::{char_width, is_ambiguous_width};
+use egui::Color32;
 
 use crate::app::{App, BLINK_HALF_MS};
-use crate::render::terminal_grid_pass::{CellInput, GlyphFit};
-use crate::render::theme::{Rgb, Theme};
-use crate::selection::Selection;
-use crate::settings::AmbiguousWidthMode;
+use crate::render::theme::Theme;
 
 /// Fallback cell width in logical pixels when the rasterizer can't
 /// measure "M" (e.g. test builds with a stub rasterizer that returns
