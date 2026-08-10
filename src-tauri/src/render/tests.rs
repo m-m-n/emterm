@@ -67,55 +67,160 @@ fn ac4_frame_events_any_false_for_default_true_for_each_remaining_field() {
 
 // ── task0006 AC-3: cursor/search origin carry no sidebar term ──────
 
-/// Regression guard for the right-edge placement update: `draw_cursor`
-/// and `draw_search_highlights` must not read any mux-sidebar inset
-/// into their x-origin — the persistent sidebar reserves grid WIDTH
-/// only. Scans each function's own source text (between its `fn`
-/// signature and the next top-level `fn`) rather than the whole file,
-/// since `sidebar_width` / `sidebar_visibility` legitimately appear
-/// elsewhere in this module for drawing the widget itself.
-#[test]
-fn draw_cursor_and_search_highlights_origin_have_no_sidebar_term() {
-    let src = include_str!("overlays.rs");
-    let extract_fn_source = |signature: &str| -> String {
-        let start = src
-            .find(signature)
-            .unwrap_or_else(|| panic!("marker `{signature}` not found in overlays.rs"));
-        let body = &src[start..];
-        let tail = &body[signature.len()..];
-        let end = [tail.find("\nfn "), tail.find("\npub(in crate::render) fn ")]
-            .into_iter()
-            .flatten()
-            .min()
-            .map(|i| i + signature.len())
-            .unwrap_or(body.len());
-        body[..end].to_string()
+/// Build an `App` whose single tab spawned no real shell process
+/// ([`crate::tabs::Tab::test_shell_less`]), mirroring `app/tests.rs`'s
+/// helper of the same shape (duplicated here rather than shared across
+/// modules — both are private `#[cfg(test)]` helpers).
+fn app_with_shell_less_tab() -> App {
+    let mut app = App::new();
+    let dims = app.cell_size;
+    let tab = crate::tabs::Tab::test_shell_less(
+        "shell",
+        dims.cols,
+        dims.rows,
+        app.settings.scrollback_lines,
+        app.settings.clone(),
+        app.notification_sink.clone(),
+    );
+    app.tabs.push(tab);
+    app.active = 0;
+    app
+}
+
+/// Attach the active tab to a single-window mux session (mirrors
+/// `window_host/tests.rs`'s helper of the same name). With the
+/// overlay-mode setting at its default (`false`), this flips
+/// `mux_sidebar_visibility()` from `Hidden` to `Persistent`.
+fn attach_active_tab_to_mux_session(app: &mut App) {
+    use mux_ipc::protocol::{MessageType, MuxMessage, SessionInfo, WelcomeMsg, WindowInfo};
+    let windows = vec![WindowInfo {
+        id: 1,
+        name: "win".to_string(),
+        active_pane_id: 10,
+    }];
+    let session = SessionInfo {
+        id: 1,
+        name: "main".to_string(),
+        window_count: windows.len() as u32,
+        pane_count: windows.len() as u32,
+        active_window_index: 0,
+        windows,
     };
-    let draw_cursor_src = extract_fn_source("fn draw_cursor(");
-    let draw_search_src = extract_fn_source("fn draw_search_highlights(");
-    // Target the specific x-origin-inset code terms rather than the
-    // bare word "sidebar" — both functions' doc comments legitimately
-    // mention the sidebar in prose (explaining why there is no term).
-    let forbidden = [
-        "sidebar_inset",
-        "mux_sidebar_x_inset",
-        "mux_sidebar_grid_inset",
-    ];
-    for needle in forbidden {
-        assert!(
-            !draw_cursor_src.contains(needle),
-            "draw_cursor's origin math must contain no sidebar term \
-             (AC-3): found `{needle}` — the cursor x-origin must be \
-             identical with and without the persistent sidebar"
-        );
-        assert!(
-            !draw_search_src.contains(needle),
-            "draw_search_highlights's origin math must contain no \
-             sidebar term (AC-3): found `{needle}` — the search-\
-             highlight x-origin must be identical with and without the \
-             persistent sidebar"
-        );
-    }
+    let welcome = MuxMessage::control(
+        MessageType::Welcome,
+        0,
+        &WelcomeMsg::Accepted {
+            server_version: 1,
+            sessions: vec![session],
+        },
+    );
+    app.on_mux_message(0, welcome);
+}
+
+/// Run one egui frame that paints exactly the two AC-3 overlay passes
+/// (`draw_cursor` + `draw_search_highlights`) and return every shape it
+/// produced. A fresh `Context` + default `RawInput` per call keeps the
+/// two invocations below comparable shape-for-shape.
+fn overlay_pass_shapes(
+    app: &App,
+    core: &TerminalCore,
+    theme: &Theme,
+) -> Vec<egui::epaint::ClippedShape> {
+    let ctx = egui::Context::default();
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            super::overlays::draw_cursor(ui, core, theme, app);
+            super::overlays::draw_search_highlights(ui, core, app);
+        });
+    });
+    output.shapes
+}
+
+/// Regression guard for the right-edge placement update (AC-3):
+/// `draw_cursor` and `draw_search_highlights` must not read any
+/// mux-sidebar inset into their x-origin — the persistent sidebar
+/// reserves grid WIDTH only. Verified behaviorally: both functions are
+/// exercised for real with the sidebar `Hidden` and then `Persistent`,
+/// and their full painted output must be identical. Any sidebar term
+/// sneaking into the origin math would shift the painted coordinates
+/// between the two states and fail the comparison. (Replaces a former
+/// source-text scan that was coupled to `overlays.rs`'s file layout and
+/// visibility spelling.)
+#[test]
+fn draw_cursor_and_search_highlights_paint_identically_with_persistent_sidebar() {
+    let mut app = app_with_shell_less_tab();
+    // Persistent (not overlay) sidebar mode — the variant that reserves
+    // grid width and therefore the one AC-3 constrains. `app.settings`
+    // is an `Arc<Settings>` — clone-and-flip to mutate, mirroring
+    // `window_host/tests.rs`'s pattern for the same purpose.
+    app.settings = std::sync::Arc::new({
+        let mut s = (*app.settings).clone();
+        s.mux.window_sidebar_overlay = false;
+        s
+    });
+    // Unfocused window: `draw_cursor` holds the cursor at its steady
+    // "on" phase (hollow outline), bypassing the blink clock so the
+    // paint is wall-clock independent.
+    app.window_focused = false;
+    // Non-degenerate cell metrics so a sidebar term leaking into the
+    // origin would move the shapes by a visible amount.
+    app.cell_w_logical = 9.0;
+    app.cell_h_logical = 18.0;
+    // One in-viewport search match so `draw_search_highlights` paints.
+    app.search.visible = true;
+    app.search.current_index = 0;
+    app.search.matches = vec![crate::search::SearchMatch {
+        segments: vec![crate::search::MatchSegment {
+            abs_row: 0,
+            col_start: 2,
+            col_end: 5,
+        }],
+    }];
+
+    let mut core = TerminalCore::new(80, 24, 100);
+    core.set_cursor_visible(true);
+    core.set_cursor(3, 1);
+    let theme = Theme::default();
+
+    assert_eq!(
+        app.mux_sidebar_visibility(),
+        crate::app::MuxSidebarVisibility::Hidden,
+        "precondition: an unattached tab shows no sidebar"
+    );
+    let shapes_hidden = overlay_pass_shapes(&app, &core, &theme);
+
+    attach_active_tab_to_mux_session(&mut app);
+    assert_eq!(
+        app.mux_sidebar_visibility(),
+        crate::app::MuxSidebarVisibility::Persistent,
+        "precondition: mux attach with overlay mode off shows the persistent sidebar"
+    );
+    let shapes_persistent = overlay_pass_shapes(&app, &core, &theme);
+
+    // Non-vacuousness: the overlay passes painted something beyond the
+    // bare panel background — the cursor outline and the highlight rect
+    // are actually present, so the equality below compares real output.
+    let baseline = {
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |_ui| {});
+        });
+        output.shapes
+    };
+    assert!(
+        shapes_hidden.len() >= baseline.len() + 2,
+        "expected the cursor outline and the search-highlight rect on \
+         top of the {} bare-panel shape(s), got {} total",
+        baseline.len(),
+        shapes_hidden.len()
+    );
+
+    assert_eq!(
+        shapes_hidden, shapes_persistent,
+        "cursor / search-highlight paint must be identical with and \
+         without the persistent sidebar (AC-3): the sidebar reserves \
+         grid WIDTH only — no x-origin term"
+    );
 }
 
 #[test]
