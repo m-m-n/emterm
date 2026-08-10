@@ -1,6 +1,6 @@
-//! Client-side daemon control: shutdown and upgrade requests over the
-//! socket, reachability polling, legacy-daemon recovery, and upgrade
-//! admission bookkeeping.
+//! Client-side daemon control: the ensure-running bootstrap, shutdown and
+//! upgrade requests over the socket, reachability polling, legacy-daemon
+//! recovery, and upgrade admission bookkeeping.
 
 use super::*;
 /// Send a bare `Shutdown` control message. `Shutdown`'s wire shape (message
@@ -178,6 +178,44 @@ pub(in crate::mux) enum LegacyRecovery {
     /// A daemon speaking [`PREVIOUS_PROTOCOL_VERSION`] was found and asked
     /// to exit; the caller should now spawn a fresh daemon.
     Recovered,
+}
+
+/// Ensure the mux daemon is running, spawning it if necessary.
+///
+/// If the socket file does not exist, spawns the daemon as a background
+/// process and waits for it to become ready with exponential backoff.
+/// Returns the socket path on success.
+pub fn ensure_daemon_running() -> Result<PathBuf, String> {
+    let sock_path = socket_path();
+
+    // Clean up stale socket (daemon died but socket file remains)
+    cleanup_stale_socket(&sock_path)
+        .map_err(|e| format!("Failed to clean up stale socket: {}", e))?;
+
+    let mut daemon_running = if cfg!(unix) {
+        sock_path.exists()
+    } else {
+        is_daemon_running(&sock_path)
+    };
+
+    if daemon_running {
+        // Strategy B (task0010 rework): a presence check alone cannot tell
+        // an old-protocol daemon from a compatible one — every mux client
+        // would fail against a long-lived v1 daemon after an eMterm
+        // upgrade. Probe the real protocol version and, on the adjacent
+        // older version, shut the legacy daemon down automatically so a
+        // compatible one can start in its place.
+        match recover_from_legacy_daemon(&sock_path)? {
+            LegacyRecovery::Compatible => {}
+            LegacyRecovery::Recovered => daemon_running = false,
+        }
+    }
+
+    if !daemon_running {
+        spawn_daemon(&sock_path)?;
+    }
+
+    Ok(sock_path)
 }
 
 /// Probe the daemon already occupying `sock_path` and recover automatically

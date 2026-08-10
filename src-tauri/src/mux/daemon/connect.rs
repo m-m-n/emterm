@@ -94,55 +94,19 @@ pub fn cleanup_stale_socket(path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Ensure the mux daemon is running, spawning it if necessary.
-///
-/// If the socket file does not exist, spawns the daemon as a background
-/// process and waits for it to become ready with exponential backoff.
-/// Returns the socket path on success.
-pub fn ensure_daemon_running() -> Result<PathBuf, String> {
-    let sock_path = socket_path();
-
-    // Clean up stale socket (daemon died but socket file remains)
-    cleanup_stale_socket(&sock_path)
-        .map_err(|e| format!("Failed to clean up stale socket: {}", e))?;
-
-    let mut daemon_running = if cfg!(unix) {
-        sock_path.exists()
-    } else {
-        is_daemon_running(&sock_path)
-    };
-
-    if daemon_running {
-        // Strategy B (task0010 rework): a presence check alone cannot tell
-        // an old-protocol daemon from a compatible one — every mux client
-        // would fail against a long-lived v1 daemon after an eMterm
-        // upgrade. Probe the real protocol version and, on the adjacent
-        // older version, shut the legacy daemon down automatically so a
-        // compatible one can start in its place.
-        match recover_from_legacy_daemon(&sock_path)? {
-            LegacyRecovery::Compatible => {}
-            LegacyRecovery::Recovered => daemon_running = false,
-        }
-    }
-
-    if !daemon_running {
-        spawn_daemon(&sock_path)?;
-    }
-
-    Ok(sock_path)
-}
-
 /// Create the socket's parent directory with restricted permissions, spawn
 /// the daemon as a detached background process, and wait for it to become
 /// ready with exponential backoff.
 ///
-/// Extracted out of [`ensure_daemon_running`] (task0001) so the `emterm mux
-/// attach` path can respawn a daemon after a legacy-daemon recovery
-/// shutdown, without duplicating the spawn/readiness logic.
+/// Extracted out of the ensure-daemon-running bootstrap (task0001, now in
+/// `control_client.rs`) so the `emterm mux attach` path can respawn a
+/// daemon after a legacy-daemon recovery shutdown, without duplicating the
+/// spawn/readiness logic.
 ///
 /// Precondition: no compatible daemon currently owns `sock_path` (the
 /// caller is responsible for stale-socket cleanup, the presence check, and
-/// the recovery probe, as [`ensure_daemon_running`] does). Postcondition: a
+/// the recovery probe, as `control_client.rs`'s ensure-daemon-running
+/// bootstrap does). Postcondition: a
 /// daemon answers on `sock_path`, or this returns an error string identical
 /// to the pre-extraction failure messages ("Failed to spawn daemon: …",
 /// "Failed to start mux daemon").
