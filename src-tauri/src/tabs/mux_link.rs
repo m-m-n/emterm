@@ -55,152 +55,7 @@ impl Tab {
     pub fn apply_mux_message(&mut self, msg: MuxMessage) -> bool {
         match msg.msg_type {
             MessageType::Snapshot | MessageType::SnapshotRestore => {
-                // task0003 D3 (review round-2 findings `200b2c8beeb68fe4` /
-                // `87ba3cc2911d104e`): a frame that RESETS the tab's single
-                // core must only be applied when it belongs to the pane this
-                // tab is currently displaying — mirrors the `PtyOutput` arm's
-                // filter below. Both the reattach path (per-pane
-                // `SnapshotRestore`) and the visibility-resume path
-                // (per-pane `Snapshot`) send one such frame per pane in the
-                // session, relying on the CLIENT to pick the right one; this
-                // arm used to apply whatever arrived last unconditionally,
-                // so a background window's reattach / resume snapshot
-                // silently overwrote the visible pane's content with a
-                // different window's screen — re-introducing, via this
-                // newer per-pane framing, the exact "switch shows the wrong
-                // pane's content" symptom this feature exists to fix. When
-                // the tab has no window group (older daemon / single pane),
-                // `active_pane_id()` is `None` and every frame is accepted,
-                // matching the `PtyOutput` arm's fallback.
-                if let Some(active) = self.mux_group.as_ref().and_then(|g| g.active_pane_id()) {
-                    if msg.pane_id != active {
-                        log::debug!(
-                            "mux apc: dropping {:?} for non-active pane {} (active {}) for tab {:?}",
-                            msg.msg_type,
-                            msg.pane_id,
-                            active,
-                            self.title
-                        );
-                        return false;
-                    }
-                }
-                // task0004 round-4 rework (D1'): decode the wire payload
-                // into its structural dimension segments + plain content
-                // bytes (`mux_ipc::protocol::decode_snapshot_payload_typed`).
-                // An older daemon's payload (no magic prefix) decodes as
-                // `Legacy`, degrading to single-dimension replay (AC-11) —
-                // see `reset_and_replay_segments`'s doc comment.
-                //
-                // D3''' (round-6 rework, review round-5 finding
-                // `b45fb09344067621`): use the TYPED result, not the tuple
-                // compatibility wrapper — `Malformed` there maps to
-                // `(Vec::new(), &[])`, which this arm would apply as "empty
-                // snapshot," blanking the pane the same way rendering the
-                // corrupt envelope literally would have. A `Malformed`
-                // frame here instead logs and skips applying it entirely,
-                // leaving whatever is currently displayed intact.
-                #[cfg(test)]
-                {
-                    // task0006 FR8 AC-6: counts every decode attempt,
-                    // including one that will end up coalescing into an
-                    // already-in-flight same-pane switch below — see
-                    // `test_snapshot_decode_count`'s doc for what this
-                    // does (and does not) claim about FR8's scope.
-                    self.snapshot_decode_count += 1;
-                }
-                let (dim_segments, content_bytes) =
-                    match decode_snapshot_payload_typed(&msg.payload) {
-                        DecodedSnapshotPayload::Legacy(content) => (Vec::new(), content.to_vec()),
-                        DecodedSnapshotPayload::Structured { segments, content } => {
-                            (segments, content.to_vec())
-                        }
-                        DecodedSnapshotPayload::Malformed => {
-                            log::warn!(
-                                "mux apc: dropping malformed {:?} payload ({} bytes) for tab {:?} \
-                             (pane {}); keeping the current display",
-                                msg.msg_type,
-                                msg.payload.len(),
-                                self.title,
-                                msg.pane_id
-                            );
-                            return false;
-                        }
-                    };
-                let segments: Vec<ReplaySegment> = dim_segments
-                    .iter()
-                    .map(|d| ReplaySegment {
-                        offset: d.offset,
-                        cols: d.cols,
-                        rows: d.rows,
-                    })
-                    .collect();
-                // FR4: branch on payload size. Small snapshots replay
-                // synchronously (no perceptible block, no swap gap); large
-                // ones go off-thread so the switch stays responsive.
-                //
-                // D3''/AC-5 (task0005 rework, review round-4 finding
-                // `b1de83542bfe60bc`): ALSO branch on segment count — a
-                // small-payload, many-segment snapshot (a resize-drag-shaped
-                // sequence) can still cost real reflow time on the
-                // synchronous path, since each segment's reflow cost scales
-                // with the core's accumulated size, not the segment's own
-                // byte count.
-                if content_bytes.len() < OFFTHREAD_REPLAY_THRESHOLD_BYTES
-                    && segments.len() < OFFTHREAD_REPLAY_SEGMENT_THRESHOLD
-                {
-                    // Synchronous path (legacy). `reset_frame_for_replay`
-                    // owns the recipe (prompt clear, fold rebuild, drain +
-                    // backfill marks so `pending_frame_reset` latches) so the
-                    // PaneCreated path stays in lockstep. A pending off-thread
-                    // switch (if any) is superseded by this newer, now-applied
-                    // switch — `supersede_pending_replay` signals its worker
-                    // to bail before dropping it, drops any coalesced
-                    // same-pane re-dispatch (FR7/FR8, task0003 — now moot,
-                    // this sync application is itself the newest switch), and
-                    // cancels any in-flight 2nd-pass scrollback restore.
-                    let _ = self.supersede_pending_replay("superseded by sync switch");
-                    let _actions = self.reset_frame_for_replay(&content_bytes, &segments);
-                    log::debug!(
-                        "mux apc: applied {:?} ({} bytes, {} segments, sync) for tab {:?}",
-                        msg.msg_type,
-                        content_bytes.len(),
-                        segments.len(),
-                        self.title
-                    );
-                } else {
-                    // Off-thread path (FR1/FR4): copy the payload, do the
-                    // frame-discard portion now (prompts/folds belonged to
-                    // the outgoing frame), and dispatch a worker. The
-                    // displayed core is left intact so the outgoing pane
-                    // stays visible until the swap. A newer switch supersedes
-                    // any prior in-flight parse.
-                    //
-                    // The live-output queue is keyed on the tab's *active*
-                    // pane id (the pane `switch_to` already moved to), the
-                    // same id the `PtyOutput` arm filters on, so live bytes
-                    // for the just-switched-to pane queue while the parse runs
-                    // instead of being dropped. Fall back to the snapshot's
-                    // own `pane_id` when the tab has no window group.
-                    let target_pane = self
-                        .mux_group
-                        .as_ref()
-                        .and_then(|g| g.active_pane_id())
-                        .unwrap_or(msg.pane_id);
-                    let segments_len = segments.len();
-                    self.dispatch_offthread_replay(target_pane, content_bytes, segments);
-                    log::debug!(
-                        "mux apc: dispatched {:?} ({} bytes, {} segments, off-thread) for tab {:?} pane {}",
-                        msg.msg_type,
-                        self.pending_switch
-                            .as_ref()
-                            .map(|p| p.payload.len())
-                            .unwrap_or(0),
-                        segments_len,
-                        self.title,
-                        target_pane
-                    );
-                }
-                true
+                self.handle_snapshot(msg.msg_type, msg.pane_id, &msg.payload)
             }
             MessageType::PtyOutput => {
                 // OSC-probe (temporary): flag when GUI-side sees a viewer
@@ -867,6 +722,156 @@ impl Tab {
                 false
             }
         }
+    }
+
+    /// `Snapshot` / `SnapshotRestore` arm of [`Self::apply_mux_message`]:
+    /// pane-filter, payload decode, and sync / off-thread replay dispatch.
+    fn handle_snapshot(&mut self, msg_type: MessageType, pane_id: u32, payload: &[u8]) -> bool {
+        // task0003 D3 (review round-2 findings `200b2c8beeb68fe4` /
+        // `87ba3cc2911d104e`): a frame that RESETS the tab's single
+        // core must only be applied when it belongs to the pane this
+        // tab is currently displaying — mirrors the `PtyOutput` arm's
+        // filter below. Both the reattach path (per-pane
+        // `SnapshotRestore`) and the visibility-resume path
+        // (per-pane `Snapshot`) send one such frame per pane in the
+        // session, relying on the CLIENT to pick the right one; this
+        // arm used to apply whatever arrived last unconditionally,
+        // so a background window's reattach / resume snapshot
+        // silently overwrote the visible pane's content with a
+        // different window's screen — re-introducing, via this
+        // newer per-pane framing, the exact "switch shows the wrong
+        // pane's content" symptom this feature exists to fix. When
+        // the tab has no window group (older daemon / single pane),
+        // `active_pane_id()` is `None` and every frame is accepted,
+        // matching the `PtyOutput` arm's fallback.
+        if let Some(active) = self.mux_group.as_ref().and_then(|g| g.active_pane_id()) {
+            if pane_id != active {
+                log::debug!(
+                    "mux apc: dropping {:?} for non-active pane {} (active {}) for tab {:?}",
+                    msg_type,
+                    pane_id,
+                    active,
+                    self.title
+                );
+                return false;
+            }
+        }
+        // task0004 round-4 rework (D1'): decode the wire payload
+        // into its structural dimension segments + plain content
+        // bytes (`mux_ipc::protocol::decode_snapshot_payload_typed`).
+        // An older daemon's payload (no magic prefix) decodes as
+        // `Legacy`, degrading to single-dimension replay (AC-11) —
+        // see `reset_and_replay_segments`'s doc comment.
+        //
+        // D3''' (round-6 rework, review round-5 finding
+        // `b45fb09344067621`): use the TYPED result, not the tuple
+        // compatibility wrapper — `Malformed` there maps to
+        // `(Vec::new(), &[])`, which this arm would apply as "empty
+        // snapshot," blanking the pane the same way rendering the
+        // corrupt envelope literally would have. A `Malformed`
+        // frame here instead logs and skips applying it entirely,
+        // leaving whatever is currently displayed intact.
+        #[cfg(test)]
+        {
+            // task0006 FR8 AC-6: counts every decode attempt,
+            // including one that will end up coalescing into an
+            // already-in-flight same-pane switch below — see
+            // `test_snapshot_decode_count`'s doc for what this
+            // does (and does not) claim about FR8's scope.
+            self.snapshot_decode_count += 1;
+        }
+        let (dim_segments, content_bytes) = match decode_snapshot_payload_typed(payload) {
+            DecodedSnapshotPayload::Legacy(content) => (Vec::new(), content.to_vec()),
+            DecodedSnapshotPayload::Structured { segments, content } => {
+                (segments, content.to_vec())
+            }
+            DecodedSnapshotPayload::Malformed => {
+                log::warn!(
+                    "mux apc: dropping malformed {:?} payload ({} bytes) for tab {:?} \
+                     (pane {}); keeping the current display",
+                    msg_type,
+                    payload.len(),
+                    self.title,
+                    pane_id
+                );
+                return false;
+            }
+        };
+        let segments: Vec<ReplaySegment> = dim_segments
+            .iter()
+            .map(|d| ReplaySegment {
+                offset: d.offset,
+                cols: d.cols,
+                rows: d.rows,
+            })
+            .collect();
+        // FR4: branch on payload size. Small snapshots replay
+        // synchronously (no perceptible block, no swap gap); large
+        // ones go off-thread so the switch stays responsive.
+        //
+        // D3''/AC-5 (task0005 rework, review round-4 finding
+        // `b1de83542bfe60bc`): ALSO branch on segment count — a
+        // small-payload, many-segment snapshot (a resize-drag-shaped
+        // sequence) can still cost real reflow time on the
+        // synchronous path, since each segment's reflow cost scales
+        // with the core's accumulated size, not the segment's own
+        // byte count.
+        if content_bytes.len() < OFFTHREAD_REPLAY_THRESHOLD_BYTES
+            && segments.len() < OFFTHREAD_REPLAY_SEGMENT_THRESHOLD
+        {
+            // Synchronous path (legacy). `reset_frame_for_replay`
+            // owns the recipe (prompt clear, fold rebuild, drain +
+            // backfill marks so `pending_frame_reset` latches) so the
+            // PaneCreated path stays in lockstep. A pending off-thread
+            // switch (if any) is superseded by this newer, now-applied
+            // switch — `supersede_pending_replay` signals its worker
+            // to bail before dropping it, drops any coalesced
+            // same-pane re-dispatch (FR7/FR8, task0003 — now moot,
+            // this sync application is itself the newest switch), and
+            // cancels any in-flight 2nd-pass scrollback restore.
+            let _ = self.supersede_pending_replay("superseded by sync switch");
+            let _actions = self.reset_frame_for_replay(&content_bytes, &segments);
+            log::debug!(
+                "mux apc: applied {:?} ({} bytes, {} segments, sync) for tab {:?}",
+                msg_type,
+                content_bytes.len(),
+                segments.len(),
+                self.title
+            );
+        } else {
+            // Off-thread path (FR1/FR4): copy the payload, do the
+            // frame-discard portion now (prompts/folds belonged to
+            // the outgoing frame), and dispatch a worker. The
+            // displayed core is left intact so the outgoing pane
+            // stays visible until the swap. A newer switch supersedes
+            // any prior in-flight parse.
+            //
+            // The live-output queue is keyed on the tab's *active*
+            // pane id (the pane `switch_to` already moved to), the
+            // same id the `PtyOutput` arm filters on, so live bytes
+            // for the just-switched-to pane queue while the parse runs
+            // instead of being dropped. Fall back to the snapshot's
+            // own `pane_id` when the tab has no window group.
+            let target_pane = self
+                .mux_group
+                .as_ref()
+                .and_then(|g| g.active_pane_id())
+                .unwrap_or(pane_id);
+            let segments_len = segments.len();
+            self.dispatch_offthread_replay(target_pane, content_bytes, segments);
+            log::debug!(
+                "mux apc: dispatched {:?} ({} bytes, {} segments, off-thread) for tab {:?} pane {}",
+                msg_type,
+                self.pending_switch
+                    .as_ref()
+                    .map(|p| p.payload.len())
+                    .unwrap_or(0),
+                segments_len,
+                self.title,
+                target_pane
+            );
+        }
+        true
     }
 
     /// Request an on-demand screen snapshot for `pane_id`. The daemon replies
