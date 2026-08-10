@@ -33,7 +33,7 @@ fn cell_metrics_px_origin_x_has_no_sidebar_term() {
     let src = include_str!("resize_layout.rs");
     let start = src
         .find("fn cell_metrics_px(&self, app: &App)")
-        .expect("marker `fn cell_metrics_px` not found in window_host.rs");
+        .expect("marker `fn cell_metrics_px` not found in resize_layout.rs");
     let body = &src[start..];
     let end = body
         .find("\n    pub fn grid_size(")
@@ -1485,10 +1485,10 @@ fn fr1_wheel_sub_notch_pixel_delta_is_noop() {
 /// task plan's Test Notes).
 #[test]
 fn mouse_wheel_handler_routes_sidebar_hits_to_egui_before_the_terminal_scroll_path() {
-    let src = include_str!("event_loop.rs");
+    let src = include_str!("pointer_routing.rs");
     let start = src
-        .find("WindowEvent::MouseWheel { delta, .. } =>")
-        .expect("MouseWheel arm not found in window_host.rs");
+        .find("pub(super) fn handle_mouse_wheel(")
+        .expect("MouseWheel handler not found in pointer_routing.rs");
     let body = &src[start..];
     let sidebar_guard_pos = body.find("mux_sidebar::point_in_sidebar").expect(
         "MouseWheel handler must query ui::mux_sidebar::point_in_sidebar (AC-4: the \
@@ -1533,10 +1533,10 @@ fn mouse_wheel_handler_routes_sidebar_hits_to_egui_before_the_terminal_scroll_pa
 /// that case and this test does not re-derive that coverage.
 #[test]
 fn mouse_input_press_guard_queries_shared_sidebar_hit_region_before_selection_start() {
-    let src = include_str!("event_loop.rs");
+    let src = include_str!("pointer_routing.rs");
     let arm_start = src
-        .find("WindowEvent::PointerButton { state, button, .. } =>")
-        .expect("PointerButton arm not found in window_host.rs");
+        .find("pub(super) fn handle_pointer_button(")
+        .expect("PointerButton handler not found in pointer_routing.rs");
     let arm_body = &src[arm_start..];
     let guard_start = arm_body
         .find("// Same rule for the bottom status-bar panel")
@@ -1578,16 +1578,16 @@ fn mouse_input_press_guard_queries_shared_sidebar_hit_region_before_selection_st
 /// (IMPLEMENTATION.md decision 3.5).
 #[test]
 fn press_and_wheel_guards_share_the_same_sidebar_hit_region_helper() {
-    let src = include_str!("event_loop.rs");
+    let src = include_str!("pointer_routing.rs");
     let press_start = src
-        .find("WindowEvent::PointerButton { state, button, .. } =>")
-        .expect("PointerButton arm not found in window_host.rs");
+        .find("pub(super) fn handle_pointer_button(")
+        .expect("PointerButton handler not found in pointer_routing.rs");
     let wheel_start = src
-        .find("WindowEvent::MouseWheel { delta, .. } =>")
-        .expect("MouseWheel arm not found in window_host.rs");
+        .find("pub(super) fn handle_mouse_wheel(")
+        .expect("MouseWheel handler not found in pointer_routing.rs");
     assert!(
         press_start < wheel_start,
-        "expected the PointerButton arm to appear before the MouseWheel arm"
+        "expected the PointerButton handler to appear before the MouseWheel handler"
     );
     let press_body = &src[press_start..wheel_start];
     assert!(
@@ -1626,14 +1626,14 @@ fn press_and_wheel_guards_share_the_same_sidebar_hit_region_helper() {
 /// inside the sidebar" is exercised by `ui::mux_sidebar::tests::ac1_*`.
 #[test]
 fn pointer_moved_hover_feed_shares_the_same_sidebar_hit_region_helper() {
-    let src = include_str!("event_loop.rs");
+    let src = include_str!("pointer_routing.rs");
     let arm_start = src
-        .find("WindowEvent::PointerMoved { position, .. } =>")
-        .expect("PointerMoved arm not found in window_host.rs");
+        .find("pub(super) fn handle_pointer_moved(")
+        .expect("PointerMoved handler not found in pointer_routing.rs");
     let arm_body = &src[arm_start..];
     let arm_end = arm_body
-        .find("\n            WindowEvent::PointerButton")
-        .expect("PointerButton arm not found after PointerMoved");
+        .find("\npub(super) fn handle_pointer_button(")
+        .expect("PointerButton handler not found after handle_pointer_moved");
     let moved_body = &arm_body[..arm_end];
     assert!(
         moved_body.contains("mux_sidebar::point_in_sidebar("),
