@@ -1,26 +1,19 @@
 //! Message handlers for mux IPC commands.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 
-use super::outbound::{OutboundAdmission, ReplySink};
+use super::outbound::ReplySink;
 use super::protocol::*;
 use super::pty_spawn::{register_pane_and_start_reader, spawn_pty};
-use super::reattach::{
-    build_shadow_parser_snapshot, collect_reattach_data, detach_session_panes, send_reattach_data,
-};
-use crate::agent_status::AgentState as CoreAgentState;
-use crate::mux::daemon::{from_wire_state, to_wire_state};
+use super::reattach::build_shadow_parser_snapshot;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    AgentStatus, AgentStatusReportSender, AgentWaitOutcome, AgentWaiter, AnyPermit,
-    DeferredOutputItem, DeferredOutputQueue, MuxPane, NotificationSender, PaneId, PtyOutputChunk,
-    ResumeOutcome, SharedPaneExitSender, SharedScrollback, SharedShadowParser, TitleChangeSender,
-    encode_snapshot_segments, evaluate_output_target, lock_shadow_parser, resume_pane_with_permit,
+    AgentStatusReportSender, DeferredOutputQueue, NotificationSender, PaneId, PtyOutputChunk,
+    SharedPaneExitSender, SharedScrollback, SharedShadowParser, TitleChangeSender,
+    encode_snapshot_segments,
 };
 
 mod agent_api;

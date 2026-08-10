@@ -1,7 +1,21 @@
 //! Agent-facing API handlers: ReadPane / SendText / WaitAgentState,
 //! their size caps, pane resolution, and agent-state waiter management.
 
-use super::*;
+use std::sync::Arc;
+
+use mux_ipc::protocol::{
+    AgentApiError, AgentApiErrorKind, MuxMessage, PublicPaneId, ReadPaneMsg, ReadPaneResultMsg,
+    SendTextMsg, SendTextResultMsg, WaitAgentStateMsg, WaitAgentStateResultMsg,
+};
+use tokio::sync::{Mutex, oneshot};
+
+use crate::agent_status::AgentState as CoreAgentState;
+use crate::mux::daemon::{from_wire_state, to_wire_state};
+use crate::mux::session::manager::SessionManager;
+use crate::mux::session::pane::{
+    AgentStatus, AgentWaitOutcome, AgentWaiter, MuxPane, PaneId, lock_shadow_parser,
+};
+
 // ============================================================================
 // Agent-facing API: ReadPane / SendText / WaitAgentState (task0004)
 //

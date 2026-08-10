@@ -1,7 +1,32 @@
 //! Post-handshake message dispatch: the single-shot CLI-client control
 //! loop, upgrade-request relay, and the GUI-loop message router.
 
-use super::*;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
+
+use futures::{SinkExt, StreamExt};
+use mux_ipc::protocol::{ErrorMsg, MessageType, MuxMessage, SetVisibilityPayload};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio_util::codec::Framed;
+
+use super::UPGRADE_PREPARE_TIMEOUT;
+use crate::mux::daemon::{UpgradeSignal, UpgradeSignalSender};
+use crate::mux::ipc::codec::MuxCodec;
+use crate::mux::ipc::handlers::{
+    flush_deferred_output, handle_attach, handle_create_window, handle_destroy_pane,
+    handle_destroy_window, handle_move_window, handle_read_pane, handle_rename_window,
+    handle_request_pane_snapshot, handle_resize, handle_send_text, handle_set_visibility,
+    handle_switch_window, handle_wait_agent_state,
+};
+use crate::mux::ipc::outbound::{OutboundAdmission, OutboundHandle, ReplySink};
+use crate::mux::session::manager::SessionManager;
+use crate::mux::session::pane::{
+    AgentStatusReportSender, DeferredOutputQueue, NotificationSender, PtyOutputChunk,
+    SharedPaneExitSender, TitleChangeSender,
+};
+
 /// Handle a CLI client after handshake.
 ///
 /// Reads at most one control message (e.g., CreateWindow), processes it,

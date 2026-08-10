@@ -16,17 +16,12 @@ use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 
 use super::codec::MuxCodec;
 use super::handlers::{
-    apply_fair_permit_to_front_deferred_item, flush_deferred_output, handle_attach,
-    handle_create_window, handle_destroy_pane, handle_destroy_window, handle_move_window,
-    handle_read_pane, handle_rename_window, handle_request_pane_snapshot, handle_resize,
-    handle_send_text, handle_set_visibility, handle_switch_window, handle_wait_agent_state,
+    apply_fair_permit_to_front_deferred_item, flush_deferred_output, handle_destroy_pane,
 };
-use super::outbound::{
-    OUTBOUND_QUEUE_CAPACITY, OutboundAdmission, OutboundHandle, ReplySink, run_outbound_writer,
-};
+use super::outbound::{OUTBOUND_QUEUE_CAPACITY, OutboundAdmission, run_outbound_writer};
 use super::protocol::*;
 use super::reattach::detach_session_panes;
-use crate::mux::daemon::{SharedUpgradeAckSlot, UpgradeSignal, UpgradeSignalSender};
+use crate::mux::daemon::{SharedUpgradeAckSlot, UpgradeSignalSender};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatusReportSender, ChunkKind, DeferredOutputQueue, NotificationSender, PtyOutputChunk,

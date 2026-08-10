@@ -1,6 +1,11 @@
 use super::*;
-use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
+use crate::agent_status::AgentState as CoreAgentState;
+use crate::mux::session::pane::{
+    AgentWaiter, DeferredOutputItem, MuxPane, PaneOutputTarget, SharedOutputTarget,
+};
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::oneshot;
 
 /// Decode a `Snapshot`-kind chunk's wire-encoded `data` (task0004
 /// round-4 rework D1', `mux_ipc::protocol::decode_snapshot_payload`)

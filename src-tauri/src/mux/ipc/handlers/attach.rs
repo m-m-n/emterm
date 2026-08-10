@@ -1,7 +1,20 @@
 //! Attach / visibility handlers and the deferred-output flush path for
 //! reattached or newly-visible panes.
 
-use super::*;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use mux_ipc::protocol::{AttachMsg, ErrorMsg, MessageType, MuxMessage};
+use tokio::sync::{Mutex, mpsc, oneshot};
+
+use crate::mux::ipc::outbound::OutboundAdmission;
+use crate::mux::ipc::reattach::{collect_reattach_data, detach_session_panes, send_reattach_data};
+use crate::mux::session::manager::SessionManager;
+use crate::mux::session::pane::{
+    AnyPermit, DeferredOutputItem, DeferredOutputQueue, PaneId, PtyOutputChunk, ResumeOutcome,
+    TitleChangeSender, evaluate_output_target, resume_pane_with_permit,
+};
+
 /// Handle Attach message: switch the client to a different session.
 ///
 /// Detaches panes from the current session, updates the active session,
