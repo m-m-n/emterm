@@ -71,47 +71,7 @@ impl Tab {
             MessageType::SwitchWindow => self.handle_switch_window(msg.pane_id),
             MessageType::RenameWindow => self.handle_rename_window(&msg),
             MessageType::PtyExited => self.handle_pty_exited(msg.pane_id),
-            MessageType::Detached => {
-                // The daemon confirmed our `Detach`: exit mux mode. Clear the
-                // window group (the tab reverts to a plain tab) and the
-                // session name (status-bar mux badge clears). Port of the
-                // WebView `onDetached → exitMuxMode`.
-                log::info!("mux apc: detached from session for tab {:?}", self.title);
-                self.mux_group = None;
-                self.mux_session_name = None;
-                // Restore pre-mux routing: the next pump parses the PTS stream
-                // with `self.core` again (the bridge process exits and hands the
-                // PTY back to the shell). Drop any partial outer frame the
-                // extractor was carrying so a stale half-sequence cannot corrupt
-                // a future re-attach (FR5).
-                self.mux_apc_extractor.reset();
-                // Cancel any in-flight off-thread snapshot replay before
-                // clearing the grid. Otherwise a switch dispatched just before
-                // detach (target snapshot >= OFFTHREAD_REPLAY_THRESHOLD_BYTES)
-                // would still resolve on a later `poll_pending_switch`, swapping
-                // the worker-built core (the detached window's content) back
-                // over the grid we clear below. Mirrors the synchronous
-                // `Snapshot` arm's supersede-the-pending-switch step.
-                // `supersede_pending_replay` also drops any coalesced
-                // same-pane re-dispatch (FR7/FR8, task0003 — it belonged to
-                // the pane being cleared too, and letting a later
-                // `poll_pending_switch` dispatch it would revive a stale
-                // request for a pane this tab no longer shows) and cancels
-                // any in-flight 2nd-pass scrollback restore.
-                let _ = self.supersede_pending_replay("mux detached");
-                // The displayed grid still holds the detached mux window's
-                // content. The bridge process exits right after this Detached
-                // frame (mux::bridge → process::exit), handing the PTY back to
-                // the shell that ran `emterm mux attach`, which reprints its
-                // prompt — but on a clean screen only if we drop the stale mux
-                // frame now. Reuse the PaneCreated append recipe (clear grid +
-                // prompts/folds via reset_and_replay(b""), latch
-                // pending_frame_reset so App::pump_all drops any selection and
-                // forces a full redraw). Without this the detached session's
-                // screen lingers until the shell happens to overwrite it.
-                let _ = self.reset_frame_for_replay(b"", &[]);
-                true
-            }
+            MessageType::Detached => self.handle_detached(),
             other => {
                 log::debug!("mux apc: unhandled message type {other:?}");
                 false
@@ -895,6 +855,50 @@ impl Tab {
             }
             self.request_pane_snapshot(pane_id);
         }
+        true
+    }
+
+    /// `Detached` arm of [`Self::apply_mux_message`]: exit mux mode and
+    /// restore plain-tab routing.
+    fn handle_detached(&mut self) -> bool {
+        // The daemon confirmed our `Detach`: exit mux mode. Clear the
+        // window group (the tab reverts to a plain tab) and the
+        // session name (status-bar mux badge clears). Port of the
+        // WebView `onDetached → exitMuxMode`.
+        log::info!("mux apc: detached from session for tab {:?}", self.title);
+        self.mux_group = None;
+        self.mux_session_name = None;
+        // Restore pre-mux routing: the next pump parses the PTS stream
+        // with `self.core` again (the bridge process exits and hands the
+        // PTY back to the shell). Drop any partial outer frame the
+        // extractor was carrying so a stale half-sequence cannot corrupt
+        // a future re-attach (FR5).
+        self.mux_apc_extractor.reset();
+        // Cancel any in-flight off-thread snapshot replay before
+        // clearing the grid. Otherwise a switch dispatched just before
+        // detach (target snapshot >= OFFTHREAD_REPLAY_THRESHOLD_BYTES)
+        // would still resolve on a later `poll_pending_switch`, swapping
+        // the worker-built core (the detached window's content) back
+        // over the grid we clear below. Mirrors the synchronous
+        // `Snapshot` arm's supersede-the-pending-switch step.
+        // `supersede_pending_replay` also drops any coalesced
+        // same-pane re-dispatch (FR7/FR8, task0003 — it belonged to
+        // the pane being cleared too, and letting a later
+        // `poll_pending_switch` dispatch it would revive a stale
+        // request for a pane this tab no longer shows) and cancels
+        // any in-flight 2nd-pass scrollback restore.
+        let _ = self.supersede_pending_replay("mux detached");
+        // The displayed grid still holds the detached mux window's
+        // content. The bridge process exits right after this Detached
+        // frame (mux::bridge → process::exit), handing the PTY back to
+        // the shell that ran `emterm mux attach`, which reprints its
+        // prompt — but on a clean screen only if we drop the stale mux
+        // frame now. Reuse the PaneCreated append recipe (clear grid +
+        // prompts/folds via reset_and_replay(b""), latch
+        // pending_frame_reset so App::pump_all drops any selection and
+        // forces a full redraw). Without this the detached session's
+        // screen lingers until the shell happens to overwrite it.
+        let _ = self.reset_frame_for_replay(b"", &[]);
         true
     }
 
