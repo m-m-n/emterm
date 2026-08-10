@@ -6,51 +6,12 @@ use winit::event::KeyEvent;
 use winit::keyboard::{Key as WinitKey, NamedKey};
 
 use crate::app::App;
-use crate::mux::dialog::{MuxDialogOutcome, MuxDialogState};
 use crate::mux::prefix::{KeyInput as MuxKeyInput, KeySym};
 use crate::pty::input::Modifiers;
 use crate::ui::keybinds::Chord;
 
 use super::WindowHost;
 use super::input_translate::{input_mods_to_egui, winit_key_to_egui};
-
-/// Drive one frame of the open mux dialog: render via the UI layer
-/// (`ui::mux_dialogs::draw`) and dispatch the resulting outcome into the
-/// domain layer (`App::confirm_mux_*`). This is the orchestration glue
-/// that previously lived in `ui::mux_dialogs::drive`; moved here so the UI
-/// module no longer has to `use crate::app::App` (otherwise the UI layer
-/// imports App, and App imports UI types like `TabEvent` — a cycle).
-/// `window_host` already owns `App`, so dispatch lives at this boundary.
-pub(super) fn drive_mux_dialogs(app: &mut App, ctx: &egui::Context) -> bool {
-    if !app.mux_dialog.is_open() {
-        return false;
-    }
-    // Reconcile against any daemon-driven changes that arrived since the
-    // dialog opened (PaneCreated / PtyExited / SwitchWindow). If the
-    // captured window vanished, refresh_mux_dialog flips the state to
-    // Closed; we then early-return without drawing.
-    app.refresh_mux_dialog();
-    if !app.mux_dialog.is_open() {
-        return false;
-    }
-    let locale = app.locale;
-    let outcome = crate::ui::mux_dialogs::draw(&mut app.mux_dialog, ctx, locale);
-    match outcome {
-        MuxDialogOutcome::Pending => {}
-        MuxDialogOutcome::ConfirmRename { window_id, name } => {
-            app.mux_dialog = MuxDialogState::Closed;
-            app.confirm_mux_rename(window_id, name);
-        }
-        MuxDialogOutcome::ConfirmMove { window_id, target } => {
-            app.mux_dialog = MuxDialogState::Closed;
-            app.confirm_mux_move(window_id, target);
-        }
-        MuxDialogOutcome::Cancelled => {
-            app.mux_dialog = MuxDialogState::Closed;
-        }
-    }
-    true
-}
 
 /// Convert an (egui::Key, current modifiers) pair from the winit event
 /// pipeline into the framework-agnostic [`MuxKeyInput`] the mux prefix
