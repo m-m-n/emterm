@@ -2,7 +2,16 @@
 //! attach / detach / hidden state machine, and the permit-guarded
 //! resume path.
 
-use super::*;
+use std::sync::{Arc, Mutex as StdMutex};
+
+use tokio::sync::mpsc;
+
+use super::handles::lock_shadow_parser;
+use super::output_queue::PtyOutputChunk;
+use super::{MuxPane, encode_snapshot_segments};
+use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
+use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
+
 /// Why a pane is currently detached. Combines `NetworkDetach`
 /// (no client connected / kicked / explicit detach) with
 /// `HiddenByVisibility` (client connected but reported hidden).
