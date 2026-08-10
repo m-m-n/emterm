@@ -67,114 +67,7 @@ impl Tab {
             // unrecognized message type.
             MessageType::AgentStatusUpdate => self.handle_agent_status_update(&msg),
             MessageType::Welcome => self.handle_welcome(&msg),
-            MessageType::PaneCreated => {
-                // SPEC FR4 / Message Mapping: the daemon's PaneCreated is the
-                // authoritative "append window" signal — it fires for every
-                // pane the daemon creates, whether this client requested the
-                // create or another client did. Treat it as such:
-                //
-                // - Require an existing group: a PaneCreated arriving before
-                //   Welcome installs nothing (no `get_or_insert_with`, so the
-                //   empty-group leakage that made other handlers spuriously
-                //   think this tab was mux-attached is gone — M4).
-                // - Idempotent: if the pane id is already in our group (resend
-                //   / replay), don't double-append.
-                // - Daemon-authoritative: append even when no pending-create
-                //   credit exists. `pending_create` is now purely an
-                //   optimistic-UX counter — consume it when present so a
-                //   subsequent CreateWindow request still gets its own credit,
-                //   but never gate the append on it (the spec finding #5).
-                let Some(group) = self.mux_group.as_mut() else {
-                    log::debug!(
-                        "mux apc: PaneCreated pane={} before attach (no group), ignored",
-                        msg.pane_id
-                    );
-                    return false;
-                };
-                if group.index_of_pane_id(msg.pane_id).is_some() {
-                    log::debug!(
-                        "mux apc: PaneCreated pane={} already in group, ignored (idempotency)",
-                        msg.pane_id
-                    );
-                    return false;
-                }
-                let pending = group.take_pending_create();
-                // Locally-unique window id (one past the current max) so the
-                // synthetic id never collides with a daemon-seeded one. Initial
-                // name "Terminal" (OQ1 resolved); daemon-pushed RenameWindow
-                // later overwrites it.
-                let new_id = group.fresh_window_id();
-                // The new window becomes the active sub-tab (see `push`). Treat
-                // that like a pane switch for scroll bookkeeping: latch the
-                // outgoing pane id so `App::pump_all` parks the outgoing pane's
-                // scroll into its slot and reloads the new pane's (default
-                // `Live`) slot — first-latch-only, matching the SwitchWindow
-                // path. `active_pane_id()` is `None` for the tab's first mux
-                // window (empty group before this push), so that case correctly
-                // latches nothing.
-                let from_pane = group.active_pane_id();
-                group.push(
-                    MuxWindow {
-                        id: new_id,
-                        name: "Terminal".to_string(),
-                    },
-                    msg.pane_id,
-                );
-                // FR6 (mux): the push made the new window the active sub-tab.
-                // Latch it at the event source so `App::pump_all` scrolls it into
-                // view when this is the active tab — immune to a same-pump
-                // `PtyExited` or a `Welcome` reseed, unlike a window-count delta.
-                self.pending_window_appended = true;
-                if let Some(from) = from_pane {
-                    if self.pending_pane_switch_from.is_none() {
-                        self.pending_pane_switch_from = Some(from);
-                    }
-                }
-                log::info!(
-                    "mux apc: pane {} created (window {}, pending_consumed={}) for tab {:?}",
-                    msg.pane_id,
-                    new_id,
-                    pending,
-                    self.title
-                );
-                // The newly created window becomes the active sub-tab (see
-                // `MuxWindowGroup::push`). Without a core reset here, the
-                // previous active window's grid + scrollback stay painted
-                // until the new shell's first byte arrives — and even after
-                // it does, the old content lingers in scrollback. The
-                // shared `reset_frame_for_replay` recipe drops prompts /
-                // folds, runs `reset_and_replay(b"")`, and routes through
-                // `backfill_marks` so `pending_frame_reset` latches and
-                // any active selection / press anchor on this tab is
-                // dropped by `App::pump_all`.
-                let _ = self.reset_frame_for_replay(b"", &[]);
-                // The daemon spawns every new PTY at a hardcoded 80x24
-                // (`handle_create_window`); without this, the pane stays at
-                // 80 columns even though the GUI grid is wider, so output
-                // wraps early. Push the current grid dimensions immediately
-                // after the append so the daemon-side PTY catches up.
-                let (cols, rows) = {
-                    let core = self.core.lock();
-                    (core.cols(), core.rows())
-                };
-                self.send_control(&MuxMessage::control(
-                    MessageType::Resize,
-                    msg.pane_id,
-                    &ResizeMsg { cols, rows },
-                ));
-                // task0003 AC-6: record this emission (PaneCreated site —
-                // see `ResizeFrameRecord`).
-                #[cfg(test)]
-                {
-                    self.resize_frame_log.push(ResizeFrameRecord {
-                        tab_stable_id: self.stable_id,
-                        pane_id: msg.pane_id,
-                        cols,
-                        rows,
-                    });
-                }
-                true
-            }
+            MessageType::PaneCreated => self.handle_pane_created(msg.pane_id),
             MessageType::SwitchWindow => {
                 // Daemon-initiated switch (e.g. CLI `switch-window`): sync the
                 // active index to the window owning this pane. Port of
@@ -880,6 +773,117 @@ impl Tab {
                 false
             }
         }
+    }
+
+    /// `PaneCreated` arm of [`Self::apply_mux_message`]: append the daemon's
+    /// new window, reset the core, and push the current PTY size.
+    fn handle_pane_created(&mut self, pane_id: u32) -> bool {
+        // SPEC FR4 / Message Mapping: the daemon's PaneCreated is the
+        // authoritative "append window" signal — it fires for every
+        // pane the daemon creates, whether this client requested the
+        // create or another client did. Treat it as such:
+        //
+        // - Require an existing group: a PaneCreated arriving before
+        //   Welcome installs nothing (no `get_or_insert_with`, so the
+        //   empty-group leakage that made other handlers spuriously
+        //   think this tab was mux-attached is gone — M4).
+        // - Idempotent: if the pane id is already in our group (resend
+        //   / replay), don't double-append.
+        // - Daemon-authoritative: append even when no pending-create
+        //   credit exists. `pending_create` is now purely an
+        //   optimistic-UX counter — consume it when present so a
+        //   subsequent CreateWindow request still gets its own credit,
+        //   but never gate the append on it (the spec finding #5).
+        let Some(group) = self.mux_group.as_mut() else {
+            log::debug!(
+                "mux apc: PaneCreated pane={} before attach (no group), ignored",
+                pane_id
+            );
+            return false;
+        };
+        if group.index_of_pane_id(pane_id).is_some() {
+            log::debug!(
+                "mux apc: PaneCreated pane={} already in group, ignored (idempotency)",
+                pane_id
+            );
+            return false;
+        }
+        let pending = group.take_pending_create();
+        // Locally-unique window id (one past the current max) so the
+        // synthetic id never collides with a daemon-seeded one. Initial
+        // name "Terminal" (OQ1 resolved); daemon-pushed RenameWindow
+        // later overwrites it.
+        let new_id = group.fresh_window_id();
+        // The new window becomes the active sub-tab (see `push`). Treat
+        // that like a pane switch for scroll bookkeeping: latch the
+        // outgoing pane id so `App::pump_all` parks the outgoing pane's
+        // scroll into its slot and reloads the new pane's (default
+        // `Live`) slot — first-latch-only, matching the SwitchWindow
+        // path. `active_pane_id()` is `None` for the tab's first mux
+        // window (empty group before this push), so that case correctly
+        // latches nothing.
+        let from_pane = group.active_pane_id();
+        group.push(
+            MuxWindow {
+                id: new_id,
+                name: "Terminal".to_string(),
+            },
+            pane_id,
+        );
+        // FR6 (mux): the push made the new window the active sub-tab.
+        // Latch it at the event source so `App::pump_all` scrolls it into
+        // view when this is the active tab — immune to a same-pump
+        // `PtyExited` or a `Welcome` reseed, unlike a window-count delta.
+        self.pending_window_appended = true;
+        if let Some(from) = from_pane {
+            if self.pending_pane_switch_from.is_none() {
+                self.pending_pane_switch_from = Some(from);
+            }
+        }
+        log::info!(
+            "mux apc: pane {} created (window {}, pending_consumed={}) for tab {:?}",
+            pane_id,
+            new_id,
+            pending,
+            self.title
+        );
+        // The newly created window becomes the active sub-tab (see
+        // `MuxWindowGroup::push`). Without a core reset here, the
+        // previous active window's grid + scrollback stay painted
+        // until the new shell's first byte arrives — and even after
+        // it does, the old content lingers in scrollback. The
+        // shared `reset_frame_for_replay` recipe drops prompts /
+        // folds, runs `reset_and_replay(b"")`, and routes through
+        // `backfill_marks` so `pending_frame_reset` latches and
+        // any active selection / press anchor on this tab is
+        // dropped by `App::pump_all`.
+        let _ = self.reset_frame_for_replay(b"", &[]);
+        // The daemon spawns every new PTY at a hardcoded 80x24
+        // (`handle_create_window`); without this, the pane stays at
+        // 80 columns even though the GUI grid is wider, so output
+        // wraps early. Push the current grid dimensions immediately
+        // after the append so the daemon-side PTY catches up.
+        let (cols, rows) = {
+            let core = self.core.lock();
+            (core.cols(), core.rows())
+        };
+        self.send_control(&MuxMessage::control(
+            MessageType::Resize,
+            pane_id,
+            &ResizeMsg { cols, rows },
+        ));
+        // task0003 AC-6: record this emission (PaneCreated site —
+        // see `ResizeFrameRecord`).
+        #[cfg(test)]
+        {
+            self.resize_frame_log.push(ResizeFrameRecord {
+                tab_stable_id: self.stable_id,
+                pane_id: pane_id,
+                cols,
+                rows,
+            });
+        }
+        true
     }
 
     /// Request an on-demand screen snapshot for `pane_id`. The daemon replies
