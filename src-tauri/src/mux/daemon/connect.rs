@@ -235,34 +235,6 @@ pub(in crate::mux) fn spawn_daemon(sock_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-// ============================================================================
-// task0010 rework: safe PROTOCOL_VERSION upgrade path (strategy B)
-//
-// A version bump alone left a running v1 daemon stranded after an eMterm
-// upgrade: `ensure_daemon_running` only checked socket presence, and even
-// `mux kill` couldn't recover it (the old server rejects a v2 Hello before
-// ever reading Shutdown). The helpers below open a short handshake to
-// probe the real protocol version and, on the adjacent older version
-// (`PREVIOUS_PROTOCOL_VERSION`), send a version-tolerant Shutdown so the
-// legacy daemon exits and a compatible one can take its place.
-// ============================================================================
-
-/// Outcome of [`recover_from_legacy_daemon`]'s handshake probe.
-///
-/// `pub(in crate::mux)` (task0001): the `emterm mux attach` path
-/// (`mux::cli::execute_attach`) needs to branch on this outcome the same
-/// way [`ensure_daemon_running`] does, without exposing it outside the mux
-/// module.
-#[derive(Debug)]
-pub(in crate::mux) enum LegacyRecovery {
-    /// The running daemon already accepted a [`PROTOCOL_VERSION`] Hello —
-    /// nothing to recover.
-    Compatible,
-    /// A daemon speaking [`PREVIOUS_PROTOCOL_VERSION`] was found and asked
-    /// to exit; the caller should now spawn a fresh daemon.
-    Recovered,
-}
-
 /// Connect to the daemon's control channel with read/write timeouts, ready
 /// for a [`handshake_with_version`] call. Unix: the `AF_UNIX` socket at
 /// `sock_path`. Windows: the daemon's Named Pipe (`sock_path` is unused
