@@ -57,169 +57,7 @@ impl Tab {
             MessageType::Snapshot | MessageType::SnapshotRestore => {
                 self.handle_snapshot(msg.msg_type, msg.pane_id, &msg.payload)
             }
-            MessageType::PtyOutput => {
-                // OSC-probe (temporary): flag when GUI-side sees a viewer
-                // launch OSC 777 arrive from the mux extractor. Mirrors the
-                // daemon (pty_spawn.rs) and bridge (bridge.rs) probes. Only
-                // metadata is logged (never the payload bytes) so this probe
-                // cannot leak user file content into persisted release logs.
-                const OSC_PROBE_NEEDLE: &[u8] = b"\x1b]777;emterm;";
-                let osc_probe = msg
-                    .payload
-                    .windows(OSC_PROBE_NEEDLE.len())
-                    .position(|w| w == OSC_PROBE_NEEDLE);
-                if let Some(off) = osc_probe {
-                    log::warn!(
-                        "[osc-probe gui] enter pane={} payload_len={} osc_off={}",
-                        msg.pane_id,
-                        msg.payload.len(),
-                        off,
-                    );
-                }
-                // Route by pane. Once attached (see the Welcome handler), the
-                // daemon streams live output for *every* pane in the session to
-                // this owning connection — but native renders one core per tab,
-                // showing only the active window. Feeding another window's bytes
-                // into this core interleaves unrelated screens (the "other
-                // tabs' data mixing in" symptom). The WebView keeps a separate
-                // core per pane; native instead drops non-active panes here and
-                // reconciles each window's screen from the daemon's
-                // authoritative state via `request_pane_snapshot` on switch.
-                // When the tab has no window group (older daemon / single
-                // pane), `active_pane_id()` is None and all output is accepted.
-                if let Some(active) = self.mux_group.as_ref().and_then(|g| g.active_pane_id()) {
-                    if msg.pane_id != active {
-                        if osc_probe.is_some() {
-                            log::warn!(
-                                "[osc-probe gui] DROP inactive-pane pane={} active={} payload_len={}",
-                                msg.pane_id,
-                                active,
-                                msg.payload.len(),
-                            );
-                        }
-                        log::debug!(
-                            "mux apc: dropping PtyOutput for inactive pane {} (active {})",
-                            msg.pane_id,
-                            active
-                        );
-                        return false;
-                    }
-                }
-                // FR3: while an off-thread replay for this pane is in flight,
-                // the displayed core is still showing the *outgoing* pane —
-                // feeding the just-switched-to pane's live bytes into it would
-                // corrupt the visible screen. Queue them in arrival order
-                // instead; `App::pump_all` replays the queue onto the
-                // worker-built core after the swap. Output that races in for a
-                // *different* target than the pending switch is dropped (it
-                // belongs to a pane we are no longer switching to).
-                if let Some(pending) = self.pending_switch.as_mut() {
-                    if msg.pane_id == pending.target_pane {
-                        if osc_probe.is_some() {
-                            log::warn!(
-                                "[osc-probe gui] QUEUED pending-switch pane={} target={} payload_len={}",
-                                msg.pane_id,
-                                pending.target_pane,
-                                msg.payload.len(),
-                            );
-                        }
-                        pending.queued_bytes =
-                            pending.queued_bytes.saturating_add(msg.payload.len());
-                        pending.live_queue.push(msg.payload);
-                        // Bound the backlog: past the cap, abandon the
-                        // off-thread switch and reparse synchronously now,
-                        // applying the accumulated queue as ordinary output.
-                        // This caps both the swap-time replay burst and the
-                        // memory a fast pane can accumulate during a slow parse.
-                        if pending.queued_bytes > OFFTHREAD_LIVE_QUEUE_CAP_BYTES {
-                            // Take the coalesced re-dispatch (if any) BEFORE
-                            // superseding — `supersede_pending_replay` drops
-                            // `pending_redispatch`, but this fallback still
-                            // needs it as the latest known content for the
-                            // pane (see the payload selection below).
-                            let redispatch = self.pending_redispatch.take();
-                            let pending = self
-                                .supersede_pending_replay("live-queue overflow sync reparse")
-                                .expect("pending_switch is Some in this arm");
-                            log::warn!(
-                                "mux off-thread replay live-queue exceeded {} bytes for tab {:?}; \
-                                 synchronous reparse fallback",
-                                OFFTHREAD_LIVE_QUEUE_CAP_BYTES,
-                                self.title
-                            );
-                            // FR8 (task0003): a coalesced same-pane
-                            // re-dispatch (if any) is the LATEST known
-                            // content for this pane — reparse that instead
-                            // of the (possibly superseded) payload the
-                            // abandoned worker was building, so this
-                            // synchronous fallback never regresses to
-                            // stale content. `self.core` is already at the
-                            // right grid regardless (`Tab::resize` always
-                            // resizes it directly, independent of any
-                            // deferred `pending_resize`), so
-                            // `reset_frame_for_replay` needs no extra
-                            // resize step here.
-                            //
-                            // `pending.live_queue` is safe to apply
-                            // unconditionally against whichever payload
-                            // wins above (review round-1 finding
-                            // `ebc9de26bb15fcb1`, task0006 redesign): the
-                            // same-pane coalesce branch in
-                            // `dispatch_offthread_replay` already cleared
-                            // it at COALESCE time if `pending_redispatch`
-                            // is `Some` here, so it holds exactly "output
-                            // queued since that coalesce" either way —
-                            // never a stale prefix the new payload might
-                            // already contain.
-                            let (payload, segments) = match redispatch {
-                                Some((_, payload, segments)) => (payload, segments),
-                                None => (pending.payload, pending.segments),
-                            };
-                            self.reset_frame_for_replay(&payload, &segments);
-                            self.apply_queued_live_output(pending.live_queue);
-                            // The swap-equivalent happened synchronously now;
-                            // repaint the newly-visible pane.
-                            return true;
-                        }
-                        // Queued, not yet visible — no redraw needed; the swap
-                        // will repaint.
-                        return false;
-                    }
-                    if osc_probe.is_some() {
-                        log::warn!(
-                            "[osc-probe gui] DROP pending-switch pane={} target={} payload_len={}",
-                            msg.pane_id,
-                            pending.target_pane,
-                            msg.payload.len(),
-                        );
-                    }
-                    log::debug!(
-                        "mux apc: dropping PtyOutput for pane {} during pending switch to {}",
-                        msg.pane_id,
-                        pending.target_pane
-                    );
-                    return false;
-                }
-                if osc_probe.is_some() {
-                    log::warn!(
-                        "[osc-probe gui] APPLY pane={} payload_len={}",
-                        msg.pane_id,
-                        msg.payload.len(),
-                    );
-                }
-                // The daemon's continuous PTY stream: feed it into term_core
-                // as a normal byte stream (NOT a reset). Without this the
-                // mux session looks frozen after the initial Snapshot. Shares
-                // the post-parse recipe (device-response write-back + mark
-                // drain/backfill) with the coalesce flush via
-                // `apply_active_pane_output`, so the per-frame and batched
-                // paths can never drift (SPEC NFR2). Frames carrying a device
-                // query (`CSI ... n` / `CSI ... c`) are routed here per-frame
-                // by `process_combined`'s `batch_eligible` gate so each reply
-                // is captured before the next query overwrites the core's
-                // single-slot response buffer.
-                self.apply_active_pane_output(&msg.payload)
-            }
+            MessageType::PtyOutput => self.handle_pty_output(msg.pane_id, msg.payload),
             // The former mux status-bar daemon push (opcode 0x16, see
             // `mux_ipc::protocol`'s reserved-opcode comment) was retired
             // by mux-status-bar-removal task0001; that opcode no longer
@@ -872,6 +710,171 @@ impl Tab {
             );
         }
         true
+    }
+
+    /// `PtyOutput` arm of [`Self::apply_mux_message`]: pane routing, the
+    /// pending-switch live queue (with its overflow fallback), and the
+    /// live-output apply.
+    fn handle_pty_output(&mut self, pane_id: u32, payload: Vec<u8>) -> bool {
+        // OSC-probe (temporary): flag when GUI-side sees a viewer
+        // launch OSC 777 arrive from the mux extractor. Mirrors the
+        // daemon (pty_spawn.rs) and bridge (bridge.rs) probes. Only
+        // metadata is logged (never the payload bytes) so this probe
+        // cannot leak user file content into persisted release logs.
+        const OSC_PROBE_NEEDLE: &[u8] = b"\x1b]777;emterm;";
+        let osc_probe = payload
+            .windows(OSC_PROBE_NEEDLE.len())
+            .position(|w| w == OSC_PROBE_NEEDLE);
+        if let Some(off) = osc_probe {
+            log::warn!(
+                "[osc-probe gui] enter pane={} payload_len={} osc_off={}",
+                pane_id,
+                payload.len(),
+                off,
+            );
+        }
+        // Route by pane. Once attached (see the Welcome handler), the
+        // daemon streams live output for *every* pane in the session to
+        // this owning connection — but native renders one core per tab,
+        // showing only the active window. Feeding another window's bytes
+        // into this core interleaves unrelated screens (the "other
+        // tabs' data mixing in" symptom). The WebView keeps a separate
+        // core per pane; native instead drops non-active panes here and
+        // reconciles each window's screen from the daemon's
+        // authoritative state via `request_pane_snapshot` on switch.
+        // When the tab has no window group (older daemon / single
+        // pane), `active_pane_id()` is None and all output is accepted.
+        if let Some(active) = self.mux_group.as_ref().and_then(|g| g.active_pane_id()) {
+            if pane_id != active {
+                if osc_probe.is_some() {
+                    log::warn!(
+                        "[osc-probe gui] DROP inactive-pane pane={} active={} payload_len={}",
+                        pane_id,
+                        active,
+                        payload.len(),
+                    );
+                }
+                log::debug!(
+                    "mux apc: dropping PtyOutput for inactive pane {} (active {})",
+                    pane_id,
+                    active
+                );
+                return false;
+            }
+        }
+        // FR3: while an off-thread replay for this pane is in flight,
+        // the displayed core is still showing the *outgoing* pane —
+        // feeding the just-switched-to pane's live bytes into it would
+        // corrupt the visible screen. Queue them in arrival order
+        // instead; `App::pump_all` replays the queue onto the
+        // worker-built core after the swap. Output that races in for a
+        // *different* target than the pending switch is dropped (it
+        // belongs to a pane we are no longer switching to).
+        if let Some(pending) = self.pending_switch.as_mut() {
+            if pane_id == pending.target_pane {
+                if osc_probe.is_some() {
+                    log::warn!(
+                        "[osc-probe gui] QUEUED pending-switch pane={} target={} payload_len={}",
+                        pane_id,
+                        pending.target_pane,
+                        payload.len(),
+                    );
+                }
+                pending.queued_bytes = pending.queued_bytes.saturating_add(payload.len());
+                pending.live_queue.push(payload);
+                // Bound the backlog: past the cap, abandon the
+                // off-thread switch and reparse synchronously now,
+                // applying the accumulated queue as ordinary output.
+                // This caps both the swap-time replay burst and the
+                // memory a fast pane can accumulate during a slow parse.
+                if pending.queued_bytes > OFFTHREAD_LIVE_QUEUE_CAP_BYTES {
+                    // Take the coalesced re-dispatch (if any) BEFORE
+                    // superseding — `supersede_pending_replay` drops
+                    // `pending_redispatch`, but this fallback still
+                    // needs it as the latest known content for the
+                    // pane (see the payload selection below).
+                    let redispatch = self.pending_redispatch.take();
+                    let pending = self
+                        .supersede_pending_replay("live-queue overflow sync reparse")
+                        .expect("pending_switch is Some in this arm");
+                    log::warn!(
+                        "mux off-thread replay live-queue exceeded {} bytes for tab {:?}; \
+                         synchronous reparse fallback",
+                        OFFTHREAD_LIVE_QUEUE_CAP_BYTES,
+                        self.title
+                    );
+                    // FR8 (task0003): a coalesced same-pane
+                    // re-dispatch (if any) is the LATEST known
+                    // content for this pane — reparse that instead
+                    // of the (possibly superseded) payload the
+                    // abandoned worker was building, so this
+                    // synchronous fallback never regresses to
+                    // stale content. `self.core` is already at the
+                    // right grid regardless (`Tab::resize` always
+                    // resizes it directly, independent of any
+                    // deferred `pending_resize`), so
+                    // `reset_frame_for_replay` needs no extra
+                    // resize step here.
+                    //
+                    // `pending.live_queue` is safe to apply
+                    // unconditionally against whichever payload
+                    // wins above (review round-1 finding
+                    // `ebc9de26bb15fcb1`, task0006 redesign): the
+                    // same-pane coalesce branch in
+                    // `dispatch_offthread_replay` already cleared
+                    // it at COALESCE time if `pending_redispatch`
+                    // is `Some` here, so it holds exactly "output
+                    // queued since that coalesce" either way —
+                    // never a stale prefix the new payload might
+                    // already contain.
+                    let (payload, segments) = match redispatch {
+                        Some((_, payload, segments)) => (payload, segments),
+                        None => (pending.payload, pending.segments),
+                    };
+                    self.reset_frame_for_replay(&payload, &segments);
+                    self.apply_queued_live_output(pending.live_queue);
+                    // The swap-equivalent happened synchronously now;
+                    // repaint the newly-visible pane.
+                    return true;
+                }
+                // Queued, not yet visible — no redraw needed; the swap
+                // will repaint.
+                return false;
+            }
+            if osc_probe.is_some() {
+                log::warn!(
+                    "[osc-probe gui] DROP pending-switch pane={} target={} payload_len={}",
+                    pane_id,
+                    pending.target_pane,
+                    payload.len(),
+                );
+            }
+            log::debug!(
+                "mux apc: dropping PtyOutput for pane {} during pending switch to {}",
+                pane_id,
+                pending.target_pane
+            );
+            return false;
+        }
+        if osc_probe.is_some() {
+            log::warn!(
+                "[osc-probe gui] APPLY pane={} payload_len={}",
+                pane_id,
+                payload.len(),
+            );
+        }
+        // The daemon's continuous PTY stream: feed it into term_core
+        // as a normal byte stream (NOT a reset). Without this the
+        // mux session looks frozen after the initial Snapshot. Shares
+        // the post-parse recipe (device-response write-back + mark
+        // drain/backfill) with the coalesce flush via
+        // `apply_active_pane_output`, so the per-frame and batched
+        // paths can never drift (SPEC NFR2). Frames carrying a device
+        // query (`CSI ... n` / `CSI ... c`) are routed here per-frame
+        // by `process_combined`'s `batch_eligible` gate so each reply
+        // is captured before the next query overwrites the core's
+        // single-slot response buffer.
+        self.apply_active_pane_output(&payload)
     }
 
     /// Request an on-demand screen snapshot for `pane_id`. The daemon replies
