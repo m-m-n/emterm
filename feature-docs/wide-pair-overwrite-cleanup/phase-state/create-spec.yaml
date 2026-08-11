@@ -1,19 +1,29 @@
 schema_version: 1
 feature: wide-pair-overwrite-cleanup
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: fca570fe
-last_input_digest: sha256:bb5ed5b6c19b49db13a2b8c4a7bde9b22b12662a3045c96fc0cea4c3044dd7a3
-active_request_id: create-spec-run-0001
+base_revision: 3342e9a868d241e8cf2533af52f4df4008a93005
+last_input_digest: sha256:51eca4c128bf250b3086fe3f33f904d928a9db97cc8710fc0ba1116082708868
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
-  - request_id: create-spec-run-0001
-    status: dispatched
-    input_digest: sha256:bb5ed5b6c19b49db13a2b8c4a7bde9b22b12662a3045c96fc0cea4c3044dd7a3
-    output_digest: null
-artifacts: []
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:bb5ed5b6c19b49db13a2b8c4a7bde9b22b12662a3045c96fc0cea4c3044dd7a3
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:51eca4c128bf250b3086fe3f33f904d928a9db97cc8710fc0ba1116082708868
+  output_digest: null
+artifacts:
+- path: feature-docs/wide-pair-overwrite-cleanup/REQUIREMENTS.md
+  sha256: sha256:2ba2723455746ff0aba6a7b6d99d69abde76bbaefde4249754b4e71329f7cb20
+  produced_by: create-spec-run-0002
+- path: feature-docs/wide-pair-overwrite-cleanup/SPEC.md
+  sha256: sha256:98b5887f60ea2f8542f7e7befb1d195c024f69179ae6018ffb8ff55b0f0398e7
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
@@ -22,10 +32,10 @@ resolved_input_cache:
     generation_digest: sha256:bb5ed5b6c19b49db13a2b8c4a7bde9b22b12662a3045c96fc0cea4c3044dd7a3
     resolved_at_generation: 1
     paths:
-      - doc/UI-DESIGN-GUIDELINES.yaml
-      - src-tauri/src/render/theme.rs
-      - src-tauri/src/ui/md3.rs
-      - src-tauri/web-shared/styles.css
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/src/render/theme.rs
+    - src-tauri/src/ui/md3.rs
+    - src-tauri/web-shared/styles.css
     digests:
       doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
       src-tauri/src/render/theme.rs: sha256:47851b16a1eda3327b6049b85d8dbcd7bc9664f2be63fc8a6655d598e93f5a2f
