@@ -68,9 +68,17 @@ workflow:
     status: completed
     completed_at_commit: 663a99dcb33dc8d518f922dcb7646534eecc2f44
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: a17d06ab622a34b1f402114813da1e1b833c385d
+    result: pass
     failed_items: []
+    notes: >
+      自動検証はすべて通過。ビルド 3/3（rust check・CLI-only check・viewer+settings バンドル）、
+      テスト TS-1..TS-9 相当が全て green（src-tauri --lib 3215 passed / app_settings --lib 36 passed /
+      bun test 326 passed / bun run typecheck exit 0）。bun test の 4 件の失敗は本 feature と無関係の
+      既存 baseline で、main（ae0484bd）でも同一の依存構成で再現することを確認済み
+      （plugin/marketplace version guard 2 件、viewer entry の dompurify バージョン差異由来 2 件）。
+      M-1..M-4 は実 OS 通知とフォーカス状態が要るため自動実行不可。人手確認として未評価のまま残す
   - id: retrospect
     status: pending
 
