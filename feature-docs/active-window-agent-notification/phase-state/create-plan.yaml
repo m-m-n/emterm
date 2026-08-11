@@ -1,0 +1,21 @@
+schema_version: 1
+feature: active-window-agent-notification
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 2a83f5e898101eb23aa1e4b8b11ee26dd849c586
+last_input_digest: "sha256:2600a6017faea5ec1e09b8ca1affd136276a5ab0f8fe014632c3a063cbaf30d8"
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: "sha256:2600a6017faea5ec1e09b8ca1affd136276a5ab0f8fe014632c3a063cbaf30d8"
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
