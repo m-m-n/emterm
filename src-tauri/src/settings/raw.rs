@@ -125,6 +125,7 @@ pub(in crate::settings) struct RawSettings {
     agent_status_notifications: Option<bool>,
     agent_notify_on_done: Option<bool>,
     agent_notify_on_blocked: Option<bool>,
+    agent_notify_visible_pane: Option<bool>,
 
     // ── Language / logging ──
     language: Option<String>,
@@ -565,6 +566,9 @@ impl RawSettings {
         }
         if let Some(v) = self.agent_notify_on_blocked {
             dst.agent_notify_on_blocked = v;
+        }
+        if let Some(v) = self.agent_notify_visible_pane {
+            dst.agent_notify_visible_pane = v;
         }
 
         // ── Language / logging ──
