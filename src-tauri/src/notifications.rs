@@ -174,15 +174,17 @@ pub fn notification_body(sanitized_title: &str, kind: ActivityKind, locale: Loca
 }
 
 // ── Agent-status notifications (task0007 / FR9; task0001 event-type
-// toggles) ─────────────────────────────────────────────────────────────
+// toggles; active-window-agent-notification task0001 visible-pane
+// setting) ────────────────────────────────────────────────────────────
 //
-// blocked/done transitions on panes the user is not looking at fire OS
-// notifications, gated by (IMPLEMENTATION.md "Notification gating"):
-// qualifying transition (blocked/done) -> pane not visible (foreground
-// window + displayed tab) -> both `Settings::agent_status_notifications`
-// and the existing global `Settings::notification_enabled` on -> the
-// event-type toggle for the target state (`agent_notify_on_done` /
-// `agent_notify_on_blocked`) on -> the per-pane rate limit not exceeded.
+// blocked/done transitions fire OS notifications, gated by
+// (IMPLEMENTATION.md "Notification gating"): qualifying transition
+// (blocked/done) -> the pane is not visible OR
+// `Settings::agent_notify_visible_pane` is on -> both
+// `Settings::agent_status_notifications` and the existing global
+// `Settings::notification_enabled` on -> the event-type toggle for the
+// target state (`agent_notify_on_done` / `agent_notify_on_blocked`) on ->
+// the per-pane rate limit not exceeded.
 //
 // The gating decision ([`should_fire_agent_notification`]) is a pure
 // function so it is testable without the GUI event loop or the
@@ -249,10 +251,16 @@ fn event_type_notifications_enabled(
 }
 
 /// Pure gating decision for one drained agent-status transition
-/// (AC-1..AC-4 of task0007; AC-2..AC-4 of task0001's event-type toggles).
-/// `notify_on_done` / `notify_on_blocked` are the per-event-type settings
-/// (`Settings::agent_notify_on_done` / `Settings::agent_notify_on_blocked`)
-/// — only the toggle matching `new_state` gates the decision (see
+/// (AC-1..AC-4 of task0007; AC-2..AC-4 of task0001's event-type toggles;
+/// AC-3/AC-4 of active-window-agent-notification task0001's visible-pane
+/// setting). `notify_visible_pane` is `Settings::agent_notify_visible_pane`
+/// (default `true`): the pane-visibility conjunct passes when the pane is
+/// NOT visible, OR it is visible AND `notify_visible_pane` is on — every
+/// other conjunct below is unaffected by this setting and continues to
+/// suppress independently. `notify_on_done` / `notify_on_blocked` are the
+/// per-event-type settings (`Settings::agent_notify_on_done` /
+/// `Settings::agent_notify_on_blocked`) — only the toggle matching
+/// `new_state` gates the decision (see
 /// [`event_type_notifications_enabled`]). `rate_limit_ok` is a read-only
 /// check the caller obtains from
 /// [`AgentNotificationRateLimiter::is_within_limit`] *before* calling this
@@ -263,6 +271,7 @@ fn event_type_notifications_enabled(
 pub fn should_fire_agent_notification(
     new_state: AgentState,
     pane_visible: bool,
+    notify_visible_pane: bool,
     agent_notifications_enabled: bool,
     global_notifications_enabled: bool,
     notify_on_done: bool,
@@ -270,7 +279,7 @@ pub fn should_fire_agent_notification(
     rate_limit_ok: bool,
 ) -> bool {
     is_qualifying_agent_state(new_state)
-        && !pane_visible
+        && (!pane_visible || notify_visible_pane)
         && agent_notifications_enabled
         && global_notifications_enabled
         && event_type_notifications_enabled(new_state, notify_on_done, notify_on_blocked)
@@ -552,26 +561,60 @@ mod tests {
     // blocked/done; working/idle never fire, regardless of visibility.
     // Event-type toggles both ON (task0001) — equivalent to the
     // pre-task0001 signature's implicit "always eligible" behavior.
+    // `notify_visible_pane` is irrelevant here (pane not visible) so it
+    // is held at its default `true`.
     #[test]
     fn should_fire_ac1_blocked_and_done_fire_working_idle_never_fire() {
         for state in [AgentState::Blocked, AgentState::Done] {
             assert!(should_fire_agent_notification(
-                state, false, true, true, true, true, true
+                state, false, true, true, true, true, true, true
             ));
         }
         for state in [AgentState::Working, AgentState::Idle] {
             assert!(!should_fire_agent_notification(
-                state, false, true, true, true, true, true
+                state, false, true, true, true, true, true, true
             ));
         }
     }
 
-    // AC-2: a qualifying transition on the visible pane does not fire.
+    // AC-3 (active-window-agent-notification task0001): with
+    // `notify_visible_pane` ON (the default), a qualifying transition on
+    // the visible pane now fires when every other gate passes. This
+    // intentionally flips the pre-task0001 expectation — see task0001's
+    // task plan "Existing-test impact (deliberate)".
     #[test]
-    fn should_fire_ac2_visible_pane_does_not_fire() {
+    fn should_fire_visible_pane_task0001_ac3_fires_when_notify_visible_pane_on() {
+        assert!(should_fire_agent_notification(
+            AgentState::Blocked,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+        ));
+        assert!(should_fire_agent_notification(
+            AgentState::Done,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+        ));
+    }
+
+    // AC-3 (active-window-agent-notification task0001): with
+    // `notify_visible_pane` OFF, a visible pane stays suppressed —
+    // pinning the pre-feature (legacy) behaviour.
+    #[test]
+    fn should_fire_visible_pane_task0001_ac3_suppressed_when_notify_visible_pane_off() {
         assert!(!should_fire_agent_notification(
             AgentState::Blocked,
             true,
+            false,
             true,
             true,
             true,
@@ -581,12 +624,107 @@ mod tests {
         assert!(!should_fire_agent_notification(
             AgentState::Done,
             true,
+            false,
             true,
             true,
             true,
             true,
             true
         ));
+    }
+
+    // AC-3 (active-window-agent-notification task0001): a non-visible
+    // pane's outcome is identical whether `notify_visible_pane` is ON or
+    // OFF — the setting only gates VISIBLE panes.
+    #[test]
+    fn should_fire_non_visible_pane_task0001_ac3_unaffected_by_notify_visible_pane_setting() {
+        for notify_visible_pane in [true, false] {
+            assert!(should_fire_agent_notification(
+                AgentState::Blocked,
+                false,
+                notify_visible_pane,
+                true,
+                true,
+                true,
+                true,
+                true
+            ));
+        }
+    }
+
+    // AC-4 (active-window-agent-notification task0001): with
+    // `notify_visible_pane` ON and the pane visible, each of the other
+    // gates still suppresses independently — the setting cannot bypass
+    // them.
+    #[test]
+    fn should_fire_visible_pane_task0001_ac4_other_gates_still_suppress() {
+        // Master toggle off.
+        assert!(!should_fire_agent_notification(
+            AgentState::Blocked,
+            true,
+            true,
+            false,
+            true,
+            true,
+            true,
+            true
+        ));
+        // Global toggle off.
+        assert!(!should_fire_agent_notification(
+            AgentState::Blocked,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true,
+            true
+        ));
+        // Matching event-type toggle off.
+        assert!(!should_fire_agent_notification(
+            AgentState::Blocked,
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+            true
+        ));
+        // Rate limit exhausted.
+        assert!(!should_fire_agent_notification(
+            AgentState::Blocked,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            false
+        ));
+    }
+
+    // AC-5 (active-window-agent-notification task0001): Working/Idle
+    // never notify regardless of pane visibility or the
+    // `notify_visible_pane` setting.
+    #[test]
+    fn should_fire_task0001_ac5_working_idle_never_fire_regardless_of_visibility_setting() {
+        for state in [AgentState::Working, AgentState::Idle] {
+            for pane_visible in [true, false] {
+                for notify_visible_pane in [true, false] {
+                    assert!(!should_fire_agent_notification(
+                        state,
+                        pane_visible,
+                        notify_visible_pane,
+                        true,
+                        true,
+                        true,
+                        true,
+                        true
+                    ));
+                }
+            }
+        }
     }
 
     // AC-3: either settings switch off suppresses the notification.
@@ -596,6 +734,7 @@ mod tests {
         assert!(!should_fire_agent_notification(
             AgentState::Blocked,
             false,
+            true,
             false,
             true,
             true,
@@ -607,6 +746,7 @@ mod tests {
             AgentState::Blocked,
             false,
             true,
+            true,
             false,
             true,
             true,
@@ -616,6 +756,7 @@ mod tests {
         assert!(!should_fire_agent_notification(
             AgentState::Done,
             false,
+            true,
             false,
             false,
             true,
@@ -630,6 +771,7 @@ mod tests {
         assert!(!should_fire_agent_notification(
             AgentState::Blocked,
             false,
+            true,
             true,
             true,
             true,
@@ -675,6 +817,7 @@ mod tests {
             false,
             true,
             true,
+            true,
             false,
             true,
             true
@@ -682,6 +825,7 @@ mod tests {
         assert!(!should_fire_agent_notification(
             AgentState::Blocked,
             false,
+            true,
             true,
             true,
             true,
@@ -700,6 +844,7 @@ mod tests {
             false,
             true,
             true,
+            true,
             false,
             true,
             true
@@ -708,6 +853,7 @@ mod tests {
         assert!(should_fire_agent_notification(
             AgentState::Done,
             false,
+            true,
             true,
             true,
             true,
@@ -725,6 +871,7 @@ mod tests {
         assert!(!should_fire_agent_notification(
             AgentState::Blocked,
             false,
+            true,
             false,
             true,
             true,
@@ -734,6 +881,7 @@ mod tests {
         assert!(!should_fire_agent_notification(
             AgentState::Done,
             false,
+            true,
             true,
             false,
             true,
@@ -748,12 +896,12 @@ mod tests {
     fn should_fire_task0001_ac5_both_toggles_on_matches_prior_behavior() {
         for state in [AgentState::Blocked, AgentState::Done] {
             assert!(should_fire_agent_notification(
-                state, false, true, true, true, true, true
+                state, false, true, true, true, true, true, true
             ));
         }
         for state in [AgentState::Working, AgentState::Idle] {
             assert!(!should_fire_agent_notification(
-                state, false, true, true, true, true, true
+                state, false, true, true, true, true, true, true
             ));
         }
     }
@@ -792,9 +940,20 @@ mod tests {
 
         // Simulate a transition that was suppressed by visibility (the
         // caller never calls `record` because `should_fire_*` was false).
+        // Visible pane with `notify_visible_pane` off — the legacy
+        // suppression path still exists as one way to reach "suppressed".
         let visible = true;
-        let fire =
-            should_fire_agent_notification(AgentState::Blocked, visible, true, true, true, true, true);
+        let notify_visible_pane = false;
+        let fire = should_fire_agent_notification(
+            AgentState::Blocked,
+            visible,
+            notify_visible_pane,
+            true,
+            true,
+            true,
+            true,
+            true,
+        );
         assert!(!fire);
         // No `record` call — the window must still be open.
         assert!(limiter.is_within_limit(&"pane-1", now));

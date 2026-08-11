@@ -135,7 +135,8 @@ impl App {
 
     /// Fire (or suppress) a desktop notification for one drained
     /// agent-status transition (task0007 / FR9; task0001's event-type
-    /// toggles).
+    /// toggles; active-window-agent-notification task0001's visible-pane
+    /// setting).
     ///
     /// `pane_key` identifies the pane for the per-pane rate limit
     /// (task0005's mux `public_pane_id`, or a caller-chosen stable key for
@@ -153,11 +154,14 @@ impl App {
     /// (task0005) is wired into `App`, its per-frame
     /// `drain_transitions()` calls this method once per drained event.
     /// `Settings::agent_notify_on_done` / `Settings::agent_notify_on_blocked`
-    /// (task0001) are read here alongside the existing
-    /// `agent_status_notifications` / `notification_enabled` gates and
-    /// passed to [`crate::notifications::should_fire_agent_notification`],
-    /// which selects the toggle matching `transition.new_state`. Returns
-    /// whether the notification fired, for tests.
+    /// (task0001) and `Settings::agent_notify_visible_pane`
+    /// (active-window-agent-notification task0001) are read here alongside
+    /// the existing `agent_status_notifications` / `notification_enabled`
+    /// gates and passed to
+    /// [`crate::notifications::should_fire_agent_notification`], which
+    /// selects the toggle matching `transition.new_state` and applies the
+    /// visible-pane setting to the visibility conjunct. Returns whether
+    /// the notification fired, for tests.
     pub fn maybe_notify_agent_transition(
         &mut self,
         pane_key: impl Into<String>,
@@ -173,6 +177,7 @@ impl App {
         let fire = crate::notifications::should_fire_agent_notification(
             transition.new_state,
             pane_visible,
+            self.settings.agent_notify_visible_pane,
             self.settings.agent_status_notifications,
             self.settings.notification_enabled,
             self.settings.agent_notify_on_done,
