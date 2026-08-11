@@ -58,7 +58,7 @@ workflow:
       追加するのみで、新規レイアウト・新規コンポーネント・視覚デザイン判断を伴わない
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: ae0484bd8e4b182e449d0387b860d586153a982d
