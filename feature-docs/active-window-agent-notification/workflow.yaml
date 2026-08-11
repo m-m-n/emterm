@@ -89,9 +89,9 @@ tasks:
     domains: [data-persistence, ui]
     complexity: medium
     requirements: [FR1, FR2, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/active-window-agent-notification/task0001
   task0002:
     title: "Settings-panel toggle and TypeScript mirror"
     plan: tasks/task0002.md
@@ -108,9 +108,9 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR3, FR4, NFR1]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/active-window-agent-notification/task0002
 
 review:
   status: pending
