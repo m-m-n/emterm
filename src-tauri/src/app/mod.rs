@@ -897,16 +897,24 @@ impl App {
 
     /// Auto-dismiss pump for both toast owners, in a fixed order: the
     /// restart toast first, then the SFTP toasts. Returns `true` when either
-    /// pump changed toast state (caller schedules a repaint). The restart
-    /// toast is pumped as its own call so its auto-dismiss never depends on
-    /// the SFTP pump staying unconditional.
+    /// pump changed state (caller schedules a repaint).
+    ///
+    /// Broader than its name: [`Self::pump_sftp`] is not just toast pruning —
+    /// it also drains the SFTP progress / duplicate-check channels, drives
+    /// the overwrite-dialog transitions, and starts pending uploads. This
+    /// call must therefore run every egui frame UNCONDITIONALLY — never gate
+    /// it on [`Self::toast_pending`]: before the first toast exists the
+    /// progress events would never be drained and SFTP would stall. Both
+    /// pump results are bound before combining so neither call can ever be
+    /// short-circuited away by the other's outcome.
     ///
     /// `now` is egui's frame-time clock (monotonic, wall-clock-free), which
     /// only advances when a frame actually paints — see [`TOAST_POLL_MS`]
     /// for how those frames are kept flowing.
     pub fn pump_toasts(&mut self, now: f64) -> bool {
         let restart_changed = self.pump_restart_toast(now);
-        self.pump_sftp(now) || restart_changed
+        let sftp_changed = self.pump_sftp(now);
+        restart_changed || sftp_changed
     }
 
     /// Next `Instant` the event loop must wake while a restart or SFTP toast
