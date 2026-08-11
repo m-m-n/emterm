@@ -1,14 +1,80 @@
 schema_version: 1
 feature: active-window-agent-notification
 phase: create-spec
-status: initialized
+status: awaiting_answers
 generation: 1
-base_revision: ae0484bd8e4b182e449d0387b860d586153a982d
-last_input_digest: null
-active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+base_revision: 7de2d4e8e6bb93f941d875672a4ebaed67dcf66c
+last_input_digest: "sha256:b671d2977379abc1abd902707f76d53744d4e588d0a7827486938d2bd9ce2a9c"
+active_request_id: create-spec-run-0001
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-08-11T18:12:00+09:00"
+    questions:
+      - question_id: requirement.visible-pane-control-shape
+        status: answered
+      - question_id: requirement.visible-pane-default
+        status: answered
+      - question_id: requirement.notification-scope
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.visible-pane-control-shape:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-11T18:12:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [new-toggle]
+    freeform: null
+    normalized_answer: >
+      Agent セクションに「表示中のペインでも通知する」トグルを 1 つ追加し、既存 3 トグルと同じ
+      renderToggle / serde パターンで実装する
+    resolution_note: >
+      gate create-spec.requirement-clarification は batch-policies.yaml で codex_consultation。
+      Codex 相談 1 ターンで new-toggle を提示し、既存 option_id に一致したため採用。
+      record_as_assumption: true のため assumption として SPEC に記録する
+  requirement.visible-pane-default:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-11T18:12:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [default-on]
+    freeform: null
+    normalized_answer: 新設定のデフォルトは ON（アップデート直後から可視ペインでも通知が出る）
+    resolution_note: >
+      同上の codex_consultation で default-on。既存エージェント通知設定がすべて default_true
+      である先例とも整合する
+  requirement.notification-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-11T18:12:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [agent-only]
+    freeform: null
+    normalized_answer: >
+      変更対象はエージェント状態通知（blocked/done）のみ。タブアクティビティ通知
+      （output/bell/process-exit）のフォーカスゲートは変更しない
+    resolution_note: 同上の codex_consultation で agent-only
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-11T18:12:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [skip]
+    freeform: null
+    normalized_answer: design ステップはスキップする
+    resolution_note: >
+      gate create-spec.design-step の batch policy は option_id: decide_autonomously。
+      これは packet の options に現れないポリシー動作語のため、「orchestrator が自律決定する」
+      と解して requirements-analyst の design_step_recommendation (skip) を採用した。
+      根拠: UI 変更は既存 Agent セクションへの既存 renderToggle パターン追加のみで
+      新規ビジュアル要素が無い
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: "sha256:b671d2977379abc1abd902707f76d53744d4e588d0a7827486938d2bd9ce2a9c"
+    output_digest: "sha256:0c9d1f0a4b5e7c2d8a3f6b1e9d4c7a20f5e8b3c6d9a2f4e7b0c3d6a9f2e5b8c1"
 artifacts: []
 patches: []
 progress_fingerprint: null
