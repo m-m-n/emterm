@@ -378,17 +378,32 @@ enum DrainStatus {
     Pending,
 }
 
-/// Consume everything currently buffered in `pipe` (which the caller
-/// has switched to `O_NONBLOCK`) into `out`, without ever blocking.
-/// A read error other than `WouldBlock` / `Interrupted` is treated as
-/// end of collection with whatever has arrived, matching what the
-/// former reader thread's `read_to_end` delivered on error.
+/// Upper bound, in bytes, on how much a single [`drain_available`] sweep
+/// will collect before returning. Without this, a child that keeps its
+/// stdout pipe non-empty (writing faster than we drain) would never let
+/// the inner loop exit, so the caller's deadline/`try_wait` re-evaluation
+/// in the outer wait loop would never run and `spawn_bounded`'s
+/// timeout guarantee (AC-3/NFR1) would not hold.
+const DRAIN_SWEEP_LIMIT: usize = 256 * 1024;
+
+/// Consume up to [`DRAIN_SWEEP_LIMIT`] bytes currently buffered in `pipe`
+/// (which the caller has switched to `O_NONBLOCK`) into `out`, without
+/// ever blocking. A read error other than `WouldBlock` / `Interrupted` is
+/// treated as end of collection with whatever has arrived, matching what
+/// the former reader thread's `read_to_end` delivered on error.
 fn drain_available(pipe: &mut std::process::ChildStdout, out: &mut Vec<u8>) -> DrainStatus {
     let mut chunk = [0u8; 4096];
+    let mut swept = 0usize;
     loop {
+        if swept >= DRAIN_SWEEP_LIMIT {
+            return DrainStatus::Pending;
+        }
         match pipe.read(&mut chunk) {
             Ok(0) => return DrainStatus::Eof,
-            Ok(n) => out.extend_from_slice(&chunk[..n]),
+            Ok(n) => {
+                out.extend_from_slice(&chunk[..n]);
+                swept += n;
+            }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => return DrainStatus::Pending,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => return DrainStatus::Eof,
