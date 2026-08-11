@@ -1,0 +1,59 @@
+task_id: task0001
+baseline_failures: []          # 3215 passed, 0 failed, 3 ignored before any change
+final_failures: []             # 3217 passed, 0 failed, 3 ignored after implementation
+acceptance_tests:
+  AC-1:
+    tests:
+      - notifications::tests::agent_notification_body_strips_csi_sequences_from_tab_title
+      - notifications::tests::agent_notification_body_strips_control_chars_from_tab_title
+    red_confirmed: true
+    red_reason: >-
+      Same two tests as AC-2/AC-3 evidence the choke point: before
+      sanitize_title was wired into agent_notification_body, the tab
+      title reached the body verbatim (no sanitize_title call on that
+      path), so both tests failed for that reason.
+  AC-2:
+    tests:
+      - notifications::tests::agent_notification_body_strips_csi_sequences_from_tab_title
+    red_confirmed: true
+    red_reason: >-
+      panicked at src-tauri/src/notifications.rs:1007:9: body must not
+      contain the ESC byte: "claude: \u{1b}[31mred\u{1b}[0m title (blocked)"
+  AC-3:
+    tests:
+      - notifications::tests::agent_notification_body_strips_control_chars_from_tab_title
+    red_confirmed: true
+    red_reason: >-
+      panicked at src-tauri/src/notifications.rs:1023:9: body must not
+      contain C0/DEL/C1 control characters: "claude: a\u{7}b\0c\u{9f}d (blocked)"
+  AC-4:
+    tests:
+      - notifications::tests::agent_notification_body_uses_sanitized_name_and_tab_title
+      - notifications::tests::agent_notification_body_falls_back_to_neutral_name_when_absent
+    red_confirmed: false
+    red_reason: >-
+      Regression guard, not a red-then-green criterion: these pre-existing
+      tests use plain ASCII titles ("my-tab"), so sanitize_title's no-op
+      pass-through for normal titles already made them green before this
+      task's change and they stayed green, unmodified, after it (task
+      plan: "the existing agent_notification_body tests must pass without
+      modification").
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Non-observable-via-test criterion (no new sanitization
+      implementation added; sanitize_title and the tab-activity
+      notification path (notification_body) left unmodified). Verified by
+      diff review: the only change in src-tauri/src/notifications.rs is
+      one added `sanitize_title(tab_title)` call plus its two `let`
+      bindings inside agent_notification_body, and the new pinning tests.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Full-suite outcome, not a single red-then-green test. `cargo test
+      --manifest-path src-tauri/Cargo.toml --lib` after implementation:
+      3217 passed, 0 failed, 3 ignored (baseline was 3215 passed, 0
+      failed, 3 ignored; the delta is exactly the 2 new tests added for
+      AC-2/AC-3).

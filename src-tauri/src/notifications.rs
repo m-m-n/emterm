@@ -348,6 +348,12 @@ fn agent_name_fallback(locale: Locale) -> &'static str {
 /// sanitized agent name (or the neutral fallback) plus the tab title, per
 /// the task plan's body format ("uses the model's name ... or a neutral
 /// fallback, plus the tab title").
+///
+/// `tab_title` is untrusted (OSC 0/2 payload) and is routed through the
+/// same [`sanitize_title`] used by the tab-activity notification path
+/// (agent-notification-sanitize-title task0001, review finding
+/// 7dd413bdd9289905) — sanitizing here makes this function the single
+/// choke point for both existing call sites and any future one.
 pub fn agent_notification_body(
     transition: &AgentTransition,
     tab_title: &str,
@@ -369,7 +375,8 @@ pub fn agent_notification_body(
         (Locale::En, AgentState::Working | AgentState::Idle) => "active",
         (Locale::Ja, AgentState::Working | AgentState::Idle) => "実行中",
     };
-    format!("{name}: {tab_title} ({state_msg})")
+    let sanitized_title = sanitize_title(tab_title);
+    format!("{name}: {sanitized_title} ({state_msg})")
 }
 
 #[cfg(test)]
@@ -990,6 +997,42 @@ mod tests {
         assert_eq!(
             agent_notification_body(&t, "my-tab", Locale::Ja),
             "エージェント: my-tab (ブロック中)"
+        );
+    }
+
+    // AC-2 (agent-notification-sanitize-title task0001): a tab title
+    // carrying a CSI sequence must not leak escape/CSI bytes into the
+    // returned body — pins the property, not one exact fixture string
+    // (task plan Test Notes).
+    #[test]
+    fn agent_notification_body_strips_csi_sequences_from_tab_title() {
+        let body = agent_notification_body(
+            &transition(AgentState::Blocked),
+            "\x1b[31mred\x1b[0m title",
+            Locale::En,
+        );
+        assert!(
+            !body.contains('\x1b'),
+            "body must not contain the ESC byte: {body:?}"
+        );
+    }
+
+    // AC-3 (agent-notification-sanitize-title task0001): a tab title
+    // carrying C0/DEL/C1 control characters must not leak any of them
+    // into the returned body.
+    #[test]
+    fn agent_notification_body_strips_control_chars_from_tab_title() {
+        let body = agent_notification_body(
+            &transition(AgentState::Blocked),
+            "a\x07b\x00c\u{9f}d",
+            Locale::En,
+        );
+        assert!(
+            body.chars().all(|c| {
+                let cp = c as u32;
+                !(cp <= 0x1f || (0x7f..=0x9f).contains(&cp))
+            }),
+            "body must not contain C0/DEL/C1 control characters: {body:?}"
         );
     }
 }
