@@ -762,3 +762,266 @@ fn test_retroactive_widen_one_before_last_column_sets_wrap_pending() {
     assert!(core.get_wrap_pending());
     assert_eq!(core.get_cursor_col(), 4);
 }
+
+// ── wide-pair-overwrite-cleanup (task0001): print-path partner blanking ──
+//
+// FR1/FR2/FR3 (this feature's SPEC.md) are distinct from the FR1-FR4
+// comments above (keycap-cluster-composition, a past feature) — do not
+// confuse the two when reading test names/comments in this section.
+
+// AC-1 (TS1, FR1): overwriting a wide-pair base cell with a width-1
+// character via the ASCII fast path blanks its now-orphaned spacer.
+#[test]
+fn test_handle_print_ascii_overwrite_wide_base_blanks_spacer() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    // ⏭️ = U+23ED + VS16, width 2 (base at col0, spacer at col1).
+    core.process_pty_data("\u{23ED}\u{FE0F}".as_bytes());
+    core.handle_print(0x58); // 'X' forces the buffered cluster to flush
+    assert_eq!(core.get_cell_width(0, 0), 2);
+    assert_eq!(core.get_cell_width(1, 0), 0);
+
+    core.process_pty_data(b"\r"); // cursor back to col 0
+    core.handle_print(0x41); // 'A' overwrites the wide base (ASCII fast path)
+
+    assert_eq!(core.get_cell_char(0, 0), "A");
+    assert_eq!(core.get_cell_width(0, 0), 1);
+    assert_eq!(core.get_cell_char(1, 0), " "); // orphaned spacer blanked
+    assert_eq!(core.get_cell_width(1, 0), 1);
+}
+
+// AC-1 (TS1, FR1): same scenario through the non-ASCII slow path
+// (write_grapheme_to_grid), confirming the rule is not fast-path-only.
+#[test]
+fn test_write_grapheme_nonascii_overwrite_wide_base_blanks_spacer() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    core.process_pty_data("\u{23ED}\u{FE0F}".as_bytes());
+    core.handle_print(0x58); // flush
+    assert_eq!(core.get_cell_width(0, 0), 2);
+    assert_eq!(core.get_cell_width(1, 0), 0);
+
+    core.process_pty_data(b"\r");
+    core.process_pty_data("\u{00E9}".as_bytes()); // 'é', width 1, non-ASCII (slow path)
+
+    assert_eq!(core.get_cell_char(0, 0), "\u{00E9}");
+    assert_eq!(core.get_cell_width(0, 0), 1);
+    assert_eq!(core.get_cell_char(1, 0), " ");
+    assert_eq!(core.get_cell_width(1, 0), 1);
+}
+
+// AC-2 (TS2, FR2): overwriting a wide-pair spacer cell blanks its
+// now-orphaned base (ASCII fast path).
+#[test]
+fn test_handle_print_ascii_overwrite_wide_spacer_blanks_base() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    core.process_pty_data("\u{23ED}\u{FE0F}".as_bytes());
+    core.handle_print(0x58);
+    assert_eq!(core.get_cell_width(0, 0), 2);
+    assert_eq!(core.get_cell_width(1, 0), 0);
+
+    core.process_pty_data(b"\x1b[1;2H"); // CUP row1,col2 (1-indexed) -> (col1,row0)
+    core.handle_print(0x42); // 'B' overwrites the spacer (ASCII fast path)
+
+    assert_eq!(core.get_cell_char(1, 0), "B");
+    assert_eq!(core.get_cell_width(1, 0), 1);
+    assert_eq!(core.get_cell_char(0, 0), " "); // orphaned base blanked
+    assert_eq!(core.get_cell_width(0, 0), 1);
+}
+
+// AC-2 (TS2, FR2): same scenario through the non-ASCII slow path.
+#[test]
+fn test_write_grapheme_nonascii_overwrite_wide_spacer_blanks_base() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    core.process_pty_data("\u{23ED}\u{FE0F}".as_bytes());
+    core.handle_print(0x58);
+    assert_eq!(core.get_cell_width(0, 0), 2);
+    assert_eq!(core.get_cell_width(1, 0), 0);
+
+    core.process_pty_data(b"\x1b[1;2H");
+    core.process_pty_data("\u{00E9}".as_bytes());
+
+    assert_eq!(core.get_cell_char(1, 0), "\u{00E9}");
+    assert_eq!(core.get_cell_width(1, 0), 1);
+    assert_eq!(core.get_cell_char(0, 0), " ");
+    assert_eq!(core.get_cell_width(0, 0), 1);
+}
+
+// AC-3 (TS6, FR3): writing a wide (width-2) character whose placeholder
+// would land on another wide pair's base blanks that pair's now-orphaned
+// spacer too (chained cleanup), exercised via write_grapheme_to_grid's
+// direct placeholder-creation path.
+#[test]
+fn test_write_grapheme_wide_write_over_existing_base_blanks_its_spacer() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    // Pair A at col1 (base) / col2 (spacer): CJK '世'.
+    core.process_pty_data(b"\x1b[1;2H"); // cursor -> col1
+    core.handle_print(0x4E16); // '世', width 2
+    assert_eq!(core.get_cell_width(1, 0), 2);
+    assert_eq!(core.get_cell_width(2, 0), 0);
+
+    // New wide write at col0: its placeholder wants col1, currently pair
+    // A's base. Overwriting it would orphan pair A's spacer at col2
+    // unless it is blanked first.
+    core.process_pty_data(b"\r"); // cursor -> col0
+    core.handle_print(0x4E2D); // '中', width 2: base at col0, placeholder at col1
+
+    assert_eq!(core.get_cell_char(0, 0), "\u{4E2D}");
+    assert_eq!(core.get_cell_width(0, 0), 2);
+    assert_eq!(core.get_cell_width(1, 0), 0); // new placeholder (pair B's spacer)
+    assert_eq!(core.get_cell_char(2, 0), " "); // pair A's spacer, orphaned, blanked
+    assert_eq!(core.get_cell_width(2, 0), 1);
+}
+
+// AC-3 (TS6, FR3/FR4): the same chained-cleanup rule applied at the
+// widen_after_merge spacer-creation site: a retroactive VS16 widen whose
+// new spacer would land on another wide pair's base blanks that pair's
+// spacer too.
+#[test]
+fn test_widen_after_merge_spacer_creation_over_existing_base_blanks_its_spacer() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    // Pair A at col1 (base) / col2 (spacer): CJK '世'.
+    core.process_pty_data(b"\x1b[1;2H"); // cursor -> col1
+    core.handle_print(0x4E16); // '世'
+    assert_eq!(core.get_cell_width(1, 0), 2);
+    assert_eq!(core.get_cell_width(2, 0), 0);
+
+    // Digit at col0, then a standalone VS16 retroactively widens it; the
+    // new spacer wants col1, currently pair A's base.
+    core.process_pty_data(b"\r"); // cursor -> col0
+    core.handle_print(0x35); // '5' at col0
+    core.handle_print(0xFE0F); // VS16: retroactive widen
+
+    assert_eq!(core.get_cell_char(0, 0), "5\u{FE0F}");
+    assert_eq!(core.get_cell_width(0, 0), 2);
+    assert_eq!(core.get_cell_width(1, 0), 0); // new spacer (digit pair)
+    assert_eq!(core.get_cell_char(2, 0), " "); // pair A's spacer, orphaned, blanked
+    assert_eq!(core.get_cell_width(2, 0), 1);
+}
+
+// FR4 (Design item 4, relocate_widened_base_via_wrap): when a last-column
+// VS16 widen relocates to the next row, its base/spacer writes at the new
+// row's col0/col1 apply the same partner-blanking rule as ordinary
+// writes. Here col1 of the target row already holds an unrelated wide
+// pair's base; the new relocated spacer overwriting it must blank that
+// pair's own spacer at col2.
+#[test]
+fn test_relocate_widened_base_via_wrap_spacer_creation_blanks_existing_pair_spacer() {
+    let mut core = TerminalCore::new(5, 3, 0); // last column index = 4
+    // Pre-populate row 1 with an unrelated wide pair at col1(base)/col2(spacer).
+    core.process_pty_data(b"\x1b[2;2H"); // row2,col2 (1-indexed) -> (col1,row1)
+    core.handle_print(0x4E16); // '世' at (1,1): base col1, spacer col2
+    assert_eq!(core.get_cell_width(1, 1), 2);
+    assert_eq!(core.get_cell_width(2, 1), 0);
+
+    // Row 0: fill to the last column, then trigger a VS16 widen that
+    // relocates via wrap to row 1.
+    core.process_pty_data(b"\x1b[1;1H"); // back to (0,0)
+    for c in b'A'..=b'D' {
+        core.handle_print(c as u32);
+    }
+    core.handle_print(0x35); // '5' at col4 (last column)
+    assert_eq!(core.get_cursor_col(), 4);
+    core.handle_print(0xFE0F); // VS16 -> relocate via wrap to row 1
+
+    assert_eq!(core.get_cell_char(0, 1), "5\u{FE0F}");
+    assert_eq!(core.get_cell_width(0, 1), 2);
+    assert_eq!(core.get_cell_width(1, 1), 0); // new spacer (relocated pair)
+    assert_eq!(core.get_cell_char(2, 1), " "); // old pair's spacer, orphaned, blanked
+    assert_eq!(core.get_cell_width(2, 1), 1);
+}
+
+// AC-4 (TS3, FR1-FR4): investigation report P5 repro — a shorter redraw
+// after CR that overwrites a wide-pair base but does not itself reach far
+// enough to overwrite the old spacer (no EL, no full-line repaint) must
+// not leave that spacer as an orphan.
+#[test]
+fn test_write_grapheme_shorter_redraw_after_wide_base_overwrite_blanks_orphan_spacer() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    // Frame 1: '─' (DEC line drawing), ⏭️ (U+23ED + VS16, width 2), "AB".
+    core.set_g0_charset(1);
+    core.handle_print(0x71); // '─' at col0
+    core.set_g0_charset(0);
+    core.process_pty_data("\u{23ED}\u{FE0F}".as_bytes()); // buffered
+    core.handle_print(0x41); // 'A' forces flush: base at col1, spacer at col2
+    core.handle_print(0x42); // 'B' at col4
+    assert_eq!(core.get_cell_char(0, 0), "\u{2500}");
+    assert_eq!(core.get_cell_width(1, 0), 2);
+    assert_eq!(core.get_cell_width(2, 0), 0);
+    assert_eq!(core.get_cell_char(3, 0), "A");
+    assert_eq!(core.get_cell_char(4, 0), "B");
+
+    // Frame 2: CR, then a *shorter* redraw that overwrites only col0/col1
+    // (the wide base) and stops — no EL, no write reaching col2.
+    core.process_pty_data(b"\r");
+    core.handle_print(0x20); // ' ' at col0 (was '─', width1: no trigger)
+    core.handle_print(0x2D); // '-' overwrites the wide base at col1 (R1)
+
+    assert_eq!(core.get_cell_char(0, 0), " ");
+    assert_eq!(core.get_cell_char(1, 0), "-");
+    assert_eq!(core.get_cell_width(1, 0), 1);
+    assert_eq!(core.get_cell_char(2, 0), " "); // orphaned spacer, blanked
+    assert_eq!(core.get_cell_width(2, 0), 1);
+    // Untouched trailing content from frame 1 survives (NFR1).
+    assert_eq!(core.get_cell_char(3, 0), "A");
+    assert_eq!(core.get_cell_char(4, 0), "B");
+}
+
+// AC-5 (TS4, FR4, NFR1): U+23ED and its VS16 arrive via separate
+// process_pty_data calls (PTY chunk boundary). The buffered emoji+VS16
+// flush must still land width 2 with a correct spacer and cursor
+// position — the partner-blanking checks this task adds must not disturb
+// this pre-existing chunked-arrival behavior (both cells were empty, so
+// no rule engages).
+#[test]
+fn test_write_grapheme_u23ed_vs16_across_chunk_boundary_widens_correctly() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    core.process_pty_data("\u{23ED}".as_bytes());
+    core.process_pty_data("\u{FE0F}".as_bytes());
+    core.process_pty_data(b"X"); // forces flush of the buffered cluster
+
+    assert_eq!(core.get_cell_char(0, 0), "\u{23ED}\u{FE0F}");
+    assert_eq!(core.get_cell_width(0, 0), 2);
+    assert_eq!(core.get_cell_width(1, 0), 0); // spacer
+    assert_eq!(core.get_cell_char(2, 0), "X");
+    assert_eq!(core.get_cursor_col(), 3);
+}
+
+// AC-6 (NFR1): full existing term_core suite (--lib) stays green — see
+// AC-6 note in tests.yaml; verified by the full `cargo test --lib` run
+// rather than a single dedicated test here.
+
+// AC-7 (NFR1, NFR4): overwriting a width-1 cell with another width-1
+// character (no wide-pair involvement) leaves the left/right neighbor
+// cells' content and width completely unchanged (ASCII fast path).
+#[test]
+fn test_handle_print_ascii_overwrite_ordinary_cell_leaves_neighbors_unchanged() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    core.handle_print(0x41); // 'A' col0
+    core.handle_print(0x42); // 'B' col1
+    core.handle_print(0x43); // 'C' col2
+    core.process_pty_data(b"\r"); // cursor -> col0
+    core.handle_print(0x2A); // '*' overwrites col0 (ASCII fast path)
+
+    assert_eq!(core.get_cell_char(0, 0), "*");
+    assert_eq!(core.get_cell_char(1, 0), "B");
+    assert_eq!(core.get_cell_width(1, 0), 1);
+    assert_eq!(core.get_cell_char(2, 0), "C");
+    assert_eq!(core.get_cell_width(2, 0), 1);
+}
+
+// AC-7 (NFR1, NFR4): same guarantee through the non-ASCII slow path,
+// overwriting a middle cell and checking both neighbors.
+#[test]
+fn test_write_grapheme_nonascii_overwrite_ordinary_cell_leaves_neighbors_unchanged() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    core.handle_print(0x41); // 'A' col0
+    core.handle_print(0x42); // 'B' col1
+    core.handle_print(0x43); // 'C' col2
+    core.process_pty_data(b"\x1b[1;2H"); // CUP row1,col2 (1-indexed) -> (col1,row0)
+    core.process_pty_data("\u{00E9}".as_bytes()); // 'é', width1, non-ASCII (slow path)
+
+    assert_eq!(core.get_cell_char(1, 0), "\u{00E9}");
+    assert_eq!(core.get_cell_char(0, 0), "A");
+    assert_eq!(core.get_cell_width(0, 0), 1);
+    assert_eq!(core.get_cell_char(2, 0), "C");
+    assert_eq!(core.get_cell_width(2, 0), 1);
+}

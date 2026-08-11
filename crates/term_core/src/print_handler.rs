@@ -63,6 +63,87 @@ impl TerminalCore {
         }
     }
 
+    /// Blank a wide-pair partner cell (an orphaned spacer or base) in
+    /// place: replace its content with a single space at width 1, while
+    /// preserving fg/bg/flags/hyperlink (IMPLEMENTATION.md D2), removing
+    /// any overflow-table entry for it, and marking the row dirty.
+    ///
+    /// Callers must already have confirmed the target cell is currently
+    /// width 0 or width 2 (the shared partner-blanking precondition) —
+    /// this function does not re-check.
+    fn blank_wide_pair_partner(&mut self, col: u16, row: u16) {
+        let Some(idx) = self.cell_index(col, row) else {
+            return;
+        };
+        if self.ring_cells[idx].is_overflow() && !self.overflow.is_empty() {
+            let abs = self.viewport_abs(row) as u32;
+            let col32 = col as u32;
+            if self.overflow.remove(&(col32, abs)).is_some() {
+                overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
+            }
+        }
+        let cell = &mut self.ring_cells[idx];
+        cell.set_char(" ");
+        cell.width = 1;
+        self.mark_row_dirty(row);
+    }
+
+    /// R1/R2 (print_handler-local rule, see IMPLEMENTATION.md Shared
+    /// Components + task0001 plan Design): before overwriting the cell at
+    /// (col, row), whose current width is `old_width`, blank whichever
+    /// neighbor would otherwise be orphaned by the overwrite:
+    /// - R1: `old_width == 2` (overwriting a wide base) and the spacer at
+    ///   col+1 is still width 0 → blank col+1.
+    /// - R2: `old_width == 0` (overwriting a spacer) and the base at
+    ///   col-1 is still width 2 → blank col-1.
+    ///
+    /// Callers on the ASCII fast path already have `old_width` from the
+    /// same cell access used for the write itself (NFR4: no additional
+    /// memory access). No-op when `old_width == 1` (the ordinary case);
+    /// callers should skip calling this entirely in that case to avoid
+    /// even the redundant re-check.
+    fn blank_orphaned_neighbor_before_overwrite(&mut self, col: u16, row: u16, old_width: u8) {
+        if old_width == 2 {
+            if col + 1 < self.cols {
+                if let Some(idx2) = self.cell_index(col + 1, row) {
+                    if self.ring_cells[idx2].width == 0 {
+                        self.blank_wide_pair_partner(col + 1, row);
+                    }
+                }
+            }
+        } else if old_width == 0 && col > 0 {
+            if let Some(idx2) = self.cell_index(col - 1, row) {
+                if self.ring_cells[idx2].width == 2 {
+                    self.blank_wide_pair_partner(col - 1, row);
+                }
+            }
+        }
+    }
+
+    /// R3 (print_handler-local rule): before turning (ph_col, row) into a
+    /// wide-pair placeholder/spacer, check whether its current content is
+    /// itself a wide base (width 2) whose own spacer at ph_col+1 would be
+    /// orphaned by the overwrite. Blanks that spacer first — chained
+    /// cleanup for when a new wide write's placeholder lands on an
+    /// unrelated pair's base.
+    fn blank_orphaned_base_before_placeholder(&mut self, ph_col: u16, row: u16) {
+        let Some(idx) = self.cell_index(ph_col, row) else {
+            return;
+        };
+        if self.ring_cells[idx].width != 2 {
+            return;
+        }
+        let next_col = ph_col + 1;
+        if next_col >= self.cols {
+            return;
+        }
+        if let Some(idx2) = self.cell_index(next_col, row) {
+            if self.ring_cells[idx2].width == 0 {
+                self.blank_wide_pair_partner(next_col, row);
+            }
+        }
+    }
+
     /// Write a character/grapheme to grid at cursor, handling wrap and scroll.
     /// Scroll is handled internally via ring buffer.
     fn write_grapheme_to_grid(&mut self, char_str: &str, width: u8) {
@@ -89,6 +170,12 @@ impl TerminalCore {
         let col = self.cursor.col;
         let row = self.cursor.row;
         if let Some(idx) = self.cell_index(col, row) {
+            let old_width = self.ring_cells[idx].width;
+            if old_width != 1 {
+                // R1/R2 (FR1/FR2): blank an orphaned wide-pair neighbor
+                // before this overwrite lands.
+                self.blank_orphaned_neighbor_before_overwrite(col, row, old_width);
+            }
             let abs = self.viewport_abs(row) as u32;
             let cell = &mut self.ring_cells[idx];
             cell.set_char(char_str);
@@ -114,6 +201,10 @@ impl TerminalCore {
 
         // Placeholder for width-2 characters
         if width == 2 && col + 1 < self.cols {
+            // R3 (FR3): a chained-cleanup blank if col+1 currently holds
+            // an unrelated wide pair's base, before it becomes this pair's
+            // placeholder.
+            self.blank_orphaned_base_before_placeholder(col + 1, row);
             if let Some(idx) = self.cell_index(col + 1, row) {
                 let abs = self.viewport_abs(row) as u32;
                 let ph = &mut self.ring_cells[idx];
@@ -151,6 +242,14 @@ impl TerminalCore {
         let col = self.cursor.col;
         let row = self.cursor.row;
         if let Some(idx) = self.cell_index(col, row) {
+            // D4 (NFR4): single branch gates the wide-pair partner-blanking
+            // rule (R1/R2); the ordinary width-1 overwrite (common case)
+            // does no extra work beyond this one width read, which reuses
+            // the cache line already touched for the write below.
+            let old_width = self.ring_cells[idx].width;
+            if old_width != 1 {
+                self.blank_orphaned_neighbor_before_overwrite(col, row, old_width);
+            }
             let cell = &mut self.ring_cells[idx];
             cell.char_data[0] = byte;
             // Skip zeroing char_data[1..]: char_len=1 ensures only byte 0 is read
@@ -302,6 +401,10 @@ impl TerminalCore {
             let base = &self.ring_cells[base_idx];
             (base.fg, base.bg, base.flags, base.hyperlink_id)
         };
+        // R3 (FR3/FR4): a chained-cleanup blank if col+1 currently holds
+        // an unrelated wide pair's base, before it becomes this widened
+        // cell's spacer.
+        self.blank_orphaned_base_before_placeholder(col + 1, row);
         let abs = self.viewport_abs(row) as u32;
         if let Some(sp_idx) = self.cell_index(col + 1, row) {
             let sp = &mut self.ring_cells[sp_idx];
@@ -366,6 +469,15 @@ impl TerminalCore {
         let new_abs = self.viewport_abs(new_row) as u32;
         self.ring_wrapped[new_abs as usize] = true;
 
+        // R1/R2 (FR1/FR2, Design item 4): the relocated base write at the
+        // new row's col 0 may itself orphan a neighbor if that row already
+        // held wide-pair remnants.
+        if let Some(idx) = self.cell_index(0, new_row) {
+            let old_width = self.ring_cells[idx].width;
+            if old_width != 1 {
+                self.blank_orphaned_neighbor_before_overwrite(0, new_row, old_width);
+            }
+        }
         if let Some(idx) = self.cell_index(0, new_row) {
             let cell = &mut self.ring_cells[idx];
             cell.set_char(&content);
@@ -379,6 +491,9 @@ impl TerminalCore {
             cell.flags = flags;
             cell.hyperlink_id = hyperlink_id;
         }
+        // R3 (FR3, Design item 4): the relocated spacer write at col 1 may
+        // land on another pair's base, orphaning that pair's own spacer.
+        self.blank_orphaned_base_before_placeholder(1, new_row);
         if let Some(idx) = self.cell_index(1, new_row) {
             let sp = &mut self.ring_cells[idx];
             sp.char_data = [0; 16];
