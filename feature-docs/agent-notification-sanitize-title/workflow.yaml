@@ -30,7 +30,7 @@ workflow:
     skipped_reason: "Rust バックエンドの通知本文組み立てに対するセキュリティ修正のみで、UI・ビジュアル・レイアウト・デザイントークンへの変更が一切ない。"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: fee55c0f4564655333d973ac97fbfb3942ecb7dd
