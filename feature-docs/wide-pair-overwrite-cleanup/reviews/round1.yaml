@@ -1,0 +1,227 @@
+round: 1
+executed_at: "2026-08-11T22:35:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: b67fbe8d9b8291176e077b4e077992cba723d1b1
+  head_commit: 0d3a4ff929c278f17c07a98dda69070c842b33ee
+  changed_files:
+    - crates/term_core/src/csi_edit.rs
+    - crates/term_core/src/csi_screen.rs
+    - crates/term_core/src/print_handler.rs
+    - crates/term_core/src/print_handler/tests.rs
+    - test-docs/wide-pair-overwrite-cleanup/task0001.tests.yaml
+    - test-docs/wide-pair-overwrite-cleanup/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+    - perspective: performance
+      reason: "NFR4 が ASCII 高速パス（handle_print_ascii）の性能維持を要件化しており、その高頻度パスに新規分岐が追加されているため"
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: vertex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: vertex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: vertex, status: completed}
+findings:
+  - stable_id: b8a62feaf016ef08
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/csi_edit.rs
+    line: 161
+    title: "相方セル空白化プリミティブが 2 実装に分裂（blank_wide_pair_split / blank_wide_pair_partner）"
+    description: >-
+      同じ「wide ペアの片割れを width=1 の空白へ戻し、fg/bg/flags/hyperlink を保持し、
+      overflow テーブル/逆引き index のエントリを削除し、行を dirty にする」処理が 2 箇所に
+      独立実装されている。csi_edit.rs:161 の blank_wide_pair_split（pub(crate)、幅 0/2 を
+      自分で再検査して no-op）と print_handler.rs:74 の blank_wide_pair_partner（private、
+      幅チェックは呼び出し側責務、overflow は is_overflow() && !overflow.is_empty() で
+      ガード）。出力は現状等価だが、事前条件・overflow 掃除の書き方・可視性・置き場所が
+      すべて異なるため、片方だけを直すと print 経路と CSI 編集経路で不変条件の修復結果が
+      食い違う（shotgun surgery）。IMPLEMENTATION.md D2 の中心不変条件が 2 箇所に複製され
+      SSOT が無い。加えて共有ヘルパーが編集オペレーション専用モジュール csi_edit.rs に
+      置かれ、そこへ csi_screen.rs の ECH が依存する形になっており責務所在も曖昧。
+    suggestion: >-
+      grid セルのミューテーション基盤側（terminal_cells.rs 等）に
+      pub(crate) fn blank_wide_pair_half(&mut self, col: u16, row: u16) を 1 本だけ置き、
+      幅 0/2 の自己ガードを内側に持つ版へ統一する。print_handler 側の
+      blank_wide_pair_partner は削除し、R1/R2/R3 の呼び出し側の事前チェックは
+      「呼ぶかどうかの最適化」としてのみ残す（正しさは共通ヘルパーの自己ガードが担保）。
+      NFR4 のゲート（old_width != 1）は呼び出し前に済んでいるため通常経路の性能特性は
+      変わらない。
+    sources: [claude:architecture, claude:comprehensive]
+    confidence: 75
+    resolution: deferred
+    resolution_reason: "medium severity: auto-fix ゲート（critical/high のみ）の対象外。リファクタリング提案であり本 feature の受け入れ条件には影響しない"
+  - stable_id: 221c2569b17a55f9
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/csi_screen.rs
+    line: 45
+    title: "EL/ED (clear_line_range) は wide ペア相方掃除が入らず、同じ孤児セルを作り続ける"
+    description: >-
+      本 feature は print 経路（R1/R2/R3）と ECH/ICH/DCH に相方掃除を入れたが、
+      handle_erase_in_line / handle_erase_in_display が使う clear_line_range は素の
+      BCE 埋めのままで幅 0/2 の相方を見ない。具体的な失敗経路: (1) カーソルが spacer 上で
+      ESC[K（EL 0）→ 消去範囲が col..cols なので col-1 の幅2 base が生き残り孤児 base
+      （レポート P4 のグリフ重なり）、(2) カーソルが base 上で ESC[1K（EL 1）→
+      clear_line_range(row, 0, col+1) が base を消し col+1 の spacer が幅0 のまま残り
+      孤児 spacer（P3 の罫線ズレ）、(3) ESC[J / ESC[1J（ED 0/1）はカーソル行に同じ
+      clear_line_range を呼ぶため同一。この前提条件（カーソルが wide ペアの片側に着地）は
+      まさに本 feature の発端であるアプリ側と端末側の幅モデル不一致そのもの。
+      SPEC.md の FR5 は csi_edit 系（ECH/DCH/ICH）のみを実装時判断の対象としており、
+      EL/ED は判断対象にも上がっていない。NFR2 の参照実装（xterm / Alacritty / WezTerm）は
+      いずれも erase 時に相方を掃除する。
+    suggestion: >-
+      (a) ECH と同じ pre-capture → clear_line_range → 両端の blank_wide_pair_split
+      パターンを handle_erase_in_line の mode 0/1 と handle_erase_in_display の
+      mode 0/1 のカーソル行呼び出しにも適用する（範囲は EL0: [col, cols)、
+      EL1: [0, col+1)、両端の判定式は ECH と同一で流用可能）。(b) clear_line_range 側に
+      相方掃除を畳み込み、行全体クリアだけを例外にする。(c) スコープ外を維持するなら
+      SPEC/IMPLEMENTATION に既知の残課題として明記する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium severity: auto-fix ゲート対象外。SPEC の FR5 は ECH/DCH/ICH のみを対象としており EL/ED はスコープ外。別 feature として起票を推奨"
+  - stable_id: 06ef78e20e9b9f0b
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/print_handler.rs
+    line: 74
+    title: "新規ヘルパーの overflow（16バイト超グラフェム）分岐がテストで一度も通っていない"
+    description: >-
+      blank_wide_pair_partner と blank_wide_pair_split はどちらも overflow 側テーブル
+      （char_len == 0xFF）のエントリ削除を含むが、追加された 19 本のテストはすべて inline に
+      収まる文字（'世' 3バイト、⏭️ 6バイト等）しか使っておらず、この分岐を一度も実行しない。
+      ZWJ 家族絵文字（25バイト）などは幅2 かつ 16バイト超で overflow テーブル行きになり、
+      まさに本 feature が対象とする「幅2 base の片側上書き」の主役になりうる。削除順序や
+      overflow_ridx の同期を誤ると get_cell_char が unwrap_or_default() で空文字を返し、
+      掃除したはずのセルが「空白」ではなく「文字無し」になる — 元のバグとほぼ同じ見え方。
+      現状の実装は読む限り正しいが、リグレッションを検知する手段が無い。
+    suggestion: >-
+      overflow 経路のテストを最低 1 本ずつ追加する。(1) print 経路 — ZWJ 家族絵文字を col0 に
+      書いて base が overflow 行きになることを確認し、col0 を ASCII で上書きして col1 の
+      spacer が " " / width 1 になることを assert。(2) csi_edit 経路 — 同じ ZWJ ペアの
+      spacer 位置にカーソルを置いて DCH/ECH し、col-1 が get_cell_char == " " を返す
+      （空文字ではない）ことを assert。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium severity: auto-fix ゲート対象外。テストカバレッジの追加提案であり既存の受け入れ条件は満たしている"
+  - stable_id: 931abe859e23fa5d
+    severity: medium
+    category: architecture
+    file: crates/term_core/src/csi_screen.rs
+    line: 65
+    title: "wide ペア不変条件の強制点が chokepoint を持たず、ハンドラごとに分散している"
+    description: >-
+      ECH の後始末が handle_erase_characters 側にだけ手書きで足され、共通プリミティブ
+      clear_line_range は不変条件を知らないまま残る。範囲消去の端で孤児が生まれる条件は
+      ECH/EL/ED で完全に同一であり、同じバグクラスが同一ファイル内に残存する
+      （stable_id 221c2569b17a55f9 と同根）。本変更だけで ICH/DCH/ECH/print の 4 経路に
+      それぞれ検出条件の異なる修復コードが増えており（ICH 3分岐・DCH 3分岐・ECH 2分岐、
+      いずれも独立に境界条件を再導出）、今後 grid を書き換えるハンドラを追加するたびに
+      同じ推論を再実装する必要が生じる。
+    suggestion: >-
+      範囲消去の端修復を clear_line_range の呼び出し境界に共通化する。あるいは
+      fn repair_range_edges(&mut self, row, start, end, start_was_spacer, last_was_base)
+      のような共通関数を 1 本切り、ECH からはそれを呼ぶ形にして後続で EL/ED を同じ関数に
+      載せられる受け皿を残す。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium severity: auto-fix ゲート対象外。設計改善提案であり受け入れ条件には影響しない"
+  - stable_id: 4b0dfdcc426d75aa
+    severity: medium
+    category: spec
+    file: crates/term_core/src/print_handler/tests.rs
+    line: 932
+    title: "TS3 (P5 再現) が SPEC の指定シナリオ「1 桁ズラして書き直し」になっていない"
+    description: >-
+      SPEC.md の TS3 は「行を 1 桁ズラして書き直し（フレーム間の列幅変化を模擬）、旧フレームの
+      残骸が残らないことを検証する」と規定するが、追加された TS3 相当のテストは CR 後に同じ
+      列位置へ「より短い」再描画をするだけで、wide ペアの位置がフレーム間で 1 桁ずれる状況を
+      再現していない。この 1 桁ズレこそがレポート P5 の罫線ズレ・文字重なりを生んだ経路で、
+      ズレた再描画では base 上書き（FR1）と spacer 上書き（FR2）が同一行内で連続して発生する。
+      現状の追加テスト群は FR1 / FR2 を個別に検証しているだけで、P5 の複合シナリオに対する
+      回帰ガードが存在しない。
+    suggestion: >-
+      P5 の指定手順どおりのテストを 1 本追加する。フレーム1 で「幅1 文字 + ⏭️ + 後続文字」を
+      書き、CR 後のフレーム2 で同じ内容を 1 桁ズラして書き直し、(a) 旧 base 位置・旧 spacer
+      位置に幅0/幅2 の残骸が一切残らないこと、(b) 新しいペアが正しく base(幅2)+spacer(幅0)
+      になっていることを get_cell_char / get_cell_width で検証する。あわせて
+      test-docs/wide-pair-overwrite-cleanup/task0001.tests.yaml にも追記する。
+    sources: [claude:spec]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium severity: auto-fix ゲート（category != spec の制約もあり）対象外。SPEC の TS3 が要求する複合シナリオの回帰ガード追加は follow-up 推奨"
+  - stable_id: 7941ef452d881510
+    severity: medium
+    category: performance
+    file: crates/term_core/src/print_handler.rs
+    line: 110
+    title: "Redundant cell_index calls in partner-blanking hot paths"
+    description: >-
+      blank_wide_pair_partner が cell_index を 1 度呼んだあと、
+      blank_orphaned_neighbor_before_overwrite / blank_orphaned_base_before_placeholder が
+      同じセルに対して再度呼ぶ。wide ペア境界では 1 セルあたり 2-3 回の追加呼び出しになる。
+    suggestion: "初回ルックアップのインデックスを呼び出しチェーンに渡すか、影響セルごとに 1 度だけ計算して再利用する"
+    sources: [vertex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium severity かつ old_width != 1 の分岐内でのみ発火するマイクロ最適化。Claude 側 performance レビューは実測影響なしと判断（cross-model 不一致）"
+  - stable_id: 128ab667bdead7f6
+    severity: medium
+    category: performance
+    file: crates/term_core/src/csi_edit.rs
+    line: 66
+    title: "Repeated get_cell_width calls on already-accessed cells"
+    description: >-
+      ICH は col_was_spacer 判定後にシフト後の cols-1 に対して再度 get_cell_width を呼び、
+      DCH も同様に 3 回呼ぶ。各呼び出しが cell_index の再計算と ring_cells アクセスを伴う。
+    suggestion: "シフトループ中に境界セルの width をキャッシュするか、既に取得済みのセル参照から直接 width を得る"
+    sources: [vertex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium severity かつ ICH/DCH 1 回あたりの定数コスト。Claude 側 performance レビューは実測影響なしと判断（cross-model 不一致）"
+  - stable_id: 13ebf590b4291599
+    severity: medium
+    category: performance
+    file: crates/term_core/src/print_handler.rs
+    line: 91
+    title: "Extra overflow map operations in print hot path"
+    description: >-
+      blank_wide_pair_partner は相方掃除のたびに overflow.is_empty() を検査し、非空のときは
+      対象セルが実際に overflow エントリかどうかに関わらず HashMap remove と
+      overflow_ridx_remove を行う。
+    suggestion: "対象セルが overflow エントリであると分かっている場合にのみ overflow 掃除を行う（per-cell フラグを先に見る）"
+    sources: [vertex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium severity。実装は既に is_overflow() でガードしており指摘の前提が不正確。Claude 側 performance レビューも実測影響なしと判断（cross-model 不一致）"
+  - stable_id: f5abaee2de740bac
+    severity: medium
+    category: performance
+    file: crates/term_core/src/print_handler.rs
+    line: 201
+    title: "Redundant width checks in ASCII fast path"
+    description: >-
+      write_ascii_to_grid が old_width != 1 を検査してから
+      blank_orphaned_neighbor_before_overwrite を呼び、その中で同じ width 比較
+      （old_width == 2 / == 0）と隣接セルの cell_index ルックアップを繰り返す。
+    suggestion: "隣接セル空白化のロジックを write_ascii_to_grid に直接インライン化して関数呼び出しと重複検査を避ける"
+    sources: [vertex:performance]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium severity。old_width != 1 のゲート内でのみ発火し通常経路は分岐 1 回のみ（NFR4 の設計どおり）。Claude 側 performance レビューも実測影響なしと判断（cross-model 不一致）"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: "critical/high の findings がゼロのため R4 の候補ゲート（severity ∈ {critical, high}）に該当する finding が 1 件も無く、auto-fix ループは実行されていない"
+residual_critical_high: 0
+rework_required: false
