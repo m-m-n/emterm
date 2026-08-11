@@ -108,7 +108,7 @@ tasks:
     domains: [ui]
     complexity: low
     requirements: [FR3, FR4, NFR1]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/active-window-agent-notification/task0002
 
