@@ -21,8 +21,8 @@ pub(super) enum StdinAction {
 const MAX_APC_PAYLOAD: usize = 22 * 1024 * 1024;
 
 // `PLAINTEXT_PREFIX` (and `APC_PREFIX` / `MUX_OSC_PARAM`) come from the
-// `mux_ipc::protocol` SSOT via the `use super::ipc::protocol::*` glob above, so
-// all three mux transport markers have a single owner.
+// `mux_ipc::protocol` SSOT, so all three mux transport markers have a
+// single owner.
 
 /// State machine that separates APC/OSC/plaintext mux sequences from passthrough data on stdin.
 ///
