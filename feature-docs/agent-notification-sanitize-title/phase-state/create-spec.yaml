@@ -1,0 +1,31 @@
+schema_version: 1
+feature: agent-notification-sanitize-title
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: fee55c0f4564655333d973ac97fbfb3942ecb7dd
+last_input_digest: sha256:2b265683c7a1c2be55c51c5098e6fe4c601228ae2f7ecc586932454106b3bad3
+active_request_id: create-spec-run-0002
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: sha256:2b265683c7a1c2be55c51c5098e6fe4c601228ae2f7ecc586932454106b3bad3
+    output_digest: sha256:0d4a6f0f6a5f3f9d2c7b1e8a4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f
+artifacts: []
+patches: []
+progress_fingerprint: sha256:3f1c9a2b7e6d5c4b3a29180716253443526170f9e8d7c6b5a4938271605f4e3d
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:2b265683c7a1c2be55c51c5098e6fe4c601228ae2f7ecc586932454106b3bad3
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:resolved-at-dispatch
+      src-tauri/web-shared/styles.css: sha256:resolved-at-dispatch
+    truncated: false
+last_error: null
