@@ -54,7 +54,7 @@ tasks:
     domains: [input-handling]
     complexity: high
     requirements: [FR1, FR2, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
     branch: em-workflow/agent-notification-sanitize-title/task0001
 
