@@ -58,7 +58,8 @@ workflow:
       追加するのみで、新規レイアウト・新規コンポーネント・視覚デザイン判断を伴わない
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: af7e307e470442cf21e2a0fbcdc6a136a878d3c3
   - id: implement
     status: pending
     base_commit: ae0484bd8e4b182e449d0387b860d586153a982d
@@ -71,7 +72,45 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Visible-pane notification setting and gate (Rust)"
+    plan: tasks/task0001.md
+    files:
+      - crates/app_settings/src/settings.rs
+      - crates/app_settings/src/settings/tests.rs
+      - src-tauri/src/settings/mod.rs
+      - src-tauri/src/settings/raw.rs
+      - src-tauri/src/settings/tests.rs
+      - src-tauri/src/notifications.rs
+      - src-tauri/src/app/agent_status.rs
+      - src-tauri/src/app/tests/agent_status.rs
+    skills: [backend-impl]
+    domains: [data-persistence, ui]
+    complexity: medium
+    requirements: [FR1, FR2, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    notes: null
+    branch: null
+  task0002:
+    title: "Settings-panel toggle and TypeScript mirror"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/web-shared/settings/types.ts
+      - src-tauri/web-shared/settings/sections/agent-section.ts
+      - src-tauri/web-shared/settings/sections/agent-section.test.ts
+      - src-tauri/web-shared/i18n/locales/en.json
+      - src-tauri/web-shared/i18n/locales/ja.json
+      - src-tauri/web-shared/settings/settings-panel.test.ts
+      - src-tauri/web-shared/settings/sections/mux-section.test.ts
+      - src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: low
+    requirements: [FR3, FR4, NFR1]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -85,71 +124,71 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2]
   FR2:
     title: "Add the setting field (default ON)"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-4]
   FR3:
     title: "Mirror the schema in TypeScript"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS-6]
   FR4:
     title: "Add the settings-panel toggle"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS-5]
   FR5:
     title: "Preserve the existing gates"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-3]
   FR6:
     title: "Scope limited to agent status notifications"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-8]
   NFR1:
     title: "Maintainability — follow the existing Settings pattern"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002]
     tests: [TS-4, TS-5, TS-6]
   NFR2:
     title: "Testability — keep should_fire_agent_notification a pure function"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1]
   NFR3:
     title: "Compatibility — do not break the CLI build"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-7]
   NFR4:
     title: "Resource use — transition queue does not grow without bound"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-9]
 
 batch:
   review_rework_count: 0

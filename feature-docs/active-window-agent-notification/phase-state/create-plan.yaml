@@ -1,20 +1,36 @@
 schema_version: 1
 feature: active-window-agent-notification
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
 base_revision: 815b03dc9a3aa39cfcb027c2c86bb910a0117b0e
 last_input_digest: "sha256:0e5b4a5ff40134cd027f91626ba709df3678519f527eaaa5980d2723e7f72c9f"
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-plan-run-0001
-    status: dispatched
+    status: completed
     input_digest: "sha256:0e5b4a5ff40134cd027f91626ba709df3678519f527eaaa5980d2723e7f72c9f"
-    output_digest: null
-artifacts: []
-patches: []
+    output_digest: "sha256:20348cc9033530a33d3d334e85f97de094728c9f54257ec8165277a0a7f6bf18"
+artifacts:
+  - path: feature-docs/active-window-agent-notification/IMPLEMENTATION.md
+    sha256: "sha256:20348cc9033530a33d3d334e85f97de094728c9f54257ec8165277a0a7f6bf18"
+    produced_by: create-plan-run-0001
+  - path: feature-docs/active-window-agent-notification/VERIFICATION.md
+    sha256: "sha256:0f70b57cffc1292c3af5dbd40d2c23dbe667986d9dd73f6e47be1c07dd5ab4a1"
+    produced_by: create-plan-run-0001
+  - path: feature-docs/active-window-agent-notification/tasks/task0001.md
+    sha256: "sha256:06896e3c354e9b77364a1e74930d1752d07c7fc21c5953a0eed5b8a3d2a5458e"
+    produced_by: create-plan-run-0001
+  - path: feature-docs/active-window-agent-notification/tasks/task0002.md
+    sha256: "sha256:24cacabe3838446094ad2154816a29e2740666a22d3c483c7dc9da3011eec968"
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: create-plan-p0001
+    status: applied
+    base_input_digest: "sha256:0e5b4a5ff40134cd027f91626ba709df3678519f527eaaa5980d2723e7f72c9f"
+    base_workflow_blob: 6b1d149936b13b59e3b16381015ed11b45b25280
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
