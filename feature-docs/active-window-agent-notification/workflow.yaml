@@ -114,8 +114,17 @@ tasks:
     branch: em-workflow/active-window-agent-notification/task0002
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, security, performance, spec]
+    discretionary: []
+    cross_validation: true
+  perspectives:
+    comprehensive: pending
+    security: pending
+    performance: pending
+    spec: pending
   residual_critical_high: 0
   needs_rework: false
 
