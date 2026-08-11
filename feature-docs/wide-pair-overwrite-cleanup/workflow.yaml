@@ -53,9 +53,13 @@ workflow:
   status: completed
   completed_at_commit: fa2ca24bec65a78910a7da6010444c50c45d104b
 - id: verify
-  status: in_progress
-  result: null
-  failed_items: []
+  status: failed
+  result: fail
+  failed_items:
+  - id: TS3
+    note: SPEC が指定する P5 の「行を 1 桁ズラして書き直し」シナリオが未実装。追加された test_write_grapheme_shorter_redraw_after_wide_base_overwrite_blanks_orphan_spacer は同じ列位置への「短い再描画」であり、フレーム間で wide ペア位置が 1 桁ずれる複合ケース（同一行内で FR1 の base 上書きと FR2 の spacer 上書きが連続発生）を再現していない
+  - id: SC-5
+    note: 「レポートの P3 / P4 / P5 の再現手順がユニットテスト化され回帰ガードになる」のうち P5 が未達。P3(TS1)/P4(TS2) は充足
 - id: retrospect
   status: pending
 tasks:
