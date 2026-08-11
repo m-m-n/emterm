@@ -1,0 +1,49 @@
+schema_version: 1
+feature: active-window-agent-notification
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: ae0484bd8e4b182e449d0387b860d586153a982d
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: "sha256:e13f1cb4b7fdbd0f4e6d6c5c1f2ab0a5d5c8a0d1f0c60d9c04f1a7fca7f28b60"
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/components/md3-select.ts
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+      - src-tauri/web-shared/styles.css
+      - src-tauri/web-shared/styles/data-viewer.css
+      - src-tauri/web-shared/styles/settings-panel.css
+      - src-tauri/web-shared/styles/status-bar.css
+      - src-tauri/web-shared/styles/tab-bar.css
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: "sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef"
+      src-tauri/web-shared/components/md3-select.css: "sha256:b09cdb7c03aecfd24ac44581995a8f75188c4929c744af5e065f5a2a947ae9cd"
+      src-tauri/web-shared/components/md3-select.ts: "sha256:8212cad86e4f25206de4dbdc72ae0e74df5618449e7fca76d06264f22ab42577"
+      src-tauri/web-shared/settings/markdown-theme-presets.ts: "sha256:8344c4f43366d3e78df8c8f170a5fc75e93121d16e64912635c51880ff6a429a"
+      src-tauri/web-shared/settings/ui-theme-presets.ts: "sha256:5e1afbad9942f28348372986ffcb0a77f7992edb67c5d760637c0019404a3094"
+      src-tauri/web-shared/styles.css: "sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb"
+      src-tauri/web-shared/styles/data-viewer.css: "sha256:f9e52eddb4095005dd6332bd926225cd71fbeefe6ca5ceaabde07019bd37d83b"
+      src-tauri/web-shared/styles/settings-panel.css: "sha256:9888a9d5f95bcbe97d182a57674a6de1070a92e22e7ef9600711ffc89298d2ce"
+      src-tauri/web-shared/styles/status-bar.css: "sha256:340ca36149748d8c33599e10edadf03c8b518532b3243d7929c48516fc9c4b1e"
+      src-tauri/web-shared/styles/tab-bar.css: "sha256:ed61cb383c32e63c6a61ffd998bd77373e60201f5a1cdecab18b4d90e9e2f049"
+    truncated: false
+  e2e:
+    generation_digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+last_error: null
