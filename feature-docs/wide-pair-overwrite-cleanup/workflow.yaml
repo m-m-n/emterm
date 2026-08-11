@@ -53,13 +53,26 @@ workflow:
   status: completed
   completed_at_commit: fa2ca24bec65a78910a7da6010444c50c45d104b
 - id: verify
-  status: in_progress
-  result: null
-  failed_items:
-  - id: TS3
-    note: SPEC が指定する P5 の「行を 1 桁ズラして書き直し」シナリオが未実装。追加された test_write_grapheme_shorter_redraw_after_wide_base_overwrite_blanks_orphan_spacer は同じ列位置への「短い再描画」であり、フレーム間で wide ペア位置が 1 桁ずれる複合ケース（同一行内で FR1 の base 上書きと FR2 の spacer 上書きが連続発生）を再現していない
-  - id: SC-5
-    note: 「レポートの P3 / P4 / P5 の再現手順がユニットテスト化され回帰ガードになる」のうち P5 が未達。P3(TS1)/P4(TS2) は充足
+  status: completed
+  result: pass
+  failed_items: []
+  verification_summary:
+    build: pass — cargo check (GUI feature) と --no-default-features がいずれも exit 0。GUI 側は worktree に gitignored のバンドルフォントが無いと build.rs で落ちるため、main ツリーから src-tauri/assets/fonts/ をコピーして実行した（コード起因ではない環境ギャップ）
+    tests: pass — term_core 785 passed / 0 failed / 13 ignored、workspace 3215 passed / 0 failed / 3 ignored
+    scenarios:
+      TS1: pass — test_handle_print_ascii_overwrite_wide_base_blanks_spacer ほか
+      TS2: pass — test_handle_print_ascii_overwrite_wide_spacer_blanks_base ほか
+      TS3: pass — task0003 で test_write_grapheme_column_shifted_redraw_blanks_all_orphan_partners を追加。1 桁ズラし再描画で FR1/FR2/FR3/FR4 が同一行内に連続発生する P5 複合シナリオを再現し、4 規則すべて個別に red 確認済み
+      TS4: pass — test_write_grapheme_u23ed_vs16_across_chunk_boundary_widens_correctly
+      TS5: pending (manual) — 実機確認。E2E 基盤が無いためリリースビルドでのユーザー目視確認が必要
+      TS6: pass — test_write_grapheme_wide_write_over_existing_base_blanks_its_spacer
+      TS7: pass — csi_edit / csi_screen の ICH/DCH/ECH 境界テスト 7 本
+      TS8: pass — 既存スイート全緑（回帰なし）
+      TS9: pass (review) — performance 観点 2 本（Claude / Vertex）が、通常経路の追加コストは old_width != 1 の分岐 1 回に留まると確認
+      TS10: pass (review) — 統合 diff は crates/term_core 配下 + implementer のテスト記録 test-docs/ のみ。test-docs はワークフロー規約の成果物でありプロダクトコード外
+    excluded_requirements: []
+    manual_pending:
+    - TS5
 - id: retrospect
   status: pending
 tasks:
