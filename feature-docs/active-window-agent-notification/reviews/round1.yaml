@@ -1,0 +1,113 @@
+round: 1
+executed_at: "2026-08-11T19:05:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 1432895d8c0404f609d641bc7d7081359b3ee6f4
+  head_commit: 1fad5e9f5fb81bf469c98e70b73492d33de6c540
+  changed_files:
+    - crates/app_settings/src/settings.rs
+    - crates/app_settings/src/settings/tests.rs
+    - src-tauri/src/app/agent_status.rs
+    - src-tauri/src/app/tests/agent_status.rs
+    - src-tauri/src/notifications.rs
+    - src-tauri/src/settings/mod.rs
+    - src-tauri/src/settings/raw.rs
+    - src-tauri/src/settings/tests.rs
+    - src-tauri/web-shared/i18n/locales/en.json
+    - src-tauri/web-shared/i18n/locales/ja.json
+    - src-tauri/web-shared/settings/sections/agent-section.test.ts
+    - src-tauri/web-shared/settings/sections/agent-section.ts
+    - src-tauri/web-shared/settings/sections/mux-section.test.ts
+    - src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+    - src-tauri/web-shared/settings/settings-panel.test.ts
+    - src-tauri/web-shared/settings/types.ts
+    - test-docs/active-window-agent-notification/task0001.tests.yaml
+    - test-docs/active-window-agent-notification/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: vertex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: vertex, status: completed}
+findings:
+  - stable_id: 7dd413bdd9289905
+    severity: medium
+    category: security
+    file: src-tauri/src/notifications.rs
+    line: 372
+    title: "エージェント通知本文がタブタイトルを未サニタイズのまま OS 通知へ渡す（本変更で到達経路が拡大）"
+    description: >
+      agent_notification_body は tab_title を format! でそのまま埋め込み、
+      notify_rust::Notification::body 経由で D-Bus に送出する。タブタイトルは子プロセスが
+      OSC 0/2 で任意に設定できる非信頼入力で、姉妹経路のタブアクティビティ通知が
+      sanitize_title を必ず通しているのに対し、エージェント通知経路だけがこれを欠く。
+      body-markup 対応の通知サーバでは限定 HTML として解釈され得るほか、長さ上限も無い。
+      欠落自体は task0009 由来の既存問題で本 diff が作り込んだものではないが、本 diff は
+      可視ペイン抑止を既定 ON で外したため到達条件が実質的に広がっている。
+    suggestion: >
+      agent_notification_body の中で既存の sanitize_title を通す（両呼び出し元を一箇所で塞げる
+      choke point）。CSI/制御文字入りタイトルが本文に残らないことを固定する単体テストを
+      notifications::tests に追加する。
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >
+      severity が medium のため Phase R4 の auto-fix 候補ゲート（critical/high のみ）に
+      該当せず、このラウンドでは修正していない。既存欠落の切り出し修正として別タスク化が妥当
+  - stable_id: 4f3d5c66b7ca025e
+    severity: medium
+    category: performance
+    file: src-tauri/src/app/agent_status.rs
+    line: 191
+    title: "可視ペイン通知の解禁で、同期 D-Bus 呼び出しがフォーカス中フレームのイベントループを塞ぐ"
+    description: >
+      App::notify → NotifyRustSink::send → notify_rust::Notification::show() は Linux で
+      同期 D-Bus RPC を呼び出しスレッドで実行し、この経路は winit イベントループの
+      about_to_wait から走る。可視ペイン通知を既定 ON にしたことで、ユーザーが操作中の
+      フレームでも同期ラウンドトリップが発生するようになった。発火頻度はペインあたり
+      30 秒の rate limit で上限が付くため critical/high ではないが、hot path の
+      ブロッキング I/O として修正価値がある。
+    suggestion: >
+      NotifyRustSink::send を専用ワーカースレッド + bounded channel で非同期化する
+      （チャネル満杯時は drop — 既存の「抑止された通知は捨てる」方針と一致）。
+      NotificationSink トレイト境界を変えずに済み、TestSink を使う既存テストにも影響しない。
+    sources: [claude:performance]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >
+      severity が medium のため Phase R4 の auto-fix 候補ゲートに該当せず、このラウンドでは
+      修正していない。通知経路の非同期化は本 feature のスコープ外の構造変更
+  - stable_id: 3a1451892c226760
+    severity: medium
+    category: comprehensive
+    file: doc/SPECIFICATION.md
+    line: 1195
+    title: "ユーザー向けドキュメントが可視ペイン抑止の旧挙動のまま（新設定も未記載）"
+    description: >
+      doc/SPECIFICATION.md:1195-1196 と doc/AGENT-STATUS.md:190,199-201 が
+      「non-visible pane のみ通知」という旧挙動を記述したままで、新キー
+      agent_notify_visible_pane（既定 ON）も列挙されていない。姉妹機能
+      agent-desktop-notification は設定追加時に SPECIFICATION.md を更新しており、
+      リポジトリの慣行としてもドキュメント更新が期待される。
+    suggestion: >
+      doc/SPECIFICATION.md:1195 を「可視ペインは agent_notify_visible_pane（既定 on）で制御し、
+      OFF のときのみ抑止」に書き換え、1196 の列挙に新キーを追加する。
+      doc/AGENT-STATUS.md の Notifications 節も同じ内容に合わせる。
+    sources: [claude:comprehensive]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: >
+      severity が medium で auto-fix 候補ゲートに該当しない。加えて対象ファイルが
+      changed_files 外のため Phase R3 の規則により confidence を 50 に丸めている
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

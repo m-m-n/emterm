@@ -65,7 +65,8 @@ workflow:
     base_commit: 1432895d8c0404f609d641bc7d7081359b3ee6f4
     completed_at_commit: a0ffff5a30148b3056780ac49f87ae33724f2c0f
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 663a99dcb33dc8d518f922dcb7646534eecc2f44
   - id: verify
     status: pending
     result: null
@@ -114,17 +115,17 @@ tasks:
     branch: em-workflow/active-window-agent-notification/task0002
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, spec]
     discretionary: []
     cross_validation: true
   perspectives:
-    comprehensive: pending
-    security: pending
-    performance: pending
-    spec: pending
+    comprehensive: completed
+    security: completed
+    performance: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
