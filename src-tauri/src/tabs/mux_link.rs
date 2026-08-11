@@ -298,13 +298,18 @@ impl Tab {
                         payload.len(),
                     );
                 }
-                // `queue_live_output` owns the queue/byte-count pair and the
-                // cap check; `Overflowed` bounds the backlog — past the cap,
-                // abandon the off-thread switch and reparse synchronously
-                // now, applying the accumulated queue as ordinary output.
-                // This caps both the swap-time replay burst and the memory a
-                // fast pane can accumulate during a slow parse.
-                if let LiveQueueOutcome::Overflowed = self.queue_live_output(payload) {
+                // `PendingSwitch::queue_live_output` owns the
+                // queue/byte-count pair and the cap check; `Overflowed`
+                // bounds the backlog — past the cap, abandon the off-thread
+                // switch and reparse synchronously now, applying the
+                // accumulated queue as ordinary output. This caps both the
+                // swap-time replay burst and the memory a fast pane can
+                // accumulate during a slow parse.
+                if let Some(LiveQueueOutcome::Overflowed) = self
+                    .pending_switch
+                    .as_mut()
+                    .map(|p| p.queue_live_output(payload))
+                {
                     // Take the coalesced re-dispatch (if any) BEFORE
                     // superseding — `supersede_pending_replay` drops
                     // `pending_redispatch`, but this fallback still
