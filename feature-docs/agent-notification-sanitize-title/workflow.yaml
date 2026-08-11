@@ -40,9 +40,20 @@ workflow:
     status: completed
     completed_at_commit: 06d230e6cebf03f024ea00ea1aad2755c23e33de
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 0a2207c64b084638fbf01f9b48dde118f59abb1a
+    result: pass
     failed_items: []
+    notes: >-
+      build (cargo check) 通過。test (cargo test --lib) 3217 passed / 0 failed
+      (tabs.rs replay フレークは出ず、単一スレッド再実行は不要)。TS1-TS4 と SC1-SC3 を全て充足。
+      format (cargo fmt -- --check) は 12 ファイルで差分を報告したが、変更ファイル
+      src-tauri/src/notifications.rs の差分は 0 件で、全て本 feature 以前から存在する
+      クレート全体のスタイル乖離 (本プロジェクトは rustfmt を強制していない)。本変更起因の
+      不適合は無いため pass と判定した。
+      前提作業: src-tauri/assets/fonts/ が gitignored でこの worktree に存在せず build.rs が
+      panic したため、プロジェクト同梱の scripts/fetch-fonts.sh (HTTPS + SHA256 検証) で
+      取得してから検証した。追跡ファイルへの変更は無い。
   - id: retrospect
     status: pending
 
