@@ -63,8 +63,34 @@ impl TerminalCore {
     /// CSI X - Erase Characters.
     /// count: number of characters to erase (default 1).
     pub fn handle_erase_characters(&mut self, count: u16) {
-        let end = self.cursor.col.saturating_add(count).min(self.cols);
-        self.clear_line_range(self.cursor.row, self.cursor.col, end);
+        let row = self.cursor.row;
+        let start = self.cursor.col;
+        let end = start.saturating_add(count).min(self.cols);
+        if end <= start {
+            self.clear_line_range(row, start, end);
+            return;
+        }
+
+        // Wide-pair partner cleanup (D2/D3): capture pre-erase state before
+        // clear_line_range blanks the range to BCE. `clear_line_range` is
+        // shared with ED/EL (out of scope for this cleanup), so the
+        // partner-blanking stays local to this handler and is never folded
+        // into clear_line_range itself.
+        let start_is_spacer = self.get_cell_width(start, row) == 0;
+        let last_is_base = self.get_cell_width(end - 1, row) == 2;
+
+        self.clear_line_range(row, start, end);
+
+        if start_is_spacer && start > 0 {
+            // The range's first erased cell was a spacer; its base at
+            // start-1 (untouched by the erase) is now orphaned.
+            self.blank_wide_pair_split(start - 1, row);
+        }
+        if last_is_base {
+            // The range's last erased cell was a base; the spacer right
+            // after the range (untouched by the erase) is now orphaned.
+            self.blank_wide_pair_split(end, row);
+        }
     }
 }
 
@@ -257,6 +283,104 @@ mod tests {
         core.clear_dirty();
         core.set_cursor(0, 0);
         core.handle_erase_characters(5);
+        assert!(core.is_row_dirty(0));
+    }
+
+    // ── Wide-pair partner cleanup (task0002 D2/D3) ───────────
+
+    use crate::cell::PackedColor;
+
+    // AC-1: ECH whose erase range starts on a spacer blanks the orphaned
+    // base at col-1, preserving its ORIGINAL attributes (distinct from the
+    // BCE color used for the actually-erased cell).
+    #[test]
+    fn test_erase_characters_spacer_start_blanks_left_base() {
+        let mut core = TerminalCore::new(10, 1, 0);
+        core.handle_print(b'A' as u32);
+        core.handle_print(b'B' as u32);
+        core.set_cursor_fg(1, 9, 0, 0); // indexed 9
+        core.set_cursor_bg(1, 3, 0, 0); // indexed 3
+        core.handle_print(0x4E16); // '世' -> base@2, spacer@3 (colored)
+        core.reset_cursor_attrs();
+        core.handle_print(b'C' as u32);
+        core.handle_print(b'D' as u32);
+        core.handle_print(0x56FD); // '国' (unrelated pair) -> base@6, spacer@7
+        core.handle_print(b'E' as u32);
+        core.handle_print(b'F' as u32);
+
+        core.set_cursor_bg(1, 5, 0, 0); // indexed 5: BCE color for the erase
+        core.set_cursor(3, 0); // spacer of the first pair
+        core.clear_dirty();
+        core.handle_erase_characters(1);
+
+        assert_eq!(core.get_cell_char(0, 0), "A");
+        assert_eq!(core.get_cell_char(1, 0), "B");
+        // col2 was the base; its spacer at col3 is erased (part of the
+        // range), so col2 is now orphaned and blanked, preserving its
+        // ORIGINAL attributes (not the BCE color used for the erase).
+        assert_eq!(core.get_cell_char(2, 0), " ");
+        assert_eq!(core.get_cell_width(2, 0), 1);
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_fg(2, 0)),
+            PackedColor::indexed(9)
+        );
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_bg(2, 0)),
+            PackedColor::indexed(3)
+        );
+        // col3 is the actually-erased cell: BCE, using the cursor's current
+        // bg (indexed 5) — distinct from col2's preserved bg (indexed 3).
+        assert_eq!(core.get_cell_char(3, 0), " ");
+        assert_eq!(core.get_cell_width(3, 0), 1);
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_bg(3, 0)),
+            PackedColor::indexed(5)
+        );
+        assert_eq!(core.get_cell_char(4, 0), "C");
+        assert_eq!(core.get_cell_char(5, 0), "D");
+        // Unrelated pair is untouched.
+        assert_eq!(core.get_cell_char(6, 0), "国");
+        assert_eq!(core.get_cell_width(6, 0), 2);
+        assert_eq!(core.get_cell_width(7, 0), 0);
+        assert_eq!(core.get_cell_char(8, 0), "E");
+        assert_eq!(core.get_cell_char(9, 0), "F");
+        assert!(core.is_row_dirty(0));
+    }
+
+    // AC-2: ECH whose erase range ends on a base blanks the orphaned spacer
+    // right after the range.
+    #[test]
+    fn test_erase_characters_base_at_range_end_blanks_right_spacer() {
+        let mut core = TerminalCore::new(10, 1, 0);
+        core.handle_print(b'A' as u32);
+        core.handle_print(b'B' as u32);
+        core.handle_print(0x4E16); // '世' -> base@2, spacer@3
+        core.handle_print(b'C' as u32);
+        core.handle_print(b'D' as u32);
+        core.handle_print(0x56FD); // '国' (unrelated pair) -> base@6, spacer@7
+        core.handle_print(b'E' as u32);
+        core.handle_print(b'F' as u32);
+
+        core.set_cursor(2, 0); // base of the first pair
+        core.clear_dirty();
+        core.handle_erase_characters(1);
+
+        assert_eq!(core.get_cell_char(0, 0), "A");
+        assert_eq!(core.get_cell_char(1, 0), "B");
+        assert_eq!(core.get_cell_char(2, 0), " "); // erased (BCE)
+        assert_eq!(core.get_cell_width(2, 0), 1);
+        // col3 was the spacer following the erased base; it is now orphaned
+        // and blanked.
+        assert_eq!(core.get_cell_char(3, 0), " ");
+        assert_eq!(core.get_cell_width(3, 0), 1);
+        assert_eq!(core.get_cell_char(4, 0), "C");
+        assert_eq!(core.get_cell_char(5, 0), "D");
+        // Unrelated pair is untouched.
+        assert_eq!(core.get_cell_char(6, 0), "国");
+        assert_eq!(core.get_cell_width(6, 0), 2);
+        assert_eq!(core.get_cell_width(7, 0), 0);
+        assert_eq!(core.get_cell_char(8, 0), "E");
+        assert_eq!(core.get_cell_char(9, 0), "F");
         assert!(core.is_row_dirty(0));
     }
 }
