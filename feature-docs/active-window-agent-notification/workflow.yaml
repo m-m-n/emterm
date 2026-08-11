@@ -1,0 +1,156 @@
+schema_version: 1
+feature: active-window-agent-notification
+created: 2026-08-11
+base_branch: main
+parent_branch: em-workflow/active-window-agent-notification/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/components/md3-select.ts
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+      - src-tauri/web-shared/styles/settings-panel.css
+      - src-tauri/web-shared/styles/tab-bar.css
+      - src-tauri/web-shared/styles/status-bar.css
+      - src-tauri/web-shared/styles/data-viewer.css
+  components:
+    rust:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    app_settings:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/app_settings/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    typescript:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+    typescript_types:
+      language: typescript
+      build_command: ""
+      test_command: "bun run typecheck"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 80f5dfaee0e973aeac56add76574b561794bf7bb
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >
+      UI 変更は設定画面の既存 Agent セクションへ既存 renderToggle パターンのトグルを 1 つ
+      追加するのみで、新規レイアウト・新規コンポーネント・視覚デザイン判断を伴わない
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: ae0484bd8e4b182e449d0387b860d586153a982d
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Make the visible-pane notification gate configurable"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2]
+  FR2:
+    title: "Add the setting field (default ON)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-4]
+  FR3:
+    title: "Mirror the schema in TypeScript"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-6]
+  FR4:
+    title: "Add the settings-panel toggle"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-5]
+  FR5:
+    title: "Preserve the existing gates"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-3]
+  FR6:
+    title: "Scope limited to agent status notifications"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Maintainability — follow the existing Settings pattern"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-4, TS-5, TS-6]
+  NFR2:
+    title: "Testability — keep should_fire_agent_notification a pure function"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1]
+  NFR3:
+    title: "Compatibility — do not break the CLI build"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-7]
+  NFR4:
+    title: "Resource use — transition queue does not grow without bound"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

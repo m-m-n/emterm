@@ -1,11 +1,11 @@
 schema_version: 1
 feature: active-window-agent-notification
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 1b142fd5ec3dc67a1d7cb7ca1dad40efc27451ce
 last_input_digest: "sha256:7ee99ad48fa4633fee6a904120e3558415a9acc3eb62a80a08f961155c1560d9"
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -80,10 +80,16 @@ worker_runs:
     input_digest: "sha256:0ce520837cb168d08d0bc37d150937aa2416491dd7bb06b828d53cc367fb120a"
     output_digest: "sha256:5a1c9e0b7d3f6a2c8e4b0d7f1a3c6e9b2d5f8a1c4e7b0d3f6a9c2e5b8d1f4a70"
   - request_id: create-spec-run-0003
-    status: dispatched
+    status: completed
     input_digest: "sha256:7ee99ad48fa4633fee6a904120e3558415a9acc3eb62a80a08f961155c1560d9"
-    output_digest: null
-artifacts: []
+    output_digest: "sha256:f24d108321961522c75ccd2f7d6fbc96a5852910401758ad950575191124c9fa"
+artifacts:
+  - path: feature-docs/active-window-agent-notification/REQUIREMENTS.md
+    sha256: "sha256:44581cb5ef1c5d8f41555523036b765783be68e61bda7b39dd0a0343f7393a71"
+    produced_by: create-spec-run-0003
+  - path: feature-docs/active-window-agent-notification/SPEC.md
+    sha256: "sha256:f24d108321961522c75ccd2f7d6fbc96a5852910401758ad950575191124c9fa"
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
