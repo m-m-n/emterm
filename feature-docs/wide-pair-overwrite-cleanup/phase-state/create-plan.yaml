@@ -1,0 +1,21 @@
+schema_version: 1
+feature: wide-pair-overwrite-cleanup
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 0191babba0ff0febe4183f5721905c3e7ccca1dd
+last_input_digest: sha256:d5181b61373172f9c627d2fa0b8b478cf747c9963331888686777490398fabce
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:d5181b61373172f9c627d2fa0b8b478cf747c9963331888686777490398fabce
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
