@@ -1,0 +1,34 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [csi_screen::tests::test_erase_characters_spacer_start_blanks_left_base]
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: \"世\" right: \" \" (col2 base was left unblanked before the fix)"
+  AC-2:
+    tests: [csi_screen::tests::test_erase_characters_base_at_range_end_blanks_right_spacer]
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: \"\" right: \" \" (col3 spacer was left as an empty-char orphan before the fix)"
+  AC-3:
+    tests:
+      - csi_edit::tests::test_delete_characters_cursor_on_spacer_blanks_left_base
+      - csi_edit::tests::test_delete_characters_shift_boundary_base_loses_spacer_blanks_base
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: \"世\" right: \" \" (orphaned base at col-1 and orphaned base at the shift/BCE boundary were both left unblanked before the fix)"
+  AC-4:
+    tests: [csi_edit::tests::test_delete_characters_shift_boundary_spacer_leaves_no_orphan]
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: \"\" right: \" \" (spacer relocated to col via the shift was left as an empty-char orphan before the fix)"
+  AC-5:
+    tests: [csi_edit::tests::test_insert_characters_cursor_on_spacer_blanks_left_base_and_shifted_spacer]
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: \"世\" right: \" \" (orphaned base at col-1 was left unblanked before the fix)"
+  AC-6:
+    tests: [csi_edit::tests::test_insert_characters_pushes_spacer_off_edge_blanks_base_at_last_col]
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: \"世\" right: \" \" (base stranded alone at the last column by the shift was left unblanked before the fix)"
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "NFR1 regression-guard criterion, not a new behavior: verified by the existing csi_edit.rs / csi_screen.rs test suite (unmodified, width-1-only-row scenarios) staying green across the change. No new test authored; outcome is 'full --lib suite green', confirmed both before (765 passed) and after (772 passed, +7 new) this task's edits."
