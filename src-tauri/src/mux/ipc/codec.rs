@@ -6,7 +6,7 @@
 use bytes::{Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
 
-use super::protocol::{MAX_FRAME_LENGTH, MuxMessage};
+use mux_ipc::protocol::{MAX_FRAME_LENGTH, MuxMessage};
 
 /// Codec that frames MuxMessages with length-delimited encoding.
 pub struct MuxCodec {
@@ -65,8 +65,8 @@ impl Encoder<MuxMessage> for MuxCodec {
 
 #[cfg(test)]
 mod tests {
-    use super::super::protocol::MessageType;
     use super::*;
+    use mux_ipc::protocol::MessageType;
 
     #[test]
     fn test_codec_round_trip() {
