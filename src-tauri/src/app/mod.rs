@@ -901,12 +901,19 @@ impl App {
     ///
     /// Broader than its name: [`Self::pump_sftp`] is not just toast pruning —
     /// it also drains the SFTP progress / duplicate-check channels, drives
-    /// the overwrite-dialog transitions, and starts pending uploads. This
-    /// call must therefore run every egui frame UNCONDITIONALLY — never gate
-    /// it on [`Self::toast_pending`]: before the first toast exists the
-    /// progress events would never be drained and SFTP would stall. Both
-    /// pump results are bound before combining so neither call can ever be
-    /// short-circuited away by the other's outcome.
+    /// the overwrite-dialog transitions, and starts pending uploads. Never
+    /// gate this call on [`Self::toast_pending`]: before the first toast
+    /// exists the progress events would never be drained and SFTP would
+    /// stall. Both pump results are bound before combining so neither call
+    /// can ever be short-circuited away by the other's outcome.
+    ///
+    /// Scope of the guarantee: both pumps run on every frame that actually
+    /// RENDERS — not on every event-loop turn. The frame itself may be
+    /// skipped by `should_skip_frame` (window_host), whose `overlay_work`
+    /// term includes [`Self::toast_pending`]; a pending SFTP event with no
+    /// toast up yet therefore does not keep frames alive on its own and
+    /// relies on another redraw trigger reaching the egui pass (known
+    /// limitation, present since before this facade existed).
     ///
     /// `now` is egui's frame-time clock (monotonic, wall-clock-free), which
     /// only advances when a frame actually paints — see [`TOAST_POLL_MS`]
