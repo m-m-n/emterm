@@ -232,7 +232,9 @@
       "notifyOnDone": "Turn Complete",
       "notifyOnDoneDesc": "Notify when an agent finishes its turn (requires Agent Status Notifications to be on)",
       "notifyOnBlocked": "Waiting for Input",
-      "notifyOnBlockedDesc": "Notify when an agent is waiting for your input (requires Agent Status Notifications to be on)"
+      "notifyOnBlockedDesc": "Notify when an agent is waiting for your input (requires Agent Status Notifications to be on)",
+      "notifyVisiblePane": "Notify Even for the Visible Pane",
+      "notifyVisiblePaneDesc": "Also notify for the pane currently visible in the focused window (requires Agent Status Notifications to be on)"
     },
     "markdownViewer": {
       "title": "Markdown Viewer",

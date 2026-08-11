@@ -1,11 +1,12 @@
 /**
  * Tests for the Agent settings section: the agent notification master
- * toggle (moved here from Notifications) and the two per-event-type toggles
- * (turn complete / waiting for input).
+ * toggle (moved here from Notifications) and the three per-event-type
+ * toggles (turn complete / waiting for input / visible pane).
  *
  * Covers:
- * - AC-2: master -> turn complete -> waiting for input toggles render in
- *   that order, each reflecting the corresponding currentSettings value.
+ * - AC-2: master -> turn complete -> waiting for input -> visible pane
+ *   toggles render in that order, each reflecting the corresponding
+ *   currentSettings value.
  * - AC-3: flipping each toggle saves the corresponding setting key.
  * - AC-4: the notification section no longer renders the agent master
  *   toggle (moved, not duplicated).
@@ -14,6 +15,10 @@
  *   labels are not raw i18n keys, and the old
  *   settings.notification.agentStatusNotifications* keys resolve to
  *   nothing (moved, not duplicated).
+ *
+ * task0002 (active-window-agent-notification) additions:
+ * - AC-2/AC-3/AC-4 above extended to the fourth "visible pane" toggle
+ *   (`agent_notify_visible_pane`).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -93,6 +98,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     agent_status_notifications: true,
     agent_notify_on_done: true,
     agent_notify_on_blocked: true,
+    agent_notify_visible_pane: true,
     keybinds: makeKeybinds(),
     language: "auto",
     ui_font_family: "",
@@ -145,12 +151,13 @@ afterEach(() => {
 });
 
 describe("renderAgentSection() — toggle order and values (AC-2)", () => {
-  test("renders master, turn-complete, waiting-for-input toggles in that order, reflecting settings", () => {
+  test("renders master, turn-complete, waiting-for-input, visible-pane toggles in that order, reflecting settings", () => {
     const panel = document.createElement("div");
     const settings = makeSettings({
       agent_status_notifications: true,
       agent_notify_on_done: false,
       agent_notify_on_blocked: true,
+      agent_notify_visible_pane: false,
     });
     const ctx = makeCtx(settings, () => {});
 
@@ -163,10 +170,25 @@ describe("renderAgentSection() — toggle order and values (AC-2)", () => {
       "settings-agent-status-notifications",
       "settings-agent-notify-on-done",
       "settings-agent-notify-on-blocked",
+      "settings-agent-notify-visible-pane",
     ]);
     expect(toggles[0]!.getAttribute("aria-checked")).toBe("true");
     expect(toggles[1]!.getAttribute("aria-checked")).toBe("false");
     expect(toggles[2]!.getAttribute("aria-checked")).toBe("true");
+    expect(toggles[3]!.getAttribute("aria-checked")).toBe("false");
+  });
+
+  test("reflects visible-pane toggle on when settings carry the default true", () => {
+    const panel = document.createElement("div");
+    const settings = makeSettings({ agent_notify_visible_pane: true });
+    const ctx = makeCtx(settings, () => {});
+
+    renderAgentSection(panel, ctx);
+
+    const toggle = panel.querySelector(
+      "#settings-agent-notify-visible-pane",
+    ) as HTMLButtonElement;
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
   });
 
   test("reflects all-off settings", () => {
@@ -175,6 +197,7 @@ describe("renderAgentSection() — toggle order and values (AC-2)", () => {
       agent_status_notifications: false,
       agent_notify_on_done: false,
       agent_notify_on_blocked: false,
+      agent_notify_visible_pane: false,
     });
     const ctx = makeCtx(settings, () => {});
 
@@ -241,6 +264,24 @@ describe("renderAgentSection() — save on toggle (AC-3)", () => {
 
     expect(saved).toEqual([["agent_notify_on_blocked", true]]);
   });
+
+  test("flipping the visible-pane toggle saves agent_notify_visible_pane", () => {
+    const panel = document.createElement("div");
+    const settings = makeSettings({ agent_notify_visible_pane: true });
+    const saved: Array<[string, unknown]> = [];
+    const ctx = makeCtx(settings, (key, value) => {
+      saved.push([key, value]);
+    });
+
+    renderAgentSection(panel, ctx);
+    (
+      panel.querySelector(
+        "#settings-agent-notify-visible-pane",
+      ) as HTMLButtonElement
+    ).click();
+
+    expect(saved).toEqual([["agent_notify_visible_pane", false]]);
+  });
 });
 
 describe("renderNotificationSection() — agent toggle moved out (AC-4)", () => {
@@ -276,6 +317,8 @@ describe("renderAgentSection() — i18n (AC-6)", () => {
       "settings.agent.notifyOnDoneDesc",
       "settings.agent.notifyOnBlocked",
       "settings.agent.notifyOnBlockedDesc",
+      "settings.agent.notifyVisiblePane",
+      "settings.agent.notifyVisiblePaneDesc",
     ];
     for (const locale of ["en", "ja"] as const) {
       setLocale(locale);
@@ -300,6 +343,7 @@ describe("renderAgentSection() — i18n (AC-6)", () => {
       t("settings.agent.master"),
       t("settings.agent.notifyOnDone"),
       t("settings.agent.notifyOnBlocked"),
+      t("settings.agent.notifyVisiblePane"),
     ]);
     expect(labels).not.toContain("settings.agent.master");
   });

@@ -105,6 +105,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     agent_status_notifications: true,
     agent_notify_on_done: true,
     agent_notify_on_blocked: true,
+    agent_notify_visible_pane: true,
     keybinds: makeKeybinds(),
     language: "auto",
     ui_font_family: "",
