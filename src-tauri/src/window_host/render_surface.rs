@@ -25,10 +25,13 @@ impl WindowHost {
     /// `surface_config` update, the configure, and the `surface_dirty`
     /// reset keeps the "a configure clears `surface_dirty`" invariant
     /// inside this method instead of relying on every caller (and every
-    /// future caller) to restore it.
+    /// future caller) to restore it. Dimensions are clamped to at least
+    /// 1 here for the same reason: wgpu panics on a zero-sized configure,
+    /// so the never-zero invariant lives with the configure instead of
+    /// in every caller.
     pub(super) fn configure_surface_to(&mut self, width: u32, height: u32) {
-        self.surface_config.width = width;
-        self.surface_config.height = height;
+        self.surface_config.width = width.max(1);
+        self.surface_config.height = height.max(1);
         self.surface.configure(&self.device, &self.surface_config);
         self.surface_dirty = false;
     }
@@ -36,7 +39,7 @@ impl WindowHost {
     /// Reconfigure the wgpu surface for the current window size.
     fn reconfigure_surface(&mut self) {
         let size = self.window.surface_size();
-        self.configure_surface_to(size.width.max(1), size.height.max(1));
+        self.configure_surface_to(size.width, size.height);
     }
 
     /// Acquire the next swapchain texture, transparently recovering from
