@@ -37,7 +37,8 @@ workflow:
     base_commit: 66e3aaabf5eeff8f5eb09779f496ff831891a3b7
     completed_at_commit: 032b2e2df3ee17f2cfb9ce8a696ad8cfa51b84e0
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 06d230e6cebf03f024ea00ea1aad2755c23e33de
   - id: verify
     status: pending
     result: null
@@ -60,13 +61,17 @@ tasks:
     branch: em-workflow/agent-notification-sanitize-title/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, architecture, spec]
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    security: completed
+    architecture: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 

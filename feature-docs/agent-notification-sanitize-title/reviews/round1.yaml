@@ -1,0 +1,101 @@
+round: 1
+executed_at: "2026-08-12T00:35:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 66e3aaabf5eeff8f5eb09779f496ff831891a3b7
+  head_commit: 300610b73e03c59f210b01ad8a6bc10901d3e158
+  changed_files:
+    - src-tauri/src/notifications.rs
+    - test-docs/agent-notification-sanitize-title/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: litellm, model: vertex-glm-5, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: afa7e833c3f394a8
+    severity: medium
+    category: security
+    file: src-tauri/src/notifications.rs
+    line: 378
+    title: "sanitize_title は markup メタ文字 (< & >) を残すため D-Bus 通知 body にマークアップ注入できる"
+    description: >-
+      sanitize_title が落とすのは CSI シーケンス・C0/DEL/C1 制御文字・100 文字超過分だけで、
+      `<` `&` `>` はそのまま通過する。生成された body は NotifyRustSink 経由で notify_rust の
+      .body() にエスケープなしで渡り、org.freedesktop.Notifications 仕様では body-markup
+      capability を広告するサーバ (GNOME Shell / Plasma / dunst markup=full 等) で HTML
+      サブセット (<b> <i> <u> <a href> <img src>) として解釈される。ターミナル内の任意プロセスが
+      OSC 0/2 でタイトルにリンクタグを仕込むだけで、デスクトップ通知にフィッシングリンクを
+      注入できる。既存の tab-activity 経路も同じ sanitize_title を使うため同性質の穴を共有しており、
+      本 diff で新規に生まれた欠陥ではない (制御文字を落とす分、変更前より露出は減っている)。
+      本タスクのスコープ (既存 sanitize_title を通す) の外側にある残存ギャップ。
+    suggestion: >-
+      sanitize_title の末尾で markup メタ文字をエスケープする (`&` → `&amp;`, `<` → `&lt;`,
+      `>` → `&gt;`)、または送出側 NotifyRustSink::send で .body() 直前にエスケープする。
+      body-markup を広告しないサーバでは `&amp;` が生で見えるため、notify_rust の
+      get_capabilities() で "body-markup" を確認できたときだけエスケープするのが正確。
+      エスケープは 100 文字トランケートより後に行い、エンティティが途中で切られないようにする。
+    sources: [claude:security, codex:security]
+    confidence: 95
+    resolution: unresolved
+    resolution_reason: "medium のため R4 auto-fix の対象外 (gate は critical/high のみ)。本タスクのスコープ外の別問題として Notion に follow-up タスクを起票済み"
+  - stable_id: c215e7ec73f7a019
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/notifications.rs
+    line: 1008
+    title: "AC-2 のテストが CSI 除去を固定できていない（ESC バイト不在のみを主張）"
+    description: >-
+      agent_notification_body_strips_csi_sequences_from_tab_title は
+      `!body.contains('\x1b')` しか主張しないため、CSI 正規表現が失われて C0 フィルタだけが
+      残った場合 ("[31mred[0m title") でも緑のまま通る。AC-3 のテストも制御文字の不在しか
+      見ない。両テストとも否定形のみの assertion なので、サニタイズが本文を丸ごと空にする
+      実装でも通ってしまい、可視テキストの保存も固定されていない。sanitize_title 自体の
+      CSI テストは存在するが、それは choke point の経路を固定しない。実装の挙動自体は
+      正しく、固定の強度だけの問題。
+    suggestion: >-
+      本文全体を固定する assert_eq! に置き換える
+      (例: assert_eq!(body, "claude: red title (blocked)") /
+      assert_eq!(body, "claude: abcd (blocked)"))。最小修正としては
+      `!body.contains('\x1b') && !body.contains("[31m") && body.contains("red title")` でも可。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium のため R4 auto-fix の対象外。実装の挙動は正しく TS1/TS2 は満たすため verify はブロックしない。Notion に follow-up タスクを起票済み"
+  - stable_id: 6d2232a64f62dbdf
+    severity: medium
+    category: architecture
+    file: src-tauri/src/notifications.rs
+    line: 357
+    title: "通知本文ビルダー2種でサニタイズ契約が逆向きに分裂"
+    description: >-
+      agent_notification_body は「呼び出し側は生の tab_title を渡してよい (内部で
+      sanitize_title する)」契約になったが、兄弟関数 notification_body(sanitized_title: &str, ...)
+      は逆に「呼び出し側がサニタイズ済みを渡す」契約のまま残っている。同一不変条件が
+      モジュール内で 2 つの相反する規約で守られる状態で、区別は引数名とドキュメントだけ、
+      型では強制されていない。新しい呼び出し側が notification_body(&tab.title, ...) と
+      書けば今回直したバグが再発する。追加された doc コメントの "single choke point" も、
+      実際に choke point になったのは agent 経路だけなので誤読を招く。
+    suggestion: >-
+      (a) notification_body 側も内部で sanitize_title を呼び引数名を title に変える
+      (sanitize_title は冪等なので既存の早期サニタイズはサイズ抑制として残せる)、または
+      (b) sanitize_title だけが生成できる SanitizedTitle newtype を導入して型で強制する。
+      いずれの場合も doc コメントの "single choke point" を実際の適用範囲に合わせて書き直す。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium のため R4 auto-fix の対象外。設計クリーンアップとして Notion に follow-up タスクを起票済み"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: "R4 の candidate gate は severity ∈ {critical, high}。全 3 件が medium のため候補ゼロで、auto-fix ループは 1 度も走っていない"
+residual_critical_high: 0
+rework_required: false
