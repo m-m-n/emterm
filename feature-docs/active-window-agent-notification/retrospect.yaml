@@ -1,0 +1,32 @@
+feature: active-window-agent-notification
+collected_at: "2026-08-11T19:08:00+09:00"
+session_ids:
+  - f1189dc0-1c12-487e-997a-bab699f37c41.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >
+    統合 worktree には gitignore 対象のビルド前提物が無いため、検証コマンドを走らせる前に
+    別途用意が要る。今回は src-tauri/assets/fonts/ の同梱フォント（scripts/fetch-fonts.sh 産）と
+    wasm/pkg/ の WASM 成果物を main ツリーから複製した。task0001 の implementer も同じ壁に
+    当たって同じ対処をしている（deviations に記録あり）ので、worktree 単位で再発する既知コスト
+  - >
+    main ツリーの node_modules が bun.lock より古く（dompurify 3.3.1 / lockfile は 3.4.13）、
+    lockfile どおりに入れた worktree でだけ viewer entry のテスト 2 件が落ちた。main を
+    detached worktree に出して同じ node_modules で走らせ、本 feature と無関係の既存 baseline だと
+    切り分けた。「main で緑だから回帰」と判定すると誤るケース
+  - >
+    batch policy の create-spec.design-step は option_id: decide_autonomously を指すが、これは
+    requirements-analyst が返す packet の options（skip / run）に現れないポリシー動作語。
+    question-resolution.md の「解決した option_id が options に無ければ protocol error で中断」を
+    字義どおり適用すると batch 実行が止まる。今回は「orchestrator が自律決定する」と解して
+    analyst の推奨（skip）を採用した。policy 側か packet 側の語彙を揃える余地がある
+  - >
+    review の auto-fix 候補ゲートは critical/high のみなので、medium 3 件はすべて未修正のまま
+    completed になった。うち 2 件（通知本文のタブタイトル未サニタイズ、ユーザー向けドキュメントの
+    旧挙動記述）は実際に手を入れる価値がある内容で、フォローアップタスク化が要る
