@@ -16,7 +16,7 @@ project:
       language: Rust
       build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
       test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
-      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check"
       e2e_test_command: ""
 
 workflow:
