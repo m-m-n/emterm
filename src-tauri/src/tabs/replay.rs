@@ -13,9 +13,9 @@ use super::{
     ScrollbackRestoreOutcome, SwapOutcome, Tab,
 };
 
-/// Outcome of [`Tab::queue_live_output`]: whether the queued payload kept the
-/// live-queue backlog under [`OFFTHREAD_LIVE_QUEUE_CAP_BYTES`] or pushed it
-/// past the cap.
+/// Outcome of [`PendingSwitch::queue_live_output`]: whether the queued
+/// payload kept the live-queue backlog under
+/// [`OFFTHREAD_LIVE_QUEUE_CAP_BYTES`] or pushed it past the cap.
 pub(super) enum LiveQueueOutcome {
     /// Queued below the cap; the pending swap replays it after the switch.
     Queued,
@@ -23,6 +23,26 @@ pub(super) enum LiveQueueOutcome {
     /// switch and reparse synchronously, applying the queue as ordinary
     /// output.
     Overflowed,
+}
+
+impl PendingSwitch {
+    /// Queue one target-pane `PtyOutput` payload, keeping the `live_queue` /
+    /// `queued_bytes` pair in lockstep and reporting whether the backlog
+    /// crossed [`OFFTHREAD_LIVE_QUEUE_CAP_BYTES`]. Living on the owning type
+    /// (and in this file, next to the coalesce-time reset in
+    /// `dispatch_offthread_replay` that clears both fields together), the
+    /// pair invariant — `queued_bytes` is always the byte total of
+    /// `live_queue`'s payloads — reads in one place, and obtaining
+    /// `&mut PendingSwitch` structurally guarantees a switch is in flight.
+    pub(super) fn queue_live_output(&mut self, payload: Vec<u8>) -> LiveQueueOutcome {
+        self.queued_bytes = self.queued_bytes.saturating_add(payload.len());
+        self.live_queue.push(payload);
+        if self.queued_bytes > OFFTHREAD_LIVE_QUEUE_CAP_BYTES {
+            LiveQueueOutcome::Overflowed
+        } else {
+            LiveQueueOutcome::Queued
+        }
+    }
 }
 
 impl Tab {
@@ -788,31 +808,6 @@ impl Tab {
                     self.title
                 );
             }
-        }
-    }
-
-    /// Queue one target-pane `PtyOutput` payload against the in-flight
-    /// off-thread switch, keeping the `live_queue` / `queued_bytes` pair in
-    /// lockstep and reporting whether the backlog crossed
-    /// [`OFFTHREAD_LIVE_QUEUE_CAP_BYTES`]. Owning the increase side here puts
-    /// it in the same file as the coalesce-time reset in
-    /// `dispatch_offthread_replay` (which clears both fields together), so
-    /// the pair invariant — `queued_bytes` is always the byte total of
-    /// `live_queue`'s payloads — reads in one place.
-    ///
-    /// Caller contract: `pending_switch` is `Some` (the queue/drop routing in
-    /// `handle_pty_output` has already matched the target pane).
-    pub(super) fn queue_live_output(&mut self, payload: Vec<u8>) -> LiveQueueOutcome {
-        let pending = self
-            .pending_switch
-            .as_mut()
-            .expect("queue_live_output requires an in-flight pending switch");
-        pending.queued_bytes = pending.queued_bytes.saturating_add(payload.len());
-        pending.live_queue.push(payload);
-        if pending.queued_bytes > OFFTHREAD_LIVE_QUEUE_CAP_BYTES {
-            LiveQueueOutcome::Overflowed
-        } else {
-            LiveQueueOutcome::Queued
         }
     }
 
