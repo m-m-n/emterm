@@ -4,10 +4,11 @@ import type { SectionContext } from "./types";
 
 /**
  * Renders the "Agent" settings category: the agent notification master
- * toggle (moved here from Notifications) followed by the two per-event-type
+ * toggle (moved here from Notifications) followed by the per-event-type
  * toggles that gate individual agent state transitions.
  *
- * Order: master -> turn complete (done) -> waiting for input (blocked).
+ * Order: master -> turn complete (done) -> waiting for input (blocked) ->
+ * visible pane.
  */
 export function renderAgentSection(
   panel: HTMLElement,
@@ -55,6 +56,19 @@ export function renderAgentSection(
       value: settings.agent_notify_on_blocked,
       description: t("settings.agent.notifyOnBlockedDesc"),
       onSave: (v) => ctx.saveSetting("agent_notify_on_blocked", v),
+    },
+    ctx.addContentListener,
+  );
+
+  // Visible Pane notification toggle
+  renderToggle(
+    panel,
+    {
+      key: "agent-notify-visible-pane",
+      label: t("settings.agent.notifyVisiblePane"),
+      value: settings.agent_notify_visible_pane,
+      description: t("settings.agent.notifyVisiblePaneDesc"),
+      onSave: (v) => ctx.saveSetting("agent_notify_visible_pane", v),
     },
     ctx.addContentListener,
   );
