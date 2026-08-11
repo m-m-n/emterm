@@ -47,6 +47,38 @@ fn next_toast_deadline_some_when_sftp_toast_active() {
     assert!(app.next_toast_deadline().is_some());
 }
 
+/// `pump_toasts` contract: BOTH pumps run on every call, regardless of the
+/// other's result — the combined return value must never short-circuit
+/// either pump away. Arm the restart toast and queue an SFTP toast that are
+/// both past their dismiss deadlines, then observe that ONE `pump_toasts`
+/// call prunes both.
+#[test]
+fn pump_toasts_runs_both_pumps_unconditionally() {
+    let mut app = App::new();
+    app.restart_toast.arm(0.0);
+    app.sftp_ui.toasts.toasts.push(crate::sftp::ui::Toast {
+        session_id: "s1".to_string(),
+        file_name: "f.txt".to_string(),
+        status: crate::sftp::SftpUploadStatus::Uploading,
+        bytes_transferred: 0,
+        total_bytes: 100,
+        error_message: None,
+        dismiss_at: Some(1.0),
+    });
+    let now = RESTART_TOAST_LINGER_SECS + 1.0;
+    let changed = app.pump_toasts(now);
+    assert!(changed, "pruning either toast must report a state change");
+    assert!(
+        !app.restart_toast.active(),
+        "restart toast past its linger deadline must be pruned"
+    );
+    assert!(
+        app.sftp_ui.toasts.toasts.is_empty(),
+        "SFTP toast past its dismiss deadline must be pruned — \
+         pump_sftp must run even though pump_restart_toast already changed state"
+    );
+}
+
 #[test]
 fn next_blink_deadline_none_when_no_active_tab() {
     let app = App::new();
