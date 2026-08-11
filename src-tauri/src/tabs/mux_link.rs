@@ -13,6 +13,7 @@ use crate::mux::window_group::{MuxWindow, MuxWindowGroup};
 
 #[cfg(test)]
 use super::ResizeFrameRecord;
+use super::replay::LiveQueueOutcome;
 use super::{
     OFFTHREAD_LIVE_QUEUE_CAP_BYTES, OFFTHREAD_REPLAY_SEGMENT_THRESHOLD,
     OFFTHREAD_REPLAY_THRESHOLD_BYTES, Tab,
@@ -287,24 +288,23 @@ impl Tab {
         // worker-built core after the swap. Output that races in for a
         // *different* target than the pending switch is dropped (it
         // belongs to a pane we are no longer switching to).
-        if let Some(pending) = self.pending_switch.as_mut() {
-            if pane_id == pending.target_pane {
+        if let Some(pending_target) = self.pending_switch.as_ref().map(|p| p.target_pane) {
+            if pane_id == pending_target {
                 if osc_probe.is_some() {
                     log::warn!(
                         "[osc-probe gui] QUEUED pending-switch pane={} target={} payload_len={}",
                         pane_id,
-                        pending.target_pane,
+                        pending_target,
                         payload.len(),
                     );
                 }
-                pending.queued_bytes = pending.queued_bytes.saturating_add(payload.len());
-                pending.live_queue.push(payload);
-                // Bound the backlog: past the cap, abandon the
-                // off-thread switch and reparse synchronously now,
-                // applying the accumulated queue as ordinary output.
-                // This caps both the swap-time replay burst and the
-                // memory a fast pane can accumulate during a slow parse.
-                if pending.queued_bytes > OFFTHREAD_LIVE_QUEUE_CAP_BYTES {
+                // `queue_live_output` owns the queue/byte-count pair and the
+                // cap check; `Overflowed` bounds the backlog — past the cap,
+                // abandon the off-thread switch and reparse synchronously
+                // now, applying the accumulated queue as ordinary output.
+                // This caps both the swap-time replay burst and the memory a
+                // fast pane can accumulate during a slow parse.
+                if let LiveQueueOutcome::Overflowed = self.queue_live_output(payload) {
                     // Take the coalesced re-dispatch (if any) BEFORE
                     // superseding — `supersede_pending_replay` drops
                     // `pending_redispatch`, but this fallback still
@@ -362,14 +362,14 @@ impl Tab {
                 log::warn!(
                     "[osc-probe gui] DROP pending-switch pane={} target={} payload_len={}",
                     pane_id,
-                    pending.target_pane,
+                    pending_target,
                     payload.len(),
                 );
             }
             log::debug!(
                 "mux apc: dropping PtyOutput for pane {} during pending switch to {}",
                 pane_id,
-                pending.target_pane
+                pending_target
             );
             return false;
         }
