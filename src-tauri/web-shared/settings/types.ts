@@ -73,6 +73,7 @@ export interface AppSettings {
   agent_status_notifications: boolean;
   agent_notify_on_done: boolean;
   agent_notify_on_blocked: boolean;
+  agent_notify_visible_pane: boolean;
 
   // Keybinds
   keybinds: KeybindSettings;

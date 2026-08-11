@@ -1,0 +1,35 @@
+task_id: task0002
+baseline_failures:
+  - "plugin/marketplace version regression guard (task0002 AC-9) > plugin.json still reports version 0.1.0"
+  - "plugin/marketplace version regression guard (task0002 AC-9) > marketplace.json still reports the emterm plugin entry as version 0.1.0"
+final_failures:
+  - "plugin/marketplace version regression guard (task0002 AC-9) > plugin.json still reports version 0.1.0"
+  - "plugin/marketplace version regression guard (task0002 AC-9) > marketplace.json still reports the emterm plugin entry as version 0.1.0"
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: "Directly observed: with agent-section.ts already wired to read/save settings.agent_notify_visible_pane but the field temporarily removed from the AppSettings interface, `bun run typecheck` failed with 'error TS2339: Property agent_notify_visible_pane does not exist on type AppSettings' and 'error TS2345: Argument of type \"agent_notify_visible_pane\" is not assignable to parameter of type keyof AppSettings' (agent-section.ts:69,71). Restoring the field made `bun run typecheck` exit clean with no diagnostics."
+  AC-2:
+    tests:
+      - "renderAgentSection() — toggle order and values (AC-2) > renders master, turn-complete, waiting-for-input, visible-pane toggles in that order, reflecting settings"
+      - "renderAgentSection() — toggle order and values (AC-2) > reflects visible-pane toggle on when settings carry the default true"
+      - "renderAgentSection() — toggle order and values (AC-2) > reflects all-off settings"
+    red_confirmed: true
+    red_reason: "Before the fourth renderToggle call existed, the order test failed: expected toggle ids array to include \"settings-agent-notify-visible-pane\" as a 4th element, received only 3 ids (assertion diff showed the missing entry). The single-toggle value test failed with `TypeError: null is not an object (evaluating 'toggle.getAttribute')` because #settings-agent-notify-visible-pane did not exist in the DOM yet."
+  AC-3:
+    tests:
+      - "renderAgentSection() — save on toggle (AC-3) > flipping the visible-pane toggle saves agent_notify_visible_pane"
+    red_confirmed: true
+    red_reason: "TypeError: null is not an object (evaluating 'panel.querySelector(\"#settings-agent-notify-visible-pane\").click') — the toggle did not exist before agent-section.ts rendered it."
+  AC-4:
+    tests:
+      - "renderAgentSection() — i18n (AC-6) > ja and en both resolve every label/description key used by the section"
+      - "renderAgentSection() — i18n (AC-6) > the rendered labels are translated text, not the raw i18n key (en)"
+    red_confirmed: true
+    red_reason: "The i18n key-resolution loop failed with `expect(received).not.toBe(expected)` — `t(\"settings.agent.notifyVisiblePane\")` returned the raw key \"settings.agent.notifyVisiblePane\" (echoed back by the i18n fallback) because en.json/ja.json had no such key yet. The rendered-labels test failed because the labels array was missing the 4th entry (\"settings.agent.notifyVisiblePane\" raw key), diff showed the expected translated string absent."
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: "The 'full bun test suite passes' half is a regression gate, not a single red->green behavior: it was already true before this task started (baseline had only the 2 unrelated failures) and stays true after. The 'every fixture constructing a complete settings object carries the new field' half is a completeness convention (IMPLEMENTATION.md D3), not independently enforced by any automated check for these 3 files: verified directly by reverting the field in settings-panel.test.ts / mux-section.test.ts / terminal-behavior-section.test.ts and re-running both `bun run typecheck` (tsconfig.json excludes **/*.test.ts and only roots src-tauri/{viewer,settings}/web, so these fixtures are outside its scope entirely and it stayed clean) and `bun test` on the three affected files (18/18 still passed with the field absent). No test or type error distinguishes 'fixture has the field' from 'fixture omits it' for these three files, so this half cannot be made to fail first; the field was added for D3 mirror-completeness correctness per the task plan, verified by code inspection instead."
+notes: "AC-1 is a typecheck-gated criterion (task plan Test Notes); its red/green state was observed via `bun run typecheck` output rather than a named test failure. AC-5's fixture-completeness clause could not be red-confirmed (see AC-5 red_reason and unconfirmed_reds in the final report) — the field was added to settings-panel.test.ts, mux-section.test.ts, and terminal-behavior-section.test.ts for D3 mirror-completeness per the task plan, but no automated check in this repo currently fails when it is absent from those three files specifically (tsconfig.json excludes *.test.ts from typecheck scope, and no runtime test asserts full key-set equality against the AppSettings interface)."

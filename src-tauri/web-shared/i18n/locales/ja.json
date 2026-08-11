@@ -232,7 +232,9 @@
       "notifyOnDone": "ターン終了",
       "notifyOnDoneDesc": "エージェントのターンが終了した時に通知します（エージェントステータス通知がオンの場合のみ有効）",
       "notifyOnBlocked": "質問待ち",
-      "notifyOnBlockedDesc": "エージェントが入力待ちになった時に通知します（エージェントステータス通知がオンの場合のみ有効）"
+      "notifyOnBlockedDesc": "エージェントが入力待ちになった時に通知します（エージェントステータス通知がオンの場合のみ有効）",
+      "notifyVisiblePane": "表示中のペインでも通知する",
+      "notifyVisiblePaneDesc": "フォーカス中のウィンドウで表示されているペインでも通知します（エージェントステータス通知がオンの場合のみ有効）"
     },
     "markdownViewer": {
       "title": "Markdownビューアー",
