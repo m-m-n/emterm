@@ -89,10 +89,32 @@ fn maybe_notify_agent_transition_ac1_working_and_idle_never_fire() {
     assert!(sink.calls().is_empty());
 }
 
-// AC-2: a transition on the visible pane does not fire.
+// task0001 (active-window-agent-notification): a qualifying transition
+// on the visible pane now fires under the default settings — the new
+// `agent_notify_visible_pane` setting defaults ON. This intentionally
+// flips AC-2's pre-task0001 expectation (see task0001's task plan
+// "Existing-test impact (deliberate)"); the companion test below pins
+// the legacy suppression via an explicit setting-OFF case.
 #[test]
-fn maybe_notify_agent_transition_ac2_visible_pane_does_not_fire() {
+fn maybe_notify_agent_transition_ac2_visible_pane_fires_by_default() {
     let (mut app, sink) = app_with_test_sink();
+    assert!(app.settings.agent_notify_visible_pane);
+    let fired = app.maybe_notify_agent_transition(
+        "pane-1",
+        true,
+        &agent_transition(crate::notifications::AgentState::Done),
+        "my-tab",
+    );
+    assert!(fired);
+    assert_eq!(sink.calls().len(), 1);
+}
+
+// task0001: with `agent_notify_visible_pane` OFF, the pre-feature
+// suppression of visible-pane notifications is pinned.
+#[test]
+fn maybe_notify_agent_transition_ac2_visible_pane_suppressed_when_setting_off() {
+    let (mut app, sink) = app_with_test_sink();
+    with_setting(&mut app, |s| s.agent_notify_visible_pane = false);
     let fired = app.maybe_notify_agent_transition(
         "pane-1",
         true,
@@ -101,6 +123,23 @@ fn maybe_notify_agent_transition_ac2_visible_pane_does_not_fire() {
     );
     assert!(!fired);
     assert!(sink.calls().is_empty());
+}
+
+// AC-6 (active-window-agent-notification task0001): a notification
+// fired for a VISIBLE pane still records that pane's rate-limit window —
+// shared with non-visible fires, per FR5/TS-3. A second qualifying
+// transition for the same pane within 30s is suppressed even though the
+// pane is (still) visible and the setting is ON.
+#[test]
+fn maybe_notify_agent_transition_task0001_ac6_visible_pane_fire_shares_rate_limit_window() {
+    let (mut app, sink) = app_with_test_sink();
+    let t = agent_transition(crate::notifications::AgentState::Blocked);
+
+    assert!(app.maybe_notify_agent_transition("pane-1", true, &t, "my-tab"));
+    // Immediately after: still inside the rate-limit window, even though
+    // the pane is visible and the setting is ON.
+    assert!(!app.maybe_notify_agent_transition("pane-1", true, &t, "my-tab"));
+    assert_eq!(sink.calls().len(), 1);
 }
 
 // AC-3: either settings switch off suppresses the notification.
@@ -240,11 +279,14 @@ fn discard_agent_notification_state_reopens_the_rate_limit_window() {
 // ("Rework context" — review round 1's `drain_wiring_spec` finding).
 
 /// AC-1: a real Set-transition to Blocked on a NON-visible (background)
-/// pane, drained by `pump_all`, fires exactly one notification; the
-/// SAME kind of transition on the VISIBLE (active, focused) pane fires
-/// none.
+/// pane, drained by `pump_all`, fires exactly one notification.
+/// task0001 (active-window-agent-notification): the SAME kind of
+/// transition on the VISIBLE (active, focused) pane now ALSO fires under
+/// the default settings (`agent_notify_visible_pane` defaults ON) — the
+/// companion test below pins the pre-task0001 (legacy) suppression via
+/// an explicit setting-OFF case.
 #[test]
-fn pump_all_ac1_notifies_background_pane_not_visible_pane() {
+fn pump_all_ac1_notifies_background_pane_and_visible_pane_by_default() {
     let (mut app, sink) = app_with_test_sink();
     app.spawn_initial_tab(); // tab 0: stays background (non-visible)
     app.spawn_new_tab(); // tab 1: freshly active
@@ -261,8 +303,42 @@ fn pump_all_ac1_notifies_background_pane_not_visible_pane() {
     app.pump_all();
     assert_eq!(sink.calls().len(), 1);
 
-    // The ACTIVE tab's own agent reports Done: window focused AND it
-    // IS the displayed tab, so this must not fire (count unchanged).
+    // The ACTIVE tab's own agent reports Done: window focused AND it IS
+    // the displayed tab, but `agent_notify_visible_pane` defaults ON, so
+    // this now fires too (count increments).
+    app.tabs[1].cb_state.lock().pending_agent_status.push(
+        crate::agent_status::AgentStatusEvent::Set {
+            state: crate::agent_status::AgentState::Done,
+            name: Some("claude".to_string()),
+        },
+    );
+    app.pump_all();
+    assert_eq!(sink.calls().len(), 2);
+}
+
+/// task0001: with `agent_notify_visible_pane` OFF, the pre-feature
+/// suppression of the visible (active, focused) pane's notification is
+/// pinned — only the background pane's transition fires.
+#[test]
+fn pump_all_notifies_background_pane_not_visible_pane_when_setting_off() {
+    let (mut app, sink) = app_with_test_sink();
+    with_setting(&mut app, |s| s.agent_notify_visible_pane = false);
+    app.spawn_initial_tab(); // tab 0: stays background (non-visible)
+    app.spawn_new_tab(); // tab 1: freshly active
+    app.window_focused = true;
+
+    app.tabs[0].cb_state.lock().pending_agent_status.push(
+        crate::agent_status::AgentStatusEvent::Set {
+            state: crate::agent_status::AgentState::Blocked,
+            name: Some("claude".to_string()),
+        },
+    );
+    app.pump_all();
+    assert_eq!(sink.calls().len(), 1);
+
+    // The ACTIVE tab's own agent reports Done: window focused AND it IS
+    // the displayed tab, and the setting is OFF, so this must not fire
+    // (count unchanged).
     app.tabs[1].cb_state.lock().pending_agent_status.push(
         crate::agent_status::AgentStatusEvent::Set {
             state: crate::agent_status::AgentState::Done,

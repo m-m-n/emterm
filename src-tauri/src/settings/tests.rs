@@ -538,6 +538,29 @@ fn loader_agent_notify_on_blocked_null_keeps_default() {
     );
 }
 
+// ── agent_notify_visible_pane (active-window-agent-notification
+// task0001 AC-2) ──────────────────────────────────────────────────
+
+#[test]
+fn default_agent_notify_visible_pane_is_true() {
+    assert!(Settings::new().agent_notify_visible_pane);
+}
+
+#[test]
+fn loader_agent_notify_visible_pane_flat_key_is_applied() {
+    let s = load_json(r#"{"agent_notify_visible_pane": false}"#);
+    assert!(!s.agent_notify_visible_pane);
+}
+
+#[test]
+fn loader_agent_notify_visible_pane_null_keeps_default() {
+    let s = load_json(r#"{"agent_notify_visible_pane": null}"#);
+    assert_eq!(
+        s.agent_notify_visible_pane,
+        Settings::default().agent_notify_visible_pane
+    );
+}
+
 // ── language / log recording / skk_mode ─────────────────────────
 
 #[test]
