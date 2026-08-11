@@ -1,0 +1,37 @@
+feature: agent-notification-sanitize-title
+collected_at: "2026-08-12T00:37:00+09:00"
+session_ids: [fb29b00a-3dae-4a3b-ab33-b7dcbe9e5d80]
+signals:
+  review_critical_high: []      # severity ∈ {critical, high} は 0 件
+  conflict_reworks: []          # implementer 報告の conflict_retries は 0
+  file_prediction_misses: []    # implementer 報告の deviations は空
+  verification_failures: []     # verify は pass
+  discretionary_perspectives: []  # Layer-2 追加なし (floor のみで充足)
+  declined_findings: []         # resolution: declined は 0 件
+lessons_candidates:
+  - id: L1
+    note: >-
+      src-tauri/assets/fonts/ は gitignored なので git worktree 間で共有されない。
+      新しい worktree で最初に cargo check / cargo test を走らせると build.rs が
+      font_missing で panic する。implementer と verify フェーズの両方が同じ壁に当たり、
+      それぞれ独立に scripts/fetch-fonts.sh を実行して解決した。worktree 作成直後に
+      一度 fetch-fonts を走らせる手順にできれば 2 度の試行錯誤が消える。
+  - id: L2
+    note: >-
+      workflow.yaml の format_command に、承認ストアに無い文字列を書いてしまい
+      Step A.5 で差し替えが必要になった。planner/analyst がコマンドを提案する時点で
+      bash_guard.py --list と突合できれば、承認ゲートでの手戻りが減る。
+  - id: L3
+    note: >-
+      本プロジェクトは rustfmt をクレート全体に強制していないため、
+      format_command (cargo fmt -- --check) は本 feature と無関係な 12 ファイルで
+      常に差分を報告する。verify が「変更ファイルの差分件数が 0 か」で判定する必要があった。
+      format_command を変更ファイル限定にできる形にするか、verify 側の判定規則として
+      明文化する余地がある。
+  - id: L4
+    note: >-
+      R4 auto-fix の candidate gate が severity ∈ {critical, high} のため、
+      medium 3 件 (うち 1 件は confidence 95 のセキュリティ残存ギャップで claude/codex が
+      独立に合意) は auto-fix を一度も通らず unresolved のまま完了した。
+      batch 運用ではこれらが人間の目に触れる唯一の経路が round 記録と Notion コメントなので、
+      follow-up タスクの起票が実質的な受け皿になっている。
