@@ -305,63 +305,67 @@ impl Tab {
                 // accumulated queue as ordinary output. This caps both the
                 // swap-time replay burst and the memory a fast pane can
                 // accumulate during a slow parse.
-                if let Some(LiveQueueOutcome::Overflowed) = self
+                match self
                     .pending_switch
                     .as_mut()
                     .map(|p| p.queue_live_output(payload))
                 {
-                    // Take the coalesced re-dispatch (if any) BEFORE
-                    // superseding — `supersede_pending_replay` drops
-                    // `pending_redispatch`, but this fallback still
-                    // needs it as the latest known content for the
-                    // pane (see the payload selection below).
-                    let redispatch = self.pending_redispatch.take();
-                    let pending = self
-                        .supersede_pending_replay("live-queue overflow sync reparse")
-                        .expect("pending_switch is Some in this arm");
-                    log::warn!(
-                        "mux off-thread replay live-queue exceeded {} bytes for tab {:?}; \
-                         synchronous reparse fallback",
-                        OFFTHREAD_LIVE_QUEUE_CAP_BYTES,
-                        self.title
-                    );
-                    // FR8 (task0003): a coalesced same-pane
-                    // re-dispatch (if any) is the LATEST known
-                    // content for this pane — reparse that instead
-                    // of the (possibly superseded) payload the
-                    // abandoned worker was building, so this
-                    // synchronous fallback never regresses to
-                    // stale content. `self.core` is already at the
-                    // right grid regardless (`Tab::resize` always
-                    // resizes it directly, independent of any
-                    // deferred `pending_resize`), so
-                    // `reset_frame_for_replay` needs no extra
-                    // resize step here.
-                    //
-                    // `pending.live_queue` is safe to apply
-                    // unconditionally against whichever payload
-                    // wins above (review round-1 finding
-                    // `ebc9de26bb15fcb1`, task0006 redesign): the
-                    // same-pane coalesce branch in
-                    // `dispatch_offthread_replay` already cleared
-                    // it at COALESCE time if `pending_redispatch`
-                    // is `Some` here, so it holds exactly "output
-                    // queued since that coalesce" either way —
-                    // never a stale prefix the new payload might
-                    // already contain.
-                    let (payload, segments) = match redispatch {
-                        Some((_, payload, segments)) => (payload, segments),
-                        None => (pending.payload, pending.segments),
-                    };
-                    self.reset_frame_for_replay(&payload, &segments);
-                    self.apply_queued_live_output(pending.live_queue);
-                    // The swap-equivalent happened synchronously now;
-                    // repaint the newly-visible pane.
-                    return true;
+                    // Queued below the cap (`None` is unreachable — the
+                    // enclosing `if let` read `target_pane` from this same
+                    // `pending_switch`): not yet visible, no redraw needed;
+                    // the swap will repaint. Exhaustive match so a new
+                    // `LiveQueueOutcome` variant forces this site to decide.
+                    Some(LiveQueueOutcome::Queued) | None => return false,
+                    Some(LiveQueueOutcome::Overflowed) => {}
                 }
-                // Queued, not yet visible — no redraw needed; the swap
-                // will repaint.
-                return false;
+                // Take the coalesced re-dispatch (if any) BEFORE
+                // superseding — `supersede_pending_replay` drops
+                // `pending_redispatch`, but this fallback still
+                // needs it as the latest known content for the
+                // pane (see the payload selection below).
+                let redispatch = self.pending_redispatch.take();
+                let pending = self
+                    .supersede_pending_replay("live-queue overflow sync reparse")
+                    .expect("pending_switch is Some in this arm");
+                log::warn!(
+                    "mux off-thread replay live-queue exceeded {} bytes for tab {:?}; \
+                         synchronous reparse fallback",
+                    OFFTHREAD_LIVE_QUEUE_CAP_BYTES,
+                    self.title
+                );
+                // FR8 (task0003): a coalesced same-pane
+                // re-dispatch (if any) is the LATEST known
+                // content for this pane — reparse that instead
+                // of the (possibly superseded) payload the
+                // abandoned worker was building, so this
+                // synchronous fallback never regresses to
+                // stale content. `self.core` is already at the
+                // right grid regardless (`Tab::resize` always
+                // resizes it directly, independent of any
+                // deferred `pending_resize`), so
+                // `reset_frame_for_replay` needs no extra
+                // resize step here.
+                //
+                // `pending.live_queue` is safe to apply
+                // unconditionally against whichever payload
+                // wins above (review round-1 finding
+                // `ebc9de26bb15fcb1`, task0006 redesign): the
+                // same-pane coalesce branch in
+                // `dispatch_offthread_replay` already cleared
+                // it at COALESCE time if `pending_redispatch`
+                // is `Some` here, so it holds exactly "output
+                // queued since that coalesce" either way —
+                // never a stale prefix the new payload might
+                // already contain.
+                let (payload, segments) = match redispatch {
+                    Some((_, payload, segments)) => (payload, segments),
+                    None => (pending.payload, pending.segments),
+                };
+                self.reset_frame_for_replay(&payload, &segments);
+                self.apply_queued_live_output(pending.live_queue);
+                // The swap-equivalent happened synchronously now;
+                // repaint the newly-visible pane.
+                return true;
             }
             if osc_probe.is_some() {
                 log::warn!(

@@ -16,6 +16,10 @@ use super::{
 /// Outcome of [`PendingSwitch::queue_live_output`]: whether the queued
 /// payload kept the live-queue backlog under
 /// [`OFFTHREAD_LIVE_QUEUE_CAP_BYTES`] or pushed it past the cap.
+/// `#[must_use]`: the cap check and the caller's overflow reaction
+/// (supersede + synchronous reparse) are connected ONLY by this return
+/// value — dropping it would silently void the backlog bound.
+#[must_use]
 pub(super) enum LiveQueueOutcome {
     /// Queued below the cap; the pending swap replays it after the switch.
     Queued,
