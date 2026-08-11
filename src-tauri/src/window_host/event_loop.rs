@@ -642,8 +642,7 @@ impl ApplicationHandler for PocApp {
         // present mode (Mailbox/Immediate, see `WindowHost::new`) nothing
         // else brakes the cycle — the loop spins at full speed for the
         // toast's entire lifetime.
-        let toast_pending =
-            self.app.restart_toast.active() || !self.app.sftp_ui.toasts.toasts.is_empty();
+        let toast_pending = self.app.toast_pending();
         let toast_due = toast_redraw_due(toast_pending, host.last_toast_redraw, Instant::now());
         if toast_due {
             host.last_toast_redraw = Some(Instant::now());

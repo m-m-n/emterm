@@ -254,7 +254,7 @@ impl WindowHost {
             // the egui pass to run every frame just like the status bar
             // carve-out above — otherwise the 60 Hz wake this scheduled in
             // `about_to_wait` (see `toast_pending` / `bell_due` there) spins
-            // uselessly, discarding every frame here before `pump_sftp` /
+            // uselessly, discarding every frame here before `pump_toasts` /
             // the toast prune / the bell-flash paint / the search overlay
             // ever run.
             //
@@ -288,8 +288,7 @@ impl WindowHost {
             // sees it) — bare `PointerMoved` is deliberately excluded from
             // `egui_input_pending` below, so without this the card would
             // never actually paint its brightened state on hover-enter.
-            let overlay_work = app.restart_toast.active()
-                || !app.sftp_ui.toasts.toasts.is_empty()
+            let overlay_work = app.toast_pending()
                 || app.visual_bell_progress().is_some()
                 || app.search_visible()
                 || bell_erase_pending
@@ -379,13 +378,8 @@ impl WindowHost {
             // SFTP: drain progress + duplicate-check channels using the egui
             // frame time (monotonic, wall-clock-free) so terminal toasts can
             // schedule their auto-dismiss, then draw the overlay/dialogs/toasts.
-            // The binary-mismatch restart toast is pumped as its own call so
-            // its auto-dismiss never depends on the SFTP pump staying
-            // unconditional.
             let now = ctx.input(|i| i.time);
-            let mut toasts_changed = app.pump_restart_toast(now);
-            toasts_changed |= app.pump_sftp(now);
-            if toasts_changed {
+            if app.pump_toasts(now) {
                 ctx.request_repaint();
             }
             frame_events.sftp = crate::render::draw_sftp_overlay(ctx, app);
@@ -492,7 +486,7 @@ impl WindowHost {
         if let Some(evt) = frame_events.sftp {
             use crate::render::SftpFrameEvent;
             // Frame time for any error toast surfaced by the confirm paths
-            // (monotonic, wall-clock-free; same source as `pump_sftp`).
+            // (monotonic, wall-clock-free; same source as `pump_toasts`).
             let now = self.egui_ctx.input(|i| i.time);
             match evt {
                 SftpFrameEvent::ConfirmUpload => app.confirm_upload_dialog(now),
@@ -980,7 +974,7 @@ impl WindowHost {
             )),
             // Real elapsed time, NOT `None`: egui replaces `None` with
             // `previous_time + predicted_dt`, i.e. a frame counter scaled by
-            // 1/60 s. The toast auto-dismiss deadlines (`App::pump_sftp`
+            // 1/60 s. The toast auto-dismiss deadlines (`App::pump_toasts`
             // reads `ctx.input(|i| i.time)`) are scheduled against this
             // clock, so it must track wall time regardless of the actual
             // frame cadence (frame-skips below 60 Hz, Mailbox-present bursts
