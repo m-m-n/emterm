@@ -1,0 +1,96 @@
+task_id: task0001
+baseline_failures: []          # 4a: cargo test --manifest-path crates/term_core/Cargo.toml --lib -> 765 passed, 0 failed, 13 ignored
+final_failures: []             # after implementation: 776 passed, 0 failed, 13 ignored (11 new tests, all green)
+acceptance_tests:
+  AC-1:
+    tests:
+      - print_handler::tests::test_handle_print_ascii_overwrite_wide_base_blanks_spacer
+      - print_handler::tests::test_write_grapheme_nonascii_overwrite_wide_base_blanks_spacer
+    red_confirmed: true
+    red_reason: >-
+      Verified by temporarily reverting print_handler.rs (git stash of the
+      implementation file only, tests kept) and re-running: both tests
+      failed with `assertion left == right failed / left: "" / right: " "`
+      at the col+1 spacer assertion (orphaned spacer stayed width-0/empty
+      instead of being blanked to a width-1 space).
+  AC-2:
+    tests:
+      - print_handler::tests::test_handle_print_ascii_overwrite_wide_spacer_blanks_base
+      - print_handler::tests::test_write_grapheme_nonascii_overwrite_wide_spacer_blanks_base
+    red_confirmed: true
+    red_reason: >-
+      Same revert-and-rerun method as AC-1. ASCII-path test failed with
+      `left: "" / right: " "` (orphaned base cell left as an unblanked
+      spacer-adjacent width-1 default, not exercised); non-ASCII-path test
+      failed with `left: "⏭\u{fe0f}" / right: " "` (the old wide base
+      character was still readable at col0 instead of being blanked).
+  AC-3:
+    tests:
+      - print_handler::tests::test_write_grapheme_wide_write_over_existing_base_blanks_its_spacer
+      - print_handler::tests::test_widen_after_merge_spacer_creation_over_existing_base_blanks_its_spacer
+      - print_handler::tests::test_relocate_widened_base_via_wrap_spacer_creation_blanks_existing_pair_spacer
+    red_confirmed: true
+    red_reason: >-
+      Same revert-and-rerun method. All three failed with
+      `left: "" / right: " "` at the chained-cleanup spacer assertion (the
+      unrelated pair's orphaned spacer, at col+2 of the placeholder
+      position, stayed empty/width-0 instead of being blanked). The third
+      test additionally exercises the same R3 rule applied at the
+      relocate_widened_base_via_wrap call site (Design item 4), not just
+      write_grapheme_to_grid/widen_after_merge.
+  AC-4:
+    tests:
+      - print_handler::tests::test_write_grapheme_shorter_redraw_after_wide_base_overwrite_blanks_orphan_spacer
+    red_confirmed: true
+    red_reason: >-
+      Same revert-and-rerun method. Failed with `left: "" / right: " "`:
+      after a shorter redraw overwrites only the wide base (no EL, no
+      write reaching the old spacer column), the old spacer stayed
+      orphaned (width-0, empty content) instead of being blanked to a
+      width-1 space; trailing untouched content (cols 3/4) was correctly
+      unaffected in both the red and green runs (NFR1 half of the
+      assertion set was never red, only the orphan-blanking half was).
+  AC-5:
+    tests:
+      - print_handler::tests::test_write_grapheme_u23ed_vs16_across_chunk_boundary_widens_correctly
+    red_confirmed: false
+    red_reason: >-
+      This test writes into previously-empty cells (no existing wide pair
+      at the target position), so the new R1/R2/R3 checks all gate on
+      old_width==1 and never engage — the scenario is unaffected by this
+      task's changes by construction. Confirmed via the same revert
+      experiment: it passed even with print_handler.rs's implementation
+      changes reverted. This matches the task plan's own framing of AC-5
+      as "既存挙動の維持" (a non-regression guard for chunked
+      U+23ED+VS16 arrival across process_pty_data calls), not a new-
+      behavior criterion. AC-1/AC-2's slow-path tests already cover the
+      R1/R2 rule through the same write_grapheme_to_grid function that
+      flush_grapheme_buffer calls here.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a single test; verified by the full-suite outcome itself
+      (`cargo test --manifest-path crates/term_core/Cargo.toml --lib`).
+      Baseline (step 4a, before any change) was already 765 passed / 0
+      failed / 13 ignored; final run (after implementation) is 776 passed
+      / 0 failed / 13 ignored (the 11 new tests added by this task, no
+      regressions). There is no "red" state to observe for a criterion
+      whose content is "the existing suite stays green."
+  AC-7:
+    tests:
+      - print_handler::tests::test_handle_print_ascii_overwrite_ordinary_cell_leaves_neighbors_unchanged
+      - print_handler::tests::test_write_grapheme_nonascii_overwrite_ordinary_cell_leaves_neighbors_unchanged
+    red_confirmed: false
+    red_reason: >-
+      Both overwrite a width-1 cell with a width-1 character (no wide-pair
+      involvement), so old_width==1 and the new R1/R2 gate is a no-op by
+      design — this is exactly the behavior-invariant path NFR4 requires
+      to add zero extra work. Confirmed via the revert experiment: both
+      passed even with print_handler.rs's implementation changes reverted,
+      since there was never any pre-existing code touching neighbor cells
+      on this path either. This matches the task plan's Test Notes
+      verbatim: "NFR4のゲート構造(分岐1回)自体はテストで直接観測できない
+      ため、AC-7の挙動不変テストとレビュー(VERIFICATION.md TS9)で担保する"
+      — AC-7 is an invariant check paired with code review, not a
+      red-before-green criterion.
