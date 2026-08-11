@@ -33,8 +33,9 @@ workflow:
     status: completed
     completed_at_commit: 8099d13907ad7fdfd29b21f1d549b4360c50d354
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 66e3aaabf5eeff8f5eb09779f496ff831891a3b7
+    completed_at_commit: 032b2e2df3ee17f2cfb9ce8a696ad8cfa51b84e0
   - id: review
     status: pending
   - id: verify
@@ -54,7 +55,7 @@ tasks:
     domains: [input-handling]
     complexity: high
     requirements: [FR1, FR2, NFR1, NFR2]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/agent-notification-sanitize-title/task0001
 
