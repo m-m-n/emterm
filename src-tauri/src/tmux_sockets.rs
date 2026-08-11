@@ -722,42 +722,65 @@ mod tests {
     const SPAWN_RETRIES: u32 = 20;
     const SPAWN_RETRY_PAUSE: Duration = Duration::from_millis(50);
 
+    /// Wall-clock cap on the retry loops below. Transient spawn
+    /// exhaustion clears in far less than this, so the budget never
+    /// gates a healthy run. What it bounds is a regression that makes
+    /// every attempt slow — say, one reintroducing a
+    /// [`TEST_TIMEOUT`]-length wait or a reader stall per attempt: the
+    /// retry check notices the budget is spent as soon as the first
+    /// slow attempt returns, so CI fails after roughly ONE such
+    /// attempt instead of stalling opaquely for that attempt times the
+    /// whole retry count.
+    const SPAWN_RETRY_BUDGET: Duration = Duration::from_secs(10);
+
     /// [`enumerate_sockets`] for tests expecting NO fallback rows: a
     /// fallback (`session: None`) in the result means some socket's
     /// child could not deliver — under these tests' generous bounds,
     /// transient spawn failure — so retry rather than hand the
-    /// corrupted roster to the assert. The last attempt's result is
-    /// returned as-is: a real fallback-producing regression still
-    /// fails loudly, just after the retry budget.
+    /// corrupted roster to the assert. Retries stop at [`SPAWN_RETRIES`]
+    /// attempts or once [`SPAWN_RETRY_BUDGET`] is spent, whichever
+    /// comes first, and the last attempt's result is returned as-is: a
+    /// real fallback-producing regression still fails loudly, just
+    /// after the retry budget.
     fn enumerate_sockets_expecting_sessions(
         sockets: &[TmuxSocket],
         tmux_bin: &str,
     ) -> Vec<TmuxEntry> {
-        for _ in 0..SPAWN_RETRIES {
+        let deadline = Instant::now() + SPAWN_RETRY_BUDGET;
+        let mut attempts_left = SPAWN_RETRIES;
+        loop {
+            attempts_left -= 1;
             let entries = enumerate_sockets(sockets, tmux_bin, TEST_TIMEOUT, TEST_READER_GRACE);
-            if entries.iter().all(|e| e.session.is_some()) {
+            if entries.iter().all(|e| e.session.is_some())
+                || attempts_left == 0
+                || Instant::now() >= deadline
+            {
                 return entries;
             }
             std::thread::sleep(SPAWN_RETRY_PAUSE);
         }
-        enumerate_sockets(sockets, tmux_bin, TEST_TIMEOUT, TEST_READER_GRACE)
     }
 
     /// [`spawn_bounded`] for tests that need the spawn itself to
     /// succeed (`None` would fail them for a reason they are not
-    /// checking). The final attempt's outcome is returned as-is.
+    /// checking). Bounded like [`enumerate_sockets_expecting_sessions`]
+    /// — attempt count and wall clock — with the last attempt's
+    /// outcome returned as-is.
     fn spawn_bounded_retrying(
         mut make_cmd: impl FnMut() -> Command,
         timeout: Duration,
         reader_grace: Duration,
     ) -> Option<BoundedOutput> {
-        for _ in 0..SPAWN_RETRIES {
-            if let Some(outcome) = spawn_bounded(make_cmd(), timeout, reader_grace) {
-                return Some(outcome);
+        let deadline = Instant::now() + SPAWN_RETRY_BUDGET;
+        let mut attempts_left = SPAWN_RETRIES;
+        loop {
+            attempts_left -= 1;
+            let outcome = spawn_bounded(make_cmd(), timeout, reader_grace);
+            if outcome.is_some() || attempts_left == 0 || Instant::now() >= deadline {
+                return outcome;
             }
             std::thread::sleep(SPAWN_RETRY_PAUSE);
         }
-        spawn_bounded(make_cmd(), timeout, reader_grace)
     }
 
     #[test]
