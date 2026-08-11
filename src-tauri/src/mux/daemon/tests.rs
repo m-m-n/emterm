@@ -6,12 +6,15 @@ use std::path::PathBuf;
 
 #[cfg(unix)]
 use crate::mux::identity;
+#[cfg(unix)]
 use crate::mux::ipc::handlers::handle_destroy_pane;
 use crate::mux::session::manager::SessionManager;
 use crate::prompts::PromptMarkKind;
+use mux_ipc::protocol::{AgentStatusUpdateMsg, MessageType, RenameWindowMsg};
+#[cfg(unix)]
 use mux_ipc::protocol::{
-    AgentStatusUpdateMsg, ClientType, ErrorMsg, HelloMsg, MessageType, MuxMessage,
-    PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, RenameWindowMsg, WelcomeMsg,
+    ClientType, ErrorMsg, HelloMsg, MuxMessage, PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION,
+    WelcomeMsg,
 };
 
 #[test]

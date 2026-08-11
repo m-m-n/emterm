@@ -1,8 +1,11 @@
 use super::*;
+#[cfg(unix)]
 use crate::mux::daemon;
+use mux_ipc::protocol::{AgentApiErrorKind, AgentState, SessionInfo};
+#[cfg(unix)]
 use mux_ipc::protocol::{
-    AgentApiErrorKind, AgentState, ClientType, ErrorMsg, HelloMsg, MessageType, MuxMessage,
-    PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, SessionInfo, WelcomeMsg,
+    ClientType, ErrorMsg, HelloMsg, MessageType, MuxMessage, PREVIOUS_PROTOCOL_VERSION,
+    PROTOCOL_VERSION, WelcomeMsg,
 };
 
 #[test]
