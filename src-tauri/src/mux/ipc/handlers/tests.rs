@@ -3,6 +3,9 @@ use crate::agent_status::AgentState as CoreAgentState;
 use crate::mux::session::pane::{
     AgentWaiter, DeferredOutputItem, MuxPane, PaneOutputTarget, SharedOutputTarget,
 };
+use mux_ipc::protocol::{
+    AgentApiErrorKind, AgentState, ReadPaneMsg, SendTextMsg, WaitAgentStateMsg,
+};
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::oneshot;

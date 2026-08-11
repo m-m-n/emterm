@@ -19,13 +19,16 @@ use super::handlers::{
     apply_fair_permit_to_front_deferred_item, flush_deferred_output, handle_destroy_pane,
 };
 use super::outbound::{OUTBOUND_QUEUE_CAPACITY, OutboundAdmission, run_outbound_writer};
-use super::protocol::*;
 use super::reattach::detach_session_panes;
 use crate::mux::daemon::{SharedUpgradeAckSlot, UpgradeSignalSender};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     AgentStatusReportSender, ChunkKind, DeferredOutputQueue, NotificationSender, PtyOutputChunk,
     SharedPaneExitSender, TitleChangeSender,
+};
+use mux_ipc::protocol::{
+    ClientType, HelloMsg, MessageType, MuxMessage, PROTOCOL_VERSION, PtyExitedMsg, RenameWindowMsg,
+    WelcomeMsg,
 };
 
 mod dispatch;

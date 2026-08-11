@@ -6,7 +6,6 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
 use super::outbound::ReplySink;
-use super::protocol::*;
 use super::pty_spawn::{register_pane_and_start_reader, spawn_pty};
 use super::reattach::build_shadow_parser_snapshot;
 use crate::mux::session::manager::SessionManager;
@@ -14,6 +13,10 @@ use crate::mux::session::pane::{
     AgentStatusReportSender, DeferredOutputQueue, NotificationSender, PaneId, PtyOutputChunk,
     SharedPaneExitSender, SharedScrollback, SharedShadowParser, TitleChangeSender,
     encode_snapshot_segments,
+};
+use mux_ipc::protocol::{
+    CreateWindowPayload, ErrorMsg, MessageType, MoveWindowMsg, MuxMessage, RenameWindowMsg,
+    ResizeMsg,
 };
 
 mod agent_api;

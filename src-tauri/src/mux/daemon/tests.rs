@@ -120,7 +120,7 @@ fn spawn_fake_legacy_daemon(sock_path: std::path::PathBuf) -> std::thread::JoinH
 
             let accept = WelcomeMsg::Accepted {
                 server_version: FAKE_LEGACY_VERSION,
-                sessions: Vec::<crate::mux::ipc::protocol::SessionInfo>::new(),
+                sessions: Vec::<mux_ipc::protocol::SessionInfo>::new(),
             };
             write_welcome(&mut stream, &accept);
 
@@ -181,7 +181,7 @@ fn recover_from_legacy_daemon_is_noop_against_a_compatible_daemon() {
         assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
         let accept = WelcomeMsg::Accepted {
             server_version: PROTOCOL_VERSION,
-            sessions: Vec::<crate::mux::ipc::protocol::SessionInfo>::new(),
+            sessions: Vec::<mux_ipc::protocol::SessionInfo>::new(),
         };
         write_welcome(&mut stream, &accept);
     });
@@ -280,7 +280,7 @@ fn spawn_fake_current_daemon(
 
             let accept = WelcomeMsg::Accepted {
                 server_version: PROTOCOL_VERSION,
-                sessions: Vec::<crate::mux::ipc::protocol::SessionInfo>::new(),
+                sessions: Vec::<mux_ipc::protocol::SessionInfo>::new(),
             };
             write_welcome(&mut stream, &accept);
 
@@ -1711,10 +1711,7 @@ async fn test_apply_agent_status_report_accepted_broadcasts_update() {
     assert_eq!(payload.pane_id, pane_id);
     let expected_public_id = { mgr.lock().await.public_pane_id(pane_id) };
     assert_eq!(payload.public_pane_id, expected_public_id);
-    assert_eq!(
-        payload.state,
-        Some(crate::mux::ipc::protocol::AgentState::Working)
-    );
+    assert_eq!(payload.state, Some(mux_ipc::protocol::AgentState::Working));
     assert_eq!(payload.name.as_deref(), Some("claude"));
     assert_eq!(payload.revision, 1);
     assert!(!payload.replay_derived);
@@ -2043,10 +2040,7 @@ async fn test_sync_agent_status_after_snapshot_only_stateful_panes() {
     let payload: AgentStatusUpdateMsg = msg.decode_payload().unwrap();
     assert_eq!(payload.pane_id, stateful_id);
     assert!(payload.replay_derived);
-    assert_eq!(
-        payload.state,
-        Some(crate::mux::ipc::protocol::AgentState::Blocked)
-    );
+    assert_eq!(payload.state, Some(mux_ipc::protocol::AgentState::Blocked));
 
     // Nothing further: the stateless pane produces no message.
     let none = tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
@@ -2148,10 +2142,7 @@ async fn test_sync_agent_status_after_pane_snapshot_stateful_pane_broadcasts() {
     let payload: AgentStatusUpdateMsg = msg.decode_payload().unwrap();
     assert_eq!(payload.pane_id, pane_id);
     assert!(payload.replay_derived);
-    assert_eq!(
-        payload.state,
-        Some(crate::mux::ipc::protocol::AgentState::Done)
-    );
+    assert_eq!(payload.state, Some(mux_ipc::protocol::AgentState::Done));
 }
 
 /// AC-5: a stateless (never-reported, revision == 0) pane produces no

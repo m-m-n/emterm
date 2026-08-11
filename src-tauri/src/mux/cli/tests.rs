@@ -47,7 +47,7 @@ fn decide_replacement_reenters_on_refused_validation() {
 
 // ---- send-keys target resolution tests ----
 
-use crate::mux::ipc::protocol::WindowInfo;
+use mux_ipc::protocol::WindowInfo;
 
 fn make_test_sessions(windows: Vec<WindowInfo>, active_window_index: u32) -> Vec<SessionInfo> {
     vec![SessionInfo {

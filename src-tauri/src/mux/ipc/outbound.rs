@@ -32,8 +32,8 @@ use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, FramedWrite};
 
 use super::codec::MuxCodec;
-use super::protocol::{MessageType, MuxMessage};
 use crate::mux::daemon::SharedUpgradeAckSlot;
+use mux_ipc::protocol::{MessageType, MuxMessage};
 
 /// Bound on the outbound admission queue (FR4).
 ///

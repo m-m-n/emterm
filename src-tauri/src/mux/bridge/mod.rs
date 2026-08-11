@@ -3,7 +3,9 @@
 //! The bridge translates between APC escape sequences on stdin/stdout
 //! and MuxMessage frames on the Unix domain socket.
 
-use super::ipc::protocol::*;
+use mux_ipc::protocol::{
+    ClientType, HelloMsg, MAX_FRAME_LENGTH, MessageType, MuxMessage, PROTOCOL_VERSION,
+};
 
 use std::sync::Arc;
 use std::sync::Mutex;

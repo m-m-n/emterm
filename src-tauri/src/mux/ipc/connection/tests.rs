@@ -1,5 +1,6 @@
 use super::*;
 use crate::mux::ipc::reattach::collect_reattach_data;
+use mux_ipc::protocol::{AttachMsg, ErrorMsg};
 
 // ── G2 starvation guard (AC-2, mux-window-switch-output-hang task0004
 // rework, review round 3 findings `dd23cfc388062939`/

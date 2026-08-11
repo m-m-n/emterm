@@ -7,13 +7,13 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use super::outbound::OutboundAdmission;
-use super::protocol::*;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     DetachReason, PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
     lock_shadow_parser,
 };
 use crate::mux::snapshot_bytes::build_snapshot_bytes;
+use mux_ipc::protocol::{MAX_SNAPSHOT_FRAME_PAYLOAD, MessageType, MuxMessage};
 
 /// Build a self-contained ANSI byte sequence that reproduces the current
 /// screen state tracked by the given shadow parser, prefixed with the pane's

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use super::pane::PaneId;
 use super::session::{MuxSession, SessionId};
 use super::window::WindowId;
-use crate::mux::ipc::protocol::{MuxMessage, PublicPaneId, SessionInfo, WindowInfo};
+use mux_ipc::protocol::{MuxMessage, PublicPaneId, SessionInfo, WindowInfo};
 
 /// Daemon incarnation token (SPEC FR13): a lowercase-hex string generated
 /// once per daemon start, embedded in every public pane ID minted during

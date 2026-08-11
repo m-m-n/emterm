@@ -115,9 +115,9 @@ pub(super) async fn run_notification_task(
 /// rather than re-deriving it.
 pub(in crate::mux) fn to_wire_state(
     state: crate::agent_status::AgentState,
-) -> crate::mux::ipc::protocol::AgentState {
+) -> mux_ipc::protocol::AgentState {
     use crate::agent_status::AgentState as Core;
-    use crate::mux::ipc::protocol::AgentState as Wire;
+    use mux_ipc::protocol::AgentState as Wire;
     match state {
         Core::Idle => Wire::Idle,
         Core::Working => Wire::Working,
@@ -131,10 +131,10 @@ pub(in crate::mux) fn to_wire_state(
 /// handler to match a request's wire `states` set against pane state held
 /// in the core type.
 pub(in crate::mux) fn from_wire_state(
-    state: crate::mux::ipc::protocol::AgentState,
+    state: mux_ipc::protocol::AgentState,
 ) -> crate::agent_status::AgentState {
     use crate::agent_status::AgentState as Core;
-    use crate::mux::ipc::protocol::AgentState as Wire;
+    use mux_ipc::protocol::AgentState as Wire;
     match state {
         Wire::Idle => Core::Idle,
         Wire::Working => Core::Working,

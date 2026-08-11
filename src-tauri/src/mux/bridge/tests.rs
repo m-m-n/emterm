@@ -1,4 +1,7 @@
 use super::*;
+use mux_ipc::protocol::AttachMsg;
+#[cfg(unix)]
+use mux_ipc::protocol::WelcomeMsg;
 
 #[test]
 fn test_stdin_parser_passthrough_only() {
