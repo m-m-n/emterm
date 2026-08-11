@@ -21,6 +21,7 @@ use std::ffi::CString;
 use std::io;
 use std::io::Read;
 use std::mem;
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
@@ -360,22 +361,84 @@ enum BoundedOutput {
         pid: u32,
     },
     /// The child exited, but its stdout never reached EOF within the
-    /// post-exit grace period (e.g. a grandchild inherited the pipe's
-    /// write end, or the reader thread was starved on a loaded host).
-    /// Whatever the child wrote is discarded; distinct from `Exited`
-    /// with empty stdout so callers can degrade loudly instead of
-    /// mistaking the stall for "ran fine, printed nothing".
+    /// post-exit grace period (a grandchild inherited the pipe's write
+    /// end and kept it open). Whatever the child wrote is discarded;
+    /// distinct from `Exited` with empty stdout so callers can degrade
+    /// loudly instead of mistaking the stall for "ran fine, printed
+    /// nothing".
     ReaderStalled,
 }
 
-/// Spawn `cmd` and wait up to `timeout` for it to exit, collecting its
-/// stdout on a background thread so a chatty child can never deadlock
-/// the bounded wait by filling its pipe before this function drains it.
-/// After the child exits, wait up to `reader_grace` for the reader
-/// thread to hand over the collected output ([`BoundedOutput::ReaderStalled`]
-/// past that). On expiry the child is killed AND reaped (`Child::wait`),
-/// so no zombie remains (AC-3). `None` only when the spawn itself
-/// failed (binary absent, permission denied, ...).
+/// Outcome of one [`drain_available`] sweep over the child's stdout.
+enum DrainStatus {
+    /// The write side is fully closed; nothing more will ever arrive.
+    Eof,
+    /// The pipe is merely empty right now; more may arrive while any
+    /// write end remains open.
+    Pending,
+}
+
+/// Upper bound, in bytes, on how much a single [`drain_available`] sweep
+/// will collect before returning. Without this, a child that keeps its
+/// stdout pipe non-empty (writing faster than we drain) would never let
+/// the inner loop exit, so the caller's deadline/`try_wait` re-evaluation
+/// in the outer wait loop would never run and `spawn_bounded`'s
+/// timeout guarantee (AC-3/NFR1) would not hold.
+const DRAIN_SWEEP_LIMIT: usize = 256 * 1024;
+
+/// Consume up to [`DRAIN_SWEEP_LIMIT`] bytes currently buffered in `pipe`
+/// (which the caller has switched to `O_NONBLOCK`) into `out`, without
+/// ever blocking. A read error other than `WouldBlock` / `Interrupted` is
+/// treated as end of collection with whatever has arrived, matching what
+/// the former reader thread's `read_to_end` delivered on error.
+fn drain_available(pipe: &mut std::process::ChildStdout, out: &mut Vec<u8>) -> DrainStatus {
+    let mut chunk = [0u8; 4096];
+    let mut swept = 0usize;
+    loop {
+        if swept >= DRAIN_SWEEP_LIMIT {
+            return DrainStatus::Pending;
+        }
+        match pipe.read(&mut chunk) {
+            Ok(0) => return DrainStatus::Eof,
+            Ok(n) => {
+                out.extend_from_slice(&chunk[..n]);
+                swept += n;
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => return DrainStatus::Pending,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return DrainStatus::Eof,
+        }
+    }
+}
+
+/// Switch `pipe`'s fd to non-blocking so [`drain_available`] can sweep
+/// it from the wait loop without ever blocking past a deadline.
+fn set_nonblocking(pipe: &std::process::ChildStdout) -> io::Result<()> {
+    let fd = pipe.as_raw_fd();
+    // SAFETY: `fd` is owned by `pipe`, which the caller keeps alive for
+    // the duration of both calls.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Spawn `cmd` and wait up to `timeout` for it to exit, draining its
+/// stdout with non-blocking reads from inside the wait loop so a
+/// chatty child can never deadlock the bounded wait by filling its
+/// pipe before this function reads it. After the child exits, keep
+/// draining up to `reader_grace` for EOF
+/// ([`BoundedOutput::ReaderStalled`] past that). Every return path
+/// drops the pipe, closing this process's read end — a stall parks no
+/// reader thread and leaks no fd. On expiry the child is killed AND
+/// reaped (`Child::wait`), so no zombie remains (AC-3). `None` when
+/// the spawn itself failed (binary absent, permission denied, ...) or
+/// the fresh pipe rejected `O_NONBLOCK` (the child is killed and
+/// reaped first).
 fn spawn_bounded(
     mut cmd: Command,
     timeout: Duration,
@@ -395,38 +458,53 @@ fn spawn_bounded(
     };
     let pid = child.id();
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    match child.stdout.take() {
-        Some(mut pipe) => {
-            std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                let _ = pipe.read_to_end(&mut buf);
-                let _ = tx.send(buf);
-            });
-        }
-        None => {
-            let _ = tx.send(Vec::new());
+    let mut stdout = child.stdout.take();
+    if let Some(pipe) = &stdout {
+        if let Err(e) = set_nonblocking(pipe) {
+            log::debug!("setting stdout non-blocking for pid {pid} failed: {e}");
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
         }
     }
+    let mut collected = Vec::new();
 
     let deadline = Instant::now() + timeout;
     loop {
+        // Sweep before the liveness check so an exit observed below
+        // finds the pipe already near-empty, and a chatty child never
+        // stalls on a full pipe while the loop waits.
+        if let Some(pipe) = &mut stdout {
+            if matches!(drain_available(pipe, &mut collected), DrainStatus::Eof) {
+                stdout = None;
+            }
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
-                // The child has exited, so its stdout is at EOF (or
-                // about to be); the reader thread finishes almost
-                // immediately. The grace period only guards against a
-                // pathological reader stall, not normal operation.
-                return match rx.recv_timeout(reader_grace) {
-                    Ok(stdout) => Some(BoundedOutput::Exited {
-                        success: status.success(),
-                        stdout,
-                    }),
-                    Err(_) => {
-                        log::debug!("stdout reader stalled for pid {pid}");
-                        Some(BoundedOutput::ReaderStalled)
+                // The child has exited, so EOF (with any remaining
+                // buffered output) arrives almost immediately. The
+                // grace period only guards against a pathological
+                // stall — a grandchild holding the write end open —
+                // not normal operation.
+                let grace_deadline = Instant::now() + reader_grace;
+                loop {
+                    let Some(pipe) = &mut stdout else {
+                        return Some(BoundedOutput::Exited {
+                            success: status.success(),
+                            stdout: collected,
+                        });
+                    };
+                    match drain_available(pipe, &mut collected) {
+                        DrainStatus::Eof => stdout = None,
+                        DrainStatus::Pending => {
+                            if Instant::now() >= grace_deadline {
+                                log::debug!("stdout reader stalled for pid {pid}");
+                                return Some(BoundedOutput::ReaderStalled);
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
                     }
-                };
+                }
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
@@ -703,12 +781,12 @@ mod tests {
     /// scheduling delay.
     const TEST_TIMEOUT: Duration = Duration::from_secs(60);
 
-    /// The reader-grace analogue of [`TEST_TIMEOUT`]: production's
-    /// 500ms [`READER_GRACE`] is enough scheduling headroom for a
-    /// lightly loaded host, but the full suite running in parallel can
-    /// starve the reader thread past it, faking a stall and making
-    /// enumeration tests flaky. Tests not exercising the stall itself
-    /// pass this instead.
+    /// The reader-grace analogue of [`TEST_TIMEOUT`]. Since the drain
+    /// moved inline (no reader thread left to starve), a load-delayed
+    /// run can no longer fake a stall — EOF already in the pipe is
+    /// observed no matter how late the sweep runs — so this generous
+    /// bound remains purely as a uniform hang backstop for tests not
+    /// exercising the stall itself.
     const TEST_READER_GRACE: Duration = Duration::from_secs(60);
 
     /// Generous bounds handle slow scheduling, but a parallel full
@@ -722,42 +800,65 @@ mod tests {
     const SPAWN_RETRIES: u32 = 20;
     const SPAWN_RETRY_PAUSE: Duration = Duration::from_millis(50);
 
+    /// Wall-clock cap on the retry loops below. Transient spawn
+    /// exhaustion clears in far less than this, so the budget never
+    /// gates a healthy run. What it bounds is a regression that makes
+    /// every attempt slow — say, one reintroducing a
+    /// [`TEST_TIMEOUT`]-length wait or a reader stall per attempt: the
+    /// retry check notices the budget is spent as soon as the first
+    /// slow attempt returns, so CI fails after roughly ONE such
+    /// attempt instead of stalling opaquely for that attempt times the
+    /// whole retry count.
+    const SPAWN_RETRY_BUDGET: Duration = Duration::from_secs(10);
+
     /// [`enumerate_sockets`] for tests expecting NO fallback rows: a
     /// fallback (`session: None`) in the result means some socket's
     /// child could not deliver — under these tests' generous bounds,
     /// transient spawn failure — so retry rather than hand the
-    /// corrupted roster to the assert. The last attempt's result is
-    /// returned as-is: a real fallback-producing regression still
-    /// fails loudly, just after the retry budget.
+    /// corrupted roster to the assert. Retries stop at [`SPAWN_RETRIES`]
+    /// attempts or once [`SPAWN_RETRY_BUDGET`] is spent, whichever
+    /// comes first, and the last attempt's result is returned as-is: a
+    /// real fallback-producing regression still fails loudly, just
+    /// after the retry budget.
     fn enumerate_sockets_expecting_sessions(
         sockets: &[TmuxSocket],
         tmux_bin: &str,
     ) -> Vec<TmuxEntry> {
-        for _ in 0..SPAWN_RETRIES {
+        let deadline = Instant::now() + SPAWN_RETRY_BUDGET;
+        let mut attempts_left = SPAWN_RETRIES;
+        loop {
+            attempts_left -= 1;
             let entries = enumerate_sockets(sockets, tmux_bin, TEST_TIMEOUT, TEST_READER_GRACE);
-            if entries.iter().all(|e| e.session.is_some()) {
+            if entries.iter().all(|e| e.session.is_some())
+                || attempts_left == 0
+                || Instant::now() >= deadline
+            {
                 return entries;
             }
             std::thread::sleep(SPAWN_RETRY_PAUSE);
         }
-        enumerate_sockets(sockets, tmux_bin, TEST_TIMEOUT, TEST_READER_GRACE)
     }
 
     /// [`spawn_bounded`] for tests that need the spawn itself to
     /// succeed (`None` would fail them for a reason they are not
-    /// checking). The final attempt's outcome is returned as-is.
+    /// checking). Bounded like [`enumerate_sockets_expecting_sessions`]
+    /// — attempt count and wall clock — with the last attempt's
+    /// outcome returned as-is.
     fn spawn_bounded_retrying(
         mut make_cmd: impl FnMut() -> Command,
         timeout: Duration,
         reader_grace: Duration,
     ) -> Option<BoundedOutput> {
-        for _ in 0..SPAWN_RETRIES {
-            if let Some(outcome) = spawn_bounded(make_cmd(), timeout, reader_grace) {
-                return Some(outcome);
+        let deadline = Instant::now() + SPAWN_RETRY_BUDGET;
+        let mut attempts_left = SPAWN_RETRIES;
+        loop {
+            attempts_left -= 1;
+            let outcome = spawn_bounded(make_cmd(), timeout, reader_grace);
+            if outcome.is_some() || attempts_left == 0 || Instant::now() >= deadline {
+                return outcome;
             }
             std::thread::sleep(SPAWN_RETRY_PAUSE);
         }
-        spawn_bounded(make_cmd(), timeout, reader_grace)
     }
 
     #[test]
@@ -1050,6 +1151,71 @@ esac
             Some(BoundedOutput::TimedOut { .. }) => {
                 panic!("the child did not exit within the bound")
             }
+            None => panic!("spawn failed on every retry"),
+        }
+    }
+
+    // The inline non-blocking drain must keep consuming while the child
+    // still runs: 256 KiB is several times a Linux pipe's default 64 KiB
+    // capacity, so the child can only finish (and this test can only see
+    // a clean exit) if the wait loop drains concurrently — the property
+    // the dedicated reader thread provided before the drain moved
+    // inline.
+    #[test]
+    fn spawn_bounded_collects_output_larger_than_the_pipe_buffer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = write_script(
+            dir.path(),
+            "chatty.sh",
+            "#!/bin/sh\ndd if=/dev/zero bs=1024 count=256 2>/dev/null\n",
+        );
+        let make_cmd = || {
+            let mut cmd = Command::new(&script);
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            cmd
+        };
+
+        match spawn_bounded_retrying(make_cmd, TEST_TIMEOUT, TEST_READER_GRACE) {
+            Some(BoundedOutput::Exited { success, stdout }) => {
+                assert!(success, "chatty.sh must exit cleanly");
+                assert_eq!(stdout.len(), 256 * 1024);
+            }
+            Some(BoundedOutput::TimedOut { .. }) => {
+                panic!("the child blocked on a full pipe instead of being drained")
+            }
+            Some(BoundedOutput::ReaderStalled) => panic!("no grandchild holds this pipe open"),
+            None => panic!("spawn failed on every retry"),
+        }
+    }
+
+    // Output produced before AND after a mid-run pause must all be
+    // collected: the pre-exit sweeps drain the early bytes while the
+    // wait loop polls, the post-exit grace sweep picks up the rest.
+    #[test]
+    fn spawn_bounded_collects_output_across_a_mid_run_pause() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = write_script(
+            dir.path(),
+            "paused.sh",
+            "#!/bin/sh\nprintf early\nsleep 0.2\nprintf late\n",
+        );
+        let make_cmd = || {
+            let mut cmd = Command::new(&script);
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            cmd
+        };
+
+        match spawn_bounded_retrying(make_cmd, TEST_TIMEOUT, TEST_READER_GRACE) {
+            Some(BoundedOutput::Exited { success, stdout }) => {
+                assert!(success, "paused.sh must exit cleanly");
+                assert_eq!(stdout, b"earlylate");
+            }
+            Some(BoundedOutput::TimedOut { .. }) => panic!("the child did not exit in time"),
+            Some(BoundedOutput::ReaderStalled) => panic!("no grandchild holds this pipe open"),
             None => panic!("spawn failed on every retry"),
         }
     }
