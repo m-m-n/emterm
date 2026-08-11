@@ -1,0 +1,75 @@
+feature: wide-pair-overwrite-cleanup
+collected_at: "2026-08-12T00:05:00+09:00"
+session_ids:
+  - 5b55959e-45d3-4b6c-907b-a96715d0b397
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures:
+    - id: TS3
+      note: >-
+        SPEC の TS3 が指定する P5「1 桁ズラし再描画」が実装されず、同じ列位置への
+        「短い再描画」テストで代替されていた。spec 観点レビュー（Claude）が medium として
+        指摘した内容と verify の失敗判定が一致。rework 1 回で task0003 を合成して解消。
+      resolved_by: task0003
+    - id: SC-5
+      note: >-
+        「P3 / P4 / P5 の再現手順がユニットテスト化され回帰ガードになる」のうち P5 が未達。
+        TS3 の解消と同時に充足。
+      resolved_by: task0003
+  discretionary_perspectives:
+    - perspective: performance
+      reason: >-
+        NFR4 が ASCII 高速パス（handle_print_ascii）の性能維持を要件化しており、
+        その高頻度パスに新規分岐が追加されているため
+  declined_findings: []
+  deferred_findings:
+    - stable_id: b8a62feaf016ef08
+      category: architecture
+      resolution_reason: "medium severity: auto-fix ゲート対象外。相方セル空白化プリミティブが csi_edit / print_handler に 2 重実装（architecture / comprehensive の 2 観点が同一 site を指摘）"
+    - stable_id: 221c2569b17a55f9
+      category: comprehensive
+      resolution_reason: "medium severity: EL/ED (clear_line_range) が同じ孤児セルを作り続ける未対応経路。SPEC の FR5 は ECH/DCH/ICH のみを対象としており EL/ED はスコープ外"
+    - stable_id: 06ef78e20e9b9f0b
+      category: comprehensive
+      resolution_reason: "medium severity: overflow（16バイト超グラフェム）分岐がテスト未カバー"
+    - stable_id: 931abe859e23fa5d
+      category: architecture
+      resolution_reason: "medium severity: 不変条件の強制点が chokepoint を持たずハンドラごとに分散"
+    - stable_id: 4b0dfdcc426d75aa
+      category: spec
+      resolution_reason: "medium severity: TS3 の P5 未カバー指摘。verify で failed_items として拾い直し rework task0003 で解消済み"
+    - stable_id: 7941ef452d881510
+      category: performance
+      resolution_reason: "medium severity: cell_index 重複呼び出し。cross-model 不一致（Claude は実測影響なしと判断）"
+    - stable_id: 128ab667bdead7f6
+      category: performance
+      resolution_reason: "medium severity: get_cell_width 重複呼び出し。cross-model 不一致"
+    - stable_id: 13ebf590b4291599
+      category: performance
+      resolution_reason: "medium severity: overflow map 操作。指摘の前提が不正確（実装は is_overflow() でガード済み）"
+    - stable_id: f5abaee2de740bac
+      category: performance
+      resolution_reason: "medium severity: ASCII fast path の width 重複検査。cross-model 不一致"
+lessons_candidates:
+  - >-
+    verify フェーズが spec 観点レビューの medium 指摘（stable_id 4b0dfdcc426d75aa）を
+    独立に拾い直して failed_items にできた。auto-fix ゲートが critical/high 限定のため
+    medium は review では動かないが、SPEC の Success Criteria に紐づく medium は
+    verify で拾える。review と verify の役割分担が機能した実例。
+  - >-
+    GUI ビルド確認（cargo check --manifest-path src-tauri/Cargo.toml）が worktree で
+    build.rs パニックする。src-tauri/assets/fonts/ が gitignored で worktree に
+    複製されないため。implementer 2 本が同じ壁に当たり、どちらも「環境ギャップなので
+    スキップ」と報告した。worktree 作成時にフォントを main ツリーからコピーする
+    ステップがあれば、build コマンドが実際に検証として機能する。
+  - >-
+    stable_id はカテゴリを含まないため、architecture と comprehensive が同じ物理バグを
+    別タイトルで指摘したケースで、日本語タイトルの正規化（非 ASCII が空白化される）により
+    偶然同一 stable_id になった。設計意図どおりの挙動だが、日本語タイトルでは
+    正規化後に残るのが英数字トークン（関数名など）だけになる点は留意。
+  - >-
+    Vertex の spec レビューが返した 4 件の候補をレビュアーエージェントが diff 突合で
+    全件棄却した。うち 2 件は「FR5 の status: tbd」を「実装してはいけない」と誤読した
+    もので、プロンプトで明示的に指摘しないよう指示していたにもかかわらず発生した。

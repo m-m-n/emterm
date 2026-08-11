@@ -74,7 +74,7 @@ workflow:
     manual_pending:
     - TS5
 - id: retrospect
-  status: pending
+  status: completed
 tasks:
   task0001:
     title: print 経路の wide ペア相方掃除
