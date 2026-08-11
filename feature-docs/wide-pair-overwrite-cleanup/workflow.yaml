@@ -77,9 +77,9 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/wide-pair-overwrite-cleanup/task0001
   task0002:
     title: CSI 編集・消去系（ICH/DCH/ECH）の wide ペア相方掃除
     plan: tasks/task0002.md
@@ -96,9 +96,9 @@ tasks:
     - NFR1
     - NFR2
     - NFR3
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/wide-pair-overwrite-cleanup/task0002
 review:
   status: pending
   rounds_completed: 0
