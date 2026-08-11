@@ -1,11 +1,11 @@
 schema_version: 1
 feature: active-window-agent-notification
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
-base_revision: 7de2d4e8e6bb93f941d875672a4ebaed67dcf66c
-last_input_digest: "sha256:b671d2977379abc1abd902707f76d53744d4e588d0a7827486938d2bd9ce2a9c"
-active_request_id: create-spec-run-0001
+base_revision: 1b142fd5ec3dc67a1d7cb7ca1dad40efc27451ce
+last_input_digest: "sha256:7ee99ad48fa4633fee6a904120e3558415a9acc3eb62a80a08f961155c1560d9"
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -75,6 +75,14 @@ worker_runs:
     status: needs_user_input
     input_digest: "sha256:b671d2977379abc1abd902707f76d53744d4e588d0a7827486938d2bd9ce2a9c"
     output_digest: "sha256:0c9d1f0a4b5e7c2d8a3f6b1e9d4c7a20f5e8b3c6d9a2f4e7b0c3d6a9f2e5b8c1"
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:0ce520837cb168d08d0bc37d150937aa2416491dd7bb06b828d53cc367fb120a"
+    output_digest: "sha256:5a1c9e0b7d3f6a2c8e4b0d7f1a3c6e9b2d5f8a1c4e7b0d3f6a9c2e5b8d1f4a70"
+  - request_id: create-spec-run-0003
+    status: dispatched
+    input_digest: "sha256:7ee99ad48fa4633fee6a904120e3558415a9acc3eb62a80a08f961155c1560d9"
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
