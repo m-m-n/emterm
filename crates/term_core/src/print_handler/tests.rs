@@ -1025,3 +1025,229 @@ fn test_write_grapheme_nonascii_overwrite_ordinary_cell_leaves_neighbors_unchang
     assert_eq!(core.get_cell_char(2, 0), "C");
     assert_eq!(core.get_cell_width(2, 0), 1);
 }
+
+// ── wide-pair-overwrite-cleanup (task0003): P5 composite scenario ──
+//
+// AC-1/AC-2/AC-3 (TS3, FR1-FR4): investigation report P5 repro — a redraw
+// after CR that shifts column alignment by one column, so the same-row
+// rewrite both overwrites an old wide base directly (FR1) and overwrites
+// an old spacer directly (FR2) within the same redraw, while a later
+// width-2 write's placeholder lands on a third pair's base
+// (FR3, write_grapheme_to_grid's own chained cleanup) and a later
+// retroactive VS16 widen's new spacer lands on a fourth pair's base
+// (FR4, widen_after_merge's own chained cleanup). Column arithmetic for
+// each trigger is documented inline; the closing checks verify every
+// column of the row so no orphan spacer/base survives anywhere in it.
+//
+// Note on FR4 routing: the task plan for this scenario described the
+// ⏭️ (U+23ED + VS16) stream itself as passing through the retroactive-widen
+// (widen_after_merge / FR4) path. That does not hold: U+23ED carries the
+// Extended_Pictographic property, so handle_print always buffers it (see
+// test_write_grapheme_u23ed_vs16_across_chunk_boundary_widens_correctly
+// above, which already exercises this exact codepoint pair and is named
+// for write_grapheme_to_grid, not widen_after_merge). FR4 is genuinely
+// exercised below via a separate digit+VS16 element (U+0035 + U+FE0F),
+// which reaches widen_after_merge through try_retroactive_merge the same
+// way the dedicated FR4 test
+// (test_widen_after_merge_spacer_creation_over_existing_base_blanks_its_spacer
+// above) does. ⏭️ is still used for the frame-1 pair that FR1 targets,
+// matching its literal codepoint-stream representation.
+#[test]
+fn test_write_grapheme_column_shifted_redraw_blanks_all_orphan_partners() {
+    let mut core = TerminalCore::new(16, 3, 0);
+
+    // Frame 1: '─', ⏭️ (PAIR-1 base@1/spacer@2), 'A',
+    // '5'+VS16-widened (PAIR-2 base@4/spacer@5), 'B',
+    // '中' (PAIR-3 base@7/spacer@8), 'C',
+    // '文' (PAIR-4 base@10/spacer@11), 'D'.
+    core.set_g0_charset(1);
+    core.handle_print(0x71); // '─' at col0
+    core.set_g0_charset(0);
+    core.process_pty_data("\u{23ED}\u{FE0F}".as_bytes()); // buffered
+    core.handle_print(0x41); // 'A' forces flush: PAIR-1 base@1(w2)/spacer@2(w0)
+    core.handle_print(0x35); // '5' at col4
+    core.handle_print(0xFE0F); // VS16: retroactive widen -> PAIR-2 base@4(w2)/spacer@5(w0)
+    core.handle_print(0x42); // 'B' at col6
+    core.handle_print(0x4E2D); // '中': PAIR-3 base@7(w2)/spacer@8(w0)
+    core.handle_print(0x43); // 'C' at col9
+    core.handle_print(0x6587); // '文': PAIR-4 base@10(w2)/spacer@11(w0)
+    core.handle_print(0x44); // 'D' at col12
+
+    assert_eq!(core.get_cell_char(1, 0), "\u{23ED}\u{FE0F}");
+    assert_eq!(core.get_cell_width(1, 0), 2);
+    assert_eq!(core.get_cell_width(2, 0), 0);
+    assert_eq!(core.get_cell_char(4, 0), "5\u{FE0F}");
+    assert_eq!(core.get_cell_width(4, 0), 2);
+    assert_eq!(core.get_cell_width(5, 0), 0);
+    assert_eq!(core.get_cell_width(7, 0), 2);
+    assert_eq!(core.get_cell_width(8, 0), 0);
+    assert_eq!(core.get_cell_width(10, 0), 2);
+    assert_eq!(core.get_cell_width(11, 0), 0);
+
+    // Frame 2: CR, then a column-shifted redraw. Each rule's cleanup
+    // target column is deliberately left untouched afterward (no later
+    // write in this frame lands on it again) so the row check below
+    // observes the rule's own output directly, rather than content a
+    // later write would have produced regardless of whether the rule ran.
+    core.process_pty_data(b"\r");
+
+    // col0: ' ' — old '─' (w1): no trigger.
+    core.handle_print(0x20);
+    // col1: '-' — old = PAIR-1 base (w2): FR1 blanks the orphaned spacer
+    // at col2 (col+1) before this overwrite lands. Nothing else in this
+    // frame writes to col2 afterward.
+    core.handle_print(0x2D);
+
+    // Skip col2/col3/col4 entirely (CUP jump): PAIR-2's base at col4
+    // stays untouched, so the next write lands squarely on its spacer.
+    core.process_pty_data(b"\x1b[1;6H"); // CUP -> (row0, col5)
+    // col5: 'y' — old = PAIR-2 spacer (w0), base still w2 at col4 (col-1):
+    // FR2 blanks that base before this overwrite lands. Nothing else in
+    // this frame writes to col4 afterward.
+    core.handle_print(0x79);
+
+    // col6-7: '日' (w2) — old col6 = 'B' (w1): no overwrite trigger. Its
+    // placeholder at col7 lands on PAIR-3's base (still w2, untouched):
+    // FR3 (write_grapheme_to_grid's chained cleanup) blanks PAIR-3's
+    // spacer at col8 before the placeholder overwrites col7. Nothing else
+    // in this frame writes to col8 afterward.
+    core.handle_print(0x65E5);
+
+    // Skip col8 entirely (CUP jump) to col9.
+    core.process_pty_data(b"\x1b[1;10H"); // CUP -> (row0, col9)
+    // col9: '5' then VS16 — old col9 = 'C' (w1): no trigger for the base
+    // write. The VS16 then retroactively widens col9 (widen_after_merge);
+    // its new spacer at col10 lands on PAIR-4's base (still w2,
+    // untouched): FR4 (widen_after_merge's own chained cleanup) blanks
+    // PAIR-4's spacer at col11 before the new spacer overwrites col10.
+    // Nothing else in this frame writes to col11 afterward.
+    core.handle_print(0x35);
+    core.handle_print(0xFE0F);
+
+    // AC-3: verify every column of the row — expected content/width. This
+    // (together with the orphan scan below) confirms no orphan spacer
+    // (w0 not preceded by a w2 base) or orphan base (w2 not followed by a
+    // w0 spacer) survives anywhere in the row.
+    let expected: &[(u16, &str, u8)] = &[
+        (0, " ", 1),
+        (1, "-", 1),
+        (2, " ", 1),          // PAIR-1 spacer, blanked by FR1
+        (3, "A", 1),          // untouched leftover from frame 1
+        (4, " ", 1),          // PAIR-2 base, blanked by FR2
+        (5, "y", 1),
+        (6, "\u{65E5}", 2),   // new base
+        (7, "", 0),           // new placeholder/spacer (was PAIR-3's base)
+        (8, " ", 1),          // PAIR-3 spacer, blanked by FR3
+        (9, "5\u{FE0F}", 2),  // widened base
+        (10, "", 0),          // new spacer (was PAIR-4's base)
+        (11, " ", 1),         // PAIR-4 spacer, blanked by FR4
+        (12, "D", 1),         // untouched leftover from frame 1
+        (13, " ", 1),
+        (14, " ", 1),
+        (15, " ", 1),
+    ];
+    for &(col, ch, width) in expected {
+        assert_eq!(core.get_cell_char(col, 0), ch, "col {col}: unexpected char");
+        assert_eq!(
+            core.get_cell_width(col, 0),
+            width,
+            "col {col}: unexpected width"
+        );
+    }
+
+    // Explicit orphan scan across the whole row, independent of the exact
+    // content table above.
+    for col in 0..16u16 {
+        let w = core.get_cell_width(col, 0);
+        if w == 0 {
+            assert!(
+                col > 0 && core.get_cell_width(col - 1, 0) == 2,
+                "col {col}: orphan spacer (no width-2 base immediately before it)"
+            );
+        }
+        if w == 2 {
+            assert!(
+                col + 1 < 16 && core.get_cell_width(col + 1, 0) == 0,
+                "col {col}: orphan base (no width-0 spacer immediately after it)"
+            );
+        }
+    }
+}
+
+// AC-1/AC-2 (TS3, FR1, FR2) additional coverage: shift-direction-dependent
+// role swap. Test Notes call out that the side of a wide pair that gets
+// directly overwritten (base vs. spacer) flips with the shift direction;
+// this test demonstrates both roles in a single row. PAIR-A's spacer is
+// hit directly (its base survives untouched until FR2 blanks it); PAIR-B's
+// base is hit directly (its spacer survives untouched until FR1 blanks
+// it) — the reverse pairing from the composite P5 test above.
+#[test]
+fn test_write_grapheme_redraw_swaps_which_partner_side_is_overwritten() {
+    let mut core = TerminalCore::new(10, 3, 0);
+
+    // Frame 1: '─', PAIR-A '世' (base@1/spacer@2), 'M',
+    // PAIR-B '中' (base@4/spacer@5), 'N'.
+    core.set_g0_charset(1);
+    core.handle_print(0x71); // '─' at col0
+    core.set_g0_charset(0);
+    core.handle_print(0x4E16); // '世': PAIR-A base@1(w2)/spacer@2(w0)
+    core.handle_print(0x4D); // 'M' at col3
+    core.handle_print(0x4E2D); // '中': PAIR-B base@4(w2)/spacer@5(w0)
+    core.handle_print(0x4E); // 'N' at col6
+
+    assert_eq!(core.get_cell_width(1, 0), 2);
+    assert_eq!(core.get_cell_width(2, 0), 0);
+    assert_eq!(core.get_cell_width(4, 0), 2);
+    assert_eq!(core.get_cell_width(5, 0), 0);
+
+    // Frame 2: CR, then jump directly onto PAIR-A's spacer (skipping its
+    // base entirely) before continuing left-to-right. Each rule's cleanup
+    // target column (col1 for FR2, col5 for FR1) is left untouched
+    // afterward so the row check below observes the rule's own output.
+    core.process_pty_data(b"\r");
+    core.process_pty_data(b"\x1b[1;3H"); // CUP -> (row0, col2)
+
+    // col2: 'k' — old = PAIR-A spacer (w0), base still w2 at col1 (col-1):
+    // FR2 blanks that base before this overwrite lands. Nothing else in
+    // this frame writes to col1 afterward.
+    core.handle_print(0x6B);
+    // col3: 'L' — old = 'M' (w1, untouched): no trigger.
+    core.handle_print(0x4C);
+    // col4: 'X' — old = PAIR-B base (w2): FR1 blanks the orphaned spacer
+    // at col5 before this overwrite lands. Nothing else in this frame
+    // writes to col5 afterward.
+    core.handle_print(0x58);
+
+    let expected: &[(u16, &str, u8)] = &[
+        (0, "\u{2500}", 1), // untouched leftover from frame 1
+        (1, " ", 1),        // PAIR-A base, blanked by FR2
+        (2, "k", 1),
+        (3, "L", 1),
+        (4, "X", 1),
+        (5, " ", 1), // PAIR-B spacer, blanked by FR1
+        (6, "N", 1), // untouched leftover from frame 1
+        (7, " ", 1),
+        (8, " ", 1),
+        (9, " ", 1),
+    ];
+    for &(col, ch, width) in expected {
+        assert_eq!(core.get_cell_char(col, 0), ch, "col {col}: unexpected char");
+        assert_eq!(
+            core.get_cell_width(col, 0),
+            width,
+            "col {col}: unexpected width"
+        );
+    }
+    for col in 0..10u16 {
+        assert_ne!(
+            core.get_cell_width(col, 0),
+            0,
+            "col {col}: unexpected orphan spacer"
+        );
+        assert_ne!(
+            core.get_cell_width(col, 0),
+            2,
+            "col {col}: unexpected orphan base"
+        );
+    }
+}

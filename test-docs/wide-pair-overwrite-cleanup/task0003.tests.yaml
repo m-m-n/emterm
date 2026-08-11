@@ -1,0 +1,92 @@
+task_id: task0003
+baseline_failures: []          # 4a: cargo test --manifest-path crates/term_core/Cargo.toml --lib -> 783 passed, 0 failed, 13 ignored
+final_failures: []             # after adding tests: 785 passed, 0 failed, 13 ignored (2 new tests, all green; print_handler.rs unchanged, AC-4's "no gap found" branch)
+acceptance_tests:
+  AC-1:
+    tests:
+      - print_handler::tests::test_write_grapheme_column_shifted_redraw_blanks_all_orphan_partners
+      - print_handler::tests::test_write_grapheme_redraw_swaps_which_partner_side_is_overwritten
+    red_confirmed: true
+    red_reason: >-
+      Verified with two isolated experiments on print_handler.rs (each
+      reverted via `git checkout --` immediately after, confirmed clean via
+      `git status`/`git diff` before proceeding): (1) short-circuiting the
+      old_width==2 branch of blank_orphaned_neighbor_before_overwrite (the
+      FR1 rule) alone made both tests fail at exactly the FR1 target column
+      (col 2 in the composite test, col 5 in the swap test) with
+      `left: "" / right: " "`; (2) short-circuiting the old_width==0 branch
+      (the FR2 rule) alone made both tests fail at exactly the FR2 target
+      column (col 4 / col 1) with the old wide-base content still present
+      (`left: "5\u{fe0f}" / right: " "` and `left: "世" / right: " "`). Both
+      tests were first fixed to stop re-overwriting each rule's cleanup
+      target column after triggering it (an earlier draft immediately wrote
+      a filler character over the blanked cell, masking the exact failure
+      this criterion needs to observe) before these experiments were run.
+  AC-2:
+    tests:
+      - print_handler::tests::test_write_grapheme_column_shifted_redraw_blanks_all_orphan_partners
+    red_confirmed: true
+    red_reason: >-
+      Two further isolated experiments, same revert-after-each-experiment
+      method: (1) commenting out the blank_orphaned_base_before_placeholder
+      call inside write_grapheme_to_grid's placeholder-creation block (FR3)
+      alone made the composite test fail at exactly col 8 (PAIR-3's spacer,
+      left orphaned) with `left: "" / right: " "`; (2) commenting out the
+      same call inside widen_after_merge (FR4) alone made it fail at
+      exactly col 11 (PAIR-4's spacer) with `left: "" / right: " "`. Note:
+      the task plan described the ⏭️ (U+23ED+VS16 stream) element itself as
+      passing through the widen_after_merge/FR4 path; that claim does not
+      hold against the actual code (U+23ED is Extended_Pictographic, so
+      handle_print always buffers it — see the comment above the composite
+      test and test_write_grapheme_u23ed_vs16_across_chunk_boundary_widens_correctly,
+      which already exercises this exact codepoint pair via
+      write_grapheme_to_grid, not widen_after_merge). FR4 is genuinely
+      exercised in the composite test via a separate digit+VS16 element
+      (U+0035+U+FE0F) instead, confirmed red above.
+  AC-3:
+    tests:
+      - print_handler::tests::test_write_grapheme_column_shifted_redraw_blanks_all_orphan_partners
+    red_confirmed: true
+    red_reason: >-
+      The per-column expected-content/width table and the explicit orphan
+      scan in this test are exactly what caught col 2/4/8/11 in the four
+      AC-1/AC-2 experiments above (each experiment's failure was reported
+      by this same table's per-column assert_eq!). No separate red
+      experiment beyond those four is needed: AC-3 is the verification
+      mechanism the AC-1/AC-2 reds were observed through, not a distinct
+      code path.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      "実装コードは無変更のまま" is the outcome, not a test — task0001's
+      existing rules already handle every trigger this task's tests add
+      (confirmed by the four isolated red experiments under AC-1/AC-2, each
+      pinpointing the exact pre-existing rule responsible; no new bug was
+      found). print_handler.rs is byte-identical to its state before this
+      task started (verified via `git diff --stat` showing only
+      print_handler/tests.rs changed, and `git status` clean on
+      print_handler.rs after every temporary experiment was reverted).
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a single test; verified by the full-suite outcome itself (`cargo
+      test --manifest-path crates/term_core/Cargo.toml --lib`). Baseline
+      (step 4a, before touching anything) was 783 passed / 0 failed / 13
+      ignored; final run (after adding the two new tests, no production
+      changes) is 785 passed / 0 failed / 13 ignored. There is no "red"
+      state to observe for a criterion whose content is "the existing
+      suite stays green."
+notes: >-
+  Both new tests were fixed once before red-confirmation: the initial draft
+  immediately overwrote each rule's cleanup-target column with a filler
+  character right after triggering it, which meant the row-check assertions
+  could never actually observe an orphan even if a rule were broken (the
+  filler write always produced the same final width/char regardless of the
+  rule's outcome). This was caught by running the red-confirmation
+  experiments themselves — the first attempt showed both new tests still
+  green with FR3/FR4 disabled, which was the signal something in the test
+  construction was wrong rather than the implementation being correct. The
+  tests were redesigned to leave each rule's cleanup target untouched for
+  the remainder of the frame-2 redraw before being fixed and re-verified.
