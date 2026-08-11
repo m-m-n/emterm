@@ -458,6 +458,16 @@ pub struct AppSettings {
     /// missing/null keys resolve to the default.
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub agent_notify_on_blocked: bool,
+    /// task0001 (active-window-agent-notification): whether a
+    /// blocked/done agent-status transition on a *visible* pane may fire
+    /// a desktop notification. Same declaration pattern as
+    /// `agent_status_notifications`: default ON, missing/null keys
+    /// resolve to the default. `true` means visible-pane transitions are
+    /// notification-eligible (every other gate still applies); `false`
+    /// keeps the pre-feature suppression of visible-pane notifications.
+    /// Never affects non-visible-pane behaviour.
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub agent_notify_visible_pane: bool,
 
     // Keybinds
     #[serde(default, deserialize_with = "deserialize_null_default")]
@@ -768,6 +778,7 @@ impl Default for AppSettings {
             agent_status_notifications: default_true(),
             agent_notify_on_done: default_true(),
             agent_notify_on_blocked: default_true(),
+            agent_notify_visible_pane: default_true(),
             clipboard_read_osc52: default_true(),
             clipboard_max_size_osc52: default_clipboard_max_size_osc52(),
             log_recording_enabled: false,

@@ -145,6 +145,7 @@ fn test_round_trip_preserves_all_fields() {
         agent_status_notifications: false,
         agent_notify_on_done: false,
         agent_notify_on_blocked: false,
+        agent_notify_visible_pane: false,
         mux: MuxSettings::default(),
         statusbar_enabled: true,
         statusbar_app_line1_left: "{git_branch}".to_string(),
@@ -204,6 +205,7 @@ fn test_round_trip_preserves_all_fields() {
     assert!(!restored.agent_status_notifications);
     assert!(!restored.agent_notify_on_done);
     assert!(!restored.agent_notify_on_blocked);
+    assert!(!restored.agent_notify_visible_pane);
     assert_eq!(restored.profiles.len(), 1);
     assert_eq!(restored.profiles[0].name, "Dev");
     assert_eq!(restored.profiles[0].shell_path, "/bin/zsh");
@@ -339,6 +341,41 @@ fn agent_notify_on_blocked_null_resolves_to_default_true() {
 fn agent_notify_on_blocked_explicit_false_deserializes() {
     let s: AppSettings = serde_json::from_str(r#"{"agent_notify_on_blocked": false}"#).unwrap();
     assert!(!s.agent_notify_on_blocked);
+}
+
+// ── agent_notify_visible_pane (active-window-agent-notification
+// task0001 AC-1) ─────────────────────────────────────────────────────
+
+#[test]
+fn agent_notify_visible_pane_defaults_to_true() {
+    assert!(AppSettings::default().agent_notify_visible_pane);
+}
+
+#[test]
+fn agent_notify_visible_pane_missing_key_resolves_to_default_true() {
+    let s: AppSettings = serde_json::from_str("{}").unwrap();
+    assert!(s.agent_notify_visible_pane);
+}
+
+#[test]
+fn agent_notify_visible_pane_null_resolves_to_default_true() {
+    let s: AppSettings = serde_json::from_str(r#"{"agent_notify_visible_pane": null}"#).unwrap();
+    assert!(s.agent_notify_visible_pane);
+}
+
+#[test]
+fn agent_notify_visible_pane_explicit_false_deserializes() {
+    let s: AppSettings = serde_json::from_str(r#"{"agent_notify_visible_pane": false}"#).unwrap();
+    assert!(!s.agent_notify_visible_pane);
+}
+
+#[test]
+fn agent_notify_visible_pane_explicit_false_round_trips() {
+    let mut s = AppSettings::default();
+    s.agent_notify_visible_pane = false;
+    let json = serde_json::to_string(&s).unwrap();
+    let restored: AppSettings = serde_json::from_str(&json).unwrap();
+    assert!(!restored.agent_notify_visible_pane);
 }
 
 #[test]

@@ -1,0 +1,111 @@
+task_id: task0001
+baseline_failures: []          # 4a: full suite green before any change (3205 src-tauri + 31 app_settings)
+final_failures: []             # after implementation: 3215 src-tauri + 36 app_settings, all green
+acceptance_tests:
+  AC-1:
+    tests:
+      - settings::tests::agent_notify_visible_pane_defaults_to_true
+      - settings::tests::agent_notify_visible_pane_missing_key_resolves_to_default_true
+      - settings::tests::agent_notify_visible_pane_null_resolves_to_default_true
+      - settings::tests::agent_notify_visible_pane_explicit_false_deserializes
+      - settings::tests::agent_notify_visible_pane_explicit_false_round_trips
+      - settings::tests::test_round_trip_preserves_all_fields
+    red_confirmed: true
+    red_reason: >-
+      Field was added to AppSettings before its tests were written (execution-
+      order slip), so the tests never went red in the originally-intended
+      order. Retroactively verified by stripping the field + Default arm from
+      crates/app_settings/src/settings.rs and re-running
+      `cargo test --manifest-path crates/app_settings/Cargo.toml --lib`:
+      8 compile errors (E0609 "no field `agent_notify_visible_pane` on type
+      `settings::AppSettings`") at the exact lines of the tests listed here.
+      Restored the field and confirmed the diff against the pre-strip backup
+      was byte-identical before continuing.
+  AC-2:
+    tests:
+      - settings::tests::default_agent_notify_visible_pane_is_true
+      - settings::tests::loader_agent_notify_visible_pane_flat_key_is_applied
+      - settings::tests::loader_agent_notify_visible_pane_null_keeps_default
+    red_confirmed: true
+    red_reason: >-
+      Tests were written first against src-tauri/src/settings/tests.rs before
+      Settings::agent_notify_visible_pane / RawSettings::agent_notify_visible_pane
+      existed. `cargo test --manifest-path src-tauri/Cargo.toml --lib
+      agent_notify_visible_pane` failed with 4 compile errors (E0609 "no field
+      `agent_notify_visible_pane` on type `settings::Settings`") before
+      src-tauri/src/settings/mod.rs and raw.rs were edited.
+  AC-3:
+    tests:
+      - notifications::tests::should_fire_visible_pane_task0001_ac3_fires_when_notify_visible_pane_on
+      - notifications::tests::should_fire_visible_pane_task0001_ac3_suppressed_when_notify_visible_pane_off
+      - notifications::tests::should_fire_non_visible_pane_task0001_ac3_unaffected_by_notify_visible_pane_setting
+    red_confirmed: true
+    red_reason: >-
+      The gate signature/body was edited before these tests were added
+      (execution-order slip), so no red was observed in the intended order.
+      Retroactively verified by temporarily reverting
+      should_fire_agent_notification's pane-visibility conjunct from
+      `(!pane_visible || notify_visible_pane)` back to the pre-task0001
+      `!pane_visible` (parameter kept, ignored) and re-running the notifications
+      test module: should_fire_visible_pane_task0001_ac3_fires_when_notify_visible_pane_on
+      failed ("assertion failed: should_fire_agent_notification(AgentState::Blocked,
+      true, true, true, true, true, true, true)"). The other two tests in this
+      AC pass under both old and new logic (visible-pane-suppressed and
+      non-visible-pane cases are unchanged by the toggle) — they complete the
+      truth table but are not independently discriminating; noted in
+      unconfirmed_reds below. Change reverted back to the correct
+      `(!pane_visible || notify_visible_pane)` immediately after the check.
+  AC-4:
+    tests:
+      - notifications::tests::should_fire_visible_pane_task0001_ac4_other_gates_still_suppress
+    red_confirmed: false
+    red_reason: >-
+      Verified via the same revert-and-check as AC-3: this test passes
+      identically under the old `!pane_visible`-only logic and the new
+      `(!pane_visible || notify_visible_pane)` logic, because with
+      notify_visible_pane held ON and the OTHER gate (master/global/event-type
+      toggle/rate-limit) held OFF, a visible pane was already suppressed under
+      the old logic too (pre-task0001 never let a visible pane fire at all).
+      The test is not discriminating on its own; it pins that the new setting
+      cannot bypass the other independent gates, per the task plan's AC-4.
+  AC-5:
+    tests:
+      - notifications::tests::should_fire_task0001_ac5_working_idle_never_fire_regardless_of_visibility_setting
+      - app::tests::agent_status::pump_all_ac2_same_state_and_clear_transitions_do_not_notify
+    red_confirmed: false
+    red_reason: >-
+      The Working/Idle exclusion (is_qualifying_agent_state) and the Clear-
+      transition skip (app/agent_status.rs's `let Some(new_state) = new_state
+      else { continue; }`) both predate this task and are untouched by it;
+      pump_all_ac2_same_state_and_clear_transitions_do_not_notify is an
+      existing, unmodified test. Verified via the same revert-and-check as
+      AC-3/AC-4 that should_fire_task0001_ac5_working_idle_never_fire_regardless_of_visibility_setting
+      passes under both old and new gate logic — the behavior genuinely
+      pre-existed; this is a regression-pin test, not new red-then-green
+      coverage.
+  AC-6:
+    tests:
+      - app::tests::agent_status::maybe_notify_agent_transition_task0001_ac6_visible_pane_fire_shares_rate_limit_window
+    red_confirmed: true
+    red_reason: >-
+      Retroactively verified via the same gate-logic revert as AC-3: with
+      pane-visibility suppression restored to `!pane_visible` only, the
+      first call in this test (`maybe_notify_agent_transition("pane-1", true,
+      ...)`, expected to fire) failed ("assertion failed:
+      app.maybe_notify_agent_transition(\"pane-1\", true, &t, \"my-tab\")"),
+      because a visible pane never fired under the old logic so the
+      rate-limiter was never armed to test sharing against. Confirms the test
+      actually exercises the new code path.
+  AC-7:
+    tests:
+      - app::tests::agent_status::pump_all_ac3_drains_transitions_even_when_setting_is_off
+    red_confirmed: false
+    red_reason: >-
+      Non-regression criterion, verified by running the build/test commands
+      rather than a red-then-green cycle: `cargo check --manifest-path
+      src-tauri/Cargo.toml --no-default-features` passes;
+      pump_all_ac3_drains_transitions_even_when_setting_is_off (pre-existing,
+      unmodified) still passes, confirming the drain loop in
+      App::apply_agent_status_batch still runs unconditionally; grep confirms
+      no notify_on_output/notify_on_bell/notify_on_process_exit test, gate, or
+      `kind_enabled` code was touched by this task's diff.

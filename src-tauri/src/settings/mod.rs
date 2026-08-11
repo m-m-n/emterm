@@ -206,6 +206,14 @@ pub struct Settings {
     /// the "waiting for input" (blocked) agent-status notification. Same
     /// gating role as [`Settings::agent_notify_on_done`].
     pub agent_notify_on_blocked: bool,
+    /// task0001 (active-window-agent-notification): whether a
+    /// blocked/done agent-status transition on a *visible* pane may fire
+    /// a desktop notification. Default `true`. Read alongside the other
+    /// agent-status gates by
+    /// [`crate::notifications::should_fire_agent_notification`], which
+    /// treats the pane-visibility conjunct as "not visible OR this
+    /// setting is on" — every other gate still applies.
+    pub agent_notify_visible_pane: bool,
     /// UI language: `Auto` (OS locale), `En`, or `Ja`. Resolved to a
     /// concrete [`crate::i18n::Locale`] once at startup
     /// (`App::with_settings`); `Auto` consults the system locale and
@@ -301,6 +309,7 @@ impl Default for Settings {
             agent_status_notifications: true,
             agent_notify_on_done: true,
             agent_notify_on_blocked: true,
+            agent_notify_visible_pane: true,
             language: Language::default(),
             log_recording_enabled: false,
             markdown_theme_follow_ui: true,
