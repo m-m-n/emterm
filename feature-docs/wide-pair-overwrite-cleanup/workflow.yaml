@@ -43,7 +43,8 @@ workflow:
   - IMPLEMENTATION.md
   - VERIFICATION.md
   - tasks/
-  status: in_progress
+  status: completed
+  completed_at_commit: 1a152f160b6783873449801fd3942c1d30de0040
 - id: implement
   status: pending
   base_commit: null
@@ -55,7 +56,49 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: print 経路の wide ペア相方掃除
+    plan: tasks/task0001.md
+    files:
+    - crates/term_core/src/print_handler.rs
+    - crates/term_core/src/print_handler/tests.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    status: pending
+    notes: null
+    branch: null
+  task0002:
+    title: CSI 編集・消去系（ICH/DCH/ECH）の wide ペア相方掃除
+    plan: tasks/task0002.md
+    files:
+    - crates/term_core/src/csi_edit.rs
+    - crates/term_core/src/csi_screen.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    complexity: medium
+    requirements:
+    - FR5
+    - NFR1
+    - NFR2
+    - NFR3
+    status: pending
+    notes: null
+    branch: null
 review:
   status: pending
   rounds_completed: 0
@@ -69,64 +112,92 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS1
+    - TS3
   FR2:
     title: spacer への上書きで base を空白化
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS2
+    - TS3
   FR3:
     title: 幅2 書き込みの placeholder 作成時の連鎖掃除
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS3
+    - TS6
   FR4:
     title: widen_after_merge の spacer 作成箇所への適用
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS3
+    - TS4
   FR5:
     title: csi_edit 系（ECH/DCH/ICH）への同種掃除の適用
-    status: tbd
-    tbd_reason: task_description の制約・前提でユーザーが「スコープに含めるかは実装時に判断する」と明示的に保留している
+    status: assumed
+    tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0002
+    tests:
+    - TS7
   NFR1:
     title: 回帰安全
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS4
+    - TS8
   NFR2:
     title: 他ターミナル実装との整合
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS1
+    - TS2
+    - TS7
   NFR3:
     title: 修正の局所性
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    - task0002
+    tests:
+    - TS10
   NFR4:
     title: ASCII 高速パスの性能維持
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS9
 batch:
   review_rework_count: 0
   verify_rework_count: 0
