@@ -146,7 +146,10 @@ fn overlay_pass_shapes(
 /// mux-sidebar inset into their x-origin — the persistent sidebar
 /// reserves grid WIDTH only. Verified behaviorally: both functions are
 /// exercised for real with the sidebar `Hidden` and then `Persistent`,
-/// and their full painted output must be identical. Any sidebar term
+/// each in two rounds — window unfocused (hollow outline) and focused
+/// with core-side blink disabled (filled block via
+/// `cursor::draw_block_cursor`) — and the full painted output must be
+/// identical across the sidebar states in both rounds. Any sidebar term
 /// sneaking into the origin math would shift the painted coordinates
 /// between the two states and fail the comparison. (Replaces a former
 /// source-text scan that was coupled to `overlays.rs`'s file layout and
@@ -185,6 +188,10 @@ fn draw_cursor_and_search_highlights_paint_identically_with_persistent_sidebar()
     let mut core = TerminalCore::new(80, 24, 100);
     core.set_cursor_visible(true);
     core.set_cursor(3, 1);
+    // Blink disabled so the focused rounds below also hold the cursor at
+    // its steady "on" phase (`blink_visible_now(false)` is always true),
+    // keeping the focused paint wall-clock independent too.
+    core.set_cursor_blink(false);
     let theme = Theme::default();
 
     assert_eq!(
@@ -192,7 +199,14 @@ fn draw_cursor_and_search_highlights_paint_identically_with_persistent_sidebar()
         crate::app::MuxSidebarVisibility::Hidden,
         "precondition: an unattached tab shows no sidebar"
     );
-    let shapes_hidden = overlay_pass_shapes(&app, &core, &theme);
+    let shapes_hidden_unfocused = overlay_pass_shapes(&app, &core, &theme);
+    // Second round with the window focused: the focused + blink-disabled
+    // gate routes the block cursor through `cursor::draw_block_cursor`
+    // (filled cell) instead of the hollow outline, so BOTH cursor paint
+    // paths are exercised for real.
+    app.window_focused = true;
+    let shapes_hidden_focused = overlay_pass_shapes(&app, &core, &theme);
+    app.window_focused = false;
 
     attach_active_tab_to_mux_session(&mut app);
     assert_eq!(
@@ -200,7 +214,9 @@ fn draw_cursor_and_search_highlights_paint_identically_with_persistent_sidebar()
         crate::app::MuxSidebarVisibility::Persistent,
         "precondition: mux attach with overlay mode off shows the persistent sidebar"
     );
-    let shapes_persistent = overlay_pass_shapes(&app, &core, &theme);
+    let shapes_persistent_unfocused = overlay_pass_shapes(&app, &core, &theme);
+    app.window_focused = true;
+    let shapes_persistent_focused = overlay_pass_shapes(&app, &core, &theme);
 
     // Non-vacuousness: the overlay passes painted something beyond the
     // bare panel background — the cursor outline and the highlight rect
@@ -213,18 +229,40 @@ fn draw_cursor_and_search_highlights_paint_identically_with_persistent_sidebar()
         output.shapes
     };
     assert!(
-        shapes_hidden.len() >= baseline.len() + 2,
+        shapes_hidden_unfocused.len() >= baseline.len() + 2,
         "expected the cursor outline and the search-highlight rect on \
          top of the {} bare-panel shape(s), got {} total",
         baseline.len(),
-        shapes_hidden.len()
+        shapes_hidden_unfocused.len()
+    );
+    assert!(
+        shapes_hidden_focused.len() >= baseline.len() + 2,
+        "expected the filled block cursor and the search-highlight rect \
+         on top of the {} bare-panel shape(s), got {} total",
+        baseline.len(),
+        shapes_hidden_focused.len()
+    );
+    // The focused round must actually have reached `draw_block_cursor`:
+    // a filled block paints differently from the unfocused hollow
+    // outline, so identical output would mean the focused path bailed
+    // out before painting (e.g. a blink gate regression).
+    assert_ne!(
+        shapes_hidden_unfocused, shapes_hidden_focused,
+        "focused (filled block) and unfocused (hollow outline) rounds \
+         must paint differently"
     );
 
     assert_eq!(
-        shapes_hidden, shapes_persistent,
+        shapes_hidden_unfocused, shapes_persistent_unfocused,
         "cursor / search-highlight paint must be identical with and \
          without the persistent sidebar (AC-3): the sidebar reserves \
          grid WIDTH only — no x-origin term"
+    );
+    assert_eq!(
+        shapes_hidden_focused, shapes_persistent_focused,
+        "focused-round cursor / search-highlight paint must be identical \
+         with and without the persistent sidebar (AC-3): the sidebar \
+         reserves grid WIDTH only — no x-origin term"
     );
 }
 
