@@ -1,0 +1,22 @@
+schema_version: 1
+feature: wide-pair-overflow-tests
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: cabde2ce2b698f999ac3dc875a185b03b3266988
+last_input_digest: "sha256:61ce0c83907a923e9885fbf2cb900aa7756158011b8ffdf3250b374d2c9e34f9"
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: "sha256:61ce0c83907a923e9885fbf2cb900aa7756158011b8ffdf3250b374d2c9e34f9"
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
+batch_task_source: "https://www.notion.so/3b93509ec8ee814bb780d31743f75ebb"
