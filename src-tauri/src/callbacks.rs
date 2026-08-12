@@ -146,6 +146,22 @@ pub struct NotifyRustSink;
 
 impl NotificationSink for NotifyRustSink {
     fn send(&self, title: &str, body: &str) {
+        // task0001 (IMPLEMENTATION.md D1 案(b)): this is the sole D-Bus
+        // egress point for every notification producer (OSC 9, tab
+        // activity, agent status, link-hover) — escape here, once, gated
+        // by a fresh per-send capability query (D2: not cached). Windows
+        // notify-rust has no `get_capabilities()` export (XDG-only
+        // surface), so the whole gate is `#[cfg(unix)]`; the `.show()`
+        // call below is unchanged from before this task (FR5).
+        #[cfg(unix)]
+        let body_owned = if body_markup_confirmed(&notify_rust::get_capabilities()) {
+            escape_body_markup(body)
+        } else {
+            body.to_string()
+        };
+        #[cfg(unix)]
+        let body = body_owned.as_str();
+
         match notify_rust::Notification::new()
             .summary(title)
             .body(body)
@@ -155,6 +171,32 @@ impl NotificationSink for NotifyRustSink {
             Err(e) => log::warn!("notify-rust failed: {e}"),
         }
     }
+}
+
+/// (task0001 Component 1, TS1/TS2/TS3) Escape notify-rust body-markup meta
+/// characters. `&` is replaced first, then `<` and `>`, so the entity
+/// references this function produces are never re-escaped by the `&` pass
+/// (AC-2 / FR1). Pure: no I/O. Unix-only because the sole caller
+/// (`NotifyRustSink::send`) only reaches it behind the `#[cfg(unix)]`
+/// capability gate above.
+#[cfg(unix)]
+fn escape_body_markup(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// (task0001 Component 2, TS4) Interpret a `get_capabilities()` result:
+/// "confirmed" only when the fetch succeeded AND the capability list
+/// contains `"body-markup"`. Any other outcome (fetch failure, or a
+/// successful list that omits it) is "unconfirmed" — the fail-safe side
+/// (FR3): callers must not escape on "unconfirmed". Generic over the error
+/// type so it composes directly with `notify_rust::Result<Vec<String>>`
+/// (`E = notify_rust::error::Error`) without pulling that type into tests.
+#[cfg(unix)]
+fn body_markup_confirmed<E>(capabilities: &Result<Vec<String>, E>) -> bool {
+    matches!(capabilities, Ok(caps) if caps.iter().any(|c| c == "body-markup"))
 }
 
 /// Rate limiter that suppresses identical `(title, body)` pairs within a
