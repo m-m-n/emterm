@@ -1,0 +1,101 @@
+round: 1
+executed_at: "2026-08-12T13:32:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 13dc155ba4207b01d55ac112b222a63422a3ab93
+  head_commit: a6c1b674b6eb103372f7a6127f0e9c33df333a1d
+  changed_files:
+    - src-tauri/src/app/mod.rs
+    - src-tauri/src/app/tests/timing.rs
+    - src-tauri/src/self_exec.rs
+    - src-tauri/src/sftp/service.rs
+    - src-tauri/src/window_host/event_loop.rs
+    - src-tauri/src/window_host/frame_pacing.rs
+    - src-tauri/src/window_host/render_surface.rs
+    - test-docs/frame-skip-pending-work/task0001.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed, note: "returned zero findings with a truncated-output summary"}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: litellm, model: vertex-glm-5, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: e7d6f3a3da4d9ee2
+    severity: medium
+    category: spec
+    file: src-tauri/src/app/tests/timing.rs
+    line: 87
+    title: "新規テストが RESTART_REQUIRED を無同期で書き換え、AC5 が指定する並列 --lib 実行で非決定的に落ちる"
+    description: >-
+      SPEC.md の Success Criteria AC5 は `--test-threads=1` を伴わない `cargo test --lib`
+      の全通過を要求しているが、追加テストはプロセスグローバルな RESTART_REQUIRED を
+      ロック無しで書き換える。並列実行時に self_exec 側のテストと相互に期待を破る。
+      さらに FR5 の決定で next_toast_deadline が frame_work_pending 起点になったため、
+      既存テスト next_toast_deadline_none_when_no_toast_active も新たにこのフラグへ
+      依存するようになった。IMPLEMENTATION.md / VERIFICATION.md は `--test-threads=1`
+      前提に書かれており、SPEC AC5 の文言と食い違っている。
+    suggestion: >-
+      (a) self_exec に #[cfg(test)] の共有ミューテックスと RAII ガードを置き、フラグを
+      読む/書く全テスト（新規 4 本 + self_exec の 2 本 + next_toast_deadline 系の既存
+      テスト）をガード経由に統一する。または (b) SPEC.md AC5 のコマンドを
+      VERIFICATION.md と揃えて `-- --test-threads=1` 付きに改める。
+    sources: [claude:spec]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity — R4 の auto-fix 候補ゲート（critical/high）に該当しないため未対応。フォローアップタスクとして起票"
+  - stable_id: 19614e858f1d741b
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/self_exec.rs
+    line: 180
+    title: "新テストシームが process-global な RESTART_REQUIRED を並列テストから読み書きし、既存テストごと flaky になる"
+    description: >-
+      test_set_restart_required の導入で、プロセス全体に 1 つしかない RESTART_REQUIRED を
+      7 本のテストが直列化なしに読み書きする状態になった。既存の
+      pump_toasts_runs_both_pumps_unconditionally（restart_required() が swap で消費）と
+      next_toast_deadline_none_when_no_toast_active を巻き込んで flaky になる。
+      self_exec.rs のドックコメント「The suite runs single-threaded」はプロジェクトの
+      既定 cargo test コマンドと一致していない。加えてフラグ復元が成功パス上にしか
+      無いため、途中の assert が panic すると raised のまま後続テストへ波及する。
+    suggestion: >-
+      test-only の Mutex + Drop でフラグを必ず戻す RAII ガードを self_exec に置き、
+      フラグに触れる全テストをそれ経由にする。あるいは serial_test を dev-dependency に
+      追加して #[serial(restart_flag)] を付ける。いずれの場合も self_exec.rs の
+      「The suite runs single-threaded」記述を実際の直列化手段の説明に差し替える。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity — R4 の auto-fix 候補ゲート（critical/high）に該当しないため未対応。フォローアップタスクとして起票"
+  - stable_id: 6c0ec12db00184a9
+    severity: medium
+    category: architecture
+    file: src-tauri/src/sftp/service.rs
+    line: 647
+    title: "テスト用シームが send_progress / send_result の「bare send 禁止」不変条件を破っている"
+    description: >-
+      send_progress / send_result の doc コメントは「このモジュールの送信サイトはすべて
+      このヘルパを通す（progress_tx への bare .send( は禁止）」と明言しており、これが
+      wake 漏れを防ぐ唯一の enforcement になっている。新規の test_push_progress_event /
+      test_push_result_event はチャネルへ直接 send しており、この規約に対する反例を
+      モジュール内に作った。#[cfg(test)] 限定なので production 挙動への影響は無いが、
+      SSOT である doc コメントと実装が食い違い、以後のコピー元になる懸念がある。
+    suggestion: >-
+      テストシームも send_progress / send_result 経由にする。wake() がテスト環境で
+      問題になるなら、その例外を send_progress の doc に明記し、不変条件の記述を
+      「production の送信サイトはすべて」に訂正する。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity — R4 の auto-fix 候補ゲート（critical/high）に該当しないため未対応。フォローアップタスクとして起票"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
