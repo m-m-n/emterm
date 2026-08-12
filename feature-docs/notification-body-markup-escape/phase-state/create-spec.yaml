@@ -1,0 +1,29 @@
+schema_version: 1
+feature: notification-body-markup-escape
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 5c59cf32204b226a49c72f54a23f680daac8190e
+last_input_digest: sha256:cd826bbffb1bd97f3eaf2ef95201ed22509333f5aeae7aad2b6c4fb70c5beabe
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: sha256:52a33e5851b24f944c558ddcd97b409a95713a28e5a0abf6ae9ab6a4e778be06
+    output_digest: sha256:analyst-run-0001-payload
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:cd826bbffb1bd97f3eaf2ef95201ed22509333f5aeae7aad2b6c4fb70c5beabe
+    output_digest: null
+artifacts:
+  - path: feature-docs/notification-body-markup-escape/REQUIREMENTS.md
+    produced_by: create-spec-run-0002
+  - path: feature-docs/notification-body-markup-escape/SPEC.md
+    produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

@@ -1,0 +1,34 @@
+feature: notification-body-markup-escape
+collected_at: "2026-08-12T19:35:00+09:00"
+session_ids: [a750d4e8-36f5-4bd9-87b3-62b609df4d5e]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - |
+    fresh worktree では gitignored のバンドルフォント（src-tauri/assets/fonts/）が
+    存在せず build.rs が panic するため、cargo test / check の前に
+    scripts/fetch-fonts.sh の実行が要る。implementer と verify フェーズの両方で
+    同じ壁に当たった。task plan の前提条件、または workflow.yaml の build/test
+    コマンド文字列側にこの前段を織り込む余地がある。
+  - |
+    レビュー 9 本のうち 4 観点（architecture / spec / comprehensive、および
+    security / performance の一部）が同一の構造的弱点「send() の判定分岐を
+    テストが複製していて本番経路が未カバー」を別々の stable_id で報告した。
+    same_site 述語は行距離 5 以内・同一 category 内でしか統合しないため、
+    同根の指摘が category をまたぐと 1 件に畳まれない。集約の粒度としては
+    正しい（category を跨ぐ統合は禁止されている）が、レポート時に「同根」を
+    人手で束ねる必要が出た。
+  - |
+    本 feature の findings は 8 件すべて medium で、R4 auto-fix ゲート
+    （critical/high のみ）に 1 件もかからなかった。severity 分布が medium に
+    偏る変更では auto-fix が実質無効になり、指摘は全て次タスクへの繰り越しになる。
+  - |
+    プロジェクト全体に既存の rustfmt ドリフトがあるため、workflow.yaml の
+    format_command に `cargo fmt --check` を置くと verify が常に赤になる。
+    今回は「変更ファイルにドリフトが無い」ことを根拠に pass 判定したが、
+    判定基準がコマンドの exit code から外れた。
