@@ -149,16 +149,16 @@ impl NotificationSink for NotifyRustSink {
         // task0001 (IMPLEMENTATION.md D1 案(b)): this is the sole D-Bus
         // egress point for every notification producer (OSC 9, tab
         // activity, agent status, link-hover) — escape here, once, gated
-        // by a fresh per-send capability query (D2: not cached). Windows
-        // notify-rust has no `get_capabilities()` export (XDG-only
-        // surface), so the whole gate is `#[cfg(unix)]`; the `.show()`
-        // call below is unchanged from before this task (FR5).
+        // by a fresh per-send capability query (D2: not cached; the same
+        // decision drives BOTH title and body, see `escape_for_send`).
+        // Windows notify-rust has no `get_capabilities()` export
+        // (XDG-only surface), so the whole gate is `#[cfg(unix)]`; the
+        // `.show()` call below is unchanged from before this task (FR5).
         #[cfg(unix)]
-        let body_owned = if body_markup_confirmed(&notify_rust::get_capabilities()) {
-            escape_body_markup(body)
-        } else {
-            body.to_string()
-        };
+        let (title_owned, body_owned) =
+            escape_for_send(title, body, &notify_rust::get_capabilities());
+        #[cfg(unix)]
+        let title = title_owned.as_str();
         #[cfg(unix)]
         let body = body_owned.as_str();
 
@@ -170,6 +170,28 @@ impl NotificationSink for NotifyRustSink {
             Ok(_) => log::debug!("notify-rust dispatched: {title}"),
             Err(e) => log::warn!("notify-rust failed: {e}"),
         }
+    }
+}
+
+/// (task0001) Apply the per-send escape decision to both `title` (summary)
+/// and `body` under a SINGLE evaluation of `capabilities` (D2: the caller
+/// queries `get_capabilities()` exactly once per `send` and passes the
+/// result here, so the two fields can never diverge within one send).
+/// Confirmed → both fields pass through [`escape_body_markup`]; otherwise
+/// both pass through byte-for-byte unchanged (fail-open parity, FR1/FR3).
+/// Private to this module — the only caller is `NotifyRustSink::send`
+/// (AC-6); pulled out of `send` so it is unit-testable without a real
+/// D-Bus connection.
+#[cfg(unix)]
+fn escape_for_send<E>(
+    title: &str,
+    body: &str,
+    capabilities: &Result<Vec<String>, E>,
+) -> (String, String) {
+    if body_markup_confirmed(capabilities) {
+        (escape_body_markup(title), escape_body_markup(body))
+    } else {
+        (title.to_string(), body.to_string())
     }
 }
 
