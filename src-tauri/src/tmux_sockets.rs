@@ -540,6 +540,71 @@ mod tests {
         path
     }
 
+    /// Bind `path` as an `AF_UNIX`/`SOCK_STREAM` socket WITHOUT ever
+    /// calling `listen(2)` on it, then close the fd — leaving behind a
+    /// genuine socket-type file that no listener has ever backed
+    /// (task0001: the "stale" fixture for
+    /// [`discover_returns_only_the_live_socket`]).
+    ///
+    /// This deliberately replaces the fixture's prior construction —
+    /// `std::os::unix::net::UnixListener::bind(path)` immediately
+    /// followed by `drop(listener)` — which MUST NOT be reintroduced.
+    /// That pattern is fork-window flaky (task0001 Design): `bind()`
+    /// there implicitly calls `listen()` too, so for as long as the
+    /// returned `UnixListener` value is alive the socket genuinely IS
+    /// listening. Any OTHER test thread's `std::process::Command::spawn`
+    /// that clones (`fork`) during that window inherits a *copy* of
+    /// this process's whole fd table, including that still-open
+    /// listener fd — `close-on-exec` only takes effect at `exec()`, not
+    /// at `fork()`/`clone()`. If the forked child survives past this
+    /// thread's own `drop(listener)` and past this test's
+    /// `probe_unix_socket` connect-probe, the probe connects
+    /// successfully against the CHILD's inherited fd even though this
+    /// process already dropped its own reference — nondeterministically
+    /// making "stale" look "live" and failing the assertion below.
+    ///
+    /// Never calling `listen()` removes the race at its root instead of
+    /// racing to close a window faster: a bound-but-never-listened
+    /// `SOCK_STREAM` socket refuses every `connect(2)` (`ECONNREFUSED`)
+    /// unconditionally, for as long as it exists, because acceptance
+    /// requires a listen backlog that was never created. No fd copy of
+    /// it — in this process, in a forked child, anywhere — can ever
+    /// accept a connection, so the fixture's "nobody is listening"
+    /// property no longer depends on this process's fd lifetime at all
+    /// (task0001 fixture contract).
+    fn bind_unlistened_socket(path: &Path) {
+        let c_path = CString::new(path.as_os_str().as_bytes()).expect("path has no interior NUL");
+        let path_bytes = c_path.as_bytes_with_nul();
+
+        let mut addr: libc::sockaddr_un = unsafe { mem::zeroed() };
+        addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        assert!(
+            path_bytes.len() <= addr.sun_path.len(),
+            "socket path too long for sun_path"
+        );
+        for (dst, src) in addr.sun_path.iter_mut().zip(path_bytes.iter()) {
+            *dst = *src as libc::c_char;
+        }
+
+        // SAFETY: `fd` is a socket this function just created; `addr` is
+        // zero-initialized plain-old-data sized to match `bind(2)`'s
+        // expectations. Every exit path below closes `fd`.
+        unsafe {
+            let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+            assert!(fd >= 0, "socket() failed: {}", io::Error::last_os_error());
+
+            let addr_len = mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+            let ret = libc::bind(fd, (&raw const addr) as *const libc::sockaddr, addr_len);
+            if ret != 0 {
+                let err = io::Error::last_os_error();
+                libc::close(fd);
+                panic!("bind() failed: {err}");
+            }
+            // Deliberately no listen(2) call here — see doc comment above.
+            libc::close(fd);
+        }
+    }
+
     // AC-1: a live listening socket, a stale (non-listening) socket file,
     // and a regular file are all present; only the live socket comes back.
     #[test]
@@ -550,17 +615,21 @@ mod tests {
         let listener = UnixListener::bind(&live_path).expect("bind live");
 
         let stale_path = dir.path().join("stale");
-        {
-            let stale_listener = UnixListener::bind(&stale_path).expect("bind stale");
-            drop(stale_listener);
-            // Dropping the listener closes the server side; the special
-            // socket-type file `stale_path` remains on disk (bind() does
-            // not unlink on close), matching a tmux server that died
-            // without removing its socket.
-        }
+        // See `bind_unlistened_socket`'s doc comment: this construction
+        // (bind, never listen) is deliberate and fork-window-race-proof;
+        // do not replace it with bind-then-drop-a-listener.
+        bind_unlistened_socket(&stale_path);
         assert!(
             stale_path.exists(),
             "stale socket file should remain on disk"
+        );
+        assert!(
+            std::fs::symlink_metadata(&stale_path)
+                .expect("stat stale socket file")
+                .file_type()
+                .is_socket(),
+            "stale path should still be a socket-type file, matching a tmux \
+             server that died without removing its socket"
         );
 
         let plain_path = dir.path().join("plain.txt");

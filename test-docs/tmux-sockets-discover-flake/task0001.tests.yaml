@@ -1,0 +1,64 @@
+task_id: task0001
+baseline_failures: []          # full --lib suite, pre-change: 3217 passed, 0 failed, 3 ignored
+final_failures: []             # full --lib suite, post-change: 3217 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests: [tmux_sockets::tests::discover_returns_only_the_live_socket]
+    red_confirmed: true
+    red_reason: >
+      This flake is inherently nondeterministic, so a single pre-fix run
+      cannot be relied on to reproduce it. Ran the exact verification
+      command (`CARGO_TARGET_DIR=src-tauri/target cargo test
+      --manifest-path src-tauri/Cargo.toml --lib tmux_sockets`) 60 times
+      against the pre-fix bind-then-drop stale fixture and observed 3
+      failures (iterations 26, 39, 51 of 60), each:
+      "assertion `left == right` failed\n  left: [TmuxSocket { name:
+      \"live\", .. }, TmuxSocket { name: \"stale\", .. }]\n right:
+      [TmuxSocket { name: \"live\", .. }]" at tmux_sockets.rs:572 (the
+      stale socket being misreported as live). After switching the stale
+      fixture to bind-without-listen (`bind_unlistened_socket`), the same
+      command run 65 more times (post-fix) produced 0 failures. Note:
+      per the task plan's Test Notes, this stress repetition is a
+      verification activity, not a persisted `#[test]`.
+  AC-2:
+    tests: [tmux_sockets::tests::discover_returns_only_the_live_socket]
+    red_confirmed: false
+    red_reason: >
+      Both assertions (stale socket file remains on disk;
+      discover_in returns only the live socket) already existed and
+      passed before this task started — no code change was needed to
+      satisfy them, only preserved. Confirmed they are still present
+      (and one, the socket-type-file check, was strengthened, not
+      weakened) and still pass after the fixture change.
+  AC-3:
+    tests: []
+    red_reason: >
+      Verified by `git diff --stat` / `git diff`: the entire diff is one
+      hunk inside `#[cfg(test)] mod tests` in tmux_sockets.rs (a new
+      `bind_unlistened_socket` helper plus the stale-fixture lines in
+      `discover_returns_only_the_live_socket`); no line outside the test
+      module changed.
+  AC-4:
+    tests: []
+    red_reason: >
+      Verified by running the full command `CARGO_TARGET_DIR=src-tauri/target
+      cargo test --manifest-path src-tauri/Cargo.toml --lib`: 3217
+      passed, 0 failed, 3 ignored, both before and after the change.
+  AC-5:
+    tests: []
+    red_reason: >
+      Verified by inspection: no `--test-threads` flag was added to any
+      command used to verify this task; the fix (never calling listen()
+      on the stale fixture socket) removes the race's root cause instead
+      of relying on serialized execution.
+  AC-6:
+    tests: []
+    red_reason: >
+      Verified by inspection: `bind_unlistened_socket`'s doc comment in
+      tmux_sockets.rs explains the fork-window race mechanism (a
+      concurrent test thread's `Command::spawn` clone inheriting a copy
+      of a still-listening fd before this thread's drop takes effect)
+      and explicitly states the prior bind-then-drop-a-listener pattern
+      must not be reintroduced; the call site in
+      `discover_returns_only_the_live_socket` also carries a short
+      pointer back to that comment.
