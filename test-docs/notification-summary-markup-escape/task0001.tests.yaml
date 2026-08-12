@@ -1,0 +1,43 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - callbacks::tests::summary_markup_escape::confirmed_capabilities_escape_a_tag_bearing_title_like_the_body_path
+      - callbacks::tests::summary_markup_escape::confirmed_capabilities_double_escape_a_preexisting_entity_in_a_title
+    red_confirmed: true
+    red_reason: "cannot find function `escape_for_send` in this scope (E0425) — the helper did not exist yet"
+  AC-2:
+    tests:
+      - callbacks::tests::summary_markup_escape::unconfirmed_capability_list_leaves_the_title_unchanged
+      - callbacks::tests::summary_markup_escape::failed_capability_fetch_leaves_the_title_unchanged
+      - callbacks::tests::summary_markup_escape::unconfirmed_capability_list_leaves_the_body_unchanged_in_the_same_call
+    red_confirmed: true
+    red_reason: "cannot find function `escape_for_send` in this scope (E0425) — the helper did not exist yet"
+  AC-3:
+    tests:
+      - callbacks::tests::summary_markup_escape::confirmed_capabilities_escape_a_sanitize_title_truncated_title_intact
+    red_confirmed: true
+    red_reason: "cannot find function `escape_for_send` in this scope (E0425) — the helper did not exist yet"
+  AC-4:
+    tests:
+      - callbacks::tests::summary_markup_escape::osc9_fallback_title_flows_through_the_same_escaped_decision
+    red_confirmed: true
+    red_reason: "cannot find function `escape_for_send` in this scope (E0425) — the helper did not exist yet"
+  AC-5:
+    tests:
+      - callbacks::tests::body_markup_escape::escape_body_markup_neutralizes_html_tags
+      - callbacks::tests::body_markup_escape::escape_body_markup_double_escapes_a_preexisting_entity
+      - callbacks::tests::body_markup_escape::escape_body_markup_after_sanitize_title_truncation_keeps_entity_intact
+      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_true_only_for_a_successful_list_containing_it
+      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_false_when_absent_from_a_successful_list
+      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_false_on_fetch_failure
+      - callbacks::tests::body_markup_escape::unconfirmed_capabilities_leave_the_body_unchanged
+      - callbacks::tests::body_markup_escape::tab_activity_and_agent_bodies_are_both_escaped_when_confirmed
+    red_confirmed: false
+    red_reason: "Pre-existing PR #35 tests; not touched by this task. Verified green both before and after this task's change (regression gate, not a red-green cycle of this task)."
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: "Not a test-observable outcome; verified by diff/code inspection: git status shows only src-tauri/src/callbacks.rs and src-tauri/src/callbacks/tests.rs changed, the new escape_for_send helper is #[cfg(unix)] private (not pub) with NotifyRustSink::send as its sole caller, and sanitize_title/notifications.rs/the Windows toast path are untouched."

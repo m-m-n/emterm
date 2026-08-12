@@ -1,0 +1,34 @@
+schema_version: 1
+feature: notification-summary-markup-escape
+phase: create-plan
+status: completed
+generation: 1
+base_revision: f5a77a329f0791e2e0ca777dfc20cacc3290ae67
+last_input_digest: sha256:e18af7bc43928c9f352b053811e579235ea37b79a38d4ff4ad7ef8415fc2a143
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: completed
+    input_digest: sha256:e18af7bc43928c9f352b053811e579235ea37b79a38d4ff4ad7ef8415fc2a143
+    output_digest: null
+artifacts:
+  - path: feature-docs/notification-summary-markup-escape/IMPLEMENTATION.md
+    sha256: sha256:c4171fa7c75de67a88f2b17f0f1c14aade22fa6c1dcffec033f52eb690547cc3
+    produced_by: create-plan-run-0001
+  - path: feature-docs/notification-summary-markup-escape/VERIFICATION.md
+    sha256: sha256:cc4b26424aad5423d08f6bd7d0d47f898ef1554bf8479064f9f95da3c34cb68b
+    produced_by: create-plan-run-0001
+  - path: feature-docs/notification-summary-markup-escape/tasks/task0001.md
+    sha256: sha256:d01852b00d34014a547e94a77e43ebdc2eaab02fd942532bd93fd943c7a09a13
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: notification-summary-markup-escape-p0001
+    status: applied
+    base_input_digest: sha256:e18af7bc43928c9f352b053811e579235ea37b79a38d4ff4ad7ef8415fc2a143
+    base_workflow_blob: null
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
