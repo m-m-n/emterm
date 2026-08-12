@@ -1,14 +1,18 @@
 schema_version: 1
 feature: notification-body-markup-escape
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: bdbe144d9f30d30c2ad9c4cc4359a590e9bf67a4
-last_input_digest: null
-active_request_id: null
+base_revision: 5c59cf32204b226a49c72f54a23f680daac8190e
+last_input_digest: sha256:52a33e5851b24f944c558ddcd97b409a95713a28e5a0abf6ae9ab6a4e778be06
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:52a33e5851b24f944c558ddcd97b409a95713a28e5a0abf6ae9ab6a4e778be06
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
