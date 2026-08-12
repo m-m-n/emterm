@@ -1,0 +1,159 @@
+schema_version: 1
+feature: notification-body-markup-escape
+created: 2026-08-12
+base_branch: main
+parent_branch: em-workflow/notification-body-markup-escape/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 69dd84f0c95b54a0aa943f80b279705b7fdcbf7c
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "UI を持たない Rust 通知パイプラインのセキュリティ修正（文字列エスケープと D-Bus capability 判定）であり、視覚的な表面もデザイントークンの関与も無いため"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: b0fa156ecab84a58bda30bd7a4f7f7c70177fd4f
+  - id: implement
+    status: completed
+    completed_at_commit: f4813fc44388ca4bbdbc39b76930919dc7241d12
+    base_commit: f421e9c6f48e5e7ee6606f0040c82b521d3db8d7
+  - id: review
+    status: completed
+    completed_at_commit: 8d5b2cb9d9701e0a1c83e9fc10404e350e72e812
+  - id: verify
+    status: completed
+    completed_at_commit: 180366a9b546fd35fdb0369693bccc79512d372c
+    result: pass
+    failed_items: []
+    notes: |
+      build(main/cli) 双方 exit 0、--lib 3225 passed / 0 failed / 3 ignored。
+      TS1-TS5 は新規ユニットテスト 8 本、TS6 は notifications.rs 無変更を diff で確認、
+      TS7 はスイート全体通過、TS8 は --no-default-features check 通過、
+      TS9 は新規コードが全て #[cfg(unix)] 配下で .show() が字面上無変更であることをコード検査で確認。
+      format check は agent_status_exit_latch.rs / arg_dispatch.rs / mux/inherited_pty.rs /
+      mux/session/session.rs / tests/cli_subcommands.rs / tests/mux_hot_upgrade.rs に
+      プロジェクト既存の rustfmt ドリフトを報告するが、本 feature の変更ファイル
+      （callbacks.rs / callbacks/tests.rs）にはドリフト無し。既存ドリフトは本 feature の
+      スコープ外のため fail としない。
+      なお fresh worktree では gitignored のバンドルフォントが無くビルドが落ちるため、
+      検証前に scripts/fetch-fonts.sh の実行が必要だった（git 追跡差分は発生しない）。
+  - id: retrospect
+    status: completed
+    completed_at_commit: d13e980b3ffcac91b5fa14e97876b37e2f386df8
+
+tasks:
+  task0001:
+    title: "通知シンクにおける body-markup ケイパビリティ連動のマークアップエスケープ"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/callbacks.rs
+      - src-tauri/src/callbacks/tests.rs
+    skills: [backend-impl]
+    domains: [input-handling, external-io]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2, NFR3]
+    status: merged
+    notes: null
+    branch: em-workflow/notification-body-markup-escape/task0001
+
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Escape markup metacharacters in the notification body title"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS2]
+  FR2:
+    title: "Escape after the 100-character truncation"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS3]
+  FR3:
+    title: "Gate escaping on the server's body-markup capability"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS4]
+  FR4:
+    title: "Cover both notification paths that share sanitize_title"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS5]
+  FR5:
+    title: "Windows notification path unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS9]
+  NFR1:
+    title: "Existing sanitize_title behavior preserved"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS6, TS7]
+  NFR2:
+    title: "Security: injection choke point"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS5]
+  NFR3:
+    title: "Feature-gate and platform-gate hygiene"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS8]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

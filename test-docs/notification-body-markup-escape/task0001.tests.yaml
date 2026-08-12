@@ -1,0 +1,36 @@
+task_id: task0001
+baseline_failures: []          # 4a: `cargo test --lib` was clean before any change (3217 passed, 0 failed, 3 ignored)
+final_failures: []             # after implementation: 3225 passed, 0 failed, 3 ignored (8 new tests added)
+acceptance_tests:
+  AC-1:
+    tests: [callbacks::tests::body_markup_escape::escape_body_markup_neutralizes_html_tags]
+    red_confirmed: true
+    red_reason: "assertion failed: raw '<' survived: <a href=\"https://attacker.invalid\">Sign in</a> (stub escape_body_markup returned input unchanged)"
+  AC-2:
+    tests: [callbacks::tests::body_markup_escape::escape_body_markup_double_escapes_a_preexisting_entity]
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: \"Tom & Jerry &amp; co\", right: \"Tom &amp; Jerry &amp;amp; co\" (stub escape_body_markup returned input unchanged)"
+  AC-3:
+    tests: [callbacks::tests::body_markup_escape::escape_body_markup_after_sanitize_title_truncation_keeps_entity_intact]
+    red_confirmed: true
+    red_reason: "assertion failed: entity reference was split or missing: aaa...a< (stub escape_body_markup returned input unchanged, so the trailing '<' was never turned into '&lt;')"
+  AC-4:
+    tests:
+      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_true_only_for_a_successful_list_containing_it
+      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_false_when_absent_from_a_successful_list
+      - callbacks::tests::body_markup_escape::body_markup_confirmed_is_false_on_fetch_failure
+      - callbacks::tests::body_markup_escape::unconfirmed_capabilities_leave_the_body_unchanged
+    red_confirmed: true
+    red_reason: "body_markup_confirmed_is_false_when_absent_from_a_successful_list: assertion failed: !body_markup_confirmed(&absent); body_markup_confirmed_is_false_on_fetch_failure: assertion failed: !body_markup_confirmed(&failed) (stub body_markup_confirmed always returned true). body_markup_confirmed_is_true_only_for_a_successful_list_containing_it and unconfirmed_capabilities_leave_the_body_unchanged happened to pass against the stub by coincidence (stub=always-true / composed-decision-with-body-unchanged-branch-untouched); both were re-verified against the real implementation and still pass for the intended reason."
+  AC-5:
+    tests: [callbacks::tests::body_markup_escape::tab_activity_and_agent_bodies_are_both_escaped_when_confirmed]
+    red_confirmed: true
+    red_reason: "assertion failed: !tab_escaped.contains('<') (stub escape_body_markup returned input unchanged, so the tab-activity path's body still contained raw '<')"
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: "Non-regression criterion, not new behavior: src-tauri/src/notifications.rs is untouched by this task (verified via `git diff` scoping to callbacks.rs / callbacks/tests.rs only) and the full `cargo test --manifest-path src-tauri/Cargo.toml --lib` suite (which includes notifications.rs's existing sanitize_title/notification_body/agent_notification_body tests) passed identically before (3217 passed / 0 failed / 3 ignored) and after (3225 passed / 0 failed / 3 ignored, the +8 delta being this task's new tests) this task's changes."
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "Build/gating criterion, not new behavior: verified by running both approved check commands after implementation — `cargo check --manifest-path src-tauri/Cargo.toml` (default features) and `cargo check --manifest-path src-tauri/Cargo.toml --no-default-features` — both succeeded. The new capability-judgment/escape code (escape_body_markup, body_markup_confirmed, and the send() gate) is entirely under `#[cfg(unix)]` inside callbacks.rs, which is itself only compiled under the `gui` feature; the --no-default-features build skips callbacks.rs entirely. The Windows send() flow (the `.summary()/.body()/.show()` match block) is unchanged text from before this task."

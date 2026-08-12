@@ -1,0 +1,25 @@
+schema_version: 1
+feature: notification-body-markup-escape
+phase: create-plan
+status: completed
+generation: 1
+base_revision: 723b4d39432f142ebd76b91e5a76fd6219cecbaa
+last_input_digest: sha256:3176606fd482d97e8d4346a939ad4e65b1fccb1878daf75fa4fec148914d3072
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: completed
+    input_digest: sha256:3176606fd482d97e8d4346a939ad4e65b1fccb1878daf75fa4fec148914d3072
+    output_digest: null
+artifacts: []
+patches:
+  - patch_id: notification-body-markup-escape-p0001
+    status: applied
+    base_input_digest: sha256:3176606fd482d97e8d4346a939ad4e65b1fccb1878daf75fa4fec148914d3072
+    base_workflow_blob: eae95e6294909d841316b3f5586ab07267a7961d
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

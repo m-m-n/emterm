@@ -666,3 +666,148 @@ fn parse_osc9_empty_title_uses_fallback() {
     assert_eq!(t, "fb");
     assert_eq!(b, ";body");
 }
+
+// ── task0001: body-markup escape (Unix only — notify-rust's
+// `get_capabilities()` is an XDG-only export, see `NotifyRustSink::send`) ─
+
+#[cfg(unix)]
+mod body_markup_escape {
+    use super::*;
+
+    // AC-1 (TS1): a body containing an HTML anchor tag becomes an
+    // escaped literal — no raw `<`/`>` survive.
+    #[test]
+    fn escape_body_markup_neutralizes_html_tags() {
+        let input = r#"<a href="https://attacker.invalid">Sign in</a>"#;
+        let out = escape_body_markup(input);
+        assert!(!out.contains('<'), "raw '<' survived: {out}");
+        assert!(!out.contains('>'), "raw '>' survived: {out}");
+        assert_eq!(
+            out,
+            r#"&lt;a href="https://attacker.invalid"&gt;Sign in&lt;/a&gt;"#
+        );
+    }
+
+    // AC-2 (TS2): `&` is replaced first, so a pre-existing `&amp;` becomes
+    // `&amp;amp;` rather than staying `&amp;` (which would leave the
+    // ambiguity the ordering rule exists to remove).
+    #[test]
+    fn escape_body_markup_double_escapes_a_preexisting_entity() {
+        assert_eq!(
+            escape_body_markup("Tom & Jerry &amp; co"),
+            "Tom &amp; Jerry &amp;amp; co"
+        );
+    }
+
+    // AC-3 (TS3): a title with a meta-character right at the
+    // `sanitize_title` 100-char truncation boundary, escaped AFTER
+    // truncation, produces a complete trailing entity reference — the
+    // escape step never sees a boundary to split.
+    #[test]
+    fn escape_body_markup_after_sanitize_title_truncation_keeps_entity_intact() {
+        let mut title = "a".repeat(99);
+        title.push('<'); // 100th character — sanitize_title's cutoff.
+        title.push_str("TRAILING-SHOULD-BE-TRUNCATED>");
+
+        let sanitized = crate::notifications::sanitize_title(&title);
+        assert_eq!(sanitized.chars().count(), 100);
+        assert!(sanitized.ends_with('<'));
+
+        let escaped = escape_body_markup(&sanitized);
+        assert!(
+            escaped.ends_with("&lt;"),
+            "entity reference was split or missing: {escaped}"
+        );
+        assert!(!escaped.contains("TRUNCATED"));
+    }
+
+    // AC-4 (TS4): "unconfirmed" covers both a successful capability list
+    // that omits `"body-markup"` and a failed fetch — fail-safe means both
+    // must resolve to "do not escape".
+    #[test]
+    fn body_markup_confirmed_is_true_only_for_a_successful_list_containing_it() {
+        let present: Result<Vec<String>, ()> =
+            Ok(vec!["actions".to_string(), "body-markup".to_string()]);
+        assert!(body_markup_confirmed(&present));
+    }
+
+    #[test]
+    fn body_markup_confirmed_is_false_when_absent_from_a_successful_list() {
+        let absent: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
+        assert!(!body_markup_confirmed(&absent));
+    }
+
+    #[test]
+    fn body_markup_confirmed_is_false_on_fetch_failure() {
+        let failed: Result<Vec<String>, ()> = Err(());
+        assert!(!body_markup_confirmed(&failed));
+    }
+
+    // AC-4 (TS4, composed): when unconfirmed, the same escape/no-escape
+    // decision `NotifyRustSink::send` makes leaves the body byte-for-byte
+    // unchanged — a literal `&amp;` in the input must not become visible
+    // as anything else (no partial/accidental transform).
+    #[test]
+    fn unconfirmed_capabilities_leave_the_body_unchanged() {
+        let body = r#"Tom & Jerry &amp; <b>bold</b>"#;
+        let unconfirmed: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
+        let out = if body_markup_confirmed(&unconfirmed) {
+            escape_body_markup(body)
+        } else {
+            body.to_string()
+        };
+        assert_eq!(out, body);
+    }
+
+    // AC-5 (TS5): both notification-body producers — tab-activity
+    // (`sanitize_title` + `notification_body`) and agent-status
+    // (`agent_notification_body`) — are covered by the same sink-side
+    // escape decision when it resolves "confirmed". Proves the single
+    // choke point covers both pipelines (IMPLEMENTATION.md D1 NFR2).
+    #[test]
+    fn tab_activity_and_agent_bodies_are_both_escaped_when_confirmed() {
+        let confirmed: Result<Vec<String>, ()> = Ok(vec!["body-markup".to_string()]);
+
+        // Tab-activity path.
+        let sanitized = crate::notifications::sanitize_title(r#"<img src=x onerror=alert(1)>"#);
+        let tab_body = crate::notifications::notification_body(
+            &sanitized,
+            crate::notifications::ActivityKind::Output,
+            crate::i18n::Locale::En,
+        );
+        assert!(
+            tab_body.contains('<'),
+            "fixture lost its markup: {tab_body}"
+        );
+        let tab_escaped = if body_markup_confirmed(&confirmed) {
+            escape_body_markup(&tab_body)
+        } else {
+            tab_body.clone()
+        };
+        assert!(!tab_escaped.contains('<'));
+        assert!(!tab_escaped.contains('>'));
+
+        // Agent-status path.
+        let transition = crate::notifications::AgentTransition {
+            old_state: None,
+            new_state: crate::notifications::AgentState::Blocked,
+            name: Some("<script>evil</script>".to_string()),
+        };
+        let agent_body = crate::notifications::agent_notification_body(
+            &transition,
+            "my-tab",
+            crate::i18n::Locale::En,
+        );
+        assert!(
+            agent_body.contains('<'),
+            "fixture lost its markup: {agent_body}"
+        );
+        let agent_escaped = if body_markup_confirmed(&confirmed) {
+            escape_body_markup(&agent_body)
+        } else {
+            agent_body.clone()
+        };
+        assert!(!agent_escaped.contains('<'));
+        assert!(!agent_escaped.contains('>'));
+    }
+}
