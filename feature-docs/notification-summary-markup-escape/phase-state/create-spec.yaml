@@ -8,12 +8,29 @@ last_input_digest: sha256:677572ac7a5fc18c6585c5ed9a7d41f5d08dd76d0704cd5a3c3c14
 active_request_id: create-spec-run-0001
 packets:
   create-spec-q0001:
-    status: issued
+    status: answered
     issued_at: "2026-08-12T19:26:00+09:00"
     questions:
       - question_id: requirement.title-escape-approach
-        status: issued
-answers: {}
+        status: answered
+answers:
+  requirement.title-escape-approach:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-12T19:29:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [escape-at-sink]
+    freeform: null
+    normalized_answer: >-
+      capability 確認済みのとき NotifyRustSink::send で summary(title) にも
+      escape_body_markup を適用する（方針 a）。sanitize_title は変更しない。
+    resolution_note: >-
+      batch mode. gate create-spec.requirement-clarification -> policy
+      action codex_consultation. Codex (run_codex_exec.sh readonly, 1 turn)
+      recommended escape-at-sink, matching the analyst's tentative position;
+      the orchestrator judged the mapping onto the existing option_id.
+      Recorded as an assumption per batch-policies.yaml
+      (record_as_assumption: true).
 worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
