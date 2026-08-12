@@ -53,9 +53,20 @@ workflow:
     status: completed
     completed_at_commit: a6c1b674b6eb103372f7a6127f0e9c33df333a1d
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 0f8b935368f38de14b38d3d1b3e39d7c6f5fec1a
+    result: pass
     failed_items: []
+    notes:
+      automated:
+        - "TS-1..TS-6 + full --lib suite: 3224 passed / 0 failed / 3 ignored (--test-threads=1)"
+        - "TS-9 build: Linux GUI check / --no-default-features check / Windows xwin --lib --tests — all exit 0, zero warnings"
+        - "format: cargo fmt --check reports drift ONLY in 7 files this feature never touched (agent_status_exit_latch.rs, arg_dispatch.rs, mux/inherited_pty.rs, mux/session/session.rs, tests/cli_subcommands.rs, tests/mux_hot_upgrade.rs) — pre-existing, out of scope per the project's no-crate-wide-fmt convention"
+      inspection:
+        - "TS-8 (AC3): pump_toasts / next_toast_deadline docs describe the new predicate-based gating; the old 'relies on another redraw trigger' phrasing is gone from src-tauri/src/"
+        - "TS-10 (NFR3): frame_work_pending is one Acquire atomic load + two crossbeam is_empty() + the existing toast check; consumes nothing, takes no extra lock"
+      deferred_manual:
+        - "TS-7a (AC1) / TS-7b (AC2): idle-tab SFTP progress toast and post-binary-swap restart toast require a running GUI session on real hardware. Not executable in this unattended run — left unchecked in VERIFICATION.md for the human evaluator" 
   - id: retrospect
     status: pending
 
