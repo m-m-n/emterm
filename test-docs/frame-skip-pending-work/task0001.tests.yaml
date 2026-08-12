@@ -1,0 +1,94 @@
+task_id: task0001
+baseline_failures: []          # cargo test --lib -- --test-threads=1: 3217 passed, 0 failed, 3 ignored
+final_failures: []             # 3224 passed (7 new), 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - self_exec::tests::restart_pending_reports_true_across_consecutive_peeks
+      - self_exec::tests::restart_required_still_consumes_once_after_peeks
+    red_confirmed: true
+    red_reason: >-
+      error[E0425]: cannot find function `restart_pending` in this scope
+      (self_exec.rs) — verified by temporarily gating `restart_pending`
+      behind `#[cfg(not(test))]`, confirming both tests fail to compile for
+      the missing symbol, then restoring the real (ungated) function.
+  AC-2:
+    tests:
+      - app::tests::timing::frame_work_pending_false_on_fresh_app
+    red_confirmed: true
+    red_reason: >-
+      error[E0599]: no method named `frame_work_pending` found for struct
+      `app::App` in the current scope (app/tests/timing.rs:94), before
+      `App::frame_work_pending` existed.
+  AC-3:
+    tests:
+      - app::tests::timing::frame_work_pending_true_when_progress_channel_nonempty_and_consumes_nothing
+      - app::tests::timing::frame_work_pending_true_when_result_channel_nonempty_and_consumes_nothing
+      - app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing
+    red_confirmed: true
+    red_reason: >-
+      Same E0599 "no method named `frame_work_pending`" compile failure as
+      AC-2, observed for all three call sites in the same run before
+      `App::frame_work_pending` existed.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Wiring-only criterion (call-site rewiring, no independently
+      observable behavior beyond what AC-3/AC-5 already assert). Per the
+      task plan: "AC-4 has no unit test (call-site wiring): it is covered
+      by review inspection and the manual scenario TS-7 in
+      VERIFICATION.md." Verified by inspection: `render_surface.rs`'s
+      `overlay_work` toast term and `event_loop.rs`'s pacing read feeding
+      `toast_redraw_due` both now call `app.frame_work_pending()`; neither
+      site calls `app.toast_pending()` directly any more (confirmed via
+      `grep -rn '\.toast_pending()' src-tauri/src/` — the only remaining
+      call sites are the `frame_work_pending` implementation itself and
+      this task's own precondition assertions in
+      app/tests/timing.rs).
+  AC-5:
+    tests:
+      - app::tests::timing::next_toast_deadline_some_when_pretoast_progress_event_pending
+    red_confirmed: true
+    red_reason: >-
+      Same E0599 "no method named `frame_work_pending`" compile failure
+      (this test calls `App::frame_work_pending` transitively via the
+      not-yet-updated `next_toast_deadline`, and directly calls
+      `app.sftp_service.test_push_progress_event()`, which also did not
+      exist yet). Pre-existing tests
+      `next_toast_deadline_none_when_no_toast_active`,
+      `next_toast_deadline_some_when_restart_toast_active`, and
+      `next_toast_deadline_some_when_sftp_toast_active` stayed green
+      throughout (not touched).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Documentation criterion, no test harness for prose content. Verified
+      by inspection: the `pump_toasts` known-limitation paragraph
+      (app/mod.rs) now states pre-toast pending work keeps frames alive
+      through `frame_work_pending` instead of "relies on another redraw
+      trigger"; the `toast_pending` doc no longer claims the redraw
+      pacing / skip veto / deadline call it directly (it now says they
+      call `frame_work_pending`, of which `toast_pending` is one term).
+      `grep -rn "relies on another redraw trigger" src-tauri/src/` and
+      `grep -rn "known limitation" src-tauri/src/` both return no matches
+      after the change.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/suite-wide criterion, not a single unit test. Verified by
+      running each configuration directly: `cargo test --lib --
+      --test-threads=1` (3224 passed, 0 failed, 3 ignored — 7 new tests,
+      zero regressions from the 3217/0/3 baseline); `cargo check`
+      (Linux GUI, default features) zero warnings; `cargo check
+      --no-default-features` zero warnings; `cargo xwin check --target
+      x86_64-pc-windows-msvc --lib --tests` zero warnings; `cargo fmt
+      --check` reports no diff in any file this task touched (the
+      command still exits non-zero crate-wide due to pre-existing
+      formatting drift in six files this task never touched —
+      agent_status_exit_latch.rs, arg_dispatch.rs, mux/inherited_pty.rs,
+      mux/session/session.rs, tests/cli_subcommands.rs,
+      tests/mux_hot_upgrade.rs — confirmed pre-existing and out of this
+      task's scope; see report notes).
