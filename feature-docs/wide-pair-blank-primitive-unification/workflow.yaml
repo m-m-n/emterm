@@ -42,7 +42,7 @@ workflow:
     completed_at_commit: 293739edf38e84d47853d1cf4a8ed0210af50c85
     base_commit: cf4340657086623669ff1f771a15432c1239e602
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
   - id: retrospect
@@ -67,8 +67,16 @@ tasks:
     branch: em-workflow/wide-pair-blank-primitive-unification/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary:
+      - perspective: architecture
+        reason: "変更の目的そのものが SSOT 化とチョークポイント化で、architecture 由来の deferred findings 2 件が起票元。構造判断の妥当性が本 feature の主論点"
+      - perspective: performance
+        reason: "NFR1 が ASCII 高速パスの性能特性維持を制約しており、diff が print ホットパスと 5 つの範囲消去経路の呼び出し構造を書き換えている"
+    cross_validation: true
   residual_critical_high: 0
   needs_rework: false
 
