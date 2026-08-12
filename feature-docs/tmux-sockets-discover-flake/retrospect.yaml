@@ -1,0 +1,17 @@
+feature: tmux-sockets-discover-flake
+collected_at: "2026-08-12T10:07:50+09:00"
+session_ids: [e4dc77c3-9d0f-402b-a93d-5b35ca25d7f8.jsonl]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  deferred_findings:
+    - stable_id: e86544305169d904
+      category: comprehensive
+      resolution_reason: "medium severity — R4 auto-fix ゲート（critical/high のみ）の対象外"
+lessons_candidates:
+  - "統合 worktree は gitignore 済みのフォントアセット（src-tauri/assets/fonts/*）を持たないため、gui feature の cargo check / test が build.rs で失敗する。implementer も verify も個別に scripts/fetch-fonts.sh を実行する必要があった。worktree 作成直後に一度走らせる形にできると重複が消える"
+  - "flake 修正タスクは『修正前の赤』を単発実行で決定的に再現できないため、TDD の red 確認が成立しない。ストレス反復（実行前 3/60 失敗 → 実行後 0/65）を red/green の代替証跡として扱った"

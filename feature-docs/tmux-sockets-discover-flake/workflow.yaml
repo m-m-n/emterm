@@ -51,7 +51,8 @@ workflow:
       format: "cargo fmt --check: 12 pre-existing diffs, identical on main; tmux_sockets.rs is clean — no regression"
       MT-1: "diff hunks all at line >= 543 while #[cfg(test)] starts at line 522 — confined to the test module; AC-6 rationale comment present"
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 2edc4486a9e0cd3497a6f8d2aef1cfb631bb4f7a
 
 tasks:
   task0001:
