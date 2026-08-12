@@ -45,7 +45,18 @@ workflow:
     status: completed
     completed_at_commit: 1c8ccadb58ecda4debc6f19e7dea577ff1a809c9
   - id: verify
-    status: pending
+    status: in_progress
+    result: pass
+    failed_items: []
+    summary:
+      build: "pass — CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml。初回は gitignored な bundled フォント不在で build.rs が panic したため、メイン作業ツリーの src-tauri/assets/fonts/ を worktree にコピーして再実行し成功。コード起因の失敗ではない"
+      test: "pass — CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib / 802 passed, 0 failed, 13 ignored"
+      format: "pass (feature 範囲) — 承認済みの cargo fmt --manifest-path crates/term_core/Cargo.toml --check を実行。報告された差分は crates/term_core/src/print_handler/tests.rs のみで、base commit 時点の内容と完全一致（本 feature は同ファイルを変更していない）既存ドリフト。クレート全体 fmt を走らせない方針どおり手を入れていない"
+      e2e: "not applicable — プロジェクトに E2E 基盤なし"
+      scenarios: "TS-1..TS-4 は 802 件のユニットテストで被覆・pass。TS-5 は手動スポットチェック項目で、NFR1 は AC5 の diff インスペクションで代替確認済み"
+      criteria: "AC1..AC6 すべて pass。AC1=blank_wide_pair_half が terminal_cells.rs:256 に pub(crate) で 1 本のみ / AC2,AC3=blank_wide_pair_partner・blank_wide_pair_split ともに crate 内から消滅（grep で確認）/ AC4=erase_range_with_edge_repair が csi_screen.rs に 1 本、呼び出し 5 箇所 / AC5=old_width != 1 ゲートが print_handler.rs:149,225,452 に温存 / AC6=ビルド+テスト pass"
+      manual_items: "TS-5（オプトインベンチ）は未実行。NFR1 は AC5 の diff インスペクションで確認済みのため verify のブロッカーとしない"
+      excluded_requirements: "なし（status: excluded の要件は無い）"
   - id: retrospect
     status: pending
 
