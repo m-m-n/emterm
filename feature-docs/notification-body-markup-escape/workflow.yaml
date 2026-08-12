@@ -35,7 +35,7 @@ workflow:
     skipped_reason: "UI を持たない Rust 通知パイプラインのセキュリティ修正（文字列エスケープと D-Bus capability 判定）であり、視覚的な表面もデザイントークンの関与も無いため"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: bdbe144d9f30d30c2ad9c4cc4359a590e9bf67a4
