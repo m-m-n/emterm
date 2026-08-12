@@ -16,7 +16,7 @@ project:
     main:
       language: rust
       build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
-      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      test_command: "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
       format_command: ""
       e2e_test_command: ""
     term_core:
@@ -46,7 +46,8 @@ workflow:
     completed_at_commit: 9be762b8de487dc3ed12fbee1cf815281794f5a5
     base_commit: 754ab5adcfd366a4718dd3e5f0adc7ab6de4c344
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 2a3d8711c1dba3201237622e12344fb9924a0ac4
   - id: verify
     status: pending
     result: null
@@ -82,13 +83,16 @@ tasks:
     branch: em-workflow/wide-pair-overflow-tests/task0002
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, spec]
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    security: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
