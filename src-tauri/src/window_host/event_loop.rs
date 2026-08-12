@@ -631,8 +631,11 @@ impl ApplicationHandler for PocApp {
         // Toasts auto-dismiss on frame time, but nothing else schedules the
         // intermediate frames: on an idle / unfocused terminal the redraw
         // triggers above can all be false, so a visible toast would never be
-        // pruned until an unrelated event. While any toast is up, keep frames
-        // flowing so the restart / SFTP toasts dismiss on schedule.
+        // pruned until an unrelated event. While any toast is up — OR
+        // pre-toast pending work exists that will create one (an undrained
+        // SFTP event, a raised restart flag; see `App::frame_work_pending`,
+        // frame-skip-pending-work task0001) — keep frames flowing so the
+        // restart / SFTP toasts arm and dismiss on schedule.
         //
         // Rate-limited to the `TOAST_POLL_MS` cadence via `last_toast_redraw`:
         // the `WaitUntil` timer below does NOT bound this by itself, because
@@ -642,8 +645,9 @@ impl ApplicationHandler for PocApp {
         // present mode (Mailbox/Immediate, see `WindowHost::new`) nothing
         // else brakes the cycle — the loop spins at full speed for the
         // toast's entire lifetime.
-        let toast_pending = self.app.toast_pending();
-        let toast_due = toast_redraw_due(toast_pending, host.last_toast_redraw, Instant::now());
+        let frame_work_pending = self.app.frame_work_pending();
+        let toast_due =
+            toast_redraw_due(frame_work_pending, host.last_toast_redraw, Instant::now());
         if toast_due {
             host.last_toast_redraw = Some(Instant::now());
         }

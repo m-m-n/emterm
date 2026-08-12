@@ -20,11 +20,14 @@ use crate::app::App;
 /// live even when the terminal grid itself is quiescent.
 ///
 /// `overlay_work` is `true` when a restart/SFTP toast is counting down to
-/// auto-dismiss, a visual-bell flash is still decaying, the search UI is
-/// visible, or the one-shot bell-erase-frame signal is pending — any of
-/// these needs the egui pass (`pump_sftp` / toast prune / bell paint /
-/// search overlay) to run every frame, the same carve-out
-/// `status_bar_changed` gets for the status bar's own wake chain.
+/// auto-dismiss, pre-toast pending work exists that will create one — an
+/// undrained SFTP event, a raised restart flag; see
+/// `App::frame_work_pending`, frame-skip-pending-work task0001 — a
+/// visual-bell flash is still decaying, the search UI is visible, or the
+/// one-shot bell-erase-frame signal is pending — any of these needs the
+/// egui pass (`pump_sftp` / toast prune / bell paint / search overlay) to
+/// run every frame, the same carve-out `status_bar_changed` gets for the
+/// status bar's own wake chain.
 ///
 /// `egui_input_pending` is `true` when `pending_egui_events` holds input
 /// (a click, wheel, or key destined for the egui chrome) that no egui pass
@@ -49,20 +52,24 @@ pub(super) fn should_skip_frame(
 }
 
 /// Whether `about_to_wait` should request a redraw on behalf of an active
-/// toast this turn: a toast is up AND at least [`crate::app::TOAST_POLL_MS`]
-/// has elapsed since the last toast-driven request (`None` = no request was
-/// made yet, so the first one fires immediately). This is the rate limit
-/// that keeps the toast-driven `request_redraw` → `RedrawRequested` →
-/// `about_to_wait` cycle at the poll cadence instead of spinning at full
-/// speed under a non-blocking present mode. Extracted as a pure function —
-/// plain values in, plain bool out — so it is directly unit-testable
-/// (mirrors [`should_skip_frame`] above).
+/// toast OR pre-toast pending work this turn (`work_pending` — widened from
+/// "toast up" alone by frame-skip-pending-work task0001's
+/// `App::frame_work_pending`): the condition holds AND at least
+/// [`crate::app::TOAST_POLL_MS`] has elapsed since the last such
+/// redraw request (`None` = no request was made yet, so the first one
+/// fires immediately). This is the rate limit that keeps the
+/// `request_redraw` → `RedrawRequested` → `about_to_wait` cycle at the poll
+/// cadence instead of spinning at full speed under a non-blocking present
+/// mode. Extracted as a pure function — plain values in, plain bool out —
+/// so it is directly unit-testable (mirrors [`should_skip_frame`] above);
+/// the widened caller input is not this function's concern, so its shape
+/// and logic are unchanged.
 pub(super) fn toast_redraw_due(
-    toast_pending: bool,
+    work_pending: bool,
     last_redraw: Option<Instant>,
     now: Instant,
 ) -> bool {
-    toast_pending
+    work_pending
         && last_redraw.is_none_or(|last| {
             now.duration_since(last) >= Duration::from_millis(crate::app::TOAST_POLL_MS)
         })
@@ -274,8 +281,10 @@ pub(super) fn preedit_effective_dirty_rows(
 /// unfocused, the cursor is hidden, or no tab is active
 /// ([`App::next_blink_deadline`]); `bell_deadline` is `None` when no
 /// visual-bell flash is decaying ([`App::next_bell_deadline`]);
-/// `toast_deadline` is `None` when no restart/SFTP toast is up
-/// ([`App::next_toast_deadline`]); `mux_sidebar_dim_deadline` is `None`
+/// `toast_deadline` is `None` when no restart/SFTP toast is up AND no
+/// pre-toast pending work exists ([`App::next_toast_deadline`],
+/// [`App::frame_work_pending`] — frame-skip-pending-work task0001);
+/// `mux_sidebar_dim_deadline` is `None`
 /// when the overlay card's dim/fade feature is settled or not shown
 /// ([`App::next_mux_sidebar_dim_deadline`] — task0002 AC-5).
 ///

@@ -79,6 +79,87 @@ fn pump_toasts_runs_both_pumps_unconditionally() {
     );
 }
 
+// ── frame-skip-pending-work task0001: App::frame_work_pending ──────
+
+/// AC-2 / TS-1: a freshly constructed App with empty SFTP channels and a
+/// clear restart flag reports no pending work.
+#[test]
+fn frame_work_pending_false_on_fresh_app() {
+    crate::self_exec::test_set_restart_required(false);
+    let app = App::new();
+    assert!(
+        !app.toast_pending(),
+        "precondition: a fresh App has no toast up"
+    );
+    assert!(!app.frame_work_pending());
+}
+
+/// AC-3 / TS-2: an undrained SFTP progress event makes the predicate true,
+/// and evaluating it does not drain the channel.
+#[test]
+fn frame_work_pending_true_when_progress_channel_nonempty_and_consumes_nothing() {
+    crate::self_exec::test_set_restart_required(false);
+    let app = App::new();
+    app.sftp_service.test_push_progress_event();
+
+    assert!(app.frame_work_pending());
+    assert!(
+        app.sftp_progress_rx.try_recv().is_ok(),
+        "evaluating the predicate must not drain the progress channel"
+    );
+}
+
+/// AC-3 / TS-3: an undrained SFTP duplicate-check result makes the
+/// predicate true, and evaluating it does not drain the channel.
+#[test]
+fn frame_work_pending_true_when_result_channel_nonempty_and_consumes_nothing() {
+    crate::self_exec::test_set_restart_required(false);
+    let app = App::new();
+    app.sftp_service.test_push_result_event();
+
+    assert!(app.frame_work_pending());
+    assert!(
+        app.sftp_result_rx.try_recv().is_ok(),
+        "evaluating the predicate must not drain the result channel"
+    );
+}
+
+/// AC-3 / TS-4: a raised restart flag makes the predicate true, and
+/// evaluating it does not consume the flag — unlike `restart_required()`,
+/// which arms the toast exactly once.
+#[test]
+fn frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing() {
+    crate::self_exec::test_set_restart_required(true);
+    let app = App::new();
+
+    assert!(app.frame_work_pending());
+    assert!(
+        crate::self_exec::restart_pending(),
+        "evaluating the predicate must not consume the restart flag"
+    );
+
+    // Restore clear state (process-global flag; other tests assume clear).
+    crate::self_exec::test_set_restart_required(false);
+}
+
+/// AC-5 / TS-6: the wait deadline stays bounded while pre-toast pending
+/// work exists — a queued progress event with no toast up yet — closing
+/// the rate-limit race IMPLEMENTATION.md D1 describes. Nothing is armed
+/// once fully idle (covered by the pre-existing
+/// `next_toast_deadline_none_when_no_toast_active`, which must stay green).
+#[test]
+fn next_toast_deadline_some_when_pretoast_progress_event_pending() {
+    crate::self_exec::test_set_restart_required(false);
+    let app = App::new();
+    assert!(!app.toast_pending(), "precondition: no toast up yet");
+    app.sftp_service.test_push_progress_event();
+
+    assert!(
+        app.next_toast_deadline().is_some(),
+        "a queued pre-toast progress event must still arm the poll deadline"
+    );
+}
+
 #[test]
 fn next_blink_deadline_none_when_no_active_tab() {
     let app = App::new();
