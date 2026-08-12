@@ -1,0 +1,33 @@
+schema_version: 1
+feature: el-ed-wide-pair-cleanup
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: bdbe144d
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/components/md3-select.ts
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+      - src-tauri/web-shared/styles.css
+      - src-tauri/web-shared/styles/data-viewer.css
+      - src-tauri/web-shared/styles/settings-panel.css
+      - src-tauri/web-shared/styles/status-bar.css
+      - src-tauri/web-shared/styles/tab-bar.css
+    digests: {}
+    truncated: false
+last_error: null
