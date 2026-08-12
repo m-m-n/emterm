@@ -44,7 +44,8 @@ workflow:
     base_commit: 56828c534468ae1ab78b91cf763235bed2a22bc4
     completed_at_commit: fe035149e15c6d0e911f473a0eac91cb3a949156
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: f35aead73d567a912b444befc5453f03a286eb00
   - id: verify
     status: pending
     result: null
