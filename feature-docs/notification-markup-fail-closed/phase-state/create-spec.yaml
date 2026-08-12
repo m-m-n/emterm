@@ -1,19 +1,29 @@
 schema_version: 1
 feature: notification-markup-fail-closed
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 314c4878
 last_input_digest: sha256:f87142433e447bbf153fca66893a6e660232e9a00351d101a93fcc9b212c5299
-active_request_id: create-spec-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: completed
     input_digest: sha256:f87142433e447bbf153fca66893a6e660232e9a00351d101a93fcc9b212c5299
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:38991f5002cd0ce2a1953f255b8b4767c6ba8b61bac48a53368bf228320728f3
+    output_digest: null
+artifacts:
+  - path: feature-docs/notification-markup-fail-closed/REQUIREMENTS.md
+    sha256: null
+    produced_by: create-spec-run-0002
+  - path: feature-docs/notification-markup-fail-closed/SPEC.md
+    sha256: null
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
