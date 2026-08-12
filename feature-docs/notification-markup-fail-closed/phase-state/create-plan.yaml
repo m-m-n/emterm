@@ -1,0 +1,21 @@
+schema_version: 1
+feature: notification-markup-fail-closed
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 3bce2bfeaa42bd2abb6be424886dc8e41230f68c
+last_input_digest: sha256:2309b97fc4cb8359af6b689b79e26623213fef5f5a472e9c8f8c6fd5727f39b3
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:2309b97fc4cb8359af6b689b79e26623213fef5f5a472e9c8f8c6fd5727f39b3
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
