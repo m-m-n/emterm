@@ -38,7 +38,8 @@ workflow:
     status: completed
     completed_at_commit: f093704c3a295c4a17fa0c10a9087b5462a2913a
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 293739edf38e84d47853d1cf4a8ed0210af50c85
     base_commit: cf4340657086623669ff1f771a15432c1239e602
   - id: review
     status: pending
@@ -61,8 +62,8 @@ tasks:
     domains: [input-handling]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2, NFR3]
-    status: in_progress
-    notes: null
+    status: merged
+    notes: "conflict_retries=0, tests=pass (802 passed / 0 failed). Environmental: fresh worktree lacked gitignored bundled fonts; ran scripts/fetch-fonts.sh locally so the workspace cargo check could run. Pre-existing fmt drift in print_handler/tests.rs (untouched) still makes crate-wide cargo fmt --check report a diff."
     branch: em-workflow/wide-pair-blank-primitive-unification/task0001
 
 review:
@@ -74,56 +75,56 @@ review:
 requirements:
   FR1:
     title: Single partner-blanking primitive on the cell-mutation base layer
-    status: pending
+    status: ok
     tbd_reason: null
     excluded_reason: null
     tasks: [task0001]
     tests: [TS-1, TS-2]
   FR2:
     title: Self-guarding precondition inside the primitive
-    status: pending
+    status: ok
     tbd_reason: null
     excluded_reason: null
     tasks: [task0001]
     tests: [TS-3]
   FR3:
     title: print path and CSI paths converge on the primitive
-    status: pending
+    status: ok
     tbd_reason: null
     excluded_reason: null
     tasks: [task0001]
     tests: [TS-1]
   FR4:
     title: Range-erase edge repair chokepoint
-    status: pending
+    status: ok
     tbd_reason: null
     excluded_reason: null
     tasks: [task0001]
     tests: [TS-1]
   FR5:
     title: Full-row erase paths gain no partner behavior
-    status: pending
+    status: ok
     tbd_reason: null
     excluded_reason: null
     tasks: [task0001]
     tests: [TS-4]
   NFR1:
     title: ASCII fast-path performance unchanged
-    status: pending
+    status: ok
     tbd_reason: null
     excluded_reason: null
     tasks: [task0001]
     tests: [TS-5]
   NFR2:
     title: Behavior-preserving refactor
-    status: pending
+    status: ok
     tbd_reason: null
     excluded_reason: null
     tasks: [task0001]
     tests: [TS-1]
   NFR3:
     title: No public API change
-    status: pending
+    status: ok
     tbd_reason: null
     excluded_reason: null
     tasks: [task0001]
