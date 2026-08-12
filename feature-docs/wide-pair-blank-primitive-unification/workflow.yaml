@@ -45,7 +45,8 @@ workflow:
     status: completed
     completed_at_commit: 1c8ccadb58ecda4debc6f19e7dea577ff1a809c9
   - id: verify
-    status: in_progress
+    status: completed
+    completed_at_commit: bf481915873dcb2a46788e4dbaa5ec169ba537c7
     result: pass
     failed_items: []
     summary:
