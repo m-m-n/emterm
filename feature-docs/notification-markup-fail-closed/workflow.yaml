@@ -37,7 +37,7 @@ workflow:
     skipped_reason: "src-tauri/src/callbacks.rs 内の #[cfg(unix)] エスケープ判定分岐のみを変更するバックエンドのセキュリティバグ修正で、UI・視覚面・レイアウト・デザイントークンへの変更が一切ないため。"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: null
