@@ -1,0 +1,21 @@
+schema_version: 1
+feature: tmux-sockets-discover-flake
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 4f90f26ddd6f05f6e8734add961210e0c6261f9c
+last_input_digest: sha256:9d0b872edcc48938863a48d36241e9cd10a30052eecd2b37f6a46803b60ea84f
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:9d0b872edcc48938863a48d36241e9cd10a30052eecd2b37f6a46803b60ea84f
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
