@@ -29,7 +29,8 @@ workflow:
     skipped_reason: "Test-stability fix in a headless #[cfg(unix)] Rust module (tmux socket discovery). No UI surface, no visual artifact, no design-system involvement."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: 2b0d111b5b25935a27911b2d9542faa075e02198
   - id: implement
     status: pending
     base_commit: bdbe144d9f30d30c2ad9c4cc4359a590e9bf67a4
@@ -42,7 +43,19 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "fork 窓レース下での discover_returns_only_the_live_socket の安定化"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/tmux_sockets.rs
+    skills: []
+    domains: [concurrency, external-io]
+    complexity: high
+    requirements: [FR1, FR2, NFR1, NFR2]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -58,29 +71,29 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS3]
   FR2:
     title: "Preserve the stale-exclusion verification intent"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS2, TS3]
   NFR1:
     title: "Fix works under parallel execution"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1]
   NFR2:
     title: "Production behavior unchanged"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS3]
 
 batch:
   review_rework_count: 0
