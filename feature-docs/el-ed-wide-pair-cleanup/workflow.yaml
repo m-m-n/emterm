@@ -48,9 +48,19 @@ workflow:
     status: completed
     completed_at_commit: de4ee8c6428d9e7276a74219c82f45acb9088afb
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 3f174e3858e40f0f0079e3cdcff041d895b81372
+    result: pass
     failed_items: []
+    summary:
+      build: "pass — CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml (gitignored な bundled フォントを worktree にローカル配置後に成功。コード起因の失敗ではない)"
+      test: "pass — CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib / 795 passed, 0 failed, 13 ignored"
+      format: "pass (feature 範囲) — 承認済みの check 版 cargo fmt --manifest-path crates/term_core/Cargo.toml --check を実行。差分は crates/term_core/src/print_handler/tests.rs のみで base commit 時点から存在する無関係な既存ドリフト。本 feature は同ファイルに未変更のため方針どおり手を入れていない"
+      e2e: "not applicable — プロジェクトに E2E 基盤なし"
+      scenarios: "TS-1..TS-6 すべて新規ユニットテスト10件で被覆・pass"
+      criteria: "AC1..AC6 すべて pass（AC6 は MV-1 の文書インスペクション）"
+      manual_items: "MV-1..MV-4 すべて pass"
+      excluded_requirements: "なし（status: excluded の要件は無い）"
   - id: retrospect
     status: pending
 
