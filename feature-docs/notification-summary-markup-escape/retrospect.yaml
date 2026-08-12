@@ -1,6 +1,6 @@
 feature: notification-summary-markup-escape
 collected_at: "2026-08-12T20:35:00+09:00"
-session_ids: []
+session_ids: [11de5fb7-cf82-4c4a-b89b-e27f9104fb1d.jsonl]
 signals:
   review_critical_high: []
   conflict_reworks: []
