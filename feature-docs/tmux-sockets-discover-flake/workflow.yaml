@@ -53,9 +53,9 @@ tasks:
     domains: [concurrency, external-io]
     complexity: high
     requirements: [FR1, FR2, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/tmux-sockets-discover-flake/task0001
 
 review:
   status: pending
