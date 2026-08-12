@@ -49,9 +49,17 @@ workflow:
     status: completed
     completed_at_commit: 2a3d8711c1dba3201237622e12344fb9924a0ac4
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 52e62094d15cbb8010472c8916d7113f646aef6c
+    result: pass
     failed_items: []
+    summary:
+      build: "term_core check ok / src-tauri check ok"
+      test_term_core: "799 passed, 0 failed, 13 ignored"
+      test_workspace: "3240 passed, 0 failed, 3 ignored (fetch-fonts 前置の承認済み複合コマンド)"
+      scenarios: "TS1-TS4 実体確認・個別実行 ok / TS5 回帰 ok"
+      nfr2: "差分は 276 行の追加のみ、全て #[cfg(test)] mod tests 内。Cargo.toml 変更なし"
+      excluded: []
   - id: retrospect
     status: pending
 
