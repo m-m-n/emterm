@@ -1,0 +1,87 @@
+schema_version: 1
+feature: tmux-sockets-discover-flake
+created: 2026-08-12
+base_branch: main
+parent_branch: em-workflow/tmux-sockets-discover-flake/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: in_progress
+    completed_at_commit: null
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Test-stability fix in a headless #[cfg(unix)] Rust module (tmux socket discovery). No UI surface, no visual artifact, no design-system involvement."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: bdbe144d9f30d30c2ad9c4cc4359a590e9bf67a4
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Stabilize discover_returns_only_the_live_socket under parallel execution"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "Preserve the stale-exclusion verification intent"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Fix works under parallel execution"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Production behavior unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
