@@ -1,0 +1,131 @@
+round: 1
+executed_at: "2026-08-13T09:05:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 56828c534468ae1ab78b91cf763235bed2a22bc4
+  head_commit: 84e24fdfa076a75b2cfd30570e3b12911a65164e
+  changed_files:
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - test-docs/notification-markup-fail-closed/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: litellm, model: vertex-glm-5, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: f2401560284a766c
+    severity: medium
+    category: architecture
+    file: src-tauri/src/callbacks/tests.rs
+    line: 776
+    title: "エスケープ判定ルールが本番と3箇所のテストに二重実装され、単一チョークポイントを迂回している"
+    description: |
+      escape_for_send（callbacks.rs:194-204）が「capability 判定 → title/body 両方のエスケープ」を担う
+      単一の合成ユニットだが、body_markup_escape モジュールの3つのテスト（tests.rs:761, 790, 813）は
+      その分岐マッピングをテスト側でハンドコピーしている。今回の fail-closed 反転で本番1箇所に対して
+      テスト側のコピー3箇所も手作業で入れ替える必要が生じており、判定ルールが4箇所に散った
+      shotgun surgery の実コストが顕在化している。とくに
+      tab_activity_and_agent_bodies_are_both_escaped_when_confirmed はコメントで
+      「single choke point が両パイプラインを覆うことを証明する」と述べながら、その choke point を
+      一度も呼んでいない。
+    suggestion: |
+      テスト側の分岐コピーを消し、本番の合成ユニット escape_for_send をそのまま呼ぶ形に寄せる
+      （summary_markup_escape 側と同じ作法に統一）。body_markup_absence_confirmed 単体の
+      真理値テストは述語の契約を直接ピン留めするものなのでそのまま残してよい。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium severity — auto-fix ゲート（critical/high のみ）の対象外。フォローアップタスクとして起票"
+  - stable_id: bd30201d9d565374
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/callbacks/tests.rs
+    line: 757
+    title: "分岐ロジックを複製したテストが escape_for_send を拘束しない（Ok+body-markup の body 側は無検証）"
+    description: |
+      unconfirmed_capabilities_leave_the_body_unchanged(757-767) と
+      tab_activity_and_agent_bodies_are_both_escaped_when_confirmed(775-820) は escape_for_send を
+      呼ばず、本番と同じ形の分岐をテスト側に複製している。これらのテストは escape_for_send の分岐が
+      どちら向きでも通る（fail-open へ再反転させても緑のまま）。さらに escape_for_send に対して
+      「Ok かつ body-markup あり → body がエスケープされる」ことを assert しているテストが存在せず、
+      SPEC の決定表 3 行のうち 1 セルが合成レベルで未固定。
+    suggestion: |
+      3 箇所の複製分岐を escape_for_send の直接呼び出しに置き換え、戻り値を assert する。
+      あわせて意味が反転して残っている unconfirmed_* 系 3 テストを absence_confirmed_* 系へ改名し、
+      NFR2 の語彙整合をテストにも及ぼす。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium severity — auto-fix ゲート（critical/high のみ）の対象外。フォローアップタスクとして起票"
+  - stable_id: 8ca300731a347d83
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/callbacks/tests.rs
+    line: 861
+    title: "SPEC TS2 / Edge Cases が明示する Ok(vec![])（空 capability リスト）のテストが無い"
+    description: |
+      SPEC の TS2 と Edge Cases は「Ok(空リスト) を明示的な no body-markup として非エスケープで通す」
+      ことを規定しているが、追加・更新されたテストの Ok 非マークアップ系は 4 件とも
+      Ok(vec!["actions"]) のみで、空リストを 1 件も通していない。
+      !caps.iter().any(..) が空 Vec で true になるという境界挙動そのものが未固定。
+    suggestion: |
+      body_markup_escape に Ok(vec![]) を渡すケースを追加する。body_markup_absence_confirmed が
+      true を返すこと、および escape_for_send が入力とバイト同一を返すことを assert し、
+      task0001.tests.yaml の AC-2 の tests 一覧にも追加して TS2 のカバレッジを明示する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium severity — auto-fix ゲート（critical/high のみ）の対象外。フォローアップタスクとして起票"
+  - stable_id: e4460353c4e1258e
+    severity: medium
+    category: security
+    file: src-tauri/src/callbacks.rs
+    line: 496
+    title: "Raw OSC notification content is written to warning logs"
+    description: |
+      同一の OSC 9 通知がレートリミットされたとき、攻撃者制御の title と body がまるごと warn レベルで
+      ログに出る。通知 body にはコマンド・ジョブ・URL・トークン等が含まれうるため、意図した
+      デスクトップ通知を超えた永続的な情報開示経路になる。成功時も title が debug レベルで出る
+      （callbacks.rs:175）。本 diff のハンク外にある既存コードで、今回の変更が持ち込んだものではない。
+    suggestion: |
+      通知内容をログに出さない。抑止・送出イベントと、長さや鍵付き診断 ID のような非機微メタデータ
+      だけをログする。
+    sources: [codex:security]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium severity かつ diff ハンク外の既存問題 — auto-fix ゲート対象外。別タスクとして起票"
+  - stable_id: 03533374d9cc5821
+    severity: medium
+    category: comprehensive
+    file: test-docs/notification-summary-markup-escape/task0001.tests.yaml
+    line: 14
+    title: "前フィーチャーの受け入れテスト記録が改名で参照切れになり、AC-2 の期待値も現仕様と矛盾"
+    description: |
+      今回のリネームにより test-docs/notification-summary-markup-escape/task0001.tests.yaml が挙げる
+      4 件のテストパスが存在しなくなった。加えて AC-2 の記述内容（失敗フェッチ→title 据え置き）は
+      本 SPEC の FR1 が意図的に反転させた旧仕様であり、記録側にその旨が無いため、後から読むと
+      現行コードが AC-2 に違反しているように見える。changed_files 外のファイルのため confidence は 50 に制限。
+    suggestion: |
+      旧 yaml のテストパスを現行名へ更新し、AC-2 に supersede 注記を追加する。記録を時点スナップショット
+      として凍結する運用なら、新 yaml 側に旧 feature の AC-2/AC-5 テスト名の対応表を残して
+      参照切れを追跡可能にする。
+    sources: [claude:comprehensive]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: "medium severity かつ changed_files 外 — auto-fix ゲート対象外。別タスクとして起票"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
