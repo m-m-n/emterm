@@ -1,0 +1,190 @@
+round: 1
+executed_at: "2026-08-12T19:20:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: f421e9c6f48e5e7ee6606f0040c82b521d3db8d7
+  head_commit: 8d5b2cb9d9701e0a1c83e9fc10404e350e72e812
+  changed_files:
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - test-docs/notification-body-markup-escape/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: litellm, model: vertex-glm-5, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: eade9e7f97a29a29
+    severity: medium
+    category: security
+    file: src-tauri/src/callbacks.rs
+    line: 157
+    line_end: 161
+    title: "get_capabilities() 失敗時は fail-open でマークアップが素通りする"
+    description: |
+      `body_markup_confirmed` は `Err(_)`（capability 取得失敗）を「未確認」として扱い、
+      送信側はエスケープを行わずに生の body を `.show()` に渡す。`get_capabilities()` は
+      `.show()` とは別の D-Bus 往復なので、GetCapabilities だけがタイムアウト・サービス
+      起動レース・ポータル経由のエラーで失敗し、直後の `Notify` が成功する窓がありうる。
+      その窓では body-markup 対応サーバ（GNOME Shell / dunst）に対して OSC 9 由来の
+      `<a href>` / `<img src>` がそのまま渡り、本タスクが塞ごうとした通知内フィッシング
+      経路が残る。逆側の誤り（非対応サーバへの過剰エスケープ）は `&amp;lt;` がリテラル
+      表示される表示劣化にとどまるため、失敗コストは非対称。
+      Claude と Codex が独立に同一箇所を指摘（クロスモデル合意）。
+    suggestion: |
+      判定を「成功したリストが body-markup を含まないと明示したときだけ素通し、それ以外
+      （取得失敗を含む）はエスケープ」に変える。ただし SPEC.md FR3 が現状の挙動を
+      明文化しているため、FR3 を fail-closed に改めるか、リスク受容として明記するかの
+      仕様判断が要る。
+    sources: [claude:security, codex:security]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "medium severity のため R4 auto-fix ゲート（critical/high のみ）の対象外。FR3 の仕様変更を伴うため別タスクへ繰り越し"
+  - stable_id: 11996759d76a5041
+    severity: medium
+    category: security
+    file: src-tauri/src/callbacks.rs
+    line: 166
+    title: "同じ egress で summary(title) は無エスケープのまま — dunst ではマークアップが解釈される"
+    description: |
+      本変更は `NotifyRustSink::send` を「唯一の D-Bus egress で一度だけエスケープする」
+      ポイントと位置づけているが、エスケープ対象は body のみで `.summary(title)` は素通し。
+      title は `parse_osc9` が端末出力から直接切り出す攻撃者制御可能な値。freedesktop 仕様上
+      summary はマークアップ非対象だが、dunst は `markup=full` 時に summary にも markup 変換を
+      適用し `<a href>` の URL をクリック可能にするため、body と同クラスの通知内フィッシング面が残る。
+    suggestion: |
+      本タスクのスコープを body 限定に保つなら SPEC の既知の残存リスクとして明記し後続タスクを
+      起票する。塞ぐなら (a) confirmed のとき title にも `escape_body_markup` を適用、
+      (b) `sanitize_title` 側で `<` `>` `&` を除去/置換、のいずれか。
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity かつ元タスクのスコープ外（body 限定）。別タスクへ繰り越し"
+  - stable_id: c1b7251a310b62cc
+    severity: medium
+    category: performance
+    file: src-tauri/src/callbacks.rs
+    line: 157
+    line_end: 163
+    title: "通知1件ごとに D-Bus 接続+ラウンドトリップが1回増える（get_capabilities を毎回・無条件に発行）"
+    description: |
+      `NotifyRustSink::send` は winit メインスレッドおよび PTY 読み取りスレッド上で同期実行
+      される。そこへ `notify_rust::get_capabilities()` を毎送信・無条件に追加しているため、
+      1 通知あたりのブロッキング D-Bus コストが接続 1 + 往復 1 から接続 2 + 往復 2 へ倍増する。
+      `NotificationRateLimiter` は同一 (title, body) を 1 秒抑止するだけなので、body が異なる
+      OSC 9 を連続で吐くスクリプトでは抑止が効かない。
+      Claude と litellm(vertex-deepseek-v3.2) が独立に同一箇所を指摘（クロスモデル合意）。
+      IMPLEMENTATION.md D2 の「キャッシュしない」判断は、この毎回のブロッキング IPC コストを
+      前提にしていない。
+    suggestion: |
+      (a) メタ文字ショートサーキット: body に `&` `<` `>` が無ければ結果は入力と同一なので
+      capability 問い合わせ自体を省く（D2 と両立）。または (b) capability を短時間キャッシュする
+      （D2 の決定を覆す形になる点は明示的に判断すること）。
+    sources: [claude:performance, litellm:vertex-deepseek-v3.2:performance]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: "medium severity のため R4 auto-fix ゲートの対象外。別タスクへ繰り越し"
+  - stable_id: f51da7aab1499d43
+    severity: medium
+    category: architecture
+    file: src-tauri/src/callbacks.rs
+    line: 156
+    line_end: 163
+    title: "エスケープ判断が本番シンクに直書きされ、テストが同じ分岐を複製している"
+    description: |
+      `NotifyRustSink::send` が `notify_rust::get_capabilities()` を直接呼び、その結果で
+      エスケープ有無を決めているため、`send` 自体を検証するテストが書けない。結果として
+      callbacks/tests.rs 側は同じ分岐を自前に再実装しており、AC-1〜AC-5 が検証しているのは
+      本番の判断ではなくテスト内のコピーになっている。`send` の分岐を反転しても新規テストは
+      全てグリーンのまま通る。
+    suggestion: |
+      capability 取得（I/O）と body 決定（純粋ロジック）の境界を `body_for_send()` として
+      切り出し、`send` とテストの双方が同じ関数を通るようにする。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium severity のため R4 auto-fix ゲートの対象外。別タスクへ繰り越し"
+  - stable_id: 409f4a029ce8169d
+    severity: medium
+    category: spec
+    file: src-tauri/src/callbacks/tests.rs
+    line: 768
+    line_end: 813
+    title: "TS5 が共有パイプライン（NotifyRustSink::send）を経由していない"
+    description: |
+      SPEC.md の TS5 (FR4, NFR2) は「共有パイプライン経由でエスケープが実行される」ことを
+      要求しているが、`tab_activity_and_agent_bodies_are_both_escaped_when_confirmed` は
+      `NotifyRustSink::send` を呼ばず、send 内の判定をテスト側に複製している。NFR2 の
+      チョークポイント性質を固定するテストが存在しない。
+    suggestion: "判定を純関数 `body_for_send()` として切り出し、send とテストの双方がその同一関数を通るようにする（architecture / comprehensive の同根指摘と同じ修正で解消する）。"
+    sources: [claude:spec]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity のため R4 auto-fix ゲートの対象外。architecture の f51da7aab1499d43 と同根で、同一修正で解消する"
+  - stable_id: e587c1b6f27875e4
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/callbacks/tests.rs
+    line: 754
+    line_end: 809
+    title: "エスケープ判定のテストが send() のロジックを複製しており、本番経路の反転を検出できない"
+    description: |
+      新規テストは `escape_body_markup` と `body_markup_confirmed` を個別に検証したうえで、
+      `NotifyRustSink::send` の判定をテスト内に書き写している。send() 側の分岐は 1 行も
+      カバーされていないため、条件を反転しても、shadowing を消して未エスケープの引数を
+      `.body()` に渡しても、8 本の新規テストは全て緑のまま通る。
+    suggestion: "判定を純関数 `body_for_send()` として callbacks.rs に切り出し、send() とテストの双方から同じ関数を呼ぶ。"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity のため R4 auto-fix ゲートの対象外。architecture / spec の同根指摘と同一修正で解消する"
+  - stable_id: 69160887e00fe870
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/callbacks.rs
+    line: 157
+    line_end: 161
+    title: "get_capabilities() の失敗が無言で握り潰され、エスケープ無効化を診断できない"
+    description: |
+      `body_markup_confirmed` は `Err(_)` を `false` に畳み込むだけでログが出ない。本プロジェクトは
+      DevTools が使えず調査経路が emterm.log に限定されているため、「通知に HTML がそのまま出る」と
+      報告されたときに能力取得失敗・サーバ非対応・エスケープ側のバグを切り分けられない。
+      `.show()` 側は `Err` を `log::warn!` しており、同じ D-Bus 呼び出しである能力取得だけ無言なのは
+      一貫性も欠く。
+    suggestion: "能力取得結果を一度束縛し、`Err` のときに `log::warn!` を出す。毎送信で冗長なら、直前の結果と異なるときのみ出す形でもよい。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium severity のため R4 auto-fix ゲートの対象外。別タスクへ繰り越し"
+  - stable_id: ba32033b6ad194af
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/callbacks.rs
+    line: 157
+    title: "通知 1 件ごとに同期 D-Bus 往復が 1 回増え、PTY 処理スレッドと UI スレッドの両方をブロックする"
+    description: |
+      `handle_notify` は `TerminalCore::process_pty_data` 内の OSC コールバックなので PTY 読み取り
+      スレッドが往復ぶん停止し、`App::notify` はフレーム内ループから呼ばれるため winit の UI スレッドが
+      フレーム中に停止する。`pending_notifications` のドキュメントコメント（callbacks.rs:279-281）は
+      「バッファリングによって process_pty_data 内で D-Bus 往復をしない」と述べているが、実装は既に
+      インラインで送っており、今回の変更でその乖離が広がっている。
+    suggestion: "performance の c1b7251a310b62cc と同根。往復回数を減らすか、少なくとも callbacks.rs:279-281 のドキュメントコメントを実態に合わせて更新する。"
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium severity のため R4 auto-fix ゲートの対象外。performance の c1b7251a310b62cc と同根"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
