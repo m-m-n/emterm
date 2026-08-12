@@ -804,4 +804,43 @@ mod tests {
             }
         }
     }
+
+    // ── Overflow wide-pair partner cleanup (task0002 D1/D2, TS4) ─────
+
+    // TS4 (AC-2, FR2): ECH with the cursor on the spacer of an
+    // overflow-table base (grapheme > 16 inline bytes) blanks the orphaned
+    // base at col-1, proving blank_wide_pair_split's char_len == 0xFF
+    // branch runs through the ECH call site.
+    #[test]
+    fn test_erase_characters_cursor_on_spacer_of_overflow_base_blanks_left_base() {
+        let mut core = TerminalCore::new(10, 1, 0);
+        // D1: ZWJ family emoji 👨‍👩‍👧‍👦 (7 codepoints, 25 UTF-8 bytes,
+        // exceeding the 16-byte inline cell capacity) buffers in the
+        // grapheme accumulator until a following non-combining char flushes
+        // it to the grid (D1 note 1).
+        core.handle_print(0x1F468); // 👨
+        core.handle_print(0x200D); // ZWJ
+        core.handle_print(0x1F469); // 👩
+        core.handle_print(0x200D); // ZWJ
+        core.handle_print(0x1F467); // 👧
+        core.handle_print(0x200D); // ZWJ
+        core.handle_print(0x1F466); // 👦
+        core.handle_print(b'X' as u32); // flush -> base@col0 (overflow), spacer@col1, 'X'@col2
+
+        // Minimal pre-condition (D1): col0 is an overflow-table base, col1
+        // is its spacer.
+        assert!(core.ring_cells[core.cell_index(0, 0).unwrap()].is_overflow());
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        assert_eq!(core.get_cell_width(1, 0), 0);
+
+        core.set_cursor(1, 0); // spacer position
+        core.clear_dirty();
+        core.handle_erase_characters(1);
+
+        // Post-condition (FR2 + D4): col0 reads back as a plain space, not
+        // an empty string.
+        assert_eq!(core.get_cell_char(0, 0), " ");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        assert!(core.is_row_dirty(0));
+    }
 }

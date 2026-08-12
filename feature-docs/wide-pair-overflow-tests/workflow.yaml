@@ -1,0 +1,154 @@
+schema_version: 1
+feature: wide-pair-overflow-tests
+created: 2026-08-12
+base_branch: main
+parent_branch: em-workflow/wide-pair-overflow-tests/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: ""
+      e2e_test_command: ""
+    term_core:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: ed031c8a98e4c8e0c843c0b5229faab2f834a777
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      term_core（ANSI パーサ/グリッド）へのユニットテスト追加のみで、UI・視覚的出力・
+      ユーザー向け挙動の変更が一切ないため。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 602f1711d6337599680b99066e30e898cedd9921
+  - id: implement
+    status: completed
+    completed_at_commit: 9be762b8de487dc3ed12fbee1cf815281794f5a5
+    base_commit: 754ab5adcfd366a4718dd3e5f0adc7ab6de4c344
+  - id: review
+    status: completed
+    completed_at_commit: 2a3d8711c1dba3201237622e12344fb9924a0ac4
+  - id: verify
+    status: completed
+    completed_at_commit: 52e62094d15cbb8010472c8916d7113f646aef6c
+    result: pass
+    failed_items: []
+    summary:
+      build: "term_core check ok / src-tauri check ok"
+      test_term_core: "799 passed, 0 failed, 13 ignored"
+      test_workspace: "3240 passed, 0 failed, 3 ignored (fetch-fonts 前置の承認済み複合コマンド)"
+      scenarios: "TS1-TS4 実体確認・個別実行 ok / TS5 回帰 ok"
+      nfr2: "差分は 276 行の追加のみ、全て #[cfg(test)] mod tests 内。Cargo.toml 変更なし"
+      excluded: []
+  - id: retrospect
+    status: completed
+    completed_at_commit: 0cb0288135670a7589f7460cf0296b54955e070c
+
+tasks:
+  task0001:
+    title: print 経路の overflow 相方掃除テスト（TS1/TS2）
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/print_handler/tests.rs
+    skills: []
+    domains: [input-handling]
+    complexity: low
+    requirements: [FR1, FR3, FR4, NFR1, NFR2]
+    status: merged
+    notes: null
+    branch: em-workflow/wide-pair-overflow-tests/task0001
+  task0002:
+    title: DCH / ECH 経路の overflow 相方掃除テスト（TS3/TS4）
+    plan: tasks/task0002.md
+    files:
+      - crates/term_core/src/csi_edit.rs
+      - crates/term_core/src/csi_screen.rs
+    skills: []
+    domains: [input-handling]
+    complexity: low
+    requirements: [FR2, FR3, FR4, NFR1, NFR2]
+    status: merged
+    notes: null
+    branch: em-workflow/wide-pair-overflow-tests/task0002
+
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary: []
+    cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    spec: completed
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: print 経路の overflow 相方掃除テスト
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS2]
+  FR2:
+    title: DCH / ECH 経路の overflow 相方掃除テスト
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0002]
+    tests: [TS3, TS4]
+  FR3:
+    title: overflow 分岐の実行証明
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002]
+    tests: [TS1, TS2, TS3]
+  FR4:
+    title: 既存テストの維持
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002]
+    tests: [TS5]
+  NFR1:
+    title: 既存テスト規約への準拠
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002]
+    tests: [TS5]
+  NFR2:
+    title: プロダクションコード非変更
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001, task0002]
+    tests: [TS5]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

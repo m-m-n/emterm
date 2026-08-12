@@ -1251,3 +1251,107 @@ fn test_write_grapheme_redraw_swaps_which_partner_side_is_overwritten() {
         );
     }
 }
+
+// ── wide-pair-overflow-tests (task0001): print-path overflow branch ──
+//
+// TS1/TS2 exercise the overflow-table-bound wide-pair base scenario
+// (`char_len == 0xFF`), unlike the wide-pair-overwrite-cleanup tests above
+// which use inline (non-overflow) wide pairs. D1: the ZWJ family emoji
+// recipe (7 codepoints, 25 UTF-8 bytes) merges into a single width-2
+// cluster whose base exceeds the 16-byte inline cell capacity and goes to
+// the overflow side table (`TerminalCore::overflow` /
+// `TerminalCore::overflow_ridx`). D2: asserting directly on the overflow
+// flag / overflow table / overflow_ridx is an intentional, scoped
+// exception to test/README.md's "avoid asserting on internal state"
+// guidance (see IMPLEMENTATION.md D2) — it is the only way to prove FR3's
+// "the char_len == 0xFF branch actually ran and both structures stayed in
+// sync" requirement.
+
+// AC-1 (TS1, FR1/FR3): overwriting an overflow-bound wide-pair base with
+// an ASCII character removes the overflow entry via the write's own
+// overflow cleanup (handle_print_ascii), and blanks the now-orphaned
+// spacer via blank_wide_pair_partner's *non*-overflow branch (the spacer
+// itself was never overflow-bound). The overflow branch of
+// blank_wide_pair_partner itself is exercised by TS2 below — see the plan's
+// "経路の注記".
+#[test]
+fn test_handle_print_ascii_overwrite_overflow_base_blanks_spacer() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    // D1: ZWJ family emoji 👨‍👩‍👧‍👦, 7 codepoints / 25 UTF-8 bytes, merges
+    // into a single width-2 cluster whose base exceeds the 16-byte inline
+    // capacity and goes to the overflow side table.
+    core.process_pty_data(
+        "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}".as_bytes(),
+    );
+    core.flush_grapheme_buffer(); // D1 note 1: force the buffered cluster to the grid
+
+    // Pre assert (D2 + FR3): base is overflow-bound; overflow table and
+    // overflow_ridx both carry the col0 entry; base width 2, spacer width 0.
+    let idx0 = core.cell_index(0, 0).expect("col0 row0 in bounds");
+    assert!(core.ring_cells[idx0].is_overflow());
+    let abs = core.viewport_abs(0) as u32;
+    assert!(core.overflow.contains_key(&(0u32, abs)));
+    assert!(
+        core.overflow_ridx
+            .get(&abs)
+            .map(|cols| cols.contains(&0u32))
+            .unwrap_or(false)
+    );
+    assert_eq!(core.get_cell_width(0, 0), 2);
+    assert_eq!(core.get_cell_width(1, 0), 0);
+
+    core.process_pty_data(b"\r"); // cursor back to col0
+    core.handle_print(0x41); // 'A' overwrites the overflow base (ASCII fast path)
+
+    assert_eq!(core.get_cell_char(0, 0), "A");
+    assert_eq!(core.get_cell_width(0, 0), 1);
+    assert_eq!(core.get_cell_char(1, 0), " "); // orphaned spacer blanked (FR1)
+    assert_eq!(core.get_cell_width(1, 0), 1);
+
+    // FR3: the overflow entry removed from both structures.
+    assert!(!core.overflow.contains_key(&(0u32, abs)));
+    assert!(!core.overflow_ridx.contains_key(&abs));
+}
+
+// AC-2 (TS2, FR1/FR3): overwriting the spacer of an overflow-bound wide
+// pair triggers R2 (blank_orphaned_neighbor_before_overwrite), which calls
+// blank_wide_pair_partner on the overflow-bound base cell — the overflow
+// branch (`char_len == 0xFF`) of that primitive is the path this test
+// proves runs and keeps the overflow table / overflow_ridx in sync.
+#[test]
+fn test_handle_print_ascii_overwrite_wide_spacer_blanks_overflow_base() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    core.process_pty_data(
+        "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}".as_bytes(),
+    );
+    core.flush_grapheme_buffer();
+
+    // Pre assert (D2 + FR3): same setup as TS1.
+    let idx0 = core.cell_index(0, 0).expect("col0 row0 in bounds");
+    assert!(core.ring_cells[idx0].is_overflow());
+    let abs = core.viewport_abs(0) as u32;
+    assert!(core.overflow.contains_key(&(0u32, abs)));
+    assert!(
+        core.overflow_ridx
+            .get(&abs)
+            .map(|cols| cols.contains(&0u32))
+            .unwrap_or(false)
+    );
+    assert_eq!(core.get_cell_width(0, 0), 2);
+    assert_eq!(core.get_cell_width(1, 0), 0);
+
+    core.process_pty_data(b"\x1b[1;2H"); // CUP row1,col2 (1-indexed) -> (col1,row0)
+    core.handle_print(0x42); // 'B' overwrites the spacer (ASCII fast path)
+
+    assert_eq!(core.get_cell_char(1, 0), "B");
+    assert_eq!(core.get_cell_width(1, 0), 1);
+    assert_eq!(core.get_cell_char(0, 0), " "); // orphaned overflow base blanked (D4)
+    assert_eq!(core.get_cell_width(0, 0), 1);
+
+    // FR3: the overflow entry removed from both structures — here the
+    // `char_len == 0xFF` branch inside blank_wide_pair_partner is what
+    // performs the removal (unlike TS1, where the overwrite's own cleanup
+    // does it).
+    assert!(!core.overflow.contains_key(&(0u32, abs)));
+    assert!(!core.overflow_ridx.contains_key(&abs));
+}
