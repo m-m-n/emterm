@@ -21,8 +21,8 @@ project:
 workflow:
   - id: create-spec
     artifacts: [REQUIREMENTS.md, SPEC.md]
-    status: in_progress
-    completed_at_commit: null
+    status: completed
+    completed_at_commit: 44acfed9734caab79826fea31418aa046ba03a1c
   - id: design
     artifacts: [DESIGN.md, design/]
     status: skipped
