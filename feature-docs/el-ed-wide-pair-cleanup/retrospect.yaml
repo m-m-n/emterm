@@ -1,0 +1,35 @@
+feature: el-ed-wide-pair-cleanup
+collected_at: "2026-08-12T15:05:00+09:00"
+session_ids: [ce6c269a-c811-4133-8ab7-e20421e1e36e]
+signals:
+  review_critical_high:
+    - stable_id: e8dd917c8b1e7f78
+      category: spec
+      file: crates/term_core/src/csi_screen.rs
+      title: "Potential mismatch between condition and target cell for right-edge cleanup"
+      resolution: declined
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "NFR3 が消去ホットパスへの影響を制約しており、diff が EL/ED の全消去経路に幅参照と条件分岐を追加しているため"
+  declined_findings:
+    - stable_id: e8dd917c8b1e7f78
+      category: spec
+      resolution_reason: "誤検知。finding 本文自身が FR2 を満たすと結論しており severity: critical のラベルと矛盾。実コードでも FR2 どおりと確認"
+    - stable_id: c424075fb7a03789
+      category: spec
+      resolution_reason: "欠陥の指摘ではなく FR4 準拠の確認"
+    - stable_id: ae3a4d395478c093
+      category: spec
+      resolution_reason: "欠陥の指摘ではなく FR5 準拠の確認"
+    - stable_id: 85ec5b647eda7386
+      category: spec
+      resolution_reason: "欠陥の指摘ではなく FR6 準拠の確認"
+lessons_candidates:
+  - "litellm(vertex-deepseek-v3.2) の spec レビュアーが「違反なし」の確認を finding として 4 件返し、うち 1 件に severity: critical を付けた。本文と severity が矛盾する出力は R5 の completion gate（residual_critical_high > 0）を誤って塞ぎうる。観点スキルまたはレビュアー契約側で「準拠確認は finding として返さない」を明示する余地がある"
+  - "同じ litellm ハーネスの performance レビュアーはトークン枯渇で出力が `{` 1 文字に切断され、findings ゼロ・skipped=false で返った。retryable な skip_reason が付かないため R2b のチェーン前進が効かず、クロスモデル検証が実質空振りする。切断検出を skip_reason（例: output_truncated）として扱えるとフォールバックが機能する"
+  - "実装者が最初のテスト/ビルドを worktree ではなくメインツリーで実行しかけた（Bash ツールの既定 cwd がプロジェクトルートのため）。本人が commit 前に自己検出して再実行したが、worktree-task-workflow 側で cwd の明示を強めると再発を防げる"
+  - "新規 worktree では gitignore 済みの bundled フォントが存在せず、build.rs が panic して build コマンドが落ちる。verify/implement の両方で同じ回避（メインツリーからのコピー）が必要になった。fetch-fonts を含む承認済みコマンド列を verify の build に使うか、worktree 作成時に配置する手順があると素直"
+  - "レビュー結果として medium 1 件（EL/ED 4 箇所のコピペと各コピーの片側が構造的に死に枝）が deferred になった。Notion タスクが元々スコープ外に挙げていた『相方掃除プリミティブの共通化・chokepoint 化』と同一主題で、レビューが独立に同じ結論へ到達している"

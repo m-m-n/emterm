@@ -62,7 +62,8 @@ workflow:
       manual_items: "MV-1..MV-4 すべて pass"
       excluded_requirements: "なし（status: excluded の要件は無い）"
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: a61b223d5af21a7380a5fcca8c0087d745e9911b
 
 tasks:
   task0001:
