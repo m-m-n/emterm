@@ -43,7 +43,8 @@ workflow:
     skipped_reason: "Pure backend/runtime-logic bug fix inside src-tauri/src/ (frame-skip gate predicate). No new UI surface; toast UI design changes are explicitly out of scope in the task description."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: 29f91d9e07fe7a04adede0493e4e617d8570131f
   - id: implement
     status: pending
     base_commit: bdbe144d9f30d30c2ad9c4cc4359a590e9bf67a4
@@ -56,7 +57,26 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Pending-work predicate for the frame-skip gate
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/self_exec.rs
+      - src-tauri/src/app/mod.rs
+      - src-tauri/src/app/tests/timing.rs
+      - src-tauri/src/app/tests/mod.rs
+      - src-tauri/src/window_host/render_surface.rs
+      - src-tauri/src/window_host/event_loop.rs
+      - src-tauri/src/window_host/frame_pacing.rs
+      - src-tauri/src/sftp/service.rs
+    skills: [backend-impl]
+    domains: [concurrency, ui]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -72,71 +92,71 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4, TS-5]
   FR2:
     title: App::frame_work_pending predicate
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-4]
   FR3:
     title: overlay_work uses the new predicate
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-7]
   FR4:
     title: event_loop redraw pacing uses the new predicate
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-7]
   FR5:
     title: next_toast_deadline predicate choice
-    status: tbd
-    tbd_reason: "The task description explicitly defers this choice to design time. To be settled in the create-plan step."
+    status: ok
+    tbd_reason: "Resolved at create-plan: next_toast_deadline() moves to the new frame_work_pending() predicate — see IMPLEMENTATION.md D1 (closes the TOAST_POLL_MS rate-limit race for one-shot pending work; keeps all three consumers of the finding on a single predicate)."
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-6]
   FR6:
     title: Update known-limitation doc
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-8]
   FR7:
     title: Unit tests for the new predicate
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2, TS-3, TS-4]
   NFR1:
     title: Existing restart_required() consume semantics unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
   NFR2:
     title: Zero warnings across the three check configurations
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-9]
   NFR3:
     title: Predicate cheap enough for per-turn / per-render evaluation
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-10]
 
 batch:
   review_rework_count: 0
