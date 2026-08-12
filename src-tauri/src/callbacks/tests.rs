@@ -811,3 +811,123 @@ mod body_markup_escape {
         assert!(!agent_escaped.contains('>'));
     }
 }
+
+// ── task0001: summary-markup escape (mirrors `body_markup_escape` above;
+// same pinned components, applied to the title/summary side of
+// `NotifyRustSink::send` under the single per-send gate — D2). Exercises
+// the private `escape_for_send` composition unit since the sink itself
+// cannot be invoked against a real D-Bus connection (Test Notes). ────────
+
+#[cfg(unix)]
+mod summary_markup_escape {
+    use super::*;
+
+    // AC-1 (TS1): with a confirmed capability list, a tag-bearing title is
+    // converted to entity references — same ordering (`&` first) as the
+    // body path produces for the same input.
+    #[test]
+    fn confirmed_capabilities_escape_a_tag_bearing_title_like_the_body_path() {
+        let title = r#"<a href="https://attacker.invalid">Sign in</a>"#;
+        let confirmed: Result<Vec<String>, ()> = Ok(vec!["body-markup".to_string()]);
+        let (escaped_title, _escaped_body) = escape_for_send(title, "body", &confirmed);
+        assert!(!escaped_title.contains('<'), "raw '<' survived: {escaped_title}");
+        assert!(!escaped_title.contains('>'), "raw '>' survived: {escaped_title}");
+        assert_eq!(
+            escaped_title,
+            r#"&lt;a href="https://attacker.invalid"&gt;Sign in&lt;/a&gt;"#
+        );
+    }
+
+    // AC-1: `&` is replaced first in the title too, so a pre-existing
+    // `&amp;` double-escapes — mirrors the pinned body behavior.
+    #[test]
+    fn confirmed_capabilities_double_escape_a_preexisting_entity_in_a_title() {
+        let confirmed: Result<Vec<String>, ()> = Ok(vec!["body-markup".to_string()]);
+        let (escaped_title, _) = escape_for_send("Tom & Jerry &amp; co", "body", &confirmed);
+        assert_eq!(escaped_title, "Tom &amp; Jerry &amp;amp; co");
+    }
+
+    // AC-2 (TS2): an unconfirmed capability result — a successful list
+    // without `body-markup` — leaves the title byte-for-byte unchanged.
+    #[test]
+    fn unconfirmed_capability_list_leaves_the_title_unchanged() {
+        let title = r#"Tom & Jerry &amp; <b>bold</b>"#;
+        let unconfirmed: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
+        let (escaped_title, _) = escape_for_send(title, "body", &unconfirmed);
+        assert_eq!(escaped_title, title);
+    }
+
+    // AC-2: a failed capability fetch is also "unconfirmed" — fail-open
+    // parity with the body path (FR1/FR3).
+    #[test]
+    fn failed_capability_fetch_leaves_the_title_unchanged() {
+        let title = r#"<script>alert(1)</script>"#;
+        let failed: Result<Vec<String>, ()> = Err(());
+        let (escaped_title, _) = escape_for_send(title, "body", &failed);
+        assert_eq!(escaped_title, title);
+    }
+
+    // AC-2 / D2: a single gate evaluation drives BOTH fields — when
+    // unconfirmed, body is unchanged too, in the same call.
+    #[test]
+    fn unconfirmed_capability_list_leaves_the_body_unchanged_in_the_same_call() {
+        let unconfirmed: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
+        let (_escaped_title, escaped_body) =
+            escape_for_send("title", "Tom & Jerry &amp; <b>bold</b>", &unconfirmed);
+        assert_eq!(escaped_body, "Tom & Jerry &amp; <b>bold</b>");
+    }
+
+    // AC-3 (TS3): a title truncated by `sanitize_title` to exactly 100
+    // characters, ending in `<`, escapes to a complete trailing entity
+    // reference — the escape happens strictly after truncation, so the
+    // entity is never split.
+    #[test]
+    fn confirmed_capabilities_escape_a_sanitize_title_truncated_title_intact() {
+        let mut title = "a".repeat(99);
+        title.push('<'); // 100th character — sanitize_title's cutoff.
+        title.push_str("TRAILING-SHOULD-BE-TRUNCATED>");
+
+        let sanitized = crate::notifications::sanitize_title(&title);
+        assert_eq!(sanitized.chars().count(), 100);
+        assert!(sanitized.ends_with('<'));
+
+        let confirmed: Result<Vec<String>, ()> = Ok(vec!["body-markup".to_string()]);
+        let (escaped_title, _) = escape_for_send(&sanitized, "body", &confirmed);
+        assert!(
+            escaped_title.ends_with("&lt;"),
+            "entity reference was split or missing: {escaped_title}"
+        );
+        assert!(!escaped_title.contains("TRUNCATED"));
+    }
+
+    // AC-4 (TS4): the OSC 9 fallback-title branch (empty title segment →
+    // current tab title, or "emterm" when there is none) produces a title
+    // that flows through the same escaped summary decision as an explicit
+    // title.
+    #[test]
+    fn osc9_fallback_title_flows_through_the_same_escaped_decision() {
+        let confirmed: Result<Vec<String>, ()> = Ok(vec!["body-markup".to_string()]);
+
+        // Fallback to the current tab title (untrusted OSC 0/2 payload).
+        let (title, _body) = parse_osc9(";all green", Some("<tab title>"));
+        assert_eq!(title, "<tab title>");
+        let (escaped_title, _) = escape_for_send(&title, "all green", &confirmed);
+        assert_eq!(escaped_title, "&lt;tab title&gt;");
+
+        // Fallback to "emterm" when there's no tab title either — no meta
+        // characters, so the escape is an identity transform (must not
+        // corrupt a plain title).
+        let (title, _body) = parse_osc9(";all green", None);
+        assert_eq!(title, "emterm");
+        let (escaped_title, _) = escape_for_send(&title, "all green", &confirmed);
+        assert_eq!(escaped_title, "emterm");
+    }
+
+    // Edge case: a title consisting only of meta characters.
+    #[test]
+    fn confirmed_capabilities_escape_a_title_of_only_meta_characters() {
+        let confirmed: Result<Vec<String>, ()> = Ok(vec!["body-markup".to_string()]);
+        let (escaped_title, _) = escape_for_send("<>&", "body", &confirmed);
+        assert_eq!(escaped_title, "&lt;&gt;&amp;");
+    }
+}

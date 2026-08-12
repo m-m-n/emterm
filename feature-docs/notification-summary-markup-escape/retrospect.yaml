@@ -1,0 +1,42 @@
+feature: notification-summary-markup-escape
+collected_at: "2026-08-12T20:35:00+09:00"
+session_ids: [11de5fb7-cf82-4c4a-b89b-e27f9104fb1d.jsonl]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings:
+    - stable_id: 3d75840c8f7bd928
+      category: security
+      resolution_reason: >-
+        SPEC.md の Out of Scope に明示された capability 取得失敗時の fail-open。
+        この feature が作り込んだものではなく、別タスクとして起票する。
+    - stable_id: 102ae64a012ea0ae
+      category: comprehensive
+      resolution_reason: >-
+        SPEC.md の assume.approach-a-escape-at-sink が受容済みのトレードオフとして
+        記録している表示劣化。ただし判断は batch モードの Codex 相談による自動解決
+        （reversible）なので、別タスクで人間の再検討に載せる。
+  deferred_findings:
+    - stable_id: 5de8188253e559b0
+      category: comprehensive
+      resolution_reason: >-
+        severity medium のため auto-fix 候補ゲート（critical/high のみ）にかからず
+        未適用。テストカバレッジの穴として別タスクに起票する。
+lessons_candidates:
+  - >-
+    新規 integration worktree では gitignored の bundled フォントが無く、
+    build.rs の font_missing チェックにより cargo check / test が一切通らない。
+    implementer と verify の両方で scripts/fetch-fonts.sh の実行が必要になった。
+    worktree 生成直後のブートストラップ手順として定型化できる余地がある。
+  - >-
+    batch モードで方針選択を Codex 相談により自動解決した場合、その決定が
+    reversible な assumption として記録されても、後段の comprehensive レビューが
+    「人間の確認に載せる価値がある」と再提起することがある。自動決定の可視化に
+    レビューが実際に効いた事例。
+  - >-
+    テスト側でプロダクションコードの分岐をインライン再実装していると、
+    リグレッションゲートとして宣言されていても実際には機能しない。
+    今回 comprehensive レビューがこれを検出した。
