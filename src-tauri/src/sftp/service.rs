@@ -635,6 +635,34 @@ fn detect_sftp_windows() -> String {
     String::new()
 }
 
+/// Test-only seam (frame-skip-pending-work task0001, FR7): place a
+/// synthetic event on the progress / duplicate-check-result channels
+/// directly, bypassing the real upload / duplicate-check pipeline, so
+/// `App::frame_work_pending` predicate tests can observe a non-empty
+/// receiver without spawning a subprocess. Production channel layout and
+/// the public `SftpService` API (used outside `cfg(test)`) are unchanged —
+/// these methods only exist in test builds.
+#[cfg(test)]
+impl SftpService {
+    pub(crate) fn test_push_progress_event(&self) {
+        let _ = self.progress_tx.send(SftpUploadProgress {
+            session_id: "test-pending".to_string(),
+            file_name: "test.txt".to_string(),
+            bytes_transferred: 0,
+            total_bytes: 0,
+            status: SftpUploadStatus::Uploading,
+            error_message: None,
+        });
+    }
+
+    pub(crate) fn test_push_result_event(&self) {
+        let _ = self.result_tx.send(DuplicateCheckResult {
+            request_id: 0,
+            outcome: Ok(Vec::new()),
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

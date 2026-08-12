@@ -249,14 +249,16 @@ impl WindowHost {
             };
             let status_bar_changed = app.status_bar_view_model_changed();
             // Overlay work in flight (a restart/SFTP toast counting down to
-            // auto-dismiss, a visual-bell flash still decaying, the search
-            // UI being open, or the one-shot bell-erase-frame signal) needs
-            // the egui pass to run every frame just like the status bar
-            // carve-out above — otherwise the 60 Hz wake this scheduled in
-            // `about_to_wait` (see `toast_pending` / `bell_due` there) spins
-            // uselessly, discarding every frame here before `pump_toasts` /
-            // the toast prune / the bell-flash paint / the search overlay
-            // ever run.
+            // auto-dismiss, pre-toast pending work that will create one —
+            // an undrained SFTP event, a raised restart flag, see
+            // `App::frame_work_pending` — a visual-bell flash still
+            // decaying, the search UI being open, or the one-shot
+            // bell-erase-frame signal) needs the egui pass to run every
+            // frame just like the status bar carve-out above — otherwise
+            // the 60 Hz wake this scheduled in `about_to_wait` (see
+            // `frame_work_pending` / `bell_due` there) spins uselessly,
+            // discarding every frame here before `pump_toasts` / the toast
+            // prune / the bell-flash paint / the search overlay ever run.
             //
             // task0005 AC-2: `app.search_visible()` keeps every frame live
             // while the search UI is open (interactive query editing,
@@ -288,7 +290,7 @@ impl WindowHost {
             // sees it) — bare `PointerMoved` is deliberately excluded from
             // `egui_input_pending` below, so without this the card would
             // never actually paint its brightened state on hover-enter.
-            let overlay_work = app.toast_pending()
+            let overlay_work = app.frame_work_pending()
                 || app.visual_bell_progress().is_some()
                 || app.search_visible()
                 || bell_erase_pending
