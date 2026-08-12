@@ -1,0 +1,106 @@
+task_id: task0001
+baseline_failures: []          # `--lib -- --test-threads=1` baseline: 3240 passed, 0 failed, 3 ignored
+final_failures: []             # same suite after implementation: 3240 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - callbacks::tests::summary_markup_escape::failed_capability_fetch_escapes_both_title_and_body_in_the_same_call
+      - callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_false_on_fetch_failure
+    red_confirmed: true
+    red_reason: >-
+      Isolated the assertion (not just the compile error) by temporarily
+      reproducing the OLD fail-open decision under the new predicate's
+      name/shape (`body_markup_absence_confirmed = !body_markup_confirmed`,
+      matching the exact pre-task escape_for_send branch), then ran the
+      new tests against it. Both failed for the right reason:
+      `failed_capability_fetch_escapes_both_title_and_body_in_the_same_call`
+      panicked with "raw markup survived in title: <script>alert(1)</script>"
+      (old code left the title unescaped on Err), and
+      `body_markup_absence_confirmed_is_false_on_fetch_failure` panicked with
+      "assertion failed: !body_markup_absence_confirmed(&failed)" (old-logic
+      shim returns true for Err, which is exactly the fail-open bug this
+      task closes). The isolation harness was discarded before committing;
+      only the real fail-closed implementation is in the diff.
+  AC-2:
+    tests:
+      - callbacks::tests::summary_markup_escape::unconfirmed_capability_list_leaves_the_title_unchanged
+      - callbacks::tests::summary_markup_escape::unconfirmed_capability_list_leaves_the_body_unchanged_in_the_same_call
+      - callbacks::tests::body_markup_escape::unconfirmed_capabilities_leave_the_body_unchanged
+      - callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_true_only_for_a_successful_list_without_it
+    red_confirmed: false
+    red_reason: >-
+      FR2's "successful query, list omits body-markup → pass through"
+      branch is explicitly unchanged by this task (task0001.md "Existing
+      tests whose expectations are preserved"). Verified with the same
+      old-logic isolation harness used for AC-1: all four tests already
+      passed against the pre-task decision (the Ok-without-body-markup
+      case behaves identically under fail-open and fail-closed), so no
+      red→green transition demonstrates new behavior here — these pin a
+      regression guard for FR2, not new functionality. Two of the four
+      (unconfirmed_capabilities_leave_the_body_unchanged,
+      body_markup_absence_confirmed_is_true_only_for_a_successful_list_without_it)
+      reference the new predicate name directly and so failed to COMPILE
+      before the predicate existed (E0425); the other two call
+      escape_for_send only and compiled and passed unmodified throughout.
+  AC-3:
+    tests:
+      - callbacks::tests::summary_markup_escape::confirmed_capabilities_escape_a_tag_bearing_title_like_the_body_path
+      - callbacks::tests::summary_markup_escape::confirmed_capabilities_double_escape_a_preexisting_entity_in_a_title
+      - callbacks::tests::summary_markup_escape::confirmed_capabilities_escape_a_sanitize_title_truncated_title_intact
+      - callbacks::tests::summary_markup_escape::confirmed_capabilities_escape_a_title_of_only_meta_characters
+      - callbacks::tests::summary_markup_escape::osc9_fallback_title_flows_through_the_same_escaped_decision
+      - callbacks::tests::body_markup_escape::tab_activity_and_agent_bodies_are_both_escaped_when_confirmed
+      - callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_false_when_present_in_a_successful_list
+    red_confirmed: false
+    red_reason: >-
+      FR2's "successful query, list contains body-markup → escape" branch
+      is explicitly unchanged (task0001.md "confirmed-path escape tests —
+      unchanged expectations"). Verified with the same isolation harness:
+      all seven already passed against the pre-task decision (the
+      Ok-with-body-markup case escapes under both fail-open and
+      fail-closed), so this is regression coverage, not a demonstrated
+      red→green transition. `body_markup_absence_confirmed_is_false_when_present_in_a_successful_list`
+      references the new predicate directly and so failed to COMPILE
+      before it existed (E0425); the other six call escape_for_send only
+      and were unmodified (or comment-only edits) throughout.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Diff/inspection criterion (VERIFICATION.md TS6), not unit-testable.
+      Verified by reviewing `git diff -- src-tauri/src/callbacks.rs`: every
+      changed line sits inside doc comments or the existing `#[cfg(unix)]`
+      block (escape_for_send, escape_body_markup's doc,
+      body_markup_absence_confirmed); the Windows `.show()` call and
+      everything outside `#[cfg(unix)]` is untouched by the diff.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Diff/inspection criterion (VERIFICATION.md TS7), not unit-testable.
+      Verified with `grep -rn "fail-open" src-tauri/src/callbacks.rs
+      src-tauri/src/callbacks/tests.rs` (0 hits) and `grep -rn
+      "body_markup_confirmed\b"` for the old predicate name (0 hits, fully
+      replaced by body_markup_absence_confirmed, whose name and doc state
+      the fail-closed contract: pass-through only on confirmed absence).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/integration criterion (VERIFICATION.md TS4/TS5), not a single
+      unit test. Verified by running the three VERIFICATION.md commands
+      after implementation: `cargo check` (main) — 0 errors; `cargo test
+      --lib -- --test-threads=1` — 3240 passed, 0 failed, 3 ignored (same
+      counts as the pre-implementation baseline); `cargo check
+      --no-default-features` — 0 errors.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Diff/inspection criterion (no dedicated VERIFICATION.md TS beyond
+      TS4's full-suite run). Verified: the diff touches only
+      escape_for_send's branch condition, the predicate's body/name/doc,
+      and doc comments; `sanitize_title`, the notification rate limiter,
+      and escape_body_markup's replace-ordering ('&' first, then '<',
+      then '>') are byte-identical to before this task, confirmed by `git
+      diff` showing no hunks in those functions.

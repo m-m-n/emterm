@@ -151,6 +151,11 @@ impl NotificationSink for NotifyRustSink {
         // activity, agent status, link-hover) — escape here, once, gated
         // by a fresh per-send capability query (D2: not cached; the same
         // decision drives BOTH title and body, see `escape_for_send`).
+        // notification-markup-fail-closed SPEC: the gate is fail-closed —
+        // a failed capability query escapes both fields, same as a
+        // confirmed `body-markup` capability; only an explicit,
+        // successful "body-markup absent" report passes text through
+        // unescaped.
         // Windows notify-rust has no `get_capabilities()` export
         // (XDG-only surface), so the whole gate is `#[cfg(unix)]`; the
         // `.show()` call below is unchanged from before this task (FR5).
@@ -173,34 +178,40 @@ impl NotificationSink for NotifyRustSink {
     }
 }
 
-/// (task0001) Apply the per-send escape decision to both `title` (summary)
-/// and `body` under a SINGLE evaluation of `capabilities` (D2: the caller
-/// queries `get_capabilities()` exactly once per `send` and passes the
-/// result here, so the two fields can never diverge within one send).
-/// Confirmed → both fields pass through [`escape_body_markup`]; otherwise
-/// both pass through byte-for-byte unchanged (fail-open parity, FR1/FR3).
-/// Private to this module — the only caller is `NotifyRustSink::send`
-/// (AC-6); pulled out of `send` so it is unit-testable without a real
-/// D-Bus connection.
+/// (task0001, notification-markup-fail-closed SPEC) Apply the per-send
+/// escape decision to both `title` (summary) and `body` under a SINGLE
+/// evaluation of `capabilities` (D2: the caller queries
+/// `get_capabilities()` exactly once per `send` and passes the result
+/// here, so the two fields can never diverge within one send). Fail-closed
+/// (FR1/FR3): pass-through applies ONLY when the query succeeded and the
+/// returned list explicitly omits `body-markup`; every other outcome — a
+/// query failure, or a successful list that contains `body-markup` —
+/// escapes both fields via [`escape_body_markup`].
+/// Private to this module — the only caller is `NotifyRustSink::send`;
+/// pulled out of `send` so it is unit-testable without a real D-Bus
+/// connection.
 #[cfg(unix)]
 fn escape_for_send<E>(
     title: &str,
     body: &str,
     capabilities: &Result<Vec<String>, E>,
 ) -> (String, String) {
-    if body_markup_confirmed(capabilities) {
-        (escape_body_markup(title), escape_body_markup(body))
-    } else {
+    if body_markup_absence_confirmed(capabilities) {
         (title.to_string(), body.to_string())
+    } else {
+        (escape_body_markup(title), escape_body_markup(body))
     }
 }
 
-/// (task0001 Component 1, TS1/TS2/TS3) Escape notify-rust body-markup meta
-/// characters. `&` is replaced first, then `<` and `>`, so the entity
-/// references this function produces are never re-escaped by the `&` pass
-/// (AC-2 / FR1). Pure: no I/O. Unix-only because the sole caller
-/// (`NotifyRustSink::send`) only reaches it behind the `#[cfg(unix)]`
-/// capability gate above.
+/// (previous task — notification-body-markup-escape SPEC Component 1,
+/// TS1/TS2/TS3) Escape notify-rust body-markup meta characters. `&` is
+/// replaced first, then `<` and `>`, so the entity references this
+/// function produces are never re-escaped by the `&` pass (AC-2 / FR1 of
+/// that SPEC). Pure: no I/O. Unchanged by the notification-markup-fail-
+/// closed SPEC (NFR3) — that SPEC only inverts the capability decision
+/// that gates which of `escape_for_send`'s two branches calls this
+/// function. Unix-only because the sole caller (`NotifyRustSink::send`)
+/// only reaches it behind the `#[cfg(unix)]` capability gate above.
 #[cfg(unix)]
 fn escape_body_markup(input: &str) -> String {
     input
@@ -209,16 +220,19 @@ fn escape_body_markup(input: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// (task0001 Component 2, TS4) Interpret a `get_capabilities()` result:
-/// "confirmed" only when the fetch succeeded AND the capability list
-/// contains `"body-markup"`. Any other outcome (fetch failure, or a
-/// successful list that omits it) is "unconfirmed" — the fail-safe side
-/// (FR3): callers must not escape on "unconfirmed". Generic over the error
-/// type so it composes directly with `notify_rust::Result<Vec<String>>`
-/// (`E = notify_rust::error::Error`) without pulling that type into tests.
+/// (task0001 Component 2, TS1/TS2, notification-markup-fail-closed SPEC)
+/// Interpret a `get_capabilities()` result under fail-closed semantics:
+/// the EXPLICIT ABSENCE of `body-markup` support, confirmed only when the
+/// fetch succeeded AND the returned list omits it. Any other outcome — a
+/// fetch failure, or a successful list that contains `body-markup` —
+/// returns `false`, and callers escape on `false` (escaping is the
+/// default; pass-through is the narrow exception, FR1/FR3). Generic over
+/// the error type so it composes directly with
+/// `notify_rust::Result<Vec<String>>` (`E = notify_rust::error::Error`)
+/// without pulling that type into tests.
 #[cfg(unix)]
-fn body_markup_confirmed<E>(capabilities: &Result<Vec<String>, E>) -> bool {
-    matches!(capabilities, Ok(caps) if caps.iter().any(|c| c == "body-markup"))
+fn body_markup_absence_confirmed<E>(capabilities: &Result<Vec<String>, E>) -> bool {
+    matches!(capabilities, Ok(caps) if !caps.iter().any(|c| c == "body-markup"))
 }
 
 /// Rate limiter that suppresses identical `(title, body)` pairs within a
