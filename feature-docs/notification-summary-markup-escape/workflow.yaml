@@ -33,7 +33,8 @@ workflow:
       ビジュアル判断・デザイントークンの変更を伴わないため。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: 55e59cf8b78a61971db4421270a55379f15c5d85
   - id: implement
     status: pending
     base_commit: null
@@ -46,7 +47,20 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Escape notification summary at the D-Bus egress
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/callbacks.rs
+      - src-tauri/src/callbacks/tests.rs
+    skills: [backend-impl]
+    domains: [input-handling, external-io]
+    complexity: high
+    requirements: [FR1, FR2, FR3, NFR1, NFR2]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -62,36 +76,36 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS2, TS3]
   FR2:
     title: Cover the OSC 9 title path end to end
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS4]
   FR3:
     title: Body escaping unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS2, TS5]
   NFR1:
     title: Single egress point
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS4, TS6]
   NFR2:
     title: Platform scope
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS7]
 
 batch:
   review_rework_count: 0
