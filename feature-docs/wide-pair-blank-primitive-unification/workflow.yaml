@@ -67,8 +67,8 @@ tasks:
     branch: em-workflow/wide-pair-blank-primitive-unification/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, spec]
     discretionary:
@@ -77,8 +77,19 @@ review:
       - perspective: performance
         reason: "NFR1 が ASCII 高速パスの性能特性維持を制約しており、diff が print ホットパスと 5 つの範囲消去経路の呼び出し構造を書き換えている"
     cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    spec: completed
+    architecture: completed
+    performance: completed
   residual_critical_high: 0
   needs_rework: false
+  deferred_findings:
+    - stable_id: 00acde921b09f637
+      severity: medium
+      file: crates/term_core/src/terminal_dispatch.rs
+      reason: "changed_files 外の既存ギャップ。挙動保存 refactor である本 feature のスコープ外のため別タスクへ"
 
 requirements:
   FR1:

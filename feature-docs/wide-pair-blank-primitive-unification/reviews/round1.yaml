@@ -1,0 +1,75 @@
+round: 1
+executed_at: "2026-08-12T22:24:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: cf4340657086623669ff1f771a15432c1239e602
+  head_commit: 7fcd30d5746ecaff17c750504380ca12bbeaf917
+  changed_files:
+    - crates/term_core/src/csi_edit.rs
+    - crates/term_core/src/csi_screen.rs
+    - crates/term_core/src/print_handler.rs
+    - crates/term_core/src/terminal_cells.rs
+    - test-docs/wide-pair-blank-primitive-unification/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+    - perspective: architecture
+      reason: "変更の目的そのものが SSOT 化とチョークポイント化で、architecture 由来の deferred findings 2 件が起票元。構造判断の妥当性が本 feature の主論点"
+    - perspective: performance
+      reason: "NFR1 が ASCII 高速パスの性能特性維持を制約しており、diff が print ホットパスと 5 つの範囲消去経路の呼び出し構造を書き換えている"
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: litellm, model: vertex-glm-5, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: 00acde921b09f637
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_dispatch.rs
+    line: 106
+    line_end: 120
+    title: "ASCII fast path が wide-pair partner blanking をバイパスしており、新プリミティブの「単一 chokepoint」宣言と食い違う"
+    description: >-
+      terminal_cells.rs:250-255 の新 doc は blank_wide_pair_half を「print path /
+      ICH・DCH / range-erase の唯一の D2 修復」と宣言しているが、process_pty_data の
+      ASCII fast path (terminal_dispatch.rs:106-120) は handle_print_ascii を
+      インライン展開した別経路で、old_width の読み取りも
+      blank_orphaned_neighbor_before_overwrite 呼び出しも持たない（オーバーフロー表
+      エントリの除去も無い）。can_fast_ascii の条件は charset と kitty placeholder のみで、
+      grid 上に wide pair があるかは見ていないため、この経路は到達可能。具体的な破綻:
+      全角文字を出力した後、次の process_pty_data 呼び出しで CR + ASCII が来て col0 の
+      base (width 2) を上書きすると、col1 の width 0 spacer が孤児として残り D2 不変条件が
+      破れる（slow path の handle_print_ascii は同じケースを修復し、専用テストもある）。
+      本 diff 自体はこのギャップを作っていない — 既存の穴であり、terminal_dispatch.rs は
+      changed_files に含まれない。今回の統一で「print path は全て新プリミティブを通る」と
+      読める記述が入ったことで、将来の読み手が fast path も網羅済みと誤解する点が問題。
+    suggestion: >-
+      本タスク（挙動保存 refactor）のスコープ外として follow-up 起票するのが妥当。対応方針は
+      次のいずれか: (a) fast path のセル書き込み前に old_width を読み、old_width != 1 なら
+      blank_orphaned_neighbor_before_overwrite を呼んで slow path と揃える（合わせて
+      overflow エントリ除去も handle_print_ascii と同形にする）。(b) 直ちに直さないなら、
+      terminal_cells.rs の blank_wide_pair_half doc の「print path」を「print slow path
+      (handle_print_ascii / write_grapheme_to_grid)」に限定し、terminal_dispatch.rs の
+      fast path が未対応である旨を既知の例外として明記する。
+    sources: [claude:comprehensive]
+    confidence: 50
+    resolution: deferred
+    resolution_reason: >-
+      severity medium のため R4 の auto-fix 候補ゲート（critical/high のみ）に載らない。
+      加えて対象ファイル terminal_dispatch.rs は本 feature の changed_files 外で、
+      レビュアー自身が「本 diff が作ったギャップではない既存の穴」と明記している。
+      SPEC.md の FR/NFR いずれにも該当せず、修正は挙動変更を伴うため behavior-preserving
+      refactor である本 feature のスコープ外。別タスクとして起票する。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
