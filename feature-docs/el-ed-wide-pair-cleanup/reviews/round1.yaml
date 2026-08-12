@@ -1,0 +1,125 @@
+round: 1
+executed_at: "2026-08-12T14:52:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 858ffbcaa3c95ca04b15682f6898925e02eb4c76
+  head_commit: de4ee8c6428d9e7276a74219c82f45acb9088afb
+  changed_files:
+    - crates/term_core/src/csi_screen.rs
+    - test-docs/el-ed-wide-pair-cleanup/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+    - perspective: performance
+      reason: "NFR3 が消去ホットパスへの影響を制約しており、diff が EL/ED の全消去経路に幅参照と条件分岐を追加しているため"
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed, note: "モデル出力がトークン枯渇で途中切断され findings ゼロ。retryable な skip_reason は返っていないため R2b のチェーン前進は非該当"}
+findings:
+  - stable_id: b5faa9d564cbcfa6
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/csi_screen.rs
+    line: 21
+    title: "ED/EL に追加したパートナー処理は 4 箇所コピペで、各コピーの半分が到達不能"
+    description: >-
+      ECH と同形の相方掃除ブロックが ED 0 / ED 1 / EL 0 / EL 1 の 4 箇所へ複製されたが、
+      ED/EL では範囲端が固定なので各コピーの片側が構造的に発火しない。mode 0 は
+      end == self.cols 固定のため blank_wide_pair_split(end, row) が cell_index の
+      col < cols 判定で必ず no-op になり、右パートナー処理は決して動かない。mode 1 は
+      start がリテラル 0 のため start_is_spacer && start > 0 が常に false で、直前の
+      get_cell_width(0, row) 計算ごと死んでいる。動作は正しい（mode 0 は左のみ、
+      mode 1 は右のみが実在するケース）が、境界に敏感な同一ロジックが ECH を含め
+      5 箇所に散り、しかも半分が死に枝のため、将来ガードを直す際の追随漏れと
+      「ED 0 は右パートナーも見ている」という誤読を招く。ECH だけが持つ end-1
+      アンダーフロー保護が複製先に無い点も、コピー間の差異が既に生じている例
+      （ただし cols >= 1 が clamp_resize_dims で保証されるため実害は無い）。
+    suggestion: >-
+      (a) 各サイトで実際に発火し得る側だけを残し、なぜ片側で十分かをコメントに書く。
+      (b) csi_screen.rs に private ヘルパを 1 本切り出して ECH と ED/EL の 4 サイトから
+      呼ぶ（clear_line_range 自体には畳み込まないという既存コメントの意図は、別名の
+      ラッパを挟む形なら維持できる）。加えて ED 0/ED 1 のカーソル行処理は EL 0/EL 1 と
+      完全に同一なので、ED 側を handle_erase_in_line への委譲にすればコピーは 4→2 に減る。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: >-
+      severity: medium のため R4 の auto-fix ゲート（critical/high のみ）に乗らない。
+      機能上の欠陥ではなく保守性リスクであり、Notion タスクの「スコープ外」に明記された
+      相方掃除プリミティブの共通化・chokepoint 化（finding b8a62feaf016ef08 /
+      931abe859e23fa5d）と同じ主題のため、別タスクとして起票する。
+  - stable_id: e8dd917c8b1e7f78
+    severity: critical
+    category: spec
+    file: crates/term_core/src/csi_screen.rs
+    line: 108
+    title: "Potential mismatch between condition and target cell for right-edge cleanup"
+    description: >-
+      EL 1 の last_is_base 判定が end - 1 の幅を見て blank_wide_pair_split(end, row)
+      を呼ぶ形が FR2 と食い違う可能性があるという指摘。ただし finding 本文自身が
+      「end = col+1 なので blank_wide_pair_split は col+1 に対して呼ばれ、FR2 の要求に
+      合致する」と結論している。
+    suggestion: "（原文）This appears to satisfy FR2."
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      誤検知。finding の description と suggestion の双方が「FR2 を満たしている」と
+      結論しており、severity: critical のラベルが本文と矛盾している。実コード
+      （csi_screen.rs mode 1）を直接確認したところ end = cursor.col + 1、
+      last_is_base = get_cell_width(end - 1) == 2（= カーソル位置の base 判定）、
+      blank_wide_pair_split(end) = col+1 の spacer であり FR2 の記述どおり。
+      Claude の spec レビュアーは同じ経路を独立に検証して findings ゼロ、
+      Claude / codex の security レビュアーも境界安全を確認済み。
+  - stable_id: c424075fb7a03789
+    severity: medium
+    category: spec
+    file: crates/term_core/src/csi_screen.rs
+    line: 57
+    title: "No violation; confirming FR4 compliance"
+    description: "EL 2 / ED 2 に相方掃除が入っていないことは FR4 と整合、という確認。"
+    suggestion: "（原文）No action needed; the implementation respects FR4."
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: "欠陥の指摘ではなく準拠確認。finding 本文が明示的に no violation と述べている。"
+  - stable_id: ae3a4d395478c093
+    severity: medium
+    category: spec
+    file: crates/term_core/src/csi_screen.rs
+    line: 418
+    title: "No violation; attribute preservation likely satisfied"
+    description: "blank_wide_pair_split が属性を保持するため FR5 は満たされている、という確認。"
+    suggestion: "（原文）Ensure the blank_wide_pair_split implementation indeed preserves attributes as documented."
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: "欠陥の指摘ではなく準拠確認。追加テストが属性保持を assert していることを finding 自身が認めている。"
+  - stable_id: 85ec5b647eda7386
+    severity: medium
+    category: spec
+    file: crates/term_core/src/csi_screen.rs
+    line: 451
+    title: "Tests added per FR6"
+    description: "TS-1..TS-6 を覆うテストが追加され FR6 を満たしている、という確認。"
+    suggestion: "（原文）No action needed."
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: "欠陥の指摘ではなく準拠確認。suggestion 自体が No action needed。"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: >-
+    R4 の候補ゲート（severity ∈ {critical, high} かつ category != spec）に該当する
+    finding がゼロのため、auto-fix ループは 1 度も走っていない。唯一の critical は
+    category: spec のため構造的に対象外、唯一の非 spec finding は medium。
+residual_critical_high: 0
+rework_required: false
