@@ -42,7 +42,8 @@ workflow:
     status: completed
     completed_at_commit: 602f1711d6337599680b99066e30e898cedd9921
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 9be762b8de487dc3ed12fbee1cf815281794f5a5
     base_commit: 754ab5adcfd366a4718dd3e5f0adc7ab6de4c344
   - id: review
     status: pending
@@ -63,7 +64,7 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: [FR1, FR3, FR4, NFR1, NFR2]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/wide-pair-overflow-tests/task0001
   task0002:
