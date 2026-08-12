@@ -883,16 +883,47 @@ impl App {
     }
 
     /// Whether any toast (the binary-mismatch restart toast or an SFTP
-    /// toast) is currently up. The single predicate behind every "keep
-    /// frames flowing while a toast is visible" decision — the event loop's
-    /// redraw pacing, the render skip veto, and [`Self::next_toast_deadline`]
-    /// all call this instead of reaching into the two toast owners
-    /// themselves.
+    /// toast) is currently up. One term of [`Self::frame_work_pending`] —
+    /// the event loop's redraw pacing, the render skip veto, and
+    /// [`Self::next_toast_deadline`] call THAT predicate, not this one, so
+    /// pre-toast pending work (an undrained SFTP event, a raised restart
+    /// flag) keeps frames flowing too, not just an already-visible toast.
     ///
     /// Lives here (not `timing.rs`) because it spans both toast owners:
     /// timing owns the restart toast, sftp owns the SFTP toasts.
     pub fn toast_pending(&self) -> bool {
         self.restart_toast.active() || !self.sftp_ui.toasts.toasts.is_empty()
+    }
+
+    /// Whether ANY work is pending that should keep frames flowing —
+    /// including work that precedes a toast's existence (frame-skip-
+    /// pending-work task0001). True iff any of:
+    ///
+    /// 1. a toast is already up ([`Self::toast_pending`]), OR
+    /// 2. the SFTP progress channel is non-empty, OR
+    /// 3. the SFTP duplicate-check result channel is non-empty, OR
+    /// 4. the restart flag is raised (not yet consumed by
+    ///    [`crate::self_exec::restart_required`]).
+    ///
+    /// Supersedes [`Self::toast_pending`] as the input to the render skip
+    /// veto (`window_host::render_surface`), the redraw pacing
+    /// (`window_host::event_loop`), and [`Self::next_toast_deadline`] — the
+    /// three consumers that previously read `toast_pending` directly. An
+    /// idle window that receives the SFTP event or restart signal which
+    /// will *create* the first toast now paints the frame that creates it,
+    /// instead of discarding it and waiting for an unrelated redraw
+    /// trigger.
+    ///
+    /// Contract: evaluation consumes nothing — no channel drain, no flag
+    /// swap, no state mutation. Cost is one atomic read
+    /// ([`crate::self_exec::restart_pending`]) plus two constant-time
+    /// channel emptiness checks plus the existing toast check; it takes no
+    /// lock the App does not already hold.
+    pub fn frame_work_pending(&self) -> bool {
+        self.toast_pending()
+            || !self.sftp_progress_rx.is_empty()
+            || !self.sftp_result_rx.is_empty()
+            || crate::self_exec::restart_pending()
     }
 
     /// Auto-dismiss pump for both toast owners, in a fixed order: the
@@ -910,10 +941,12 @@ impl App {
     /// Scope of the guarantee: both pumps run on every frame that actually
     /// RENDERS — not on every event-loop turn. The frame itself may be
     /// skipped by `should_skip_frame` (window_host), whose `overlay_work`
-    /// term includes [`Self::toast_pending`]; a pending SFTP event with no
-    /// toast up yet therefore does not keep frames alive on its own and
-    /// relies on another redraw trigger reaching the egui pass (known
-    /// limitation, present since before this facade existed).
+    /// term reads [`Self::frame_work_pending`] (frame-skip-pending-work
+    /// task0001); a pending SFTP event with no toast up yet therefore now
+    /// keeps frames alive on its own — the render skip veto, the redraw
+    /// pacing, and [`Self::next_toast_deadline`] all treat pre-toast
+    /// pending work the same as a visible toast, so the very frame that
+    /// turns the first progress event into a toast is the one that paints.
     ///
     /// `now` is egui's frame-time clock (monotonic, wall-clock-free), which
     /// only advances when a frame actually paints — see [`TOAST_POLL_MS`]
@@ -924,13 +957,21 @@ impl App {
         restart_changed || sftp_changed
     }
 
-    /// Next `Instant` the event loop must wake while a restart or SFTP toast
-    /// is active (task0004 D4). See [`TOAST_POLL_MS`] for why this is a
-    /// bounded poll rather than an exact deadline. `None` once no toast is
-    /// active — the loop then only wakes on other timed work (blink/bell)
-    /// or an event.
+    /// Next `Instant` the event loop must wake while a restart/SFTP toast is
+    /// active OR pre-toast pending work exists ([`Self::frame_work_pending`],
+    /// task0004 D4, frame-skip-pending-work task0001 IMPLEMENTATION.md D1).
+    /// See [`TOAST_POLL_MS`] for why this is a bounded poll rather than an
+    /// exact deadline. Gating on the wider predicate — not
+    /// [`Self::toast_pending`] alone — closes a rate-limit race: the
+    /// toast-driven redraw request in `about_to_wait` is itself rate-limited
+    /// to the poll cadence, so a wake for newly arrived pre-toast work that
+    /// lands inside that window would otherwise be consumed without a
+    /// redraw request, and a fully idle window (no other armed deadline)
+    /// would then fall back to event-wait with nothing left to re-enter the
+    /// loop. `None` once nothing is pending — the loop then only wakes on
+    /// other timed work (blink/bell) or an event.
     pub fn next_toast_deadline(&self) -> Option<Instant> {
-        self.toast_pending()
+        self.frame_work_pending()
             .then(|| Instant::now() + std::time::Duration::from_millis(TOAST_POLL_MS))
     }
 
