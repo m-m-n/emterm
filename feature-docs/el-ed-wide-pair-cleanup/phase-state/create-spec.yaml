@@ -1,0 +1,47 @@
+schema_version: 1
+feature: el-ed-wide-pair-cleanup
+phase: create-spec
+status: completed
+generation: 1
+base_revision: bdbe144d
+last_input_digest: sha256:984483362e2c760545ca9d2da436516d91f477f2ec969156b76b023ca4c23574
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: sha256:cd4e54479ba7387a42ff2644e1c07c14277a806682f67e7953b04a9e756aa05f
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:984483362e2c760545ca9d2da436516d91f477f2ec969156b76b023ca4c23574
+    output_digest: null
+artifacts:
+  - path: feature-docs/el-ed-wide-pair-cleanup/REQUIREMENTS.md
+    sha256: null
+    produced_by: create-spec-run-0002
+  - path: feature-docs/el-ed-wide-pair-cleanup/SPEC.md
+    sha256: null
+    produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/components/md3-select.ts
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+      - src-tauri/web-shared/styles.css
+      - src-tauri/web-shared/styles/data-viewer.css
+      - src-tauri/web-shared/styles/settings-panel.css
+      - src-tauri/web-shared/styles/status-bar.css
+      - src-tauri/web-shared/styles/tab-bar.css
+    digests: {}
+    truncated: false
+last_error: null

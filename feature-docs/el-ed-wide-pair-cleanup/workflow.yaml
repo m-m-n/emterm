@@ -1,0 +1,180 @@
+schema_version: 1
+feature: el-ed-wide-pair-cleanup
+created: 2026-08-12
+base_branch: main
+parent_branch: em-workflow/el-ed-wide-pair-cleanup/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/components/md3-select.ts
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+      - src-tauri/web-shared/styles/data-viewer.css
+      - src-tauri/web-shared/styles/settings-panel.css
+      - src-tauri/web-shared/styles/status-bar.css
+      - src-tauri/web-shared/styles/tab-bar.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
+      format_command: "cargo fmt -p term_core"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 9a7b73316ce263fad7e4385ec6055531da72dcb4
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Pure behavioral bug fix inside the term_core Rust crate's escape-sequence erase path. No UI surface, no visual output, no new component or theme work; the change is invisible except as corrected grid cell state. A design step has nothing to specify."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 718574ab281f4baddf43733c8d6f88a03d0b2479
+  - id: implement
+    status: completed
+    completed_at_commit: 95713e5cbecde216250a02aa9ddc7ad2e18fd0c2
+    base_commit: 858ffbcaa3c95ca04b15682f6898925e02eb4c76
+  - id: review
+    status: completed
+    completed_at_commit: de4ee8c6428d9e7276a74219c82f45acb9088afb
+  - id: verify
+    status: completed
+    completed_at_commit: 3f174e3858e40f0f0079e3cdcff041d895b81372
+    result: pass
+    failed_items: []
+    summary:
+      build: "pass — CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml (gitignored な bundled フォントを worktree にローカル配置後に成功。コード起因の失敗ではない)"
+      test: "pass — CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib / 795 passed, 0 failed, 13 ignored"
+      format: "pass (feature 範囲) — 承認済みの check 版 cargo fmt --manifest-path crates/term_core/Cargo.toml --check を実行。差分は crates/term_core/src/print_handler/tests.rs のみで base commit 時点から存在する無関係な既存ドリフト。本 feature は同ファイルに未変更のため方針どおり手を入れていない"
+      e2e: "not applicable — プロジェクトに E2E 基盤なし"
+      scenarios: "TS-1..TS-6 すべて新規ユニットテスト10件で被覆・pass"
+      criteria: "AC1..AC6 すべて pass（AC6 は MV-1 の文書インスペクション）"
+      manual_items: "MV-1..MV-4 すべて pass"
+      excluded_requirements: "なし（status: excluded の要件は無い）"
+  - id: retrospect
+    status: completed
+    completed_at_commit: a61b223d5af21a7380a5fcca8c0087d745e9911b
+
+tasks:
+  task0001:
+    title: EL/ED cursor-row wide-pair partner cleanup + regression tests
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/csi_screen.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
+    status: merged
+    notes: null
+    branch: em-workflow/el-ed-wide-pair-cleanup/task0001
+
+review:
+  status: completed
+  rounds_completed: 1
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary:
+      - perspective: performance
+        reason: "NFR3 が消去ホットパスへの影響を制約しており、diff が EL/ED の全消去経路に幅参照と条件分岐を追加しているため"
+    cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    spec: completed
+    performance: completed
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: EL 0 blanks the orphaned base left of the erase range
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-4]
+  FR2:
+    title: EL 1 blanks the orphaned spacer right of the erase range
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-2, TS-4]
+  FR3:
+    title: ED 0 / ED 1 apply the same cleanup on the cursor row
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-3]
+  FR4:
+    title: Full-line clears remain no-ops for edge cleanup
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-6]
+  FR5:
+    title: Partner blanking preserves cell attributes
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3]
+  FR6:
+    title: Regression unit tests in term_core
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-6]
+  FR7:
+    title: Remaining out-of-scope items documented
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: No new dependencies in crates/term_core
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: []
+  NFR2:
+    title: No change to erase semantics inside the cleared range
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2]
+  NFR3:
+    title: Negligible performance impact on the erase hot path
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: []
+  NFR4:
+    title: Out-of-bounds boundary columns are safe
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-5]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
