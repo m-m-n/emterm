@@ -1,0 +1,123 @@
+round: 1
+executed_at: "2026-08-12T20:20:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 3d3ee6e77ce00819e947b7f514e51a881c4f23d0
+  head_commit: 1f7840c6aec9364cf1dc63662a8ff6edac46aafb
+  changed_files:
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - test-docs/notification-summary-markup-escape/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: litellm, model: vertex-glm-5, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: 3d75840c8f7bd928
+    severity: medium
+    category: security
+    file: src-tauri/src/callbacks.rs
+    line: 194
+    title: Capability lookup errors leave attacker-controlled markup unescaped
+    description: >-
+      `get_capabilities()` の `Err` 分岐が `escape_for_send` の非エスケープ経路に
+      到達し、title / body の両方が素通しで転送される。OSC 9 の title/body と
+      OSC 0/2 由来のフォールバックタブタイトルは端末制御下の値なので、markup 対応
+      デーモンが GetCapabilities を正しく実装していない場合や、Notify は成功する
+      一方でその呼び出しが一時的に失敗した場合に、`<a>` や `<font>` が生のまま
+      デーモンへ届き、通知内のなりすましが成立しうる。
+    suggestion: >-
+      capability 取得失敗と「成功したが body-markup を持たない応答」を区別し、
+      `Err` では fail-closed（両フィールドをエスケープする、または通知を抑止する）
+      にする。生テキストのまま送るのは、マークアップ非解釈が capability 応答で
+      確認できたときだけにする。
+    sources: [codex:security]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      SPEC.md の Out of Scope に「capability 取得失敗時の fail-open（別タスク）」
+      として明示的に除外されている項目で、この feature の変更が新たに作り込んだ
+      ものではない（PR #35 の body 側から引き継いだ既定挙動）。本ラウンドでは
+      対処せず、Notion に別タスクとして起票する。
+  - stable_id: 5de8188253e559b0
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/callbacks/tests.rs
+    line: 832
+    title: >-
+      confirmed 経路の body エスケープを検証するテストが無く、FR3 の
+      リグレッションゲートが実際には効いていない
+    description: >-
+      `escape_for_send` の confirmed 分岐は `(escape_body_markup(title),
+      escape_body_markup(body))` を返すが、confirmed でこのヘルパを呼ぶ新規テストは
+      いずれも返り値の body を `_` で捨てている。body を検証している唯一のテストは
+      unconfirmed 分岐のみ。既存の PR #35 の body テストは
+      `if body_markup_confirmed(..) { escape_body_markup(..) }` をテスト側で
+      インライン再実装しているため、`escape_for_send` の中身が変わっても素通りする。
+      結果として confirmed 分岐を `(escape_body_markup(title), body.to_string())`
+      に書き換えても全テストが green のままになり、PR #35 の body 無害化が黙って
+      退行しうる。task0001.tests.yaml の AC-5 が既存 body テストを regression gate
+      と宣言している点と実態が食い違っている。
+    suggestion: >-
+      confirmed 分岐で body も実際にエスケープされることを `escape_for_send` 経由で
+      1 本ピン留めする。併せて既存テストの分岐インライン再実装を
+      `escape_for_send` 呼び出しに置き換えると、ロジックの二重実装が解消されて
+      regression gate が実際に機能する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: >-
+      severity medium のため R4 の auto-fix 候補ゲート（critical/high のみ）に
+      かからず、本ラウンドでは適用しない。指摘自体は妥当なテストカバレッジの穴
+      なので、Notion に別タスクとして起票して追跡する。
+  - stable_id: 102ae64a012ea0ae
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/callbacks.rs
+    line: 158
+    title: >-
+      summary を body-markup capability で判定してエスケープするため、summary を
+      プレーンテキスト描画するサーバ（GNOME Shell / Plasma）でエンティティが
+      literal 表示される
+    description: >-
+      エスケープ判定に使う `body_markup_confirmed` は freedesktop の `body-markup`
+      capability、すなわち body のマークアップ可否しか見ていない。GNOME Shell も
+      KDE Plasma も `body-markup` を広告するが summary はプレーンテキストとして
+      描画するため、title に `&` `<` `>` が含まれるとこれらのデスクトップで
+      `Build &amp; deploy done` のようにエンティティ参照がそのまま見える表示劣化に
+      なる。`&` は動的タブタイトルや OSC 9 の任意文言に十分現れるため机上の懸念では
+      ない。SPEC.md の assume.approach-a-escape-at-sink はこの劣化を受容済みの
+      トレードオフとして記録しているが、その記録は `&lt;` の例のみで `&` の頻度に
+      触れておらず、判断自体も batch モードの Codex consultation による自動解決
+      （reversible な assumption）である。
+    suggestion: >-
+      (a) 現状維持（SPEC の受容済みトレードオフ）。(b) summary 側だけエンティティ化
+      ではなくマークアップとして解釈されない無害化に変える（`<` `>` の除去や
+      非マークアップ文字への置換）。(c) `get_server_information()` でサーバを判定し
+      summary にマークアップを適用する実装に限ってエスケープする（ホワイトリスト
+      保守コストあり）。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: declined
+    resolution_reason: >-
+      SPEC.md の assume.approach-a-escape-at-sink が受容済みのトレードオフとして
+      記録しており、この feature の実装は SPEC どおり。ただし方針 (a)/(b) の選択は
+      batch モードで Codex 相談により自動決定した reversible な assumption であり、
+      `&` の literal 表示という実挙動は人間の確認に値するため、Notion に別タスクとして
+      起票して再検討の余地を残す。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
