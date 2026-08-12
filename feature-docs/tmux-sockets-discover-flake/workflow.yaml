@@ -39,9 +39,17 @@ workflow:
     status: completed
     completed_at_commit: 1422a4b9be013ad95a6a5049123df252876103b3
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: c9db60af2c78e425894a6a2d4418e8d91c3b3b91
+    result: pass
     failed_items: []
+    evidence:
+      build: "cargo check: exit 0"
+      TS1: "60 iterations of --lib tmux_sockets at default parallelism, 0 failures"
+      TS2: "discover_returns_only_the_live_socket passes; stale-exclusion assertions intact (socket-type check added)"
+      TS3: "cargo test --lib: 3217 passed / 0 failed / 3 ignored"
+      format: "cargo fmt --check: 12 pre-existing diffs, identical on main; tmux_sockets.rs is clean — no regression"
+      MT-1: "diff hunks all at line >= 543 while #[cfg(test)] starts at line 522 — confined to the test module; AC-6 rationale comment present"
   - id: retrospect
     status: pending
 
