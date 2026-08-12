@@ -1,0 +1,25 @@
+feature: wide-pair-overflow-tests
+collected_at: "2026-08-12T23:21:00+09:00"
+session_ids: ["980e46c1-3876-4f6b-ad1b-59b2541d1d6e"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    新規 worktree では gitignore された資産（src-tauri/assets/fonts/*.ttf）が
+    存在しないため、src-tauri の build.rs が失敗し workspace テストが回らない。
+    implementer は単一クレートスコープだったため気づけず、AC4 が未検証のまま
+    完了報告になった（spec レビューが検出）。workflow.yaml の components に
+    fetch-fonts 前置の複合コマンドを最初から入れておけば防げた。
+  - >-
+    テスト追加のみの feature でも、追加テストがトートロジーになっていないか
+    （assert が本当に退行を検知するか）は comprehensive レビューが有効に働いた。
+    ECH 側テストが overflow テーブル削除を assert しておらず、実装を削っても
+    緑のまま通る穴を検出した。medium なので auto-fix 対象外。
+  - >-
+    tests.yaml の red_confirmed 契約が implementer 間で揺れた。ビルド/全スイート
+    緑のような「red に落とせない基準」の扱いを、契約側に明示しておくと揃う。

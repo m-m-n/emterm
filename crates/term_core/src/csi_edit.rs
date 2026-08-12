@@ -585,4 +585,56 @@ mod tests {
         assert_eq!(core.get_cell_width(11, 0), 1);
         assert!(core.is_row_dirty(0));
     }
+
+    // ── Overflow wide-pair partner cleanup (task0002 D1/D2, TS3) ─────
+
+    // TS3 (AC-1, FR2/FR3): DCH with the cursor on the spacer of an
+    // overflow-table base (grapheme > 16 inline bytes) blanks the orphaned
+    // base at col-1 AND removes its entries from the overflow table and
+    // overflow_ridx. This proves blank_wide_pair_split's char_len == 0xFF
+    // branch actually runs (DCH's own overflow-range cleanup only covers
+    // cursor.col and rightward, never col-1).
+    #[test]
+    fn test_delete_characters_cursor_on_spacer_of_overflow_base_clears_overflow_entries() {
+        let mut core = TerminalCore::new(10, 1, 0);
+        // D1: ZWJ family emoji 👨‍👩‍👧‍👦 (7 codepoints, 25 UTF-8 bytes,
+        // exceeding the 16-byte inline cell capacity) buffers in the
+        // grapheme accumulator until a following non-combining char flushes
+        // it to the grid (D1 note 1).
+        core.handle_print(0x1F468); // 👨
+        core.handle_print(0x200D); // ZWJ
+        core.handle_print(0x1F469); // 👩
+        core.handle_print(0x200D); // ZWJ
+        core.handle_print(0x1F467); // 👧
+        core.handle_print(0x200D); // ZWJ
+        core.handle_print(0x1F466); // 👦
+        core.handle_print(b'X' as u32); // flush -> base@col0 (overflow), spacer@col1, 'X'@col2
+
+        let abs = core.viewport_abs(0) as u32;
+        // Pre-condition (D2): base is overflow-table, width 2; col1 is its
+        // spacer. Both overflow structures carry the col0 entry.
+        assert!(core.ring_cells[core.cell_index(0, 0).unwrap()].is_overflow());
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        assert_eq!(core.get_cell_width(1, 0), 0);
+        assert!(core.overflow.contains_key(&(0, abs)));
+        assert!(
+            core.overflow_ridx
+                .get(&abs)
+                .is_some_and(|cols| cols.contains(&0))
+        );
+
+        core.set_cursor(1, 0); // spacer position
+        core.clear_dirty();
+        core.handle_delete_characters(1);
+
+        // Post-condition (FR2 + D4): col0 reads back as a plain space, not
+        // an empty string.
+        assert_eq!(core.get_cell_char(0, 0), " ");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        // Post-condition (FR3 + D2): both overflow structures lost the
+        // entry.
+        assert!(!core.overflow.contains_key(&(0, abs)));
+        assert!(!core.overflow_ridx.contains_key(&abs));
+        assert!(core.is_row_dirty(0));
+    }
 }
