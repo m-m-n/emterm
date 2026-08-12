@@ -38,7 +38,7 @@ workflow:
     skipped_reason: "Pure behavioral bug fix inside the term_core Rust crate's escape-sequence erase path. No UI surface, no visual output, no new component or theme work; the change is invisible except as corrected grid cell state. A design step has nothing to specify."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: bdbe144d9f30d30c2ad9c4cc4359a590e9bf67a4
