@@ -76,7 +76,7 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: [FR2, FR3, FR4, NFR1, NFR2]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/wide-pair-overflow-tests/task0002
 
