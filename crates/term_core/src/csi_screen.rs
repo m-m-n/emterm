@@ -11,7 +11,24 @@ impl TerminalCore {
         match mode {
             0 => {
                 // Below: clear from cursor to end of screen
-                self.clear_line_range(self.cursor.row, self.cursor.col, self.cols);
+                let row = self.cursor.row;
+                let start = self.cursor.col;
+                let end = self.cols;
+                // Wide-pair partner cleanup (D2/D3): see the comment on
+                // handle_erase_characters below for the shape of this
+                // pattern.
+                let start_is_spacer = self.get_cell_width(start, row) == 0;
+                let last_is_base = self.get_cell_width(end - 1, row) == 2;
+
+                self.clear_line_range(row, start, end);
+
+                if start_is_spacer && start > 0 {
+                    self.blank_wide_pair_split(start - 1, row);
+                }
+                if last_is_base {
+                    self.blank_wide_pair_split(end, row);
+                }
+
                 for r in (self.cursor.row + 1)..self.rows {
                     self.clear_line(r);
                 }
@@ -22,7 +39,24 @@ impl TerminalCore {
                 for r in 0..self.cursor.row {
                     self.clear_line(r);
                 }
-                self.clear_line_range(self.cursor.row, 0, self.cursor.col + 1);
+
+                let row = self.cursor.row;
+                let start = 0;
+                let end = self.cursor.col + 1;
+                // Wide-pair partner cleanup (D2/D3): see the comment on
+                // handle_erase_characters below for the shape of this
+                // pattern.
+                let start_is_spacer = self.get_cell_width(start, row) == 0;
+                let last_is_base = self.get_cell_width(end - 1, row) == 2;
+
+                self.clear_line_range(row, start, end);
+
+                if start_is_spacer && start > 0 {
+                    self.blank_wide_pair_split(start - 1, row);
+                }
+                if last_is_base {
+                    self.blank_wide_pair_split(end, row);
+                }
                 0
             }
             2 => {
@@ -46,11 +80,43 @@ impl TerminalCore {
         match mode {
             0 => {
                 // ToEnd: clear from cursor to end of line
-                self.clear_line_range(self.cursor.row, self.cursor.col, self.cols);
+                let row = self.cursor.row;
+                let start = self.cursor.col;
+                let end = self.cols;
+                // Wide-pair partner cleanup (D2/D3): see the comment on
+                // handle_erase_characters below for the shape of this
+                // pattern.
+                let start_is_spacer = self.get_cell_width(start, row) == 0;
+                let last_is_base = self.get_cell_width(end - 1, row) == 2;
+
+                self.clear_line_range(row, start, end);
+
+                if start_is_spacer && start > 0 {
+                    self.blank_wide_pair_split(start - 1, row);
+                }
+                if last_is_base {
+                    self.blank_wide_pair_split(end, row);
+                }
             }
             1 => {
                 // ToStart: clear from start to cursor (inclusive)
-                self.clear_line_range(self.cursor.row, 0, self.cursor.col + 1);
+                let row = self.cursor.row;
+                let start = 0;
+                let end = self.cursor.col + 1;
+                // Wide-pair partner cleanup (D2/D3): see the comment on
+                // handle_erase_characters below for the shape of this
+                // pattern.
+                let start_is_spacer = self.get_cell_width(start, row) == 0;
+                let last_is_base = self.get_cell_width(end - 1, row) == 2;
+
+                self.clear_line_range(row, start, end);
+
+                if start_is_spacer && start > 0 {
+                    self.blank_wide_pair_split(start - 1, row);
+                }
+                if last_is_base {
+                    self.blank_wide_pair_split(end, row);
+                }
             }
             2 => {
                 // All: clear entire line
@@ -72,10 +138,12 @@ impl TerminalCore {
         }
 
         // Wide-pair partner cleanup (D2/D3): capture pre-erase state before
-        // clear_line_range blanks the range to BCE. `clear_line_range` is
-        // shared with ED/EL (out of scope for this cleanup), so the
-        // partner-blanking stays local to this handler and is never folded
-        // into clear_line_range itself.
+        // clear_line_range blanks the range to BCE. The ED/EL cursor-row
+        // call sites (handle_erase_in_display, handle_erase_in_line above)
+        // perform this same local cleanup at their own call sites; it is
+        // never folded into clear_line_range itself because that function
+        // is a shared primitive whose full-row callers (clear_line, EL 2,
+        // ED 2) must not gain partner behavior.
         let start_is_spacer = self.get_cell_width(start, row) == 0;
         let last_is_base = self.get_cell_width(end - 1, row) == 2;
 
@@ -382,5 +450,395 @@ mod tests {
         assert_eq!(core.get_cell_char(8, 0), "E");
         assert_eq!(core.get_cell_char(9, 0), "F");
         assert!(core.is_row_dirty(0));
+    }
+
+    // ── EL/ED wide-pair partner cleanup (task0001) ───────────
+
+    // AC-1 (TS-1): EL 0 whose erase range starts on a spacer blanks the
+    // orphaned base at col-1, preserving its ORIGINAL attributes (distinct
+    // from the BCE color used for the erase). An unrelated pair before the
+    // range proves no over-reach.
+    #[test]
+    fn test_erase_in_line_to_end_spacer_at_cursor_blanks_left_base() {
+        let mut core = TerminalCore::new(10, 1, 0);
+        core.handle_print(b'A' as u32);
+        core.handle_print(b'B' as u32);
+        core.handle_print(0x56FD); // '国' (unrelated pair) -> base@2, spacer@3
+        core.set_cursor_fg(1, 9, 0, 0); // indexed 9
+        core.set_cursor_bg(1, 3, 0, 0); // indexed 3
+        core.handle_print(0x4E16); // '世' -> base@4, spacer@5 (colored)
+        core.reset_cursor_attrs();
+
+        core.set_cursor_bg(1, 5, 0, 0); // indexed 5: BCE color for the erase
+        core.set_cursor(5, 0); // spacer of the target pair
+        core.clear_dirty();
+        core.handle_erase_in_line(0);
+
+        assert_eq!(core.get_cell_char(0, 0), "A");
+        assert_eq!(core.get_cell_char(1, 0), "B");
+        // Unrelated pair before the range is untouched.
+        assert_eq!(core.get_cell_char(2, 0), "国");
+        assert_eq!(core.get_cell_width(2, 0), 2);
+        assert_eq!(core.get_cell_width(3, 0), 0);
+        // col4 was the base; its spacer at col5 is erased (inside the
+        // range), so col4 is now orphaned and blanked, preserving its
+        // ORIGINAL attributes (not the BCE color used for the erase).
+        assert_eq!(core.get_cell_char(4, 0), " ");
+        assert_eq!(core.get_cell_width(4, 0), 1);
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_fg(4, 0)),
+            PackedColor::indexed(9)
+        );
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_bg(4, 0)),
+            PackedColor::indexed(3)
+        );
+        // col5..9 are the actually-erased range: BCE, using the cursor's
+        // current bg (indexed 5) — distinct from col4's preserved bg.
+        for c in 5..10 {
+            assert_eq!(core.get_cell_char(c, 0), " ");
+            assert_eq!(core.get_cell_width(c, 0), 1);
+            assert_eq!(
+                PackedColor::from_u32(core.get_cell_bg(c, 0)),
+                PackedColor::indexed(5)
+            );
+        }
+        assert!(core.is_row_dirty(0));
+    }
+
+    // AC-2 (TS-2): EL 1 whose erase range ends on a base blanks the
+    // orphaned spacer right after the range. An unrelated pair after the
+    // range proves no over-reach.
+    #[test]
+    fn test_erase_in_line_to_start_base_at_cursor_blanks_right_spacer() {
+        let mut core = TerminalCore::new(10, 1, 0);
+        core.handle_print(b'A' as u32);
+        core.handle_print(b'B' as u32);
+        core.set_cursor_fg(1, 9, 0, 0); // indexed 9
+        core.set_cursor_bg(1, 3, 0, 0); // indexed 3
+        core.handle_print(0x4E16); // '世' -> base@2, spacer@3 (colored)
+        core.reset_cursor_attrs();
+        core.handle_print(b'C' as u32);
+        core.handle_print(b'D' as u32);
+        core.handle_print(0x56FD); // '国' (unrelated pair) -> base@6, spacer@7
+        core.handle_print(b'E' as u32);
+        core.handle_print(b'F' as u32);
+
+        core.set_cursor_bg(1, 5, 0, 0); // indexed 5: BCE color for the erase
+        core.set_cursor(2, 0); // base of the target pair
+        core.clear_dirty();
+        core.handle_erase_in_line(1);
+
+        // col0..2 are the actually-erased range: BCE, using the cursor's
+        // current bg (indexed 5).
+        for c in 0..=2 {
+            assert_eq!(core.get_cell_char(c, 0), " ");
+            assert_eq!(core.get_cell_width(c, 0), 1);
+            assert_eq!(
+                PackedColor::from_u32(core.get_cell_bg(c, 0)),
+                PackedColor::indexed(5)
+            );
+        }
+        // col3 was the spacer following the erased base; it is now orphaned
+        // and blanked, preserving its ORIGINAL attributes.
+        assert_eq!(core.get_cell_char(3, 0), " ");
+        assert_eq!(core.get_cell_width(3, 0), 1);
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_fg(3, 0)),
+            PackedColor::indexed(9)
+        );
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_bg(3, 0)),
+            PackedColor::indexed(3)
+        );
+        assert_eq!(core.get_cell_char(4, 0), "C");
+        assert_eq!(core.get_cell_char(5, 0), "D");
+        // Unrelated pair after the range is untouched.
+        assert_eq!(core.get_cell_char(6, 0), "国");
+        assert_eq!(core.get_cell_width(6, 0), 2);
+        assert_eq!(core.get_cell_width(7, 0), 0);
+        assert_eq!(core.get_cell_char(8, 0), "E");
+        assert_eq!(core.get_cell_char(9, 0), "F");
+        assert!(core.is_row_dirty(0));
+    }
+
+    // AC-3 (TS-3): ED 0 reproduces the EL 0 cursor-row result (AC-1) and
+    // also fully clears the rows below the cursor.
+    #[test]
+    fn test_erase_in_display_below_spacer_at_cursor_blanks_left_base() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        // Row 0 (above cursor): must stay untouched by ED 0.
+        for c in 0..10 {
+            core.set_cell_ascii(c, 0, b'Z', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        // Row 2 (below cursor): must be fully cleared by ED 0.
+        for c in 0..10 {
+            core.set_cell_ascii(c, 2, b'Y', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+
+        // Row 1 (cursor row): same layout as the EL 0 case (AC-1).
+        core.set_cursor(0, 1);
+        core.handle_print(b'A' as u32);
+        core.handle_print(b'B' as u32);
+        core.handle_print(0x56FD); // '国' (unrelated pair) -> base@2, spacer@3
+        core.set_cursor_fg(1, 9, 0, 0);
+        core.set_cursor_bg(1, 3, 0, 0);
+        core.handle_print(0x4E16); // '世' -> base@4, spacer@5 (colored)
+        core.reset_cursor_attrs();
+
+        core.set_cursor_bg(1, 5, 0, 0); // indexed 5: BCE color for the erase
+        core.set_cursor(5, 1); // spacer of the target pair, row 1
+        core.clear_dirty();
+        let result = core.handle_erase_in_display(0);
+        assert_eq!(result, 0);
+
+        // Row 0 untouched (above cursor).
+        for c in 0..10 {
+            assert_eq!(core.get_cell_char(c, 0), "Z");
+        }
+        // Row 1: identical assertions to the EL 0 case.
+        assert_eq!(core.get_cell_char(0, 1), "A");
+        assert_eq!(core.get_cell_char(1, 1), "B");
+        assert_eq!(core.get_cell_char(2, 1), "国");
+        assert_eq!(core.get_cell_width(2, 1), 2);
+        assert_eq!(core.get_cell_width(3, 1), 0);
+        assert_eq!(core.get_cell_char(4, 1), " ");
+        assert_eq!(core.get_cell_width(4, 1), 1);
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_fg(4, 1)),
+            PackedColor::indexed(9)
+        );
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_bg(4, 1)),
+            PackedColor::indexed(3)
+        );
+        for c in 5..10 {
+            assert_eq!(core.get_cell_char(c, 1), " ");
+            assert_eq!(core.get_cell_width(c, 1), 1);
+        }
+        // Row 2 fully cleared (below cursor).
+        for c in 0..10 {
+            assert_eq!(core.get_cell_char(c, 2), " ");
+        }
+        assert!(core.is_row_dirty(1));
+        assert!(core.is_row_dirty(2));
+    }
+
+    // AC-3 (TS-3): ED 1 reproduces the EL 1 cursor-row result (AC-2) and
+    // also fully clears the rows above the cursor.
+    #[test]
+    fn test_erase_in_display_above_base_at_cursor_blanks_right_spacer() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        // Row 0 (above cursor): must be fully cleared by ED 1.
+        for c in 0..10 {
+            core.set_cell_ascii(c, 0, b'Z', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        // Row 2 (below cursor): must stay untouched by ED 1.
+        for c in 0..10 {
+            core.set_cell_ascii(c, 2, b'Y', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+
+        // Row 1 (cursor row): same layout as the EL 1 case (AC-2).
+        core.set_cursor(0, 1);
+        core.handle_print(b'A' as u32);
+        core.handle_print(b'B' as u32);
+        core.set_cursor_fg(1, 9, 0, 0);
+        core.set_cursor_bg(1, 3, 0, 0);
+        core.handle_print(0x4E16); // '世' -> base@2, spacer@3 (colored)
+        core.reset_cursor_attrs();
+        core.handle_print(b'C' as u32);
+        core.handle_print(b'D' as u32);
+        core.handle_print(0x56FD); // '国' (unrelated pair) -> base@6, spacer@7
+        core.handle_print(b'E' as u32);
+        core.handle_print(b'F' as u32);
+
+        core.set_cursor_bg(1, 5, 0, 0); // indexed 5: BCE color for the erase
+        core.set_cursor(2, 1); // base of the target pair, row 1
+        core.clear_dirty();
+        let result = core.handle_erase_in_display(1);
+        assert_eq!(result, 0);
+
+        // Row 0 fully cleared (above cursor).
+        for c in 0..10 {
+            assert_eq!(core.get_cell_char(c, 0), " ");
+        }
+        // Row 1: identical assertions to the EL 1 case.
+        for c in 0..=2 {
+            assert_eq!(core.get_cell_char(c, 1), " ");
+            assert_eq!(core.get_cell_width(c, 1), 1);
+        }
+        assert_eq!(core.get_cell_char(3, 1), " ");
+        assert_eq!(core.get_cell_width(3, 1), 1);
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_fg(3, 1)),
+            PackedColor::indexed(9)
+        );
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_bg(3, 1)),
+            PackedColor::indexed(3)
+        );
+        assert_eq!(core.get_cell_char(4, 1), "C");
+        assert_eq!(core.get_cell_char(5, 1), "D");
+        assert_eq!(core.get_cell_char(6, 1), "国");
+        assert_eq!(core.get_cell_width(6, 1), 2);
+        assert_eq!(core.get_cell_width(7, 1), 0);
+        assert_eq!(core.get_cell_char(8, 1), "E");
+        assert_eq!(core.get_cell_char(9, 1), "F");
+        // Row 2 untouched (below cursor).
+        for c in 0..10 {
+            assert_eq!(core.get_cell_char(c, 2), "Y");
+        }
+        assert!(core.is_row_dirty(0));
+        assert!(core.is_row_dirty(1));
+    }
+
+    // AC-4 (TS-4): EL 0 with the cursor on the base (both halves of the
+    // pair inside the range) triggers no extra blanking outside the range.
+    #[test]
+    fn test_erase_in_line_to_end_base_at_cursor_no_extra_blank() {
+        let mut core = TerminalCore::new(10, 1, 0);
+        core.handle_print(b'A' as u32);
+        core.handle_print(b'B' as u32);
+        core.set_cursor_fg(1, 9, 0, 0);
+        core.set_cursor_bg(1, 3, 0, 0);
+        core.handle_print(0x4E16); // '世' -> base@2, spacer@3
+        core.reset_cursor_attrs();
+
+        core.set_cursor_bg(1, 5, 0, 0); // indexed 5: BCE color for the erase
+        core.set_cursor(2, 0); // base of the pair (not spacer)
+        core.clear_dirty();
+        core.handle_erase_in_line(0);
+
+        // col0/col1 untouched: no left-partner blank fired.
+        assert_eq!(core.get_cell_char(0, 0), "A");
+        assert_eq!(core.get_cell_char(1, 0), "B");
+        // col2..9 (including the former base/spacer) are all plain BCE
+        // fill using the erase's bg — NOT the pair's preserved original
+        // bg, proving no extra (incorrect) attribute-preserving blank ran.
+        for c in 2..10 {
+            assert_eq!(core.get_cell_char(c, 0), " ");
+            assert_eq!(core.get_cell_width(c, 0), 1);
+            assert_eq!(
+                PackedColor::from_u32(core.get_cell_bg(c, 0)),
+                PackedColor::indexed(5)
+            );
+        }
+        assert!(core.is_row_dirty(0));
+    }
+
+    // AC-4 (TS-4): EL 1 with the cursor on the spacer (base also inside the
+    // range) triggers no extra blanking outside the range.
+    #[test]
+    fn test_erase_in_line_to_start_spacer_at_cursor_no_extra_blank() {
+        let mut core = TerminalCore::new(10, 1, 0);
+        core.handle_print(b'A' as u32);
+        core.set_cursor_fg(1, 9, 0, 0);
+        core.set_cursor_bg(1, 3, 0, 0);
+        core.handle_print(0x4E16); // '世' -> base@1, spacer@2
+        core.reset_cursor_attrs();
+        core.handle_print(b'C' as u32);
+
+        core.set_cursor_bg(1, 5, 0, 0); // indexed 5: BCE color for the erase
+        core.set_cursor(2, 0); // spacer of the pair (not base)
+        core.clear_dirty();
+        core.handle_erase_in_line(1);
+
+        // col0..2 (including the former base/spacer) are all plain BCE
+        // fill using the erase's bg — proving no extra blank ran.
+        for c in 0..=2 {
+            assert_eq!(core.get_cell_char(c, 0), " ");
+            assert_eq!(core.get_cell_width(c, 0), 1);
+            assert_eq!(
+                PackedColor::from_u32(core.get_cell_bg(c, 0)),
+                PackedColor::indexed(5)
+            );
+        }
+        // col3 untouched: no right-partner blank fired.
+        assert_eq!(core.get_cell_char(3, 0), "C");
+        assert!(core.is_row_dirty(0));
+    }
+
+    // AC-5 (TS-5): EL 0 with the cursor at col 0 (full-row range, no left
+    // partner) is a safe no-op for the cleanup step. col 0 is forced into a
+    // spacer-shaped cell (width 0) to exercise the `start > 0` guard —
+    // without it, `start - 1` at start=0 would underflow.
+    #[test]
+    fn test_erase_in_line_to_end_cursor_at_col_zero_no_left_partner() {
+        let mut core = TerminalCore::new(10, 1, 0);
+        for c in 0..10 {
+            core.set_cell_ascii(c, 0, b'A', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.set_cell(0, 0, " ", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.set_cursor(0, 0);
+        core.clear_dirty();
+        core.handle_erase_in_line(0); // must not panic (underflow guard)
+        for c in 0..10 {
+            assert_eq!(core.get_cell_char(c, 0), " ");
+            assert_eq!(core.get_cell_width(c, 0), 1);
+        }
+        assert!(core.is_row_dirty(0));
+    }
+
+    // AC-5 (TS-5): EL 1 with cursor.col + 1 == cols (right partner check
+    // out of bounds) is a safe no-op for the cleanup step. col (cols-1) is
+    // forced into a base-shaped cell (width 2) with no spacer to exercise
+    // blank_wide_pair_split's out-of-bounds guard.
+    #[test]
+    fn test_erase_in_line_to_start_cursor_at_last_col_no_right_partner() {
+        let mut core = TerminalCore::new(10, 1, 0);
+        for c in 0..10 {
+            core.set_cell_ascii(c, 0, b'B', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.set_cell(9, 0, "世", 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.set_cursor(9, 0); // cursor.col + 1 == cols
+        core.clear_dirty();
+        core.handle_erase_in_line(1); // must not panic (OOB guard)
+        for c in 0..10 {
+            assert_eq!(core.get_cell_char(c, 0), " ");
+            assert_eq!(core.get_cell_width(c, 0), 1);
+        }
+        assert!(core.is_row_dirty(0));
+    }
+
+    // AC-6 (TS-6): EL 2 over a row containing wide pairs produces a fully
+    // BCE-cleared row with no behavioral change attributable to partner
+    // cleanup.
+    #[test]
+    fn test_erase_in_line_all_wide_pair_no_partner_cleanup() {
+        let mut core = TerminalCore::new(10, 1, 0);
+        core.handle_print(b'A' as u32);
+        core.handle_print(0x4E16); // base@1, spacer@2
+        core.handle_print(b'B' as u32);
+        core.handle_print(0x56FD); // base@4, spacer@5
+        core.handle_print(b'C' as u32);
+        core.set_cursor(3, 0);
+        core.clear_dirty();
+        core.handle_erase_in_line(2);
+        for c in 0..10 {
+            assert_eq!(core.get_cell_char(c, 0), " ");
+            assert_eq!(core.get_cell_width(c, 0), 1);
+        }
+        assert!(core.is_row_dirty(0));
+    }
+
+    // AC-6 (TS-6): ED 2 over rows containing wide pairs produces fully
+    // BCE-cleared rows with no behavioral change attributable to partner
+    // cleanup.
+    #[test]
+    fn test_erase_in_display_all_wide_pair_no_partner_cleanup() {
+        let mut core = TerminalCore::new(10, 2, 0);
+        core.handle_print(0x4E16); // row0: base@0, spacer@1
+        core.set_cursor(0, 1);
+        core.handle_print(0x56FD); // row1: base@0, spacer@1
+        core.set_cursor(3, 0);
+        core.clear_dirty();
+        let result = core.handle_erase_in_display(2);
+        assert_eq!(result, 0);
+        for r in 0..2 {
+            for c in 0..10 {
+                assert_eq!(core.get_cell_char(c, r), " ");
+                assert_eq!(core.get_cell_width(c, r), 1);
+            }
+        }
     }
 }
