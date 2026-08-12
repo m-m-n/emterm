@@ -1,0 +1,22 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [csi_edit::tests::test_delete_characters_cursor_on_spacer_of_overflow_base_clears_overflow_entries]
+    red_confirmed: true
+    red_reason: "temporarily flipped the post-condition to assert core.overflow.contains_key(&(0, abs)) (i.e. the entry NOT removed); assertion failed: core.overflow.contains_key(&(0, abs)) at csi_edit.rs:662"
+  AC-2:
+    tests: [csi_screen::tests::test_erase_characters_cursor_on_spacer_of_overflow_base_blanks_left_base]
+    red_confirmed: true
+    red_reason: 'temporarily changed the expected post-condition char from " " to "世"; assertion `left == right` failed: left: " ", right: "世" at csi_screen.rs:879'
+  AC-3:
+    tests: []
+    red_reason: "naming/placement/no-new-dev-dependency check; not independently testable as a red/green test. Verified by inspection: both tests live in the existing mod tests blocks, follow the test_<subject>_<scenario>_<expected> pattern used by adjacent wide-pair tests, and Cargo.toml has no new [dev-dependencies]."
+  AC-4:
+    tests: []
+    red_reason: "verified via `git diff --stat`: both diffs are additions-only inside csi_edit.rs's and csi_screen.rs's `#[cfg(test)] mod tests` blocks; no non-test lines changed."
+  AC-5:
+    tests: [csi_edit::tests::test_delete_characters_cursor_on_spacer_of_overflow_base_clears_overflow_entries, csi_screen::tests::test_erase_characters_cursor_on_spacer_of_overflow_base_blanks_left_base]
+    red_confirmed: true
+    red_reason: "verified via the approved project_commands.test (`CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib`): 797 passed, 0 failed. The plan's second listed command (workspace-level src-tauri/Cargo.toml --test-threads=1) is outside this task's approved project_commands and was not run here; noted in the implementer report."
