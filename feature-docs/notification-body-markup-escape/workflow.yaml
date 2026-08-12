@@ -45,9 +45,22 @@ workflow:
     status: completed
     completed_at_commit: 8d5b2cb9d9701e0a1c83e9fc10404e350e72e812
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 180366a9b546fd35fdb0369693bccc79512d372c
+    result: pass
     failed_items: []
+    notes: |
+      build(main/cli) 双方 exit 0、--lib 3225 passed / 0 failed / 3 ignored。
+      TS1-TS5 は新規ユニットテスト 8 本、TS6 は notifications.rs 無変更を diff で確認、
+      TS7 はスイート全体通過、TS8 は --no-default-features check 通過、
+      TS9 は新規コードが全て #[cfg(unix)] 配下で .show() が字面上無変更であることをコード検査で確認。
+      format check は agent_status_exit_latch.rs / arg_dispatch.rs / mux/inherited_pty.rs /
+      mux/session/session.rs / tests/cli_subcommands.rs / tests/mux_hot_upgrade.rs に
+      プロジェクト既存の rustfmt ドリフトを報告するが、本 feature の変更ファイル
+      （callbacks.rs / callbacks/tests.rs）にはドリフト無し。既存ドリフトは本 feature の
+      スコープ外のため fail としない。
+      なお fresh worktree では gitignored のバンドルフォントが無くビルドが落ちるため、
+      検証前に scripts/fetch-fonts.sh の実行が必要だった（git 追跡差分は発生しない）。
   - id: retrospect
     status: pending
 
