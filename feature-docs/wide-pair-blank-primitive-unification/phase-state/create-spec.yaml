@@ -1,10 +1,10 @@
 schema_version: 1
 feature: wide-pair-blank-primitive-unification
 phase: create-spec
-status: initialized
+status: completed
 generation: 1
 base_revision: cabde2ce
-last_input_digest: null
+last_input_digest: sha256:7b14893bfb130cce370913c68f71adcfbf8f96e5e3f93ae8d2d9937cdc33a8ce
 active_request_id: null
 packets: {}
 answers: {}
