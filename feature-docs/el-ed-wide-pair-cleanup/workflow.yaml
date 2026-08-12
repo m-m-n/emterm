@@ -41,7 +41,8 @@ workflow:
     status: completed
     completed_at_commit: 718574ab281f4baddf43733c8d6f88a03d0b2479
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 95713e5cbecde216250a02aa9ddc7ad2e18fd0c2
     base_commit: 858ffbcaa3c95ca04b15682f6898925e02eb4c76
   - id: review
     status: pending
@@ -62,7 +63,7 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/el-ed-wide-pair-cleanup/task0001
 
