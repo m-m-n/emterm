@@ -1,16 +1,22 @@
 schema_version: 1
 feature: notification-summary-markup-escape
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: a38685bb5aa58fda31153b0fe74a5168bda4d8de
 last_input_digest: sha256:677572ac7a5fc18c6585c5ed9a7d41f5d08dd76d0704cd5a3c3c140c34ed8738
 active_request_id: create-spec-run-0001
-packets: {}
+packets:
+  create-spec-q0001:
+    status: issued
+    issued_at: "2026-08-12T19:26:00+09:00"
+    questions:
+      - question_id: requirement.title-escape-approach
+        status: issued
 answers: {}
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:677572ac7a5fc18c6585c5ed9a7d41f5d08dd76d0704cd5a3c3c140c34ed8738
     output_digest: null
 artifacts: []
