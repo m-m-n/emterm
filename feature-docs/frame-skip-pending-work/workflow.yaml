@@ -43,7 +43,7 @@ workflow:
     skipped_reason: "Pure backend/runtime-logic bug fix inside src-tauri/src/ (frame-skip gate predicate). No new UI surface; toast UI design changes are explicitly out of scope in the task description."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: bdbe144d9f30d30c2ad9c4cc4359a590e9bf67a4
