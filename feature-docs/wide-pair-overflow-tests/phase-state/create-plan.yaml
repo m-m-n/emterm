@@ -1,20 +1,24 @@
 schema_version: 1
 feature: wide-pair-overflow-tests
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
 base_revision: 140830cb7e92cbaaee6567e630e7804bc4be5e01
 last_input_digest: "sha256:1136f6187d62929d297982baf197127ecadc34d594a39204d031854e338b479b"
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-plan-run-0001
-    status: dispatched
+    status: completed
     input_digest: "sha256:1136f6187d62929d297982baf197127ecadc34d594a39204d031854e338b479b"
     output_digest: null
 artifacts: []
-patches: []
+patches:
+  - patch_id: wide-pair-overflow-tests-p0001
+    status: applied
+    base_input_digest: "sha256:1136f6187d62929d297982baf197127ecadc34d594a39204d031854e338b479b"
+    base_workflow_blob: 0eff549c7b5458ce916f5a4321d8e008294d7abb
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
