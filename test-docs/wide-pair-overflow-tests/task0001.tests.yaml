@@ -1,0 +1,59 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - print_handler::tests::test_handle_print_ascii_overwrite_overflow_base_blanks_spacer
+    red_confirmed: true
+    red_reason: >-
+      Temporarily flipped the final overflow-table assert
+      (`assert!(!core.overflow.contains_key(&(0u32, abs)))` ->
+      `assert!(core.overflow.contains_key(&(0u32, abs)))`) and reran; panicked
+      with "assertion failed: core.overflow.contains_key(&(0u32, abs))" at
+      tests.rs:1312. Reverted after confirming the panic.
+  AC-2:
+    tests:
+      - print_handler::tests::test_handle_print_ascii_overwrite_wide_spacer_blanks_overflow_base
+    red_confirmed: true
+    red_reason: >-
+      Same technique as AC-1, applied to this test's final overflow-table
+      assert; panicked with "assertion failed:
+      core.overflow.contains_key(&(0u32, abs))" at tests.rs:1355. Reverted
+      after confirming the panic.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Structural/naming criterion, not independently testable in isolation.
+      Verified by inspection: both new tests live inside the existing
+      print_handler/tests.rs module (no new file), follow the
+      test_<subject>_<scenario>_<expected> naming pattern used by adjacent
+      tests in the same section, and no new dev-dependency was added to
+      crates/term_core/Cargo.toml (diff is 0 lines there).
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Diff-scope criterion, verified via `git diff --stat`: the only file
+      changed is crates/term_core/src/print_handler/tests.rs (104 insertions,
+      0 deletions, no other file touched).
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/full-suite-passes criterion, not a single dedicated test. Verified
+      via `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      crates/term_core/Cargo.toml --lib` (project_commands.test, the only
+      command in this task's approved project_commands): 797 passed, 0
+      failed, 13 ignored (baseline before this task's changes was 795
+      passed, 0 failed). The second command named in the task plan's AC-5
+      (`cargo test --manifest-path src-tauri/Cargo.toml --lib --
+      --test-threads=1`) is outside this task's project_commands scope and
+      was not run as an approved command; when attempted manually for
+      information it failed for an environment reason unrelated to this
+      diff (bundled font asset assets/fonts/Noto-COLRv1.ttf absent in this
+      freshly created worktree, required by src-tauri/build.rs — confirmed
+      present in the main worktree, so this is a worktree-provisioning gap,
+      not a regression caused by this task's test-only change to
+      crates/term_core).
