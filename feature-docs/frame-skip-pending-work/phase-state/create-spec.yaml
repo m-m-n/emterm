@@ -1,7 +1,7 @@
 schema_version: 1
 feature: frame-skip-pending-work
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: b931c24ad187846c4c6288c54ee9408ece11b720
 last_input_digest: "sha256:9c0a56855cf0432d042b0b34b4d8a676a7b2286b3783f6efafa4d1b5355f3c8f"
@@ -13,7 +13,17 @@ worker_runs:
     status: completed
     input_digest: "sha256:9c0a56855cf0432d042b0b34b4d8a676a7b2286b3783f6efafa4d1b5355f3c8f"
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:ac45d767481386828badc482b6369039ad80954dd524e9891e1c43604533550b"
+    output_digest: null
+artifacts:
+  - path: feature-docs/frame-skip-pending-work/REQUIREMENTS.md
+    sha256: null
+    produced_by: create-spec-run-0002
+  - path: feature-docs/frame-skip-pending-work/SPEC.md
+    sha256: null
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
