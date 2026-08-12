@@ -63,31 +63,6 @@ impl TerminalCore {
         }
     }
 
-    /// Blank a wide-pair partner cell (an orphaned spacer or base) in
-    /// place: replace its content with a single space at width 1, while
-    /// preserving fg/bg/flags/hyperlink (IMPLEMENTATION.md D2), removing
-    /// any overflow-table entry for it, and marking the row dirty.
-    ///
-    /// Callers must already have confirmed the target cell is currently
-    /// width 0 or width 2 (the shared partner-blanking precondition) —
-    /// this function does not re-check.
-    fn blank_wide_pair_partner(&mut self, col: u16, row: u16) {
-        let Some(idx) = self.cell_index(col, row) else {
-            return;
-        };
-        if self.ring_cells[idx].is_overflow() && !self.overflow.is_empty() {
-            let abs = self.viewport_abs(row) as u32;
-            let col32 = col as u32;
-            if self.overflow.remove(&(col32, abs)).is_some() {
-                overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
-            }
-        }
-        let cell = &mut self.ring_cells[idx];
-        cell.set_char(" ");
-        cell.width = 1;
-        self.mark_row_dirty(row);
-    }
-
     /// R1/R2 (print_handler-local rule, see IMPLEMENTATION.md Shared
     /// Components + task0001 plan Design): before overwriting the cell at
     /// (col, row), whose current width is `old_width`, blank whichever
@@ -107,14 +82,14 @@ impl TerminalCore {
             if col + 1 < self.cols {
                 if let Some(idx2) = self.cell_index(col + 1, row) {
                     if self.ring_cells[idx2].width == 0 {
-                        self.blank_wide_pair_partner(col + 1, row);
+                        self.blank_wide_pair_half(col + 1, row);
                     }
                 }
             }
         } else if old_width == 0 && col > 0 {
             if let Some(idx2) = self.cell_index(col - 1, row) {
                 if self.ring_cells[idx2].width == 2 {
-                    self.blank_wide_pair_partner(col - 1, row);
+                    self.blank_wide_pair_half(col - 1, row);
                 }
             }
         }
@@ -139,7 +114,7 @@ impl TerminalCore {
         }
         if let Some(idx2) = self.cell_index(next_col, row) {
             if self.ring_cells[idx2].width == 0 {
-                self.blank_wide_pair_partner(next_col, row);
+                self.blank_wide_pair_half(next_col, row);
             }
         }
     }

@@ -71,13 +71,13 @@ impl TerminalCore {
         // by the shift itself.
         if col_was_spacer {
             if col > 0 {
-                self.blank_wide_pair_split(col - 1, row);
+                self.blank_wide_pair_half(col - 1, row);
             }
             // The spacer originally at `col` was relocated to `col + count`
             // by the shift, now orphaned (its base stayed behind at col-1,
             // separated by the freshly-inserted BCE run).
             if col + count < self.cols {
-                self.blank_wide_pair_split(col + count, row);
+                self.blank_wide_pair_half(col + count, row);
             }
         }
         // A base cell shifted into the last column never has a spacer to
@@ -86,7 +86,7 @@ impl TerminalCore {
         // ICH must not manufacture a new instance of that quirk, so any
         // base landing there via this operation is blanked.
         if self.get_cell_width(self.cols - 1, row) == 2 {
-            self.blank_wide_pair_split(self.cols - 1, row);
+            self.blank_wide_pair_half(self.cols - 1, row);
         }
     }
 
@@ -135,12 +135,12 @@ impl TerminalCore {
         if col_was_spacer && col > 0 {
             // The spacer that used to sit at `col` (pairing with the base at
             // col-1) got overwritten by the shift; col-1's base is orphaned.
-            self.blank_wide_pair_split(col - 1, row);
+            self.blank_wide_pair_half(col - 1, row);
         }
         if self.get_cell_width(col, row) == 0 {
             // A spacer whose base sat at col+count-1 (inside the deleted
             // range) was relocated to `col` by the shift, now orphaned.
-            self.blank_wide_pair_split(col, row);
+            self.blank_wide_pair_half(col, row);
         }
         if boundary_shift_nonempty && self.get_cell_width(boundary - 1, row) == 2 {
             // The last cell the shift touches (`boundary - 1`) received
@@ -148,34 +148,8 @@ impl TerminalCore {
             // base, it has lost its spacer (real or BCE-filled) at the
             // shift/BCE-fill boundary and is no longer at the true last
             // column, so the auto-wrap-off quirk exception does not apply.
-            self.blank_wide_pair_split(boundary - 1, row);
+            self.blank_wide_pair_half(boundary - 1, row);
         }
-    }
-
-    /// Blanks a wide-pair half (spacer width=0 or base width=2) left
-    /// orphaned at an ICH/DCH edit boundary, restoring the width-1 space
-    /// invariant. Preserves the target cell's fg/bg/flags/hyperlink
-    /// (IMPLEMENTATION.md D2) — only character content and width change.
-    /// No-op for out-of-bounds columns or cells that are not currently a
-    /// spacer/base half (IMPLEMENTATION.md D3 reserved name).
-    pub(crate) fn blank_wide_pair_split(&mut self, col: u16, row: u16) {
-        let Some(idx) = self.cell_index(col, row) else {
-            return;
-        };
-        let width = self.ring_cells[idx].width;
-        if width != 0 && width != 2 {
-            return;
-        }
-        self.ring_cells[idx].char_data = [0; 16];
-        self.ring_cells[idx].char_data[0] = b' ';
-        self.ring_cells[idx].char_len = 1;
-        self.ring_cells[idx].width = 1;
-        let abs = self.viewport_abs(row) as u32;
-        let col32 = col as u32;
-        if self.overflow.remove(&(col32, abs)).is_some() {
-            overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
-        }
-        self.mark_row_dirty(row);
     }
 }
 

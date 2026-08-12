@@ -14,20 +14,7 @@ impl TerminalCore {
                 let row = self.cursor.row;
                 let start = self.cursor.col;
                 let end = self.cols;
-                // Wide-pair partner cleanup (D2/D3): see the comment on
-                // handle_erase_characters below for the shape of this
-                // pattern.
-                let start_is_spacer = self.get_cell_width(start, row) == 0;
-                let last_is_base = self.get_cell_width(end - 1, row) == 2;
-
-                self.clear_line_range(row, start, end);
-
-                if start_is_spacer && start > 0 {
-                    self.blank_wide_pair_split(start - 1, row);
-                }
-                if last_is_base {
-                    self.blank_wide_pair_split(end, row);
-                }
+                self.erase_range_with_edge_repair(row, start, end);
 
                 for r in (self.cursor.row + 1)..self.rows {
                     self.clear_line(r);
@@ -43,20 +30,7 @@ impl TerminalCore {
                 let row = self.cursor.row;
                 let start = 0;
                 let end = self.cursor.col + 1;
-                // Wide-pair partner cleanup (D2/D3): see the comment on
-                // handle_erase_characters below for the shape of this
-                // pattern.
-                let start_is_spacer = self.get_cell_width(start, row) == 0;
-                let last_is_base = self.get_cell_width(end - 1, row) == 2;
-
-                self.clear_line_range(row, start, end);
-
-                if start_is_spacer && start > 0 {
-                    self.blank_wide_pair_split(start - 1, row);
-                }
-                if last_is_base {
-                    self.blank_wide_pair_split(end, row);
-                }
+                self.erase_range_with_edge_repair(row, start, end);
                 0
             }
             2 => {
@@ -83,40 +57,14 @@ impl TerminalCore {
                 let row = self.cursor.row;
                 let start = self.cursor.col;
                 let end = self.cols;
-                // Wide-pair partner cleanup (D2/D3): see the comment on
-                // handle_erase_characters below for the shape of this
-                // pattern.
-                let start_is_spacer = self.get_cell_width(start, row) == 0;
-                let last_is_base = self.get_cell_width(end - 1, row) == 2;
-
-                self.clear_line_range(row, start, end);
-
-                if start_is_spacer && start > 0 {
-                    self.blank_wide_pair_split(start - 1, row);
-                }
-                if last_is_base {
-                    self.blank_wide_pair_split(end, row);
-                }
+                self.erase_range_with_edge_repair(row, start, end);
             }
             1 => {
                 // ToStart: clear from start to cursor (inclusive)
                 let row = self.cursor.row;
                 let start = 0;
                 let end = self.cursor.col + 1;
-                // Wide-pair partner cleanup (D2/D3): see the comment on
-                // handle_erase_characters below for the shape of this
-                // pattern.
-                let start_is_spacer = self.get_cell_width(start, row) == 0;
-                let last_is_base = self.get_cell_width(end - 1, row) == 2;
-
-                self.clear_line_range(row, start, end);
-
-                if start_is_spacer && start > 0 {
-                    self.blank_wide_pair_split(start - 1, row);
-                }
-                if last_is_base {
-                    self.blank_wide_pair_split(end, row);
-                }
+                self.erase_range_with_edge_repair(row, start, end);
             }
             2 => {
                 // All: clear entire line
@@ -132,18 +80,31 @@ impl TerminalCore {
         let row = self.cursor.row;
         let start = self.cursor.col;
         let end = start.saturating_add(count).min(self.cols);
+        self.erase_range_with_edge_repair(row, start, end);
+    }
+
+    /// The single capture → clear → repair chokepoint for in-row range
+    /// erases (ECH, EL 0/1, ED 0/1): captures, before clearing, whether the
+    /// wide-pair edges of `[start, end)` would be orphaned by the erase,
+    /// performs the plain invariant-unaware range clear, then repairs those
+    /// edges via the partner-blanking primitive.
+    ///
+    /// `row` is a viewport row; `[start, end)` is the half-open erase
+    /// range. Empty range (`end` not greater than `start`) delegates to the
+    /// plain range clear only, with no capture and no repair — this
+    /// absorbs ECH's degenerate empty-range case.
+    ///
+    /// This capture-then-repair step is never folded into
+    /// `clear_line_range` itself, because that function is a shared
+    /// primitive whose full-row callers (`clear_line`, EL 2, ED 2) must not
+    /// gain partner behavior.
+    fn erase_range_with_edge_repair(&mut self, row: u16, start: u16, end: u16) {
         if end <= start {
             self.clear_line_range(row, start, end);
             return;
         }
 
-        // Wide-pair partner cleanup (D2/D3): capture pre-erase state before
-        // clear_line_range blanks the range to BCE. The ED/EL cursor-row
-        // call sites (handle_erase_in_display, handle_erase_in_line above)
-        // perform this same local cleanup at their own call sites; it is
-        // never folded into clear_line_range itself because that function
-        // is a shared primitive whose full-row callers (clear_line, EL 2,
-        // ED 2) must not gain partner behavior.
+        // Capture pre-clear state: does the erase orphan a wide-pair edge?
         let start_is_spacer = self.get_cell_width(start, row) == 0;
         let last_is_base = self.get_cell_width(end - 1, row) == 2;
 
@@ -152,12 +113,14 @@ impl TerminalCore {
         if start_is_spacer && start > 0 {
             // The range's first erased cell was a spacer; its base at
             // start-1 (untouched by the erase) is now orphaned.
-            self.blank_wide_pair_split(start - 1, row);
+            self.blank_wide_pair_half(start - 1, row);
         }
         if last_is_base {
             // The range's last erased cell was a base; the spacer right
             // after the range (untouched by the erase) is now orphaned.
-            self.blank_wide_pair_split(end, row);
+            // `end == column count` is absorbed by the primitive's
+            // out-of-bounds self-guard.
+            self.blank_wide_pair_half(end, row);
         }
     }
 }
@@ -782,7 +745,7 @@ mod tests {
     // AC-5 (TS-5): EL 1 with cursor.col + 1 == cols (right partner check
     // out of bounds) is a safe no-op for the cleanup step. col (cols-1) is
     // forced into a base-shaped cell (width 2) with no spacer to exercise
-    // blank_wide_pair_split's out-of-bounds guard.
+    // blank_wide_pair_half's out-of-bounds guard.
     #[test]
     fn test_erase_in_line_to_start_cursor_at_last_col_no_right_partner() {
         let mut core = TerminalCore::new(10, 1, 0);
