@@ -1,0 +1,98 @@
+schema_version: 1
+feature: notification-summary-markup-escape
+created: 2026-08-12
+base_branch: em-workflow/notification-body-markup-escape/integration
+parent_branch: em-workflow/notification-summary-markup-escape/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: d9c80e3b8ab1b2e5b0f436c3f9005a5db1e01220
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      Rust の通知 egress に閉じたバックエンドのセキュリティ修正で、UI 表面・
+      ビジュアル判断・デザイントークンの変更を伴わないため。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: Neutralize markup meta characters in the notification summary
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Cover the OSC 9 title path end to end
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Body escaping unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Single egress point
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: Platform scope
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
