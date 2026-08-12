@@ -1,0 +1,47 @@
+round: 1
+executed_at: "2026-08-12T09:59:43+09:00"
+scope:
+  review_mode: diff
+  base_commit: 37520c6fea04bfa84cf61f0590064b6794771ad3
+  head_commit: 1422a4b9be013ad95a6a5049123df252876103b3
+  changed_files:
+    - src-tauri/src/tmux_sockets.rs
+    - test-docs/tmux-sockets-discover-flake/task0001.tests.yaml
+plan:
+  floor: [comprehensive, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: litellm, model: vertex-glm-5, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: e86544305169d904
+    severity: medium
+    category: comprehensive
+    file: test-docs/tmux-sockets-discover-flake/task0001.tests.yaml
+    line: 33
+    title: "tests.yaml の AC-3〜AC-6 に必須フィールド red_confirmed が無い"
+    description: >
+      implementer の tests.yaml 契約では acceptance_tests の各エントリが
+      tests / red_confirmed / red_reason を持ち、tests: [] のエントリでも
+      red_confirmed を書く。本ファイルは AC-1/AC-2 にしか red_confirmed が無く、
+      AC-3〜AC-6 は red_reason だけ。既存 test-docs 群（85 箇所）は
+      tests: [] エントリにも red_confirmed: false を併記しており、
+      この欠落は「red を観測したのか未記入なのか」が機械判定できないドリフトを生む。
+      Rust 側の変更（bind して listen(2) を呼ばない stale フィクスチャ）は妥当。
+    suggestion: "AC-3〜AC-6 の各エントリに red_confirmed: false を追記する"
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium severity — R4 auto-fix ゲート（critical/high のみ）の対象外。記録のみで完了"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
