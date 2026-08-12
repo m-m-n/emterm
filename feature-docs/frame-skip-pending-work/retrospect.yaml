@@ -1,0 +1,55 @@
+feature: frame-skip-pending-work
+collected_at: "2026-08-12T13:58:00+09:00"
+session_ids: [05ec97e2-1c38-409f-91d7-cad8c142e972]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - src-tauri/src/app/tests/mod.rs
+      note: >-
+        planner predicted app/tests/mod.rs, but this codebase registers the test
+        module in app/tests.rs (which already declares `mod timing;`). The file
+        was never created. The task plan itself flagged it as "may end up
+        untouched", so the miss was anticipated rather than silent.
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - id: L1
+    note: >-
+      Three of four Claude reviewers independently landed on the same root
+      cause from different angles (comprehensive via existing-test blast
+      radius, spec via the SPEC AC5 command wording, architecture via the
+      module's bare-send invariant): process-global mutable state reached
+      through a new #[cfg(test)] seam. All three were rated medium, so the
+      R4 candidate gate (critical/high) left them unfixed even though they
+      describe one small, well-specified change. Worth considering whether
+      "N distinct perspectives converge on one root cause" should escalate
+      severity for the auto-fix gate.
+  - id: L2
+    note: >-
+      A fresh integration worktree lacks gitignored build assets
+      (src-tauri/assets/fonts/, viewer/dist, settings/dist) that build.rs
+      requires, so neither the implementer nor the verify phase can run cargo
+      at all until they are copied in from the main worktree. Both had to
+      discover and work around this independently. A documented pre-step (or
+      a project-level bootstrap command in workflow.yaml components) would
+      remove the duplicated discovery.
+  - id: L3
+    note: >-
+      The Bash tool's persistent cwd silently reset mid-verify, so two check
+      commands ran against the MAIN working tree instead of the integration
+      worktree and reported a meaningless pass. Caught only by adding `pwd`
+      to the command. Verify-phase commands that must run in the integration
+      worktree should carry their own cd (or an explicit pwd assertion) in
+      every invocation rather than relying on a cwd set in an earlier turn.
+  - id: L4
+    note: >-
+      cargo fmt --check is crate-wide and this repo carries pre-existing drift
+      in 7 unrelated files, so the format_command in workflow.yaml can never
+      exit 0 regardless of what the feature does. The verify phase had to
+      interpret the result by hand (drift confined to untouched files). A
+      changed-files-scoped format check would give a mechanically usable
+      signal.
