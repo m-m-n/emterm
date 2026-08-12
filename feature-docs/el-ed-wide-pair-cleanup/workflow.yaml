@@ -45,7 +45,7 @@ workflow:
     completed_at_commit: 95713e5cbecde216250a02aa9ddc7ad2e18fd0c2
     base_commit: 858ffbcaa3c95ca04b15682f6898925e02eb4c76
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -68,10 +68,19 @@ tasks:
     branch: em-workflow/el-ed-wide-pair-cleanup/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
-  perspectives: {}
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary:
+      - perspective: performance
+        reason: "NFR3 が消去ホットパスへの影響を制約しており、diff が EL/ED の全消去経路に幅参照と条件分岐を追加しているため"
+    cross_validation: true
+  perspectives:
+    comprehensive: pending
+    security: pending
+    spec: pending
+    performance: pending
   residual_critical_high: 0
   needs_rework: false
 
