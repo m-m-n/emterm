@@ -50,7 +50,8 @@ workflow:
     base_commit: 13dc155ba4207b01d55ac112b222a63422a3ab93
     completed_at_commit: f4d50918ee7d0176f139da343df91c1567775016
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: a6c1b674b6eb103372f7a6127f0e9c33df333a1d
   - id: verify
     status: pending
     result: null
@@ -80,13 +81,17 @@ tasks:
     branch: em-workflow/frame-skip-pending-work/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, performance, architecture, spec]
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    performance: completed
+    architecture: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
