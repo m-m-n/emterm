@@ -1,11 +1,11 @@
 schema_version: 1
 feature: notification-summary-markup-escape
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: a38685bb5aa58fda31153b0fe74a5168bda4d8de
-last_input_digest: sha256:677572ac7a5fc18c6585c5ed9a7d41f5d08dd76d0704cd5a3c3c140c34ed8738
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:619423e90bdefe3ffe65c99456bf5a26b1e5b2f9924280cbca424d8c493798b1
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: answered
@@ -35,6 +35,10 @@ worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
     input_digest: sha256:677572ac7a5fc18c6585c5ed9a7d41f5d08dd76d0704cd5a3c3c140c34ed8738
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: dispatched
+    input_digest: sha256:619423e90bdefe3ffe65c99456bf5a26b1e5b2f9924280cbca424d8c493798b1
     output_digest: null
 artifacts: []
 patches: []
