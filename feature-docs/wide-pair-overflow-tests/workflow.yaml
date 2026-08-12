@@ -63,9 +63,9 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: [FR1, FR3, FR4, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/wide-pair-overflow-tests/task0001
   task0002:
     title: DCH / ECH 経路の overflow 相方掃除テスト（TS3/TS4）
     plan: tasks/task0002.md
@@ -76,9 +76,9 @@ tasks:
     domains: [input-handling]
     complexity: low
     requirements: [FR2, FR3, FR4, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/wide-pair-overflow-tests/task0002
 
 review:
   status: pending
