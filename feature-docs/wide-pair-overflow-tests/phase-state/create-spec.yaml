@@ -1,11 +1,11 @@
 schema_version: 1
 feature: wide-pair-overflow-tests
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: cabde2ce2b698f999ac3dc875a185b03b3266988
 last_input_digest: "sha256:c9bcccb3c3bf9a32617472bd93e43c0516d1ab650cfe84a0d778ef6583507484"
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -14,10 +14,16 @@ worker_runs:
     input_digest: "sha256:61ce0c83907a923e9885fbf2cb900aa7756158011b8ffdf3250b374d2c9e34f9"
     output_digest: null
   - request_id: create-spec-run-0002
-    status: dispatched
+    status: completed
     input_digest: "sha256:c9bcccb3c3bf9a32617472bd93e43c0516d1ab650cfe84a0d778ef6583507484"
     output_digest: null
-artifacts: []
+artifacts:
+  - path: feature-docs/wide-pair-overflow-tests/REQUIREMENTS.md
+    sha256: "sha256:56bcf8a660a030cc0e81073b943fb36c5c68d70bef27abae542b725db9d39efe"
+    produced_by: create-spec-run-0002
+  - path: feature-docs/wide-pair-overflow-tests/SPEC.md
+    sha256: "sha256:7300bdfbb453415e0be8ed856037b8b6d643615d63556ebe20791d706cb7bbc2"
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
