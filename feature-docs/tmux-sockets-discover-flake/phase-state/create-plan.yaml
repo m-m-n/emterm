@@ -1,20 +1,30 @@
 schema_version: 1
 feature: tmux-sockets-discover-flake
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
 base_revision: 4f90f26ddd6f05f6e8734add961210e0c6261f9c
 last_input_digest: sha256:9d0b872edcc48938863a48d36241e9cd10a30052eecd2b37f6a46803b60ea84f
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-plan-run-0001
-    status: dispatched
+    status: completed
     input_digest: sha256:9d0b872edcc48938863a48d36241e9cd10a30052eecd2b37f6a46803b60ea84f
     output_digest: null
-artifacts: []
-patches: []
+artifacts:
+  - path: feature-docs/tmux-sockets-discover-flake/IMPLEMENTATION.md
+    produced_by: create-plan-run-0001
+  - path: feature-docs/tmux-sockets-discover-flake/VERIFICATION.md
+    produced_by: create-plan-run-0001
+  - path: feature-docs/tmux-sockets-discover-flake/tasks/task0001.md
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: tmux-sockets-discover-flake-p0001
+    status: applied
+    base_input_digest: sha256:9d0b872edcc48938863a48d36241e9cd10a30052eecd2b37f6a46803b60ea84f
+    base_workflow_blob: 59b34593cc538d0f71233c8b4833d589d68ecabe
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
