@@ -40,7 +40,8 @@ workflow:
     base_commit: 3d3ee6e77ce00819e947b7f514e51a881c4f23d0
     completed_at_commit: 65858db43a9fe5d869f90078e54987d1be604dcd
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 1f7840c6aec9364cf1dc63662a8ff6edac46aafb
   - id: verify
     status: pending
     result: null
@@ -64,13 +65,18 @@ tasks:
     branch: em-workflow/notification-summary-markup-escape/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
