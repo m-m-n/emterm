@@ -58,9 +58,9 @@ tasks:
     domains: [input-handling, external-io]
     complexity: high
     requirements: [FR1, FR2, FR3, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/notification-summary-markup-escape/task0001
 
 review:
   status: pending
