@@ -39,7 +39,7 @@ workflow:
       ユーザー向け挙動の変更が一切ないため。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: cabde2ce2b698f999ac3dc875a185b03b3266988
