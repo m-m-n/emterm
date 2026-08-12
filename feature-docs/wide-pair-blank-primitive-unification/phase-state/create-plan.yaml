@@ -1,7 +1,7 @@
 schema_version: 1
 feature: wide-pair-blank-primitive-unification
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: d86f6572
 last_input_digest: sha256:862cfdc7359503106ca7cddcd74756993880bb6774dc01f8c1fb60dbd580ab5f
@@ -19,7 +19,9 @@ artifacts:
     digest: sha256:1bf9f3ab97b119d411516790facf28c1e3297c81e2f2dc4784756e35eb63b5b3
   - path: feature-docs/wide-pair-blank-primitive-unification/tasks/task0001.md
     digest: sha256:d3342e128e1046d3e73a7ba98780d96fce10acd6b72c6328ccea5cff0356b8d2
-patches: []
+patches:
+  - patch_id: wide-pair-blank-primitive-unification-p0001
+    applied: true
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
