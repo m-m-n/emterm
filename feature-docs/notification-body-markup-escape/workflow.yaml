@@ -1,0 +1,121 @@
+schema_version: 1
+feature: notification-body-markup-escape
+created: 2026-08-12
+base_branch: main
+parent_branch: em-workflow/notification-body-markup-escape/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 69dd84f0c95b54a0aa943f80b279705b7fdcbf7c
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "UI を持たない Rust 通知パイプラインのセキュリティ修正（文字列エスケープと D-Bus capability 判定）であり、視覚的な表面もデザイントークンの関与も無いため"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: bdbe144d9f30d30c2ad9c4cc4359a590e9bf67a4
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Escape markup metacharacters in the notification body title"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS2]
+  FR2:
+    title: "Escape after the 100-character truncation"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3]
+  FR3:
+    title: "Gate escaping on the server's body-markup capability"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS4]
+  FR4:
+    title: "Cover both notification paths that share sanitize_title"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5]
+  FR5:
+    title: "Windows notification path unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Existing sanitize_title behavior preserved"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS6, TS7]
+  NFR2:
+    title: "Security: injection choke point"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS5]
+  NFR3:
+    title: "Feature-gate and platform-gate hygiene"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
