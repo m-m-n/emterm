@@ -1,0 +1,15 @@
+feature: notification-markup-fail-closed
+collected_at: "2026-08-13T09:20:00+09:00"
+session_ids: [a805304b-8a6f-424f-81b9-7a8a8b73df88]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - "integration worktree に bundled fonts (src-tauri/assets/fonts/*) が無く build.rs が失敗する。implementer / verify の双方で bash scripts/fetch-fonts.sh を先に走らせる必要があった。gitignored 資産を必要とするプロジェクトでは worktree 作成直後の準備コマンドを workflow.yaml に持たせる余地がある"
+  - "review の findings 5 件が全て medium で auto-fix ゲート（critical/high のみ）を外れた。うち 3 件はテストの拘束力（本番分岐をテスト側に複製していて escape_for_send を検証していない、SPEC TS2 の空 capability リスト未カバー）に関する指摘で、planner の VERIFICATION.md は TS1-TS3 を『存在する』としか要求していなかった。テスト設計の観点をレビューより前（plan-writing）に効かせられるかは検討の余地がある"
+  - "前 feature の test-docs 記録（notification-summary-markup-escape/task0001.tests.yaml）がテスト改名で参照切れになった。feature をまたぐテスト名変更時に旧記録を追随させる運用が無い"
+  - "cargo fmt --check が本 diff と無関係な既存乖離を報告する（プロジェクトが rustfmt 非強制）。format_command を verify の合否に含めない現在の運用は妥当だった"
