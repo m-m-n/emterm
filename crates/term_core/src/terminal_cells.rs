@@ -238,4 +238,177 @@ impl TerminalCore {
         cell.bg = self.cursor.bg;
         cell
     }
+
+    // ── Wide-pair partner blanking primitive ─────────────
+
+    /// Blank a wide-pair half (an orphaned spacer at width 0, or a base at
+    /// width 2) at `(col, row)` in place: rewrite it to a width-1 space,
+    /// preserving fg/bg/flags/hyperlink, remove any overflow-table entry
+    /// (and its reverse-index entry) for the position, and mark the row
+    /// dirty.
+    ///
+    /// Self-guarding (no precondition on the caller): a no-op, with no
+    /// mutation and no panic, when `(col, row)` does not resolve to a cell
+    /// or when the cell's current width is neither 0 nor 2 (e.g. already
+    /// width 1). This is the single D2-invariant repair shared by the
+    /// print path, ICH/DCH, and the range-erase edge-repair chokepoint —
+    /// see IMPLEMENTATION.md "Shared Components".
+    pub(crate) fn blank_wide_pair_half(&mut self, col: u16, row: u16) {
+        let Some(idx) = self.cell_index(col, row) else {
+            return;
+        };
+        let width = self.ring_cells[idx].width;
+        if width != 0 && width != 2 {
+            return;
+        }
+        if !self.overflow.is_empty() {
+            let abs = self.viewport_abs(row) as u32;
+            let col32 = col as u32;
+            if self.overflow.remove(&(col32, abs)).is_some() {
+                overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
+            }
+        }
+        let cell = &mut self.ring_cells[idx];
+        cell.set_char(" ");
+        cell.width = 1;
+        self.mark_row_dirty(row);
+    }
+}
+
+#[cfg(test)]
+mod blank_wide_pair_half_tests {
+    use super::*;
+    use crate::cell::{PackedColor, STYLE_BOLD};
+
+    fn make_core() -> TerminalCore {
+        TerminalCore::new(10, 3, 0)
+    }
+
+    // AC-1 (TS-2): a width-2 base cell is rewritten to a width-1 space.
+    #[test]
+    fn width2_base_becomes_width1_space() {
+        let mut core = make_core();
+        let idx = core.cell_index(2, 0).unwrap();
+        core.ring_cells[idx].set_char("世");
+        core.ring_cells[idx].width = 2;
+        core.clear_dirty();
+
+        core.blank_wide_pair_half(2, 0);
+
+        assert_eq!(core.get_cell_char(2, 0), " ");
+        assert_eq!(core.get_cell_width(2, 0), 1);
+    }
+
+    // AC-1 (TS-2): a width-0 spacer cell is rewritten to a width-1 space.
+    #[test]
+    fn width0_spacer_becomes_width1_space() {
+        let mut core = make_core();
+        let idx = core.cell_index(3, 0).unwrap();
+        core.ring_cells[idx].char_data = [0; 16];
+        core.ring_cells[idx].char_len = 0;
+        core.ring_cells[idx].width = 0;
+        core.clear_dirty();
+
+        core.blank_wide_pair_half(3, 0);
+
+        assert_eq!(core.get_cell_char(3, 0), " ");
+        assert_eq!(core.get_cell_width(3, 0), 1);
+    }
+
+    // AC-1 (TS-2): fg/bg/flags/hyperlink survive the blank.
+    #[test]
+    fn preserves_fg_bg_flags_hyperlink() {
+        let mut core = make_core();
+        let idx = core.cell_index(1, 0).unwrap();
+        core.ring_cells[idx].set_char("世");
+        core.ring_cells[idx].width = 2;
+        core.ring_cells[idx].fg = PackedColor::indexed(9);
+        core.ring_cells[idx].bg = PackedColor::indexed(3);
+        core.ring_cells[idx].flags = STYLE_BOLD;
+        core.ring_cells[idx].hyperlink_id = 7;
+
+        core.blank_wide_pair_half(1, 0);
+
+        assert_eq!(core.get_cell_char(1, 0), " ");
+        assert_eq!(core.get_cell_width(1, 0), 1);
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_fg(1, 0)),
+            PackedColor::indexed(9)
+        );
+        assert_eq!(
+            PackedColor::from_u32(core.get_cell_bg(1, 0)),
+            PackedColor::indexed(3)
+        );
+        assert_eq!(core.get_cell_flags(1, 0), STYLE_BOLD);
+        assert_eq!(core.get_cell_hyperlink_id(1, 0), 7);
+    }
+
+    // AC-1 (TS-2): a removed overflow entry also removes its reverse-index
+    // entry.
+    #[test]
+    fn removes_overflow_entry_and_reverse_index() {
+        let mut core = make_core();
+        let idx = core.cell_index(0, 0).unwrap();
+        core.ring_cells[idx].char_len = 0xFF; // mark as overflow
+        core.ring_cells[idx].width = 2;
+        core.overflow
+            .insert((0, 0), "long-overflow-content".to_string());
+        overflow_ridx_insert(&mut core.overflow_ridx, 0, 0);
+        assert!(core.overflow.contains_key(&(0, 0)));
+        assert!(
+            core.overflow_ridx
+                .get(&0)
+                .is_some_and(|cols| cols.contains(&0))
+        );
+
+        core.blank_wide_pair_half(0, 0);
+
+        assert!(!core.overflow.contains_key(&(0, 0)));
+        assert!(
+            !core
+                .overflow_ridx
+                .get(&0)
+                .is_some_and(|cols| cols.contains(&0))
+        );
+        assert_eq!(core.get_cell_char(0, 0), " ");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+    }
+
+    // AC-1 (TS-2): the row is marked dirty.
+    #[test]
+    fn marks_row_dirty() {
+        let mut core = make_core();
+        let idx = core.cell_index(2, 1).unwrap();
+        core.ring_cells[idx].width = 0;
+        core.clear_dirty();
+        assert!(!core.is_row_dirty(1));
+
+        core.blank_wide_pair_half(2, 1);
+
+        assert!(core.is_row_dirty(1));
+    }
+
+    // AC-2 (TS-3): a width-1 cell is a strict no-op (no mutation, no dirty
+    // mark).
+    #[test]
+    fn width1_cell_is_strict_noop() {
+        let mut core = make_core();
+        core.set_cell_ascii(4, 0, b'A', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.clear_dirty();
+
+        core.blank_wide_pair_half(4, 0);
+
+        assert_eq!(core.get_cell_char(4, 0), "A");
+        assert_eq!(core.get_cell_width(4, 0), 1);
+        assert!(!core.is_row_dirty(0));
+    }
+
+    // AC-2 (TS-3): an out-of-bounds position is a no-op with no panic.
+    #[test]
+    fn out_of_bounds_position_is_noop_no_panic() {
+        let mut core = make_core();
+        core.blank_wide_pair_half(100, 0); // col OOB
+        core.blank_wide_pair_half(0, 100); // row OOB
+        // Reaching this point without panicking is the assertion.
+    }
 }

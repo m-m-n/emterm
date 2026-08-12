@@ -1,0 +1,69 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - terminal_cells::blank_wide_pair_half_tests::width2_base_becomes_width1_space
+      - terminal_cells::blank_wide_pair_half_tests::width0_spacer_becomes_width1_space
+      - terminal_cells::blank_wide_pair_half_tests::preserves_fg_bg_flags_hyperlink
+      - terminal_cells::blank_wide_pair_half_tests::removes_overflow_entry_and_reverse_index
+      - terminal_cells::blank_wide_pair_half_tests::marks_row_dirty
+    red_confirmed: true
+    red_reason: "no method named `blank_wide_pair_half` found for struct `TerminalCore` (E0599) before the primitive existed"
+  AC-2:
+    tests:
+      - terminal_cells::blank_wide_pair_half_tests::width1_cell_is_strict_noop
+      - terminal_cells::blank_wide_pair_half_tests::out_of_bounds_position_is_noop_no_panic
+    red_confirmed: true
+    red_reason: "same E0599 compile failure as AC-1 (both tests live in the same new module, added before the primitive existed)"
+  AC-3:
+    tests:
+      - print_handler::tests::test_handle_print_ascii_overwrite_wide_base_blanks_spacer
+      - print_handler::tests::test_write_grapheme_nonascii_overwrite_wide_base_blanks_spacer
+      - print_handler::tests::test_handle_print_ascii_overwrite_wide_spacer_blanks_base
+      - print_handler::tests::test_write_grapheme_nonascii_overwrite_wide_spacer_blanks_base
+      - print_handler::tests::test_write_grapheme_wide_write_over_existing_base_blanks_its_spacer
+      - print_handler::tests::test_widen_after_merge_spacer_creation_over_existing_base_blanks_its_spacer
+      - print_handler::tests::test_relocate_widened_base_via_wrap_spacer_creation_blanks_existing_pair_spacer
+      - print_handler::tests::test_write_grapheme_shorter_redraw_after_wide_base_overwrite_blanks_orphan_spacer
+      - print_handler::tests::test_write_grapheme_u23ed_vs16_across_chunk_boundary_widens_correctly
+      - print_handler::tests::test_handle_print_ascii_overwrite_ordinary_cell_leaves_neighbors_unchanged
+      - print_handler::tests::test_write_grapheme_nonascii_overwrite_ordinary_cell_leaves_neighbors_unchanged
+      - print_handler::tests::test_write_grapheme_column_shifted_redraw_blanks_all_orphan_partners
+      - print_handler::tests::test_write_grapheme_redraw_swaps_which_partner_side_is_overwritten
+    red_confirmed: false
+    red_reason: "AC-3 is a structural/behavior-preservation criterion for a refactor (function removed + call sites migrated to the primitive, with zero output change). These are the pre-existing print-path wide-pair regression tests (test-first for a past feature, not this one); they were already green before task0001 began. Confirmed by: (1) grep showing `blank_wide_pair_partner` no longer appears anywhere in the crate after the edit, (2) this exact test list staying green, assertions byte-for-byte unchanged, across the print_handler.rs migration."
+  AC-4:
+    tests:
+      - csi_edit::tests::test_delete_characters_cursor_on_spacer_blanks_left_base
+      - csi_edit::tests::test_delete_characters_shift_boundary_base_loses_spacer_blanks_base
+      - csi_edit::tests::test_delete_characters_shift_boundary_spacer_leaves_no_orphan
+      - csi_edit::tests::test_insert_characters_cursor_on_spacer_blanks_left_base_and_shifted_spacer
+      - csi_edit::tests::test_insert_characters_pushes_spacer_off_edge_blanks_base_at_last_col
+    red_confirmed: false
+    red_reason: "Same structural/behavior-preservation shape as AC-3, for csi_edit.rs's ICH/DCH call sites. Confirmed by: (1) grep showing `blank_wide_pair_split` no longer appears anywhere in the crate after the edit, (2) this exact test list staying green, assertions unchanged, across the csi_edit.rs migration."
+  AC-5:
+    tests:
+      - csi_screen::tests::test_erase_characters_spacer_start_blanks_left_base
+      - csi_screen::tests::test_erase_characters_base_at_range_end_blanks_right_spacer
+      - csi_screen::tests::test_erase_in_line_to_end_spacer_at_cursor_blanks_left_base
+      - csi_screen::tests::test_erase_in_line_to_start_base_at_cursor_blanks_right_spacer
+      - csi_screen::tests::test_erase_in_display_below_spacer_at_cursor_blanks_left_base
+      - csi_screen::tests::test_erase_in_display_above_base_at_cursor_blanks_right_spacer
+      - csi_screen::tests::test_erase_in_line_to_end_base_at_cursor_no_extra_blank
+      - csi_screen::tests::test_erase_in_line_to_start_spacer_at_cursor_no_extra_blank
+      - csi_screen::tests::test_erase_in_line_to_end_cursor_at_col_zero_no_left_partner
+      - csi_screen::tests::test_erase_in_line_to_start_cursor_at_last_col_no_right_partner
+    red_confirmed: false
+    red_reason: "Same structural/behavior-preservation shape as AC-3/AC-4: the five ECH/EL/ED call sites collapse onto the new erase_range_with_edge_repair chokepoint with the FR5 constraint comment relocated onto it. Confirmed by: (1) no inline capture-then-repair copy remains at any of the five call sites (each is a single chokepoint call), (2) this exact test list staying green, assertions unchanged, across the csi_screen.rs migration."
+  AC-6:
+    tests:
+      - csi_screen::tests::test_erase_in_line_all_wide_pair_no_partner_cleanup
+      - csi_screen::tests::test_erase_in_display_all_wide_pair_no_partner_cleanup
+    red_confirmed: false
+    red_reason: "These tests already existed before task0001 (pinning EL 2 / ED 2 full-row-over-wide-pairs behavior) per Test Notes TS-4 guidance to add one only if none exists — none was needed. clear_line/clear_line_range/EL 2/ED 2 were not touched by this task; both tests stayed green throughout."
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "No single dedicated test: the three `old_width != 1` gates (handle_print_ascii, write_grapheme_to_grid, relocate_widened_base_via_wrap) are confirmed unchanged by diff inspection (NFR1 has no automated assertion per Test Notes); zero-assertion-change is confirmed by the full `cargo test --lib` run (802 passed, 0 failed, same as baseline plus the 7 new AC-1/AC-2 tests); the workspace build check (`cargo check --manifest-path src-tauri/Cargo.toml`) passes; `src-tauri/src/lib.rs` was not touched (confirmed via `git status`/diff scope)."
