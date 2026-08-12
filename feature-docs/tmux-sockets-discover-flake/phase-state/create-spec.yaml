@@ -1,0 +1,37 @@
+schema_version: 1
+feature: tmux-sockets-discover-flake
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: bdbe144d9f30d30c2ad9c4cc4359a590e9bf67a4
+last_input_digest: sha256:4077f9015666175cb924cb25714a658990fe7f6dfaac20990faa219d3a29456b
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:4077f9015666175cb924cb25714a658990fe7f6dfaac20990faa219d3a29456b
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:pending
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/components/md3-select.ts
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/web-shared/components/md3-select.css: sha256:b09cdb7c03aecfd24ac44581995a8f75188c4929c744af5e065f5a2a947ae9cd
+      src-tauri/web-shared/components/md3-select.ts: sha256:8212cad86e4f25206de4dbdc72ae0e74df5618449e7fca76d06264f22ab42577
+      src-tauri/web-shared/settings/markdown-theme-presets.ts: sha256:8344c4f43366d3e78df8c8f170a5fc75e93121d16e64912635c51880ff6a429a
+      src-tauri/web-shared/settings/ui-theme-presets.ts: sha256:5e1afbad9942f28348372986ffcb0a77f7992edb67c5d760637c0019404a3094
+    truncated: false
+last_error: null
