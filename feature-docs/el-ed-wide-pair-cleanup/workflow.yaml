@@ -38,7 +38,8 @@ workflow:
     skipped_reason: "Pure behavioral bug fix inside the term_core Rust crate's escape-sequence erase path. No UI surface, no visual output, no new component or theme work; the change is invisible except as corrected grid cell state. A design step has nothing to specify."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: 718574ab281f4baddf43733c8d6f88a03d0b2479
   - id: implement
     status: pending
     base_commit: bdbe144d9f30d30c2ad9c4cc4359a590e9bf67a4
@@ -51,7 +52,19 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: EL/ED cursor-row wide-pair partner cleanup + regression tests
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/csi_screen.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -67,42 +80,42 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-4]
   FR2:
     title: EL 1 blanks the orphaned spacer right of the erase range
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-2, TS-4]
   FR3:
     title: ED 0 / ED 1 apply the same cleanup on the cursor row
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-3]
   FR4:
     title: Full-line clears remain no-ops for edge cleanup
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-6]
   FR5:
     title: Partner blanking preserves cell attributes
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3]
   FR6:
     title: Regression unit tests in term_core
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3, TS-6]
   FR7:
     title: Remaining out-of-scope items documented
@@ -116,28 +129,28 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR2:
     title: No change to erase semantics inside the cleared range
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2]
   NFR3:
     title: Negligible performance impact on the erase hot path
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR4:
     title: Out-of-bounds boundary columns are safe
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-5]
 
 batch:

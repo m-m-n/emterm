@@ -1,16 +1,33 @@
 schema_version: 1
 feature: el-ed-wide-pair-cleanup
 phase: create-plan
-status: initialized
+status: completed
 generation: 1
 base_revision: 2fbdc00f9db4107f4e752fec56315f105f0de9fd
-last_input_digest: null
+last_input_digest: sha256:d1799b4555d113f4fe612ab8a83daf8d990d280f216d6d2485e828b58b07d8de
 active_request_id: null
 packets: {}
 answers: {}
-worker_runs: []
-artifacts: []
-patches: []
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: completed
+    input_digest: sha256:d1799b4555d113f4fe612ab8a83daf8d990d280f216d6d2485e828b58b07d8de
+    output_digest: null
+artifacts:
+  - path: feature-docs/el-ed-wide-pair-cleanup/IMPLEMENTATION.md
+    sha256: null
+    produced_by: create-plan-run-0001
+  - path: feature-docs/el-ed-wide-pair-cleanup/VERIFICATION.md
+    sha256: null
+    produced_by: create-plan-run-0001
+  - path: feature-docs/el-ed-wide-pair-cleanup/tasks/task0001.md
+    sha256: null
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: el-ed-wide-pair-cleanup-p0001
+    status: applied
+    base_input_digest: sha256:d1799b4555d113f4fe612ab8a83daf8d990d280f216d6d2485e828b58b07d8de
+    base_workflow_blob: 604216e470332f39feafa66d8654fa86f09216d7
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
