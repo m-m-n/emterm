@@ -37,7 +37,8 @@ workflow:
     skipped_reason: "src-tauri/src/callbacks.rs 内の #[cfg(unix)] エスケープ判定分岐のみを変更するバックエンドのセキュリティバグ修正で、UI・視覚面・レイアウト・デザイントークンへの変更が一切ないため。"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: 7ed4da27503bfbda4c7c26f9f43bb5ac2f478b92
   - id: implement
     status: pending
     base_commit: null
@@ -50,7 +51,20 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Fail-closed capability decision in the notification escape gate
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/callbacks.rs
+      - src-tauri/src/callbacks/tests.rs
+    skills: [backend-impl]
+    domains: [input-handling, external-io]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -66,57 +80,57 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1]
   FR2:
     title: Ok 経路の既存挙動を保持する
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS2, TS3]
   FR3:
     title: fail-closed 判定は per-send 単一判定として title/body 双方に適用する
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1]
   FR4:
     title: Windows 通知経路は変更しない
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS6]
   FR5:
     title: 仕様記録を fail-closed に改める
     status: ok
     tbd_reason: null
     excluded_reason: null
     tasks: []
-    tests: []
+    tests: [TS7]
   NFR1:
     title: フィーチャーゲート / プラットフォームゲート衛生の維持
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS5]
   NFR2:
     title: コード内ドキュメントの整合
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS7]
   NFR3:
     title: 既存サニタイズパイプラインの無変更
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS4]
 
 batch:
   review_rework_count: 0
