@@ -1,0 +1,25 @@
+schema_version: 1
+feature: frame-skip-pending-work
+phase: create-plan
+status: completed
+generation: 1
+base_revision: 0233ca31a40be338d9e4a499778febb48f66cae0
+last_input_digest: "sha256:b7b314472cf46f2ef384833baf48563031242c11f5f8ffc1134de54cc09d5ee7"
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: completed
+    input_digest: "sha256:b7b314472cf46f2ef384833baf48563031242c11f5f8ffc1134de54cc09d5ee7"
+    output_digest: null
+artifacts: []
+patches:
+  - patch_id: frame-skip-pending-work-p0001
+    status: applied
+    base_input_digest: "sha256:b7b314472cf46f2ef384833baf48563031242c11f5f8ffc1134de54cc09d5ee7"
+    base_workflow_blob: 6e9ed148c5d3fe9fa66ecf2d9168ec89a3beb4f7
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

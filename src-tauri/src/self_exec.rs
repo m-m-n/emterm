@@ -155,6 +155,33 @@ pub fn restart_required() -> bool {
     RESTART_REQUIRED.swap(false, Ordering::AcqRel)
 }
 
+/// Non-consuming peek at the same flag [`restart_required`] drains.
+///
+/// Returns the current value and leaves it unchanged — any number of
+/// consecutive peeks observe the same result. Feeds the App's pending-work
+/// predicate (frame-skip-pending-work task0001), which needs to know a
+/// restart is about to be requested without stealing the one-shot consume
+/// [`restart_required`] performs to arm the toast exactly once.
+///
+/// Target-neutral like [`RESTART_REQUIRED`] itself: only the setters
+/// ([`note_spawn_failure`]) are Linux-gated, so this needs no new target
+/// gating — on non-Linux targets the flag is simply never raised.
+pub fn restart_pending() -> bool {
+    RESTART_REQUIRED.load(Ordering::Acquire)
+}
+
+/// Test-only seam (frame-skip-pending-work task0001, FR7): raise or clear
+/// the process-global restart flag directly, without going through
+/// [`note_spawn_failure`]'s self-binary-mismatch detection. Crate-visible so
+/// App-level predicate tests can arm it. The suite runs single-threaded, but
+/// this flag is process-global regardless — every test that raises it must
+/// restore clear state before returning so unrelated tests stay
+/// order-independent.
+#[cfg(test)]
+pub(crate) fn test_set_restart_required(value: bool) {
+    RESTART_REQUIRED.store(value, Ordering::Release);
+}
+
 /// Build `Command::new(self_exe_path()?)`, let the caller configure it, spawn,
 /// and on `Err` call [`note_spawn_failure`] before returning the error.
 pub fn spawn_self(
@@ -219,5 +246,46 @@ mod tests {
             "test process must not have an initialized baseline"
         );
         assert!(!self_binary_missing());
+    }
+
+    // ── frame-skip-pending-work task0001, AC-1: restart_pending() peeks
+    // without clearing; restart_required() keeps its swap-reset consume
+    // semantics unchanged (TS-4, TS-5). ──
+
+    // TS-4: two consecutive peeks after raising the flag both report true —
+    // a peek must never consume.
+    #[test]
+    fn restart_pending_reports_true_across_consecutive_peeks() {
+        test_set_restart_required(true);
+        assert!(restart_pending(), "first peek must observe the raised flag");
+        assert!(
+            restart_pending(),
+            "a second consecutive peek must observe the same value, unconsumed"
+        );
+        // Restore clear state (process-global flag; other tests assume clear).
+        test_set_restart_required(false);
+        assert!(!restart_pending(), "flag must be clear after restoration");
+    }
+
+    // TS-5: after any number of peeks, restart_required() still arms the
+    // toast exactly once — true on the first read after a failure, false on
+    // every subsequent read.
+    #[test]
+    fn restart_required_still_consumes_once_after_peeks() {
+        test_set_restart_required(true);
+        assert!(restart_pending());
+        assert!(restart_pending(), "peeking again must not consume");
+        assert!(
+            restart_required(),
+            "restart_required() must report true exactly once after a raise"
+        );
+        assert!(
+            !restart_required(),
+            "a second restart_required() call must report false — consumed"
+        );
+        assert!(
+            !restart_pending(),
+            "the flag must read clear after being consumed"
+        );
     }
 }
