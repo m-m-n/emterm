@@ -35,7 +35,7 @@ workflow:
     skipped_reason: "Pure internal refactor of the term_core Rust crate (grid-cell invariant primitives). No user-visible UI, no visual or interaction surface, so the design step has nothing to decide."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
   - id: review
