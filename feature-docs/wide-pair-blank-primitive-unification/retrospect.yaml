@@ -1,0 +1,25 @@
+feature: wide-pair-blank-primitive-unification
+collected_at: "2026-08-12T22:40:00+09:00"
+session_ids: ["1065ee1d-ee67-4d98-a9a2-c04f9e1fe26c"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: architecture
+      reason: "変更の目的そのものが SSOT 化とチョークポイント化で、architecture 由来の deferred findings 2 件が起票元。構造判断の妥当性が本 feature の主論点"
+    - perspective: performance
+      reason: "NFR1 が ASCII 高速パスの性能特性維持を制約しており、diff が print ホットパスと 5 つの範囲消去経路の呼び出し構造を書き換えている"
+  declined_findings: []
+  deferred_findings:
+    - stable_id: 00acde921b09f637
+      severity: medium
+      category: comprehensive
+      file: crates/term_core/src/terminal_dispatch.rs
+      resolution_reason: "changed_files 外の既存ギャップ。挙動保存 refactor である本 feature のスコープ外"
+lessons_candidates:
+  - "起票元タスクの記述に載っていた行番号（csi_screen.rs:65）が、姉妹 feature el-ed-wide-pair-cleanup の先行マージにより陳腐化していた。requirements-analyst が実コードを読んで 5 箇所への増加を検出し、SPEC の FR4 を『将来 EL/ED を載せる受け皿を作る』から『既存 5 箇所を移行する』へ書き換えた。deferred finding からの起票では、起票時点と着手時点で前提が動くことを analyst 側で必ず突き合わせる価値がある。"
+  - "新規 worktree では gitignored な bundled フォントが無く、src-tauri の build.rs が panic して workspace ビルドが落ちる。implementer と verify の両方が同じ壁に当たった。term_core だけを触る feature でも workspace build を検証コマンドに持つ限り再発する。"
+  - "implementation-planner が書いた task plan の Files セクションが、validate-worker-output.py の『1 bullet = backtick 1 個のパス』規則に反して bullet 内に説明と関数名の backtick を含み、files-union 検証に落ちた。plan-writing スキル側にこの制約を明文化する余地がある。"
+  - "develop SKILL.md の Step B は step 実行前に status を in_progress にすると定めるが、workflow-patch の replace_all は create-plan step が pending/needs_update であることを要求するため、planner patch の dry-run-apply が弾かれた。両者の整合を取る必要がある（今回は patch 適用直前に working tree 上で pending へ戻して回避）。"
