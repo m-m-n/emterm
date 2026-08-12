@@ -721,49 +721,57 @@ mod body_markup_escape {
         assert!(!escaped.contains("TRUNCATED"));
     }
 
-    // AC-4 (TS4): "unconfirmed" covers both a successful capability list
-    // that omits `"body-markup"` and a failed fetch — fail-safe means both
-    // must resolve to "do not escape".
+    // AC-1/AC-2 (TS1/TS2, notification-markup-fail-closed FR1/FR2): the
+    // fail-closed predicate asks the inverted question — is the ABSENCE of
+    // `body-markup` explicitly confirmed? Only a successful query whose
+    // list omits it answers yes; a list containing it, or a fetch failure,
+    // both answer no, and callers escape on no (fail-closed).
     #[test]
-    fn body_markup_confirmed_is_true_only_for_a_successful_list_containing_it() {
+    fn body_markup_absence_confirmed_is_true_only_for_a_successful_list_without_it() {
+        let absent: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
+        assert!(body_markup_absence_confirmed(&absent));
+    }
+
+    #[test]
+    fn body_markup_absence_confirmed_is_false_when_present_in_a_successful_list() {
         let present: Result<Vec<String>, ()> =
             Ok(vec!["actions".to_string(), "body-markup".to_string()]);
-        assert!(body_markup_confirmed(&present));
+        assert!(!body_markup_absence_confirmed(&present));
     }
 
+    // AC-1 (TS1, FR1/FR3): a failed fetch does NOT confirm absence — this
+    // is the fail-closed side; callers escape on `false` (closes PR #35
+    // review finding eade9e7f97a29a29: a failed `GetCapabilities()` no
+    // longer lands on the unescaped side).
     #[test]
-    fn body_markup_confirmed_is_false_when_absent_from_a_successful_list() {
-        let absent: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
-        assert!(!body_markup_confirmed(&absent));
-    }
-
-    #[test]
-    fn body_markup_confirmed_is_false_on_fetch_failure() {
+    fn body_markup_absence_confirmed_is_false_on_fetch_failure() {
         let failed: Result<Vec<String>, ()> = Err(());
-        assert!(!body_markup_confirmed(&failed));
+        assert!(!body_markup_absence_confirmed(&failed));
     }
 
-    // AC-4 (TS4, composed): when unconfirmed, the same escape/no-escape
+    // AC-2 (TS2, composed): when body-markup absence is explicitly
+    // confirmed (a successful list omitting it), the same escape/no-escape
     // decision `NotifyRustSink::send` makes leaves the body byte-for-byte
     // unchanged — a literal `&amp;` in the input must not become visible
     // as anything else (no partial/accidental transform).
     #[test]
     fn unconfirmed_capabilities_leave_the_body_unchanged() {
         let body = r#"Tom & Jerry &amp; <b>bold</b>"#;
-        let unconfirmed: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
-        let out = if body_markup_confirmed(&unconfirmed) {
-            escape_body_markup(body)
-        } else {
+        let absence_confirmed: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
+        let out = if body_markup_absence_confirmed(&absence_confirmed) {
             body.to_string()
+        } else {
+            escape_body_markup(body)
         };
         assert_eq!(out, body);
     }
 
-    // AC-5 (TS5): both notification-body producers — tab-activity
+    // AC-3 (TS3): both notification-body producers — tab-activity
     // (`sanitize_title` + `notification_body`) and agent-status
     // (`agent_notification_body`) — are covered by the same sink-side
-    // escape decision when it resolves "confirmed". Proves the single
-    // choke point covers both pipelines (IMPLEMENTATION.md D1 NFR2).
+    // escape decision when the capability query confirms `body-markup`
+    // support (absence NOT confirmed). Proves the single choke point
+    // covers both pipelines (IMPLEMENTATION.md D1 NFR2).
     #[test]
     fn tab_activity_and_agent_bodies_are_both_escaped_when_confirmed() {
         let confirmed: Result<Vec<String>, ()> = Ok(vec!["body-markup".to_string()]);
@@ -779,10 +787,10 @@ mod body_markup_escape {
             tab_body.contains('<'),
             "fixture lost its markup: {tab_body}"
         );
-        let tab_escaped = if body_markup_confirmed(&confirmed) {
-            escape_body_markup(&tab_body)
-        } else {
+        let tab_escaped = if body_markup_absence_confirmed(&confirmed) {
             tab_body.clone()
+        } else {
+            escape_body_markup(&tab_body)
         };
         assert!(!tab_escaped.contains('<'));
         assert!(!tab_escaped.contains('>'));
@@ -802,10 +810,10 @@ mod body_markup_escape {
             agent_body.contains('<'),
             "fixture lost its markup: {agent_body}"
         );
-        let agent_escaped = if body_markup_confirmed(&confirmed) {
-            escape_body_markup(&agent_body)
-        } else {
+        let agent_escaped = if body_markup_absence_confirmed(&confirmed) {
             agent_body.clone()
+        } else {
+            escape_body_markup(&agent_body)
         };
         assert!(!agent_escaped.contains('<'));
         assert!(!agent_escaped.contains('>'));
@@ -847,33 +855,53 @@ mod summary_markup_escape {
         assert_eq!(escaped_title, "Tom &amp; Jerry &amp;amp; co");
     }
 
-    // AC-2 (TS2): an unconfirmed capability result — a successful list
-    // without `body-markup` — leaves the title byte-for-byte unchanged.
+    // AC-2 (TS2): a successful capability query whose list omits
+    // `body-markup` — explicit absence confirmed — leaves the title
+    // byte-for-byte unchanged (FR2, unchanged from before this feature).
     #[test]
     fn unconfirmed_capability_list_leaves_the_title_unchanged() {
         let title = r#"Tom & Jerry &amp; <b>bold</b>"#;
-        let unconfirmed: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
-        let (escaped_title, _) = escape_for_send(title, "body", &unconfirmed);
+        let absence_confirmed: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
+        let (escaped_title, _) = escape_for_send(title, "body", &absence_confirmed);
         assert_eq!(escaped_title, title);
     }
 
-    // AC-2: a failed capability fetch is also "unconfirmed" — fail-open
-    // parity with the body path (FR1/FR3).
+    // AC-1 (TS1, FR1/FR3, notification-markup-fail-closed): fail-closed —
+    // a failed capability fetch escapes BOTH the title and the body from
+    // the single per-send evaluation (no raw `<`, `>`, `&` survive in
+    // either field). Closes PR #35 review finding eade9e7f97a29a29: a
+    // failed `GetCapabilities()` no longer lands on the unescaped side.
     #[test]
-    fn failed_capability_fetch_leaves_the_title_unchanged() {
+    fn failed_capability_fetch_escapes_both_title_and_body_in_the_same_call() {
         let title = r#"<script>alert(1)</script>"#;
+        let body = r#"<a href="https://attacker.invalid">Sign in</a> & regards"#;
         let failed: Result<Vec<String>, ()> = Err(());
-        let (escaped_title, _) = escape_for_send(title, "body", &failed);
-        assert_eq!(escaped_title, title);
+        let (escaped_title, escaped_body) = escape_for_send(title, body, &failed);
+
+        assert!(
+            !escaped_title.contains('<') && !escaped_title.contains('>'),
+            "raw markup survived in title: {escaped_title}"
+        );
+        assert_eq!(escaped_title, "&lt;script&gt;alert(1)&lt;/script&gt;");
+
+        assert!(
+            !escaped_body.contains('<') && !escaped_body.contains('>'),
+            "raw markup survived in body: {escaped_body}"
+        );
+        assert_eq!(
+            escaped_body,
+            r#"&lt;a href="https://attacker.invalid"&gt;Sign in&lt;/a&gt; &amp; regards"#
+        );
     }
 
     // AC-2 / D2: a single gate evaluation drives BOTH fields — when
-    // unconfirmed, body is unchanged too, in the same call.
+    // absence is confirmed (successful list without `body-markup`), body
+    // is unchanged too, in the same call.
     #[test]
     fn unconfirmed_capability_list_leaves_the_body_unchanged_in_the_same_call() {
-        let unconfirmed: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
+        let absence_confirmed: Result<Vec<String>, ()> = Ok(vec!["actions".to_string()]);
         let (_escaped_title, escaped_body) =
-            escape_for_send("title", "Tom & Jerry &amp; <b>bold</b>", &unconfirmed);
+            escape_for_send("title", "Tom & Jerry &amp; <b>bold</b>", &absence_confirmed);
         assert_eq!(escaped_body, "Tom & Jerry &amp; <b>bold</b>");
     }
 
