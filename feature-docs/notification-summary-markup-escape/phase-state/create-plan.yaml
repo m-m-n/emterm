@@ -1,0 +1,17 @@
+schema_version: 1
+feature: notification-summary-markup-escape
+phase: create-plan
+status: initialized
+generation: 1
+base_revision: f5a77a329f0791e2e0ca777dfc20cacc3290ae67
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
