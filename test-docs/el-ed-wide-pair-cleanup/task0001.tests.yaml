@@ -1,0 +1,78 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [csi_screen::tests::test_erase_in_line_to_end_spacer_at_cursor_blanks_left_base]
+    red_confirmed: true
+    red_reason: >-
+      assertion `left == right` failed at csi_screen.rs:418 — left: "世",
+      right: " " (orphaned base at col-1 was still the wide char, not
+      blanked to a width-1 space, before the EL 0 partner cleanup existed).
+  AC-2:
+    tests: [csi_screen::tests::test_erase_in_line_to_start_base_at_cursor_blanks_right_spacer]
+    red_confirmed: true
+    red_reason: >-
+      assertion `left == right` failed at csi_screen.rs:476 — left: "",
+      right: " " (orphaned spacer at col+1 still rendered as an unfilled
+      spacer, not blanked to a width-1 space, before the EL 1 partner
+      cleanup existed).
+  AC-3:
+    tests:
+      - csi_screen::tests::test_erase_in_display_below_spacer_at_cursor_blanks_left_base
+      - csi_screen::tests::test_erase_in_display_above_base_at_cursor_blanks_right_spacer
+    red_confirmed: true
+    red_reason: >-
+      ED 0: assertion `left == right` failed at csi_screen.rs:537 — left:
+      "世", right: " " (same orphaned-base symptom as AC-1). ED 1: assertion
+      `left == right` failed at csi_screen.rs:602 — left: "", right: " "
+      (same orphaned-spacer symptom as AC-2). Both before the ED 0/ED 1
+      partner cleanup existed.
+  AC-4:
+    tests:
+      - csi_screen::tests::test_erase_in_line_to_end_base_at_cursor_no_extra_blank
+      - csi_screen::tests::test_erase_in_line_to_start_spacer_at_cursor_no_extra_blank
+    red_confirmed: false
+    red_reason: >-
+      Regression guards per the task plan's Test Notes ("AC-4/AC-5/AC-6 are
+      regression guards expected to pass before and after the fix and must
+      keep passing"): both halves of the pair sit inside the erase range in
+      these scenarios, so no partner-cleanup call is ever triggered (with or
+      without the fix) and the assertions pass unmodified before and after
+      the implementation.
+  AC-5:
+    tests:
+      - csi_screen::tests::test_erase_in_line_to_end_cursor_at_col_zero_no_left_partner
+      - csi_screen::tests::test_erase_in_line_to_start_cursor_at_last_col_no_right_partner
+    red_confirmed: false
+    red_reason: >-
+      Regression/boundary guards per the task plan's Test Notes: a
+      synthetic spacer/base is forced at the col 0 / (cols-1) boundary via
+      the low-level set_cell API specifically to exercise the start>0
+      guard and blank_wide_pair_split's own out-of-bounds no-op — both of
+      which are pre-existing invariants (the start>0 check in the new code
+      mirrors ECH's existing guard; blank_wide_pair_split's OOB safety is
+      unchanged primitive behavior per NFR4). The erase's ordinary BCE fill
+      already produced the full-row-cleared result before the fix, so
+      these pass unmodified before and after.
+  AC-6:
+    tests:
+      - csi_screen::tests::test_erase_in_line_all_wide_pair_no_partner_cleanup
+      - csi_screen::tests::test_erase_in_display_all_wide_pair_no_partner_cleanup
+    red_confirmed: false
+    red_reason: >-
+      Regression guards per the task plan's Test Notes: EL 2 / ED 2 are out
+      of scope for the D2 pattern (D3 — full-line clears stay untouched),
+      so their existing full-row clear_line behavior is unaffected by this
+      change and these pass unmodified before and after.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not a dedicated test — verified by (1) the full term_core --lib suite
+      passing with 0 pre-existing tests modified (795 passed, 0 failed, 13
+      ignored, up from the 785/0/13 baseline), (2) `git diff --stat` scoped
+      to only crates/term_core/src/csi_screen.rs, and (3) direct review
+      that the ECH scope comment at csi_screen.rs (formerly lines 74-78)
+      was refreshed to state the ED/EL cursor-row call sites now perform
+      the same local cleanup, per the Design section.
