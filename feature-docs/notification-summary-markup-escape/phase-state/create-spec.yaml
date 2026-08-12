@@ -1,11 +1,11 @@
 schema_version: 1
 feature: notification-summary-markup-escape
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: a38685bb5aa58fda31153b0fe74a5168bda4d8de
 last_input_digest: sha256:ec4377f0e1e02d1635cbb4f69420897ed1ccc48cfb6691ec0eee414e20e53599
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -41,10 +41,16 @@ worker_runs:
     input_digest: sha256:619423e90bdefe3ffe65c99456bf5a26b1e5b2f9924280cbca424d8c493798b1
     output_digest: null
   - request_id: create-spec-run-0003
-    status: dispatched
+    status: completed
     input_digest: sha256:ec4377f0e1e02d1635cbb4f69420897ed1ccc48cfb6691ec0eee414e20e53599
     output_digest: null
-artifacts: []
+artifacts:
+  - path: feature-docs/notification-summary-markup-escape/REQUIREMENTS.md
+    sha256: sha256:9d069d74da1311fc8f1ab4599b01b98c0d4b1ced9cf29ce945aa1e78838d052a
+    produced_by: create-spec-run-0003
+  - path: feature-docs/notification-summary-markup-escape/SPEC.md
+    sha256: sha256:0dffd8440d8d111a27e3175530319f53e9b53b7b8dfed92326e2f28e2373e229
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
