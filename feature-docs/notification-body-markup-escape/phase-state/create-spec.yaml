@@ -1,0 +1,17 @@
+schema_version: 1
+feature: notification-body-markup-escape
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: bdbe144d9f30d30c2ad9c4cc4359a590e9bf67a4
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
