@@ -1,0 +1,111 @@
+schema_version: 1
+feature: wide-pair-blank-primitive-unification
+created: 2026-08-12
+base_branch: main
+parent_branch: em-workflow/wide-pair-blank-primitive-unification/integration
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path crates/term_core/Cargo.toml --check"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: in_progress
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Pure internal refactor of the term_core Rust crate (grid-cell invariant primitives). No user-visible UI, no visual or interaction surface, so the design step has nothing to decide."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: Single partner-blanking primitive on the cell-mutation base layer
+    status: pending
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2]
+  FR2:
+    title: Self-guarding precondition inside the primitive
+    status: pending
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-3]
+  FR3:
+    title: print path and CSI paths converge on the primitive
+    status: pending
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1]
+  FR4:
+    title: Range-erase edge repair chokepoint
+    status: pending
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1]
+  FR5:
+    title: Full-row erase paths gain no partner behavior
+    status: pending
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-4]
+  NFR1:
+    title: ASCII fast-path performance unchanged
+    status: pending
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-5]
+  NFR2:
+    title: Behavior-preserving refactor
+    status: pending
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1]
+  NFR3:
+    title: No public API change
+    status: pending
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1]
