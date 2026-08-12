@@ -1,11 +1,11 @@
 schema_version: 1
 feature: tmux-sockets-discover-flake
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: f1222902292d99b81cd9d62c3589c39c5a9b2230
 last_input_digest: sha256:931106c60682985f69828e26a61c8f407754e4780ad9297db9defe3dcfb21004
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -14,10 +14,14 @@ worker_runs:
     input_digest: sha256:4077f9015666175cb924cb25714a658990fe7f6dfaac20990faa219d3a29456b
     output_digest: null
   - request_id: create-spec-run-0002
-    status: dispatched
+    status: completed
     input_digest: sha256:931106c60682985f69828e26a61c8f407754e4780ad9297db9defe3dcfb21004
     output_digest: null
-artifacts: []
+artifacts:
+  - path: feature-docs/tmux-sockets-discover-flake/REQUIREMENTS.md
+    produced_by: create-spec-run-0002
+  - path: feature-docs/tmux-sockets-discover-flake/SPEC.md
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
