@@ -33,7 +33,7 @@ workflow:
       ビジュアル判断・デザイントークンの変更を伴わないため。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: null
