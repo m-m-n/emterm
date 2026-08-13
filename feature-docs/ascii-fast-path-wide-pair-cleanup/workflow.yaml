@@ -1,0 +1,153 @@
+schema_version: 1
+feature: ascii-fast-path-wide-pair-cleanup
+created: 2026-08-13
+base_branch: main
+parent_branch: em-workflow/ascii-fast-path-wide-pair-cleanup/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+  components:
+    term_core:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    emterm:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    emterm_cli_only:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 4bc55fe789f9d03c07957648cbb9e44171be0b3e
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      The change is confined to term_core's ANSI/grid engine — a correctness
+      fix in the print path with no user-visible surface, no new UI, no
+      interaction flow and no design-token consumption.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: ca3f7d4c445f1628b21ce73be792b3afa28a0e4f
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: Fast path performs orphan-neighbor repair before overwrite
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS3]
+  FR2:
+    title: Fast path removes the overflow-table entry
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS4]
+  FR3:
+    title: Fast/slow path observable parity
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2]
+  FR4:
+    title: Fast path is not narrowed to achieve the fix
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5]
+  FR5:
+    title: D2-repair call-site documentation matches reality
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Regression test for the reported break
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  FR7:
+    title: No behavior change for non-wide content
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5, TS7]
+  NFR1:
+    title: "Performance: ASCII common case cost bound and recorded evaluation"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5]
+  NFR2:
+    title: "Scope: change confined to crates/term_core, no API or dependency change"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS7]
+  NFR3:
+    title: "Robustness: repair safe on adversarial PTY input"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS6]
+  NFR4:
+    title: "Convention: new tests follow test/README.md"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

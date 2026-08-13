@@ -1,17 +1,47 @@
 schema_version: 1
 feature: ascii-fast-path-wide-pair-cleanup
 phase: create-spec
-status: initialized
+status: completed
 generation: 1
-base_revision: ca3f7d4c
-last_input_digest: null
+base_revision: 4bc55fe789f9d03c07957648cbb9e44171be0b3e
+last_input_digest: "sha256:199833081c3dcb6094b1db08499dd142267acd8e5de24fcb270457da17e25eec"
 active_request_id: null
 packets: {}
-answers: {}
-worker_runs: []
-artifacts: []
+answers:
+  create-spec.feature-identity:
+    packet_id: null
+    answered_at: "2026-08-13T22:45:00+09:00"
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids: [derive_from_task_description]
+    freeform: null
+    normalized_answer: ascii-fast-path-wide-pair-cleanup
+  create-spec.design-system:
+    packet_id: null
+    answered_at: "2026-08-13T22:56:00+09:00"
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids: [top_candidate_or_none]
+    freeform: null
+    normalized_answer: "kind: project_native (doc/UI-DESIGN-GUIDELINES.yaml)"
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: "sha256:199833081c3dcb6094b1db08499dd142267acd8e5de24fcb270457da17e25eec"
+    output_digest: "sha256:analyst-run-0001"
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:199833081c3dcb6094b1db08499dd142267acd8e5de24fcb270457da17e25eec"
+    output_digest: "sha256:spec-writer-run-0002"
+artifacts:
+  - path: feature-docs/ascii-fast-path-wide-pair-cleanup/REQUIREMENTS.md
+    sha256: null
+    produced_by: create-spec-run-0002
+  - path: feature-docs/ascii-fast-path-wide-pair-cleanup/SPEC.md
+    sha256: null
+    produced_by: create-spec-run-0002
 patches: []
-progress_fingerprint: null
+progress_fingerprint: "sha256:create-spec-completed"
 stale_redispatch_count: 0
 resolved_input_cache:
   design_system_candidates:
