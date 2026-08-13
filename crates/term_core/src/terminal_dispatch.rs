@@ -104,6 +104,28 @@ impl TerminalCore {
                             }
                             let col = self.cursor.col;
                             if let Some(idx) = self.cell_index(col, self.cursor.row) {
+                                // NFR1: one read of a field in the cell record
+                                // already being written below (same cache
+                                // line) plus one untaken branch on the common
+                                // width-1 case — no allocation, no extra pass
+                                // over the input buffer, no non-inlinable
+                                // per-byte call. Mirrors the budget comment on
+                                // handle_print_ascii (print_handler.rs), the
+                                // slow ASCII writer this fast path must stay
+                                // in parity with (FR3, D-1).
+                                let old_width = self.ring_cells[idx].width;
+                                if old_width != 1 {
+                                    // R1/R2 (FR1/FR2): blank an orphaned
+                                    // wide-pair neighbor before this overwrite
+                                    // lands. The repair only ever mutates a
+                                    // neighboring column, so `idx` stays valid
+                                    // for the write below.
+                                    self.blank_orphaned_neighbor_before_overwrite(
+                                        col,
+                                        self.cursor.row,
+                                        old_width,
+                                    );
+                                }
                                 let cell = &mut self.ring_cells[idx];
                                 cell.char_data[0] = b;
                                 cell.char_len = 1;
@@ -112,6 +134,22 @@ impl TerminalCore {
                                 cell.bg = self.cursor.bg;
                                 cell.flags = self.cursor.flags;
                                 cell.hyperlink_id = self.active_hyperlink_id;
+                                // FR2: keep the overflow table and its
+                                // reverse index consistent when the
+                                // overwritten cell's long content is replaced
+                                // by this single ASCII byte (mirrors
+                                // handle_print_ascii's overflow cleanup).
+                                if !self.overflow.is_empty() {
+                                    let abs = self.viewport_abs(self.cursor.row) as u32;
+                                    let col32 = col as u32;
+                                    if self.overflow.remove(&(col32, abs)).is_some() {
+                                        crate::cell::overflow_ridx_remove(
+                                            &mut self.overflow_ridx,
+                                            abs,
+                                            col32,
+                                        );
+                                    }
+                                }
                                 self.mark_row_dirty(self.cursor.row);
                                 // Track the base cell just written (FR1); this
                                 // fast path bypasses handle_print_ascii, which
@@ -300,5 +338,221 @@ impl TerminalCore {
                 self.fire_dcs_callback(&payload);
             }
         }
+    }
+}
+
+// ── ascii-fast-path-wide-pair-cleanup (task0001): dispatch fast-path
+// write-step D2 repair ─────────────────────────────────────────────
+//
+// Every scenario below delivers its setup and its overwriting ASCII byte
+// in SEPARATE `process_pty_data` calls (see task0001 plan Design, "Why the
+// tests must split their input"): the fast path is only entered when the
+// parser is ground-clean and the grapheme buffer is empty at the START of
+// a `process_pty_data` call, so a single call beginning with non-ASCII
+// content drives its whole remainder — including any trailing ASCII —
+// through the parser-driven slow path instead.
+#[cfg(test)]
+mod tests {
+    use crate::terminal_core::TerminalCore;
+
+    // AC-1 (FR1, FR6, TS1): a fullwidth character written by one dispatch
+    // call, overwritten at column 0 by an ASCII letter in a following
+    // dispatch call (CR + letter), leaves no width-0 spacer orphaned.
+    #[test]
+    fn process_pty_data_ascii_overwrites_wide_base_blanks_orphan_spacer() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.process_pty_data("\u{4E16}".as_bytes()); // '世': base@0(w2)/spacer@1(w0)
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        assert_eq!(core.get_cell_width(1, 0), 0);
+
+        core.process_pty_data(b"\rA"); // CR then 'A': fast-path-eligible call
+
+        assert_eq!(core.get_cell_char(0, 0), "A");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        assert_eq!(core.get_cell_char(1, 0), " "); // orphaned spacer, blanked
+        assert_eq!(core.get_cell_width(1, 0), 1);
+    }
+
+    // AC-2 (FR1, TS3): with a fullwidth character occupying columns 0-1
+    // and the cursor moved onto the spacer half (col1) by its own dispatch
+    // call, a following dispatch call carrying an ASCII letter leaves col1
+    // holding that letter and col0 blanked — no width-2 base survives
+    // without its spacer.
+    #[test]
+    fn process_pty_data_ascii_overwrites_wide_spacer_blanks_orphan_base() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.process_pty_data("\u{4E16}".as_bytes()); // base@0(w2)/spacer@1(w0)
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        assert_eq!(core.get_cell_width(1, 0), 0);
+
+        core.process_pty_data(b"\x1b[1;2H"); // CUP row1,col2 (1-indexed) -> (col1,row0)
+        core.process_pty_data(b"B"); // fast-path-eligible call
+
+        assert_eq!(core.get_cell_char(1, 0), "B");
+        assert_eq!(core.get_cell_width(1, 0), 1);
+        assert_eq!(core.get_cell_char(0, 0), " "); // orphaned base, blanked
+        assert_eq!(core.get_cell_width(0, 0), 1);
+    }
+
+    // AC-3 (FR2, TS4): overwriting an overflow-table-bound wide-pair base
+    // via the fast path removes the overflow entry and its reverse-index
+    // companion; the resulting state matches what the slow ASCII writer
+    // produces for the same overwrite (see
+    // print_handler::tests::test_handle_print_ascii_overwrite_overflow_base_blanks_spacer,
+    // which exercises handle_print_ascii directly for that parity claim).
+    #[test]
+    fn process_pty_data_ascii_overwrites_overflow_base_removes_overflow_entry() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        // ZWJ family emoji (7 codepoints / 25 UTF-8 bytes): merges into a
+        // single width-2 cluster whose base exceeds the 16-byte inline cell
+        // capacity and goes to the overflow side table. Buffers until CR
+        // forces the flush in its own dispatch call.
+        core.process_pty_data(
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}".as_bytes(),
+        );
+        core.process_pty_data(b"\r"); // flush -> base@0(w2, overflow)/spacer@1(w0); CR -> col0
+
+        let idx0 = core.cell_index(0, 0).expect("col0 row0 in bounds");
+        assert!(core.ring_cells[idx0].is_overflow());
+        let abs = core.viewport_abs(0) as u32;
+        assert!(core.overflow.contains_key(&(0u32, abs)));
+        assert!(
+            core.overflow_ridx
+                .get(&abs)
+                .map(|cols| cols.contains(&0u32))
+                .unwrap_or(false)
+        );
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        assert_eq!(core.get_cell_width(1, 0), 0);
+
+        core.process_pty_data(b"A"); // fast-path-eligible call
+
+        assert_eq!(core.get_cell_char(0, 0), "A");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        assert_eq!(core.get_cell_char(1, 0), " "); // orphaned spacer, blanked
+        assert_eq!(core.get_cell_width(1, 0), 1);
+        assert!(!core.overflow.contains_key(&(0u32, abs)));
+        assert!(!core.overflow_ridx.contains_key(&abs));
+    }
+
+    // AC-4 (FR3, TS2): a core fed [fullwidth char, CR, ASCII letter] in one
+    // dispatch call (parser-driven slow path throughout, already correct)
+    // and a core fed the same bytes split so the ASCII tail begins a
+    // fast-path-eligible call end with identical grid contents, widths and
+    // overflow-table state.
+    #[test]
+    fn process_pty_data_split_fast_path_matches_single_call_slow_path() {
+        let mut stream = "\u{4E16}".as_bytes().to_vec();
+        stream.push(b'\r');
+        stream.push(b'A');
+
+        let mut core_slow = TerminalCore::new(10, 3, 0);
+        core_slow.process_pty_data(&stream); // one call: slow path throughout
+
+        let mut core_fast = TerminalCore::new(10, 3, 0);
+        core_fast.process_pty_data("\u{4E16}".as_bytes()); // setup, own call
+        core_fast.process_pty_data(b"\rA"); // fast-path-eligible call
+
+        for col in 0..10u16 {
+            assert_eq!(
+                core_fast.get_cell_char(col, 0),
+                core_slow.get_cell_char(col, 0),
+                "col {col}: char mismatch"
+            );
+            assert_eq!(
+                core_fast.get_cell_width(col, 0),
+                core_slow.get_cell_width(col, 0),
+                "col {col}: width mismatch"
+            );
+        }
+        assert_eq!(core_fast.overflow, core_slow.overflow);
+        assert_eq!(core_fast.overflow_ridx, core_slow.overflow_ridx);
+    }
+
+    // AC-5 (FR4, FR7, NFR1, TS5): on a grid holding no wide cells, a
+    // pure-ASCII stream driven through the dispatch fast path produces the
+    // same grid as the same stream driven one character at a time through
+    // handle_print (which does not enter this fast path at all), and every
+    // touched cell has width 1.
+    #[test]
+    fn process_pty_data_pure_ascii_fast_path_matches_direct_handle_print() {
+        let text: &[u8] = b"Hello, World! 123";
+
+        let mut core_fast = TerminalCore::new(40, 3, 0);
+        core_fast.process_pty_data(text);
+
+        let mut core_direct = TerminalCore::new(40, 3, 0);
+        for &b in text {
+            core_direct.handle_print(b as u32);
+        }
+
+        for col in 0..40u16 {
+            assert_eq!(
+                core_fast.get_cell_char(col, 0),
+                core_direct.get_cell_char(col, 0),
+                "col {col}: char mismatch"
+            );
+            assert_eq!(core_fast.get_cell_width(col, 0), 1, "col {col}: not width 1");
+            assert_eq!(
+                core_direct.get_cell_width(col, 0),
+                1,
+                "col {col}: not width 1"
+            );
+        }
+    }
+
+    // AC-6 (NFR3): overwriting an orphan width-0 cell at column 0 (no left
+    // neighbor to consult) completes without panic or out-of-range access,
+    // and does not blank anything outside the overwritten cell itself.
+    #[test]
+    fn process_pty_data_ascii_overwrites_width0_at_col0_no_panic() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        let idx = core.cell_index(0, 0).unwrap();
+        core.ring_cells[idx].char_data = [0; 16];
+        core.ring_cells[idx].char_len = 0;
+        core.ring_cells[idx].width = 0; // adversarial: no width-2 base exists
+
+        core.process_pty_data(b"Z");
+
+        assert_eq!(core.get_cell_char(0, 0), "Z");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+    }
+
+    // AC-6 (NFR3): overwriting a width-2 base sitting in the last column of
+    // a row (its would-be spacer column does not exist) completes without
+    // panic or out-of-range access.
+    #[test]
+    fn process_pty_data_ascii_overwrites_width2_base_at_last_column_no_panic() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        let last_col = 9u16;
+        let idx = core.cell_index(last_col, 0).unwrap();
+        core.ring_cells[idx].width = 2; // adversarial: no in-bounds spacer exists
+        core.set_cursor(last_col, 0);
+
+        core.process_pty_data(b"Z");
+
+        assert_eq!(core.get_cell_char(last_col, 0), "Z");
+        assert_eq!(core.get_cell_width(last_col, 0), 1);
+    }
+
+    // AC-6 (NFR3): overwriting a width-0 cell whose left neighbor is NOT a
+    // width-2 base (combining-mark residue rather than a real spacer)
+    // leaves that left neighbor untouched — the repair keys off the
+    // wide-pair relationship, not width 0 alone.
+    #[test]
+    fn process_pty_data_ascii_overwrites_width0_without_wide_left_neighbor_leaves_it_untouched()
+    {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.handle_print(b'X' as u32); // col0 = 'X', width 1, cursor -> col1
+        let idx = core.cell_index(1, 0).unwrap();
+        core.ring_cells[idx].width = 0; // adversarial: col0 is width 1, not 2
+        core.set_cursor(1, 0);
+
+        core.process_pty_data(b"Y");
+
+        assert_eq!(core.get_cell_char(0, 0), "X"); // left neighbor untouched
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        assert_eq!(core.get_cell_char(1, 0), "Y");
+        assert_eq!(core.get_cell_width(1, 0), 1);
     }
 }
