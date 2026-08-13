@@ -49,7 +49,7 @@ workflow:
     status: completed
     completed_at_commit: c3b037fe6c6676d284feecae223c09d67eb64eee
   - id: implement
-    status: pending
+    status: in_progress
     base_commit: 5f3ad8d60ce05abaeb0222435c9a2e9e74f2a9f0
   - id: review
     status: pending
@@ -95,9 +95,9 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR5, NFR2]
-    status: pending
+    status: in_progress
     notes: "rework round 1: findings 6d3eda4edf0a215f, 5dfe30682372a6ea"
-    branch: null
+    branch: em-workflow/ascii-fast-path-wide-pair-cleanup/task0003
   task0004:
     title: Overflow cleanup gated on the overwritten cell, not on the table
     plan: tasks/task0004.md
@@ -108,9 +108,9 @@ tasks:
     domains: [input-handling]
     complexity: medium
     requirements: [FR2, FR3, FR7, NFR1, NFR2]
-    status: pending
+    status: in_progress
     notes: "rework round 1: finding 267a99dfb58efa79"
-    branch: null
+    branch: em-workflow/ascii-fast-path-wide-pair-cleanup/task0004
 
 review:
   status: pending
