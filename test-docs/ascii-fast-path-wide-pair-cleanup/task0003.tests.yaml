@@ -1,0 +1,84 @@
+task_id: task0003
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      FR5 (documentation truthfulness) has no automated scenario in
+      SPEC.md; the task plan's Test Notes explicitly direct against
+      inventing a test that asserts on comment text. Verified by
+      inspection: the doc comment on blank_wide_pair_half
+      (crates/term_core/src/terminal_cells.rs) now enumerates all seven
+      originating paths from the task plan's Design section, with the
+      VS16 lazy-widening step present as its own bullet ("the print
+      path's VS16 lazy-widening step, before writing the spacer that a
+      retroactively widened width-1 base requires (rule R3)") and named
+      distinctly from the widened-base relocation-by-wrap step ("taken
+      when that widening happens in the row's last column, before the
+      relocated base's overwrite at the next row's first column (rules
+      R1/R2) and before the relocated spacer's write at the following
+      column (rule R3)").
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No automated scenario; inspection-verified by enumerating every
+      caller of blank_wide_pair_half and of the two repair entry points
+      (blank_orphaned_neighbor_before_overwrite for R1/R2,
+      blank_orphaned_base_before_placeholder for R3) via `grep -rn` over
+      crates/term_core/src, then mapping each to one enumeration item:
+      (1) print_handler.rs write_grapheme_to_grid — R1/R2 at the
+      overwrite call (line 157) and R3 before the wide-pair placeholder
+      write (line 187, via blank_orphaned_base_before_placeholder); (2)
+      print_handler.rs handle_print_ascii — R1/R2 at line 231; (3)
+      print_handler.rs widen_after_merge's common-case branch — R3 at
+      line 387, before the newly widened base's spacer write; (4)
+      print_handler.rs relocate_widened_base_via_wrap (widen_after_merge's
+      last-column branch, entered at line 363) — R1/R2 at line 458
+      before the relocated base's overwrite at the new row's col 0, and
+      R3 at line 476 before the relocated spacer's write at col 1; (5)
+      terminal_dispatch.rs ASCII fast path — R1/R2 at line 123; (6)
+      csi_edit.rs handle_insert_characters and handle_delete_characters
+      (ICH/DCH) — direct blank_wide_pair_half calls; (7) csi_screen.rs
+      erase_range_with_edge_repair, the single range-erase chokepoint
+      documented as never folded into clear_line_range so that
+      full-row-clear callers (clear_line, EL 2, ED 2) do not gain
+      partner behavior — direct blank_wide_pair_half calls. Every
+      caller found by the grep maps to exactly one of the seven items;
+      no unmapped caller and no enumeration item without a caller.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by reading the rewritten comment: all seven items are
+      stated in the comment's own prose (originating paths, functions
+      implied by description, rules R1/R2/R3 and the order relative to
+      the write each repairs), with no reference to IMPLEMENTATION.md or
+      any file outside the crate for which paths are covered. The
+      surrounding sentence ("It is reached from exactly these call
+      sites, and no others:") is unchanged.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      `git diff -- crates/term_core/src/terminal_cells.rs` confirms the
+      change touches only the doc comment lines on blank_wide_pair_half
+      (7 lines removed, 13 lines added, all within the `///` bullet
+      list) — no executable statement, signature, visibility, test, or
+      manifest line changed. `cargo check --manifest-path
+      crates/term_core/Cargo.toml` succeeds.  `cargo test
+      --manifest-path crates/term_core/Cargo.toml --lib` reports 814
+      passed, 0 failed, 13 ignored both before (baseline, step 4a) and
+      after this change — identical counts, so no regression. The
+      src-tauri library suite and the CLI-only check named in the task
+      plan's Test Notes are outside this task's approved
+      project_commands (scoped to the term_core build/test pair only,
+      matching expected_files); per the command-execution gate only
+      pre-approved commands are run verbatim, so those two checks are
+      not independently re-run here. Because the diff is comment-only
+      within term_core (verified above) and does not touch any
+      executable line, public signature, or manifest, it cannot change
+      src-tauri's compiled output or the CLI-only build's compiled
+      output.
