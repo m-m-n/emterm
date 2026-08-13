@@ -227,6 +227,11 @@ impl TerminalCore {
             // does no extra work beyond this one width read, which reuses
             // the cache line already touched for the write below.
             let old_width = self.ring_cells[idx].width;
+            // NFR1 (task0004): the overflow marker is read from the SAME
+            // cell record `old_width` just touched, BEFORE the write below
+            // clears it (char_len becomes 1) — a read placed after the
+            // write always observes false and silently skips the cleanup.
+            let was_overflow = self.ring_cells[idx].is_overflow();
             if old_width != 1 {
                 self.blank_orphaned_neighbor_before_overwrite(col, row, old_width);
             }
@@ -239,8 +244,10 @@ impl TerminalCore {
             cell.bg = self.cursor.bg;
             cell.flags = self.cursor.flags;
             cell.hyperlink_id = self.active_hyperlink_id;
-            // Only check overflow table when it has entries (common case: empty)
-            if !self.overflow.is_empty() {
+            // FR2: cleanup gated on the overwritten cell's OWN pre-write
+            // marker (task0004), not on "the table is non-empty anywhere in
+            // the ring" — the common ASCII case does no table access.
+            if was_overflow {
                 let abs = self.viewport_abs(row) as u32;
                 let col32 = col as u32;
                 if self.overflow.remove(&(col32, abs)).is_some() {
