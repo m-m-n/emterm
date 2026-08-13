@@ -1,0 +1,156 @@
+round: 2
+executed_at: "2026-08-14T00:05:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 5f3ad8d60ce05abaeb0222435c9a2e9e74f2a9f0
+  head_commit: 8984d54cab6ce05de146dc34430992b779bba862
+  changed_files:
+    - crates/term_core/src/print_handler.rs
+    - crates/term_core/src/print_handler/tests.rs
+    - crates/term_core/src/terminal_cells.rs
+    - crates/term_core/src/terminal_dispatch.rs
+    - test-docs/ascii-fast-path-wide-pair-cleanup/task0001.tests.yaml
+    - test-docs/ascii-fast-path-wide-pair-cleanup/task0002.tests.yaml
+    - test-docs/ascii-fast-path-wide-pair-cleanup/task0003.tests.yaml
+    - test-docs/ascii-fast-path-wide-pair-cleanup/task0004.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+    - perspective: performance
+      reason: "ASCII 高速パスの per-byte ホットループに幅読み取りと分岐を追加したため、NFR1 の性能予算への影響を独立観点で検査する"
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+round1_resolutions:
+  - stable_id: 6d3eda4edf0a215f
+    resolution: fixed
+    resolution_reason: "task0003 で列挙を 7 項目に修正。round 2 の spec(claude) / comprehensive(claude) / spec(litellm) がいずれも実コールサイトとの一致を確認"
+  - stable_id: 5dfe30682372a6ea
+    resolution: fixed
+    resolution_reason: "同上（同一サイト）。grep で全呼び出し元と 1 対 1 対応することを確認"
+  - stable_id: 267a99dfb58efa79
+    resolution: fixed
+    resolution_reason: "task0004 で書き込み前の was_overflow マーカーによる per-cell ゲートに置換。round 2 の performance(claude) が常道パスに HashMap プローブが残らないことを確認"
+  - stable_id: 7f1b77eefe15546d
+    resolution: deferred
+    resolution_reason: "ASCII 書き込みステップの二重実装解消は構造リファクタで feature スコープ外。別タスクとして起票する"
+findings:
+  - stable_id: 9907b4671d9f9e50
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_dispatch.rs
+    line: 155
+    title: "新ゲートが依存する「エントリ存在 ⟹ セルにマーカー」不変条件が未文書で、既に破っている経路がある"
+    description: >-
+      task0004 の was_overflow ゲートは「(col, abs) に overflow エントリが存在するのは
+      その位置のセルが char_len == 0xFF のときだけ」という不変条件に暗黙依存するように
+      なったが、その依存がコード上に記されていない。旧ゲート !self.overflow.is_empty() は
+      マーカーの有無に関わらず書き込み位置のエントリを削除していたため、不変条件が
+      破れていても自己修復していた。実際に破る経路が既に存在する:
+      relocate_widened_base_via_wrap（print_handler.rs:468-480）は移送先 (0, new_abs)
+      へ書く際、内容が 16 バイトに収まる場合 set_char がマーカーを落とすだけで既存
+      エントリを削除せず、続く spacer 書き込み（:484-493）も (1, new_abs) のエントリを
+      削除しない。影響は overflow の String がその行の clear / evict / reflow まで
+      回収されないメモリ保持に留まり、読み出し側は全て cell.is_overflow() ゲート済み
+      なので表示は壊れない。security(claude) と spec(claude) が同じ欠落を独立に指摘。
+    suggestion: >-
+      (a) 両 ASCII writer の if was_overflow ブロックに依存する不変条件を 1 行明記し、
+      relocate_widened_base_via_wrap の 2 箇所に write_grapheme_to_grid
+      （print_handler.rs:166-170）と同形の削除を足して不変条件を実際に成立させる。
+      (b) 成立させない方針なら両 writer のゲートを自己修復形に戻す。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: deferred
+    resolution_reason: "medium のため auto-fix ゲート外、batch の rework cap（1）も消費済み。別タスクとして起票する"
+  - stable_id: 5c54f2f05fe4a959
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_cells.rs
+    line: 255
+    title: "新規追加された D2 不変条件の定義文が、コードが意図的に許している 2 つの形状と矛盾する"
+    description: >-
+      task0003 の書き直しで call-site 列挙の前に D2 不変条件の定義文が新規に追加された。
+      列挙の網羅性は解消済みだが、定義文の断定がコードの意図的な 2 形状を否定する:
+      (1) auto-wrap OFF で行末列に書かれた全角文字は spacer を持たない width-2 base
+      として残る（print_handler.rs:183 の col + 1 < self.cols ガード、csi_edit.rs:83-90
+      が「pre-existing auto-wrap-off quirk」として明示的に温存）、(2) 左隣が width 1 の
+      width-0 セル（結合文字の残骸）は修復対象外で、AC-6 テストがまさに「触らないこと」
+      として固定している。この doc は自己完結して読まれる前提（task0003 AC-3）なので、
+      断定のままだと後続の保守者が正常動作をバグと誤認して壊す誘因になる。
+    suggestion: >-
+      定義文に「意図的に対象外の 2 形状」を併記する（レビュアーが具体的な差分案を提示済み）。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium のため auto-fix ゲート外、batch の rework cap（1）も消費済み。別タスクとして起票する"
+  - stable_id: 3a78522db0da4ea7
+    severity: medium
+    category: spec
+    file: crates/term_core/src/print_handler.rs
+    line: 250
+    title: "FR2/NFR2: 低速パス handle_print_ascii の overflow 削除ゲートを仕様外で変更し、等価性の前提が成立していない"
+    description: >-
+      SPEC NFR2 は変更範囲を terminal_dispatch.rs と terminal_cells.rs の doc comment に
+      限定しており、FR2 は「fast path が handle_print_ascii と同形で overflow エントリを
+      削除する」= 既存の低速パスを基準として fast path を合わせる方向を求めている。
+      task0004 は基準側（handle_print_ascii の実行ロジック）を書き換えた。加えてその
+      置換を正当化する等価性の前提が relocate_widened_base_via_wrap の削除漏れにより
+      成立していない（9907b4671d9f9e50 と同根）。読み出し側は全てマーカーゲート済みの
+      ため表示破壊は起きず、critical/high ではない。
+    suggestion: >-
+      9907b4671d9f9e50 の (a) を採って不変条件を成立させるか、(b) SPEC の scope に戻して
+      fast path 側を元の形にミラーする。いずれの場合も SPEC の File Structure /
+      Dependencies 節（blank_orphaned_neighbor_before_overwrite を terminal_cells.rs と
+      誤記）との整合を feature-docs 側で解消する。
+    sources: [claude:spec]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: "medium のため auto-fix ゲート外（category: spec は auto-fix 対象外）、batch の rework cap も消費済み。別タスクとして起票する"
+  - stable_id: 11fd1dec5041ea91
+    severity: medium
+    category: performance
+    file: crates/term_core/src/terminal_dispatch.rs
+    line: 155
+    title: "Hash map operations in per-byte overflow cleanup"
+    description: >-
+      overflow セルを実際に上書きする場合に限り、overflow.remove と
+      overflow_ridx_remove の 2 回のハッシュ操作が残る。常道の非 overflow バイトは
+      was_overflow ゲートで弾かれるため NFR1 の予算内。performance(claude) は同じ
+      コードを見て「予算内、新規指摘なし」と判定しており、cross-model 単独の指摘。
+    suggestion: "小整数キー向けハッシャ（FNV 等）の採用、または overflow セル多数時のプロファイル。"
+    sources: [litellm:vertex-deepseek-v3.2:performance]
+    confidence: 65
+    resolution: declined
+    resolution_reason: >-
+      NFR1 が定める予算は「常道ケース（width-1 セルを width-1 文字で上書き）に resident
+      field 読み＋分岐以上のコストを乗せない」ことで、overflow セルを実際に上書きする
+      稀ケースのハッシュ操作は FR2 の正しさに必要な処理そのもの。performance(claude) が
+      同一箇所を予算内と判定しており、指摘は予算の読み違い。
+  - stable_id: 58a76692ee0a3ed4
+    severity: medium
+    category: performance
+    file: crates/term_core/src/terminal_dispatch.rs
+    line: 164
+    title: "Extra absolute row computation in ASCII fast-path overflow cleanup"
+    description: >-
+      viewport_abs(self.cursor.row) の算術が overflow クリーンアップ分岐に入っている。
+      ただし was_overflow ゲートの内側なので、常道の非 overflow バイトでは実行されない。
+    suggestion: "バッチごとに絶対行を 1 回計算してキャッシュする、または viewport_abs の安価さを確認する。"
+    sources: [litellm:vertex-deepseek-v3.2:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      11fd1dec5041ea91 と同じ予算の読み違い。分岐の内側であり常道パスには乗らない。
+      performance(claude) が同一箇所を予算内と判定している。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
