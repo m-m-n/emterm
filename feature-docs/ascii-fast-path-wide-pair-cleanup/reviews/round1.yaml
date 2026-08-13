@@ -1,0 +1,129 @@
+round: 1
+executed_at: "2026-08-13T23:30:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 5f3ad8d60ce05abaeb0222435c9a2e9e74f2a9f0
+  head_commit: e3f3a4f036501716e10cb41850a0e3541355bd71
+  changed_files:
+    - crates/term_core/src/print_handler.rs
+    - crates/term_core/src/terminal_cells.rs
+    - crates/term_core/src/terminal_dispatch.rs
+    - test-docs/ascii-fast-path-wide-pair-cleanup/task0001.tests.yaml
+    - test-docs/ascii-fast-path-wide-pair-cleanup/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+    - perspective: performance
+      reason: "ASCII 高速パスの per-byte ホットループに幅読み取りと分岐を追加したため、NFR1 の性能予算への影響を独立観点で検査する"
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: 6d3eda4edf0a215f
+    severity: high
+    category: spec
+    file: crates/term_core/src/terminal_cells.rs
+    line: 262
+    title: "blank_wide_pair_half の呼び出し元列挙が SPEC FR5 の要求する全経路と一致していない"
+    description: >-
+      SPEC FR5 は blank_wide_pair_half の doc コメントが D2 修復の呼び出し元を
+      過不足なく列挙し、読み手が「網羅済みだ」と誤解しない状態にすることを求める。
+      実際の列挙は 6 項目で "It is reached from exactly these call sites, and no
+      others" と断言しているが、print_handler.rs:387（widen_after_merge 内の
+      blank_orphaned_base_before_placeholder(col + 1, row) — VS16 が幅1セルを
+      遅延ワイド化する通常ケースの R3 修復）がどの項目にも該当しない。列挙 3 番目
+      の "widened-base relocation-by-wrap step" は relocate_widened_base_via_wrap
+      （print_handler.rs:423 以降、最終列ブランチ）だけを指しており、親関数
+      widen_after_merge（print_handler.rs:359 以降）の通常分岐は含まない。
+      オーケストレーター側で実ファイルを検証し、列挙漏れの実在を確認済み。
+      なお litellm レビュアーが挙げた「widened-base relocation-by-wrap が
+      列挙から抜けている」という具体的理由は誤りで、当該項目は存在する。
+      指摘の骨子（列挙が実コールサイト集合と一致しない）だけを採用した。
+      同一サイトの comprehensive 観点 5dfe30682372a6ea が同じ欠落を
+      grep 実測付きで独立に指摘している。
+    suggestion: >-
+      列挙に VS16 遅延ワイド化パス（widen_after_merge の R3 修復）を追加する。
+      併せて IMPLEMENTATION.md の D-2 列挙も同じ集合に更新して SSOT を揃える。
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "auto-fix 対象外（category: spec）。rework で対応する"
+  - stable_id: 5dfe30682372a6ea
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_cells.rs
+    line: 258
+    title: "D2 修復の呼び出し元列挙が VS16 遅延ワイド化パスを落としており「no others」が偽"
+    description: >-
+      blank_wide_pair_half の doc コメントは 6 件を列挙して「and no others」と
+      断言するが、実際の呼び出し元は print_handler.rs:387（widen_after_merge の
+      R3 修復）を含めて 7 経路ある。grep 実測: print_handler.rs 157/187/231/387/
+      458/476、terminal_dispatch.rs 123、csi_edit.rs 74/80/89/138/143/151、
+      csi_screen.rs 116/123。task0002 は FR5（ドキュメント真実性）そのものが
+      成果物であり、tests.yaml の検証記録も同じ誤りを引き継いでいる。
+      IMPLEMENTATION.md の D-2 列挙（81-98 行）がドリフト元。
+    suggestion: >-
+      列挙に VS16 遅延ワイド化パスを追加し、IMPLEMENTATION.md D-2 も 7 項目へ
+      更新する。あるいは「and no others」の断言を落として 3 プリミティブ名での
+      grep 手順を書く（ただし FR5/AC-2 は列挙の維持を前提にしている）。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium のため auto-fix ゲート外。同一サイトの 6d3eda4edf0a215f と併せて rework で対応する"
+  - stable_id: 7f1b77eefe15546d
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/terminal_dispatch.rs
+    line: 106
+    title: "ASCII 書き込みステップが handle_print_ascii の手書きコピーのまま拡大し、同種ドリフトの再発余地が残る"
+    description: >-
+      dispatch 高速パスの書き込みステップは handle_print_ascii（print_handler.rs
+      220-262）とほぼ全行重複するコピーになり、パリティはコメントだけが担保する。
+      この重複が今回のバグの発生機構そのもので、先行 feature（1d080db9）でも
+      片側だけに修復が入って取り残された。追加テストは AC-4 が 1 シナリオ、
+      AC-5 が純 ASCII のみで、一般のドリフトは捕まえない。
+    suggestion: >-
+      (a) 書き込みステップを #[inline(always)] fn write_ascii_cell として
+      TerminalCore に切り出し、両経路から呼ぶ（NFR1 の non-inlinable call 制約は
+      維持できる）。または (b) ワイド文字・overflow セル・スペーサ上書き・行末・IRM
+      を混ぜた入力列で grid/widths/overflow/overflow_ridx/cursor/wrap_pending を
+      全比較する表駆動パリティテストを足す。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium のため auto-fix ゲート外"
+  - stable_id: 267a99dfb58efa79
+    severity: medium
+    category: performance
+    file: crates/term_core/src/terminal_dispatch.rs
+    line: 142
+    title: "ASCII 高速パスに 1 バイトごとの HashMap プローブが入った（overflow 非空時）"
+    description: >-
+      追加された overflow テーブル掃除のガードが !self.overflow.is_empty() の
+      ため、リング内のどこか 1 セルでも 16 バイト超のクラスタ（ZWJ 絵文字等）を
+      保持している間は、印字可能 ASCII バイト 1 個ごとに viewport_abs() +
+      HashMap<(u32,u32),String>（SipHash）のプローブを払う。高速パスの既存
+      per-byte コストはセル書き込み＋mark_row_dirty 程度なので相対影響が大きい。
+      NFR1 の性能予算（常道ケースは resident field 読み＋分岐のみ）に抵触する。
+    suggestion: >-
+      old_width と同じセルレコード（同一キャッシュライン）から
+      cell.is_overflow() を読み、そのセルが overflow だったときだけテーブル操作を
+      行う。overflow エントリは is_overflow() が真のセルにしか insert されない
+      ため挙動は等価。FR3 のパリティを厳密に保つなら handle_print_ascii 側にも
+      同じガードを入れる。
+    sources: [claude:performance]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium のため auto-fix ゲート外"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-candidates
+residual_critical_high: 1
+rework_required: true
