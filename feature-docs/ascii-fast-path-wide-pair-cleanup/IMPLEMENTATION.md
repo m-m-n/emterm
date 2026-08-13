@@ -39,7 +39,7 @@ Print (the shared orphan-neighbour repair entry point).
 | D2 invariant | The grid contract this feature restores | No cell of width 0 may remain whose left neighbour is not a width-2 base, and no width-2 base may remain whose right neighbour is not a width-0 spacer, after any write completes | task0001, task0002 |
 | Wide-pair blank primitive (`blank_wide_pair_half`, cell layer) | Rewrite one half of a broken wide pair to a width-1 blank in place | Pre: none — self-guarding. Takes a column and a row. No-op (no mutation, no panic) when the position does not resolve to a cell or the cell's current width is neither 0 nor 2. Post: the target holds a width-1 space; fg/bg/flags/hyperlink preserved; any overflow-table entry and its reverse-index companion for that position removed; the row marked dirty | task0001 (indirectly), task0002 (documents it) |
 | Orphan-neighbour repair entry point (`blank_orphaned_neighbor_before_overwrite`, print layer) | Rules R1/R2: blank whichever neighbour an imminent overwrite would orphan | Pre: called BEFORE the overwrite lands, with the target's pre-write width. Takes column, row and pre-write width. Post: when pre-write width is 2, a still-width-0 cell one column right is blanked; when pre-write width is 0 and the column is not 0, a still-width-2 cell one column left is blanked; otherwise nothing changes. Never touches the target cell itself. Never reads or writes outside the target's own row | task0001 (calls it), task0002 (documents it) |
-| Overflow-entry removal shape (print layer, ASCII writer) | Keep the overflow table and its reverse index consistent when a cell's long content is replaced by a single ASCII byte | Pre: performed for the cell just overwritten, gated on the overflow table being non-empty. Post: no overflow entry and no reverse-index entry remains for that absolute-row/column position | task0001 |
+| Overflow-entry removal shape (print layer, ASCII writer) | Keep the overflow table and its reverse index consistent when a cell's long content is replaced by a single ASCII byte | Pre: performed for the cell just overwritten, gated on that cell's own pre-write overflow marker (task0004 replaced the earlier ring-wide "overflow table non-empty" gate; the marker is read from the same cell record as `old_width`, so the per-byte ASCII path pays no table probe). Post: no overflow entry and no reverse-index entry remains for that absolute-row/column position | task0001, task0004 |
 
 ### Visibility of the repair entry point
 
@@ -80,18 +80,24 @@ reachability).
 
 ### D-2: Authoritative post-change D2-repair call-site set
 
-Both tasks work against this single enumeration; task0001 makes it true in
-code and task0002 makes it true in the cell layer's documentation. After this
+Tasks work against this single enumeration; task0001 makes it true in code
+and task0002 / task0003 make it true in the cell layer's documentation
+(task0003 added items 3 and 4 after review round 1 found the VS16
+lazy-widening step missing from the original six-item list). After this
 feature, the D2 repair primitive is reached from:
 
 1. the print path's grapheme writer, before an overwrite (rules R1/R2) and
    before a wide-pair placeholder write (rule R3);
 2. the print path's ASCII writer, before an overwrite (rules R1/R2);
-3. the print path's widened-base relocation-by-wrap step (rules R1/R2/R3);
-4. **the PTY-dispatch ASCII fast path's write step, before an overwrite
+3. the print path's VS16 retroactive-widening step (`widen_after_merge`),
+   before writing the newly widened base's spacer (rule R3);
+4. the print path's widened-base relocation-by-wrap step
+   (`relocate_widened_base_via_wrap`, the last-column branch of 3) (rules
+   R1/R2/R3);
+5. **the PTY-dispatch ASCII fast path's write step, before an overwrite
    (rules R1/R2)** — added by this feature;
-5. the ICH/DCH edit path's edge repair;
-6. the range-erase edge-repair chokepoint.
+6. the ICH/DCH edit path's edge repair;
+7. the range-erase edge-repair chokepoint.
 
 No other write path performs the repair. A reader of the primitive's
 documentation must be able to determine this set without consulting any file
