@@ -250,9 +250,24 @@ impl TerminalCore {
     /// Self-guarding (no precondition on the caller): a no-op, with no
     /// mutation and no panic, when `(col, row)` does not resolve to a cell
     /// or when the cell's current width is neither 0 nor 2 (e.g. already
-    /// width 1). This is the single D2-invariant repair shared by the
-    /// print path, ICH/DCH, and the range-erase edge-repair chokepoint —
-    /// see IMPLEMENTATION.md "Shared Components".
+    /// width 1).
+    ///
+    /// This is the single repair for the D2 invariant (no width-0 cell may
+    /// remain whose left neighbour is not a width-2 base, and no width-2
+    /// base may remain whose right neighbour is not a width-0 spacer,
+    /// after any write completes). It is reached from exactly these call
+    /// sites, and no others:
+    ///
+    /// - the print path's grapheme writer, before an overwrite (rules
+    ///   R1/R2) and before writing a wide-pair placeholder (rule R3);
+    /// - the print path's ASCII writer, before an overwrite (rules R1/R2);
+    /// - the print path's widened-base relocation-by-wrap step (rules
+    ///   R1/R2/R3);
+    /// - the PTY-dispatch ASCII fast path's write step, before an
+    ///   overwrite (rules R1/R2) — a distinct code path from the print
+    ///   path's ASCII writer above, for the same byte;
+    /// - the ICH/DCH edit path's edge repair;
+    /// - the range-erase edge-repair chokepoint.
     pub(crate) fn blank_wide_pair_half(&mut self, col: u16, row: u16) {
         let Some(idx) = self.cell_index(col, row) else {
             return;
