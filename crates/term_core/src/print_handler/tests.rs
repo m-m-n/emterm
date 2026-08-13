@@ -1355,3 +1355,77 @@ fn test_handle_print_ascii_overwrite_wide_spacer_blanks_overflow_base() {
     assert!(!core.overflow.contains_key(&(0u32, abs)));
     assert!(!core.overflow_ridx.contains_key(&abs));
 }
+
+// ── task0004: overflow cleanup gated on the overwritten cell ──────────
+//
+// The guard moves from "the overflow table is non-empty anywhere in the
+// ring" to "the overwritten cell's own pre-write overflow marker is set".
+// The marker must be read from the cell record BEFORE the write clears it
+// (char_len becomes 1) — a read placed after the write always observes
+// false and silently skips the cleanup.
+
+// AC-2 (task0004): a width-1 base cell can itself carry overflow content
+// (a long combining-mark run whose base has width 1) — this proves the
+// guard is gated on the cell's own marker, not reused from `old_width != 1`
+// (the neighbor-repair branch's condition), which would miss this cell
+// entirely since its width is already 1.
+#[test]
+fn test_handle_print_ascii_overwrite_width1_overflow_cell_removes_overflow_entry() {
+    let mut core = TerminalCore::new(20, 3, 0);
+    core.handle_print(0x65); // 'e'
+    let marks: [u32; 8] = [
+        0x0301, 0x0302, 0x0303, 0x0304, 0x0305, 0x0306, 0x0307, 0x0308,
+    ];
+    for &m in &marks {
+        core.handle_print(m); // retroactive merge, pushes col0 into overflow
+    }
+
+    // Pre assert: overflow-bound, but width stays 1 (combining marks add
+    // no width).
+    let idx0 = core.cell_index(0, 0).expect("col0 row0 in bounds");
+    assert!(core.ring_cells[idx0].is_overflow());
+    assert_eq!(core.get_cell_width(0, 0), 1);
+    let abs = core.viewport_abs(0) as u32;
+    assert!(core.overflow.contains_key(&(0u32, abs)));
+
+    core.process_pty_data(b"\r"); // cursor back to col0
+    core.handle_print(0x5A); // 'Z' overwrites via the ASCII fast path
+
+    assert_eq!(core.get_cell_char(0, 0), "Z");
+    assert_eq!(core.get_cell_width(0, 0), 1);
+    assert!(!core.overflow.contains_key(&(0u32, abs)));
+    assert!(!core.overflow_ridx.contains_key(&abs));
+}
+
+// AC-3 (task0004, FR3/FR7): with the overflow table non-empty because of
+// an UNRELATED cell (a different row), overwriting an ordinary
+// (non-overflow) cell with ASCII leaves the unrelated entry and its
+// reverse-index entry intact.
+#[test]
+fn test_handle_print_ascii_overwrite_ordinary_cell_leaves_unrelated_overflow_entry_intact() {
+    let mut core = TerminalCore::new(10, 3, 0);
+    // Unrelated overflow entry at row1/col0.
+    core.process_pty_data(b"\x1b[2;1H"); // CUP row2,col1 (1-indexed) -> row1,col0
+    core.process_pty_data(
+        "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}".as_bytes(),
+    );
+    core.flush_grapheme_buffer();
+    let unrelated_abs = core.viewport_abs(1) as u32;
+    assert!(core.overflow.contains_key(&(0u32, unrelated_abs)));
+
+    // Overwrite an ordinary width-1 cell at row0/col0 (not the overflow
+    // cell above).
+    core.process_pty_data(b"\x1b[1;1H"); // CUP row1,col1 (1-indexed) -> row0,col0
+    core.handle_print(0x5A); // 'Z' (ASCII fast path, non-overflow cell)
+
+    assert_eq!(core.get_cell_char(0, 0), "Z");
+    assert_eq!(core.get_cell_width(0, 0), 1);
+    // Unrelated entry untouched.
+    assert!(core.overflow.contains_key(&(0u32, unrelated_abs)));
+    assert!(
+        core.overflow_ridx
+            .get(&unrelated_abs)
+            .map(|cols| cols.contains(&0u32))
+            .unwrap_or(false)
+    );
+}

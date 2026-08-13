@@ -1,0 +1,112 @@
+task_id: task0004
+baseline_failures: []          # crates/term_core --lib: 814 passed, 0 failed, 13 ignored (pre-implementation)
+final_failures: []             # 819 passed, 0 failed, 13 ignored (post-implementation; 5 new tests added)
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Code-shape criterion (NFR1): no test can observe the absence of a
+      hash-map probe. Verified by reading both write steps after the
+      change: in terminal_dispatch.rs (fast path) and print_handler.rs
+      (handle_print_ascii), the overflow-table access
+      (`self.overflow.remove`, `overflow_ridx_remove`) and the absolute-row
+      computation (`self.viewport_abs`) are both syntactically INSIDE the
+      `if was_overflow { ... }` block, and `was_overflow` is read once from
+      the same cache line as `old_width` before the write. The common
+      width-1, non-overflow ASCII byte never enters that block. Mirrors
+      VERIFICATION.md's inspection item M2 approach for the NFR1 budget.
+  AC-2:
+    tests:
+      - print_handler::tests::test_handle_print_ascii_overwrite_overflow_base_blanks_spacer
+      - print_handler::tests::test_handle_print_ascii_overwrite_width1_overflow_cell_removes_overflow_entry
+      - terminal_dispatch::tests::process_pty_data_ascii_overwrites_overflow_base_removes_overflow_entry
+      - terminal_dispatch::tests::process_pty_data_ascii_overwrites_width1_overflow_cell_removes_overflow_entry
+    red_confirmed: true
+    red_reason: >-
+      Deliberately implemented the ordering trap the task plan warns about
+      first: in both writers, read `was_overflow` from the cell record
+      AFTER the write already set char_len = 1 (clearing the marker),
+      instead of before. Ran the term_core --lib suite: all 4 listed tests
+      failed with "assertion failed: !core.overflow.contains_key(&(0u32,
+      abs))" (print_handler::tests::test_handle_print_ascii_overwrite_overflow_base_blanks_spacer
+      at print_handler/tests.rs:1312,
+      print_handler::tests::test_handle_print_ascii_overwrite_width1_overflow_cell_removes_overflow_entry
+      at print_handler/tests.rs:1396,
+      terminal_dispatch::tests::process_pty_data_ascii_overwrites_overflow_base_removes_overflow_entry
+      at terminal_dispatch.rs:438,
+      terminal_dispatch::tests::process_pty_data_ascii_overwrites_width1_overflow_cell_removes_overflow_entry
+      at terminal_dispatch.rs:601) because `was_overflow` always read false
+      post-write, so the cleanup branch never ran and the stale overflow
+      entry survived the overwrite. 815 passed / 4 failed. Moved the
+      `was_overflow` read back to before the write (same statement group as
+      `old_width`); re-ran: 819 passed / 0 failed, no other regressions.
+      This also proves the guard is gated on the cell's OWN marker rather
+      than on `old_width != 1` (the neighbor-repair branch's condition):
+      the two new width1-overflow tests use a long combining-mark run
+      whose base cell stays width 1 while carrying overflow content, so a
+      width-reused gate would have missed it even with correct ordering.
+  AC-3:
+    tests:
+      - print_handler::tests::test_handle_print_ascii_overwrite_ordinary_cell_leaves_unrelated_overflow_entry_intact
+      - terminal_dispatch::tests::process_pty_data_ascii_overwrites_ordinary_cell_leaves_unrelated_overflow_entry_intact
+      - terminal_dispatch::tests::process_pty_data_ascii_overwrite_with_unrelated_overflow_matches_print_path_write
+    red_confirmed: false
+    red_reason: >-
+      Equivalence-preservation criterion with no reachable red state under
+      any plausible implementation of the new gate. The pre-task0004 gate
+      (`!self.overflow.is_empty()`) already produced the exact same result
+      for this scenario: overflow-table removal is keyed by `(col, abs)`,
+      so calling `.remove()` for a position that was never inserted is a
+      harmless no-op regardless of which gate condition triggered the
+      call — an unrelated entry's key is simply never touched. All 3 tests
+      passed unmodified BEFORE any implementation change (819/819 green
+      immediately after adding the tests, run against the untouched
+      pre-refactor code) and remained green after the gate change and
+      after the deliberate ordering-trap detour used for AC-2 (the
+      ordering trap only affects the OVERWRITTEN cell's own entry, never
+      an unrelated position). No plausible marker-gate implementation
+      makes an already-absent key "disappear," so there is no observable
+      red to drive the fix from; these tests exist to pin the equivalence
+      obligation against future regression, per the task plan's Design
+      section, not to drive new behavior.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Documentation/inspection criterion (the equivalence obligation), not
+      a test — recorded in the implementer's completion report (see the
+      final JSON report's `notes` field for the full enumeration of every
+      overflow-table insertion site and every relocation site, each
+      checked against "an entry can exist at position P only if the cell
+      record at P carries char_len == 0xFF". No disqualifying path was
+      found; the guard change is equivalence-preserving.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Diff-scope criterion, verified via `git diff --stat` after
+      implementation: only crates/term_core/src/print_handler.rs,
+      crates/term_core/src/print_handler/tests.rs (print_handler's own
+      inline test module, split into its own file per the pre-existing
+      project convention), and crates/term_core/src/terminal_dispatch.rs
+      (whose test module is inline in the same file) changed. No
+      Cargo.toml or other crate manifest touched; no new dependency; no
+      change to anything publicly exported from term_core (`was_overflow`
+      is a private local binding).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Suite/build-pass criterion, verified via the project_commands
+      assigned to this task: `cargo test --manifest-path
+      crates/term_core/Cargo.toml --lib` (819 passed, 0 failed, 13
+      ignored — 0 regressions against the 814-test pre-implementation
+      baseline) and `cargo check --manifest-path
+      crates/term_core/Cargo.toml` (clean build, no warnings). The
+      src-tauri library suite and the CLI-only check named in this AC's
+      text are outside this task's assigned project_commands (scoped to
+      crates/term_core/Cargo.toml only, per the orchestrator's task
+      dispatch) and were not run here; term_core's public API is
+      unchanged, so no impact on those builds is expected, but their
+      execution is left to the feature-level verification stage.
