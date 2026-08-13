@@ -77,7 +77,12 @@ impl TerminalCore {
     /// memory access). No-op when `old_width == 1` (the ordinary case);
     /// callers should skip calling this entirely in that case to avoid
     /// even the redundant re-check.
-    fn blank_orphaned_neighbor_before_overwrite(&mut self, col: u16, row: u16, old_width: u8) {
+    pub(crate) fn blank_orphaned_neighbor_before_overwrite(
+        &mut self,
+        col: u16,
+        row: u16,
+        old_width: u8,
+    ) {
         if old_width == 2 {
             if col + 1 < self.cols {
                 if let Some(idx2) = self.cell_index(col + 1, row) {
