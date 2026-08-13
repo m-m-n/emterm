@@ -49,8 +49,9 @@ workflow:
     status: completed
     completed_at_commit: c3b037fe6c6676d284feecae223c09d67eb64eee
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 5f3ad8d60ce05abaeb0222435c9a2e9e74f2a9f0
+    completed_at_commit: b490d7f4492f19442293a556da6679c3d148abba
   - id: review
     status: pending
   - id: verify
@@ -108,7 +109,7 @@ tasks:
     domains: [input-handling]
     complexity: medium
     requirements: [FR2, FR3, FR7, NFR1, NFR2]
-    status: in_progress
+    status: merged
     notes: "rework round 1: finding 267a99dfb58efa79"
     branch: em-workflow/ascii-fast-path-wide-pair-cleanup/task0004
 
