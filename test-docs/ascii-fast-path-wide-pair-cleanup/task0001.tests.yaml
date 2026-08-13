@@ -1,0 +1,100 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - terminal_dispatch::tests::process_pty_data_ascii_overwrites_wide_base_blanks_orphan_spacer
+    red_confirmed: true
+    red_reason: >-
+      Before the fix: assertion `left == right` failed at col1, left: "",
+      right: " " — the orphaned width-0 spacer's char content stayed empty
+      instead of being blanked to a space, because the ASCII fast path never
+      read the pre-write width or called the repair entry point.
+  AC-2:
+    tests:
+      - terminal_dispatch::tests::process_pty_data_ascii_overwrites_wide_spacer_blanks_orphan_base
+    red_confirmed: true
+    red_reason: >-
+      Before the fix: assertion `left == right` failed at col0, left: "世",
+      right: " " — overwriting the spacer half left the orphaned width-2
+      base's original content in place instead of being blanked.
+  AC-3:
+    tests:
+      - terminal_dispatch::tests::process_pty_data_ascii_overwrites_overflow_base_removes_overflow_entry
+    red_confirmed: true
+    red_reason: >-
+      Before the fix: assertion `left == right` failed at col1, left: "",
+      right: " " (same orphan-spacer symptom as AC-1, exercised over an
+      overflow-table-bound base). The overflow-table/reverse-index removal
+      assertions were unreachable before that first failing assertion, but
+      manual inspection of the pre-fix code confirms neither
+      `self.overflow.remove` nor `overflow_ridx_remove` was called on the
+      fast path at all, so the overflow-entry state would also have failed.
+  AC-4:
+    tests:
+      - terminal_dispatch::tests::process_pty_data_split_fast_path_matches_single_call_slow_path
+    red_confirmed: true
+    red_reason: >-
+      Before the fix: assertion failed "col 1: char mismatch", left: "",
+      right: " " — the single-call (slow-path) core blanked the orphaned
+      spacer while the split-call (fast-path) core did not, so the two
+      grids diverged, disproving parity.
+  AC-5:
+    tests:
+      - terminal_dispatch::tests::process_pty_data_pure_ascii_fast_path_matches_direct_handle_print
+    red_confirmed: false
+    red_reason: >-
+      Passed before the fix too, as expected per the task plan's Test Notes:
+      on a grid with no wide cells, every cell being overwritten already has
+      width 1, so the fast path's new width read/branch/repair call is never
+      taken (old_width == 1 in this scenario, both before and after the
+      change) — there is no repair-related behavior for this scenario to
+      observably differ on. AC-5's "no repair entered" aspect is instead
+      carried by AC-7's recorded cost-budget comment plus review of the
+      diff, per the plan.
+  AC-6:
+    tests:
+      - terminal_dispatch::tests::process_pty_data_ascii_overwrites_width0_at_col0_no_panic
+      - terminal_dispatch::tests::process_pty_data_ascii_overwrites_width2_base_at_last_column_no_panic
+      - terminal_dispatch::tests::process_pty_data_ascii_overwrites_width0_without_wide_left_neighbor_leaves_it_untouched
+    red_confirmed: false
+    red_reason: >-
+      All three passed before the fix too. Structurally they cannot go red:
+      each adversarial shape is exactly the case the repair entry point's
+      own guard clauses (`col + 1 < self.cols`, `col > 0`,
+      `ring_cells[idx2].width == 2`/`== 0`) no-op on, so calling the repair
+      (post-fix) versus never calling it (pre-fix) produces byte-identical
+      output for these specific inputs either way. Confirmed by re-running
+      all three against the pre-fix fast path (repair call removed): all
+      three still passed. The tests still pin the new call site's safety
+      (repair now genuinely invoked under these conditions, on the real
+      dispatch fast path, and confirmed not to panic or misfire) as a
+      regression guard, and exercise guard-clause paths not otherwise
+      reached from this call site.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-shaped (NFR1 is evaluated analytically per the task plan).
+      Verified by inspection: the write step in terminal_dispatch.rs's ASCII
+      fast path carries a comment stating the budget (one read of
+      `self.ring_cells[idx].width`, reusing the cache line already touched
+      for the write, plus one untaken `if old_width != 1` branch on the
+      common case; no allocation, no extra pass over the input buffer, no
+      non-inlinable per-byte call), and the implemented code matches that
+      statement exactly — no other change was made to the loop.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Gate, not a test, per the task plan. This task ran the two commands in
+      its own project_commands (term_core `cargo check` and term_core
+      `cargo test --lib`, both from the crate root project manifest) — both
+      pass clean with no warnings, no crate manifest touched, and no
+      publicly exported term_core signature changed (the only visibility
+      change is print_handler.rs's private -> pub(crate), which is not part
+      of the public API). The other two AC-8 checks named in the task plan
+      (the full src-tauri library suite, the CLI-only --no-default-features
+      check) are outside this task's assigned project_commands and are not
+      run here; they belong to the feature's integration/verification step.
