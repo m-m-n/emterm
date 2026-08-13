@@ -1,0 +1,76 @@
+feature: ascii-fast-path-wide-pair-cleanup
+collected_at: "2026-08-14T00:00:00+09:00"
+session_ids: [019ffb5c-fb4f-7000-9ce3-3459c3ad2af1]
+signals:
+  review_critical_high:
+    - stable_id: 6d3eda4edf0a215f
+      category: spec
+      file: crates/term_core/src/terminal_cells.rs
+      title: "blank_wide_pair_half の呼び出し元列挙が SPEC FR5 の要求する全経路と一致していない"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0004
+      files: [crates/term_core/src/print_handler/tests.rs]
+      note: >-
+        expected_files は terminal_dispatch.rs と print_handler.rs のみだったが、
+        print_handler の inline test モジュールが別ファイル（print_handler/tests.rs）に
+        分離されているため、テスト追加でそこにも触れた。deviations としては報告されて
+        いないが、変更ファイル集合としては予測外。
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "ASCII 高速パスの per-byte ホットループに幅読み取りと分岐を追加したため、NFR1 の性能予算への影響を独立観点で検査する"
+  declined_findings:
+    - stable_id: 11fd1dec5041ea91
+      category: performance
+      resolution_reason: >-
+        NFR1 の予算は「常道ケース（width-1 を width-1 で上書き）に resident field 読み＋
+        分岐以上を乗せない」ことで、overflow セルを実際に上書きする稀ケースのハッシュ操作は
+        FR2 の正しさに必要な処理。performance(claude) は同一箇所を予算内と判定。
+    - stable_id: 58a76692ee0a3ed4
+      category: performance
+      resolution_reason: "同上。分岐の内側であり常道パスには乗らない。"
+lessons_candidates:
+  - id: L1
+    note: >-
+      cross-model レビュアー（litellm/vertex-deepseek-v3.2）の round 1 spec 指摘は、
+      結論（列挙が実コールサイト集合と一致しない）は正しかったが、挙げた具体的理由
+      （widened-base relocation-by-wrap が列挙から抜けている）は事実に反していた。
+      当該項目は列挙に存在する。逆に claude spec は「過不足なく一致」と誤って通し、
+      claude comprehensive だけが grep 実測付きで真の欠落を特定した。
+      cross-model 指摘は「指摘の骨子」と「挙げられた根拠」を分けて扱い、
+      オーケストレーター側で実ファイル検証してから rework に回す価値がある。
+  - id: L2
+    note: >-
+      IMPLEMENTATION.md の D-2 のような「両タスクが実装対象とする権威的列挙」を
+      planner が起こすと、その列挙自体の誤りが両タスクに同時に伝播し、
+      タスクの検証記録（tests.yaml）にも誤りが引き継がれる。今回まさに
+      IMPLEMENTATION.md の Risk Assessment が「Doc enumeration and code drift apart
+      again」を挙げていたのに、その列挙自身がドリフト元になった。
+      権威的列挙を書く planner には、コード実測（grep）で列挙を裏取りする手順を
+      課すと再発を防げる。
+  - id: L3
+    note: >-
+      rework-planner への dispatch で write_policy.targets を空にしたため、
+      IMPLEMENTATION.md / VERIFICATION.md の記述が rework 後の実装と食い違う状態が
+      残り、planner が warnings W3/W4 で報告してオーケストレーターが手当てした。
+      rework が既存の設計判断（D-2 等）を覆す場合、IMPLEMENTATION.md を
+      write_policy.targets に含めて planner 側で直せるようにするほうが自然。
+  - id: L4
+    note: >-
+      implement フェーズで task worktree を作る際、Bash ツールの永続 cwd が
+      integration worktree に残っていたため `git rev-parse --show-toplevel` が
+      integration worktree を返し、task worktree が
+      integration/.claude/worktrees/... に入れ子で作られた。マージ自体は成功したが
+      implementer 2 名が「指定された worktree_path が存在しない」と報告した。
+      WT_ROOT は cwd 非依存（`git -C {main_repo} rev-parse --show-toplevel`）で
+      解決すべき。
+  - id: L5
+    note: >-
+      同一 Notion タスク由来と思われる feature `ascii-fast-path-wide-pair-repair` の
+      integration ブランチと worktree が create-plan 途中で残存していた。
+      develop の Step A はパス引数なしの起動を常に新規 feature として扱い既存ブランチを
+      推測しない規約なので、規約どおり新規 feature として実行した。結果として同じ
+      Notion タスクに対して 2 本のブランチが存在する。無人実行で再発火する運用では、
+      中断された feature の検出と扱いを決めておく価値がある。
