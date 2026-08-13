@@ -95,7 +95,7 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR5, NFR2]
-    status: in_progress
+    status: merged
     notes: "rework round 1: findings 6d3eda4edf0a215f, 5dfe30682372a6ea"
     branch: em-workflow/ascii-fast-path-wide-pair-cleanup/task0003
   task0004:
