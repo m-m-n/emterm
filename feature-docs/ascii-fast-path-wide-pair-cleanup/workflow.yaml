@@ -83,7 +83,7 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR5, NFR2]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/ascii-fast-path-wide-pair-cleanup/task0002
 
