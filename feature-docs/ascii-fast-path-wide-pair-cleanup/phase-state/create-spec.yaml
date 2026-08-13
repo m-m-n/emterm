@@ -1,0 +1,26 @@
+schema_version: 1
+feature: ascii-fast-path-wide-pair-cleanup
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: ca3f7d4c
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: "sha256:199833081c3dcb6094b1db08499dd142267acd8e5de24fcb270457da17e25eec"
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+    digests: {}
+    truncated: false
+last_error: null
