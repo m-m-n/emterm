@@ -46,7 +46,8 @@ workflow:
       interaction flow and no design-token consumption.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: in_progress
+    status: completed
+    completed_at_commit: c3b037fe6c6676d284feecae223c09d67eb64eee
   - id: implement
     status: pending
     base_commit: ca3f7d4c445f1628b21ce73be792b3afa28a0e4f
@@ -59,7 +60,32 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: ASCII fast-path wide-pair repair and overflow cleanup
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/terminal_dispatch.rs
+      - crates/term_core/src/print_handler.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR6, FR7, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    notes: null
+    branch: null
+  task0002:
+    title: D2-repair call-site documentation truthfulness
+    plan: tasks/task0002.md
+    files:
+      - crates/term_core/src/terminal_cells.rs
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR5, NFR2]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -75,77 +101,77 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS3]
   FR2:
     title: Fast path removes the overflow-table entry
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   FR3:
     title: Fast/slow path observable parity
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS2]
   FR4:
     title: Fast path is not narrowed to achieve the fix
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   FR5:
     title: D2-repair call-site documentation matches reality
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: []
   FR6:
     title: Regression test for the reported break
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
   FR7:
     title: No behavior change for non-wide content
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5, TS7]
   NFR1:
     title: "Performance: ASCII common case cost bound and recorded evaluation"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   NFR2:
     title: "Scope: change confined to crates/term_core, no API or dependency change"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002]
     tests: [TS7]
   NFR3:
     title: "Robustness: repair safe on adversarial PTY input"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS6]
   NFR4:
     title: "Convention: new tests follow test/README.md"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
 
 batch:
