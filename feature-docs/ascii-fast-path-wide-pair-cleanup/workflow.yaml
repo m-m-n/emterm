@@ -49,9 +49,8 @@ workflow:
     status: completed
     completed_at_commit: c3b037fe6c6676d284feecae223c09d67eb64eee
   - id: implement
-    status: completed
+    status: pending
     base_commit: 5f3ad8d60ce05abaeb0222435c9a2e9e74f2a9f0
-    completed_at_commit: 5ccf26b1030b5a05389495f02ed9da1982ab753c
   - id: review
     status: pending
   - id: verify
@@ -87,6 +86,31 @@ tasks:
     status: merged
     notes: null
     branch: em-workflow/ascii-fast-path-wide-pair-cleanup/task0002
+  task0003:
+    title: D2-repair call-site enumeration completeness (VS16 lazy-widening path)
+    plan: tasks/task0003.md
+    files:
+      - crates/term_core/src/terminal_cells.rs
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR5, NFR2]
+    status: pending
+    notes: "rework round 1: findings 6d3eda4edf0a215f, 5dfe30682372a6ea"
+    branch: null
+  task0004:
+    title: Overflow cleanup gated on the overwritten cell, not on the table
+    plan: tasks/task0004.md
+    files:
+      - crates/term_core/src/terminal_dispatch.rs
+      - crates/term_core/src/print_handler.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR2, FR3, FR7, NFR1, NFR2]
+    status: pending
+    notes: "rework round 1: finding 267a99dfb58efa79"
+    branch: null
 
 review:
   status: pending
@@ -118,14 +142,14 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0004]
     tests: [TS4]
   FR3:
     title: Fast/slow path observable parity
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0004]
     tests: [TS2]
   FR4:
     title: Fast path is not narrowed to achieve the fix
@@ -139,7 +163,7 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0002]
+    tasks: [task0002, task0003]
     tests: []
   FR6:
     title: Regression test for the reported break
@@ -153,21 +177,21 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0004]
     tests: [TS5, TS7]
   NFR1:
     title: "Performance: ASCII common case cost bound and recorded evaluation"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001]
+    tasks: [task0001, task0004]
     tests: [TS5]
   NFR2:
     title: "Scope: change confined to crates/term_core, no API or dependency change"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0001, task0002]
+    tasks: [task0001, task0002, task0003, task0004]
     tests: [TS7]
   NFR3:
     title: "Robustness: repair safe on adversarial PTY input"
@@ -185,5 +209,5 @@ requirements:
     tests: []
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework_count: 0
