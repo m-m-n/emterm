@@ -71,9 +71,9 @@ tasks:
     domains: [input-handling]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR6, FR7, NFR1, NFR2, NFR3, NFR4]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/ascii-fast-path-wide-pair-cleanup/task0001
   task0002:
     title: D2-repair call-site documentation truthfulness
     plan: tasks/task0002.md
@@ -83,9 +83,9 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR5, NFR2]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/ascii-fast-path-wide-pair-cleanup/task0002
 
 review:
   status: pending
