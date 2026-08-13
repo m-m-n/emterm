@@ -1,0 +1,17 @@
+schema_version: 1
+feature: osc9-notify-log-redaction
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: 314c487865ed6d96550892db17109b237020ef75
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
