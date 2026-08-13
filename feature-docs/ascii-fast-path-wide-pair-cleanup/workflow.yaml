@@ -46,7 +46,7 @@ workflow:
       interaction flow and no design-token consumption.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: in_progress
   - id: implement
     status: pending
     base_commit: ca3f7d4c445f1628b21ce73be792b3afa28a0e4f
