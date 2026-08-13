@@ -89,8 +89,8 @@ tasks:
     branch: em-workflow/ascii-fast-path-wide-pair-cleanup/task0002
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, spec]
     discretionary:
@@ -98,12 +98,12 @@ review:
         reason: "ASCII 高速パスの per-byte ホットループに幅読み取りと分岐を追加したため、NFR1 の性能予算への影響を独立観点で検査する"
     cross_validation: true
   perspectives:
-    comprehensive: pending
-    security: pending
-    spec: pending
-    performance: pending
-  residual_critical_high: 0
-  needs_rework: false
+    comprehensive: completed
+    security: completed
+    spec: completed
+    performance: completed
+  residual_critical_high: 1
+  needs_rework: true
 
 requirements:
   FR1:
