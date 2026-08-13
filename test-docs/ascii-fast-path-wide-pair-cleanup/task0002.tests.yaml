@@ -1,0 +1,43 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      FR5 (documentation truthfulness) has no automated scenario in
+      SPEC.md; the task plan's Test Notes explicitly direct against
+      inventing a test that asserts on comment text. Verified by
+      inspection: the rewritten doc comment on blank_wide_pair_half
+      (crates/term_core/src/terminal_cells.rs) enumerates all six D2-repair
+      call sites from IMPLEMENTATION.md D-2 (grapheme writer pre-overwrite
+      and pre-placeholder, ASCII writer pre-overwrite, widened-base
+      relocation-by-wrap, PTY-dispatch ASCII fast path, ICH/DCH edge
+      repair, range-erase edge repair), with the dispatch fast path
+      named as "a distinct code path from the print path's ASCII writer
+      above, for the same byte".
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Same as AC-1 — no automated scenario, inspection-verified. The
+      rewritten enumeration lists exactly the six D-2 call sites (no
+      extra path named) and is self-contained: it no longer defers to
+      IMPLEMENTATION.md "Shared Components" (that pointer sentence was
+      removed), so a reader determines the full set from the doc comment
+      alone without opening any file outside the crate.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by running `git diff` (confirms the change touches only
+      the doc comment on blank_wide_pair_half — no executable statement,
+      signature, visibility, test, or manifest line changed) plus the
+      project build/test commands: `cargo check --manifest-path
+      crates/term_core/Cargo.toml` succeeds, and `cargo test
+      --manifest-path crates/term_core/Cargo.toml --lib` reports 806
+      passed, 0 failed, 13 ignored both before (baseline) and after this
+      change — identical counts, so no regression. No red state applies:
+      this is a comment-only change with no behavioural test to drive
+      red first.
