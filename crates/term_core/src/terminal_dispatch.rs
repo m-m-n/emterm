@@ -114,6 +114,14 @@ impl TerminalCore {
                                 // slow ASCII writer this fast path must stay
                                 // in parity with (FR3, D-1).
                                 let old_width = self.ring_cells[idx].width;
+                                // FR2/NFR1 (task0004): the overflow marker
+                                // is read from the SAME cell record
+                                // `old_width` just touched, BEFORE the
+                                // write below clears it (char_len becomes
+                                // 1) — a read placed after the write always
+                                // observes false and silently skips the
+                                // cleanup.
+                                let was_overflow = self.ring_cells[idx].is_overflow();
                                 if old_width != 1 {
                                     // R1/R2 (FR1/FR2): blank an orphaned
                                     // wide-pair neighbor before this overwrite
@@ -139,7 +147,12 @@ impl TerminalCore {
                                 // overwritten cell's long content is replaced
                                 // by this single ASCII byte (mirrors
                                 // handle_print_ascii's overflow cleanup).
-                                if !self.overflow.is_empty() {
+                                // Gated on the overwritten cell's OWN
+                                // pre-write marker (task0004), not on "the
+                                // table is non-empty anywhere in the ring":
+                                // the common ASCII case does no table
+                                // access and no absolute-row computation.
+                                if was_overflow {
                                     let abs = self.viewport_abs(self.cursor.row) as u32;
                                     let col32 = col as u32;
                                     if self.overflow.remove(&(col32, abs)).is_some() {
@@ -554,5 +567,133 @@ mod tests {
         assert_eq!(core.get_cell_width(0, 0), 1);
         assert_eq!(core.get_cell_char(1, 0), "Y");
         assert_eq!(core.get_cell_width(1, 0), 1);
+    }
+
+    // ── task0004: overflow cleanup gated on the overwritten cell ──────
+    //
+    // The guard moves from "the overflow table is non-empty anywhere in
+    // the ring" to "the overwritten cell's own pre-write overflow marker
+    // is set". The marker must be read from the cell record BEFORE the
+    // write clears it (char_len becomes 1) — a read placed after the write
+    // always observes false and silently skips the cleanup.
+
+    // AC-2 (task0004): a width-1 base cell can itself carry overflow
+    // content (a long combining-mark run whose base has width 1) — this
+    // proves the fast path's guard is gated on the cell's own marker, not
+    // reused from `old_width != 1` (the neighbor-repair branch's
+    // condition), which would miss this cell entirely since its width is
+    // already 1.
+    #[test]
+    fn process_pty_data_ascii_overwrites_width1_overflow_cell_removes_overflow_entry() {
+        let mut core = TerminalCore::new(20, 3, 0);
+        let mut setup = vec![b'e'];
+        for m in [
+            0x0301u32, 0x0302, 0x0303, 0x0304, 0x0305, 0x0306, 0x0307, 0x0308,
+        ] {
+            let ch = char::from_u32(m).unwrap();
+            let mut buf = [0u8; 4];
+            setup.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        }
+        core.process_pty_data(&setup); // setup, own call (non-ASCII bytes: slow path)
+
+        // Pre assert: overflow-bound, but width stays 1.
+        let idx0 = core.cell_index(0, 0).expect("col0 row0 in bounds");
+        assert!(core.ring_cells[idx0].is_overflow());
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        let abs = core.viewport_abs(0) as u32;
+        assert!(core.overflow.contains_key(&(0u32, abs)));
+
+        core.process_pty_data(b"\rZ"); // CR then 'Z': fast-path-eligible call
+
+        assert_eq!(core.get_cell_char(0, 0), "Z");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        assert!(!core.overflow.contains_key(&(0u32, abs)));
+        assert!(!core.overflow_ridx.contains_key(&abs));
+    }
+
+    // AC-3 (task0004, FR3/FR7): with the overflow table non-empty because
+    // of an UNRELATED cell (a different row), overwriting an ordinary
+    // (non-overflow) cell via the dispatch fast path leaves the unrelated
+    // entry and its reverse-index entry intact.
+    #[test]
+    fn process_pty_data_ascii_overwrites_ordinary_cell_leaves_unrelated_overflow_entry_intact() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.process_pty_data(b"\x1b[2;1H"); // CUP row2,col1 (1-indexed) -> row1,col0
+        core.process_pty_data(
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}".as_bytes(),
+        );
+        core.process_pty_data(b"\r"); // flush the buffered cluster
+        let unrelated_abs = core.viewport_abs(1) as u32;
+        assert!(core.overflow.contains_key(&(0u32, unrelated_abs)));
+
+        core.process_pty_data(b"\x1b[1;1H"); // CUP row1,col1 (1-indexed) -> row0,col0
+        core.process_pty_data(b"Z"); // fast-path-eligible call, non-overflow cell
+
+        assert_eq!(core.get_cell_char(0, 0), "Z");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        assert!(core.overflow.contains_key(&(0u32, unrelated_abs)));
+        assert!(
+            core.overflow_ridx
+                .get(&unrelated_abs)
+                .map(|cols| cols.contains(&0u32))
+                .unwrap_or(false)
+        );
+    }
+
+    // AC-3 (task0004, FR3/FR7): parity between the dispatch fast path and
+    // the print path's own ASCII writer for the AC-3 scenario above —
+    // identical grid contents, widths, and overflow-table state.
+    #[test]
+    fn process_pty_data_ascii_overwrite_with_unrelated_overflow_matches_print_path_write() {
+        let setup = |core: &mut TerminalCore| {
+            core.process_pty_data(b"\x1b[2;1H"); // CUP -> row1,col0
+            core.process_pty_data(
+                "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}".as_bytes(),
+            );
+            core.process_pty_data(b"\r"); // flush the buffered cluster
+            core.process_pty_data(b"\x1b[1;1H"); // CUP -> row0,col0
+        };
+
+        // Print path: the overwriting 'Z' is delivered through
+        // handle_print_ascii via a direct call.
+        let mut core_print_path = TerminalCore::new(10, 3, 0);
+        setup(&mut core_print_path);
+        core_print_path.handle_print(0x5A); // 'Z' via handle_print_ascii directly
+
+        // Fast path: the overwriting 'Z' arrives in its own dispatch call
+        // at a ground-clean chunk boundary, entering the inlined
+        // fast-path writer.
+        let mut core_fast_path = TerminalCore::new(10, 3, 0);
+        setup(&mut core_fast_path);
+        core_fast_path.process_pty_data(b"Z"); // fast-path-eligible call
+
+        // The unrelated entry survived the overwrite (not just "both
+        // writers agree" — both could agree while both being wrong).
+        let unrelated_abs = core_fast_path.viewport_abs(1) as u32;
+        assert!(core_fast_path.overflow.contains_key(&(0u32, unrelated_abs)));
+        assert!(
+            core_fast_path
+                .overflow_ridx
+                .get(&unrelated_abs)
+                .map(|cols| cols.contains(&0u32))
+                .unwrap_or(false)
+        );
+
+        for row in 0..3u16 {
+            for col in 0..10u16 {
+                assert_eq!(
+                    core_fast_path.get_cell_char(col, row),
+                    core_print_path.get_cell_char(col, row),
+                    "row {row} col {col}: char mismatch"
+                );
+                assert_eq!(
+                    core_fast_path.get_cell_width(col, row),
+                    core_print_path.get_cell_width(col, row),
+                    "row {row} col {col}: width mismatch"
+                );
+            }
+        }
+        assert_eq!(core_fast_path.overflow, core_print_path.overflow);
+        assert_eq!(core_fast_path.overflow_ridx, core_print_path.overflow_ridx);
     }
 }
