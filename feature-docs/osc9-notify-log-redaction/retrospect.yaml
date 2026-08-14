@@ -1,0 +1,92 @@
+feature: osc9-notify-log-redaction
+collected_at: "2026-08-14T22:12:00+09:00"
+session_ids: ["01a00031-ef54-7000-889b-132eefdbaec2"]
+signals:
+  review_critical_high:
+    - stable_id: 26b94531e86a8c01
+      category: spec
+      file: src-tauri/src/callbacks.rs
+      title: "Keyed diagnostic ID uses per-process-run key as required"
+      resolution: declined
+    - stable_id: 22ca7d3736299212
+      category: spec
+      file: src-tauri/src/callbacks.rs
+      title: "Redaction includes only allowed metadata fields"
+      resolution: declined
+    - stable_id: 2d57ce088eea9c5b
+      category: spec
+      file: src-tauri/src/callbacks.rs
+      title: "Rate-limit branch redacted at warn level"
+      resolution: declined
+    - stable_id: 8f6411f090f2171a
+      category: spec
+      file: src-tauri/src/callbacks.rs
+      title: "Dispatch-success branch redacted at debug level"
+      resolution: declined
+    - stable_id: 503d7f16841bf218
+      category: spec
+      file: src-tauri/src/callbacks.rs
+      title: "Shared redaction helper exists"
+      resolution: declined
+    - stable_id: 44ec4ef31051f8d7
+      category: spec
+      file: src-tauri/src/callbacks.rs
+      title: "Error branch unchanged"
+      resolution: declined
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings:
+    - stable_id: 26b94531e86a8c01
+      category: spec
+      resolution_reason: "欠陥の指摘ではない。準拠確認を findings 配列に流用したもの"
+    - stable_id: 22ca7d3736299212
+      category: spec
+      resolution_reason: "欠陥の指摘ではない。準拠確認を findings 配列に流用したもの"
+    - stable_id: 2d57ce088eea9c5b
+      category: spec
+      resolution_reason: "欠陥の指摘ではない。準拠確認を findings 配列に流用したもの"
+    - stable_id: 8f6411f090f2171a
+      category: spec
+      resolution_reason: "欠陥の指摘ではない。準拠確認を findings 配列に流用したもの"
+    - stable_id: 503d7f16841bf218
+      category: spec
+      resolution_reason: "欠陥の指摘ではない。準拠確認を findings 配列に流用したもの"
+    - stable_id: 44ec4ef31051f8d7
+      category: spec
+      resolution_reason: "欠陥の指摘ではない。準拠確認を findings 配列に流用したもの"
+    - stable_id: bdb26038d1d70661
+      category: performance
+      resolution_reason: "hot path という前提が誤り。claude:performance も同結論。キャッシュ案は本 feature の目的と衝突する"
+    - stable_id: 33fe2a60f0381c71
+      category: performance
+      resolution_reason: "2 分岐は排他で、同一通知が両方で描画されることはない"
+lessons_candidates:
+  - >-
+    litellm ハーネス経由の spec レビュアーが、欠陥ではなく「準拠確認」6 件を
+    severity: critical の finding として返した。R3 のサニタイズは category と
+    severity の機械照合しか行わないため素通りし、R5 の完了ゲート
+    (residual_critical_high == 0) を誤って塞ぎかけた。オーケストレーター側で
+    「description と suggestion の双方が準拠を述べている」と判断して declined に
+    したが、これは判断が要る処理であり自動化されていない。同じ観点で再発するなら
+    review-spec スキル側に「findings は欠陥のみ。準拠確認は summary に書く」を
+    明記するのが筋。
+  - >-
+    fresh worktree では gitignored のバンドルフォントが無く GUI ビルドが
+    build.rs で panic する。implementer にも verify にも毎回 scripts/fetch-fonts.sh の
+    前置が要る。notification-body-markup-escape でも同じことが起きており、2 回連続。
+    implement-phase の worktree 作成手順に組み込むか、build.rs 側で自動取得する
+    余地がある。
+  - >-
+    --lib の既定並列実行で app::tests::timing::frame_work_pending_* が
+    非決定的に落ちる。--test-threads=1 では 3248 全通過。tabs.rs replay と
+    tmux_sockets discover に続く 3 件目の並列フレークで、verify のたびに
+    「feature 起因か」を人手で切り分けている。
+  - >-
+    前回 run が create-spec の phase-state 初期化直後に中断しており、同じ Notion
+    タスクの再実行で feature 名なしの引数だったため develop Step A の規約では
+    「常に新規 feature」になるところだった。既存ブランチの phase-state が同一
+    タスクのものだと確認できたので再開したが、Notion URL 起点の batch では
+    「同じタスクの再発火」が構造的に起こりうる。タスク URL と feature 名の
+    対応を残す仕組みがあると迷わない。
