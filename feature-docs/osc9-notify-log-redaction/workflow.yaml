@@ -38,7 +38,8 @@ workflow:
     status: completed
     completed_at_commit: ff0e7da07a41a8a2989dde8f051e9dd9ccecb59f
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 83cc8c2152ce61fdb396f76b03b696f9ccfaeb38
     base_commit: 9be93ff1e9bc10379cecaae8dcd886b0c56ab944
   - id: review
     status: pending
@@ -58,7 +59,7 @@ tasks:
     domains: [input-handling, external-io, concurrency]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/osc9-notify-log-redaction/task0001
 
