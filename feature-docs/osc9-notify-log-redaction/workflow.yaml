@@ -64,12 +64,18 @@ tasks:
     branch: em-workflow/osc9-notify-log-redaction/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, architecture, spec]
     discretionary: []
     cross_validation: true
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    architecture: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
