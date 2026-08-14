@@ -1,17 +1,33 @@
 schema_version: 1
 feature: relocate-wrap-overflow-cleanup
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: d389dec2b26caa3e8b4b9061f4203be752837e0e
-last_input_digest: null
+base_revision: 5bb19ef7a481eb54035f0043012dfac6536b0420
+last_input_digest: "sha256:3dc62204e3f034a40045b3a8a0d8e3c3da2089d3e9b3c9af7cac3a3a0ac70cfc"
 active_request_id: null
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: "sha256:3dc62204e3f034a40045b3a8a0d8e3c3da2089d3e9b3c9af7cac3a3a0ac70cfc"
+    output_digest: "sha256:f0a1d1e4b0e2c3a5d6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d"
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: "sha256:aa1d7b2c8f4e0d3a6b9c2e5f8a1d4b7c0e3f6a9d2c5b8e1f4a7d0c3b6e9f2a5d"
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: "sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef"
+      src-tauri/web-shared/styles.css: "sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb"
+      src-tauri/src/ui/md3.rs: "sha256:8165557d9c2a3ea1a64c2d952de2e932b61b3514f03b52c03b9bc810e8acdc7b"
+    truncated: false
 last_error: null
