@@ -43,7 +43,8 @@ workflow:
     skipped_reason: "The change has no user-visible surface: no UI, no interaction flow, no new API. It is an internal invariant repair inside crates/term_core plus code comments and one unit test; grid rendering is provably unchanged (assumption A4). The immediately prior feature in the same subsystem (ascii-fast-path-wide-pair-cleanup) skipped the design step for the same reason."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: fd36cfa12ad06a16123c170a6928fcf730700714
   - id: implement
     status: pending
     base_commit: d389dec2b26caa3e8b4b9061f4203be752837e0e
@@ -56,7 +57,21 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Close the relocation overflow-deletion gap and document the invariant"
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/print_handler.rs
+      - crates/term_core/src/terminal_dispatch.rs
+      - crates/term_core/src/print_handler/tests.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR2, NFR3, NFR4, NFR5]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -72,91 +87,91 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2]
   FR2:
     title: "Relocated spacer write removes a stale overflow entry"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
   FR3:
     title: "Reverse index stays consistent with the table"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, EC3, EC4]
   FR4:
     title: "The invariant is documented at both ASCII writers' gate"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   FR5:
     title: "The ASCII gate stays marker-based"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   FR6:
     title: "Regression test for the non-scrolling line_feed case"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
   FR7:
     title: "No observable behavior change"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3]
   FR8:
     title: "Existing suites stay green"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   NFR1:
     title: "Performance budget preserved"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR2:
     title: "Scope"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR3:
     title: "Robustness"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [EC1, EC2, EC3]
   NFR4:
     title: "Test conventions"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR5:
     title: "Documentation locality"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
 
 batch:
