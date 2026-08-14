@@ -959,3 +959,121 @@ mod summary_markup_escape {
         assert_eq!(escaped_title, "&lt;&gt;&amp;");
     }
 }
+
+// ── task0001: notification log redaction (IMPLEMENTATION.md "Redaction
+// renderer" / "Diagnostic ID" contracts, "Redacted record format"). NOT
+// Unix-gated (D4) — both log sites this feeds (the rate-limit warn record
+// and the dispatch-success debug record) exist on every supported
+// platform, unlike the escape helpers above. ────────────────────────────
+
+mod notification_redaction {
+    use super::*;
+
+    // AC-1 (TS1): none of a URL, a fixture standing in for a token-like
+    // string, or a command line survives in the rendering. Whole-token
+    // assertions only (Test Notes): a length digit or a hex character of
+    // the diagnostic ID can coincidentally match a single input
+    // character, so per-character absence would be flaky for reasons
+    // unrelated to redaction.
+    #[test]
+    fn redaction_contains_no_sensitive_substrings() {
+        let title = "https://example.com/reset?auth=SENSITIVE-FIXTURE-VALUE";
+        let body = "run: rm -rf /var/data --force";
+        let out = redact_notification(title, body);
+        assert!(!out.contains("https://example.com/reset?auth=SENSITIVE-FIXTURE-VALUE"));
+        assert!(!out.contains("SENSITIVE-FIXTURE-VALUE"));
+        assert!(!out.contains("rm -rf /var/data --force"));
+    }
+
+    // AC-2 (TS2): fixed field order, `name=value` shape, UTF-8 byte
+    // counts (not char counts — "café" is 5 bytes / 4 chars, so this
+    // pair distinguishes the two units), and exactly 3 fields.
+    #[test]
+    fn redaction_carries_byte_lengths_and_id_in_fixed_order_and_shape() {
+        let title = "café";
+        let body = "ok";
+        assert_eq!(title.len(), 5);
+        assert_eq!(title.chars().count(), 4);
+        assert_eq!(body.len(), 2);
+
+        let out = redact_notification(title, body);
+        let fields: Vec<&str> = out.split(' ').collect();
+        assert_eq!(fields.len(), 3, "expected exactly 3 fields: {out}");
+        assert_eq!(fields[0], "title_len_bytes=5");
+        assert_eq!(fields[1], "body_len_bytes=2");
+        let id = fields[2]
+            .strip_prefix("diag_id=")
+            .unwrap_or_else(|| panic!("missing diag_id field: {out}"));
+        assert_eq!(id.len(), 16);
+        assert!(
+            id.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "diag_id not 16 lowercase hex chars: {id}"
+        );
+    }
+
+    // AC-2 (D5 totality): an empty (title, body) pair is not a failure
+    // branch — both lengths render as zero.
+    #[test]
+    fn redaction_handles_empty_title_and_body() {
+        let out = redact_notification("", "");
+        assert!(out.contains("title_len_bytes=0"), "{out}");
+        assert!(out.contains("body_len_bytes=0"), "{out}");
+    }
+
+    // AC-3 (TS3): 16 lowercase hex characters, fixed width.
+    #[test]
+    fn diagnostic_id_is_16_lowercase_hex_chars() {
+        let id = notification_diagnostic_id("t", "b");
+        assert_eq!(id.len(), 16);
+        assert!(
+            id.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
+    }
+
+    // AC-3 (TS3): equal for two renderings of the same pair within one
+    // process run.
+    #[test]
+    fn diagnostic_id_is_stable_for_the_same_pair_within_one_run() {
+        let a = notification_diagnostic_id("Build done", "all green");
+        let b = notification_diagnostic_id("Build done", "all green");
+        assert_eq!(a, b);
+    }
+
+    // AC-3 (TS3): differs for a pair that differs only in the body.
+    #[test]
+    fn diagnostic_id_differs_when_only_the_body_differs() {
+        let a = notification_diagnostic_id("Build done", "all green");
+        let b = notification_diagnostic_id("Build done", "one failure");
+        assert_ne!(a, b);
+    }
+
+    // TS7 (AC-4): the rate-limit marker constant's value is unchanged by
+    // this feature — operational log greps keyed on it keep working.
+    #[test]
+    fn rate_limit_marker_constant_value_is_unchanged() {
+        assert_eq!(LOG_NOTIFY_RATE_LIMIT, "LOG_NOTIFY_RATE_LIMIT");
+    }
+
+    // TS10 (AC-5, D2 premise): the escape gate's output differs from its
+    // raw input for a body containing markup meta-characters, so
+    // rendering before vs. after the gate would yield different
+    // diagnostic IDs for what is logically the same notification — this
+    // pins *why* the dispatch-success site must capture pre-escape (the
+    // capture point itself is a review check, per Test Notes, not proven
+    // by this test alone). Unix-gated: `escape_body_markup` (the escape
+    // gate under test here) is Unix-only, same as the module's other
+    // escape-gate tests.
+    #[cfg(unix)]
+    #[test]
+    fn raw_and_escape_gate_output_render_differently() {
+        let raw_body = "<b>bold</b> & co";
+        let escaped_body = escape_body_markup(raw_body);
+        assert_ne!(raw_body, escaped_body.as_str());
+        assert_ne!(
+            redact_notification("t", raw_body),
+            redact_notification("t", &escaped_body)
+        );
+    }
+}

@@ -1,0 +1,84 @@
+task_id: task0001
+baseline_failures:
+  - app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing
+final_failures:
+  - app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing
+acceptance_tests:
+  AC-1:
+    tests:
+      - callbacks::tests::notification_redaction::redaction_contains_no_sensitive_substrings
+    red_confirmed: true
+    red_reason: >-
+      error[E0425]: cannot find function `redact_notification` in this scope
+      (function did not exist yet).
+  AC-2:
+    tests:
+      - callbacks::tests::notification_redaction::redaction_carries_byte_lengths_and_id_in_fixed_order_and_shape
+      - callbacks::tests::notification_redaction::redaction_handles_empty_title_and_body
+    red_confirmed: true
+    red_reason: >-
+      error[E0425]: cannot find function `redact_notification` in this scope
+      (function did not exist yet).
+  AC-3:
+    tests:
+      - callbacks::tests::notification_redaction::diagnostic_id_is_16_lowercase_hex_chars
+      - callbacks::tests::notification_redaction::diagnostic_id_is_stable_for_the_same_pair_within_one_run
+      - callbacks::tests::notification_redaction::diagnostic_id_differs_when_only_the_body_differs
+    red_confirmed: true
+    red_reason: >-
+      error[E0425]: cannot find function `notification_diagnostic_id` in this
+      scope (function did not exist yet). Note (Test Notes, by design): that
+      the key is created exactly once per process run, and that it never
+      appears in a log record, are not covered by these tests (no
+      cross-thread harness, no logger-capture harness in this project) —
+      both are review/inspection items per IMPLEMENTATION.md D6.
+  AC-4:
+    tests:
+      - callbacks::tests::notification_redaction::rate_limit_marker_constant_value_is_unchanged
+    red_confirmed: false
+    red_reason: >-
+      This is a pinning assertion on LOG_NOTIFY_RATE_LIMIT's value, which
+      FR4 requires to stay unchanged — the behavior genuinely pre-existed
+      and this task never touched it, so the assertion could not be made
+      to fail first. The testable part of AC-4 that IS new behavior (the
+      warn record's content becomes the renderer's output instead of raw
+      title/body) is covered by AC-1/AC-2/AC-3's red-confirmed tests on
+      `redact_notification` itself, which the rate-limit branch now calls.
+      Whether the branch's log! call actually uses that renderer output
+      and binds neither raw `title` nor raw `body` is a diff/review item
+      per IMPLEMENTATION.md D6/Test Notes (TS11) — no test harness in this
+      project captures logger output.
+  AC-5:
+    tests:
+      - callbacks::tests::notification_redaction::raw_and_escape_gate_output_render_differently
+    red_confirmed: true
+    red_reason: >-
+      error[E0425]: cannot find function `redact_notification` in this scope
+      (function did not exist yet). This test pins the TS10 premise only
+      (raw vs. escaped renderings differ); that the dispatch-success site
+      actually captures pre-escape, and that the dispatch-error branch is
+      byte-identical, are review/diff-inspection items per
+      IMPLEMENTATION.md D6/Test Notes (TS11) — no logger-capture harness
+      exists in this project.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Regression-check criterion, not new behavior — no test was authored
+      for it. Verified by re-running the full existing suite unmodified:
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      src-tauri/Cargo.toml --lib` reports 3247 passed, 1 failed, 3 ignored;
+      the 1 failure (app::tests::timing::...) is present identically in
+      the pre-implementation baseline (3239 passed, 1 failed, 3 ignored),
+      so final_failures is a subset of baseline_failures. All rate-limiter,
+      OSC 9 parse and body-markup escape tests pass byte-identical to
+      before this task.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build-check criterion, not a unit test. Verified by running
+      `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+      src-tauri/Cargo.toml --no-default-features` (exit 0, no errors) and
+      by inspecting `src-tauri/Cargo.toml` / `Cargo.lock` diff (empty — no
+      dependency added or changed).
