@@ -1429,3 +1429,172 @@ fn test_handle_print_ascii_overwrite_ordinary_cell_leaves_unrelated_overflow_ent
             .unwrap_or(false)
     );
 }
+
+// ── relocate-wrap-overflow-cleanup (task0001): relocation overflow ──────
+// deletion gap
+//
+// `relocate_widened_base_via_wrap`'s two relocated writes (the base at the
+// new row's col 0, the spacer at col 1) previously never removed the
+// overflow-table entries their target keys held, even when the write left
+// the cell not overflow-bound. This is distinct from the wide-pair-overflow
+// tests above, which exercise `blank_wide_pair_half`'s own (already
+// correct) removal branch — none of those tests touch relocation at all.
+
+// AC-1/AC-2/AC-3 (TS1, FR1/FR2/FR3/FR6): a VS16 widening of a last-column
+// base cell relocates via wrap into an EXISTING row (no scroll) whose
+// columns 0 and 1 already hold overflow-bound content from an unrelated
+// prior write. Both relocated writes (the base at col 0, the spacer at
+// col 1) must remove the stale overflow-table entries they leave behind —
+// this is the defect TS1 pins: on unmodified code both entries survive the
+// relocation even though neither cell reports overflow-bound afterward.
+// Both pre-populated cells are kept width 1 (a base char plus a long
+// combining-mark run) so the wide-pair blanking helpers (R1/R2/R3), which
+// only fire for width-2/width-0 neighbors, cannot mask the defect.
+#[test]
+fn test_relocate_widened_base_via_wrap_removes_stale_overflow_entries_on_target_row() {
+    let mut core = TerminalCore::new(5, 3, 0); // last column index = 4
+
+    let marks: [u32; 8] = [
+        0x0301, 0x0302, 0x0303, 0x0304, 0x0305, 0x0306, 0x0307, 0x0308,
+    ];
+
+    // Pre-populate row 1's col 0 with width-1 overflow-bound content.
+    core.process_pty_data(b"\x1b[2;1H"); // CUP row2,col1 (1-indexed) -> (col0,row1)
+    core.handle_print(0x65); // 'e'
+    for &m in &marks {
+        core.handle_print(m);
+    }
+    // Pre-populate row 1's col 1 with width-1 overflow-bound content.
+    core.process_pty_data(b"\x1b[2;2H"); // CUP row2,col2 (1-indexed) -> (col1,row1)
+    core.handle_print(0x66); // 'f'
+    for &m in &marks {
+        core.handle_print(m);
+    }
+
+    // Pre assert (D2/D4): both target cells are overflow-bound; the table
+    // and reverse index carry both entries.
+    let abs1 = core.viewport_abs(1) as u32;
+    assert!(core.ring_cells[core.cell_index(0, 1).expect("col0 row1 in bounds")].is_overflow());
+    assert!(core.ring_cells[core.cell_index(1, 1).expect("col1 row1 in bounds")].is_overflow());
+    assert!(core.overflow.contains_key(&(0u32, abs1)));
+    assert!(core.overflow.contains_key(&(1u32, abs1)));
+    assert!(
+        core.overflow_ridx
+            .get(&abs1)
+            .map(|cols| cols.contains(&0u32) && cols.contains(&1u32))
+            .unwrap_or(false)
+    );
+
+    // Row 0: fill to the last column, then trigger a VS16 widen that
+    // relocates via wrap into row 1 (no scroll: row 1 already exists in
+    // this 3-row terminal).
+    core.process_pty_data(b"\x1b[1;1H"); // back to (0,0)
+    for c in b'A'..=b'D' {
+        core.handle_print(c as u32);
+    }
+    core.handle_print(0x35); // '5' at col4 (last column)
+    core.handle_print(0xFE0F); // VS16 -> relocate via wrap into row 1
+
+    // Relocated content landed correctly.
+    assert_eq!(core.get_cell_char(0, 1), "5\u{FE0F}");
+    assert_eq!(core.get_cell_width(0, 1), 2);
+    assert_eq!(core.get_cell_width(1, 1), 0); // spacer
+
+    // Neither relocated cell reports overflow-bound (content is short).
+    assert!(!core.ring_cells[core.cell_index(0, 1).expect("col0 row1 in bounds")].is_overflow());
+    assert!(!core.ring_cells[core.cell_index(1, 1).expect("col1 row1 in bounds")].is_overflow());
+
+    // AC-1/AC-2 (FR1/FR2/FR3): neither key has a table entry anymore.
+    assert!(!core.overflow.contains_key(&(0u32, abs1)));
+    assert!(!core.overflow.contains_key(&(1u32, abs1)));
+    // AC-1/AC-2: the reverse index agrees — row 1's last column removal
+    // drops the row key entirely (IMPLEMENTATION.md postcondition).
+    assert!(!core.overflow_ridx.contains_key(&abs1));
+}
+
+// AC-4 (TS2, FR1): relocated content that is itself still too long to fit
+// inline after the move keeps its overflow-table entry — the fix's new
+// removal branch (AC-1) must not fire when the relocated write leaves the
+// cell still overflow-bound. Guards the still-overflow branch, which is
+// pre-existing/unmodified behavior (not a defect this task pins).
+#[test]
+fn test_relocate_widened_base_via_wrap_keeps_entry_when_relocated_content_still_overflows() {
+    let mut core = TerminalCore::new(20, 3, 0); // last column index = 19
+
+    for _ in 0..19 {
+        core.handle_print(0x41); // 'A' x19, fills cols 0..18
+    }
+    assert_eq!(core.get_cursor_col(), 19);
+
+    core.handle_print(0x65); // 'e' at col19 (last column)
+    let marks: [u32; 8] = [
+        0x0301, 0x0302, 0x0303, 0x0304, 0x0305, 0x0306, 0x0307, 0x0308,
+    ];
+    for &m in &marks {
+        core.handle_print(m); // grows content past the 16-byte inline cap
+    }
+    core.handle_print(0xFE0F); // VS16 -> merge, widen, relocate via wrap
+
+    let mut expected = String::from("e");
+    for &m in &marks {
+        expected.push(char::from_u32(m).unwrap());
+    }
+    expected.push('\u{FE0F}');
+
+    assert_eq!(core.get_cell_width(0, 1), 2);
+    let idx = core.cell_index(0, 1).expect("col0 row1 in bounds");
+    assert!(core.ring_cells[idx].is_overflow());
+    let abs1 = core.viewport_abs(1) as u32;
+    assert_eq!(core.overflow.get(&(0u32, abs1)), Some(&expected));
+}
+
+// AC-6 (EC1, NFR3): the relocation's line feed can itself trigger a
+// viewport scroll (the widened base sits on the terminal's last row) — the
+// resolved new absolute row is a ring slot recycled from an evicted row.
+// The relocated writes must operate against that resolved row without
+// panicking or reading out of range, and the recycled row (freshly blanked
+// by the eviction path, itself out of scope for this task) must not carry
+// stale overflow entries afterward.
+#[test]
+fn test_relocate_widened_base_via_wrap_scrolls_without_panic_or_stale_entries() {
+    let mut core = TerminalCore::new(5, 2, 0); // last row index = 1, no scrollback
+
+    core.process_pty_data(b"\x1b[2;1H"); // CUP row2,col1 (1-indexed) -> (col0,row1), last row
+    for c in b'A'..=b'D' {
+        core.handle_print(c as u32);
+    }
+    core.handle_print(0x35); // '5' at col4 (last column of last row)
+    assert_eq!(core.get_cursor_row(), 1);
+    assert_eq!(core.get_cursor_col(), 4);
+
+    core.handle_print(0xFE0F); // VS16 -> relocate via wrap; line feed scrolls
+
+    // Reaching here without panicking is itself part of what this proves.
+    assert_eq!(core.get_cursor_row(), 1); // scroll keeps the cursor pinned to the last row
+    assert_eq!(core.get_cell_char(0, 1), "5\u{FE0F}");
+    assert_eq!(core.get_cell_width(0, 1), 2);
+    assert_eq!(core.get_cell_width(1, 1), 0);
+
+    let abs1 = core.viewport_abs(1) as u32;
+    assert!(!core.overflow.contains_key(&(0u32, abs1)));
+    assert!(!core.overflow.contains_key(&(1u32, abs1)));
+}
+
+// AC-6 (EC2, NFR3): a terminal narrow enough that column 1 does not exist
+// on the new row — the relocated spacer write (including its new overflow
+// removal) is skipped entirely via the existing `cell_index` bounds check.
+// Proves that skip stays panic-free with the new removal call added inside
+// it.
+#[test]
+fn test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist() {
+    let mut core = TerminalCore::new(1, 3, 0); // only column 0 exists
+
+    core.handle_print(0x35); // '5' at (0,0), the only column
+    assert_eq!(core.get_cursor_col(), 0);
+    assert!(core.get_wrap_pending());
+
+    core.handle_print(0xFE0F); // VS16 -> relocate via wrap; col1 write is skipped
+
+    assert_eq!(core.get_cell_char(0, 1), "5\u{FE0F}");
+    assert_eq!(core.get_cursor_row(), 1);
+}

@@ -1,0 +1,85 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [print_handler::tests::test_relocate_widened_base_via_wrap_removes_stale_overflow_entries_on_target_row]
+    red_confirmed: true
+    red_reason: >-
+      On unmodified code: "assertion failed:
+      !core.overflow.contains_key(&(0u32, abs1))" — the relocated base
+      write's stale col0 overflow entry survived the relocation even
+      though the cell no longer reports overflow-bound.
+  AC-2:
+    tests: [print_handler::tests::test_relocate_widened_base_via_wrap_removes_stale_overflow_entries_on_target_row]
+    red_confirmed: true
+    red_reason: >-
+      Independently confirmed by temporarily reverting only the spacer
+      removal (AC-1's fix kept in place): "assertion failed:
+      !core.overflow.contains_key(&(1u32, abs1))" — the relocated spacer
+      write's stale col1 overflow entry survived the relocation. (In the
+      combined run against fully unmodified code this AC's failure is
+      masked by AC-1's earlier assertion in the same test; verified
+      separately per the note above.)
+  AC-3:
+    tests: [print_handler::tests::test_relocate_widened_base_via_wrap_removes_stale_overflow_entries_on_target_row]
+    red_confirmed: true
+    red_reason: >-
+      Same test as AC-1/AC-2 — the real trigger (VS16 widening a
+      last-column base with auto-wrap on, landing on an existing row
+      without scrolling, both target columns pre-populated with
+      width-1 overflow-bound content) fails on unmodified code as above.
+  AC-4:
+    tests: [print_handler::tests::test_relocate_widened_base_via_wrap_keeps_entry_when_relocated_content_still_overflows]
+    red_confirmed: false
+    red_reason: >-
+      This guards the pre-existing/unmodified "still overflow-bound
+      after relocation" insert branch (unchanged by this task's fix), so
+      it passes identically before and after the fix. It is not a
+      defect pin; its purpose is to prove the new `else` removal branch
+      added for AC-1 does not fire when the cell is still overflow-bound
+      (see the task plan's Risk table).
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Comment-only change (invariant + deletion-obligation text added to
+      both ASCII writers' marker-gated cleanup blocks in
+      print_handler.rs and terminal_dispatch.rs); no behavior change, no
+      test projection. Verified by review per VERIFICATION.md's manual
+      section, as the task plan's Test Notes specify. The behavior half
+      of AC-5 (both gates stay marker-based, both pre-write marker reads
+      stay before the clearing write) is additionally covered by
+      pre-existing, unmodified tests
+      (test_handle_print_ascii_overwrite_width1_overflow_cell_removes_overflow_entry
+      in print_handler/tests.rs and
+      process_pty_data_ascii_overwrites_width1_overflow_cell_removes_overflow_entry
+      in terminal_dispatch.rs), which the task plan's Test Notes (TS4)
+      say to add only if not already covered — they already were.
+  AC-6:
+    tests:
+      - print_handler::tests::test_relocate_widened_base_via_wrap_scrolls_without_panic_or_stale_entries
+      - print_handler::tests::test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist
+    red_confirmed: false
+    red_reason: >-
+      Robustness/no-regression checks (NFR3), not defect pins: the
+      scroll case's recycled ring row is already blanked by the existing
+      (out-of-scope, unmodified) eviction path before this task's writes
+      touch it, and the column-1-absent case is already skipped by the
+      existing `cell_index` bounds check that wraps the new removal
+      call. Both pass unmodified; their purpose is to prove the fix adds
+      no panic / out-of-range access. The two remaining Design-section-4
+      conditions (EC3 absent-entry, EC4 reverse-index row-key drop) are
+      exercised incidentally by TS1/TS2 per the task plan's Test Notes,
+      with no dedicated test added.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Regression/scope-compliance criterion, verified by running the
+      existing (unmodified) relocation tests plus the full suites/checks
+      listed in VERIFICATION.md, not by a new test. See the implementer
+      report for the full command list and results, including the
+      pre-existing (unrelated to this diff) format-check drift and the
+      src-tauri GUI lib suite's environment blocker (missing bundled
+      font asset, unrelated to any file in this task's scope).

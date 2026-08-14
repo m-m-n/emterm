@@ -152,6 +152,18 @@ impl TerminalCore {
                                 // table is non-empty anywhere in the ring":
                                 // the common ASCII case does no table
                                 // access and no absolute-row computation.
+                                //
+                                // Invariant this gate depends on (FR4/FR5,
+                                // task0001): an overflow-table entry exists
+                                // at a (column, absolute row) key only while
+                                // the cell at that key reports
+                                // overflow-bound (its marker set).
+                                // Obligation: because this gate no longer
+                                // sweeps the whole ring for stale entries,
+                                // every write anywhere in the print
+                                // subsystem that clears a cell's overflow
+                                // marker owns removing that cell's own
+                                // table entry itself.
                                 if was_overflow {
                                     let abs = self.viewport_abs(self.cursor.row) as u32;
                                     let col32 = col as u32;
