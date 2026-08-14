@@ -20,7 +20,9 @@
 //! `clipboard_max_size_osc52`.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hash, Hasher};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
@@ -92,6 +94,58 @@ pub const LOG_OSC52_DENIED: &str = "LOG_OSC52_DENIED";
 /// Emitted when an OSC 9 notification is suppressed by the rate limiter.
 pub const LOG_NOTIFY_RATE_LIMIT: &str = "LOG_NOTIFY_RATE_LIMIT";
 
+// ── task0001: notification log redaction ──────────────────────────────
+//
+// (osc9-notify-log-redaction IMPLEMENTATION.md "Redaction renderer" /
+// "Diagnostic ID" contracts, "Redacted record format"). Module-private:
+// the only callers are the two notification log sites in this module
+// (`handle_notify`'s rate-limit branch and `NotifyRustSink::send`'s
+// dispatch-success branch) — never exported from the crate (D4/D5). Not
+// Unix-gated (D4): unlike the escape helpers below, the dispatch-success
+// site exists on every supported platform.
+
+/// Process-global keyed hash state backing [`notification_diagnostic_id`]
+/// (D3): a single randomly-seeded `RandomState`, created lazily on first
+/// use and then shared immutably by every thread for the rest of the
+/// process run. Never per-call, never per-thread, and never logged —
+/// nothing in this module reads or exposes the key itself.
+fn notify_diagnostic_key() -> &'static RandomState {
+    static KEY: OnceLock<RandomState> = OnceLock::new();
+    KEY.get_or_init(RandomState::new)
+}
+
+/// Derive the diagnostic ID for a `(title, body)` pair (the "Diagnostic
+/// ID" contract): 16 lowercase hexadecimal characters, fixed width.
+/// Equal pairs hash equal within one process run regardless of the
+/// calling thread (backed by the shared per-run key above); different
+/// pairs differ with negligible collision probability. `str`'s `Hash`
+/// impl appends a length-implying terminator byte after each field, so
+/// hashing `title` then `body` in sequence cannot collide with a
+/// differently-split concatenation of the same bytes.
+fn notification_diagnostic_id(title: &str, body: &str) -> String {
+    let mut hasher = notify_diagnostic_key().build_hasher();
+    title.hash(&mut hasher);
+    body.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// The redaction renderer (the "Redaction renderer" contract): render the
+/// three allow-listed metadata fields for a `(title, body)` pair as
+/// defined by "Redacted record format" — title length, body length (both
+/// UTF-8 byte counts, D1) and the diagnostic ID, in that fixed order, as
+/// space-separated `name=value` pairs whose names carry their unit. Pure,
+/// total (every input pair, including empty strings, yields a rendering —
+/// no failure branch) and performs no I/O; contains no character
+/// sequence copied from either input (D5: no fourth field, ever).
+fn redact_notification(title: &str, body: &str) -> String {
+    format!(
+        "title_len_bytes={} body_len_bytes={} diag_id={}",
+        title.len(),
+        body.len(),
+        notification_diagnostic_id(title, body)
+    )
+}
+
 // ── Public types ────────────────────────────────────────────────────────
 
 /// Emterm OSC viewer-spawn request decoded from an OSC 777 payload. Phase 6
@@ -146,6 +200,19 @@ pub struct NotifyRustSink;
 
 impl NotificationSink for NotifyRustSink {
     fn send(&self, title: &str, body: &str) {
+        // osc9-notify-log-redaction task0001 (IMPLEMENTATION.md D2): this
+        // sink is the sole egress point for every notification producer
+        // (OSC 9, tab activity, agent status, link-hover), so it is also
+        // the single place both log records below can be redacted from.
+        // Render the redacted metadata from the values as RECEIVED on
+        // entry, before the `#[cfg(unix)]` escape gate below shadows
+        // `title`/`body` with their escaped forms — otherwise this
+        // dispatch-success record and a later rate-limit suppression
+        // record for a repeat of the same notification would carry two
+        // unrelated diagnostic IDs, breaking the within-run correlation
+        // FR3 exists for.
+        let redacted = redact_notification(title, body);
+
         // task0001 (IMPLEMENTATION.md D1 案(b)): this is the sole D-Bus
         // egress point for every notification producer (OSC 9, tab
         // activity, agent status, link-hover) — escape here, once, gated
@@ -172,7 +239,13 @@ impl NotificationSink for NotifyRustSink {
             .body(body)
             .show()
         {
-            Ok(_) => log::debug!("notify-rust dispatched: {title}"),
+            // osc9-notify-log-redaction task0001 (FR5): the literal
+            // prefix and colon-space separator are unchanged; only the
+            // interpolated content changes, from raw title text to the
+            // allow-listed redacted rendering.
+            Ok(_) => log::debug!("notify-rust dispatched: {redacted}"),
+            // task0001 (FR7): the dispatch-error record is unchanged —
+            // the notify-rust error value carries no notification text.
             Err(e) => log::warn!("notify-rust failed: {e}"),
         }
     }
@@ -493,7 +566,14 @@ impl NativeCallbacks {
                 .push((title.clone(), body.clone()));
             self.sink.send(&title, &body);
         } else {
-            log::warn!("{LOG_NOTIFY_RATE_LIMIT}: '{title}' / '{body}'");
+            // osc9-notify-log-redaction task0001 (FR1/FR4): the marker
+            // constant and its colon-space separator are unchanged; only
+            // the interpolated content changes, from raw title/body text
+            // to the allow-listed redacted rendering.
+            log::warn!(
+                "{LOG_NOTIFY_RATE_LIMIT}: {}",
+                redact_notification(&title, &body)
+            );
         }
     }
 
