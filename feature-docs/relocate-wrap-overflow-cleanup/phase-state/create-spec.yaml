@@ -1,7 +1,7 @@
 schema_version: 1
 feature: relocate-wrap-overflow-cleanup
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 5bb19ef7a481eb54035f0043012dfac6536b0420
 last_input_digest: "sha256:3dc62204e3f034a40045b3a8a0d8e3c3da2089d3e9b3c9af7cac3a3a0ac70cfc"
@@ -9,11 +9,21 @@ active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:c1b7e0a94f2d6835ae0417cf5d29b8e63a0f47c2d95ea1b83f60c47da2e91b05"
+    output_digest: "sha256:02c4472d4ed6fb3b97713c5aaa5cfe73244facacf3dfab34369aaa74175e6415"
   - request_id: create-spec-run-0001
     status: completed
     input_digest: "sha256:3dc62204e3f034a40045b3a8a0d8e3c3da2089d3e9b3c9af7cac3a3a0ac70cfc"
     output_digest: "sha256:f0a1d1e4b0e2c3a5d6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d"
-artifacts: []
+artifacts:
+  - path: feature-docs/relocate-wrap-overflow-cleanup/REQUIREMENTS.md
+    sha256: "sha256:02c4472d4ed6fb3b97713c5aaa5cfe73244facacf3dfab34369aaa74175e6415"
+    produced_by: create-spec-run-0002
+  - path: feature-docs/relocate-wrap-overflow-cleanup/SPEC.md
+    sha256: "sha256:3b0e53f5056023af9578250a99bd2c740392601edd2d03cf3334e5597bef6764"
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
