@@ -1,0 +1,70 @@
+schema_version: 1
+feature: osc9-notify-log-redaction
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 33538db7d2faa59158bbf7b74973570516146f27
+last_input_digest: "sha256:b4a5b5c2b888b73d8434f8f75da82758f8ccc0d1903be5964889a47d6750bbd5"
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-08-14T21:22:00+09:00"
+    questions:
+      - question_id: notify-log.success-path-debug-line
+        status: answered
+answers:
+  notify-log.success-path-debug-line:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-14T21:25:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [redact-both]
+    freeform: null
+    normalized_answer: >-
+      Redact the success-path debug line at src-tauri/src/callbacks.rs:175
+      under the same policy as the rate-limit line: replace the interpolated
+      title with non-sensitive metadata (length + keyed diagnostic ID).
+    resolution_note: >-
+      batch mode, gate create-spec.requirement-clarification -> action
+      codex_consultation. Codex (1 turn) selected redact-both; the
+      orchestrator judged the suggestion to map onto that existing
+      option_id. Recorded as an assumption per batch-policies.yaml
+      record_as_assumption: true.
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: "sha256:8d3434ac86aab067081a365fc883783290b6803720aea4e256e938954a3a5ed6"
+    output_digest: "sha256:0f0d5b1a2f6f4c8e9b7a3d2c1e5f8a4b6c9d0e1f2a3b4c5d6e7f8091a2b3c4d5"
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:1cb69171b0437c84012a2a634a82b9448b8e1a90cd5b9e9b39725a3a015d9dc0"
+    output_digest: "sha256:5b7c9e0d1f2a3b4c5d6e7f8091a2b3c4d5e6f70819a2b3c4d5e6f708192a3b4c"
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: "sha256:b4a5b5c2b888b73d8434f8f75da82758f8ccc0d1903be5964889a47d6750bbd5"
+    output_digest: "sha256:6c8d0f1e2a3b4c5d6e7f8091a2b3c4d5e6f70819a2b3c4d5e6f708192a3b4c5d"
+artifacts:
+  - path: feature-docs/osc9-notify-log-redaction/REQUIREMENTS.md
+    sha256: "sha256:0c61f1d4217e62d95380e0f41500d627566aea4540559bd086c6a3bf889bb309"
+    produced_by: create-spec-run-0003
+  - path: feature-docs/osc9-notify-log-redaction/SPEC.md
+    sha256: "sha256:91047a5f800f38c44052f5d46600a9cdf8f778e23be8c773c0cd2c9a907ad6c2"
+    produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: "sha256:e3b1a7d4c9f2058b6e4d1c8a0f7b3e5d2c9a6f81b4e7d0c3a6f9b2e5d8c1a4f7"
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: "sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef"
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/styles.css
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: "sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef"
+      src-tauri/web-shared/components/md3-select.css: "sha256:b09cdb7c03aecfd24ac44581995a8f75188c4929c744af5e065f5a2a947ae9cd"
+      src-tauri/web-shared/styles.css: "sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb"
+    truncated: false
+last_error: null
