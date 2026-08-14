@@ -1,0 +1,195 @@
+round: 1
+executed_at: "2026-08-14T22:10:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 9be93ff1e9bc10379cecaae8dcd886b0c56ab944
+  head_commit: cfdc20d2b403c3186b3446e9f59011cc6285d4e9
+  changed_files:
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - test-docs/osc9-notify-log-redaction/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: litellm, model: vertex-glm-5, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: b50fa1dc89231b4d
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/callbacks.rs
+    line: 563
+    title: "`pending_notifications` に raw title/body が無限に積まれ続ける（drain が存在せず、本機能がログから消した文字列をメモリに永続保持する）"
+    description: >-
+      `handle_notify` の emit 側分岐が OSC 9 通知ごとに
+      `state.pending_notifications.push((title.clone(), body.clone()))` を実行するが、
+      production コードに drain が一つも存在しない（出現は宣言・この push・テスト 2 箇所のみ）。
+      実配送は同関数の `sink.send` でインライン完結しているため、このバッファは二重経路の残骸。
+      結果として (1) 互いに異なる (title, body) はレートリミットを通過するため、PTY 出力から
+      OSC 9 を連続送出するとプロセス生存期間中ヒープが単調増加する、(2) 本 feature が
+      emterm.log から消した生文字列とまったく同じものがプロセスメモリに無期限保持され、
+      コアダンプ・メモリスキャン経由で同じ情報が残る。加えて callbacks.rs:388-390 の doc
+      コメントは「drained by `Tab::pump`」と書いているが、その drain は存在せず、実装と乖離している。
+    suggestion: >-
+      (a) push とフィールドと doc コメントを削除する（実配送は既に sink.send で完結。ただし
+      callbacks/tests.rs:135/:316 がこのフィールドを観測フックに使っているので書き換えが要る）、
+      (b) doc コメントどおり `Tab::pump` 側で `std::mem::take` して drain し、インラインの
+      sink.send を外す、(c) 最小対処として doc コメントを実態に直し Vec に上限を設ける。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: >-
+      本 feature のスコープ外。SPEC NFR1 が `pending_notifications` buffering を明示的に
+      不変対象として宣言しており、この push は本 diff の変更行でもない（レビュアー自身も
+      「scope 外と判断するなら decline で問題ない」と付記）。実在する欠陥のため別タスクとして
+      Notion に起票する。
+  - stable_id: da4502d3994cbf0d
+    severity: medium
+    category: architecture
+    file: src-tauri/src/callbacks.rs
+    line: 214
+    title: "通知テキストの「ログに出さない」不変条件が型ではなくコメントと文の順序だけで保たれている"
+    description: >-
+      `let redacted = redact_notification(title, body);` が `#[cfg(unix)]` のエスケープ
+      ゲート（`let title = title_owned.as_str();` によるシャドーイング）より前にあることが
+      FR3 の diag_id 相関の前提になっているが、これを強制するのはコメントだけで、型にも
+      テストにも現れない。将来エスケープをヘルパへ移す等の並べ替えで、rate-limit 記録と
+      dispatch-success 記録の diag_id が黙って食い違いうる。
+    suggestion: >-
+      (a) エスケープ結果をシャドーイングせず `title_escaped` / `body_escaped` など別名で
+      束縛し、順序依存を消す。(b) 通知本文を newtype で包み `Display`/`Debug` を実装しない
+      ことで型として漏洩を不可能にする（本タスクのスコープ超）。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: >-
+      medium のため auto-fix 候補ゲート（critical/high のみ）に乗らない。指摘は妥当で、
+      (a) は安価な堅牢化。別タスクとして Notion に起票する。
+  - stable_id: bdb26038d1d70661
+    severity: medium
+    category: performance
+    file: src-tauri/src/callbacks.rs
+    line: 132
+    title: "Per-notification allocation overhead in hot path"
+    description: >-
+      notification_diagnostic_id が呼び出しごとに hasher と format 文字列を確保している、
+      という指摘。
+    suggestion: "hasher の thread-local 化、または (title, body) ペアの diag ID キャッシュ"
+    sources: [litellm:vertex-deepseek-v3.2:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      前提が誤り。この経路は hot path ではなく、人間操作レートの通知経路（レートリミットの
+      抑止分岐と D-Bus dispatch 成功分岐）に限られる。直後の blocking な D-Bus `.show()` の
+      コストに比べ無視できる差で、claude:performance も同じ結論。キャッシュ導入は (title, body)
+      を保持することになり本 feature の目的（生テキストを持たない）と衝突する。
+  - stable_id: 33fe2a60f0381c71
+    severity: medium
+    category: performance
+    file: src-tauri/src/callbacks.rs
+    line: 221
+    title: "Redundant rendering for notification pairs"
+    description: >-
+      redact_notification が通知ごとに複数回の format! を呼び、dispatch-success 分岐と
+      rate-limit 分岐で同じ通知に対する描画が重複しうる、という指摘。
+    suggestion: "通知ごとに 1 回だけ redacted を計算して両分岐で再利用する"
+    sources: [litellm:vertex-deepseek-v3.2:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      2 分岐は排他。レートリミットで抑止された通知は sink.send に到達しないため、同一通知が
+      両方で描画されることはない。上と同じく人間操作レートの経路で、実測可能な影響が無い。
+  - stable_id: 26b94531e86a8c01
+    severity: critical
+    category: spec
+    file: src-tauri/src/callbacks.rs
+    line: 111
+    title: "Keyed diagnostic ID uses per-process-run key as required"
+    description: "FR3 準拠の確認（RandomState::new() が OS 乱数でシードされ per-process-run 要件を満たす）"
+    suggestion: "This is compliant; no change needed."
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >-
+      欠陥の指摘ではない。description と suggestion の双方が「準拠しており変更不要」と述べており、
+      レビュアーが findings 配列を検証確認の記録に流用したもの。severity: critical は
+      レビュアーの自己申告で、実体を伴わない。
+  - stable_id: 22ca7d3736299212
+    severity: critical
+    category: spec
+    file: src-tauri/src/callbacks.rs
+    line: 130
+    title: "Redaction includes only allowed metadata fields"
+    description: "FR2 準拠の確認（出力は title_len_bytes / body_len_bytes / diag_id の 3 項目のみ）"
+    suggestion: "This is compliant; no change needed."
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: "欠陥の指摘ではない。準拠確認を findings として返したもの（上と同じ扱い）"
+  - stable_id: 2d57ce088eea9c5b
+    severity: critical
+    category: spec
+    file: src-tauri/src/callbacks.rs
+    line: 566
+    title: "Rate-limit branch redacted at warn level"
+    description: "FR1 / FR4 準拠の確認"
+    suggestion: "This is compliant; no change needed."
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: "欠陥の指摘ではない。準拠確認を findings として返したもの"
+  - stable_id: 8f6411f090f2171a
+    severity: critical
+    category: spec
+    file: src-tauri/src/callbacks.rs
+    line: 200
+    title: "Dispatch-success branch redacted at debug level"
+    description: "FR5 準拠の確認"
+    suggestion: "This is compliant; no change needed."
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: "欠陥の指摘ではない。準拠確認を findings として返したもの"
+  - stable_id: 503d7f16841bf218
+    severity: critical
+    category: spec
+    file: src-tauri/src/callbacks.rs
+    line: 130
+    title: "Shared redaction helper exists"
+    description: "FR6 準拠の確認"
+    suggestion: "This is compliant; no change needed."
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: "欠陥の指摘ではない。準拠確認を findings として返したもの"
+  - stable_id: 44ec4ef31051f8d7
+    severity: critical
+    category: spec
+    file: src-tauri/src/callbacks.rs
+    line: 176
+    title: "Error branch unchanged"
+    description: "FR7 準拠の確認"
+    suggestion: "This is compliant; no change needed."
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 50
+    resolution: declined
+    resolution_reason: "欠陥の指摘ではない。準拠確認を findings として返したもの"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: >-
+    R4 の候補ゲート（severity ∈ {critical, high} かつ category != spec）に該当する finding が
+    ゼロだったためループを回していない。critical 相当は spec 観点の準拠確認 6 件のみで、
+    いずれも category: spec としてゲート対象外、かつ欠陥ではないため declined。
+residual_critical_high: 0
+rework_required: false
