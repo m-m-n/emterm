@@ -1,0 +1,55 @@
+feature: relocate-wrap-overflow-cleanup
+collected_at: "2026-08-15T00:35:00+09:00"
+session_ids: ["01a000a3-0102-7000-9d2d-4a792a24022e"]
+signals:
+  review_critical_high:
+    - stable_id: c26836ed4ec13f66
+      category: spec
+      file: crates/term_core/src/print_handler.rs
+      title: "FR1 removal shape mismatch with spec reference"
+      resolution: declined
+    - stable_id: 38ee25ecf0a7ffc9
+      category: spec
+      file: crates/term_core/src/print_handler.rs
+      title: "FR2 removal should be unconditional, diff makes it conditional"
+      resolution: declined
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: "NFR1 が ASCII 高速パスの per-byte コスト維持を明示的な要件にしており、diff が print/dispatch のホットパスと overflow テーブル操作に触れるため"
+  declined_findings:
+    - stable_id: c26836ed4ec13f66
+      category: spec
+      resolution_reason: "事実誤認。参照先 write_grapheme_to_grid (print_handler.rs:166) も同じ `!overflow.is_empty()` ガード形。新規 493 行は既存削除サイト 166/198/357/416/456 と完全に同型で、`!is_empty() && remove(..).is_some()` は `remove(..).is_some()` と意味的に等価"
+    - stable_id: 38ee25ecf0a7ffc9
+      category: spec
+      resolution_reason: "観測挙動として無条件。FR2 の「無条件」はセルの書き込み後状態で分岐しないことを指しており、テーブル空判定の短絡はこれに抵触しない"
+    - stable_id: 9630ecbb6dd77b00
+      category: performance
+      resolution_reason: "relocate は VS16 × 最終列 × auto-wrap でのみ通る低頻度パスで per-byte ホットパスではない。is_empty ガードはハッシュ計算を省く既存の局所慣習"
+    - stable_id: cd22f85943cf32b3
+      category: performance
+      resolution_reason: "9630ecbb6dd77b00 と同一理由"
+lessons_candidates:
+  - note: >-
+      litellm:vertex-deepseek-v3.2 の spec 観点が「参照先コードの実際の形」を確認せずに
+      SPEC の文言だけから shape mismatch を high 2 件で報告した。同一サイトを claude:spec は
+      「既存の widen_after_merge と同形」と正しく判定している。cross-model の
+      不一致がそのまま residual critical/high になるとゲートが誤って発火するため、
+      spec 観点の cross-model finding は参照先行番号の実体確認を経てから
+      severity を確定する運用が要るかもしれない。
+  - note: >-
+      新規 worktree では gitignored なフォント資産と viewer/settings の dist が無く、
+      GUI 側 src-tauri --lib がビルドできない。implementer は「環境の欠落」として
+      諦めたが、承認済みコマンドに provisioning 込みの複合コマンド
+      (`bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && ...`) が
+      既にある。implementer への project_commands に GUI テスト用の provisioning 込み
+      文字列を渡せば、タスク段階で検出できた。
+  - note: >-
+      comprehensive 観点が「新規テストが実は新規コードを実行していない」
+      (EC1 のスクロールテストで overflow テーブルが最後まで空) を検出した。
+      implementer 自身も tests.yaml に red_confirmed: false と記録していたので、
+      unconfirmed_reds が付いた受け入れ条件は計画側で「テストで固定できない」と
+      宣言済みのものに限る、という検査が有効かもしれない。
