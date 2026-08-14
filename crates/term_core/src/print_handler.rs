@@ -247,6 +247,16 @@ impl TerminalCore {
             // FR2: cleanup gated on the overwritten cell's OWN pre-write
             // marker (task0004), not on "the table is non-empty anywhere in
             // the ring" — the common ASCII case does no table access.
+            //
+            // Invariant this gate depends on (FR4/FR5, task0001): an
+            // overflow-table entry exists at a (column, absolute row) key
+            // only while the cell at that key reports overflow-bound (its
+            // marker set). Obligation: because this gate no longer sweeps
+            // the whole ring for stale entries, every write anywhere in the
+            // print subsystem that clears a cell's overflow marker owns
+            // removing that cell's own table entry itself (see
+            // relocate_widened_base_via_wrap for a write path that once
+            // missed this).
             if was_overflow {
                 let abs = self.viewport_abs(row) as u32;
                 let col32 = col as u32;
@@ -468,9 +478,20 @@ impl TerminalCore {
         if let Some(idx) = self.cell_index(0, new_row) {
             let cell = &mut self.ring_cells[idx];
             cell.set_char(&content);
+            // AC-1/FR1/FR3 (task0001): keep the overflow table in sync with
+            // this write's own outcome — insert when the relocated content
+            // is still too long to fit inline (unchanged existing branch),
+            // otherwise remove any entry this key held. Without the `else`
+            // branch a key could still hold a stale entry belonging to
+            // whatever content previously occupied this row even though
+            // this cell no longer reports overflow-bound, breaking the
+            // invariant the ASCII writers' marker gate depends on (see
+            // handle_print_ascii).
             if cell.is_overflow() {
                 self.overflow.insert((0, new_abs), content.clone());
                 overflow_ridx_insert(&mut self.overflow_ridx, new_abs, 0);
+            } else if !self.overflow.is_empty() && self.overflow.remove(&(0, new_abs)).is_some() {
+                overflow_ridx_remove(&mut self.overflow_ridx, new_abs, 0);
             }
             cell.width = 2;
             cell.fg = fg;
@@ -490,6 +511,13 @@ impl TerminalCore {
             sp.bg = bg;
             sp.flags = flags;
             sp.hyperlink_id = hyperlink_id;
+            // AC-2/FR2/FR3 (task0001): the spacer write always clears the
+            // overflow marker, unconditionally — remove any table entry
+            // this key held (no branch on the cell's post-write state,
+            // since a spacer is never overflow-bound).
+            if !self.overflow.is_empty() && self.overflow.remove(&(1, new_abs)).is_some() {
+                overflow_ridx_remove(&mut self.overflow_ridx, new_abs, 1);
+            }
         }
         self.mark_row_dirty(new_row);
 
