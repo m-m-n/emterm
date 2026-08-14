@@ -44,7 +44,33 @@ workflow:
   - id: review
     status: pending
   - id: verify
-    status: in_progress
+    status: completed
+    completed_at_commit: dcbea5bd98e432ba424c7a03182af6f25f8aa768
+    result: pass
+    failed_items: []
+    notes: |
+      build(main) / build(cli, --no-default-features) 双方 exit 0。
+      --lib は既定の並列実行で 3247 passed / 1 failed、単独実行と --test-threads=1 では
+      3248 passed / 0 failed / 3 ignored。落ちた 1 件は
+      app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing で、
+      本 feature が触れない app モジュールの並列実行フレーク（implementer も baseline_failures に
+      記録済み）。単独 / 単一スレッドで安定して通るため feature 起因の回帰ではないと判定した。
+      TS1-TS5 / TS7 / TS10 / TS12 は --lib スイート内で充足（新規 8 本
+      callbacks::tests::notification_redaction::* が存在し、既存の rate_limiter_* /
+      parse_osc9_* / body_markup_escape も無改変で通過）。TS8 は CLI-only check、
+      TS9 はスイート全体で充足。
+      TS11 / TS13 / TS14 は差分検査で確認: dispatch-error 分岐は無変更、両ログサイトとも
+      redact_notification の戻り値のみを補間し raw title/body を束縛しない、per-run 鍵は
+      どこにもログ出力されない、マニフェスト変更ゼロ、描画は 1 通知イベントにつき最大 1 回
+      （2 分岐は排他）。
+      TS6 は release ビルドでの実機ログ確認のため無人 batch では実行不能。未実施として残す。
+      format check は agent_status_exit_latch.rs / arg_dispatch.rs / mux/inherited_pty.rs /
+      mux/session/session.rs / tests/cli_subcommands.rs / tests/mux_hot_upgrade.rs、および
+      callbacks/tests.rs:838 にドリフトを報告する。callbacks/tests.rs:838 は PR #39 由来の
+      body_markup_escape モジュール内で、本 feature の差分ハンク（959 行目以降）の外。
+      本 feature が追加した行に rustfmt ドリフトは無いため fail としない。
+      なお fresh worktree では gitignored のバンドルフォントが無くビルドが落ちるため、
+      検証前に scripts/fetch-fonts.sh の実行が必要だった（git 追跡差分は発生しない）。
   - id: retrospect
     status: pending
 
