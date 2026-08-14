@@ -35,7 +35,8 @@ workflow:
     skipped_reason: "ユーザーに見える表面の変更が無く、src-tauri/src/callbacks.rs のログ 2 行の文字列を差し替えるだけのため。UI も WebView もユーザー向けテキストもデザイントークンの関与も無い"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: ff0e7da07a41a8a2989dde8f051e9dd9ccecb59f
   - id: implement
     status: pending
   - id: review
@@ -45,7 +46,19 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Redact OSC 9 notification text from both log sites"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/callbacks.rs
+      - src-tauri/src/callbacks/tests.rs
+    skills: [backend-impl]
+    domains: [input-handling, external-io, concurrency]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6]
+    status: pending
+    notes: null
 
 review:
   status: pending
@@ -59,92 +72,92 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS2, TS7, TS11, TS6]
   FR2:
     title: "Non-sensitive metadata set"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS2, TS3]
   FR3:
     title: "Keyed diagnostic ID"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS3]
   FR4:
     title: "Suppression remains traceable"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS7, TS6]
   FR5:
     title: "Redact the success-path debug line"
     status: assumed
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS2, TS3, TS10, TS11]
   FR6:
     title: "Shared redaction helper"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS2, TS3, TS10]
   FR7:
     title: "No other notification log site leaks text"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS11]
   NFR1:
     title: "Behavioural invariance"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS4, TS5, TS9]
   NFR2:
     title: "Escape pipeline untouched"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS12]
   NFR3:
     title: "Log convention and marker stability"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS7, TS6]
   NFR4:
     title: "No new dependency"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS13]
   NFR5:
     title: "Negligible per-notification cost"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS14]
   NFR6:
     title: "Feature-gate containment"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS8]
 
 batch:
   review_rework_count: 0
