@@ -75,9 +75,14 @@ tasks:
     branch: em-workflow/relocate-wrap-overflow-cleanup/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary:
+      - perspective: performance
+        reason: "NFR1 が ASCII 高速パスの per-byte コスト維持を明示的な要件にしており、diff が print/dispatch のホットパスと overflow テーブル操作に触れるため"
+    cross_validation: true
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
