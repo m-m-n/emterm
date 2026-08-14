@@ -53,9 +53,30 @@ workflow:
     status: completed
     completed_at_commit: 1e11ce80a001041f34cd456ff02ae3332d772092
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    completed_at_commit: cfcb025cb5557f02a83579a5f2b1e160a9c0a902
+    summary:
+      builds:
+        - {command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml", result: pass}
+        - {command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml", result: pass}
+        - {command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features", result: pass}
+      tests:
+        - {command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib", result: pass, detail: "823 passed, 0 failed, 13 ignored"}
+        - {command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1", result: pass, detail: "3248 passed, 0 failed, 3 ignored"}
+      format:
+        - {command: "cargo fmt --manifest-path crates/term_core/Cargo.toml --check", result: pass_with_preexisting_drift, detail: "drift at print_handler/tests.rs:1131 and terminal_dispatch.rs:517/565 — all outside this feature's added ranges (tests.rs:1432-1600, terminal_dispatch.rs:155-166). Per VERIFICATION.md's note this is not a failure of this feature."}
+        - {command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check", result: pass_with_preexisting_drift, detail: "7 files with drift, none touched by this feature"}
+      scenarios: {TS1: pass, TS2: pass, TS3: pass, TS4: pass, TS5: pass, EC1: pass, EC2: pass, EC3: pass, EC4: pass}
+      excluded_requirements: []
+      notes: >-
+        The GUI src-tauri --lib suite required asset provisioning in the fresh worktree
+        (bash scripts/fetch-fonts.sh + bun install + build:viewer + build:settings) —
+        an approved compound command; the gitignored fonts and dist bundles are not
+        carried by a new worktree. EC1's scenario passes but review finding
+        532f5e5cbe0763e7 records that its test does not actually exercise the new
+        removal code (the overflow table stays empty throughout).
   - id: retrospect
     status: pending
 
