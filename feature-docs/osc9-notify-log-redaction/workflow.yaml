@@ -73,7 +73,8 @@ workflow:
       なお fresh worktree では gitignored のバンドルフォントが無くビルドが落ちるため、
       検証前に scripts/fetch-fonts.sh の実行が必要だった（git 追跡差分は発生しない）。
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: a6ed0d7684fe0122245a68cca9c18b717a957626
 
 tasks:
   task0001:
