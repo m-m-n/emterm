@@ -44,7 +44,7 @@ workflow:
   - id: review
     status: pending
   - id: verify
-    status: pending
+    status: in_progress
   - id: retrospect
     status: pending
 
