@@ -1,0 +1,21 @@
+schema_version: 1
+feature: osc9-notify-log-redaction
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 94984140ffbf5308609f6b262b9aaaabf787b1ed
+last_input_digest: "sha256:39c7536ef971a36ac2772aceb11f248ad175eb7810bd52ad56f9260ae4ba7bd6"
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: "sha256:39c7536ef971a36ac2772aceb11f248ad175eb7810bd52ad56f9260ae4ba7bd6"
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
