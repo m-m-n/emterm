@@ -50,7 +50,7 @@ workflow:
     base_commit: 86b356c93370b76bf8c7d82d28dbf636a45b1c60
     completed_at_commit: d19b047bcac09898e2869d5d746c61b6954faa56
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -75,15 +75,19 @@ tasks:
     branch: em-workflow/relocate-wrap-overflow-cleanup/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, spec]
     discretionary:
       - perspective: performance
         reason: "NFR1 が ASCII 高速パスの per-byte コスト維持を明示的な要件にしており、diff が print/dispatch のホットパスと overflow テーブル操作に触れるため"
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    security: completed
+    spec: completed
+    performance: completed
   residual_critical_high: 0
   needs_rework: false
 

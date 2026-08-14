@@ -1,0 +1,162 @@
+round: 1
+executed_at: "2026-08-15T00:15:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 86b356c93370b76bf8c7d82d28dbf636a45b1c60
+  head_commit: e07e26c9fbca4a21f1f3dc9f64550c87960f8fed
+  changed_files:
+    - crates/term_core/src/print_handler.rs
+    - crates/term_core/src/print_handler/tests.rs
+    - crates/term_core/src/terminal_dispatch.rs
+    - test-docs/relocate-wrap-overflow-cleanup/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+    - perspective: performance
+      reason: "NFR1 が ASCII 高速パスの per-byte コスト維持を明示的な要件にしており、diff が print/dispatch のホットパスと overflow テーブル操作に触れるため"
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: c26836ed4ec13f66
+    severity: high
+    category: spec
+    file: crates/term_core/src/print_handler.rs
+    line: 492
+    title: "FR1 removal shape mismatch with spec reference"
+    description: >-
+      FR1 が参照する write_grapheme_to_grid の削除形と、新規の col-0 削除分岐が
+      `!self.overflow.is_empty() &&` ガードの有無で異なると指摘。FR3 の
+      「overflow.remove が Some を返したときに overflow_ridx を更新する」流れが
+      ガードで短絡することも同一サイトの指摘として併合した（元は別 finding、
+      同一 file・同一 line のため same_site で dedupe）。
+    suggestion: "`!self.overflow.is_empty() &&` ガードを外して参照形と一致させる"
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 65
+    resolution: declined
+    resolution_reason: >-
+      事実誤認。FR1 が参照する write_grapheme_to_grid の該当箇所は
+      print_handler.rs:166 で `} else if !self.overflow.is_empty() {` であり、
+      指摘が主張する「ガード無しの無条件 remove」ではない。新規の 493 行は
+      同一ファイルの既存削除サイト（166 / 198 / 357 / 416 / 456）と完全に同型。
+      さらに `!is_empty() && remove(..).is_some()` は `remove(..).is_some()` と
+      意味的に等価（空マップからの remove は None を返すため、どちらの経路でも
+      overflow_ridx_remove は呼ばれない）。claude:spec は同一サイトを指摘して
+      おらず、FR1/FR3 は充足していると独立に判定している。
+  - stable_id: 38ee25ecf0a7ffc9
+    severity: high
+    category: spec
+    file: crates/term_core/src/print_handler.rs
+    line: 525
+    title: "FR2 removal should be unconditional, diff makes it conditional"
+    description: >-
+      FR2 が「spacer 書き込みは常にマーカーを落とすので削除は無条件」と述べる
+      のに対し、diff は `!self.overflow.is_empty() &&` ガードを付けており条件付き
+      になっていると指摘。
+    suggestion: "ガードを外して無条件削除にする"
+    sources: [litellm:vertex-deepseek-v3.2:spec]
+    confidence: 65
+    resolution: declined
+    resolution_reason: >-
+      観測される挙動として無条件。`!is_empty() && remove(..)` は空マップのとき
+      remove が None を返す経路と結果が一致するため、当該キーのエントリは
+      存在すれば必ず削除される。FR2 の「無条件」はセルの書き込み後状態で分岐
+      しないこと（base 側の `if cell.is_overflow()` 分岐を持たないこと）を指して
+      おり、テーブル空判定の短絡はこれに抵触しない。既存の spacer 削除サイト
+      （198 / 416）も同じ形。
+  - stable_id: 9630ecbb6dd77b00
+    severity: medium
+    category: performance
+    file: crates/term_core/src/print_handler.rs
+    line: 493
+    title: "Redundant hash table emptiness check in hot path"
+    description: >-
+      `!self.overflow.is_empty()` ガードは HashMap::remove が空を効率的に処理する
+      ため冗長で、ホットパスにオーバーヘッドを載せていると指摘。
+    suggestion: "冗長な is_empty ガードを外す"
+    sources: [litellm:vertex-deepseek-v3.2:performance]
+    confidence: 65
+    resolution: declined
+    resolution_reason: >-
+      relocate_widened_base_via_wrap は VS16 で最終列の基底セルが幅 2 化した
+      ときだけ通る低頻度パスで、per-byte のホットパスではない（NFR1 が守る
+      ASCII 経路には一切追加コストが乗らない）。is_empty ガードはハッシュ計算を
+      省く既存の局所慣習（166 / 198 / 357 / 416 / 456）で、外すと同ファイル内で
+      形が割れる。claude:performance は指摘なしで、むしろメモリ保持が減る方向と
+      判定している。
+  - stable_id: cd22f85943cf32b3
+    severity: medium
+    category: performance
+    file: crates/term_core/src/print_handler.rs
+    line: 518
+    title: "Duplicate hash table emptiness check in spacer write path"
+    description: "spacer 書き込み側にも同じ is_empty ガードが重複しているという指摘。"
+    suggestion: "両方の削除サイトから is_empty ガードを外す"
+    sources: [litellm:vertex-deepseek-v3.2:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: "9630ecbb6dd77b00 と同一理由。低頻度パスであり、既存の局所慣習と同型。"
+  - stable_id: 532f5e5cbe0763e7
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/print_handler/tests.rs
+    line: 1579
+    title: "スクロール経路の新規テストが空のテーブルを検査していて回帰を検出できない"
+    description: >-
+      EC1 のスクロール経路テストは ASCII と 4 バイトの VS16 マージしか書き込まない
+      ため core.overflow が最後まで空で、末尾の !contains_key アサーションが常に真。
+      新規の削除コード（493 / 518）は is_empty ガードで短絡するので実行すらされず、
+      EC1 は「カバー済み」に見えて実際には未カバー。実装者の tests.yaml も
+      AC-6 を red_confirmed: false と記録している。
+    suggestion: >-
+      スクロールでリサイクルされるスロットを先に overflow-bound な内容
+      （基底文字 + 結合マーク 8 個、幅 1 のまま 16 バイト超）で埋め、エントリの
+      存在を事前アサートしてから relocation を起こす。または現行テストを
+      「no panic」に名前とコメントを揃える。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: >-
+      medium のため R4 の自動修正候補ゲート（critical/high のみ）に乗らない。
+      主要回帰テスト TS1 は修正前 red を実証済みで本体の不変条件は検証されて
+      いるが、EC1 の主張は過大。フォローアップタスクとして起票する。
+  - stable_id: 3e769a761d85d839
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/print_handler.rs
+    line: 524
+    title: "relocate 後のカーソルが cols <= 2 で範囲外に置かれ、次の 1 文字が黙って捨てられる"
+    description: >-
+      relocate_widened_base_via_wrap 末尾の無条件 `cursor.col = 2` は cols <= 2 で
+      範囲外になり、次の印字が 1 文字消える。非最終列を通る widen_after_merge
+      （423-431）は new_col >= cols をクランプしており、relocate 側だけ契約から
+      外れている。本 diff で変更された行ではないが、新規の cols=1 テストが
+      panic しないことだけを確認してカーソル位置を検証していないため、欠陥が
+      未固定のまま「カバー済み」として記録される点で本 diff と地続き。
+    suggestion: >-
+      relocate 末尾のカーソル更新を widen_after_merge と同形（new_col >= cols で
+      クランプ + wrap_pending）に揃え、cols=1 テストにカーソル位置のアサートを足す。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: >-
+      medium のため R4 の自動修正候補ゲートに乗らない。加えて本 feature の
+      NFR2 が変更範囲を overflow テーブル整合とコメント・テストに限定して
+      おり、カーソル契約の修正はスコープ外。既存欠陥としてフォローアップ
+      タスクに起票する。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: >-
+    R4 の候補ゲート（severity ∈ {critical, high} かつ category != spec）を満たす
+    finding がゼロ。high 2 件はいずれも spec 観点でゲート対象外、残る 4 件は
+    medium。よって自動修正ループは 1 度も回していない。
+residual_critical_high: 0
+rework_required: false
