@@ -1,0 +1,56 @@
+feature: relocate-wrap-ec1-scroll-test
+collected_at: "2026-08-15T22:24:00+09:00"
+session_ids: ["01a00561-daaa-7000-a90f-7ff93fb78390.jsonl"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures:
+    - id: TS-4/AC-8/NFR5
+      note: >-
+        First verify run failed: cargo fmt --check exited 1 with three drifts
+        (print_handler/tests.rs:1131, terminal_dispatch.rs:517, :565). All three
+        were pre-existing on main (b7555719); this feature introduced zero drift.
+        Resolved by the batch auto-rework (task0002), which applied targeted
+        rustfmt --edition 2024 to the two files. Second verify run: pass.
+  discretionary_perspectives: []
+  declined_findings: []
+  deferred_findings:
+    - stable_id: "821776efcf3c8be9"
+      category: comprehensive
+      severity: medium
+      resolution_reason: >-
+        medium severity so below R4's critical/high auto-fix gate and below
+        batch auto-rework's residual critical/high trigger. Genuine coverage
+        gap; filed as a follow-up task.
+    - stable_id: "af5374fd63008a17"
+      category: spec
+      severity: medium
+      resolution_reason: >-
+        Pre-existing fmt drift, not a regression from this feature. Superseded
+        in practice by task0002, which cleared all three drift sites; the
+        underlying SPEC wording tension (AC-8 vs the File Structure list)
+        remains a documentation-level observation.
+lessons_candidates:
+  - >-
+    The create-spec phase caught that an acceptance criterion supplied in the
+    task description was unsatisfiable by construction (the deletion branches
+    can never fire on the scroll path, so "removing them turns the test red"
+    could not hold). Detecting this before planning, and restating the criterion
+    against the reachable mechanism instead, avoided handing the implementer an
+    impossible requirement. The signal was requirements-analyst reading the
+    source rather than accepting the task text at face value.
+  - >-
+    Writing an acceptance criterion as a whole-command gate ("cargo fmt --check
+    is clean") makes a feature accountable for pre-existing repository state it
+    did not cause. It cost one full verify + rework cycle here. The rework was
+    ultimately the right outcome (the drift was small and in test code), but the
+    criterion's wording is what forced the detour rather than a deliberate
+    decision to clean it up.
+  - >-
+    The comprehensive reviewer found that the NEW test has the same shape of
+    weakness the feature exists to fix: it cannot observe row-scoping, so an
+    overflow-table-wide clear() regression would keep it green. Worth noting
+    that a feature correcting a vacuous test can reintroduce a narrower version
+    of the same gap, and that the SPEC's enumerated assertion list is what
+    bounded it.
