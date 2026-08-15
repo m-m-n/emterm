@@ -1,0 +1,91 @@
+round: 1
+executed_at: "2026-08-15T22:15:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 2ccadc78b218189faff58b3261fedd163f7d8836
+  head_commit: d0a408f1ba180d26d50246925ee1fa50debd24b2
+  changed_files:
+    - crates/term_core/src/print_handler/tests.rs
+    - crates/term_core/src/ring_buffer/tests.rs
+    - test-docs/relocate-wrap-ec1-scroll-test/task0001.tests.yaml
+    - test-docs/relocate-wrap-overflow-cleanup/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: "821776efcf3c8be9"
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/ring_buffer/tests.rs
+    line: 444
+    line_end: 488
+    title: "新テストは「recycled row だけ」を観測できない（全消し実装でも green）"
+    description: >-
+      test_ring_push_blank_clears_recycled_row_overflow_entries は非 vacuous で、
+      名前どおり「recycled row のエントリが消える」ことは証明している（pre-assert で
+      (0,abs0)/(1,abs0) と overflow_ridx[abs0] の存在を保証し、両 clear site を外すと
+      red になることも記録済み）。ただし fixture は rows=2 でオーバーフロー内容を
+      viewport row 0 にしか置かないため、スクロール後に overflow へ残るべきエントリが
+      1 つも存在しない。結果として ring_push_blank が self.overflow.clear() のように
+      行スコープを失った実装へ退行しても、このテストも既存の
+      test_ring_push_blank_clears_ridx も両方 green のままになる。その退行は生きている
+      行の長い書記素クラスタ内容を失わせる描画バグになる。SPEC FR4 が列挙した
+      assertion はそのまま満たしているので実装は仕様どおりであり、仕様側の網の穴。
+    suggestion: >-
+      スクロール後も残るべき行を fixture に足して行スコープを観測可能にする。
+      row 0 に 'e'/'f' を書いた後 set_cursor(0, 1) して survivor 用の内容を print し、
+      abs_survivor = viewport_abs(1) を取って pre-assert と post-assert の両方で
+      overflow.contains_key(&(0, abs_survivor)) を確認する。あわせて
+      「単一 site だけの除去では green のまま（new_bottom_abs == evicted_abs による
+      冗長性）」の一文をテスト本体のコメントにも書く。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: >-
+      medium severity のため R4 の auto-fix 候補ゲート（critical/high のみ）に該当せず、
+      batch の auto-rework も residual critical/high 限定のため発火しない。指摘自体は
+      妥当で価値が高いので、別タスクとして起票して次の run に回す。
+  - stable_id: "af5374fd63008a17"
+    severity: medium
+    category: spec
+    file: crates/term_core/src/print_handler/tests.rs
+    line: 1131
+    title: "AC-8 / NFR5 未達: cargo fmt --check が clean ではない（本機能が触れた print_handler/tests.rs を含む）"
+    description: >-
+      SPEC AC-8 は「cargo fmt --manifest-path crates/term_core/Cargo.toml --check が
+      clean」を、NFR5 は「touched Rust files が同コマンドを通る」を要求している。実測
+      では 3 箇所の drift が報告され、うち 1 箇所は本機能が編集した
+      crates/term_core/src/print_handler/tests.rs:1131、残り 2 箇所は
+      crates/term_core/src/terminal_dispatch.rs:517 / :565。オーケストレーターが main
+      （2026-08-15 時点の b7555719）でも同一コマンドを実行し、3 箇所すべてが本 feature
+      以前から存在する既存 drift であることを確認済み。本 feature が持ち込んだ drift は
+      ゼロ。AC-8 を文言どおり満たすには SPEC の File Structure に無い
+      terminal_dispatch.rs まで触る必要があり、AC-8 と FR8 / File Structure の間に
+      内在的な不整合がある。
+    suggestion: >-
+      (a) print_handler/tests.rs と terminal_dispatch.rs に rustfmt を当てて drift を
+      解消し SPEC の File Structure を拡張する、または (b) AC-8 / NFR5 の fmt 条件を
+      「本機能が変更した行に新たな drift を持ち込まない」に限定し、既存 drift を
+      out-of-scope として SPEC 本文に明記する。
+    sources: [claude:spec]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: >-
+      main 時点で既存の drift であり本 feature の退行ではない。解消にはこの feature の
+      スコープ外ファイル（terminal_dispatch.rs）への変更が必要で、かつプロジェクトの
+      標準ルール「cargo fmt をクレート全体に走らせない」（無関係ファイルを汚すため）に
+      抵触する。SPEC の文言側を直すか既存 drift を潰すかは人間の判断事項なので、別タスク
+      として起票する。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
