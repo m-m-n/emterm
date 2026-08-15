@@ -3,19 +3,78 @@ feature: pending-notifications-drain
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: 1f0ce3547525fcc62c35687972d24c2357c53cd4
+base_revision: 449a8a26d7830910297642238e39f99605885768
 last_input_digest: sha256:7e67a71ff15d028f4dc47444d6920d556a9343efe87305eae16226b3281e6502
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  pending-notifications-drain-q0001:
+    status: answered
+    issued_at: "2026-08-15T20:12:00+09:00"
+    questions:
+      - question_id: requirement.remediation-approach
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.remediation-approach:
+    packet_id: pending-notifications-drain-q0001
+    answered_at: "2026-08-15T20:14:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [remove-buffer]
+    freeform: null
+    normalized_answer: >
+      バッファを廃止する。`handle_notify` の push・`NativeCallbackState::pending_notifications`
+      フィールド・callbacks.rs:388-390 の doc コメントを削除し、配送は既存のインライン
+      `sink.send` のまま維持する。tests.rs:135 / :316 の観測フックは `TestSink` の
+      受信記録に対するアサーションへ書き換える。
+    resolution_note: >
+      batch-policies.yaml の create-spec.requirement-clarification は
+      action: codex_consultation。Codex は remove-buffer を選択し、その根拠
+      (production consumer 不在 / 配送済みデータの重複保持 / 攻撃者影響下文字列の
+      無期限保持) は analyst の confirmed_facts と一致する。option_id は packet の
+      options に存在し、analyst の recommended とも一致するため採用した。
+      record_as_assumption: true に従い、run report に記録する。
+  design-step.recommendation:
+    packet_id: pending-notifications-drain-q0001
+    answered_at: "2026-08-15T20:14:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [skip]
+    freeform: null
+    normalized_answer: >
+      design ステップはスキップする。変更対象は Rust 内部状態フィールド・doc コメント・
+      ユニットテストのみで、UI 表面・デザイントークン・WebView のいずれにも触れない。
+    resolution_note: >
+      batch-policies.yaml の create-spec.design-step は option_id: decide_autonomously
+      (オーケストレーターが自律決定せよという指示であり、worker の options に列挙される
+      値ではない)。analyst の design_step_recommendation.value = skip、かつ選択した
+      remove-buffer 方式は配送タイミングを変えないため perform の根拠も消える。
+      よって skip を採用した。
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:7e67a71ff15d028f4dc47444d6920d556a9343efe87305eae16226b3281e6502
     output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:7e67a71ff15d028f4dc47444d6920d556a9343efe87305eae16226b3281e6502
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/components/md3-select.ts
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+      - src-tauri/web-shared/styles.css
+      - src-tauri/web-shared/styles/data-viewer.css
+      - src-tauri/web-shared/styles/settings-panel.css
+      - src-tauri/web-shared/styles/status-bar.css
+      - src-tauri/web-shared/styles/tab-bar.css
+    digests: {}
+    truncated: false
 last_error: null
