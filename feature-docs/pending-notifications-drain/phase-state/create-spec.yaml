@@ -1,11 +1,11 @@
 schema_version: 1
 feature: pending-notifications-drain
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: 4118a035eee576b982a8771abf08a5343b4bfcbd
+base_revision: 67e31fd21a4f51280f0b472a6358ea45922e3145
 last_input_digest: sha256:3d06585e58d6a5c1642b42f743737027cb5860f1c257eaa6be1eac2f8637c13e
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   pending-notifications-drain-q0001:
     status: answered
@@ -61,10 +61,16 @@ worker_runs:
     input_digest: sha256:cd36f7ef4b7a2630daa00cd689a1b2de5b7640984f28de4f9691969796fd48eb
     output_digest: null
   - request_id: create-spec-run-0003
-    status: dispatched
+    status: completed
     input_digest: sha256:3d06585e58d6a5c1642b42f743737027cb5860f1c257eaa6be1eac2f8637c13e
     output_digest: null
-artifacts: []
+artifacts:
+  - path: feature-docs/pending-notifications-drain/REQUIREMENTS.md
+    sha256: sha256:20d1251c52b7d67c3e02d30cfa630055eea6f15597127c7212719be46631e5c6
+    produced_by: create-spec-run-0003
+  - path: feature-docs/pending-notifications-drain/SPEC.md
+    sha256: sha256:04b79044c29d0dfc91c611762ed480723b2c18da7afa84970fe7faa8a942ac7b
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
