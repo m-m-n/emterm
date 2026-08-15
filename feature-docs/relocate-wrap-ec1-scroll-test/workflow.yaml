@@ -55,9 +55,14 @@ workflow:
   status: completed
   completed_at_commit: d0a408f1ba180d26d50246925ee1fa50debd24b2
 - id: verify
-  status: pending
-  result: null
-  failed_items: []
+  status: failed
+  result: fail
+  failed_items:
+  - id: TS-4/AC-8/NFR5
+    note: 'cargo fmt --manifest-path crates/term_core/Cargo.toml --check exits 1 with 3 drifts (print_handler/tests.rs:1131,
+      terminal_dispatch.rs:517, :565). Verified identical on main (b7555719): all 3 are pre-existing,
+      this feature introduced zero drift. Every other scenario passed: cargo check clean, 824 passed /
+      0 failed, TS-1/TS-2/TS-3 all green under the new names, zero production-code diff.'
 - id: retrospect
   status: pending
 tasks:
