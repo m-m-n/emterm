@@ -1,0 +1,69 @@
+task_id: task0002
+baseline_failures: []          # `cargo test --lib` was already 824 passed / 0 failed / 13 ignored at the rework base; the failing gate was `cargo fmt --check`, not a test
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Ran `cargo fmt --manifest-path crates/term_core/Cargo.toml --check`
+      before any edit: exited 1 with exactly three drift hunks
+      (print_handler/tests.rs:1131, terminal_dispatch.rs:517,
+      terminal_dispatch.rs:565). After running `rustfmt --edition 2024` on
+      the two scoped files, the same command exits 0 with no output.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Non-regression invariant, not a criterion with an observable red
+      state: the baseline `cargo test --lib` run (before any edit) already
+      reported 824 passed, 0 failed, 13 ignored, matching the target count.
+      The post-edit run reports the identical line. Verified by comparing
+      the two full run outputs; no test was added, removed or renamed.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Structural invariant verified by inspecting `git status --short`
+      (exactly print_handler/tests.rs and terminal_dispatch.rs changed) and
+      `git diff` (every changed hunk's line number exceeds each file's
+      `#[cfg(test)]` boundary: terminal_dispatch.rs:379-380,
+      print_handler.rs:673-674 declaring the tests child module), plus
+      `git diff 2ccadc78 -- '*.rs' <exclude the two scoped files and
+      ring_buffer/tests.rs>` producing empty output, confirming no
+      production (non-test) Rust file differs from base_commit. No red
+      state applies here since no production line was ever changed.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by inspection: the only print_handler/tests.rs hunk
+      (line 1131) sits inside
+      test_write_grapheme_column_shifted_redraw_blanks_all_orphan_partners
+      (1056-1184), well before the three frozen tests
+      (test_relocate_widened_base_via_wrap_removes_stale_overflow_entries_on_target_row
+      at 1454, test_relocate_widened_base_via_wrap_scrolls_without_panic at
+      1564, test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist
+      at 1590). `git diff --quiet HEAD -- crates/term_core/src/ring_buffer/tests.rs`
+      exits 0 (byte-identical, untouched by this task). No red state
+      applies; this task never edits those paths.
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Same red observation as AC-1 (the pre-edit `cargo fmt --check` diff
+      is rustfmt's own reformat of the three sites: only whitespace/comment
+      column alignment and macro-call line wrapping change, no token
+      added/removed/altered — confirmed by reading the diff hunks).
+      Idempotence confirmed by re-running `rustfmt --edition 2024` on both
+      files a second time: `git diff --stat` reported the identical
+      16 insertions(+)/13 deletions(-) as before the second run, i.e. the
+      second run produced zero additional change.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by final `git status --short` showing exactly the two
+      scoped files as modified; no test-docs, feature-docs or production
+      file was touched by this task. No red state applies since no other
+      file was ever edited.
