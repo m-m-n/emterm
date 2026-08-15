@@ -1,0 +1,97 @@
+task_id: task0001
+baseline_failures:
+  - app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing
+final_failures:
+  - app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Absence property, not a runtime test (Test Notes / IMPLEMENTATION.md
+      D5). Verified by `grep -rn pending_notifications
+      src-tauri/src/callbacks.rs src-tauri/src/callbacks/tests.rs`, which
+      returned no matches (exit code 1) after the production removal.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Absence property (IMPLEMENTATION.md D5): verified by the compiler
+      (field removal compiles clean, `cargo test --lib` and `cargo check
+      --no-default-features` both succeed) plus a diff review of
+      src-tauri/src/callbacks.rs confirming no replacement field/collection
+      was introduced (see report notes for the diff).
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Absence property (IMPLEMENTATION.md D5). Verified by diff review:
+      exactly the pending_notifications field's own doc comment (3 lines)
+      was removed from src-tauri/src/callbacks.rs; every sibling field's
+      doc comment (bell_count, pending_apc, pending_dcs,
+      pending_clipboard_writes/reads, theme_dirty, pending_agent_status,
+      pending_latch_feed) is present unmodified in the diff.
+  AC-4:
+    tests: [callbacks::tests::osc_9_emits_notification]
+    red_confirmed: false
+    red_reason: >
+      Behaviour-preserving task (Test Notes): the sink-based assertions
+      (calls.len()==1, title, body) already existed in this test before
+      any change and already passed against the pre-removal, still-
+      buffering code (characterization run confirmed this). Only the
+      buffer-length assertion was deleted; no new assertion was added that
+      could go red. This is the expected "honest sequence" outcome named
+      in the task plan's Test Notes, not a fabricated red.
+  AC-5:
+    tests: [callbacks::tests::osc_133_callback_is_a_noop_for_native_state]
+    red_confirmed: false
+    red_reason: >
+      Behaviour-preserving task (Test Notes): the new assertion
+      (`h.sink.calls().is_empty()`) was run against the current,
+      still-buffering production code BEFORE the removal (characterization
+      step) and already passed, because the OSC 133 handler never called
+      the sink in either the old or new code — there is no code path that
+      could make this assertion fail before vs. after the removal. Per the
+      task plan: "a classic red→green cycle is not available for most
+      criteria — do not manufacture an artificial failing test."
+  AC-6:
+    tests:
+      - callbacks::tests::osc_9_no_separator_uses_fallback_title
+      - callbacks::tests::rate_limiter_dedupes_identical_pair_within_window
+      - callbacks::tests::rate_limiter_allows_after_window_elapsed
+      - callbacks::tests::rate_limiter_distinct_pairs_not_deduped
+    red_confirmed: false
+    red_reason: >
+      Regression-safety criterion, not a red-green criterion: the task
+      plan requires these four tests' bodies to stay verbatim and to keep
+      passing (Design step 7). Confirmed unmodified (git diff shows no
+      changes to these tests) and green both before and after the
+      production removal.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Build/lint outcome, not a unit test. All three verified directly
+      after the production removal: `cargo test --manifest-path
+      src-tauri/Cargo.toml --lib` (3247 passed, 1 pre-existing failure
+      unrelated to this task, 3 ignored — no regression vs. baseline);
+      `cargo check --manifest-path src-tauri/Cargo.toml
+      --no-default-features` (clean); `cargo fmt --manifest-path
+      src-tauri/Cargo.toml --check` (12 pre-existing drift blocks in
+      unrelated files per IMPLEMENTATION.md's Risk Assessment row for this
+      exact scenario; zero drift blocks in src-tauri/src/callbacks.rs or
+      src-tauri/src/callbacks/tests.rs — one pre-existing drift hunk found
+      in callbacks/tests.rs, in an unrelated section (summary_markup_escape
+      module) neither authored nor otherwise touched by this task, was
+      reformatted in place since that file is within this task's
+      expected_files and AC-7 requires zero drift there).
+notes: >
+  This task is explicitly behaviour-preserving (task plan Test Notes), so
+  none of the seven Acceptance Criteria admit a genuine red-before-green
+  cycle without fabricating a failing test, which the plan itself forbids.
+  The honest sequence documented in the plan was followed instead: (1)
+  rewrite the two test assertions onto the sink receive log and confirm
+  they pass against the still-buffering code (characterization —
+  confirmed both tests green pre-removal), (2) perform the production
+  removal, (3) confirm the same assertions still pass post-removal and the
+  crate compiles, (4) run the static absence checks for AC-1/AC-2/AC-3.
