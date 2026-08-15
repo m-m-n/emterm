@@ -1,0 +1,17 @@
+schema_version: 1
+feature: relocate-wrap-ec1-scroll-test
+phase: create-plan
+status: initialized
+generation: 1
+base_revision: 27e67edf1689c8a1908002e5ec7232e1b8213130
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
