@@ -1,0 +1,54 @@
+feature: pending-notifications-drain
+collected_at: "2026-08-15T20:58:00+09:00"
+session_ids: ["01a00519-7df0-7000-ae21-5fa0d1b0c71e"]
+signals:
+  review_critical_high:
+    - stable_id: 2d9aef8c4e259ac4
+      category: performance
+      file: src-tauri/src/callbacks.rs
+      title: "Potential blocking I/O introduced by removing notification buffer"
+      resolution: declined
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures:
+    - id: TS5-parallel
+      detail: >
+        `--lib` の並列実行で app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing
+        が落ちる。base commit の main (12cebc80) でも再現する pre-existing フレークで、
+        `-- --test-threads=1` では 3248 passed / 0 failed。本 feature の変更とは無関係。
+  discretionary_perspectives: []
+  declined_findings:
+    - stable_id: 2d9aef8c4e259ac4
+      category: performance
+      resolution_reason: >
+        前提（バッファが D-Bus 呼び出しをホットパスの外に出していた）が git で反証済み。
+        `sink.send` は変更前から同じ位置にインライン同期実行されており、drain は元から
+        存在しなかった。唯一の是正である buffer-then-drain の再導入は SPEC FR4 / NFR1 / NFR2
+        に正面から反する。
+    - stable_id: 540afd1119b3428c
+      category: spec
+      resolution_reason: >
+        deferred。severity medium で完了ゲート対象外。NotificationRateLimiter の dedupe マップが
+        最大 4×window の間 (title, body) を保持するため SPEC の AC2 / Data Flow が字義どおりには
+        成立しないという指摘。是正は SPEC 書き換え（仕様変更）または FR7 の文言変更を伴うため、
+        無人実行では決めず別タスクとして起票した。
+lessons_candidates:
+  - >
+    クロスモデルレビュアー（litellm:vertex-deepseek-v3.2）が、削除された doc コメントの記述を
+    そのまま「変更前の実態」として読み、存在しなかった drain を前提に critical を 1 件出した。
+    doc コメントと実装が乖離しているコードを削除する diff では、コメント側の主張がレビュアーの
+    事実誤認を誘発しうる。オーケストレーター側で `git show <base>:<file>` による前提の実地検証が
+    効いた。auto-fix の candidate gate は severity だけを見るため、前提が反証された critical を
+    そのまま prose→needs-judgment→「Apply as-is」に流すと SPEC に反する修正が入りうる —
+    R3/R4 の間に「前提が SPEC と矛盾する指摘は declined に落とす」判断点があると安全。
+  - >
+    リポジトリに pre-existing の並列実行フレーク（app::tests::timing）があり、
+    verify の test_command が既定で並列実行のため毎回 1 件赤になる。
+    implementer の baseline_failures と、base commit での実測比較の両方でしか
+    「自分のせいではない」を証明できなかった。プロジェクト側で
+    `-- --test-threads=1` を既定の test_command にするか、当該テストを修正する価値がある。
+  - >
+    integration worktree は src-tauri/assets/fonts/ と viewer/dist/ が空（どちらも gitignored）
+    のため、verify の build/test 前に fetch-fonts + bun build の前処理が必須だった。
+    承認済みの複合コマンド文字列が既にあったので詰まらなかったが、feature worktree を
+    使うワークフローでは「gitignored な生成物は worktree 間で共有されない」が繰り返し効く。
