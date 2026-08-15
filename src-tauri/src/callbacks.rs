@@ -385,10 +385,6 @@ pub struct NativeCallbackState {
     /// BEL counter. `Tab::pump` drains this into its per-frame bell
     /// latch; `App::pump_all` then dispatches `settings.bell_action`.
     pub bell_count: u32,
-    /// Pending OSC 9 notifications, drained by `Tab::pump` and dispatched
-    /// to the `NotificationSink`. Buffering here keeps the callback fast
-    /// (no D-Bus round-trip inside `process_pty_data`).
-    pub pending_notifications: Vec<(String, String)>,
     /// Pending APC (Kitty Graphics) payloads buffered by `on_apc`. Drained
     /// by `Tab::pump` after locking `TerminalCore` so the cursor row/col
     /// can be snapshotted and passed to `term_images::ImageProcessor`.
@@ -560,10 +556,6 @@ impl NativeCallbacks {
     fn handle_notify(&self, data: &str) {
         let (title, body) = parse_osc9(data, self.state.lock().title.as_deref());
         if self.rate_limiter.should_emit(&title, &body) {
-            self.state
-                .lock()
-                .pending_notifications
-                .push((title.clone(), body.clone()));
             self.sink.send(&title, &body);
         } else {
             // osc9-notify-log-redaction task0001 (FR1/FR4): the marker
