@@ -45,7 +45,8 @@ workflow:
     status: completed
     completed_at_commit: 6f975543805fee8df00bfb04bc1f68e27a929311
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: 98ef32fa32a777470dd8862107cbad605078aee9
     base_commit: f7e9f98e4ae95649f25d9a8c5137ae87e4248122
   - id: review
     status: pending
@@ -67,7 +68,7 @@ tasks:
     domains: [input-handling, concurrency]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3, NFR4, NFR5]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/pending-notifications-drain/task0001
 
