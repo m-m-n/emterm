@@ -49,7 +49,8 @@ workflow:
     completed_at_commit: 98ef32fa32a777470dd8862107cbad605078aee9
     base_commit: f7e9f98e4ae95649f25d9a8c5137ae87e4248122
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: d187e35f187ec4984052180ff19f83d2b1c70dad
   - id: verify
     status: pending
     result: null
@@ -73,13 +74,17 @@ tasks:
     branch: em-workflow/pending-notifications-drain/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, performance, spec]
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    security: completed
+    performance: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
