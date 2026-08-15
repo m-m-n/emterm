@@ -48,7 +48,7 @@ workflow:
   status: completed
   completed_at_commit: 47939ac622933394800ac9f0cc5fe209da51ee60
 - id: implement
-  status: pending
+  status: in_progress
   base_commit: 2ccadc78b218189faff58b3261fedd163f7d8836
   completed_at_commit: 5406ef9fb18b7e49e8040fa389956fbf967e6739
 - id: review
@@ -108,9 +108,9 @@ tasks:
     complexity: low
     requirements:
     - NFR5
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/relocate-wrap-ec1-scroll-test/task0002
     provenance:
       source: verify
       source_ids:
