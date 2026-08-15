@@ -132,7 +132,6 @@ fn osc_9_emits_notification() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, "Build done");
     assert_eq!(calls[0].1, "all green");
-    assert_eq!(h.state.lock().pending_notifications.len(), 1);
 }
 
 #[test]
@@ -313,7 +312,8 @@ fn osc_133_callback_is_a_noop_for_native_state() {
     let s = h.state.lock();
     assert!(s.title.is_none());
     assert!(s.osc_queue.is_empty());
-    assert!(s.pending_notifications.is_empty());
+    drop(s);
+    assert!(h.sink.calls().is_empty());
 }
 
 #[test]
@@ -838,8 +838,14 @@ mod summary_markup_escape {
         let title = r#"<a href="https://attacker.invalid">Sign in</a>"#;
         let confirmed: Result<Vec<String>, ()> = Ok(vec!["body-markup".to_string()]);
         let (escaped_title, _escaped_body) = escape_for_send(title, "body", &confirmed);
-        assert!(!escaped_title.contains('<'), "raw '<' survived: {escaped_title}");
-        assert!(!escaped_title.contains('>'), "raw '>' survived: {escaped_title}");
+        assert!(
+            !escaped_title.contains('<'),
+            "raw '<' survived: {escaped_title}"
+        );
+        assert!(
+            !escaped_title.contains('>'),
+            "raw '>' survived: {escaped_title}"
+        );
         assert_eq!(
             escaped_title,
             r#"&lt;a href="https://attacker.invalid"&gt;Sign in&lt;/a&gt;"#
