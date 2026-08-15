@@ -1,112 +1,113 @@
 schema_version: 1
 feature: relocate-wrap-ec1-scroll-test
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: 06e771e80bae535f71e2940e301c89cc65dbaa62
-last_input_digest: "sha256:a52e0dcf0535d899f86871983ccf66e6eb636bcf2e3a6e3f796f1c248e78a15c"
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:adb6c64941abcde071f9f70873b968cd556a5f5659963bc279cfe33cec0e1999
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
-    issued_at: "2026-08-15T21:32:00+09:00"
+    issued_at: '2026-08-15T21:32:00+09:00'
     questions:
-      - question_id: ec1.approach
-        status: answered
-      - question_id: ec1.deletion-branch-red-criterion
-        status: answered
-      - question_id: design.step
-        status: answered
+    - question_id: ec1.approach
+      status: answered
+    - question_id: ec1.deletion-branch-red-criterion
+      status: answered
+    - question_id: design.step
+      status: answered
 answers:
   ec1.approach:
     packet_id: create-spec-q0001
-    answered_at: "2026-08-15T21:34:00+09:00"
+    answered_at: '2026-08-15T21:34:00+09:00'
     source: batch-codex-consultation
     answer_mode: single_select
-    selected_option_ids: [b_split]
+    selected_option_ids:
+    - b_split
     freeform: null
-    normalized_answer: >-
-      Rename the existing EC1 test to a pure no-panic claim with a corrected
-      comment, and add a separate test that pins ring_push_blank's
-      eviction-time overflow clearing independently (no relocation involved).
-    resolution_note: >-
-      batch: gate create-spec.requirement-clarification -> action
-      codex_consultation. Codex (readonly, 1 turn) suggested b_split; the
-      orchestrator judged that it maps onto the packet option b_split, which
-      also matches requirements-analyst's own recommendation. Rationale:
-      approach (a) alone leaves the test green when either mechanism is
-      broken in isolation.
+    normalized_answer: Rename the existing EC1 test to a pure no-panic claim with a corrected comment,
+      and add a separate test that pins ring_push_blank's eviction-time overflow clearing independently
+      (no relocation involved).
+    resolution_note: 'batch: gate create-spec.requirement-clarification -> action codex_consultation.
+      Codex (readonly, 1 turn) suggested b_split; the orchestrator judged that it maps onto the packet
+      option b_split, which also matches requirements-analyst''s own recommendation. Rationale: approach
+      (a) alone leaves the test green when either mechanism is broken in isolation.'
   ec1.deletion-branch-red-criterion:
     packet_id: create-spec-q0001
-    answered_at: "2026-08-15T21:34:00+09:00"
+    answered_at: '2026-08-15T21:34:00+09:00'
     source: batch-codex-consultation
     answer_mode: single_select
-    selected_option_ids: [retarget_eviction]
+    selected_option_ids:
+    - retarget_eviction
     freeform: null
-    normalized_answer: >-
-      Restate the red-on-removal criterion so the scroll-path test goes red
-      when ring_push_blank's overflow_clear_row / overflow_ridx_clear_row
-      calls are removed. The relocation deletion branches stay pinned by the
-      existing TS1 on the no-scroll path.
-    resolution_note: >-
-      batch: gate create-spec.requirement-clarification -> action
-      codex_consultation. Codex suggested retarget_eviction; the orchestrator
-      judged the mapping onto that packet option. The literal criterion is
-      unsatisfiable on the scroll path because both scroll implementations
-      clear the recycled row's overflow keys before the relocated writes run.
+    normalized_answer: Restate the red-on-removal criterion so the scroll-path test goes red when ring_push_blank's
+      overflow_clear_row / overflow_ridx_clear_row calls are removed. The relocation deletion branches
+      stay pinned by the existing TS1 on the no-scroll path.
+    resolution_note: 'batch: gate create-spec.requirement-clarification -> action codex_consultation.
+      Codex suggested retarget_eviction; the orchestrator judged the mapping onto that packet option.
+      The literal criterion is unsatisfiable on the scroll path because both scroll implementations clear
+      the recycled row''s overflow keys before the relocated writes run.'
   design.step:
     packet_id: create-spec-q0001
-    answered_at: "2026-08-15T21:34:00+09:00"
+    answered_at: '2026-08-15T21:34:00+09:00'
     source: batch-decision-table
     answer_mode: single_select
-    selected_option_ids: [skip]
+    selected_option_ids:
+    - skip
     freeform: null
-    normalized_answer: >-
-      Skip the design step; skipped_reason: test-only change inside the
-      pure-Rust term_core crate with no UI surface, no visual artifact and no
-      public API change.
-    resolution_note: >-
-      batch: gate create-spec.design-step -> batch-policies.yaml
-      option_id decide_autonomously (a policy directive naming a decision
-      procedure, in the same idiom as create-spec.design-system's
-      top_candidate_or_none, not a literal packet option). The orchestrator
-      decided autonomously and selected the packet option `skip`, matching
-      requirements-analyst's design_step_recommendation.
+    normalized_answer: 'Skip the design step; skipped_reason: test-only change inside the pure-Rust term_core
+      crate with no UI surface, no visual artifact and no public API change.'
+    resolution_note: 'batch: gate create-spec.design-step -> batch-policies.yaml option_id decide_autonomously
+      (a policy directive naming a decision procedure, in the same idiom as create-spec.design-system''s
+      top_candidate_or_none, not a literal packet option). The orchestrator decided autonomously and selected
+      the packet option `skip`, matching requirements-analyst''s design_step_recommendation.'
 assumptions:
   a1:
-    statement: >-
-      "The deletion branch is actually executed" means the branch at
-      print_handler.rs:493/518 evaluates its remove(...) and that removal is
-      observable, not merely that the guard expression is reached.
+    statement: '"The deletion branch is actually executed" means the branch at print_handler.rs:493/518
+      evaluates its remove(...) and that removal is observable, not merely that the guard expression is
+      reached.'
     impact: high
     reversible: true
     recorded_via: create-spec.requirement-clarification (record_as_assumption)
   a2:
-    statement: >-
-      The full-screen scroll path (no DECSTBM scroll region) is the path EC1
-      is meant to cover; the scroll-region path via shift_rows_up is a
-      distinct clearing site and out of scope.
+    statement: The full-screen scroll path (no DECSTBM scroll region) is the path EC1 is meant to cover;
+      the scroll-region path via shift_rows_up is a distinct clearing site and out of scope.
     impact: medium
     reversible: true
     recorded_via: create-spec.requirement-clarification (record_as_assumption)
 worker_runs:
-  - request_id: create-spec-run-0001
-    status: needs_user_input
-    input_digest: "sha256:a52e0dcf0535d899f86871983ccf66e6eb636bcf2e3a6e3f796f1c248e78a15c"
-    output_digest: null
-artifacts: []
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:a52e0dcf0535d899f86871983ccf66e6eb636bcf2e3a6e3f796f1c248e78a15c
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:2679ced0d1a4d78bea46a7f3286a93a601ac097ba3d55e795f882c547992338b
+  output_digest: null
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:adb6c64941abcde071f9f70873b968cd556a5f5659963bc279cfe33cec0e1999
+  output_digest: null
+artifacts:
+- path: feature-docs/relocate-wrap-ec1-scroll-test/REQUIREMENTS.md
+  sha256: sha256:35ca183e67b44e6c54354edeb006740c356a8402c2c7e29291203081651201d4
+  produced_by: create-spec-run-0003
+- path: feature-docs/relocate-wrap-ec1-scroll-test/SPEC.md
+  sha256: sha256:3e7618a291cf0f361a7e0b22de3062c9bf1c80224ae6813d91441e5f6be3caf1
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache:
   design_system_candidates:
-    generation_digest: "sha256:pending"
+    generation_digest: sha256:pending
     resolved_at_generation: 1
     paths:
-      - doc/UI-DESIGN-GUIDELINES.yaml
-      - src-tauri/web-shared/styles.css
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
     digests:
-      doc/UI-DESIGN-GUIDELINES.yaml: "sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef"
-      src-tauri/web-shared/styles.css: "sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb"
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
     truncated: false
 last_error: null
