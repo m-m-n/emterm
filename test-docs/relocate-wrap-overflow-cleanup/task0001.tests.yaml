@@ -58,20 +58,26 @@ acceptance_tests:
       say to add only if not already covered — they already were.
   AC-6:
     tests:
-      - print_handler::tests::test_relocate_widened_base_via_wrap_scrolls_without_panic_or_stale_entries
+      - print_handler::tests::test_relocate_widened_base_via_wrap_scrolls_without_panic
       - print_handler::tests::test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist
     red_confirmed: false
     red_reason: >-
       Robustness/no-regression checks (NFR3), not defect pins: the
-      scroll case's recycled ring row is already blanked by the existing
-      (out-of-scope, unmodified) eviction path before this task's writes
-      touch it, and the column-1-absent case is already skipped by the
-      existing `cell_index` bounds check that wraps the new removal
-      call. Both pass unmodified; their purpose is to prove the fix adds
-      no panic / out-of-range access. The two remaining Design-section-4
-      conditions (EC3 absent-entry, EC4 reverse-index row-key drop) are
-      exercised incidentally by TS1/TS2 per the task plan's Test Notes,
-      with no dedicated test added.
+      scroll case's overflow assertions were vacuous (the overflow table
+      was empty for that test's entire run, so the two absence-of-entry
+      assertions were true independently of the code under test) and have
+      been removed by feature relocate-wrap-ec1-scroll-test; the test now
+      claims only no-panic / no out-of-range access plus correct placement
+      of the relocated base and spacer on the resolved row. The
+      eviction-time clearing that made those assertions vacuous is now
+      pinned directly by that feature's new
+      ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries.
+      The column-1-absent case is already skipped by the existing
+      `cell_index` bounds check that wraps the new removal call and passes
+      unmodified. The two remaining Design-section-4 conditions (EC3
+      absent-entry, EC4 reverse-index row-key drop) are exercised
+      incidentally by TS1/TS2 per the task plan's Test Notes, with no
+      dedicated test added.
   AC-7:
     tests: []
     red_confirmed: false
