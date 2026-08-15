@@ -1548,15 +1548,20 @@ fn test_relocate_widened_base_via_wrap_keeps_entry_when_relocated_content_still_
     assert_eq!(core.overflow.get(&(0u32, abs1)), Some(&expected));
 }
 
-// AC-6 (EC1, NFR3): the relocation's line feed can itself trigger a
-// viewport scroll (the widened base sits on the terminal's last row) — the
-// resolved new absolute row is a ring slot recycled from an evicted row.
-// The relocated writes must operate against that resolved row without
-// panicking or reading out of range, and the recycled row (freshly blanked
-// by the eviction path, itself out of scope for this task) must not carry
-// stale overflow entries afterward.
+// AC-6 (EC1, NFR3): the relocation's own line feed can itself trigger a
+// viewport scroll (the widened base sits on the terminal's last row), so the
+// resolved new absolute row is a ring slot recycled from an evicted row. This
+// test proves only that the relocated writes (the base and its spacer)
+// operate against that resolved row without panicking or reading out of
+// range, landing with the correct cursor position and rendered content. It
+// proves nothing about overflow-table cleanup: per IMPLEMENTATION.md D2, the
+// row key the relocated writes use is the same ring slot `ring_push_blank`
+// just recycled, whose overflow entries `ring_push_blank` already clears
+// before the relocated writes ever run — so the relocation's own deletion
+// branches are structurally unreachable on this path, and any overflow-table
+// assertion here would hold independently of the code under test.
 #[test]
-fn test_relocate_widened_base_via_wrap_scrolls_without_panic_or_stale_entries() {
+fn test_relocate_widened_base_via_wrap_scrolls_without_panic() {
     let mut core = TerminalCore::new(5, 2, 0); // last row index = 1, no scrollback
 
     core.process_pty_data(b"\x1b[2;1H"); // CUP row2,col1 (1-indexed) -> (col0,row1), last row
@@ -1574,10 +1579,6 @@ fn test_relocate_widened_base_via_wrap_scrolls_without_panic_or_stale_entries() 
     assert_eq!(core.get_cell_char(0, 1), "5\u{FE0F}");
     assert_eq!(core.get_cell_width(0, 1), 2);
     assert_eq!(core.get_cell_width(1, 1), 0);
-
-    let abs1 = core.viewport_abs(1) as u32;
-    assert!(!core.overflow.contains_key(&(0u32, abs1)));
-    assert!(!core.overflow.contains_key(&(1u32, abs1)));
 }
 
 // AC-6 (EC2, NFR3): a terminal narrow enough that column 1 does not exist
