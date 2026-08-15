@@ -3,9 +3,9 @@ feature: pending-notifications-drain
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: 449a8a26d7830910297642238e39f99605885768
-last_input_digest: sha256:7e67a71ff15d028f4dc47444d6920d556a9343efe87305eae16226b3281e6502
-active_request_id: create-spec-run-0001
+base_revision: b2c52790f4fc0280924b7c3ddb0bd3fbdb2abec4
+last_input_digest: sha256:cd36f7ef4b7a2630daa00cd689a1b2de5b7640984f28de4f9691969796fd48eb
+active_request_id: create-spec-run-0002
 packets:
   pending-notifications-drain-q0001:
     status: answered
@@ -55,6 +55,10 @@ worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
     input_digest: sha256:7e67a71ff15d028f4dc47444d6920d556a9343efe87305eae16226b3281e6502
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: dispatched
+    input_digest: sha256:cd36f7ef4b7a2630daa00cd689a1b2de5b7640984f28de4f9691969796fd48eb
     output_digest: null
 artifacts: []
 patches: []
