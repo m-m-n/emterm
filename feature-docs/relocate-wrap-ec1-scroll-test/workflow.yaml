@@ -3,58 +3,92 @@ feature: relocate-wrap-ec1-scroll-test
 created: 2026-08-15
 base_branch: main
 parent_branch: em-workflow/relocate-wrap-ec1-scroll-test/integration
-
 project:
   license: MIT
   design_system:
     kind: project_native
     paths:
-      - doc/UI-DESIGN-GUIDELINES.yaml
-      - src-tauri/web-shared/styles.css
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
   components:
     term_core:
       language: rust
-      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml"
-      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
-      format_command: "cargo fmt --manifest-path crates/term_core/Cargo.toml --check"
-      e2e_test_command: ""
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml
+        --lib
+      format_command: cargo fmt --manifest-path crates/term_core/Cargo.toml --check
+      e2e_test_command: ''
     src-tauri:
       language: rust
-      build_command: ""
-      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
-      format_command: ""
-      e2e_test_command: ""
-
+      build_command: ''
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib -- --test-threads=1
+      format_command: ''
+      e2e_test_command: ''
 workflow:
-  - id: create-spec
-    artifacts: [REQUIREMENTS.md, SPEC.md]
-    status: completed
-    completed_at_commit: 9a0e28c8d23a6059a891c8e1941aeefdf0bf9ba1
-  - id: design
-    artifacts: [DESIGN.md, design/]
-    status: skipped
-    skipped_reason: >-
-      Test-only change inside the pure-Rust term_core crate: no UI surface, no
-      visual artifact, no user-visible behavior and no public API change. The
-      diff touches test code and documentation records only, so there is
-      nothing for the design step to decide.
-  - id: create-plan
-    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 9a0e28c8d23a6059a891c8e1941aeefdf0bf9ba1
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'Test-only change inside the pure-Rust term_core crate: no UI surface, no visual artifact,
+    no user-visible behavior and no public API change. The diff touches test code and documentation records
+    only, so there is nothing for the design step to decide.'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: completed
+  completed_at_commit: 47939ac622933394800ac9f0cc5fe209da51ee60
+- id: implement
+  status: pending
+  base_commit: null
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks:
+  task0001:
+    title: Correct the EC1 scroll-path test, pin ring_push_blank's overflow clearing, reconcile the test-docs
+      records
+    plan: tasks/task0001.md
+    files:
+    - crates/term_core/src/print_handler/tests.rs
+    - crates/term_core/src/ring_buffer/tests.rs
+    - test-docs/relocate-wrap-ec1-scroll-test/task0001.tests.yaml
+    - test-docs/relocate-wrap-overflow-cleanup/task0001.tests.yaml
+    skills: []
+    domains:
+    - input-handling
+    complexity: low
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - FR8
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    - NFR5
     status: pending
-  - id: implement
-    status: pending
-    base_commit: null
-  - id: review
-    status: pending
-  - id: verify
-    status: pending
-    result: null
-    failed_items: []
-  - id: retrospect
-    status: pending
-
-tasks: {}
-
+    notes: null
+    branch: null
 review:
   status: pending
   rounds_completed: 0
@@ -62,100 +96,125 @@ review:
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
-
 requirements:
   FR1:
     title: Rename the EC1 scroll-path test to a claim it proves
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-1]
+    tasks:
+    - task0001
+    tests:
+    - TS-1
   FR2:
     title: Rewrite the EC1 leading comment
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-1]
+    tasks:
+    - task0001
+    tests:
+    - TS-1
   FR3:
     title: Drop the vacuous assertions from the EC1 test
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-1]
+    tasks:
+    - task0001
+    tests:
+    - TS-1
   FR4:
     title: Add a test that pins ring_push_blank's eviction-time overflow clearing
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-2]
+    tasks:
+    - task0001
+    tests:
+    - TS-2
   FR5:
     title: Red criterion for the new test, retargeted to the eviction path
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-2, TS-3]
+    tasks:
+    - task0001
+    tests:
+    - TS-2
+    - TS-3
   FR6:
     title: SPEC records the unreachability of the deletion branches on the scroll path
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-5]
+    tasks:
+    - task0001
+    tests:
+    - TS-5
   FR7:
     title: test-docs reconciliation (decided)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-6]
+    tasks:
+    - task0001
+    tests:
+    - TS-6
   FR8:
     title: No production code change
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-3]
+    tasks:
+    - task0001
+    tests:
+    - TS-3
   NFR1:
     title: Behavior preservation
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-4]
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   NFR2:
     title: No new dependencies
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-4]
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   NFR3:
     title: Suite determinism
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-4]
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   NFR4:
     title: Convention conformance
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-4]
+    tasks:
+    - task0001
+    tests:
+    - TS-4
   NFR5:
     title: Format cleanliness
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-4]
-
+    tasks:
+    - task0001
+    tests:
+    - TS-4
 batch:
   review_rework_count: 0
   verify_rework_count: 0
