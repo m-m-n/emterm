@@ -91,9 +91,15 @@ tasks:
     notes: null
     branch: em-workflow/relocate-wrap-ec1-scroll-test/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
+  plan:
+    floor:
+    - comprehensive
+    - security
+    - spec
+    discretionary: []
+    cross_validation: true
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
