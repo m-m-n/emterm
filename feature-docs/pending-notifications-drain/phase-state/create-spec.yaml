@@ -1,14 +1,18 @@
 schema_version: 1
 feature: pending-notifications-drain
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: 12cebc80893b7a80c2ce93af9520647dc81a5553
-last_input_digest: null
-active_request_id: null
+base_revision: 1f0ce3547525fcc62c35687972d24c2357c53cd4
+last_input_digest: sha256:7e67a71ff15d028f4dc47444d6920d556a9343efe87305eae16226b3281e6502
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:7e67a71ff15d028f4dc47444d6920d556a9343efe87305eae16226b3281e6502
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
