@@ -84,7 +84,8 @@ workflow:
       and ring_buffer/tests.rs are wholly cfg(test) child modules; terminal_dispatch.rs hunks at 517/565
       are inside the mod tests opened at line 379)'
 - id: retrospect
-  status: pending
+  status: completed
+  completed_at_commit: 637c97d572f9fb14e6d85cde19b5a7f4525ba3be
 tasks:
   task0001:
     title: Correct the EC1 scroll-path test, pin ring_push_blank's overflow clearing, reconcile the test-docs
