@@ -1,0 +1,100 @@
+round: 1
+executed_at: "2026-08-15T20:50:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: f7e9f98e4ae95649f25d9a8c5137ae87e4248122
+  head_commit: d187e35f187ec4984052180ff19f83d2b1c70dad
+  changed_files:
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - test-docs/pending-notifications-drain/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: 2d9aef8c4e259ac4
+    severity: critical
+    category: performance
+    file: src-tauri/src/callbacks.rs
+    line: 560
+    line_end: 567
+    title: "Potential blocking I/O introduced by removing notification buffer"
+    description: >
+      The pending_notifications buffer previously kept D-Bus calls out of the PTY
+      processing hot path. Without buffering, each OSC 9 notification immediately
+      triggers `self.sink.send(&title, &body)` which may involve synchronous D-Bus
+      round-trips in process_pty_data. This could block terminal rendering if D-Bus
+      is slow or congested.
+    suggestion: >
+      (reviewer supplied prose only — no diff)
+    sources: [litellm:vertex-deepseek-v3.2:performance]
+    confidence: 50
+    resolution: declined
+    resolution_reason: >
+      前提が事実に反する。オーケストレーターが git で直接検証した:
+      (1) `git show f7e9f98e:src-tauri/src/callbacks.rs` の handle_notify は変更前から
+      `self.sink.send(&title, &body)` をインラインで同期実行しており、この呼び出しは
+      本 diff で 1 バイトも動いていない。(2) 変更前ツリー全体を grep しても
+      `pending_notifications` の drain は 1 箇所も存在せず（宣言・push・テスト 2 箇所の
+      計 4 箇所のみ、app/mod.rs の同名ローカルは別型の無関係変数）、
+      「バッファが D-Bus をホットパスの外に出していた」という前提そのものが成立しない。
+      よって本 diff はブロッキング I/O を新規導入していない（削除したのは
+      配送に寄与しない書き込み専用バッファだけ）。
+      独立に claude:performance / claude:comprehensive / codex:security の 3 レビュアーが
+      同じ結論に到達している。加えて、この指摘が示唆する唯一の是正
+      （buffer-then-drain の再導入）は SPEC FR4「配送はインライン sink.send のまま維持」・
+      NFR1「観測可能な挙動の不変性」・NFR2「代替バッファを導入しない」に正面から反するため、
+      auto-fix の対象にしない。
+  - stable_id: 540afd1119b3428c
+    severity: medium
+    category: spec
+    file: src-tauri/src/callbacks.rs
+    line: 316
+    line_end: 368
+    title: "AC2 / Data Flow の「配信後に生 title/body を保持する構造は残らない」がレートリミッタの dedupe マップにより満たされていない"
+    description: >
+      SPEC の Data Flow は「After the change, the raw title / body live only for the
+      duration of the `handle_notify` call; no process-local structure retains them
+      (NFR2, AC2)」と述べ、AC2 も同趣旨。しかし既存の
+      `NotificationRateLimiter.last: Mutex<HashMap<(String, String), Instant>>`
+      (callbacks.rs:316) が `should_emit` で `(title.to_string(), body.to_string())` を
+      鍵として挿入し、GC は window の 4 倍（既定 4 秒）より古いエントリしか退避しない。
+      よって配信後も生の title/body は最大約 4 秒プロセスメモリに残る。
+      pending_notifications 除去で OBJ1（無限成長の停止）は達成されているが、
+      OBJ2 / AC2 が字義どおりには成立しない。FR7 がレートリミッタ非改変を要求しているため
+      実装側の逸脱ではなく、SPEC 記述と実コードの齟齬。
+    suggestion: >
+      (a) SPEC 側を実態に合わせ、AC2 / Data Flow を「新たな保持構造を導入しない（NFR2）」に
+      限定し、dedupe マップが最大 4×window の間 (title, body) を保持する残存リスクを明記する。
+      (b) OBJ2 を字義どおり満たすなら、NotificationRateLimiter の鍵を生文字列から
+      ハッシュ等の不可逆値へ変更する案を別タスクとして起票する（FR7 の文言更新が要るため
+      本タスク内では実施しない）。
+    sources: [claude:spec]
+    confidence: 60
+    resolution: deferred
+    resolution_reason: >
+      severity medium のため完了ゲート（residual_critical_high）に掛からない。
+      是正案 (a) は SPEC.md の書き換え＝仕様変更、(b) は FR7 の文言変更を伴う別スコープで、
+      いずれも batch 実行中に無人で決めてよい種類の変更ではない（本タスクのスコープは
+      pending_notifications の除去に限定され、FR7 はレートリミッタ非改変を明示的に要求している）。
+      Notion に別タスクとして起票し、人間の評価者の判断に委ねる。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: >
+    R4 の candidate gate（severity ∈ {critical, high} かつ category != spec）を通るのは
+    2d9aef8c4e259ac4 のみだったが、前提が git で反証済みかつ唯一の是正が SPEC FR4 / NFR1 /
+    NFR2 に反するため declined とし、auto-fix は 1 ループも実行していない。
+    540afd1119b3428c は category: spec のため gate 対象外。
+residual_critical_high: 0
+rework_required: false
