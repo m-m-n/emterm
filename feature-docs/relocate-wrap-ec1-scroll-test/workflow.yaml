@@ -55,14 +55,34 @@ workflow:
   status: completed
   completed_at_commit: d0a408f1ba180d26d50246925ee1fa50debd24b2
 - id: verify
-  status: pending
-  result: null
-  failed_items:
-  - id: TS-4/AC-8/NFR5
-    note: 'cargo fmt --manifest-path crates/term_core/Cargo.toml --check exits 1 with 3 drifts (print_handler/tests.rs:1131,
-      terminal_dispatch.rs:517, :565). Verified identical on main (b7555719): all 3 are pre-existing,
-      this feature introduced zero drift. Every other scenario passed: cargo check clean, 824 passed /
-      0 failed, TS-1/TS-2/TS-3 all green under the new names, zero production-code diff.'
+  status: completed
+  result: pass
+  failed_items: []
+  completed_at_commit: 60c07a6affa67d510a1ab122dd2b7b6ac7991b9c
+  summary:
+    build: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml ->
+      exit 0
+    test: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      -> 824 passed, 0 failed, 13 ignored
+    format: cargo fmt --manifest-path crates/term_core/Cargo.toml --check -> exit 0 (clean after task0002)
+    e2e: not applicable - no e2e_test_command for this component
+    src_tauri_component: not required - no file in this feature's scope belongs to it and production code
+      is byte-identical (VERIFICATION.md)
+    scenarios:
+      TS-1: pass - test_relocate_widened_base_via_wrap_scrolls_without_panic green under the new name;
+        old _or_stale_entries name absent
+      TS-2: pass - test_ring_push_blank_clears_recycled_row_overflow_entries green; red confirmed in task0001.tests.yaml
+        AC-4 with verbatim failure message
+      TS-3: pass - both frozen relocation tests green and unchanged
+      TS-4: pass - full suite green and format check clean
+      TS-5: pass - SPEC.md 'Unreachability of the deletion branches on the scroll path' carries all three
+        mechanisms with file:line evidence plus the shift_rows_up out-of-scope note
+      TS-6: pass - this feature's task0001/task0002 tests.yaml records exist and map every criterion;
+        the prior feature's record shows the AC-6 block as its only changed hunk
+    excluded_requirements: []
+    ac5_production_freeze: 'verified - every changed Rust hunk lies inside a #[cfg(test)] module (print_handler/tests.rs
+      and ring_buffer/tests.rs are wholly cfg(test) child modules; terminal_dispatch.rs hunks at 517/565
+      are inside the mod tests opened at line 379)'
 - id: retrospect
   status: pending
 tasks:
