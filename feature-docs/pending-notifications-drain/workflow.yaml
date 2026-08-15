@@ -67,7 +67,8 @@ workflow:
       M4（実機ランタイムスモーク）は GUI ビルドをユーザーが起動する必要があり無人実行では
       実施不能。VERIFICATION.md 自身が "not required for AC sign-off" と明記しているため未実施。
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 378dbf0af5e7f7c5c3e3fceae5e4913ce985ef8d
 
 tasks:
   task0001:
