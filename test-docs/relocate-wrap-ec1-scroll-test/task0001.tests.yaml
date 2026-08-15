@@ -1,0 +1,136 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [print_handler::tests::test_relocate_widened_base_via_wrap_scrolls_without_panic]
+    red_confirmed: false
+    red_reason: >-
+      Naming/comment correction, not a defect pin: the test's new name and
+      rewritten leading comment claim only no-panic / no out-of-range access
+      plus correct placement of the relocated base and spacer on the
+      resolved row, with no overflow-entry property asserted or implied.
+      Verified by inspecting the diff and by the test compiling and passing
+      under its new name.
+  AC-2:
+    tests: [print_handler::tests::test_relocate_widened_base_via_wrap_scrolls_without_panic]
+    red_confirmed: false
+    red_reason: >-
+      Assertion-removal correction, not a defect pin: both absence-of-
+      overflow-entry assertions and the `abs1` binding they consumed are
+      gone (confirmed by `git diff`), and every remaining assertion in the
+      test (pre-scroll cursor row/col, post-scroll cursor row pinned to the
+      last row, the relocated glyph's rendered content, the width-2/width-0
+      pair on the resolved row) is non-vacuous under the code under test.
+  AC-3:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
+    red_confirmed: false
+    red_reason: >-
+      Structural/existence criterion for the new test itself — it exists in
+      ring_buffer/tests.rs beside test_ring_push_blank_clears_ridx,
+      pre-asserts both columns' overflow-table entries and the reverse-index
+      row key are present, scrolls via a plain line feed with no relocation
+      involved, post-asserts both entries and the row key are gone, and
+      passes on unmodified code. The defect-pin red confirmation for this
+      same test is recorded separately under AC-4.
+  AC-4:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
+    red_confirmed: true
+    red_reason: >-
+      Confirmed by temporarily removing both of ring_push_blank's clearing
+      sites together (the scrollback-disabled branch's clear at
+      ring_buffer.rs:196-199 and the new-bottom clear at
+      ring_buffer.rs:221-224), in a single mutation, then running the
+      term_core test command: "assertion failed:
+      !core.overflow.contains_key(&(0u32, abs0))" at
+      ring_buffer/tests.rs:485 (the test's first post-assertion). The full
+      suite under this mutation showed exactly one failure (823 passed, 1
+      failed, 13 ignored). Production was restored byte-identically
+      afterward (`git diff -- crates/term_core/src/ring_buffer.rs` returns
+      empty) and the suite re-confirmed green (824 passed, 0 failed).
+
+      Single-site redundancy (IMPLEMENTATION.md D3): removing only the
+      scrollback-disabled branch's clear, or only the new-bottom clear
+      (each verified separately, in its own temporary mutation, then
+      restored), independently leaves this test green. The two sites
+      target the same ring slot for a single push
+      (`new_bottom_abs == evicted_abs` always) and are mutually redundant
+      for this fixture; a single-site-only removal is not a failed red
+      confirmation.
+
+      Departure from IMPLEMENTATION.md D4's prediction: D4 expected the
+      same both-sites mutation to also turn the pre-existing
+      test_ring_push_blank_clears_ridx red ("very likely... two tests
+      red"). Observed reality is otherwise — under the both-sites mutation
+      only this new test failed; test_ring_push_blank_clears_ridx stayed
+      green. Reason: that test constructs with scrollback capacity 2 (not
+      0), so ring_push_blank takes the scrollback-capacity>0 compress
+      branch (ring_buffer.rs:157-180), whose own overflow-table clear
+      (ring_buffer.rs:177-179) is a third, distinct clearing site that this
+      mutation never touched. Because Step 1 (the compress branch's clear)
+      always runs before Step 3 (the new-bottom clear) within a single
+      push, and both target the same row, the compress branch's untouched
+      clear already removes the entry before Step 3 would matter — so
+      test_ring_push_blank_clears_ridx is protected independently of the
+      two sites this mutation disabled. This is recorded as an observed
+      discrepancy with IMPLEMENTATION.md D4, not silently corrected in the
+      plan text; it does not weaken this AC's own red confirmation, since
+      AC-3's fixture (scrollback capacity 0) has no such independent third
+      clearing site and its own test genuinely went red under the mutation.
+  AC-5:
+    tests:
+      - print_handler::tests::test_relocate_widened_base_via_wrap_removes_stale_overflow_entries_on_target_row
+      - print_handler::tests::test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist
+    red_confirmed: false
+    red_reason: >-
+      Regression/freeze criterion, not a defect pin: both named tests are
+      byte-identical to their pre-task state (confirmed via `git diff`
+      showing no hunk touching either) and pass, and the final diff shows
+      zero change to any non-#[cfg(test)] line in the repository — the only
+      production-file edit made during this task (the FR5 red-confirmation
+      mutation of ring_buffer.rs) was fully reverted and confirmed empty via
+      `git diff` before the task's commits were made.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Documentary criterion verified by review, not by an automated test:
+      the rewritten EC1 comment states the unreachability mechanism from
+      IMPLEMENTATION.md D2 — the relocated writes target the same ring slot
+      ring_push_blank just recycled, whose overflow entries are already
+      cleared before the relocated writes run, so the relocation's own
+      deletion branches are structurally unreachable on the scroll path —
+      and contradicts no part of it. SPEC.md's own "Unreachability of the
+      deletion branches on the scroll path" section is present and was not
+      modified by this task.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Documentary/records criterion verified by review, not by an
+      automated test: this file exists and maps every SPEC acceptance
+      criterion (AC-1..AC-8) to its tests or an explicit
+      no-test-projection reason, and the AC-6 entry of
+      test-docs/relocate-wrap-overflow-cleanup/task0001.tests.yaml names
+      the renamed test and describes the vacuity correction — confirmed via
+      `git diff` on that file showing only the AC-6 hunk changed, with
+      every other entry left byte-identical.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Command-green criterion, not a defect pin: the term_core component's
+      test command (cargo test --manifest-path crates/term_core/Cargo.toml
+      --lib) passes with 824 passed, 0 failed, 13 ignored — one more passing
+      test than the 823-passed/0-failed baseline recorded before this
+      task's edits, matching the single new test added. The format command
+      (cargo fmt --manifest-path crates/term_core/Cargo.toml --check)
+      reports pre-existing drift in
+      crates/term_core/src/print_handler/tests.rs (around line 1131) and
+      crates/term_core/src/terminal_dispatch.rs (around lines 517 and 565)
+      — confirmed present on the unmodified baseline via `git stash` before
+      re-running the format check, and outside both this task's edited line
+      ranges and its file scope (terminal_dispatch.rs is not in
+      expected_files), so left untouched per the production-freeze / file-
+      scope constraints. No format drift was introduced within the lines
+      this task changed.

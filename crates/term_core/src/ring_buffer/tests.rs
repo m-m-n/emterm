@@ -431,6 +431,62 @@ fn test_ring_push_blank_clears_ridx() {
     assert!(core.overflow_ridx.is_empty());
 }
 
+// AC-3/AC-4 (FR4): `ring_push_blank`'s eviction-time clearing of the
+// overflow table and reverse index, pinned directly on the recycled ring
+// slot with no relocation anywhere in this fixture. Complements
+// `test_ring_push_blank_clears_ridx` above (which exercises the
+// scrollback-enabled compress path via `set_cell`); this fixture has zero
+// scrollback capacity so `ring_push_blank` takes the scrollback-disabled
+// eviction branch instead, and drives the pre-populated cells through
+// `handle_print` (mirroring `print_handler/tests.rs`'s overflow fixture
+// shape) rather than by direct cell mutation.
+#[test]
+fn test_ring_push_blank_clears_recycled_row_overflow_entries() {
+    let mut core = TerminalCore::new(5, 2, 0); // 5 cols, 2 rows, no scrollback
+
+    let marks: [u32; 8] = [
+        0x0301, 0x0302, 0x0303, 0x0304, 0x0305, 0x0306, 0x0307, 0x0308,
+    ];
+
+    // Populate viewport row 0, col 0 with width-1 overflow-bound content.
+    core.handle_print(0x65); // 'e'
+    for &m in &marks {
+        core.handle_print(m);
+    }
+    // Populate viewport row 0, col 1 with width-1 overflow-bound content.
+    core.handle_print(0x66); // 'f'
+    for &m in &marks {
+        core.handle_print(m);
+    }
+
+    let abs0 = core.viewport_abs(0) as u32;
+
+    // Pre-assert (anti-vacuity guard): both target cells are genuinely
+    // overflow-bound before the scroll, so a fixture that fails to exceed
+    // the inline cap cannot silently make this test vacuous.
+    assert!(core.overflow.contains_key(&(0u32, abs0)));
+    assert!(core.overflow.contains_key(&(1u32, abs0)));
+    assert!(
+        core.overflow_ridx
+            .get(&abs0)
+            .map(|cols| cols.contains(&0u32) && cols.contains(&1u32))
+            .unwrap_or(false)
+    );
+
+    // Move to the last row and emit a plain line feed: the full-screen
+    // scroll path runs `ring_push_blank`, recycling the slot that was
+    // holding row 0's data.
+    core.set_cursor(0, 1);
+    core.handle_execute(0x0A);
+
+    // Post-assert: neither column's entry remains in the overflow table for
+    // the recycled row key, and the reverse index no longer holds that row
+    // key at all.
+    assert!(!core.overflow.contains_key(&(0u32, abs0)));
+    assert!(!core.overflow.contains_key(&(1u32, abs0)));
+    assert!(!core.overflow_ridx.contains_key(&abs0));
+}
+
 // ── Scroll event tests ──────────────────────────────────
 
 #[test]
