@@ -517,7 +517,11 @@ mod tests {
                 core_direct.get_cell_char(col, 0),
                 "col {col}: char mismatch"
             );
-            assert_eq!(core_fast.get_cell_width(col, 0), 1, "col {col}: not width 1");
+            assert_eq!(
+                core_fast.get_cell_width(col, 0),
+                1,
+                "col {col}: not width 1"
+            );
             assert_eq!(
                 core_direct.get_cell_width(col, 0),
                 1,
@@ -565,8 +569,7 @@ mod tests {
     // leaves that left neighbor untouched — the repair keys off the
     // wide-pair relationship, not width 0 alone.
     #[test]
-    fn process_pty_data_ascii_overwrites_width0_without_wide_left_neighbor_leaves_it_untouched()
-    {
+    fn process_pty_data_ascii_overwrites_width0_without_wide_left_neighbor_leaves_it_untouched() {
         let mut core = TerminalCore::new(10, 3, 0);
         core.handle_print(b'X' as u32); // col0 = 'X', width 1, cursor -> col1
         let idx = core.cell_index(1, 0).unwrap();

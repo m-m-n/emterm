@@ -1131,17 +1131,17 @@ fn test_write_grapheme_column_shifted_redraw_blanks_all_orphan_partners() {
     let expected: &[(u16, &str, u8)] = &[
         (0, " ", 1),
         (1, "-", 1),
-        (2, " ", 1),          // PAIR-1 spacer, blanked by FR1
-        (3, "A", 1),          // untouched leftover from frame 1
-        (4, " ", 1),          // PAIR-2 base, blanked by FR2
+        (2, " ", 1), // PAIR-1 spacer, blanked by FR1
+        (3, "A", 1), // untouched leftover from frame 1
+        (4, " ", 1), // PAIR-2 base, blanked by FR2
         (5, "y", 1),
-        (6, "\u{65E5}", 2),   // new base
-        (7, "", 0),           // new placeholder/spacer (was PAIR-3's base)
-        (8, " ", 1),          // PAIR-3 spacer, blanked by FR3
-        (9, "5\u{FE0F}", 2),  // widened base
-        (10, "", 0),          // new spacer (was PAIR-4's base)
-        (11, " ", 1),         // PAIR-4 spacer, blanked by FR4
-        (12, "D", 1),         // untouched leftover from frame 1
+        (6, "\u{65E5}", 2),  // new base
+        (7, "", 0),          // new placeholder/spacer (was PAIR-3's base)
+        (8, " ", 1),         // PAIR-3 spacer, blanked by FR3
+        (9, "5\u{FE0F}", 2), // widened base
+        (10, "", 0),         // new spacer (was PAIR-4's base)
+        (11, " ", 1),        // PAIR-4 spacer, blanked by FR4
+        (12, "D", 1),        // untouched leftover from frame 1
         (13, " ", 1),
         (14, " ", 1),
         (15, " ", 1),
