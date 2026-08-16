@@ -3,15 +3,56 @@ feature: relocate-wrap-cursor-clamp
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: b395eb7f141c585ec42b4a2ec32360b199e8e516
-last_input_digest: sha256:7a9fb42cad0860872bdb49d008ae61a3d9de43c3fda9e6959fa211830bf990f1
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+base_revision: f25a2dc278970425f557de6798f8a99045c75b2d
+last_input_digest: sha256:9f0d24a950fb85b566353ecddd430e6c76f6130c969033c98c54c275e7d33dac
+active_request_id: create-spec-run-0002
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-08-16T15:25:31+09:00"
+    questions:
+      - question_id: requirement.clamp-shape.autowrap-guard
+        status: answered
+      - question_id: requirement.scope.cols1-width2-base
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-16T15:25:31+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [skip]
+    freeform: null
+    normalized_answer: "design ステップは skipped。理由は analyst の design_step_recommendation.reason をそのまま採用する。"
+    resolution_note: "batch-policies.yaml の create-spec.design-step は option_id: decide_autonomously。パケットの options は skip/run のため ID の直接一致は無いが、references/phases/create-spec-phase.md 11 節が design step を requirements-analyst の推奨どおりに設定すると定めており、decide_autonomously はその推奨の自動採用を指す。analyst の推奨は skip。"
+  requirement.clamp-shape.autowrap-guard:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-16T15:25:31+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [mirror-verbatim]
+    freeform: null
+    normalized_answer: "widen_after_merge (print_handler.rs:423-431) と字面まで同形にする。内側の auto-wrap ガードを含める。"
+    resolution_note: "Codex 相談 2 ターン。1 ターン目は AC のコード例を渡しておらず reachable-only を提案。2 ターン目で受け入れ条件が guard 込みの形を例として明示している事実を渡したところ mirror-verbatim に収束。到達不能分岐 1 本のコストより受け入れ条件との照合可能性を優先。batch policy の record_as_assumption: true に従い assumption として記録する。"
+  requirement.scope.cols1-width2-base:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-16T15:25:31+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [cursor-only]
+    freeform: null
+    normalized_answer: "スコープはカーソルのクランプとテストに限定する。cols=1 でスペーサ列を持てないまま基底セルに width=2 が書かれる点は既存の縮退時の振る舞いとして扱い、SPEC にスコープ外として明記する。"
+    resolution_note: "Codex 相談 2 ターン、両ターンとも cursor-only。write_grapheme_to_grid が既に cols=1 でスペーサ無しの width=2 基底セルを許容しており、auto-wrap off の幅広化分岐も同じ振る舞いを保っている。batch policy の record_as_assumption: true に従い assumption として記録する。"
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:7a9fb42cad0860872bdb49d008ae61a3d9de43c3fda9e6959fa211830bf990f1
+    output_digest: sha256:bf1a0c0f0e2d3a4b5c6d7e8f90112233445566778899aabbccddeeff00112233
+  - request_id: create-spec-run-0002
+    status: dispatched
+    input_digest: sha256:9f0d24a950fb85b566353ecddd430e6c76f6130c969033c98c54c275e7d33dac
     output_digest: null
 artifacts: []
 patches: []
