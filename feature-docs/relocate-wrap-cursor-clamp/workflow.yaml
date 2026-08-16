@@ -43,7 +43,8 @@ workflow:
     skipped_reason: "変更は crates/term_core 内のカーソル更新 1 箇所とその単体テストに閉じており、UI 表面・画面レイアウト・視覚的成果物・デザイントークンのいずれにも一切触れない。design ステップで決めるべき視覚設計上の論点が存在しない。"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: d3ec1402f58b86045bb1deea8df319af458483aa
   - id: implement
     status: pending
     base_commit: null
@@ -56,7 +57,20 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "relocate 末尾のカーソルを cols 境界でクランプし、テストで契約を固定する"
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/print_handler.rs
+      - crates/term_core/src/print_handler/tests.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -72,77 +86,77 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2]
   FR2:
     title: "cols <= 2 ではカーソルを最終列にクランプし wrap_pending を立てる"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2]
   FR3:
     title: "cols >= 3 の既存挙動（col=2 / wrap_pending=false）を維持する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   FR4:
     title: "relocate のカーソル以外の後処理を変更しない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   FR5:
     title: "既存 cols=1 テストにカーソル契約のアサートを追加する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
   FR6:
     title: "cols=2 の回帰テストを新規に追加する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS2]
   FR7:
     title: "クランプ後に次の 1 文字が落ちないことをテストで固定する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS3, TS4]
   NFR1:
     title: "変更範囲を term_core のカーソル更新とテストに限定する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS6]
   NFR2:
     title: "cols=1 で spacer 無しの width=2 基底セルが残る点はスコープ外"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1]
   NFR3:
     title: "cols >= 3 に対する外部から観測可能な挙動変更を持ち込まない"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   NFR4:
     title: "既存のテスト規約とフォーマット規約に従う"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS6]
   NFR5:
     title: "E2E 対象外"
