@@ -1581,13 +1581,15 @@ fn test_relocate_widened_base_via_wrap_scrolls_without_panic() {
     assert_eq!(core.get_cell_width(1, 1), 0);
 }
 
-// AC-6 (EC2, NFR3): a terminal narrow enough that column 1 does not exist
-// on the new row — the relocated spacer write (including its new overflow
-// removal) is skipped entirely via the existing `cell_index` bounds check.
-// Proves that skip stays panic-free with the new removal call added inside
-// it.
+// AC-1 (task0001): on a 1-column grid the relocated base's prospective
+// cursor column (relocated col0 + widened width 2 = 2) is at or past the
+// column count, so the clamp pins the cursor to the only column (0) and
+// raises wrap-pending, instead of leaving the cursor at the invalid
+// column 2 — this pins the cursor contract the task introduces. Also
+// proves the relocated spacer write (column 1 does not exist on this
+// grid) stays panic-free via the existing `cell_index` bounds check.
 #[test]
-fn test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist() {
+fn test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist() {
     let mut core = TerminalCore::new(1, 3, 0); // only column 0 exists
 
     core.handle_print(0x35); // '5' at (0,0), the only column
@@ -1598,4 +1600,40 @@ fn test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist()
 
     assert_eq!(core.get_cell_char(0, 1), "5\u{FE0F}");
     assert_eq!(core.get_cursor_row(), 1);
+    assert_eq!(core.get_cursor_col(), 0); // AC-1: clamped to the only column
+    assert!(core.get_wrap_pending()); // AC-1: wrap-pending raised
+
+    // AC-3: the next character is not silently dropped — it lands at
+    // column 0 of the row below the relocated row.
+    core.handle_print(0x58); // 'X'
+    assert_eq!(core.get_cell_char(0, 2), "X");
+}
+
+// AC-2 (task0001): on a 2-column grid the relocated base's prospective
+// cursor column (relocated col0 + widened width 2 = 2) is also at or past
+// the column count, so the same clamp applies: cursor pinned to the last
+// column (1) and wrap-pending raised, with the spacer at column 1
+// present this time (unlike the 1-column grid above).
+#[test]
+fn test_relocate_widened_base_via_wrap_clamps_cursor_on_two_column_grid() {
+    let mut core = TerminalCore::new(2, 3, 0);
+
+    core.handle_print(0x41); // 'A' at (0,0), cursor -> col1
+    core.handle_print(0x35); // '5' at (1,0), the last column
+    assert_eq!(core.get_cursor_col(), 1);
+    assert!(core.get_wrap_pending());
+
+    core.handle_print(0xFE0F); // VS16 -> relocate via wrap; clamp applies
+
+    assert_eq!(core.get_cell_char(0, 1), "5\u{FE0F}");
+    assert_eq!(core.get_cell_width(0, 1), 2);
+    assert_eq!(core.get_cell_width(1, 1), 0); // spacer, present on this grid
+    assert_eq!(core.get_cursor_row(), 1);
+    assert_eq!(core.get_cursor_col(), 1); // AC-2: clamped to the last column
+    assert!(core.get_wrap_pending()); // AC-2: wrap-pending raised
+
+    // AC-3: the next character is not silently dropped — it lands at
+    // column 0 of the row below the relocated row.
+    core.handle_print(0x58); // 'X'
+    assert_eq!(core.get_cell_char(0, 2), "X");
 }
