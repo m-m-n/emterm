@@ -1,0 +1,87 @@
+round: 1
+executed_at: "2026-08-16T15:55:46+09:00"
+scope:
+  review_mode: diff
+  base_commit: d329169a2b455af9be46374e18a5db8dfed96cb4
+  head_commit: 39a2b835a307d919047fea1786f1f0fa9289d2b4
+  changed_files:
+    - crates/term_core/src/print_handler.rs
+    - crates/term_core/src/print_handler/tests.rs
+    - test-docs/relocate-wrap-cursor-clamp/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: 5daac44d05600514
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/print_handler/tests.rs
+    line: 1592
+    line_end: 1592
+    title: "テスト改名により過去 feature の受入テストレコードが存在しないテスト名を指している"
+    description: |
+      `test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist` を
+      `..._clamps_cursor_when_column_one_does_not_exist` に改名した（SPEC FR5 の指示自体は妥当）が、
+      旧名を参照している既存レコードが更新されていない。
+
+      - test-docs/relocate-wrap-overflow-cleanup/task0001.tests.yaml:62（AC の tests エントリ）
+      - test-docs/relocate-wrap-ec1-scroll-test/task0001.tests.yaml:83（同上）
+      - test-docs/relocate-wrap-ec1-scroll-test/task0002.tests.yaml:46
+      - feature-docs/relocate-wrap-ec1-scroll-test/VERIFICATION.md:39（TS-3 の回帰確認対象）
+
+      `test-docs/*/taskNNNN.tests.yaml` の `acceptance_tests[].tests` は「その AC を守るテスト」を
+      再実行するための機械可読リストなので、旧名のまま残ると `cargo test <旧名>` が 0 件マッチで
+      exit 0 になり、回帰チェックが silently green として通る。前 feature が守っていた不変条件
+      （relocate 経路の overflow クリーンアップ、EC1 スクロール経路）が壊れても誰も気づかない
+      状態になる。新旧 2 テスト自体は本ラウンドで green を確認済みで、問題はそれを指す参照が
+      切れている点。
+    suggestion: |
+      改名を通すなら参照側も同じ変更に含めて更新する。上記 3 つの tests.yaml と
+      VERIFICATION.md:39 の `test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist`
+      を `test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist` に置換する
+      （過去 feature のドキュメントを不変に保ちたい方針であれば、代わりに本 feature のテストを
+      改名せず、旧名のまま cursor 契約のアサートだけ追加する形に戻す）。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: >-
+      severity medium のため R4 の auto-fix 候補ゲート（critical/high のみ）に乗らない。
+      加えて修正対象が過去 feature の test-docs / VERIFICATION.md であり、本 feature の
+      NFR1 が宣言したスコープ（crates/term_core の 2 ファイル）の外側にあたる。別タスクとして起票する。
+  - stable_id: a2480fe1bfe63867
+    severity: medium
+    category: comprehensive
+    file: test-docs/relocate-wrap-cursor-clamp/task0001.tests.yaml
+    line: 26
+    line_end: 34
+    title: "AC-5/AC-6/AC-7 に red_confirmed が欠落しており tests.yaml のスキーマからドリフトしている"
+    description: |
+      新規追加された task0001.tests.yaml では AC-1〜AC-4 に `red_confirmed` があるのに、
+      AC-5 / AC-6 / AC-7 は `tests: []` と `red_reason` だけで `red_confirmed` キーを持たない。
+      同リポジトリの既存レコード（test-docs/relocate-wrap-ec1-scroll-test/task0001.tests.yaml の
+      AC-6/AC-7/AC-8、test-docs/relocate-wrap-overflow-cleanup/task0001.tests.yaml の AC-4〜AC-7）は
+      いずれも `tests: []` のエントリにも `red_confirmed: false` を明記しており、全 AC がこのキーを
+      持つのが本レコード形式の約束になっている。機械的に読む側は「キー欠落」と「false」を区別
+      できず、欠落を falsy として扱えば偶然通り、必須キーとして扱えば解析エラーになる。
+    suggestion: |
+      AC-5 / AC-6 / AC-7 の各エントリに `red_confirmed: false` を追加し、既存 tests.yaml と
+      同じ形にそろえる。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: >-
+      severity medium のため R4 の auto-fix 候補ゲート（critical/high のみ）に乗らない。
+      本 feature 自身の成果物内のスキーマドリフトであり、実行時の振る舞いには影響しない。別タスクとして起票する。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
