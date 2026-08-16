@@ -1,0 +1,21 @@
+schema_version: 1
+feature: relocate-wrap-cursor-clamp
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: cf9190c01f6066b0fe786fc387a69fc9f5084fc8
+last_input_digest: sha256:735df8149e843552ded77a6fd5e054a9a1d8dfbcd98f2c8df274753b6f93bf89
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:735df8149e843552ded77a6fd5e054a9a1d8dfbcd98f2c8df274753b6f93bf89
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
