@@ -50,7 +50,8 @@ workflow:
     base_commit: d329169a2b455af9be46374e18a5db8dfed96cb4
     completed_at_commit: b4aa319ae6d0a88a9a3b8d5bfdd6b204351a27f4
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 39a2b835a307d919047fea1786f1f0fa9289d2b4
   - id: verify
     status: pending
     result: null
@@ -74,13 +75,17 @@ tasks:
     branch: em-workflow/relocate-wrap-cursor-clamp/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  completed_at_commit: 39a2b835a307d919047fea1786f1f0fa9289d2b4
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, spec]
     discretionary: []
     cross_validation: true
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    security: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
