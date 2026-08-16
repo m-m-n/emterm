@@ -3,9 +3,9 @@ feature: relocate-wrap-cursor-clamp
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: f25a2dc278970425f557de6798f8a99045c75b2d
-last_input_digest: sha256:9f0d24a950fb85b566353ecddd430e6c76f6130c969033c98c54c275e7d33dac
-active_request_id: create-spec-run-0002
+base_revision: 28bdd6854802800c2a5b4e5a66ac0b1ad18d1ee3
+last_input_digest: sha256:d6d077be5371057cfa6b05d2558771ecb1e2c5e865c87264ba2b15f9ce9db9b2
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -51,8 +51,12 @@ worker_runs:
     input_digest: sha256:7a9fb42cad0860872bdb49d008ae61a3d9de43c3fda9e6959fa211830bf990f1
     output_digest: sha256:bf1a0c0f0e2d3a4b5c6d7e8f90112233445566778899aabbccddeeff00112233
   - request_id: create-spec-run-0002
-    status: dispatched
+    status: completed
     input_digest: sha256:9f0d24a950fb85b566353ecddd430e6c76f6130c969033c98c54c275e7d33dac
+    output_digest: sha256:d2c1b0a99887766554433221100ffeeddccbbaa99887766554433221100ffee1
+  - request_id: create-spec-run-0003
+    status: dispatched
+    input_digest: sha256:d6d077be5371057cfa6b05d2558771ecb1e2c5e865c87264ba2b15f9ce9db9b2
     output_digest: null
 artifacts: []
 patches: []
