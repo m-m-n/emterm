@@ -53,9 +53,33 @@ workflow:
     status: completed
     completed_at_commit: 39a2b835a307d919047fea1786f1f0fa9289d2b4
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    completed_at_commit: 8e70845edb7da4c9330e76c80419a9a13587b0df
+    summary:
+      build:
+        term_core_check: pass
+        main_check: pass_with_provisioning   # 承認済み文字列 "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml" を逐語実行
+        cli_only_check: pass
+      test:
+        term_core_lib: "pass (825 passed, 0 failed, 13 ignored)"
+        main_lib: "pass (3248 passed, 0 failed, 3 ignored)"
+      scenarios:
+        TS1: pass   # test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist
+        TS2: pass   # test_relocate_widened_base_via_wrap_clamps_cursor_on_two_column_grid
+        TS3: pass   # 2 列グリッドで後続 'X' が次行 col0 に着地
+        TS4: pass   # 1 列グリッドで後続 'X' が次行 col0 に着地
+        TS5: pass   # test_retroactive_widen_at_last_column_wraps_with_autowrap を無改変で green
+        TS6: pass   # term_core の build / test / format
+      format:
+        term_core: "pass (drift なし)"
+        main: pass_with_preexisting_drift    # src-tauri/src/agent_status_exit_latch.rs、arg_dispatch.rs 等の既存 drift。本 feature は src-tauri を一切変更していないため NFR4 の caveat どおり検証失敗としない
+      manual:
+        clamp_shape_ac5: "pass — widen_after_merge(423-431) と同形、内側の MODE_AUTO_WRAP ガードを含む"
+        diff_scope_fr4_nfr1_nfr2: "pass — 本番差分は print_handler.rs のカーソル更新のみ、変更ファイルは宣言どおり 2 ファイル + テストレコード"
+        red_before_green_after: "pass — task0001.tests.yaml が AC-1/AC-2/AC-3 の red_confirmed: true と失敗メッセージを記録"
+      excluded_requirements: []
   - id: retrospect
     status: pending
 
