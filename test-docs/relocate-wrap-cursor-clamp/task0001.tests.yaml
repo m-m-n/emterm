@@ -1,0 +1,34 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - print_handler::tests::test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: 2, right: 0 (cursor column, expected clamp to 0)"
+  AC-2:
+    tests:
+      - print_handler::tests::test_relocate_widened_base_via_wrap_clamps_cursor_on_two_column_grid
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: 2, right: 1 (cursor column, expected clamp to 1); test did not exist before this task"
+  AC-3:
+    tests:
+      - print_handler::tests::test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist
+      - print_handler::tests::test_relocate_widened_base_via_wrap_clamps_cursor_on_two_column_grid
+    red_confirmed: true
+    red_reason: "same failing runs as AC-1/AC-2 above — the out-of-grid cursor column (2) made the follow-up character's cell lookup fail before the clamp was implemented, dropping it silently instead of landing at column 0 of the next row"
+  AC-4:
+    tests:
+      - print_handler::tests::test_retroactive_widen_at_last_column_wraps_with_autowrap
+    red_confirmed: false
+    red_reason: "this is a regression check, not new behavior: the existing 5-column test was already green before this task's change (3+ columns take the in-range branch, unchanged from today) and remains green after — per the task plan it is run unmodified to confirm no regression, not TDD'd red-to-green"
+  AC-5:
+    tests: []
+    red_reason: "not runtime-assertable per the task plan; satisfied by writing the clamp with the same two-branch structure (including the nested auto-wrap guard) as widen_after_merge, verified by manual code-shape inspection during review/verify (IMPLEMENTATION.md D2)"
+  AC-6:
+    tests: []
+    red_reason: "not runtime-assertable; satisfied by keeping the production diff confined to the cursor-column tail of relocate_widened_base_via_wrap (verified via `git diff` showing only the two Scope files changed and no other production line touched)"
+  AC-7:
+    tests: []
+    red_reason: "verified by running the term_core build/test/format component commands directly: cargo check, cargo test --lib (825 passed, 0 failed), cargo fmt --check (clean, no diff) all succeeded"

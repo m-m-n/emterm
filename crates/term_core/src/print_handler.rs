@@ -521,8 +521,27 @@ impl TerminalCore {
         }
         self.mark_row_dirty(new_row);
 
-        self.cursor.col = 2;
-        self.wrap_pending = false;
+        // AC-1/AC-2 (task0001): clamp the cursor to the grid instead of
+        // unconditionally placing it two columns past the relocated base.
+        // Mirrors widen_after_merge's branch structure (IMPLEMENTATION.md
+        // D2), including the inner auto-wrap guard, even though that
+        // guard's false side is unreachable from this call site: the
+        // prospective column is the relocated base's column (always 0)
+        // plus the widened cell's width (2).
+        let new_col = 0u32 + 2;
+        if new_col >= self.cols as u32 {
+            if self.get_mode(MODE_AUTO_WRAP) {
+                self.cursor.col = self.cols - 1;
+                self.wrap_pending = true;
+            }
+        } else {
+            self.cursor.col = new_col as u16;
+            // D3: the in-range branch keeps clearing wrap-pending — the
+            // carriage-return/line-feed helpers above leave the flag
+            // untouched, so this is the only thing that lowers a flag
+            // raised before relocation.
+            self.wrap_pending = false;
+        }
         self.last_write = Some((0, new_row));
     }
 }
