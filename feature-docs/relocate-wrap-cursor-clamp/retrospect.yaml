@@ -1,0 +1,49 @@
+feature: relocate-wrap-cursor-clamp
+collected_at: "2026-08-16T16:01:00+09:00"
+session_ids: [01a00934-03fa-7000-b5bc-5e8e859b19a0]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - note: >-
+      review round1 の comprehensive が「テスト改名で過去 feature の test-docs /
+      VERIFICATION.md の参照が切れる」を検出した（stable_id 5daac44d05600514）。
+      `cargo test <旧名>` は 0 件マッチでも exit 0 になるため、切れた参照は silently green
+      として通る。テストのリネームを要求する要件を書く時点で、既存の test-docs 参照を
+      同じ変更に含めるかを決めておくと、レビューで後追いにならない。
+  - note: >-
+      同じく round1 の comprehensive が `test-docs/*/taskNNNN.tests.yaml` のスキーマ
+      ドリフト（`tests: []` のエントリに `red_confirmed` が無い）を検出した
+      （stable_id a2480fe1bfe63867）。tests.yaml のスキーマがドキュメント化されておらず、
+      implementer は既存レコードを模倣するしかない。テンプレートかスキーマ定義があると
+      この種のドリフトは起きない。
+  - note: >-
+      medium の finding は R4 の auto-fix 候補ゲート（critical/high のみ）に乗らないため、
+      batch 実行では必ず unresolved のまま残る。本 run では 2 件とも実害のある指摘だったが、
+      ゲートの設計どおり自動修正されなかった。batch レポートと別タスク起票が
+      この 2 件を人間に届ける唯一の経路になっている。
+  - note: >-
+      batch の create-spec で create-spec.design-step ゲートを解決する際、
+      batch-policies.yaml の option_id `decide_autonomously` がパケットの options
+      (`skip` / `run`) に存在せず、question-resolution.md step 6 の字面では
+      「protocol error → abort」に倒れる。create-spec-phase.md 11 節が
+      「design step は requirements-analyst の推奨どおりに設定する」と定めている
+      ことを根拠に skip として解決した。policy 側の option_id を実際のパケットに
+      合わせるか、pseudo-option であることを明記すると曖昧さが消える。
+  - note: >-
+      analyst の再 dispatch で `prior_analysis` を渡す条件（digest 一致）が、
+      answers_digest を input_digest に含める規則と噛み合わない。回答が入った時点で
+      digest は必ず変わるため、clarification loop 内の再 dispatch では
+      prior_analysis が常に omit され、analyst が調査をやり直す。
+      本 run では round 2 が round 1 とほぼ同じ調査を再実行している。
+  - note: >-
+      main crate の検証は新規 worktree では bundled font と web バンドルの
+      provisioning が要る。承認済みコマンド一覧に provisioning 込みの複合文字列が
+      既にあり、それを逐語実行することで回帰確認まで到達できた。
+      VERIFICATION.md が「provisioning 失敗は環境問題として報告」と書いていたが、
+      実際には provisioning 込みコマンドで通せる。VERIFICATION.md 側にその
+      複合コマンドを書いておくと迷いがない。
