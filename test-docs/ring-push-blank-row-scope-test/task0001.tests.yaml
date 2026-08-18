@@ -1,0 +1,95 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
+    red_confirmed: false
+    red_reason: >
+      Structural criterion (survivor row present in the fixture, built via
+      the same print path/marking technique, key captured pre-scroll). Not
+      independently red/green-observable; its correctness is guarded by the
+      AC-2 pre-scroll anti-vacuity assertions, which passed on the first run
+      of the extended fixture (no red state was hit while constructing it).
+  AC-2:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
+    red_confirmed: false
+    red_reason: >
+      The pre-scroll anti-vacuity assertions (both rows genuinely present in
+      overflow/overflow_ridx before the scroll) passed immediately once
+      written; the underlying "content lands in the overflow table" behavior
+      predates this task and is unmodified by it, so there was no red state
+      to observe here. Per the task plan's TDD note, this task's genuine red
+      step is the AC-6 mutation.
+  AC-3:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
+    red_confirmed: false
+    red_reason: >
+      Pre-existing recycled-row post-assertions, preserved verbatim from
+      before this task (out of scope to re-derive their red state here).
+      Confirmed unweakened by diff review: same assertions, same lines,
+      unchanged.
+  AC-4:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
+    red_confirmed: true
+    red_reason: >
+      Demonstrated via the AC-6 transient whole-table-clear mutation (see
+      AC-6 below for the full mutation description): with the row-scoped
+      clear replaced by an unconditional `self.overflow.clear()` /
+      `self.overflow_ridx.clear()` at every clearing site inside
+      `ring_push_blank`, this exact survival assertion failed first:
+      `assertion failed: core.overflow.contains_key(&(0u32, abs1))` at
+      crates/term_core/src/ring_buffer/tests.rs:523:5. That is a
+      survivor-row assertion (not a recycled-row one), which is the evidence
+      this criterion requires.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Comment-only criterion, not test-observable. Verified by inspection:
+      the leading explanatory block above the test now describes the
+      row-scoped claim (not merely "clearing happened"), and the test body
+      carries a comment stating that removing only one of the two clearing
+      sites leaves the test green because the evicted absolute row and the
+      new bottom absolute row coincide within a single push in this fixture.
+  AC-6:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
+    red_confirmed: true
+    red_reason: >
+      Transient mutation performed in crates/term_core/src/ring_buffer.rs:
+      replaced every `overflow_clear_row`/`overflow_ridx_clear_row` call
+      pair inside `ring_push_blank` (the scrollback-bypass branch, the
+      scrollback-enabled compress branch, the scrollback-disabled branch,
+      and the new-bottom-row clear) with an unconditional
+      `self.overflow.clear(); self.overflow_ridx.clear();`. Running
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      crates/term_core/Cargo.toml --lib ring_push_blank_clears_recycled_row`
+      against the mutated file produced:
+
+      test ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries ... FAILED
+
+      ---- ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries stdout ----
+      thread 'ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries' (2553229) panicked at crates/term_core/src/ring_buffer/tests.rs:523:5:
+      assertion failed: core.overflow.contains_key(&(0u32, abs1))
+
+      test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 837 filtered out
+
+      The failing line (523) is a survivor-row assertion, matching the
+      requirement that the failure not land on a recycled-row assertion.
+      The mutation was then reverted via `git checkout --
+      crates/term_core/src/ring_buffer.rs`; `git hash-object
+      crates/term_core/src/ring_buffer.rs` before (875895f68535d87e3b91fad
+      7c226d452fd932d7c) and after the revert matched exactly, and `git
+      status --porcelain` showed no diff against HEAD for that file. The
+      full suite was re-run green afterward (see AC-7).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Whole-command outcome, not a per-test criterion. `CARGO_TARGET_DIR=
+      src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml
+      --lib` (default parallel harness, no thread-count restriction): 825
+      passed, 0 failed, 13 ignored — identical to the pre-task baseline
+      (including the untouched sibling emptiness-only test,
+      test_ring_push_blank_clears_ridx). `cargo fmt --manifest-path
+      crates/term_core/Cargo.toml --check` produced no output (clean).
