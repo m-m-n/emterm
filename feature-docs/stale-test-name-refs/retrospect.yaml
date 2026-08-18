@@ -1,0 +1,28 @@
+feature: stale-test-name-refs
+collected_at: "2026-08-18T14:26:00+09:00"
+session_ids: [01a0132e-0078-7000-aa22-d22e8fecac41.jsonl]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    タスク記述の受け入れ条件「リポジトリ全体で旧名 0 件」と制約「該当は 4 ファイル」が
+    矛盾していた。実際の repo 全体 grep は 18 箇所 11 ファイル。create-spec の
+    requirement-clarification ゲートで Codex は four_files_only を推したが、それでは
+    ユーザーの AC-2 が恒久的に成立しないため sweep_except_history を採用し、改名そのものを
+    記録する 3 ファイルだけを carve-out にした。教訓: 起票時に「参照 N 箇所」を列挙する場合、
+    列挙が網羅であることを grep で裏取りしてから AC に「全体で 0 件」を書く。
+  - >-
+    レビュー指摘（medium, stable_id 41b6ef707d9d6692）が今回も auto-fix ゲート
+    （critical/high のみ）に乗らず unresolved で残った。前 feature で medium が残ったことが
+    まさに本タスクの起点であり、同じ経路が再発している。medium の残置を別タスク起票で
+    確実に拾う運用が効いているかは次回以降の観察対象。
+  - >-
+    自分自身の識別子を含むドキュメントを書く feature では、そのドキュメントが検証対象の
+    grep 件数に混ざる。spec-writer が自発的に「旧識別子を連結形でしか書かない」規約を
+    導入し、planner / implementer / reviewer まで一貫して守られた。同種の
+    「自己言及する検証条件」を持つ feature で再利用できるパターン。
