@@ -211,6 +211,20 @@ impl RestartFlagTestGuard {
         Self { _lock: lock }
     }
 
+    /// Acquire the seam without resetting the flag.
+    ///
+    /// Same exclusivity and poison-recovery behavior as [`Self::acquire`],
+    /// but does not clear `RESTART_REQUIRED` on entry. Lets a caller open a
+    /// second exclusive span immediately after another span's guard has
+    /// dropped, and observe under the lock whatever that drop left behind —
+    /// without the reset masking the very value being verified.
+    pub(crate) fn acquire_preserving_flag() -> Self {
+        let lock = RESTART_FLAG_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self { _lock: lock }
+    }
+
     /// Raise or clear the flag within this exclusive span.
     pub(crate) fn set(&self, value: bool) {
         RESTART_REQUIRED.store(value, Ordering::Release);
@@ -352,7 +366,10 @@ mod tests {
             guard.set(true);
             assert!(restart_pending(), "sanity: the span did raise the flag");
         }
-        // Guard dropped — span ended without an explicit `set(false)`.
+        // Guard dropped — span ended without an explicit `set(false)`. Open
+        // a second exclusive span (without resetting) so the observation
+        // below is itself made under the lock, never outside any span.
+        let _guard = RestartFlagTestGuard::acquire_preserving_flag();
         assert!(
             !restart_pending(),
             "the flag must read clear once the exclusive span has ended"
@@ -375,9 +392,10 @@ mod tests {
 
         // A poisoned std::sync::Mutex would make every later `.lock()` call
         // return `Err` without this recovery; acquiring here must succeed
-        // (not hang, not panic) and the flag must not be stuck raised from
-        // the aborted span.
-        let guard = RestartFlagTestGuard::acquire();
+        // (not hang, not panic). Use the non-resetting variant so the read
+        // below observes what the aborted span actually left behind,
+        // instead of `acquire()`'s own reset making the assertion vacuous.
+        let guard = RestartFlagTestGuard::acquire_preserving_flag();
         assert!(
             !restart_pending(),
             "the flag must not be stuck raised after a panicking span"
