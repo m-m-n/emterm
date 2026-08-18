@@ -1,0 +1,95 @@
+# Identifier notation used in this record (per task0001.md / IMPLEMENTATION.md
+# discipline): the old identifier is never written as one contiguous string.
+#   OLD_ID = `test_relocate_widened_base_via_wrap_` + `no_panic_when_column_one_does_not_exist`
+#   NEW_ID = test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist
+#
+# This task is a documentation-record change with no Rust source edit (see
+# task0001.md "Why no source change is needed"). Acceptance is discharged by
+# grep-based occurrence counts, a diff-scope inspection, and the project's
+# existing crates/term_core cargo commands (IMPLEMENTATION.md D4, NFR3) —
+# not by newly authored automated tests. `tests: []` entries below name the
+# observed command evidence in `red_reason` instead.
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before editing, `grep -c` for NEW_ID returned 0 in every one of the
+      eight Scope-table files. After editing, per-file NEW_ID counts are
+      exactly 1, 1, 1, 1, 2, 2, 2, 2 (twelve total) and the OLD_ID count is
+      0 in all eight files.
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before editing, `git ls-files -z | xargs -0 grep -c` for OLD_ID
+      (built from the two concatenated fragments above) summed to 18
+      occurrences across 11 git-tracked files. After editing, the same
+      sweep sums to 6 occurrences, distributed 2+2+2 across exactly the
+      three carve-out files
+      (feature-docs/relocate-wrap-cursor-clamp/{SPEC.md,REQUIREMENTS.md,
+      reviews/round1.yaml}) and zero occurrences anywhere else.
+  AC-3:
+    tests:
+      - print_handler::tests::test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist
+    red_confirmed: false
+    red_reason: >-
+      Guard, not a red->green criterion (task0001.md Test Notes: "already
+      green at base ... treat as a guard, not a red->green step"). NEW_ID
+      already exists in crates/term_core/src/print_handler/tests.rs at the
+      base revision (assumption A-3), so
+      `cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist`
+      was green before any doc edit and remained green after: "1 passed; 0
+      failed; 0 ignored; 0 measured; 837 filtered out".
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No-regression guard, not a red->green criterion: this task edits no
+      Rust source. Baseline full-suite run (before any edit):
+      "825 passed; 0 failed; 13 ignored". Post-edit run: identical
+      "825 passed; 0 failed; 13 ignored". final_failures is empty, a
+      subset of baseline_failures (also empty).
+  AC-5:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before editing, the working tree was clean (`git status` reported
+      "nothing to commit, working tree clean"), so the diff-scope check
+      failed the criterion (0 paths, not the required 8). After editing,
+      `git status --porcelain` excluding the
+      `feature-docs/stale-test-name-refs/**` and
+      `test-docs/stale-test-name-refs/**` families lists exactly the eight
+      Scope-table paths as modified, and `git diff` for those paths shows
+      only identifier-segment hunks (verified by full-diff inspection,
+      including the VERIFICATION.md line that carries a second,
+      prefix-sharing identifier left untouched).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the three carve-out
+      files were never opened for writing by this task. Verified via
+      `git diff --stat` for the three carve-out paths returning empty
+      output after the implementation edits.
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      This record and every commit message this task writes spell the old
+      identifier only in concatenated form (OLD_ID = prefix + suffix, per
+      the notation above), never as one contiguous string, which is what
+      keeps the AC-2 repository-wide count at 6 instead of climbing to 7.
+      Confirmed by grepping this file for the contiguous OLD_ID string
+      after writing it and finding zero matches.
+notes: >-
+  Documentation-record task (task0001.md "Why no source change is needed");
+  no Rust test was authored or modified, per NFR3 and IMPLEMENTATION.md D4.
+  Acceptance was verified via grep-based occurrence counts, git diff/status
+  inspection, and the project's existing crates/term_core cargo commands
+  (check / fmt --check / identifier-filtered test / full lib test suite),
+  all captured above.
