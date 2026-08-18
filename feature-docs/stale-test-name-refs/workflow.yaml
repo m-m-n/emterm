@@ -45,6 +45,7 @@ workflow:
     completed_at_commit: 94a33288a4a2dc12a49d24ee4c1a82124a167229
   - id: verify
     status: completed
+    completed_at_commit: d3710729e445bbbaf7b4355f65a52961f6f12a4d
     result: pass
     failed_items: []
     summary: >-
@@ -62,6 +63,7 @@ workflow:
       exclusion list applies.
   - id: retrospect
     status: completed
+    completed_at_commit: 71607f6b83bd9ae9cc9b8cb23f6e71766c5c2b35
 
 tasks:
   task0001:
