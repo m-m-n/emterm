@@ -81,7 +81,7 @@ cover is covered by a test that can actually detect its loss.
       single push.
 - [ ] AC-5: `test_relocate_widened_base_via_wrap_removes_stale_overflow_entries_on_target_row`
       (TS1, `tests.rs:1454`) is unchanged and green,
-      `test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist`
+      `test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist`
       is unchanged and green, and `git diff` shows no change to any
       non-`#[cfg(test)]` source line.
 
@@ -390,7 +390,7 @@ review.
 - [ ] **TS-3** (FR5, FR8 → AC-5) —
       `print_handler::tests::test_relocate_widened_base_via_wrap_removes_stale_overflow_entries_on_target_row`
       (unchanged) +
-      `print_handler::tests::test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist`
+      `print_handler::tests::test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist`
       (unchanged): the deletion branches at `print_handler.rs:493` / `518`
       stay pinned on the no-scroll path exactly as before this feature.
       *Red expectation:* green; already red-confirmed for AC-1 / AC-2 / AC-3
