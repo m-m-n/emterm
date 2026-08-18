@@ -1,21 +1,88 @@
 schema_version: 1
 feature: flaky-frame-work-pending-test
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
-base_revision: 311634ec
+base_revision: 6da6c20bce8842f9d2c75af50752e49287f1f6fe
 last_input_digest: sha256:05aaea3f000bb4a8addfa225b95b25ff856e9b1f8704bb83dc1a2acba59c67a0
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: '2026-08-18T22:40:00+09:00'
+    questions:
+    - question_id: acceptance.stability-threshold
+      status: answered
+    - question_id: scope.test-threads-fallback
+      status: answered
+    - question_id: scope.green-suite-target
+      status: answered
+    - question_id: design-step.decision
+      status: answered
+answers:
+  acceptance.stability-threshold:
+    packet_id: create-spec-q0001
+    answered_at: '2026-08-18T22:40:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - three_consecutive
+    freeform: null
+    normalized_answer: 3 consecutive green default-parallelism --lib runs satisfy the stability criterion.
+    resolution_note: 'batch: gate create-spec.requirement-clarification -> codex_consultation. Codex:
+      three runs give objective evidence against a reproducible parallelism failure while keeping unattended
+      verification cost bounded. Policy record_as_assumption: true.'
+  scope.test-threads-fallback:
+    packet_id: create-spec-q0001
+    answered_at: '2026-08-18T22:40:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - fix_only
+    freeform: null
+    normalized_answer: Only isolating or fixing the order-dependent shared state closes this feature;
+      switching the test command to --test-threads=1 is not an acceptable outcome.
+    resolution_note: 'batch: gate create-spec.requirement-clarification -> codex_consultation. Codex:
+      requiring repair of the order-dependent shared state keeps the fix honest and avoids masking it
+      via global serialization. Policy record_as_assumption: true.'
+  scope.green-suite-target:
+    packet_id: create-spec-q0001
+    answered_at: '2026-08-18T22:40:00+09:00'
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids:
+    - lib_only
+    freeform: null
+    normalized_answer: Only the --lib suite must be green at default parallelism; integration targets
+      keep their existing invocation rules.
+    resolution_note: 'batch: gate create-spec.requirement-clarification -> codex_consultation. Codex:
+      the reported failure and acceptance criterion target --lib, while documented integration targets
+      legitimately require serialized execution. Policy record_as_assumption: true.'
+  design-step.decision:
+    packet_id: create-spec-q0001
+    answered_at: '2026-08-18T22:40:00+09:00'
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids:
+    - decide_autonomously
+    freeform: null
+    normalized_answer: Adopt the analyst's recommendation to skip the design step.
+    resolution_note: batch-policies.yaml create-spec.design-step -> select decide_autonomously.
 worker_runs:
-  - request_id: create-spec-run-0001
-    status: dispatched
-    input_digest: sha256:05aaea3f000bb4a8addfa225b95b25ff856e9b1f8704bb83dc1a2acba59c67a0
-    output_digest: null
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:05aaea3f000bb4a8addfa225b95b25ff856e9b1f8704bb83dc1a2acba59c67a0
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    resolved_at_generation: 1
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/src/ui/md3.rs
+    - src-tauri/web-shared/styles.css
+    truncated: false
 last_error: null
