@@ -1,17 +1,63 @@
 schema_version: 1
 feature: ring-push-blank-row-scope-test
 phase: create-spec
-status: initialized
+status: awaiting_answers
 generation: 1
-base_revision: 311634ec
-last_input_digest: null
+base_revision: e8b5d05bd382494a3f40da914204173e257228ca
+last_input_digest: "sha256:b1d0d1f2c3a4e5b6978899aabbccddeeff00112233445566778899aabbccddee"
 active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-08-19T08:30:00+09:00"
+    questions:
+      - question_id: requirement.sibling-test-scope
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.sibling-test-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-19T08:32:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [separate_task]
+    freeform: null
+    normalized_answer: >-
+      Keep this feature to the survivor test only. Record the sibling test
+      test_ring_push_blank_clears_ridx's blindness to the row-scope regression
+      as an explicit follow-up item in SPEC.md (out of scope for this feature).
+    resolution_note: >-
+      gate create-spec.requirement-clarification -> batch policy
+      action codex_consultation. Codex (run_codex_exec.sh readonly, 1 turn)
+      recommended separate_task; the orchestrator judged the mapping onto the
+      existing option_id. record_as_assumption applies.
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-08-19T08:32:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: >-
+      Adopt the analyst's design_step_recommendation: skip the design step.
+    resolution_note: >-
+      gate create-spec.design-step -> batch policy select option_id
+      decide_autonomously.
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: "sha256:b1d0d1f2c3a4e5b6978899aabbccddeeff00112233445566778899aabbccddee"
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+    truncated: false
 last_error: null
