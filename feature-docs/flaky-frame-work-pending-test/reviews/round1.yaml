@@ -1,0 +1,227 @@
+round: 1
+executed_at: '2026-08-18T23:55:00+09:00'
+scope:
+  review_mode: diff
+  base_commit: 03fb3b2b9dc3f1cbfd54379633ed4a331715c839
+  head_commit: a8d8168bb488a040a68c0c77f8ca95e719b538d5
+  changed_files:
+  - src-tauri/src/app/tests/timing.rs
+  - src-tauri/src/self_exec.rs
+  - test-docs/flaky-frame-work-pending-test/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- perspective: comprehensive
+  source: claude
+  status: completed
+- perspective: performance
+  source: claude
+  status: completed
+- perspective: performance
+  source: litellm
+  model: vertex-deepseek-v3.2
+  status: completed
+- perspective: architecture
+  source: claude
+  status: completed
+- perspective: architecture
+  source: litellm
+  model: vertex-glm-5
+  status: completed
+- perspective: spec
+  source: claude
+  status: completed
+- perspective: spec
+  source: litellm
+  model: vertex-deepseek-v3.2
+  status: completed
+findings:
+- stable_id: fcd9b246fd76aa66
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/self_exec.rs
+  line: 356
+  title: AC-6 の Drop テスト自身が排他スパン外でグローバルフラグを観測しており、修正対象と同型の flake を再導入している
+  description: restart_flag_test_guard_clears_the_flag_when_the_span_ends が内側ブロックで guard を drop したあと、guard
+    を保持しない状態で restart_pending() を読んでいた。Drop は store(false) の直後に MutexGuard を解放するため、この load はロック非保持で走る。並列実行下で他テストが
+    acquire → set(true) すると true を読んで落ちる。本 feature が潰した元 flake と同型（プロセスグローバル AtomicBool を排他外で観測）で、しかも
+    seam 自身が doc に定めた契約に違反していた。
+  suggestion: 観測を排他スパンの内側に閉じ込める。リセットしない取得口 acquire_preserving_flag() を追加し、その guard を保持したまま観測する。
+  sources:
+  - claude:comprehensive
+  confidence: 80
+  resolution: fixed
+  resolution_reason: auto-applied loop 1
+- stable_id: 9d9957061c24ee54
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/self_exec.rs
+  line: 380
+  title: panic スパンテストのフラグ側アサーションが恒真で、主張する保証を実際には検証していない
+  description: restart_flag_test_guard_stays_usable_after_a_panicking_span は acquire() を呼んでから「panic 後もフラグが
+    stuck しない」と assert していたが、acquire() は無条件に store(false) するため assert は必ず true になる。Drop から store を削っても緑のままだった。
+  suggestion: acquire() のリセット前にフラグを観測する（非リセット版の取得口を使う）か、アサーションとコメントを poison 復帰のみに絞る。
+  sources:
+  - claude:comprehensive
+  confidence: 65
+  resolution: fixed
+  resolution_reason: auto-applied loop 1（同一ファイル・同一編集で併せて修正）
+- stable_id: 205a2f74208fd465
+  severity: medium
+  category: spec
+  file: src-tauri/src/self_exec.rs
+  line: 356
+  title: 新規テスト restart_flag_test_guard_clears_the_flag_when_the_span_ends がガード外でフラグを観測し、同じ順序依存を再導入している
+  description: SPEC FR2（順序依存を根本から除去）および NFR3（--lib スイートに新たな失敗を持ち込まない）に反する残存レース。seam 契約（最初の touch から最後の
+    observation までガード保持）を、契約の回帰ガード自身が破っていた。
+  suggestion: 非リセットの取得口を足し、観測をロック保持下で行う。
+  sources:
+  - claude:spec
+  confidence: 75
+  resolution: fixed
+  resolution_reason: 同一サイトの high 指摘と同一の欠陥。auto-applied loop 1
+- stable_id: 9a25b98fcef38ba8
+  severity: medium
+  category: spec
+  file: src-tauri/src/self_exec.rs
+  line: 398
+  title: AC-6 の panic 分離ガードが acquire() の poison 復帰を検証しなくなり、記録した red 証拠と食い違う
+  description: loop 1 の修正で再取得が acquire() から acquire_preserving_flag() に置き換わった結果、acquire() の poison 復帰行が検証されなくなり、task0001.tests.yaml
+    の AC-6 red_reason および DIAGNOSIS.md の記述（a fresh acquire() still succeeds）とランドしたコードが食い違った（SPEC FR3）。
+  suggestion: acquire_preserving_flag() による観測は残し、その guard を drop したあとに素の acquire() を 1 回取り直す検証を追加する。
+  sources:
+  - claude:spec
+  confidence: 60
+  resolution: fixed
+  resolution_reason: auto-fix loop 1 が持ち込んだ後退。レビュアー提示の diff を loop 2 で適用（severity ゲート外の例外適用 — ループ自身が壊した記録整合性の修復のため）
+- stable_id: 1da4b80ea11f008f
+  severity: medium
+  category: architecture
+  file: src-tauri/src/self_exec.rs
+  line: 173
+  title: 排他シームの契約が文書のみで、将来のテストは迂回できる
+  description: RestartFlagTestGuard の契約（RESTART_REQUIRED を raise/clear/consume/observe するテストはガードを span
+    全体で保持する）はコンパイル時にも実行時にも強制されていない。restart_pending / restart_required / App::frame_work_pending / App::pump_toasts
+    はガードなしで呼べ、App 経由の依存は呼び出し側から不可視。旧 test_set_restart_required の doc-only 契約が破れたのが本 flake の起点であり、同じ構造に戻っている。現状の全
+    touch 箇所はガード済みで、これは再発防止の欠落。
+  suggestion: '(a) #[cfg(test)] のオーナースレッド記録 + restart_pending / restart_required の debug_assert! でガード未保持を確定的に検出する。(b)
+    根本解は RESTART_REQUIRED を App 注入の依存へ移す（本タスクのスコープ外）。'
+  sources:
+  - claude:architecture
+  confidence: 60
+  resolution: deferred
+  resolution_reason: auto-fix の severity ゲート（critical/high）未満。提示された remedy は本タスクのスコープ外のため別タスクとして起票
+- stable_id: d71ff42a2b892e8e
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/self_exec.rs
+  line: 189
+  title: 'RestartFlagTestGuard に #[must_use] が無く、束縛忘れが無警告で seam を無効化する'
+  description: 'RestartFlagTestGuard::acquire(); と式文で書くと一時値が即 Drop され、ロック解放・フラグ false 復帰となりテスト本体は無防備に走る。Drop
+    がフラグを false にするため見た目は正常で、競合が静かに再発する。#[must_use] が無いため警告も出ない。crate 内の tabs/replay.rs は同種の理由で #[must_use]
+    を使っている。'
+  suggestion: 'struct RestartFlagTestGuard に #[must_use = "..."] を付ける。'
+  sources:
+  - claude:comprehensive
+  confidence: 65
+  resolution: deferred
+  resolution_reason: auto-fix の severity ゲート未満。最終ループ後に浮上したため本ラウンドでは未適用。別タスクとして起票
+- stable_id: 948d95d1af540e93
+  severity: medium
+  category: spec
+  file: test-docs/flaky-frame-work-pending-test/task0001.tests.yaml
+  line: 32
+  title: AC-01/NFR1 の「3連続グリーン」証跡が、レビュー修正後のソース状態に対応していない
+  description: task0001.tests.yaml の AC-3 red_reason と DIAGNOSIS.md の stability evidence 節は実装コミット 41793c8a
+    時点で採取されたもので、その後のレビュー修正 2 コミット（37bc9811 / a8d8168b）に追随していない。追加分は test 専用コードだが、AC-01 は実際に3連続グリーンであることを求めており記録もそれを裏付ける必要がある。
+  suggestion: 最終 HEAD に対して VERIFICATION.md の承認済みコマンドを再実行し、証跡を更新する。
+  sources:
+  - claude:spec
+  confidence: 60
+  resolution: deferred
+  resolution_reason: verify フェーズが最終ソースに対して同じコマンド群を実行し、その結果を DIAGNOSIS.md に追記して解消する
+- stable_id: dd85d80212258026
+  severity: medium
+  category: performance
+  file: src-tauri/src/self_exec.rs
+  line: 183
+  title: Test synchronization overhead from mutex guard
+  description: RESTART_REQUIRED に触れる全テストが共有 mutex を取得するようになり、以前は無かった同期オーバーヘッドとロック競合が入る（再レビューで報告された 186
+    / 201 / 240 行の同趣旨指摘を同一サイト分は統合、残りは併記）。
+  suggestion: ロック保持区間をフラグ操作のみに絞れるか検討する。
+  sources:
+  - litellm:vertex-deepseek-v3.2:performance
+  confidence: 50
+  resolution: declined
+  resolution_reason: '誤検知に近い。対象は全て #[cfg(test)] でリリースビルドから消える。claude:performance が実測し、直列化されるのは 3250 件中
+    13 件・追加コストは 16s のスイート全体に対し 0.1s 未満（1% 未満）。loop 2 後の再レビューでは litellm 側も撤回した'
+- stable_id: 411d4943faaa98ab
+  severity: medium
+  category: performance
+  file: src-tauri/src/self_exec.rs
+  line: 201
+  title: Flag observation under lock extends exclusive spans
+  description: acquire_preserving_flag() によりテストがロック保持下でフラグを観測する形になり、回帰テストの排他区間が伸びる。
+  suggestion: 回帰テストがロック保持下で観測する必要があるか再検討する。
+  sources:
+  - litellm:vertex-deepseek-v3.2:performance
+  confidence: 50
+  resolution: declined
+  resolution_reason: ロック保持下での観測は本ラウンドの high 指摘（review-r1-f1）の修正そのもの。撤回すると元の競合に戻る。loop 2 後の再レビューで litellm
+    側も撤回した
+- stable_id: 8c0b9f01daf0bce0
+  severity: medium
+  category: performance
+  file: src-tauri/src/self_exec.rs
+  line: 240
+  title: Atomic store on every test guard drop adds overhead
+  description: Drop が毎回 RESTART_REQUIRED へ store(false) するため、テスト後処理に atomic store が増える。
+  suggestion: スイート性能への影響が有意か評価する。
+  sources:
+  - litellm:vertex-deepseek-v3.2:performance
+  confidence: 50
+  resolution: declined
+  resolution_reason: 単一の relaxed 相当 atomic store 1 回で、計測可能な影響なし。loop 2 後の再レビューで litellm 側も撤回した
+- stable_id: 3913693c3515c4ff
+  severity: medium
+  category: spec
+  file: src-tauri/src/self_exec.rs
+  line: 173
+  title: Global mutex lock effectively serializes test execution, violating FR6 parallelism requirement
+  description: グローバル mutex がテストを直列化するのは FR6 が拒否した「並列度を下げる」解決に当たる、という指摘。
+  suggestion: FR6 の意図に照らして許容できるか再検討する。
+  sources:
+  - litellm:vertex-deepseek-v3.2:spec
+  confidence: 50
+  resolution: declined
+  resolution_reason: FR6 の誤読。FR6 が禁じるのはプロジェクトのテストコマンドを -- --test-threads=1 に寄せること（AC-06）であり、1 個のプロセスグローバルを奪い合う少数テストの隔離は
+    FR2 が求める解決そのもの。loop 2 後の再レビューで litellm 側も撤回した
+- stable_id: 60a358520a788a72
+  severity: medium
+  category: architecture
+  file: src-tauri/src/self_exec.rs
+  line: 213
+  title: acquire_preserving_flag() cannot fulfill its documented contract
+  description: Drop が無条件に false を書くため、後続の acquire_preserving_flag() での観測は常に false になり恒真である、という指摘。
+  suggestion: acquire_preserving_flag() を削除するか、Drop が無条件にクリアしない設計へ変える。
+  sources:
+  - litellm:vertex-glm-5:architecture
+  confidence: 50
+  resolution: declined
+  resolution_reason: 誤検知。恒真ではない。Drop がフラグをクリアし損ねれば観測は true になりアサーションが落ちる — それがまさにこのテストが守っている事後条件。acquire()
+    での観測が恒真だった（review-r1-f2）問題を解いたのがこの取得口
+auto_fix:
+  loops_run: 2
+  applied_total: 2
+  termination: clean
+  notes: 'loop 1: review-r1 high（self_exec.rs:356 のガード外観測）を適用、同一編集で同ファイルの medium 1 件も併せて解消。loop 2: loop
+    1 が持ち込んだ後退（AC-6 の poison 復帰カバレッジ喪失）を、レビュアー提示の diff で修復。loop 2 は severity ゲート外の例外適用で、理由はラウンド記録の当該 finding
+    に記載。各ループ後に承認済みコマンドで --lib スイートを実行し 3250 passed / 0 failed を確認'
+residual_critical_high: 0
+rework_required: false
