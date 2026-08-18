@@ -1,0 +1,96 @@
+task_id: task0001
+baseline_failures:
+  - app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Documentation-content criterion (DIAGNOSIS.md enumerates the contended
+      state, every contending party, the interleaving mechanism, and quotes
+      the baseline failure verbatim). Not code-testable; verified by
+      inspection against feature-docs/flaky-frame-work-pending-test/DIAGNOSIS.md.
+      The baseline evidence it quotes was itself captured before any source
+      change (see AC-3's red_reason).
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Design-decision + documentation criterion (fix side chosen, rationale,
+      rejected resolutions recorded in DIAGNOSIS.md). Functionally evidenced
+      by AC-3/AC-4/AC-5/AC-6 collectively rather than one dedicated test.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >
+      Baseline run (command: CARGO_TARGET_DIR=src-tauri/target cargo test
+      --manifest-path src-tauri/Cargo.toml --lib), captured before any
+      source change, reported "test result: FAILED. 3247 passed; 1 failed;
+      3 ignored; ...", with the single failure being
+      app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing.
+      Three consecutive post-fix runs each reported "test result: ok. 3250
+      passed; 0 failed; 3 ignored; ...".
+  AC-4:
+    tests:
+      - app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing
+    red_confirmed: false
+    red_reason: >
+      The serial run (-- --test-threads=1) was never racy — the defect only
+      manifests under multi-threaded scheduling — so there is no red state
+      for the serial half of this criterion; it was green both before and
+      after the fix. The "test is present, not ignored" half is likewise
+      unconditionally true and has no red/green transition of its own. Both
+      are verified by command output (post-fix serial run: "test result:
+      ok. 3250 passed; 0 failed; 3 ignored; ..."; the target test's line
+      ends "... ok" in the default-parallelism run's output, confirming
+      it executed).
+  AC-5:
+    tests:
+      - app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing
+    red_confirmed: true
+    red_reason: >
+      Two independent red observations for the same assertion: (1) the
+      unmodified baseline run above; (2) TS-05's deliberate precondition
+      break (guard.set(true) temporarily changed to guard.set(false))
+      reproduced the identical failure — "assertion failed:
+      app.frame_work_pending()" at src-tauri/src/app/tests/timing.rs:149 —
+      under the approved default-parallelism command, then the break was
+      reverted and the suite re-confirmed green over three fresh
+      consecutive runs.
+  AC-6:
+    tests:
+      - self_exec::tests::restart_flag_test_guard_clears_the_flag_when_the_span_ends
+      - self_exec::tests::restart_flag_test_guard_stays_usable_after_a_panicking_span
+    red_confirmed: true
+    red_reason: >
+      Both tests were written alongside RestartFlagTestGuard's
+      implementation rather than strictly before it, then red-confirmed
+      retroactively by temporarily breaking the behavior each one asserts:
+      (1) Drop reduced to a no-op made
+      restart_flag_test_guard_clears_the_flag_when_the_span_ends fail with
+      "the flag must read clear once the exclusive span has ended"; (2)
+      acquire()'s poison recovery replaced with a bare .unwrap() made
+      restart_flag_test_guard_stays_usable_after_a_panicking_span fail on
+      the poisoned-lock panic, and cascaded into two unrelated tests
+      failing alongside it (restart_pending_reports_true_across_consecutive_peeks,
+      restart_required_still_consumes_once_after_peeks) — direct evidence
+      of the cascade IMPLEMENTATION.md's Risk Assessment names. Both
+      scratch breaks were reverted immediately after observing the
+      failure; the suite was re-confirmed green over three fresh
+      consecutive runs afterward.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Gate/inspection criterion, not a red/green test cycle. CLI-only
+      check (cargo check --no-default-features) succeeded against the
+      final source state. grep confirmed no `-- --test-threads=1` was
+      added anywhere for the --lib suite (workflow.yaml, CI config,
+      test/README.md, or the documented test command are untouched by
+      this task). Test conventions (inline #[cfg(test)] mod, naming,
+      per-test construction, no new test framework crate) verified by
+      inspection of the diff. File scope confirmed via `git diff --stat`:
+      only src-tauri/src/self_exec.rs and
+      src-tauri/src/app/tests/timing.rs changed, both inside
+      expected_files.
