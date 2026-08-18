@@ -85,7 +85,7 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/flaky-frame-work-pending-test/task0001
 review:
