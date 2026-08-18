@@ -1,0 +1,55 @@
+round: 1
+executed_at: "2026-08-18T14:19:52+09:00"
+scope:
+  review_mode: diff
+  base_commit: 72dc925f3b11dc185d1de61725b5a15df2c6a176
+  head_commit: 94a33288a4a2dc12a49d24ee4c1a82124a167229
+  changed_files:
+    - feature-docs/relocate-wrap-ec1-scroll-test/REQUIREMENTS.md
+    - feature-docs/relocate-wrap-ec1-scroll-test/SPEC.md
+    - feature-docs/relocate-wrap-ec1-scroll-test/VERIFICATION.md
+    - feature-docs/relocate-wrap-ec1-scroll-test/tasks/task0001.md
+    - feature-docs/relocate-wrap-ec1-scroll-test/tasks/task0002.md
+    - test-docs/relocate-wrap-ec1-scroll-test/task0001.tests.yaml
+    - test-docs/relocate-wrap-ec1-scroll-test/task0002.tests.yaml
+    - test-docs/relocate-wrap-overflow-cleanup/task0001.tests.yaml
+    - test-docs/stale-test-name-refs/task0001.tests.yaml
+plan:
+  floor: [comprehensive, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+findings:
+  - stable_id: 41b6ef707d9d6692
+    severity: medium
+    category: comprehensive
+    file: test-docs/stale-test-name-refs/task0001.tests.yaml
+    line: 81
+    title: "AC-7 が red_confirmed: true だが red_reason に事前観測の記述がない"
+    description: >-
+      AC-7 はこの record とコミットメッセージが旧識別子を連結形でしか書かないという
+      執筆規律の不変条件で、タスク前にはこの record 自体が存在しないため red 状態が
+      観測しようがない。red_reason が挙げる根拠は「書いた後にこのファイルを grep して
+      0 件だった」という after 状態の確認のみで、before の失敗観測が書かれていない。
+      implementer 契約は観測していない red に true を書かないことを明記しており、
+      同一 record 内の AC-6 は同種の不変条件ガードを red_confirmed: false +
+      「Invariant guard, not a red->green criterion」として正しく扱っているため、
+      AC-7 だけが内部矛盾している。
+    suggestion: >-
+      AC-7 の red_confirmed を false にし、red_reason を「観測可能な事前状態が無い
+      執筆規律の不変条件（AC-6 と同じ扱い）」と書き換える。あわせて notes に
+      AC-7 が未確認 red である旨を 1 行追記する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: >-
+      severity medium のため R4 の auto-fix 候補ゲート（critical/high のみ）に乗らず、
+      batch モードではユーザー判断も挟まない。指摘は妥当で、別タスクとして起票する。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

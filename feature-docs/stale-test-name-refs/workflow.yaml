@@ -41,7 +41,8 @@ workflow:
     completed_at_commit: c184fe8988e2c67b4fcd489e1a5f1e5022fc83ec
     base_commit: 72dc925f3b11dc185d1de61725b5a15df2c6a176
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 94a33288a4a2dc12a49d24ee4c1a82124a167229
   - id: verify
     status: pending
     result: null
@@ -71,15 +72,15 @@ tasks:
     branch: em-workflow/stale-test-name-refs/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, spec]
     discretionary: []
     cross_validation: false
   perspectives:
-    comprehensive: pending
-    spec: pending
+    comprehensive: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
