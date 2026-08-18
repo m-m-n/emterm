@@ -61,7 +61,7 @@ workflow:
       test-docs YAML records parse. No requirement is excluded, so no
       exclusion list applies.
   - id: retrospect
-    status: pending
+    status: completed
 
 tasks:
   task0001:
