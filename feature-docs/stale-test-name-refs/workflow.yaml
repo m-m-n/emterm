@@ -34,7 +34,8 @@ workflow:
       components — there is nothing for a design step to decide.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 0e40dfded280b6f17585752c18a4c309134b6f96
   - id: implement
     status: pending
     base_commit: eb891470
@@ -47,7 +48,26 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Replace the stale test identifier in the eight documentation records
+    plan: tasks/task0001.md
+    files:
+      - test-docs/relocate-wrap-overflow-cleanup/task0001.tests.yaml
+      - test-docs/relocate-wrap-ec1-scroll-test/task0001.tests.yaml
+      - test-docs/relocate-wrap-ec1-scroll-test/task0002.tests.yaml
+      - feature-docs/relocate-wrap-ec1-scroll-test/VERIFICATION.md
+      - feature-docs/relocate-wrap-ec1-scroll-test/REQUIREMENTS.md
+      - feature-docs/relocate-wrap-ec1-scroll-test/SPEC.md
+      - feature-docs/relocate-wrap-ec1-scroll-test/tasks/task0001.md
+      - feature-docs/relocate-wrap-ec1-scroll-test/tasks/task0002.md
+    skills: []
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -61,71 +81,71 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-2]
   FR2:
     title: Update the VERIFICATION.md regression reference
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-2]
   FR3:
     title: Update the remaining relocate-wrap-ec1-scroll-test records
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2]
   FR4:
     title: String-only edit
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-5]
   FR5:
     title: Repository-wide sweep with an explicit rename-record carve-out
     status: assumed
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2]
   FR6:
     title: New identifier resolves to a real test
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-3]
   FR7:
     title: Existing test suite stays green
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-4]
   NFR1:
     title: Scope confinement to documentation records
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-5]
   NFR2:
     title: Audit-trail integrity
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS-1]
+    tasks: [task0001]
+    tests: [TS-1, TS-5]
   NFR3:
     title: Out of scope
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
 
 batch:
   review_rework_count: 0
