@@ -431,9 +431,12 @@ fn test_ring_push_blank_clears_ridx() {
     assert!(core.overflow_ridx.is_empty());
 }
 
-// AC-3/AC-4 (FR4): `ring_push_blank`'s eviction-time clearing of the
-// overflow table and reverse index, pinned directly on the recycled ring
-// slot with no relocation anywhere in this fixture. Complements
+// AC-1–AC-5 (FR1–FR6): `ring_push_blank`'s row-scoped clearing of the
+// overflow table and reverse index, pinned directly on the evicted absolute
+// row and nowhere else. The fixture carries two overflow-bound rows — the
+// row the scroll recycles and a second, non-recycled survivor row — so the
+// test can show the clear is scoped to the recycled row specifically, not
+// merely that clearing happened at eviction time. Complements
 // `test_ring_push_blank_clears_ridx` above (which exercises the
 // scrollback-enabled compress path via `set_cell`); this fixture has zero
 // scrollback capacity so `ring_push_blank` takes the scrollback-disabled
@@ -459,17 +462,37 @@ fn test_ring_push_blank_clears_recycled_row_overflow_entries() {
         core.handle_print(m);
     }
 
-    let abs0 = core.viewport_abs(0) as u32;
+    // Populate viewport row 1, col 0 with overflow-bound content, via the
+    // same print path and marking technique as row 0's cells. Row 1 is the
+    // survivor: the scroll below recycles row 0's ring slot, not row 1's,
+    // so row 1's overflow entry must remain after the scroll even though
+    // its viewport position shifts.
+    core.set_cursor(0, 1);
+    core.handle_print(0x67); // 'g'
+    for &m in &marks {
+        core.handle_print(m);
+    }
 
-    // Pre-assert (anti-vacuity guard): both target cells are genuinely
-    // overflow-bound before the scroll, so a fixture that fails to exceed
-    // the inline cap cannot silently make this test vacuous.
+    let abs0 = core.viewport_abs(0) as u32;
+    let abs1 = core.viewport_abs(1) as u32; // survivor's key, captured before the scroll
+
+    // Pre-assert (anti-vacuity guard): both the to-be-recycled row's and
+    // the survivor row's entries are genuinely overflow-bound before the
+    // scroll, so a fixture that fails to exceed the inline cap cannot
+    // silently make either row's post-scroll assertions vacuous.
     assert!(core.overflow.contains_key(&(0u32, abs0)));
     assert!(core.overflow.contains_key(&(1u32, abs0)));
     assert!(
         core.overflow_ridx
             .get(&abs0)
             .map(|cols| cols.contains(&0u32) && cols.contains(&1u32))
+            .unwrap_or(false)
+    );
+    assert!(core.overflow.contains_key(&(0u32, abs1)));
+    assert!(
+        core.overflow_ridx
+            .get(&abs1)
+            .map(|cols| cols.contains(&0u32))
             .unwrap_or(false)
     );
 
@@ -479,12 +502,31 @@ fn test_ring_push_blank_clears_recycled_row_overflow_entries() {
     core.set_cursor(0, 1);
     core.handle_execute(0x0A);
 
-    // Post-assert: neither column's entry remains in the overflow table for
-    // the recycled row key, and the reverse index no longer holds that row
-    // key at all.
+    // Post-assert, removal (preserved verbatim): neither column's entry
+    // remains in the overflow table for the recycled row key, and the
+    // reverse index no longer holds that row key at all.
     assert!(!core.overflow.contains_key(&(0u32, abs0)));
     assert!(!core.overflow.contains_key(&(1u32, abs0)));
     assert!(!core.overflow_ridx.contains_key(&abs0));
+
+    // Post-assert, survival (new): the survivor row's overflow entry and
+    // reverse-index membership must remain intact — this is what proves
+    // the clear is scoped to the recycled row rather than a whole-table
+    // clear that happens to coincide with it.
+    //
+    // NOTE: removing only ONE of the two clearing sites inside
+    // `ring_push_blank` (the eviction-time clear or the new-bottom-row
+    // clear) still leaves this test green, because within a single push in
+    // this 2-row, zero-scrollback fixture the new bottom absolute row
+    // equals the evicted absolute row — the two clearing sites are
+    // mutually redundant for this fixture, not independently pinned by it.
+    assert!(core.overflow.contains_key(&(0u32, abs1)));
+    assert!(
+        core.overflow_ridx
+            .get(&abs1)
+            .map(|cols| cols.contains(&0u32))
+            .unwrap_or(false)
+    );
 }
 
 // ── Scroll event tests ──────────────────────────────────
