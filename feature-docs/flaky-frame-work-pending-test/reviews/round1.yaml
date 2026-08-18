@@ -144,8 +144,9 @@ findings:
   sources:
   - claude:spec
   confidence: 60
-  resolution: deferred
-  resolution_reason: verify フェーズが最終ソースに対して同じコマンド群を実行し、その結果を DIAGNOSIS.md に追記して解消する
+  resolution: fixed
+  resolution_reason: 'verify フェーズが最終ソース a8d8168b に対して承認済みコマンドを再実行し（並列3連続 + シリアル1回 + build 2種、いずれも 0 failed
+    / exit 0）、その結果を DIAGNOSIS.md の新節『AC-3 / AC-4: stability evidence re-captured at the verify phase』に記録した'
 - stable_id: dd85d80212258026
   severity: medium
   category: performance
