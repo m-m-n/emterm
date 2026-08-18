@@ -1,0 +1,17 @@
+schema_version: 1
+feature: ring-push-blank-row-scope-test
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: d57b62f61af5b250376178b25fc93ea8490c8b4e
+last_input_digest: "sha256:7f31c8ad25e6094bb3d17c5ea82f4b60d9e3175a4c8b26df0139ae74cb5f2d80"
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
