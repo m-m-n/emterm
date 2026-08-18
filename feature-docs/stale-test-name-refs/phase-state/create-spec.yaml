@@ -1,11 +1,11 @@
 schema_version: 1
 feature: stale-test-name-refs
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: eb891470
 last_input_digest: "sha256:af135305bd79dec6f0a1b289af56eedc6b89808147a02dd5cf0dba270348743d"
-active_request_id: create-spec-run-0001
+active_request_id: null
 packets:
   stale-test-name-refs-q0001:
     status: answered
@@ -68,7 +68,21 @@ worker_runs:
     status: needs_user_input
     input_digest: "sha256:af135305bd79dec6f0a1b289af56eedc6b89808147a02dd5cf0dba270348743d"
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:af135305bd79dec6f0a1b289af56eedc6b89808147a02dd5cf0dba270348743d"
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: "sha256:af135305bd79dec6f0a1b289af56eedc6b89808147a02dd5cf0dba270348743d"
+    output_digest: null
+artifacts:
+  - path: feature-docs/stale-test-name-refs/REQUIREMENTS.md
+    sha256: "sha256:a9b0bf0c34d345d5f4d02d9ebcc8328cb9d6e096c3054a317c10f2232a519cda"
+    produced_by: create-spec-run-0003
+  - path: feature-docs/stale-test-name-refs/SPEC.md
+    sha256: "sha256:9f63da571fb6d69e546fbd89d3fbed2538f4a8de91d674e27ed97b70a4aabf0d"
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
