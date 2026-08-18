@@ -44,9 +44,22 @@ workflow:
     status: completed
     completed_at_commit: 94a33288a4a2dc12a49d24ee4c1a82124a167229
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    summary: >-
+      TS-1 pass (OLD_ID sweep = 6, distributed 2+2+2 across exactly the three
+      carve-out files, zero elsewhere). TS-2 pass (NEW_ID per-file counts
+      1,1,1,1,2,2,2,2 = 12 across the eight edited files). TS-3 pass
+      (filtered run: 1 passed; 0 failed; 837 filtered out - not a 0-match
+      exit 0). TS-4 pass (825 passed; 0 failed; 13 ignored). TS-5 pass
+      (diff = exactly the 8 declared paths, 12 insertions / 12 deletions,
+      every hunk identifier-only; the prefix-sharing sibling identifier on
+      the VERIFICATION.md TS-3 row and every print_handler::tests:: qualifier
+      survived untouched; the three carve-out files have an empty diff).
+      Build check exit 0, cargo fmt --check exit 0. All four edited/created
+      test-docs YAML records parse. No requirement is excluded, so no
+      exclusion list applies.
   - id: retrospect
     status: pending
 
