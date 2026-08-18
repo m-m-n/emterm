@@ -202,6 +202,42 @@ appears in the executed test list of the default-parallelism run (confirmed
 via `... ok` in the run output) — not `#[ignore]`d, not deleted, not gated
 out.
 
+## AC-3 / AC-4: stability evidence re-captured at the verify phase
+
+The triad above was captured at the implementation commit `41793c8a`. Two
+review auto-fix commits landed afterwards — `37bc9811` (added the
+non-resetting `RestartFlagTestGuard::acquire_preserving_flag()` and moved the
+two guard regression tests' observations inside the exclusive span) and
+`a8d8168b` (re-added a plain `acquire()` re-acquisition so the panic-span
+test keeps exercising `acquire()`'s poison-recovery path). The verify phase
+therefore re-ran the same approved commands against the final source state
+(`a8d8168b`):
+
+Three consecutive default-parallelism runs (command:
+`CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+src-tauri/Cargo.toml --lib`):
+
+```
+test result: ok. 3250 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 16.01s
+test result: ok. 3250 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 67.00s
+test result: ok. 3250 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 15.66s
+```
+
+Serial run (command: `CARGO_TARGET_DIR=src-tauri/target cargo test
+--manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1`):
+
+```
+test result: ok. 3250 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 58.87s
+```
+
+Build gates on the same source state:
+`CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+src-tauri/Cargo.toml` and the same command with `--no-default-features` both
+finished with exit code 0.
+
+`app::tests::timing::frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing`
+reported `... ok` in every one of the four runs above.
+
 ## AC-5: assertion strength (TS-05)
 
 The target assertion was left unmodified in shape (still asserts
