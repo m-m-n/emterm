@@ -51,7 +51,7 @@ workflow:
   base_commit: 03fb3b2b9dc3f1cbfd54379633ed4a331715c839
   completed_at_commit: 55063275ea1e796295d418866f298a9351a68944
 - id: review
-  status: pending
+  status: in_progress
 - id: verify
   status: pending
   result: null
@@ -90,10 +90,18 @@ tasks:
     notes: null
     branch: em-workflow/flaky-frame-work-pending-test/task0001
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
   residual_critical_high: 0
   needs_rework: false
+  plan:
+    floor:
+    - comprehensive
+    - performance
+    - architecture
+    - spec
+    discretionary: []
+    cross_validation: true
 requirements:
   FR1:
     title: Identify the shared state behind the order dependence
