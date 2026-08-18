@@ -449,7 +449,7 @@ AC-6 エントリ（59-74 行）をその場で是正する。
 - [ ] **AC-5** (FR5, FR8):
       `test_relocate_widened_base_via_wrap_removes_stale_overflow_entries_on_target_row`
       （TS1、`tests.rs:1454`）が無改変かつ green、
-      `test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist`
+      `test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist`
       が無改変かつ green、`git diff` に `#[cfg(test)]` でないソース行の変更が無い。
 - [ ] **AC-6** (FR6): SPEC が FR6 の 3 部構成の機構と明示的な file:line 根拠つきで、
       `print_handler.rs:493` / `518` がスクロール経路では構造上到達不能であることを
@@ -492,7 +492,7 @@ AC-6 エントリ（59-74 行）をその場で是正する。
 - [ ] **TS-3** (FR5, FR8 / AC-5) —
       `print_handler::tests::test_relocate_widened_base_via_wrap_removes_stale_overflow_entries_on_target_row`
       （無改変）＋
-      `print_handler::tests::test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist`
+      `print_handler::tests::test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist`
       （無改変）: リグレッション。`print_handler.rs:493` / `518` の削除分岐が
       no-scroll 経路で本機能前とまったく同じに固定され続ける。
       *red 期待*: green。`relocate-wrap-overflow-cleanup` task0001 の AC-1 / AC-2 / AC-3

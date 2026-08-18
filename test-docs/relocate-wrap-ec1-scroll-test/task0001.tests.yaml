@@ -80,7 +80,7 @@ acceptance_tests:
   AC-5:
     tests:
       - print_handler::tests::test_relocate_widened_base_via_wrap_removes_stale_overflow_entries_on_target_row
-      - print_handler::tests::test_relocate_widened_base_via_wrap_no_panic_when_column_one_does_not_exist
+      - print_handler::tests::test_relocate_widened_base_via_wrap_clamps_cursor_when_column_one_does_not_exist
     red_confirmed: false
     red_reason: >-
       Regression/freeze criterion, not a defect pin: both named tests are
