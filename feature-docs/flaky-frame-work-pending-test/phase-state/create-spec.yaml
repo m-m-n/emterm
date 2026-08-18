@@ -1,11 +1,11 @@
 schema_version: 1
 feature: flaky-frame-work-pending-test
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: 6da6c20bce8842f9d2c75af50752e49287f1f6fe
-last_input_digest: sha256:05aaea3f000bb4a8addfa225b95b25ff856e9b1f8704bb83dc1a2acba59c67a0
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:3331efe2e50290be421fd5b1f9c7e24197be6b11c27d80c61581b7013f353123
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -73,7 +73,21 @@ worker_runs:
   status: needs_user_input
   input_digest: sha256:05aaea3f000bb4a8addfa225b95b25ff856e9b1f8704bb83dc1a2acba59c67a0
   output_digest: null
-artifacts: []
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:cc8248264e23a2c5af7d7860c28435040a7b3eaacf1a8118327936aaeb888795
+  output_digest: null
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:3331efe2e50290be421fd5b1f9c7e24197be6b11c27d80c61581b7013f353123
+  output_digest: null
+artifacts:
+- path: feature-docs/flaky-frame-work-pending-test/REQUIREMENTS.md
+  sha256: sha256:542b2e7227c526ea6f3addcaed0d4e8fc2d6f65759f5066699b18390adcab44f
+  produced_by: create-spec-run-0003
+- path: feature-docs/flaky-frame-work-pending-test/SPEC.md
+  sha256: sha256:5add08672a52799524cfd6146345cec7626ef9adc99959e921901b82f0d674d9
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
