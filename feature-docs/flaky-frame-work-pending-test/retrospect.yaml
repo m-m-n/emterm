@@ -1,0 +1,50 @@
+feature: flaky-frame-work-pending-test
+collected_at: '2026-08-19T00:15:00+09:00'
+session_ids:
+- 01a01513-b4cc-7000-9917-e86dfface942.jsonl
+signals:
+  review_critical_high:
+  - stable_id: fcd9b246fd76aa66
+    category: comprehensive
+    file: src-tauri/src/self_exec.rs
+    title: AC-6 の Drop テスト自身が排他スパン外でグローバルフラグを観測しており、修正対象と同型の flake を再導入している
+    resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings:
+  - stable_id: dd85d80212258026
+    category: performance
+    resolution_reason: '誤検知に近い。対象は全て #[cfg(test)] でリリースビルドから消える。claude:performance が実測し、直列化されるのは 3250
+      件中 13 件・追加コストは 16s のスイート全体に対し 0.1s 未満（1% 未満）。loop 2 後の再レビューでは litellm 側も撤回した'
+  - stable_id: 411d4943faaa98ab
+    category: performance
+    resolution_reason: ロック保持下での観測は本ラウンドの high 指摘（review-r1-f1）の修正そのもの。撤回すると元の競合に戻る。loop 2 後の再レビューで litellm
+      側も撤回した
+  - stable_id: 8c0b9f01daf0bce0
+    category: performance
+    resolution_reason: 単一の relaxed 相当 atomic store 1 回で、計測可能な影響なし。loop 2 後の再レビューで litellm 側も撤回した
+  - stable_id: 3913693c3515c4ff
+    category: spec
+    resolution_reason: FR6 の誤読。FR6 が禁じるのはプロジェクトのテストコマンドを -- --test-threads=1 に寄せること（AC-06）であり、1 個のプロセスグローバルを奪い合う少数テストの隔離は
+      FR2 が求める解決そのもの。loop 2 後の再レビューで litellm 側も撤回した
+  - stable_id: 60a358520a788a72
+    category: architecture
+    resolution_reason: 誤検知。恒真ではない。Drop がフラグをクリアし損ねれば観測は true になりアサーションが落ちる — それがまさにこのテストが守っている事後条件。acquire()
+      での観測が恒真だった（review-r1-f2）問題を解いたのがこの取得口
+  deferred_findings:
+  - stable_id: 1da4b80ea11f008f
+    category: architecture
+    title: 排他シームの契約が文書のみで、将来のテストは迂回できる
+    resolution_reason: auto-fix の severity ゲート（critical/high）未満。提示された remedy は本タスクのスコープ外のため別タスクとして起票
+  - stable_id: d71ff42a2b892e8e
+    category: comprehensive
+    title: 'RestartFlagTestGuard に #[must_use] が無く、束縛忘れが無警告で seam を無効化する'
+    resolution_reason: auto-fix の severity ゲート未満。最終ループ後に浮上したため本ラウンドでは未適用。別タスクとして起票
+lessons_candidates:
+- auto-fix loop 1 の修正が新たな medium（AC-6 の poison 復帰カバレッジ喪失）を生み、loop 2 で戻した。prose suggestion を editor 解釈に任せる経路では、置き換え対象が既存の検証を落としていないかを再レビューで見る価値が高い。
+- implementer の worktree でも integration worktree でも、gitignored な src-tauri/assets/fonts/ が空のため build.rs
+  の font_missing チェックで最初のビルドが必ず落ちた。両方で scripts/fetch-fonts.sh の実行が要った。
+- 'litellm 側レビュアーが #[cfg(test)] 限定コードに対して performance の medium を 4 件出し、再レビューで全て撤回した。観点スキルの除外条件（測定可能な影響・現実的な入力規模）をプロンプト側で明示すると収束が早い。'
+- litellm:spec が FR6（テストコマンドを --test-threads=1 に寄せない）を「テストを直列化してはならない」と誤読した。相反しやすい要件は、レビュー入力に否定形の境界を書き添えると誤検知が減る。
