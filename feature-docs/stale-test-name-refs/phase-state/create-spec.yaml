@@ -1,16 +1,71 @@
 schema_version: 1
 feature: stale-test-name-refs
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: eb891470
 last_input_digest: "sha256:af135305bd79dec6f0a1b289af56eedc6b89808147a02dd5cf0dba270348743d"
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  stale-test-name-refs-q0001:
+    status: answered
+    issued_at: "2026-08-18T13:50:00+09:00"
+    questions:
+      - question_id: requirement.repo-wide-grep-scope
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.repo-wide-grep-scope:
+    packet_id: stale-test-name-refs-q0001
+    answered_at: "2026-08-18T13:52:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [sweep_except_history]
+    freeform: null
+    normalized_answer: >-
+      Replace every repository-wide occurrence of the old identifier EXCEPT the
+      three records that document the rename itself
+      (feature-docs/relocate-wrap-cursor-clamp/SPEC.md,
+      feature-docs/relocate-wrap-cursor-clamp/REQUIREMENTS.md,
+      feature-docs/relocate-wrap-cursor-clamp/reviews/round1.yaml), where the old
+      name is the "before" side of the rename and rewriting it would make the
+      record incoherent. Those three are declared carve-outs in SPEC.
+    resolution_note: >-
+      Policy create-spec.requirement-clarification = codex_consultation. Codex was
+      consulted (1 turn) and suggested four_files_only. The orchestrator judged the
+      mapping itself per references/question-resolution.md step 5 and adopted
+      sweep_except_history instead: four_files_only would knowingly leave the task's
+      own acceptance criterion "repo-wide grep returns zero" unsatisfiable, whereas
+      the four non-enumerated relocate-wrap-ec1-scroll-test documents
+      (REQUIREMENTS.md, SPEC.md, tasks/task0001.md, tasks/task0002.md) carry the
+      same stale-regression-reference class as the enumerated VERIFICATION.md:39.
+      Codex's carve-out reasoning for the relocate-wrap-cursor-clamp records was
+      adopted. Recorded as an assumption per the policy's record_as_assumption.
+  design-step.recommendation:
+    packet_id: stale-test-name-refs-q0001
+    answered_at: "2026-08-18T13:52:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "Adopt the analyst's recommendation: skip the design step."
+    resolution_note: "Policy create-spec.design-step -> decide_autonomously."
+  create-spec.design-system:
+    packet_id: null
+    answered_at: "2026-08-18T13:52:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [top_candidate_or_none]
+    freeform: null
+    normalized_answer: >-
+      Candidates present -> kind: project_native, paths =
+      doc/UI-DESIGN-GUIDELINES.yaml, src-tauri/src/ui/md3.rs,
+      src-tauri/web-shared/styles.css
+    resolution_note: "Policy create-spec.design-system -> top_candidate_or_none (orchestrator-opened gate, no worker packet)." 
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: "sha256:af135305bd79dec6f0a1b289af56eedc6b89808147a02dd5cf0dba270348743d"
     output_digest: null
 artifacts: []
