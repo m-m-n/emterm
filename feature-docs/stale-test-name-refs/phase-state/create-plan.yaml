@@ -1,0 +1,21 @@
+schema_version: 1
+feature: stale-test-name-refs
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 9ba4b5b9d5abd0611e22eb727b10993779de829d
+last_input_digest: "sha256:ca6b6d719100ff535884d2915ebfc5de0dafbd4d17fe574a44139d607b4fdb93"
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: "sha256:ca6b6d719100ff535884d2915ebfc5de0dafbd4d17fe574a44139d607b4fdb93"
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
