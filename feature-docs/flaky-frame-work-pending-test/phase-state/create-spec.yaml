@@ -1,14 +1,18 @@
 schema_version: 1
 feature: flaky-frame-work-pending-test
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
 base_revision: 311634ec
-last_input_digest: null
-active_request_id: null
+last_input_digest: sha256:05aaea3f000bb4a8addfa225b95b25ff856e9b1f8704bb83dc1a2acba59c67a0
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:05aaea3f000bb4a8addfa225b95b25ff856e9b1f8704bb83dc1a2acba59c67a0
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
