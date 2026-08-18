@@ -61,8 +61,16 @@ tasks:
     branch: em-workflow/ring-push-blank-row-scope-test/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary: []
+    cross_validation: true
+  perspectives:
+    comprehensive: pending
+    security: pending
+    spec: pending
   residual_critical_high: 0
   needs_rework: false
 
