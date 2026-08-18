@@ -401,5 +401,15 @@ mod tests {
             "the flag must not be stuck raised after a panicking span"
         );
         drop(guard);
+
+        // `PoisonError::into_inner` does not clear the mutex's poison, so
+        // the plain entry point every other test uses still traverses its
+        // own recovery path here: acquiring must succeed, not panic.
+        let reacquired = RestartFlagTestGuard::acquire();
+        assert!(
+            !restart_pending(),
+            "acquire() must remain usable after a panicking span"
+        );
+        drop(reacquired);
     }
 }
