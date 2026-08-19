@@ -24,7 +24,7 @@ as on WezTerm.
 - Rust toolchain pinned by the project (rustfmt style_edition=2024).
 - Bun (TypeScript bundle / tests for child WebViews).
 - The build-location rule: always pass `--manifest-path` and
-  `CARGO_TARGET_DIR` (see `.claude/rules/build-location.md`).
+  `CARGO_TARGET_DIR` (see `.claude/rules/core-build-location.md`).
 
 ### Dependencies
 

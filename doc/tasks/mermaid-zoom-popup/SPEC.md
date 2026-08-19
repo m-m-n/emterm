@@ -341,5 +341,5 @@ Given the small scope (single WebView, one renderer file + one CSS file + option
 - Existing CSS: `src-tauri/web-shared/markdown/fullscreen.css`
 - Related project rules:
   - `.claude/rules/debugging-constraints.md` — DevTools unavailable; use `emterm.log`
-  - `.claude/rules/build-location.md` — always pass `--manifest-path` + `CARGO_TARGET_DIR`
+  - `.claude/rules/core-build-location.md` — always pass `--manifest-path` + `CARGO_TARGET_DIR`
   - `CLAUDE.md` — Bun bundler for child WebView, CSS `@import` limitations

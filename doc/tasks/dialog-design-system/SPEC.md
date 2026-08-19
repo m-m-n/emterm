@@ -342,7 +342,7 @@ The test is feature-gated `#[cfg(feature = "gui")]` (helper itself is
 - **NFR4 (workflow rules)**: Tests use
   `CARGO_TARGET_DIR=src-tauri/target` and `--manifest-path
   src-tauri/Cargo.toml --lib` per
-  `.claude/rules/build-location.md`.
+  `.claude/rules/core-build-location.md`.
 
 ## 5. Architecture
 

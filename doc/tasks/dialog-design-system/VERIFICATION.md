@@ -215,7 +215,7 @@ No E2E test suite is defined for this feature (`sdd.yaml.project.components.*.e2
 | NFR1 (compatibility) | Phase 4, 5 | TS-1, TS-3, TS-24, manual SPEC §7.3 |
 | NFR2 (CLI build) | Phase 1, 2, 6 | TS-19 |
 | NFR3 (i18n) | Phase 2, 3 | TS-1 through TS-5 pass `(ja, en)` pairs into the native `Dialog` helper + `crate::i18n::Locale`; TS-6/TS-7 resolve their titles/labels through `t()` keys defined in `src-tauri/web-shared/i18n/locales/{en,ja}.json` (the WebView helper API takes a single resolved `title: string`). |
-| NFR4 (workflow rules) | Phase 6 | Test command uses `CARGO_TARGET_DIR=src-tauri/target` + `--manifest-path` per `.claude/rules/build-location.md` |
+| NFR4 (workflow rules) | Phase 6 | Test command uses `CARGO_TARGET_DIR=src-tauri/target` + `--manifest-path` per `.claude/rules/core-build-location.md` |
 
 ## E2E Testing
 

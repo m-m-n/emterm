@@ -21,7 +21,7 @@ Keep new tests in the same style as the existing ones.
 
 Always set `CARGO_TARGET_DIR=src-tauri/target` and pass `--manifest-path`
 so concurrent sessions agree on the build output location (see
-`.claude/rules/build-location.md`).
+`.claude/rules/core-build-location.md`).
 
 ```bash
 # Run all library tests for the main binary crate
@@ -166,4 +166,4 @@ crate) only when you need a separate compilation unit (integration test).
   persists `warn` and above only). See
   `.claude/rules/debugging-constraints.md`.
 - Do not `cd` into `src-tauri/`. Stay at the project root and use
-  `--manifest-path` (see `.claude/rules/build-location.md`).
+  `--manifest-path` (see `.claude/rules/core-build-location.md`).

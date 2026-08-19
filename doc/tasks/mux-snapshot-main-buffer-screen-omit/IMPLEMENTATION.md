@@ -16,7 +16,7 @@ Branch `build_snapshot_bytes` on the captured `alt_screen` flag so the daemon vt
 ### Development Environment
 
 - Rust toolchain pinned by the project (already required for normal eMterm builds).
-- `CARGO_TARGET_DIR=src-tauri/target` for quick checks / tests (per `.claude/rules/build-location.md`).
+- `CARGO_TARGET_DIR=src-tauri/target` for quick checks / tests (per `.claude/rules/core-build-location.md`).
 
 ### Dependencies
 
