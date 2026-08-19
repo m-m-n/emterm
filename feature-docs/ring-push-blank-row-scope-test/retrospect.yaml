@@ -1,0 +1,30 @@
+feature: ring-push-blank-row-scope-test
+collected_at: "2026-08-19T09:05:00+09:00"
+session_ids: ["01a01732-d5be-7000-9543-b9952d55f055"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  deferred_findings:
+    - stable_id: 680d60eb138fc30b
+      category: comprehensive
+      severity: medium
+      resolution_reason: "medium severity: outside the R4 auto-fix gate (critical/high only); filed as a follow-up task"
+    - stable_id: 9e7ea750970a2f38
+      category: comprehensive
+      severity: medium
+      resolution_reason: "medium severity: outside the R4 auto-fix gate (critical/high only); filed as a follow-up task"
+lessons_candidates:
+  - >-
+    レビューの R4 auto-fix ゲートは critical/high のみを対象にするため、
+    テスト専用フィーチャーのように「指摘は出るが severity が medium に落ち着く」
+    形の変更では、レビューの成果が同一 run 内では 1 件も反映されない。
+    このフィーチャーでは medium 2 件をいずれも別タスクへ送った。
+  - >-
+    今回の 2 件はどちらも「アサーションは通るが観測範囲がコメントの主張より狭い」
+    という同じ形の指摘で、PR #44 のレビューで出た元 finding
+    (821776efcf3c8be9) と同型。テストの観測範囲とコメント/仕様の主張の
+    ドリフトは、このプロジェクトで繰り返し出る指摘パターンの候補。
