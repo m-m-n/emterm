@@ -67,14 +67,5 @@ project root with `--manifest-path`) so relative `src-tauri/target` /
 
 ## Web bundle prerequisites
 
-The GUI build (`--features gui`, default-on) embeds `viewer/dist/` and
-`settings/dist/` via `build.rs`. Before any GUI release build, run:
-
-```
-bun run build:viewer
-bun run build:settings
-```
-
-Or use `make build` / `make dpkg`, which run these for you. CLI-only
-builds (`--no-default-features`) skip the dist check entirely and need
-no bun involvement.
+The GUI build embeds `viewer/dist/` and `settings/dist/` via `build.rs`, so the
+bun bundles must exist before any GUI release build. See `core-commands.md`.
