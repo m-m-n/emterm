@@ -246,4 +246,4 @@ Items already verified by sdd.5-check (and NOT re-run here):
 
 Release-build verification (`make build` / `cargo build --release`) is
 explicitly the user's responsibility per project rule
-`.claude/rules/build-location.md`.
+`.claude/rules/core-build-location.md`.

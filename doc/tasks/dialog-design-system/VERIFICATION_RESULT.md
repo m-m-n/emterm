@@ -124,7 +124,7 @@
 | NFR1 | Esc=cancel / Enter=primary (非破壊) の互換性 | TS-1/TS-3/TS-24 green + helper 内強制実装 | OK |
 | NFR2 | CLI build (`--no-default-features`) で helper を引き込まない | `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features` 終了コード 0 (本実行で確認) | OK |
 | NFR3 | i18n: `(ja, en)` ペア / `Locale` または `t()` 経由 | Native: `Dialog::input/confirm/destructive_confirm` が `(ja, en, Locale)` を取る。WebView: `t("settings.{profiles,ssh}.save")` 経由 | OK |
-| NFR4 | テストコマンドが `.claude/rules/build-location.md` 準拠 | sdd.yaml `test_command` が `CARGO_TARGET_DIR=src-tauri/target` + `--manifest-path src-tauri/Cargo.toml --lib` 形式 | OK |
+| NFR4 | テストコマンドが `.claude/rules/core-build-location.md` 準拠 | sdd.yaml `test_command` が `CARGO_TARGET_DIR=src-tauri/target` + `--manifest-path src-tauri/Cargo.toml --lib` 形式 | OK |
 
 ---
 

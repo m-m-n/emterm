@@ -21,7 +21,7 @@
 ## Conventions
 
 - テストは `test/README.md` の規約に従う: インライン `#[cfg(test)] mod tests`、既存テストの構築スタイルの踏襲、完了前にフルスイート `--lib` を 1 回以上実行する。
-- cargo はプロジェクトルートから `--manifest-path src-tauri/Cargo.toml` と `CARGO_TARGET_DIR=src-tauri/target` を明示して実行する（`.claude/rules/build-location.md`）。
+- cargo はプロジェクトルートから `--manifest-path src-tauri/Cargo.toml` と `CARGO_TARGET_DIR=src-tauri/target` を明示して実行する（`.claude/rules/core-build-location.md`）。
 
 ## Cross-task Design Decisions
 
