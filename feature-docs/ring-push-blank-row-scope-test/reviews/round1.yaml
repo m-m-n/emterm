@@ -1,0 +1,79 @@
+round: 1
+executed_at: "2026-08-19T08:55:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 2b51715b2db2539b6b137d7d0b1aa4db54bfd7c9
+  head_commit: f01f53df7080f1300fcd0e1b0601bdd53bb24afe
+  changed_files:
+    - crates/term_core/src/ring_buffer/tests.rs
+    - test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: 680d60eb138fc30b
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/ring_buffer/tests.rs
+    line: 517
+    line_end: 522
+    title: "冗長性 NOTE がフィクスチャ依存だと誤記している（実際は常に成立）"
+    description: >-
+      NOTE は「この 2 行・スクロールバック 0 のフィクスチャでは新ボトム絶対行が
+      退避絶対行と一致する」と書いているが、ring_buffer.rs の Step 2/3 は
+      ring_head を 1 進めた直後に new_bottom_abs = (ring_head + rows - 1) % rows
+      を計算しており、これは代数的に回転前の ring_head（= evicted_abs）へ必ず戻る。
+      rows と scrollback_capacity の値によらず一致するため、フィクスチャ条件は無関係。
+      SPEC.md FR6 / VERIFICATION.md MT3 / task0001.tests.yaml の AC-5 は
+      いずれも無条件の記述であり、コメントだけが限定句を持つドリフト状態。
+    suggestion: >-
+      NOTE から「in this 2-row, zero-scrollback fixture」の限定句を外し、
+      new_bottom_abs = (ring_head + rows - 1) % rows が回転後に評価されるため
+      常に回転前の ring_head へ戻ること、したがってどのビューポート高さ・
+      どのスクロールバック容量でも 2 つの clear site は相互に冗長であり、
+      いかなるフィクスチャでも個別には固定できないことを書く。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: >-
+      medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。
+      別タスクとして起票する。
+  - stable_id: 9e7ea750970a2f38
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/ring_buffer/tests.rs
+    line: 523
+    line_end: 529
+    title: "survivor の生存アサートがキーの存在しか見ておらず、abs1 が survivor 行を指し続けているか未観測"
+    description: >-
+      スクロール後の survivor アサートは overflow / overflow_ridx に abs1 の
+      エントリが残っているかだけを見ており、abs1 が依然として survivor 行の
+      リングスロットを指しているか、その行の内容が生き残っているかを観測していない。
+      ring_push_blank Step 3 の塗り潰しスライス添字だけが誤り、survivor 行の
+      セルが blank 化された場合でも overflow 側のクリアは正しい行に当たったままなので
+      現在のアサートは全て緑のまま通る。「エントリが生きている」と
+      「エントリが孤児として残留している」を区別できない。
+    suggestion: >-
+      handle_execute(0x0A) 後の survival ブロックに
+      assert_eq!(core.viewport_abs(0) as u32, abs1); を追加し、
+      キーの安定性という設計上の主張を実際に観測する。必要なら
+      get_cell_char(0, 0) で survivor 行の内容が残っていることも合わせて確認する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: >-
+      medium severity: R4 の auto-fix ゲート（critical/high のみ）の対象外。
+      別タスクとして起票する。
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
