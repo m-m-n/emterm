@@ -19,14 +19,25 @@ fn next_bell_deadline_is_started_plus_flash_duration() {
     );
 }
 
+// `next_toast_deadline` / `pump_toasts` read (and, via `pump_restart_toast`,
+// consume) the process-global restart flag through `App::frame_work_pending`
+// even when the test's own assertion does not care about that flag's value —
+// frame-skip-pending-work task0001's exclusivity seam
+// (`self_exec::RestartFlagTestGuard`) covers every such touch, not only the
+// tests that assert on the flag directly (IMPLEMENTATION.md D1: a partial
+// seam leaves the contention live). See
+// `feature-docs/flaky-frame-work-pending-test/DIAGNOSIS.md`.
+
 #[test]
 fn next_toast_deadline_none_when_no_toast_active() {
+    let _guard = crate::self_exec::RestartFlagTestGuard::acquire();
     let app = App::new();
     assert_eq!(app.next_toast_deadline(), None);
 }
 
 #[test]
 fn next_toast_deadline_some_when_restart_toast_active() {
+    let _guard = crate::self_exec::RestartFlagTestGuard::acquire();
     let mut app = App::new();
     app.restart_toast.arm(0.0);
     assert!(app.next_toast_deadline().is_some());
@@ -34,6 +45,7 @@ fn next_toast_deadline_some_when_restart_toast_active() {
 
 #[test]
 fn next_toast_deadline_some_when_sftp_toast_active() {
+    let _guard = crate::self_exec::RestartFlagTestGuard::acquire();
     let mut app = App::new();
     app.sftp_ui.toasts.toasts.push(crate::sftp::ui::Toast {
         session_id: "s1".to_string(),
@@ -54,6 +66,7 @@ fn next_toast_deadline_some_when_sftp_toast_active() {
 /// call prunes both.
 #[test]
 fn pump_toasts_runs_both_pumps_unconditionally() {
+    let _guard = crate::self_exec::RestartFlagTestGuard::acquire();
     let mut app = App::new();
     app.restart_toast.arm(0.0);
     app.sftp_ui.toasts.toasts.push(crate::sftp::ui::Toast {
@@ -85,7 +98,7 @@ fn pump_toasts_runs_both_pumps_unconditionally() {
 /// clear restart flag reports no pending work.
 #[test]
 fn frame_work_pending_false_on_fresh_app() {
-    crate::self_exec::test_set_restart_required(false);
+    let _guard = crate::self_exec::RestartFlagTestGuard::acquire();
     let app = App::new();
     assert!(
         !app.toast_pending(),
@@ -98,7 +111,7 @@ fn frame_work_pending_false_on_fresh_app() {
 /// and evaluating it does not drain the channel.
 #[test]
 fn frame_work_pending_true_when_progress_channel_nonempty_and_consumes_nothing() {
-    crate::self_exec::test_set_restart_required(false);
+    let _guard = crate::self_exec::RestartFlagTestGuard::acquire();
     let app = App::new();
     app.sftp_service.test_push_progress_event();
 
@@ -113,7 +126,7 @@ fn frame_work_pending_true_when_progress_channel_nonempty_and_consumes_nothing()
 /// predicate true, and evaluating it does not drain the channel.
 #[test]
 fn frame_work_pending_true_when_result_channel_nonempty_and_consumes_nothing() {
-    crate::self_exec::test_set_restart_required(false);
+    let _guard = crate::self_exec::RestartFlagTestGuard::acquire();
     let app = App::new();
     app.sftp_service.test_push_result_event();
 
@@ -129,7 +142,8 @@ fn frame_work_pending_true_when_result_channel_nonempty_and_consumes_nothing() {
 /// which arms the toast exactly once.
 #[test]
 fn frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing() {
-    crate::self_exec::test_set_restart_required(true);
+    let guard = crate::self_exec::RestartFlagTestGuard::acquire();
+    guard.set(true);
     let app = App::new();
 
     assert!(app.frame_work_pending());
@@ -138,8 +152,8 @@ fn frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing() {
         "evaluating the predicate must not consume the restart flag"
     );
 
-    // Restore clear state (process-global flag; other tests assume clear).
-    crate::self_exec::test_set_restart_required(false);
+    // No manual restore needed: `guard`'s `Drop` clears the flag on span
+    // end regardless of what this test leaves it at.
 }
 
 /// AC-5 / TS-6: the wait deadline stays bounded while pre-toast pending
@@ -149,7 +163,7 @@ fn frame_work_pending_true_when_restart_flag_raised_and_consumes_nothing() {
 /// `next_toast_deadline_none_when_no_toast_active`, which must stay green).
 #[test]
 fn next_toast_deadline_some_when_pretoast_progress_event_pending() {
-    crate::self_exec::test_set_restart_required(false);
+    let _guard = crate::self_exec::RestartFlagTestGuard::acquire();
     let app = App::new();
     assert!(!app.toast_pending(), "precondition: no toast up yet");
     app.sftp_service.test_push_progress_event();
