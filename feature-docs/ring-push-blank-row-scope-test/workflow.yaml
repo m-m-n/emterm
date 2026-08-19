@@ -40,9 +40,20 @@ workflow:
     status: completed
     completed_at_commit: f01f53df7080f1300fcd0e1b0601bdd53bb24afe
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: ebb8b69d556122d0221ada3f876f13aeb680a3d5
+    result: pass
     failed_items: []
+    excluded_requirements:
+      - id: FR7
+        excluded_reason: "Out of scope by create-spec gate requirement.sibling-test-scope (option separate_task); the sibling test test_ring_push_blank_clears_ridx is deliberately untouched. Verified negatively: unchanged in the integrated diff."
+    summary:
+      build: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml -> exit 0, no warnings"
+      test: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib -> 825 passed, 0 failed, 13 ignored (default parallel harness)"
+      format: "cargo fmt --manifest-path crates/term_core/Cargo.toml --check -> clean"
+      scenarios: "TS1 / TS2 / TS4 automated green; TS3 evidence reviewed in test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml"
+      manual: "MT1-MT5 all pass"
+      e2e: "not applicable (no E2E infrastructure)"
   - id: retrospect
     status: pending
 
