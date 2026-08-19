@@ -37,7 +37,8 @@ workflow:
     base_commit: 2b51715b2db2539b6b137d7d0b1aa4db54bfd7c9
     completed_at_commit: d4f7cddac950a6d630d96bd8c28b326dcf08d47a
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: f01f53df7080f1300fcd0e1b0601bdd53bb24afe
   - id: verify
     status: pending
     result: null
@@ -61,16 +62,16 @@ tasks:
     branch: em-workflow/ring-push-blank-row-scope-test/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, spec]
     discretionary: []
     cross_validation: true
   perspectives:
-    comprehensive: pending
-    security: pending
-    spec: pending
+    comprehensive: completed
+    security: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
