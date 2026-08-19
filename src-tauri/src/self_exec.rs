@@ -170,16 +170,76 @@ pub fn restart_pending() -> bool {
     RESTART_REQUIRED.load(Ordering::Acquire)
 }
 
-/// Test-only seam (frame-skip-pending-work task0001, FR7): raise or clear
-/// the process-global restart flag directly, without going through
-/// [`note_spawn_failure`]'s self-binary-mismatch detection. Crate-visible so
-/// App-level predicate tests can arm it. The suite runs single-threaded, but
-/// this flag is process-global regardless — every test that raises it must
-/// restore clear state before returning so unrelated tests stay
-/// order-independent.
+/// Test-only exclusivity seam over the process-global restart flag
+/// (frame-skip-pending-work task0001, AC-2). `RESTART_REQUIRED` is shared by
+/// every test in the `--lib` binary, which cargo runs at default (multi-
+/// threaded) parallelism — a bare setter let two concurrently scheduled
+/// tests race on the same flag (see
+/// `feature-docs/flaky-frame-work-pending-test/DIAGNOSIS.md`). Every test
+/// that raises, clears, consumes, or observes `RESTART_REQUIRED` — directly
+/// or through [`restart_pending`] / [`restart_required`] / any App method
+/// that calls them — must hold a [`RestartFlagTestGuard`] for the full span
+/// between its own first touch and its last observation.
 #[cfg(test)]
-pub(crate) fn test_set_restart_required(value: bool) {
-    RESTART_REQUIRED.store(value, Ordering::Release);
+static RESTART_FLAG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// RAII guard granting exclusive access to `RESTART_REQUIRED` for one
+/// test's span. See [`RestartFlagTestGuard::acquire`].
+#[cfg(test)]
+pub(crate) struct RestartFlagTestGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl RestartFlagTestGuard {
+    /// Acquire the seam for the caller's test span.
+    ///
+    /// **Pre**: none — this is the entry point that establishes exclusivity.
+    /// **Post**: the flag reads `false` immediately after this call, so a
+    /// span never inherits a value some other party left behind, and the
+    /// caller may then raise it explicitly via [`Self::set`].
+    ///
+    /// Recovers from a poisoned lock (`unwrap_or_else` on the `LockResult`)
+    /// so a panic inside one test's span can never cascade into every later
+    /// test failing to acquire the seam — the Shared Components contract's
+    /// failure-isolation clause.
+    pub(crate) fn acquire() -> Self {
+        let lock = RESTART_FLAG_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        RESTART_REQUIRED.store(false, Ordering::Release);
+        Self { _lock: lock }
+    }
+
+    /// Acquire the seam without resetting the flag.
+    ///
+    /// Same exclusivity and poison-recovery behavior as [`Self::acquire`],
+    /// but does not clear `RESTART_REQUIRED` on entry. Lets a caller open a
+    /// second exclusive span immediately after another span's guard has
+    /// dropped, and observe under the lock whatever that drop left behind —
+    /// without the reset masking the very value being verified.
+    pub(crate) fn acquire_preserving_flag() -> Self {
+        let lock = RESTART_FLAG_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self { _lock: lock }
+    }
+
+    /// Raise or clear the flag within this exclusive span.
+    pub(crate) fn set(&self, value: bool) {
+        RESTART_REQUIRED.store(value, Ordering::Release);
+    }
+}
+
+/// **Post** (span end): the flag is always returned to `false` here,
+/// regardless of what the span left it at — including when the span ends
+/// via an unwinding panic, since `Drop` still runs during unwind. No party
+/// outside this span can observe a value the span did not itself establish.
+#[cfg(test)]
+impl Drop for RestartFlagTestGuard {
+    fn drop(&mut self) {
+        RESTART_REQUIRED.store(false, Ordering::Release);
+    }
 }
 
 /// Build `Command::new(self_exe_path()?)`, let the caller configure it, spawn,
@@ -256,14 +316,14 @@ mod tests {
     // a peek must never consume.
     #[test]
     fn restart_pending_reports_true_across_consecutive_peeks() {
-        test_set_restart_required(true);
+        let guard = RestartFlagTestGuard::acquire();
+        guard.set(true);
         assert!(restart_pending(), "first peek must observe the raised flag");
         assert!(
             restart_pending(),
             "a second consecutive peek must observe the same value, unconsumed"
         );
-        // Restore clear state (process-global flag; other tests assume clear).
-        test_set_restart_required(false);
+        guard.set(false);
         assert!(!restart_pending(), "flag must be clear after restoration");
     }
 
@@ -272,7 +332,8 @@ mod tests {
     // every subsequent read.
     #[test]
     fn restart_required_still_consumes_once_after_peeks() {
-        test_set_restart_required(true);
+        let guard = RestartFlagTestGuard::acquire();
+        guard.set(true);
         assert!(restart_pending());
         assert!(restart_pending(), "peeking again must not consume");
         assert!(
@@ -287,5 +348,68 @@ mod tests {
             !restart_pending(),
             "the flag must read clear after being consumed"
         );
+    }
+
+    // ── frame-skip-pending-work task0001, AC-6: regression guard for the
+    // exclusivity seam itself. These assert the seam's stated contract
+    // (Shared Components, IMPLEMENTATION.md) rather than the restart-flag
+    // semantics above — they fail to compile/pass if `RestartFlagTestGuard`
+    // is reverted to the old bare `test_set_restart_required` setter. No
+    // sleep, no wall-clock threshold, no thread-interleaving assumption. ──
+
+    // The flag must be clear once a span's guard has dropped, regardless of
+    // what the span itself left it at — the seam's postcondition.
+    #[test]
+    fn restart_flag_test_guard_clears_the_flag_when_the_span_ends() {
+        {
+            let guard = RestartFlagTestGuard::acquire();
+            guard.set(true);
+            assert!(restart_pending(), "sanity: the span did raise the flag");
+        }
+        // Guard dropped — span ended without an explicit `set(false)`. Open
+        // a second exclusive span (without resetting) so the observation
+        // below is itself made under the lock, never outside any span.
+        let _guard = RestartFlagTestGuard::acquire_preserving_flag();
+        assert!(
+            !restart_pending(),
+            "the flag must read clear once the exclusive span has ended"
+        );
+    }
+
+    // A panic inside one span must not poison the seam for every later
+    // span, and must not leave the flag stuck raised — failure isolation.
+    #[test]
+    fn restart_flag_test_guard_stays_usable_after_a_panicking_span() {
+        let panicked = std::panic::catch_unwind(|| {
+            let guard = RestartFlagTestGuard::acquire();
+            guard.set(true);
+            panic!("simulated panic inside an exclusive span");
+        });
+        assert!(
+            panicked.is_err(),
+            "the simulated panic must have propagated"
+        );
+
+        // A poisoned std::sync::Mutex would make every later `.lock()` call
+        // return `Err` without this recovery; acquiring here must succeed
+        // (not hang, not panic). Use the non-resetting variant so the read
+        // below observes what the aborted span actually left behind,
+        // instead of `acquire()`'s own reset making the assertion vacuous.
+        let guard = RestartFlagTestGuard::acquire_preserving_flag();
+        assert!(
+            !restart_pending(),
+            "the flag must not be stuck raised after a panicking span"
+        );
+        drop(guard);
+
+        // `PoisonError::into_inner` does not clear the mutex's poison, so
+        // the plain entry point every other test uses still traverses its
+        // own recovery path here: acquiring must succeed, not panic.
+        let reacquired = RestartFlagTestGuard::acquire();
+        assert!(
+            !restart_pending(),
+            "acquire() must remain usable after a panicking span"
+        );
+        drop(reacquired);
     }
 }
