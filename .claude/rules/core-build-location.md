@@ -69,3 +69,13 @@ project root with `--manifest-path`) so relative `src-tauri/target` /
 
 The GUI build embeds `viewer/dist/` and `settings/dist/` via `build.rs`, so the
 bun bundles must exist before any GUI release build. See `core-commands.md`.
+
+## Older references in task docs
+
+Documents under `doc/tasks/` that predate 2026-06-17 refer to
+`.claude/rules/native-poc-build-location.md`. That file no longer exists: it
+was removed in `7935cba5 refactor: promote native-poc to main implementation`,
+which promoted the `native-poc/` tree to the main implementation and replaced
+the rule with this one. Those documents are kept as records of the work at the
+time, so their target dirs (`./target`, `./target-host`) reflect the pre-promotion
+layout, not the paths in the table above.
