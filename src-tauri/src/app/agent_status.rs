@@ -9,16 +9,26 @@ use super::App;
 /// The `App::agent_status` keys `tab` occupies: its own plain-tab key
 /// (`PaneKey::Tab`, harmless to include even when unoccupied — `discard` /
 /// `mark_seen` on a missing key are no-ops) plus one `PaneKey::MuxPane` per
-/// pane in its window group, if attached (task0005). Shared by the
-/// tab-close (AC-6) and mark_seen-on-foreground-display (AC-5) call sites so
-/// "which panes belong to this tab" is defined in exactly one place.
+/// pane in its window group, if attached (task0005), scoped to `tab`'s OWN
+/// [`crate::agent_status_model::ConnectionScope`] (mux-agent-status-pane-
+/// key-collision D2: the tab's own `stable_id`) — so two tabs whose groups
+/// hold identical wire pane ids yield fully disjoint key sets. Shared by
+/// the tab-close (AC-6) and mark_seen-on-foreground-display (AC-5) call
+/// sites so "which panes belong to this tab" is defined in exactly one
+/// place.
 pub(super) fn agent_status_keys_for_tab(
     tab: &crate::tabs::Tab,
 ) -> Vec<crate::agent_status_model::PaneKey> {
-    use crate::agent_status_model::PaneKey;
+    use crate::agent_status_model::{ConnectionScope, PaneKey};
     let mut keys = vec![PaneKey::Tab(tab.stable_id)];
     if let Some(group) = tab.mux_group.as_ref() {
-        keys.extend(group.pane_ids().iter().map(|&id| PaneKey::MuxPane(id)));
+        let scope = ConnectionScope(tab.stable_id);
+        keys.extend(
+            group
+                .pane_ids()
+                .iter()
+                .map(|&id| PaneKey::MuxPane(scope, id)),
+        );
     }
     keys
 }
@@ -47,10 +57,16 @@ pub(super) fn agent_status_pane_visible(
 }
 
 /// Resolve the tab title for a drained transition's `pane`, by locating
-/// its containing tab (task0009 Design: "Resolve tab_title from the
-/// transition's pane by locating its containing tab"). `None` when no
-/// tracked tab currently owns `pane` (it closed between the transition
-/// firing and this drain — the caller falls back to an empty title).
+/// the tab whose OWN connection reported it (task0009 Design: "Resolve
+/// tab_title from the transition's pane by locating its containing tab";
+/// mux-agent-status-pane-key-collision FR5). A mux pane resolves through
+/// its [`crate::agent_status_model::ConnectionScope`] alone — equal to the
+/// owning tab's `stable_id` (D2) — NEVER through wire `pane_id` membership,
+/// so a transition never resolves to a different tab that merely happens
+/// to hold the same wire `pane_id` on another mux connection. `None` when
+/// no tracked tab currently owns `pane` (its scope's tab closed between the
+/// transition firing and this drain — the caller falls back to an empty
+/// title; EC-4).
 pub(super) fn agent_status_pane_tab_title<'a>(
     tabs: &'a [crate::tabs::Tab],
     pane: &crate::agent_status_model::PaneKey,
@@ -59,38 +75,40 @@ pub(super) fn agent_status_pane_tab_title<'a>(
     tabs.iter()
         .find(|tab| match pane {
             PaneKey::Tab(id) => tab.stable_id == *id,
-            PaneKey::MuxPane(pane_id) => tab
-                .mux_group
-                .as_ref()
-                .is_some_and(|g| g.pane_ids().contains(pane_id)),
+            PaneKey::MuxPane(scope, _pane_id) => tab.stable_id == scope.0,
         })
         .map(|tab| tab.title.as_str())
 }
 
 /// Resolve the per-pane notification rate-limit key for `pane` (task0009
 /// Design: "Resolve rate_limit_key"). Mux panes prefer the daemon-learned
-/// `public_pane_id` (stable across the pane's lifetime, unique across
-/// concurrent panes by the "Public pane ID format" shared component);
-/// plain tabs use a prefixed stable-id string. Both branches are prefixed
-/// (`"tab:"` / `"mux:"`) so the fallback path (a mux pane discarded before
-/// ever learning a public id — not expected in practice, since learning
-/// and applying a daemon update happen in the same `pump_all` batch) can
-/// never collide with a plain-tab key. Shared by every discard site
-/// (`close_tab`, the reaped-tab loop, `pump_all`'s closed-mux-pane loop)
-/// and the transition-drain loop so all four derive the same key. Takes
-/// `mux_public_pane_ids` explicitly (rather than `&App`) so it is testable
-/// without constructing a full `App`.
+/// `public_pane_id`, looked up by the pane's scoped key — (`ConnectionScope`,
+/// wire `pane_id`) — so two connections' same-numbered panes never share a
+/// learned id (mux-agent-status-pane-key-collision FR3/FR4/D4); plain tabs
+/// use a prefixed stable-id string. When no public id was ever learned, the
+/// fallback embeds BOTH the scope and the wire `pane_id`
+/// (`"mux:<scope>:<pane_id>"`) so two connections' unlearned panes still
+/// derive distinct keys, and the existing `"mux:"` prefix keeps that
+/// fallback from ever colliding with a plain-tab key (`"tab:"`). Shared by
+/// every discard site (`close_tab`, the reaped-tab loop, `pump_all`'s
+/// closed-mux-pane loop) and the transition-drain loop so all four derive
+/// the same key for the same pane. Takes `mux_public_pane_ids` explicitly
+/// (rather than `&App`) so it is testable without constructing a full
+/// `App`.
 pub(super) fn agent_notification_rate_limit_key(
-    mux_public_pane_ids: &std::collections::HashMap<u32, String>,
+    mux_public_pane_ids: &std::collections::HashMap<
+        (crate::agent_status_model::ConnectionScope, u32),
+        String,
+    >,
     pane: &crate::agent_status_model::PaneKey,
 ) -> String {
     use crate::agent_status_model::PaneKey;
     match pane {
         PaneKey::Tab(id) => format!("tab:{id}"),
-        PaneKey::MuxPane(pane_id) => mux_public_pane_ids
-            .get(pane_id)
+        PaneKey::MuxPane(scope, pane_id) => mux_public_pane_ids
+            .get(&(*scope, *pane_id))
             .cloned()
-            .unwrap_or_else(|| format!("mux:{pane_id}")),
+            .unwrap_or_else(|| format!("mux:{}:{pane_id}", scope.0)),
     }
 }
 
@@ -115,22 +133,33 @@ impl App {
         self.agent_status.aggregate(keys.iter())
     }
 
-    /// A single mux pane's aggregated badge, by wire `pane_id` (task0006:
-    /// `ui::mux_sidebar` window-entry badge — one pane per window entry).
+    /// A single mux pane's aggregated badge, by (connection scope, wire
+    /// `pane_id`) (task0006: `ui::mux_sidebar` window-entry badge — one
+    /// pane per window entry; scoped per mux-agent-status-pane-key-
+    /// collision FR2 so the caller must supply the owning tab's own
+    /// scope).
     pub fn agent_status_pane_badge(
         &self,
+        scope: crate::agent_status_model::ConnectionScope,
         pane_id: u32,
     ) -> Option<crate::agent_status_model::Aggregated> {
         self.agent_status
-            .aggregate([&crate::agent_status_model::PaneKey::MuxPane(pane_id)])
+            .aggregate([&crate::agent_status_model::PaneKey::MuxPane(scope, pane_id)])
     }
 
-    /// The daemon-minted public ID for mux pane `pane_id`, if the GUI has
-    /// learned it yet (task0006 AC-5). `None` until the daemon pushes at
-    /// least one `AgentStatusUpdate` for the pane — see
+    /// The daemon-minted public ID for mux pane `pane_id` within `scope`,
+    /// if the GUI has learned it yet (task0006 AC-5; scoped per
+    /// mux-agent-status-pane-key-collision FR3). `None` until the daemon
+    /// pushes at least one `AgentStatusUpdate` for the pane — see
     /// [`Self::mux_public_pane_ids`].
-    pub fn mux_public_pane_id(&self, pane_id: u32) -> Option<&str> {
-        self.mux_public_pane_ids.get(&pane_id).map(String::as_str)
+    pub fn mux_public_pane_id(
+        &self,
+        scope: crate::agent_status_model::ConnectionScope,
+        pane_id: u32,
+    ) -> Option<&str> {
+        self.mux_public_pane_ids
+            .get(&(scope, pane_id))
+            .map(String::as_str)
     }
 
     /// Fire (or suppress) a desktop notification for one drained
@@ -236,8 +265,8 @@ impl App {
         &mut self,
         plain_events: Vec<(u64, crate::agent_status::AgentStatusEvent)>,
         latch_inputs: Vec<(u64, crate::agent_status_model::ResolvedLatchInput)>,
-        updates: Vec<mux_ipc::protocol::AgentStatusUpdateMsg>,
-        closed_panes: Vec<u32>,
+        updates: Vec<(u64, mux_ipc::protocol::AgentStatusUpdateMsg)>,
+        closed_panes: Vec<(u64, u32)>,
     ) {
         let mut plain_events: Vec<Option<(u64, crate::agent_status::AgentStatusEvent)>> =
             plain_events.into_iter().map(Some).collect();
@@ -269,13 +298,19 @@ impl App {
             self.agent_status
                 .apply_plain_tab_event(tab_stable_id, event);
         }
-        for update in updates {
+        for (tab_stable_id, update) in updates {
+            // mux-agent-status-pane-key-collision FR1: every mux drain
+            // reaches this batch apply already tagged with its originating
+            // tab's scope — every key derived below comes from THIS pair,
+            // never from `update.pane_id` alone.
+            let scope = crate::agent_status_model::ConnectionScope(tab_stable_id);
             // task0006 AC-5: learn/refresh this pane's public ID from the
             // same message before applying it to the model — the daemon is
             // the only source for it (see `Self::mux_public_pane_ids`).
             self.mux_public_pane_ids
-                .insert(update.pane_id, update.public_pane_id.clone());
+                .insert((scope, update.pane_id), update.public_pane_id.clone());
             self.agent_status.apply_daemon_update(
+                scope,
                 update.pane_id,
                 update.state.map(crate::agent_status_model::state_from_wire),
                 update.name,
@@ -283,12 +318,15 @@ impl App {
                 update.replay_derived,
             );
         }
-        for pane_id in closed_panes {
-            // task0009 AC-4: resolve the rate-limit key from the still-
-            // present public-id mapping BEFORE removing it below.
-            let key = crate::agent_status_model::PaneKey::MuxPane(pane_id);
+        for (tab_stable_id, pane_id) in closed_panes {
+            // task0009 AC-4 / mux-agent-status-pane-key-collision FR6: the
+            // closing tab's OWN scope only — never another tab's
+            // same-numbered pane. Resolve the rate-limit key from the
+            // still-present public-id mapping BEFORE removing it below.
+            let scope = crate::agent_status_model::ConnectionScope(tab_stable_id);
+            let key = crate::agent_status_model::PaneKey::MuxPane(scope, pane_id);
             let rate_limit_key = agent_notification_rate_limit_key(&self.mux_public_pane_ids, &key);
-            self.mux_public_pane_ids.remove(&pane_id);
+            self.mux_public_pane_ids.remove(&(scope, pane_id));
             self.discard_agent_notification_state(&rate_limit_key);
             self.agent_status.discard(&key);
         }

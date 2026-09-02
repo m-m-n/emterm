@@ -27,16 +27,38 @@ use std::collections::{HashMap, VecDeque};
 use crate::agent_status::{AgentState, AgentStatusEvent};
 use crate::agent_status_exit_latch::AgentStatusExitLatch;
 
+/// The GUI-local mux connection a pane belongs to
+/// (`doc/tasks/mux-agent-status-pane-key-collision/IMPLEMENTATION.md`'s
+/// "Connection scope value" shared component). Two panes that carry the
+/// same wire `pane_id` on two different mux daemons must never collapse
+/// onto one [`AgentStatusModel`] entry — the scope is what tells them
+/// apart.
+///
+/// Currently equal to the owning [`crate::tabs::Tab`]'s `stable_id`
+/// (IMPLEMENTATION.md D2: available from attach time, before the daemon's
+/// first status update, unlike the daemon-minted `public_pane_id`), but
+/// named after the *connection* it identifies rather than the tab that
+/// currently supplies it, so the name survives if a dedicated mux client
+/// object later replaces the tab as the connection owner. Constant for
+/// the tab's whole lifetime, including across detach and re-attach; never
+/// transmitted on the wire; never rendered to the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnectionScope(pub u64);
+
 /// Identifies one agent-status-bearing entity tracked by the model.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PaneKey {
     /// A plain (non-mux) tab, keyed by its stable identity
     /// (`Tab::stable_id`), which survives close-driven index shifts.
     Tab(u64),
-    /// A mux pane, keyed by the wire `pane_id` (the same id carried by
-    /// `MuxMessage::pane_id` / `MuxWindowGroup::pane_ids`, not the
-    /// API-facing `public_pane_id` string).
-    MuxPane(u32),
+    /// A mux pane, keyed by the pair (connection scope, wire `pane_id`) —
+    /// the wire `pane_id` (the same id carried by `MuxMessage::pane_id` /
+    /// `MuxWindowGroup::pane_ids`, not the API-facing `public_pane_id`
+    /// string) alone is NOT unique: two different mux daemons attached
+    /// from two different tabs can both mint pane 1. The
+    /// [`ConnectionScope`] disambiguates them (SPEC
+    /// mux-agent-status-pane-key-collision FR1).
+    MuxPane(ConnectionScope, u32),
 }
 
 /// One pane's tracked agent status.
@@ -166,11 +188,14 @@ impl AgentStatusModel {
         self.apply_report(key, new_state, name, next_revision, false);
     }
 
-    /// Apply a daemon-pushed `AgentStatusUpdate` for a mux pane. `revision`
-    /// is the daemon-authoritative value and is stored verbatim (the model
-    /// never increments it itself for mux panes).
+    /// Apply a daemon-pushed `AgentStatusUpdate` for a mux pane. `scope`
+    /// identifies the connection that delivered the update (the tab whose
+    /// mux attach carried it); `revision` is the daemon-authoritative
+    /// value and is stored verbatim (the model never increments it itself
+    /// for mux panes).
     pub fn apply_daemon_update(
         &mut self,
+        scope: ConnectionScope,
         pane_id: u32,
         state: Option<AgentState>,
         name: Option<String>,
@@ -178,7 +203,7 @@ impl AgentStatusModel {
         replay_derived: bool,
     ) {
         self.apply_report(
-            PaneKey::MuxPane(pane_id),
+            PaneKey::MuxPane(scope, pane_id),
             state,
             name,
             revision,
@@ -304,21 +329,23 @@ impl AgentStatusModel {
         self.entries.get(pane)
     }
 
-    /// Whether any of the given mux pane ids currently carries a reported
-    /// (uncleared) agent status — one of Idle / Working / Blocked / Done.
-    /// Cleared (`state: None`) and never-reported (no tracked entry) panes
-    /// do not count. Used by the `next-agent-window` mux action (SPEC
-    /// mux-agent-tab-cycle FR6) to decide whether a mux window qualifies for
-    /// the cycle: a window qualifies when at least one of its panes
-    /// qualifies (existential), per IMPLEMENTATION.md's any-reported-state
-    /// assumption.
-    pub fn any_pane_has_reported_state<'a, I>(&self, pane_ids: I) -> bool
+    /// Whether any of the given mux pane ids, within `scope`, currently
+    /// carries a reported (uncleared) agent status — one of Idle / Working
+    /// / Blocked / Done. Cleared (`state: None`) and never-reported (no
+    /// tracked entry) panes do not count; a same-numbered pane in a
+    /// DIFFERENT scope never qualifies (SPEC
+    /// mux-agent-status-pane-key-collision FR2). Used by the
+    /// `next-agent-window` mux action (SPEC mux-agent-tab-cycle FR6) to
+    /// decide whether a mux window qualifies for the cycle: a window
+    /// qualifies when at least one of its panes qualifies (existential),
+    /// per IMPLEMENTATION.md's any-reported-state assumption.
+    pub fn any_pane_has_reported_state<'a, I>(&self, scope: ConnectionScope, pane_ids: I) -> bool
     where
         I: IntoIterator<Item = &'a u32>,
     {
         pane_ids.into_iter().any(|pid| {
             self.entries
-                .get(&PaneKey::MuxPane(*pid))
+                .get(&PaneKey::MuxPane(scope, *pid))
                 .is_some_and(|e| e.state.is_some())
         })
     }

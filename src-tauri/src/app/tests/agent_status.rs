@@ -1,5 +1,7 @@
 use super::*;
-use crate::app::agent_status::{agent_status_pane_tab_title, agent_status_pane_visible};
+use crate::app::agent_status::{
+    agent_status_keys_for_tab, agent_status_pane_tab_title, agent_status_pane_visible,
+};
 use mux_ipc::protocol::{MessageType, MuxMessage, SessionInfo, WelcomeMsg, WindowInfo};
 
 // ── Agent-status notifications (task0007) ───────────────────────
@@ -589,6 +591,7 @@ fn agent_status_pane_tab_title_resolves_plain_tab_and_mux_pane() {
     let mut app = App::new();
     app.spawn_initial_tab();
     app.tabs[0].title = "my-title".to_string();
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
     let mut group = crate::mux::window_group::MuxWindowGroup::new();
     group.seed(
         vec![crate::mux::window_group::MuxWindow {
@@ -608,34 +611,65 @@ fn agent_status_pane_tab_title_resolves_plain_tab_and_mux_pane() {
         Some("my-title")
     );
     assert_eq!(
-        agent_status_pane_tab_title(&app.tabs, &crate::agent_status_model::PaneKey::MuxPane(9)),
+        agent_status_pane_tab_title(
+            &app.tabs,
+            &crate::agent_status_model::PaneKey::MuxPane(scope, 9)
+        ),
         Some("my-title")
     );
+    // mux-agent-status-pane-key-collision FR5/EC-4: resolution is by
+    // SCOPE, not by wire pane_id membership — a different scope resolves
+    // to no tab even for the SAME wire pane_id the fixture's tab holds.
+    let other_scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id + 1);
     assert_eq!(
-        agent_status_pane_tab_title(&app.tabs, &crate::agent_status_model::PaneKey::MuxPane(999)),
+        agent_status_pane_tab_title(
+            &app.tabs,
+            &crate::agent_status_model::PaneKey::MuxPane(other_scope, 9)
+        ),
         None
     );
 }
 
 #[test]
 fn agent_notification_rate_limit_key_prefers_public_pane_id_falls_back_to_prefixed_id() {
+    use crate::agent_status_model::ConnectionScope;
     use std::collections::HashMap;
-    let mut ids: HashMap<u32, String> = HashMap::new();
-    ids.insert(7, "xyz-7".to_string());
+    let scope_a = ConnectionScope(1);
+    let scope_b = ConnectionScope(2);
+    let mut ids: HashMap<(ConnectionScope, u32), String> = HashMap::new();
+    ids.insert((scope_a, 7), "xyz-7".to_string());
 
     assert_eq!(
-        agent_notification_rate_limit_key(&ids, &crate::agent_status_model::PaneKey::MuxPane(7)),
+        agent_notification_rate_limit_key(
+            &ids,
+            &crate::agent_status_model::PaneKey::MuxPane(scope_a, 7)
+        ),
         "xyz-7"
     );
-    // No learned public id: falls back to a prefixed pane-id string.
+    // No learned public id: falls back to a prefixed, scope-qualified
+    // pane-id string.
     assert_eq!(
-        agent_notification_rate_limit_key(&ids, &crate::agent_status_model::PaneKey::MuxPane(8)),
-        "mux:8"
+        agent_notification_rate_limit_key(
+            &ids,
+            &crate::agent_status_model::PaneKey::MuxPane(scope_a, 8)
+        ),
+        "mux:1:8"
     );
     assert_eq!(
         agent_notification_rate_limit_key(&ids, &crate::agent_status_model::PaneKey::Tab(3)),
         "tab:3"
     );
+
+    // mux-agent-status-pane-key-collision TS-5 (AC-4): scope B's pane 7
+    // never learned a public id — it derives its OWN fallback key,
+    // distinct both from scope A's learned "xyz-7" and from what scope
+    // A's OWN unlearned fallback would be for the same wire pane_id.
+    let scope_b_key = agent_notification_rate_limit_key(
+        &ids,
+        &crate::agent_status_model::PaneKey::MuxPane(scope_b, 7),
+    );
+    assert_eq!(scope_b_key, "mux:2:7");
+    assert_ne!(scope_b_key, "xyz-7");
 }
 
 // TS-5: arm(now) sets the dismissal instant to now + linger window.
@@ -750,6 +784,7 @@ fn pump_all_applies_daemon_agent_status_update_to_model() {
     // this test off the production `NotifyRustSink`.
     let (mut app, _sink) = app_with_test_sink();
     app.spawn_initial_tab();
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
     let update = AgentStatusUpdateMsg {
         pane_id: 42,
         public_pane_id: "abc-42".to_string(),
@@ -765,7 +800,7 @@ fn pump_all_applies_daemon_agent_status_update_to_model() {
 
     let status = app
         .agent_status
-        .status(&crate::agent_status_model::PaneKey::MuxPane(42))
+        .status(&crate::agent_status_model::PaneKey::MuxPane(scope, 42))
         .expect("daemon update applied to the model");
     assert_eq!(status.state, Some(crate::agent_status::AgentState::Blocked));
     assert_eq!(status.revision, 7);
@@ -836,7 +871,8 @@ fn pump_all_learns_public_pane_id_from_daemon_agent_status_update() {
 
     let mut app = App::new();
     app.spawn_initial_tab();
-    assert_eq!(app.mux_public_pane_id(42), None);
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
+    assert_eq!(app.mux_public_pane_id(scope, 42), None);
 
     let update = AgentStatusUpdateMsg {
         pane_id: 42,
@@ -850,7 +886,7 @@ fn pump_all_learns_public_pane_id_from_daemon_agent_status_update() {
     app.on_mux_message(0, msg);
     app.pump_all();
 
-    assert_eq!(app.mux_public_pane_id(42), Some("abc-42"));
+    assert_eq!(app.mux_public_pane_id(scope, 42), Some("abc-42"));
 }
 
 /// A closed mux pane's public ID is forgotten alongside its
@@ -865,6 +901,7 @@ fn closing_a_mux_pane_forgets_its_public_pane_id() {
 
     let mut app = App::new();
     app.spawn_initial_tab();
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
     let welcome = MuxMessage::control(
         MessageType::Welcome,
         0,
@@ -897,7 +934,7 @@ fn closing_a_mux_pane_forgets_its_public_pane_id() {
     let update_msg = MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update);
     app.on_mux_message(0, update_msg);
     app.pump_all();
-    assert_eq!(app.mux_public_pane_id(7), Some("xyz-7"));
+    assert_eq!(app.mux_public_pane_id(scope, 7), Some("xyz-7"));
 
     let pty_exited = MuxMessage {
         msg_type: MessageType::PtyExited,
@@ -907,7 +944,7 @@ fn closing_a_mux_pane_forgets_its_public_pane_id() {
     app.on_mux_message(0, pty_exited);
     app.pump_all();
 
-    assert_eq!(app.mux_public_pane_id(7), None);
+    assert_eq!(app.mux_public_pane_id(scope, 7), None);
 }
 
 /// `agent_status_pane_badge` is a thin, single-pane wrapper over
@@ -916,16 +953,20 @@ fn closing_a_mux_pane_forgets_its_public_pane_id() {
 #[test]
 fn agent_status_pane_badge_reflects_the_single_pane_queried() {
     let mut app = App::new();
-    assert_eq!(app.agent_status_pane_badge(1), None);
+    let scope = crate::agent_status_model::ConnectionScope(1);
+    assert_eq!(app.agent_status_pane_badge(scope, 1), None);
 
     app.agent_status.apply_daemon_update(
+        scope,
         1,
         Some(crate::agent_status::AgentState::Blocked),
         None,
         1,
         false,
     );
-    let badge = app.agent_status_pane_badge(1).expect("pane 1 has status");
+    let badge = app
+        .agent_status_pane_badge(scope, 1)
+        .expect("pane 1 has status");
     assert_eq!(badge.state, crate::agent_status::AgentState::Blocked);
     assert!(badge.unseen);
 }
@@ -957,7 +998,9 @@ fn agent_status_badge_for_aggregates_across_a_tabs_mux_panes() {
         );
         tab.mux_group = Some(group);
     }
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
     app.agent_status.apply_daemon_update(
+        scope,
         11,
         Some(crate::agent_status::AgentState::Blocked),
         None,
@@ -980,4 +1023,387 @@ fn agent_status_badge_for_is_none_when_nothing_reported() {
     app.spawn_initial_tab();
     let tab = app.active_tab().unwrap();
     assert_eq!(app.agent_status_badge_for(tab), None);
+}
+
+// ── mux-agent-status-pane-key-collision TS-4..TS-9: application-level
+// scoping (SPEC FR1..FR6). Two mux-attached tabs simulate two different
+// mux daemons; both hold the SAME wire `pane_id`, which pre-fix would
+// collapse onto one model entry.
+
+/// TS-4 (AC-3): the per-tab key set `agent_status_keys_for_tab` builds is
+/// disjoint between two tabs whose groups hold an identical wire
+/// `pane_id`, and `agent_status_badge_for` (the per-tab badge) returns
+/// each tab's own state, not the other's.
+#[test]
+fn ts4_agent_status_keys_for_tab_and_badge_are_disjoint_across_tabs_sharing_a_pane_id() {
+    let mut app = App::new();
+    app.spawn_initial_tab(); // tab 0
+    app.spawn_new_tab(); // tab 1
+
+    for idx in [0usize, 1usize] {
+        let mut group = crate::mux::window_group::MuxWindowGroup::new();
+        group.seed(
+            vec![crate::mux::window_group::MuxWindow {
+                id: 0,
+                name: "w0".to_string(),
+            }],
+            vec![1], // SAME wire pane_id on both tabs
+            0,
+        );
+        app.tabs[idx].mux_group = Some(group);
+    }
+
+    let scope0 = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
+    let scope1 = crate::agent_status_model::ConnectionScope(app.tabs[1].stable_id);
+
+    let keys0 = agent_status_keys_for_tab(&app.tabs[0]);
+    let keys1 = agent_status_keys_for_tab(&app.tabs[1]);
+    assert!(keys0.contains(&crate::agent_status_model::PaneKey::MuxPane(scope0, 1)));
+    assert!(!keys0.contains(&crate::agent_status_model::PaneKey::MuxPane(scope1, 1)));
+    assert!(keys1.contains(&crate::agent_status_model::PaneKey::MuxPane(scope1, 1)));
+    assert!(!keys1.contains(&crate::agent_status_model::PaneKey::MuxPane(scope0, 1)));
+
+    app.agent_status.apply_daemon_update(
+        scope0,
+        1,
+        Some(crate::agent_status::AgentState::Idle),
+        None,
+        1,
+        false,
+    );
+    app.agent_status.apply_daemon_update(
+        scope1,
+        1,
+        Some(crate::agent_status::AgentState::Blocked),
+        None,
+        1,
+        false,
+    );
+
+    let badge0 = app.agent_status_badge_for(&app.tabs[0]).unwrap();
+    let badge1 = app.agent_status_badge_for(&app.tabs[1]).unwrap();
+    assert_eq!(badge0.state, crate::agent_status::AgentState::Idle);
+    assert_eq!(badge1.state, crate::agent_status::AgentState::Blocked);
+}
+
+/// TS-5 (AC-4): the public-pane-id map is scoped — learning a public id
+/// for one scope's pane does not overwrite or remove the other scope's
+/// entry for the SAME wire `pane_id`, each scope resolves to its own
+/// daemon's public id, and the derived rate-limit keys differ.
+#[test]
+fn ts5_public_pane_id_map_and_rate_limit_key_are_scoped() {
+    use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+    let mut app = App::new();
+    app.spawn_initial_tab(); // tab 0
+    app.spawn_new_tab(); // tab 1
+
+    let scope0 = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
+    let scope1 = crate::agent_status_model::ConnectionScope(app.tabs[1].stable_id);
+
+    let update0 = AgentStatusUpdateMsg {
+        pane_id: 1,
+        public_pane_id: "daemon-a-1".to_string(),
+        state: Some(WireState::Working),
+        name: None,
+        revision: 1,
+        replay_derived: false,
+    };
+    app.on_mux_message(
+        0,
+        MuxMessage::control(MessageType::AgentStatusUpdate, 1, &update0),
+    );
+    let update1 = AgentStatusUpdateMsg {
+        pane_id: 1,
+        public_pane_id: "daemon-b-1".to_string(),
+        state: Some(WireState::Blocked),
+        name: None,
+        revision: 1,
+        replay_derived: false,
+    };
+    app.on_mux_message(
+        1,
+        MuxMessage::control(MessageType::AgentStatusUpdate, 1, &update1),
+    );
+
+    app.pump_all();
+
+    // Learning scope1's pane 1 did not overwrite or remove scope0's.
+    assert_eq!(app.mux_public_pane_id(scope0, 1), Some("daemon-a-1"));
+    assert_eq!(app.mux_public_pane_id(scope1, 1), Some("daemon-b-1"));
+
+    let key0 = crate::agent_status_model::PaneKey::MuxPane(scope0, 1);
+    let key1 = crate::agent_status_model::PaneKey::MuxPane(scope1, 1);
+    let rate_key0 = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key0);
+    let rate_key1 = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key1);
+    assert_eq!(rate_key0, "daemon-a-1");
+    assert_eq!(rate_key1, "daemon-b-1");
+    assert_ne!(rate_key0, rate_key1);
+}
+
+/// TS-6 (AC-5): notification tab-title resolution and pane visibility
+/// resolve by the pane's connection scope, never by wire `pane_id`
+/// membership — two tabs whose groups both hold wire `pane_id` 1 resolve
+/// to their OWN tab's title, the non-active tab's pane 1 is not reported
+/// visible merely because the active tab holds pane 1 too, and a
+/// transition whose owning tab is gone resolves to no tab (EC-4).
+#[test]
+fn ts6_notification_title_and_visibility_resolve_by_scope_not_by_wire_pane_id() {
+    let mut app = App::new();
+    app.spawn_initial_tab(); // tab 0
+    app.tabs[0].title = "tab-a".to_string();
+    app.spawn_new_tab(); // tab 1, active
+    app.tabs[1].title = "tab-b".to_string();
+
+    for idx in [0usize, 1usize] {
+        let mut group = crate::mux::window_group::MuxWindowGroup::new();
+        group.seed(
+            vec![crate::mux::window_group::MuxWindow {
+                id: 0,
+                name: "w0".to_string(),
+            }],
+            vec![1], // SAME wire pane_id on both tabs
+            0,
+        );
+        app.tabs[idx].mux_group = Some(group);
+    }
+
+    let scope0 = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
+    let scope1 = crate::agent_status_model::ConnectionScope(app.tabs[1].stable_id);
+    let key0 = crate::agent_status_model::PaneKey::MuxPane(scope0, 1);
+    let key1 = crate::agent_status_model::PaneKey::MuxPane(scope1, 1);
+
+    assert_eq!(agent_status_pane_tab_title(&app.tabs, &key0), Some("tab-a"));
+    assert_eq!(agent_status_pane_tab_title(&app.tabs, &key1), Some("tab-b"));
+
+    app.window_focused = true;
+    let active_tab = app.tabs.get(1); // tab 1 is active
+    assert!(
+        agent_status_pane_visible(true, active_tab, &key1),
+        "the active tab's own scope IS visible"
+    );
+    assert!(
+        !agent_status_pane_visible(true, active_tab, &key0),
+        "the background tab's pane must not be visible merely because \
+         the active tab holds the same wire pane_id"
+    );
+
+    // EC-4: a transition whose owning tab has since closed resolves to no
+    // tab — never a different (surviving) tab that happens to hold the
+    // same wire pane_id.
+    let gone_scope = crate::agent_status_model::ConnectionScope(u64::MAX);
+    let gone_key = crate::agent_status_model::PaneKey::MuxPane(gone_scope, 1);
+    assert_eq!(agent_status_pane_tab_title(&app.tabs, &gone_key), None);
+}
+
+/// TS-7 (AC-2, AC-4): `pump_all`'s batch apply, fed two mux drains tagged
+/// for two different scopes but carrying the SAME wire `pane_id`, produces
+/// two fully independent sets of model state — state/name/revision AND the
+/// learned public-pane-id, with no overwrite in either direction.
+#[test]
+fn ts7_batch_apply_with_two_scopes_sharing_a_wire_pane_id_stays_independent() {
+    use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+    let mut app = App::new();
+    app.spawn_initial_tab(); // tab 0
+    app.spawn_new_tab(); // tab 1
+
+    let scope0 = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
+    let scope1 = crate::agent_status_model::ConnectionScope(app.tabs[1].stable_id);
+
+    let update0 = AgentStatusUpdateMsg {
+        pane_id: 5,
+        public_pane_id: "a-5".to_string(),
+        state: Some(WireState::Working),
+        name: Some("agent-a".to_string()),
+        revision: 3,
+        replay_derived: false,
+    };
+    app.on_mux_message(
+        0,
+        MuxMessage::control(MessageType::AgentStatusUpdate, 5, &update0),
+    );
+    let update1 = AgentStatusUpdateMsg {
+        pane_id: 5,
+        public_pane_id: "b-5".to_string(),
+        state: Some(WireState::Idle),
+        name: Some("agent-b".to_string()),
+        revision: 9,
+        replay_derived: false,
+    };
+    app.on_mux_message(
+        1,
+        MuxMessage::control(MessageType::AgentStatusUpdate, 5, &update1),
+    );
+
+    app.pump_all();
+
+    let status0 = app
+        .agent_status
+        .status(&crate::agent_status_model::PaneKey::MuxPane(scope0, 5))
+        .unwrap();
+    let status1 = app
+        .agent_status
+        .status(&crate::agent_status_model::PaneKey::MuxPane(scope1, 5))
+        .unwrap();
+    assert_eq!(
+        status0.state,
+        Some(crate::agent_status::AgentState::Working)
+    );
+    assert_eq!(status0.name, Some("agent-a".to_string()));
+    assert_eq!(status0.revision, 3);
+    assert_eq!(status1.state, Some(crate::agent_status::AgentState::Idle));
+    assert_eq!(status1.name, Some("agent-b".to_string()));
+    assert_eq!(status1.revision, 9);
+
+    assert_eq!(app.mux_public_pane_id(scope0, 5), Some("a-5"));
+    assert_eq!(app.mux_public_pane_id(scope1, 5), Some("b-5"));
+}
+
+/// TS-8 (primary regression test, AC-2/AC-6): the full `pump_all` pipeline
+/// — two mux-attached tabs, simulating two different daemons, both
+/// reporting the SAME wire `pane_id` — stays fully independent through
+/// model state, per-pane badge, the learned public-pane-id, and the
+/// notification dispatch, and closing ONE tab discards ONLY its own
+/// scope's entries, leaving the other's completely intact. Written to
+/// fail if ANY single derivation (model key, map key, or rate-limit key)
+/// drops the scope and falls back to the bare wire `pane_id`.
+#[test]
+fn ts8_two_connections_sharing_a_wire_pane_id_stay_independent_through_close() {
+    use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+    let (mut app, sink) = app_with_test_sink();
+    app.spawn_initial_tab(); // tab 0: "daemon A"
+    app.spawn_new_tab(); // tab 1: "daemon B", active
+    app.window_focused = true;
+
+    let scope0 = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
+    let scope1 = crate::agent_status_model::ConnectionScope(app.tabs[1].stable_id);
+
+    let welcome = |active_pane_id: u32| {
+        MuxMessage::control(
+            MessageType::Welcome,
+            0,
+            &WelcomeMsg::Accepted {
+                server_version: 1,
+                sessions: vec![SessionInfo {
+                    id: 1,
+                    name: "main".to_string(),
+                    window_count: 1,
+                    pane_count: 1,
+                    active_window_index: 0,
+                    windows: vec![WindowInfo {
+                        id: 0,
+                        name: "w0".to_string(),
+                        active_pane_id,
+                    }],
+                }],
+            },
+        )
+    };
+    app.on_mux_message(0, welcome(1));
+    app.on_mux_message(1, welcome(1)); // SAME wire pane_id (1) as tab 0
+
+    let update_a = AgentStatusUpdateMsg {
+        pane_id: 1,
+        public_pane_id: "daemon-a-pane1".to_string(),
+        state: Some(WireState::Blocked),
+        name: Some("agent-a".to_string()),
+        revision: 1,
+        replay_derived: false,
+    };
+    app.on_mux_message(
+        0,
+        MuxMessage::control(MessageType::AgentStatusUpdate, 1, &update_a),
+    );
+    let update_b = AgentStatusUpdateMsg {
+        pane_id: 1,
+        public_pane_id: "daemon-b-pane1".to_string(),
+        state: Some(WireState::Idle),
+        name: Some("agent-b".to_string()),
+        revision: 1,
+        replay_derived: false,
+    };
+    app.on_mux_message(
+        1,
+        MuxMessage::control(MessageType::AgentStatusUpdate, 1, &update_b),
+    );
+
+    app.pump_all();
+
+    let key0 = crate::agent_status_model::PaneKey::MuxPane(scope0, 1);
+    let key1 = crate::agent_status_model::PaneKey::MuxPane(scope1, 1);
+
+    // Model state independent.
+    assert_eq!(
+        app.agent_status.status(&key0).unwrap().state,
+        Some(crate::agent_status::AgentState::Blocked)
+    );
+    assert_eq!(
+        app.agent_status.status(&key1).unwrap().state,
+        Some(crate::agent_status::AgentState::Idle)
+    );
+
+    // Per-pane badge independent.
+    assert_eq!(
+        app.agent_status_pane_badge(scope0, 1).unwrap().state,
+        crate::agent_status::AgentState::Blocked
+    );
+    assert_eq!(
+        app.agent_status_pane_badge(scope1, 1).unwrap().state,
+        crate::agent_status::AgentState::Idle
+    );
+
+    // Learned public-pane-id independent.
+    assert_eq!(app.mux_public_pane_id(scope0, 1), Some("daemon-a-pane1"));
+    assert_eq!(app.mux_public_pane_id(scope1, 1), Some("daemon-b-pane1"));
+
+    // Exactly one notification: tab 0's Blocked transition on its
+    // non-visible (background) pane. Tab 1's transition is into Idle,
+    // never notification-eligible — proves the drain resolved each
+    // transition against the RIGHT tab, not a shared/aliased one.
+    assert_eq!(sink.calls().len(), 1);
+
+    // Closing tab 0 (scope0) discards ONLY scope0's entries.
+    app.close_tab(0);
+    assert!(app.agent_status.status(&key0).is_none());
+    assert_eq!(app.mux_public_pane_id(scope0, 1), None);
+    // scope1's same-numbered pane is fully intact.
+    assert_eq!(
+        app.agent_status.status(&key1).unwrap().state,
+        Some(crate::agent_status::AgentState::Idle)
+    );
+    assert_eq!(app.mux_public_pane_id(scope1, 1), Some("daemon-b-pane1"));
+}
+
+/// TS-9 (AC-3): `agent_status_pane_badge` (the per-sidebar-entry badge) is
+/// scoped — the same wire `pane_id` queried under two different scopes
+/// returns each connection's own state.
+#[test]
+fn ts9_agent_status_pane_badge_is_scoped_to_the_queried_connection() {
+    let mut app = App::new();
+    let scope_a = crate::agent_status_model::ConnectionScope(1);
+    let scope_b = crate::agent_status_model::ConnectionScope(2);
+
+    app.agent_status.apply_daemon_update(
+        scope_a,
+        1,
+        Some(crate::agent_status::AgentState::Idle),
+        None,
+        1,
+        false,
+    );
+    app.agent_status.apply_daemon_update(
+        scope_b,
+        1,
+        Some(crate::agent_status::AgentState::Blocked),
+        None,
+        1,
+        false,
+    );
+
+    let badge_a = app.agent_status_pane_badge(scope_a, 1).unwrap();
+    let badge_b = app.agent_status_pane_badge(scope_b, 1).unwrap();
+    assert_eq!(badge_a.state, crate::agent_status::AgentState::Idle);
+    assert_eq!(badge_b.state, crate::agent_status::AgentState::Blocked);
 }

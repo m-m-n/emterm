@@ -492,13 +492,20 @@ impl App {
                 // at key-event time — no polling, no cached qualify list
                 // (NFR2). A window qualifies when at least one of its panes
                 // currently carries a reported (uncleared) agent status
-                // (FR6, existential).
+                // (FR6, existential). mux-agent-status-pane-key-collision
+                // FR2: qualify within THIS tab's own connection scope only
+                // — a same-numbered pane reported by another tab's daemon
+                // must never qualify this tab's window.
+                let scope = crate::agent_status_model::ConnectionScope(tab.stable_id);
                 let group = tab.mux_group.as_ref().unwrap();
                 let current = group.active_index();
                 let qualifies: Vec<bool> = group
                     .pane_ids()
                     .iter()
-                    .map(|pane_id| self.agent_status.any_pane_has_reported_state([pane_id]))
+                    .map(|pane_id| {
+                        self.agent_status
+                            .any_pane_has_reported_state(scope, [pane_id])
+                    })
                     .collect();
                 let target = crate::mux::window_group::next_qualifying_index(&qualifies, current);
                 // When the active window is the sole qualifying window,

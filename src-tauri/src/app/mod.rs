@@ -213,16 +213,20 @@ pub struct App {
     /// so the UI (task0006) and notification (task0007) layers can read it;
     /// `pump_all` is the only writer.
     pub agent_status: crate::agent_status_model::AgentStatusModel,
-    /// pane_id -> daemon-minted public pane ID (task0006 AC-5, `mux_ipc`'s
-    /// "Public pane ID format" shared component). The GUI only LEARNS a
-    /// pane's public ID when the daemon pushes an `AgentStatusUpdate` for
-    /// it (a real report or a replay-on-attach restatement) — there is no
-    /// separate wire message that hands it over. Populated alongside
-    /// `Self::agent_status` in `pump_all` from the same
-    /// `AgentStatusUpdateMsg` batch and cleared on the same closed-pane
-    /// list, so a pane with no entry here (never reported) simply hides
-    /// the sidebar's copy-to-clipboard row (`ui::mux_sidebar` AC-5).
-    mux_public_pane_ids: std::collections::HashMap<u32, String>,
+    /// (connection scope, wire pane_id) -> daemon-minted public pane ID
+    /// (task0006 AC-5, `mux_ipc`'s "Public pane ID format" shared
+    /// component; scoped per mux-agent-status-pane-key-collision FR3 so
+    /// two connections' same-numbered panes never share a learned id). The
+    /// GUI only LEARNS a pane's public ID when the daemon pushes an
+    /// `AgentStatusUpdate` for it (a real report or a replay-on-attach
+    /// restatement) — there is no separate wire message that hands it
+    /// over. Populated alongside `Self::agent_status` in `pump_all` from
+    /// the same `AgentStatusUpdateMsg` batch and cleared on the same
+    /// closed-pane list, so a pane with no entry here (never reported)
+    /// simply hides the sidebar's copy-to-clipboard row (`ui::mux_sidebar`
+    /// AC-5).
+    mux_public_pane_ids:
+        std::collections::HashMap<(crate::agent_status_model::ConnectionScope, u32), String>,
     /// Display locale resolved once from `settings.language` at
     /// construction (`Auto` consults the OS locale). Consumed by the
     /// desktop-notification body formatting in `pump_all`.
@@ -1048,13 +1052,17 @@ impl App {
         let mut image_events: Vec<term_images::image_proc::ImageEvent> = Vec::new();
         // Agent-status inputs collected across every tab this pass (task0005),
         // applied to `self.agent_status` after the `&mut self.tabs` borrow
-        // ends: plain-tab OSC events (tagged with the originating tab's
-        // `stable_id`), daemon-pushed `AgentStatusUpdate` messages, and mux
-        // pane ids a `PtyExited` arm removed this pump.
+        // ends: plain-tab OSC events, daemon-pushed `AgentStatusUpdate`
+        // messages, and mux pane ids a `PtyExited` arm removed this pump —
+        // ALL tagged with the originating tab's `stable_id` (mux-agent-
+        // status-pane-key-collision FR1: this doubles as the connection
+        // scope `apply_agent_status_batch` derives every key from, not
+        // just the plain-tab events).
         let mut agent_status_plain_events: Vec<(u64, crate::agent_status::AgentStatusEvent)> =
             Vec::new();
-        let mut agent_status_updates: Vec<mux_ipc::protocol::AgentStatusUpdateMsg> = Vec::new();
-        let mut agent_status_closed_panes: Vec<u32> = Vec::new();
+        let mut agent_status_updates: Vec<(u64, mux_ipc::protocol::AgentStatusUpdateMsg)> =
+            Vec::new();
+        let mut agent_status_closed_panes: Vec<(u64, u32)> = Vec::new();
         // agent-exit-after-icon (task0002 deviation): each tab's resolved,
         // true-order, live-only inferred-clear latch inputs this pump
         // (tagged with the originating tab's `stable_id`, mirroring
@@ -1088,8 +1096,20 @@ impl App {
             for input in tab.take_pending_latch_inputs() {
                 agent_status_latch_inputs.push((tab_stable_id, input));
             }
-            agent_status_updates.extend(tab.take_pending_agent_status_updates());
-            agent_status_closed_panes.extend(tab.take_closed_agent_status_panes());
+            // mux-agent-status-pane-key-collision FR1: tag both mux drains
+            // with this tab's `stable_id` before they reach the batch
+            // apply — the SAME attribution the plain-tab events and latch
+            // inputs above already carry.
+            agent_status_updates.extend(
+                tab.take_pending_agent_status_updates()
+                    .into_iter()
+                    .map(|update| (tab_stable_id, update)),
+            );
+            agent_status_closed_panes.extend(
+                tab.take_closed_agent_status_panes()
+                    .into_iter()
+                    .map(|pane_id| (tab_stable_id, pane_id)),
+            );
             // FR6 (mux): drain every tab's one-shot "window appended this pump"
             // latch (set at the `PaneCreated` push site) to avoid stale
             // carry-over; act on it only for the active tab, where the freshly
@@ -1457,7 +1477,14 @@ impl App {
             .flat_map(agent_status_keys_for_tab)
             .collect();
         for key in reaped_agent_status_keys {
+            // mux-agent-status-pane-key-collision FR1/FR3/FR6: every key
+            // derived here is the reaped tab's OWN scope only — resolve
+            // the rate-limit key from the still-present public-id mapping
+            // BEFORE removing that scoped map entry below.
             let rate_limit_key = agent_notification_rate_limit_key(&self.mux_public_pane_ids, &key);
+            if let crate::agent_status_model::PaneKey::MuxPane(scope, pane_id) = key {
+                self.mux_public_pane_ids.remove(&(scope, pane_id));
+            }
             self.discard_agent_notification_state(&rate_limit_key);
             self.agent_status.discard(&key);
         }
