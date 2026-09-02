@@ -95,7 +95,8 @@ workflow:
     skipped_reason: "Defect fix in internal Rust state-keying with no user-visible interface change: no new screen, dialog, setting, keybinding or layout, and no design token consumption. Badge rendering, the mux sidebar and the status bar consume only the already-defined Aggregated value and are untouched by the key change."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 56a96b6ad3a3efe99db09d1cbd7ac19c0822f507
   - id: implement
     status: pending
     base_commit: 56727f1857ddb32ebcdd1fb726f557b4e78e6d89
@@ -108,7 +109,28 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Scope mux agent-status state by connection identity"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/agent_status_model.rs
+      - src-tauri/src/agent_status_model/tests.rs
+      - src-tauri/src/app/agent_status.rs
+      - src-tauri/src/app/mod.rs
+      - src-tauri/src/app/tab_lifecycle.rs
+      - src-tauri/src/app/mux_ui.rs
+      - src-tauri/src/app/tests/agent_status.rs
+      - src-tauri/src/tabs/mod.rs
+      - src-tauri/src/tabs/mux_link.rs
+      - src-tauri/src/render/mod.rs
+    skills: [frontend-impl]
+    domains: [ui, input-handling, concurrency]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -124,70 +146,70 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-4]
   FR2:
     title: "Badge aggregation reads only the querying tab's own scope"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-3, TS-4, TS-9]
   FR3:
     title: "Connection-scope the pane_id -> public_pane_id map"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-7, TS-8]
   FR4:
     title: "Notification rate-limit key stays collision-free across daemons"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-5, TS-8]
   FR5:
     title: "Notification tab-title resolution picks the owning tab, not the first match"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-6]
   FR6:
     title: "Pane-close discard removes only the closing daemon's entry"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-2, TS-8]
   NFR1:
     title: "No mux wire-protocol change"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR2:
     title: "Per-frame read paths stay cheap"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR3:
     title: "Plain-tab behavior unchanged"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-10]
   NFR4:
     title: "Documented invariants in the touched modules stay accurate"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
 
 batch:
