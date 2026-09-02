@@ -1,0 +1,72 @@
+feature: mux-agent-status-pane-key-collision
+collected_at: "2026-09-02T14:20:00+09:00"
+session_ids:
+  - 01a0608d-a883-749b-afad-772978619820
+  - 01a06087-e502-7220-a085-bc6e74e5b46a
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - src-tauri/src/app/tests/mux_ui.rs
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+  deferred_findings: []
+  unresolved_medium_findings:
+    - stable_id: b1653f41bb3c8838
+      category: comprehensive
+      title: "detach でスコープ内の mux エントリが残り、同一タブの再アタッチで別コネクションの状態を引き継ぐ"
+      resolution: unresolved
+      resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+    - stable_id: b0b18cfdd15773d2
+      category: security
+      title: "daemon 由来の public_pane_id を無検証でレート制限キーに使い、他タブ/他接続のキーと衝突させられる"
+      resolution: unresolved
+      resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+    - stable_id: 09b9f3c73fd673e6
+      category: security
+      title: "ConnectionScope がタブ生存期間で固定のため、detach→別 daemon へ re-attach すると前ホストの状態を引き継ぐ"
+      resolution: unresolved
+      resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+    - stable_id: 7bbdbbbfc647868e
+      category: architecture
+      title: "ConnectionScope ↔ Tab::stable_id の対応が 6 箇所に散在し、単一の変換点が無い"
+      resolution: unresolved
+      resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+    - stable_id: 4a15eab664d51716
+      category: architecture
+      title: "pane 破棄シーケンス（rate-limit key 解決→public-id 削除→通知状態破棄→model 破棄）が 3 箇所に重複"
+      resolution: unresolved
+      resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+    - stable_id: 5eee8665be1a4bf2
+      category: spec
+      title: "変更ファイルが Declared Change Set に含まれていない"
+      resolution: unresolved
+      resolution_reason: "medium severity — auto-fix candidate gate excludes category spec"
+    - stable_id: bf3e532e35ea280e
+      category: performance
+      title: "Potential O(n) iteration for single-element queries"
+      resolution: unresolved
+      resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+lessons_candidates:
+  - note: >-
+      review round 1 の findings 7 件がすべて medium で、auto-fix ゲート
+      （critical/high のみ）に 1 件も乗らなかった。バグ修正 1 タスクの feature では
+      medium が全量残る形になりやすい。deferred でも declined でもない
+      「unresolved」の扱いをどう追跡するかが曖昧。
+  - note: >-
+      medium findings のうち 2 件（b1653f41bb3c8838 / 09b9f3c73fd673e6）は
+      「detach→別 daemon へ re-attach」という同一シナリオを別観点から指している。
+      ConnectionScope をタブ生存期間ではなく attach 単位で採番していれば両方消えた
+      可能性がある。SPEC 段階でライフサイクル境界を明示する価値がある。
+  - note: >-
+      file_prediction_miss は 1 件（src-tauri/src/app/tests/mux_ui.rs）。
+      モデル層のシグネチャ変更に伴うテストのコンパイル追従で、計画時に
+      「シグネチャを変えるモジュールの既存テストファイル」を files に含める
+      規則があれば予測できた。
+  - note: >-
+      cargo fmt --all --check が feature 外の 13 箇所の既存ドリフトで exit 1 になり、
+      verify の SC-9 判定を feature 自身のファイルに限定する判断が必要になった。
+      プロジェクト側に fmt ドリフトが残っている限り毎 feature で同じ判断が発生する。
