@@ -1,0 +1,195 @@
+schema_version: 1
+feature: mux-agent-status-pane-key-collision
+created: 2026-09-02
+base_branch: main
+goal: |
+  # 別サーバーの mux に接続した複数タブでエージェント状態アイコンが混線する
+
+  種別: バグ
+  Notion タスク: https://www.notion.so/3ce3509ec8ee81459f45de40843433c3
+
+  ## 現象（必須）
+  別々の mux daemon（別サーバー）に接続した 2 つのタブで Claude Code を使うと、
+  エージェント状態アイコン（バッジ）が両タブで同じになる。片方の状態変化が
+  もう片方のタブにも「漏れて」表示される。
+  サーバー 1 のウィンドウ 1 とサーバー 2 のウィンドウ 1 でそれぞれ Claude Code を
+  開くと、両方のバッジが同一になる。
+
+  ## 再現手順（必須）
+  1. eMterm でタブ 1 を開き、サーバー 1 に SSH 接続して `emterm mux` で attach する
+  2. eMterm でタブ 2 を開き、サーバー 2 に SSH 接続して `emterm mux` で attach する
+  3. 両タブとも mux のウィンドウ 1（＝それぞれの daemon での `pane_id` = 1）にいる状態にする
+  4. タブ 1 のウィンドウ 1 で Claude Code を起動し、working / done などに状態遷移させる
+  5. タブ 2 のバッジを見る
+
+  ## 期待する挙動（必須）
+  サーバー 1 のペインの状態はタブ 1 のバッジにのみ反映され、サーバー 2 のタブ 2 の
+  バッジは自分のペインの状態だけを表示する。接続先 daemon が異なるペインは、
+  互いに独立した状態として扱われる。
+
+  ## 完了の定義（必須）
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所（任意）
+  エージェント状態の保持キーが daemon ローカルの wire `pane_id`（u32）だけで、
+  接続先 daemon を区別していない。
+  - `src-tauri/src/agent_status_model.rs:39` — `PaneKey::MuxPane(u32)`。キーは wire `pane_id` のみ
+  - `src-tauri/src/mux/session/manager.rs:76` — `alloc_pane_id` は各 daemon が 1 から連番採番。
+  よって別ホストの daemon 同士で `pane_id` は普通に衝突する
+  - `src-tauri/src/app/agent_status.rs:21` — `agent_status_keys_for_tab` が
+  `group.pane_ids()` を `PaneKey::MuxPane` に変換。別 daemon のタブでも同じキーになる
+  - `src-tauri/src/app/mod.rs:225` — `App::mux_public_pane_ids: HashMap<u32, String>` も
+  `pane_id` キーなので、別サーバー同士で上書きし合う
+  - `src-tauri/src/app/agent_status.rs` `apply_agent_status_batch` — daemon の
+  `AgentStatusUpdate` を `update.pane_id` で `agent_status` に適用している
+
+  daemon 単位でユニークな識別子は既に存在し、GUI にも届いている:
+  `public_pane_id` = `"{incarnation}-{pane_id}"`（`crates/mux_ipc/src/protocol.rs:976`、
+  incarnation は daemon 起動ごとに生成されるトークン）。これは通知のレート制限キーには
+  使われているが、状態モデルのキーには使われていない。
+
+  ## 実害・発生条件（任意）
+  発生条件: 1 つの eMterm プロセスから、**異なる daemon**（別サーバー、あるいは
+  別 incarnation）に複数タブで attach し、同じ `pane_id` のペインが同時に存在すること。
+  同一 daemon への複数 attach では `pane_id` がユニークなので発生しない。
+  想定される実害（いずれも同根）:
+  - タブバー / mux サイドバーのバッジが別サーバーの状態を表示する（報告された現象）
+  - 通知の宛先タブ名が混線する（`agent_status_pane_tab_title` は最初にマッチしたタブを返す）
+  - 通知のレート制限キーが別サーバーの `public_pane_id` に化ける
+  （`mux_public_pane_ids` の上書きによる）
+  - 片方のサーバーでペインが閉じると、もう片方の同 `pane_id` の状態も破棄される
+  （`apply_agent_status_batch` の `closed_panes` ループ）
+parent_branch: em-workflow/mux-agent-status-pane-key-collision/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --all --check"
+      e2e_test_command: ""
+    cli_only:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 894f6321d1959b0886081ea546b97e3e8305eca5
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Defect fix in internal Rust state-keying with no user-visible interface change: no new screen, dialog, setting, keybinding or layout, and no design token consumption. Badge rendering, the mux sidebar and the status bar consume only the already-defined Aggregated value and are untouched by the key change."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: 56727f1857ddb32ebcdd1fb726f557b4e78e6d89
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Scope the mux agent-status key by GUI-local mux connection identity"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-4]
+  FR2:
+    title: "Badge aggregation reads only the querying tab's own scope"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-3, TS-4, TS-9]
+  FR3:
+    title: "Connection-scope the pane_id -> public_pane_id map"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-7, TS-8]
+  FR4:
+    title: "Notification rate-limit key stays collision-free across daemons"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-5, TS-8]
+  FR5:
+    title: "Notification tab-title resolution picks the owning tab, not the first match"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-6]
+  FR6:
+    title: "Pane-close discard removes only the closing daemon's entry"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-2, TS-8]
+  NFR1:
+    title: "No mux wire-protocol change"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Per-frame read paths stay cheap"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Plain-tab behavior unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-10]
+  NFR4:
+    title: "Documented invariants in the touched modules stay accurate"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

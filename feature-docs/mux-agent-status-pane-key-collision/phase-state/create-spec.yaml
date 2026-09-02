@@ -1,9 +1,9 @@
 schema_version: 1
 feature: mux-agent-status-pane-key-collision
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: 8b08bd08634839193317ae78fff09f8a00debe56
+base_revision: 894f6321d1959b0886081ea546b97e3e8305eca5
 last_input_digest: sha256:ca2e04e20d25ed3bb67ad147546bc3397ddb5f1ed30c431b061c163d4c7de701
 active_request_id: null
 packets:
@@ -56,6 +56,15 @@ answers:
     freeform: null
     normalized_answer: "Accept requirements-analyst's recommendation to skip the design step."
     resolution_note: "gate: create-spec.design-step; batch-policies.yaml select option_id decide_autonomously."
+  create-spec.design-system:
+    packet_id: null
+    answered_at: "2026-09-02T09:18:41+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [top_candidate_or_none]
+    freeform: null
+    normalized_answer: "kind: project_native, paths: doc/UI-DESIGN-GUIDELINES.yaml, src-tauri/src/ui/md3.rs, src-tauri/web-shared/styles.css"
+    resolution_note: "gate: create-spec.design-system (orchestrator-opened, section 11a); batch-policies.yaml select option_id top_candidate_or_none; candidates present -> project_native. The three paths are one design system per .claude/rules/ui-design.md (normative yaml plus its native and CSS mirrors)."
 worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
