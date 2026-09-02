@@ -134,15 +134,25 @@ tasks:
     branch: em-workflow/mux-agent-status-pane-key-collision/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
-  plan:
-    floor: [comprehensive, security, performance, architecture, spec]
-    discretionary: []
-    cross_validation: true
-  perspectives: {}
-  residual_critical_high: 0
   needs_rework: false
+  perspectives:
+    architecture: completed
+    comprehensive: completed
+    performance: completed
+    security: completed
+    spec: completed
+  plan:
+    cross_validation: true
+    discretionary: []
+    floor:
+    - comprehensive
+    - security
+    - performance
+    - architecture
+    - spec
+  residual_critical_high: 0
+  rounds_completed: 1
+  status: completed
 
 requirements:
   FR1:

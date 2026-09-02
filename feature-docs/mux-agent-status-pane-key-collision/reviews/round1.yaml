@@ -1,0 +1,235 @@
+round: 1
+executed_at: "2026-09-02T14:12:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 56727f1857ddb32ebcdd1fb726f557b4e78e6d89
+  head_commit: 861e0265beef7f5b97c449087b72501c964b978e
+  changed_files:
+    - src-tauri/src/agent_status_model.rs
+    - src-tauri/src/agent_status_model/tests.rs
+    - src-tauri/src/app/agent_status.rs
+    - src-tauri/src/app/mod.rs
+    - src-tauri/src/app/mux_ui.rs
+    - src-tauri/src/app/tab_lifecycle.rs
+    - src-tauri/src/app/tests/agent_status.rs
+    - src-tauri/src/app/tests/mux_ui.rs
+    - src-tauri/src/render/mod.rs
+    - test-docs/mux-agent-status-pane-key-collision/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+  - {perspective: performance, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: litellm, model: vertex-glm-5, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: vertex-deepseek-v3.2, status: completed}
+findings:
+  - stable_id: b1653f41bb3c8838
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/agent_status_model.rs
+    line: 42
+    line_end: 46
+    title: "detach でスコープ内の mux エントリが残り、同一タブの再アタッチで別コネクションの状態を引き継ぐ"
+    description: |
+      ConnectionScope はタブの stable_id なので detach と再アタッチをまたいで不変だが、detach 経路に
+      エントリ破棄がない。Tab::handle_detached (src-tauri/src/tabs/mux_link.rs:872-912) は
+      mux_group = None にするだけで pending_closed_agent_status_panes へ何も積まないため、
+      (1) 以後 agent_status_keys_for_tab は PaneKey::Tab しか返さず、close_tab / pump_all の reaped
+      ループ (app/tab_lifecycle.rs:147-151, app/mod.rs:1483-1487) が本 diff で追加した
+      「MuxPane キーの破棄 + mux_public_pane_ids の削除」に到達できず、旧セッションのモデルエントリと
+      公開 ID がプロセス終了まで残る。キーがスコープ付きになったことで別タブの同番号 pane_id による
+      上書き再利用も起きなくなり、detach のたびに単調増加する。
+      (2) さらに同じタブが別セッション（別 daemon インカーネーション）へ再アタッチすると、スコープが
+      同一のまま新しい wire pane_id が旧セッションの残存エントリへ衝突する。新 daemon がその pane を
+      報告するまで agent_status_badge_for は旧セッションの Blocked/Done をそのタブのバッジとして
+      出し続ける。FR1/FR2 が排除したい「別コネクションの pane が 1 エントリに畳まれる」問題の逐次版で、
+      doc コメントの主張と実挙動が食い違っている。
+    suggestion: |
+      (a) handle_detached で mux_group をクリアする前に group.pane_ids() を
+      pending_closed_agent_status_panes へ積む — 既存の closed_panes バッチ経路がモデルエントリ・
+      レート制限状態・スコープ付き mux_public_pane_ids をまとめて破棄する。
+      (b) スコープをアタッチごとに採番する（stable_id ではなくアタッチ単位のカウンタ）ようにし、
+      ConnectionScope の doc から「detach と再アタッチをまたいで不変」の記述を外す。この場合も旧スコープの
+      エントリを detach 時に破棄する手当てが別途要る。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+  - stable_id: b0b18cfdd15773d2
+    severity: medium
+    category: security
+    file: src-tauri/src/app/agent_status.rs
+    line: 108
+    line_end: 111
+    title: "daemon 由来の public_pane_id を無検証でレート制限キーに使い、他タブ/他接続のキーと衝突させられる"
+    description: |
+      agent_notification_rate_limit_key は mux パネルのキーとして daemon が送ってきた
+      update.public_pane_id をそのまま返す（app/agent_status.rs:108-111、格納は同ファイル 310 行の
+      mux_public_pane_ids.insert）。この文字列は mux daemon（SSH 越しのリモートホスト上で動く外部
+      プロセス。信頼境界の向こう側）が完全に制御でき、GUI 側は crates/mux_ipc/src/protocol.rs の
+      PublicPaneId::parse による形式検証を一切通していない。一方 App::agent_notification_rate_limiter は
+      全タブ・全接続で共有された単一の String キー空間（app/mod.rs:439）で、プレーンタブは
+      "tab:<stable_id>"、未学習の mux パネルは本 diff が導入した "mux:<scope>:<pane_id>" という予約形を
+      使う。悪意ある/侵害された daemon が public_pane_id に "tab:5" や "mux:1:7" を入れて送ると、被害側
+      タブ/接続とレート制限バケットを共有できる。攻撃側パネルで通知を連発すれば被害側の Blocked/Done
+      通知が抑止され、攻撃側パネルを閉じれば discard_agent_notification_state("tab:5") が被害側の
+      レート制限状態を消す。本 diff のドキュメントコメント（88-95 行）は「"mux:" 接頭辞により "tab:" と
+      衝突しない」と述べているが、それが成り立つのは fallback 分岐だけで、学習済み ID 分岐には
+      当てはまらない。
+    suggestion: |
+      (a) 受信時に検証する: apply_agent_status_batch で mux_public_pane_ids に入れる前に
+      mux_ipc::protocol::PublicPaneId::parse(&update.public_pane_id) を通し、失敗したら学習せず
+      fallback キーを使う。parse は incarnation が小文字 hex であること・'-' 区切り・数値の pane 番号を
+      要求するので、"tab:5" / "mux:1:7" のような予約形はそもそも作れなくなる。
+      (b) 学習済み ID も名前空間で隔離する: agent_notification_rate_limit_key の MuxPane 分岐で daemon
+      文字列を生のまま返さず、format!("muxpub:{}:{}", scope.0, id) のようにスコープ込みで包む。
+      レート制限キーは内部専用なので互換性の影響なしに適用できる。
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+  - stable_id: 09b9f3c73fd673e6
+    severity: medium
+    category: security
+    file: src-tauri/src/agent_status_model.rs
+    line: 30
+    line_end: 46
+    title: "ConnectionScope がタブ生存期間で固定のため、detach→別 daemon へ re-attach すると前ホストの状態を引き継ぐ"
+    description: |
+      ConnectionScope は tab.stable_id と等しく、doc も「Constant for the tab's whole lifetime,
+      including across detach and re-attach」と明記している。しかし detach 経路 Tab::handle_detached
+      (src-tauri/src/tabs/mux_link.rs:878 付近) は mux_group = None にするだけで、グループが保持していた
+      pane_id を pending_closed_agent_status_panes に積まない。よって detach 後も (scope, pane_id) の
+      AgentStatusModel エントリ・mux_public_pane_ids エントリ・レート制限エントリがそのまま残る。同じ
+      タブで別ホストの daemon に attach し直すと、新 daemon の wire pane_id 1 が旧 daemon の scope 同一
+      エントリをそのまま継承する: バッジ/サイドバーには旧ホストの state と agent name が新接続のパネル
+      として表示され、通知のレート制限アイデンティティも旧ホストの public_pane_id のまま解決される。
+      FR1 の不変条件の逐次ケースにおける穴。修正前（bare pane_id キー）より影響範囲は狭まっているので
+      新規の退行ではないが、本 diff の doc が明示的に安全と主張している点なので残存リスクとして報告する。
+    suggestion: |
+      (a) detach 時に破棄する: Tab::handle_detached で mux_group をクリアする前に group.pane_ids() を
+      pending_closed_agent_status_panes へ積み、既存の apply_agent_status_batch の closed_panes ループに
+      回収させる。
+      (b) スコープを接続世代にする: ConnectionScope を (stable_id, attach 世代カウンタ) から導出し、
+      attach のたびに世代を進める（この場合も (a) の破棄は残留メモリ回収のために併用が望ましい）。
+    sources: [claude:security]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+  - stable_id: 7bbdbbbfc647868e
+    severity: medium
+    category: architecture
+    file: src-tauri/src/agent_status_model.rs
+    line: 46
+    line_end: 61
+    title: "ConnectionScope ↔ Tab::stable_id の対応が 6 箇所に散在し、単一の変換点が無い"
+    description: |
+      ConnectionScope は「接続の同一性」を表す不透明トークンとして導入され、doc コメント自身が
+      『将来 mux client オブジェクトが tab に代わって接続の所有者になっても名前が生き残るように』と
+      述べている。しかし実際の対応規則（scope == tab.stable_id）は生成側 5 箇所
+      （app/agent_status.rs:25 / :306 / :326、app/mux_ui.rs:499、render/mod.rs:317）と逆方向の照合
+      1 箇所（app/agent_status.rs:78 の tab.stable_id == scope.0）にインライン展開されており、規則を
+      集約したアクセサが存在しない。損失は 2 つ。(1) shotgun surgery: doc が明示的に予告している
+      『scope の供給元差し替え』が起きた時、6 箇所すべてを漏れなく直す必要があり、1 箇所でも漏らすと
+      キーが静かに食い違う。(2) 型の緩さ: pub struct ConnectionScope(pub u64) はフィールドが公開タプル
+      なので任意の u64 を包める。特に render/mod.rs:316-319 は表示層でありながらモデルキーの同一性規則を
+      自前で知ることになっており、この漏れの中で最も層をまたいでいる。
+    suggestion: |
+      (a) impl Tab { pub fn connection_scope(&self) -> ConnectionScope } を用意し、生成 5 箇所と
+      app/agent_status.rs:78 の照合をすべてそれ経由にする。同時に ConnectionScope(pub u64) の
+      フィールドを非公開にしてコンストラクタを 1 本に絞れば、任意の u64 の混入もコンパイル時に止まる。
+      (b) 表示層に scope を渡させない — App::agent_status_pane_badge(&self, tab: &Tab, pane_id: u32) の
+      ように &Tab を受ける API にして、render/mod.rs から ConnectionScope の構築自体を消す。
+      あわせて apply_agent_status_batch の updates / closed_panes のタグも生 u64 ではなく
+      ConnectionScope 型で受ければ、pump_all→batch 間でも newtype の保護が途切れない。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+  - stable_id: 4a15eab664d51716
+    severity: medium
+    category: architecture
+    file: src-tauri/src/app/tab_lifecycle.rs
+    line: 147
+    line_end: 153
+    title: "pane 破棄シーケンス（rate-limit key 解決→public-id 削除→通知状態破棄→model 破棄）が 3 箇所に重複"
+    description: |
+      agent_status モデルのエントリと mux_public_pane_ids は同じライフサイクルを持つ 2 本の並行マップで、
+      削除は必ず「public-id が残っているうちに rate_limit_key を解決 → マップから削除 → 通知状態を破棄
+      → モデルから破棄」という順序で行わなければならない。この不変条件が 3 箇所に手書きで複製された:
+      app/tab_lifecycle.rs:147-153（close_tab）、app/mod.rs:1483-1489（reaped タブのループ）、
+      app/agent_status.rs:325-331（pump_all の閉鎖 pane ループ）。うち前 2 者は完全に同一のコピーである。
+      この重複には実証済みのコストがある — test-docs/mux-agent-status-pane-key-collision/task0001.tests.yaml
+      の AC-6 red_reason が、まさにこの削除が close_tab と reaped ループで欠落していた既存バグを TS-8 が
+      検出したと記録している。つまり『4 箇所目を足したとき、あるいは順序を間違えたとき』にまた同じ抜けが
+      起きる構造のまま、複製が 1 つ増えた。
+    suggestion: |
+      (a) impl App { fn discard_agent_status_key(&mut self, key: &PaneKey) } を新設し、rate_limit_key
+      解決・mux_public_pane_ids からの削除・discard_agent_status_state・agent_status.discard をその中
+      だけで行い、3 箇所をこの呼び出し 1 行に置き換える（順序ミスも構造的に不可能になる）。
+      (b) そもそも並行マップを解消し、daemon 由来の public_pane_id を AgentStatusModel のエントリ側に
+      持たせて、ライフサイクルを model の discard 1 本にまとめる。
+    sources: [claude:architecture]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+  - stable_id: 5eee8665be1a4bf2
+    severity: medium
+    category: spec
+    file: src-tauri/src/app/tests/mux_ui.rs
+    line: 112
+    line_end: 224
+    title: "変更ファイルが Declared Change Set に含まれていない"
+    description: |
+      SPEC「Declared Change Set」は『the feature-specific paths above are derived at create-plan from
+      every task's files entries in workflow.yaml』かつ『This declaration is a SUPERSET assertion: the
+      actual change set observed at verification time must be CONTAINED IN the declared set』と規定して
+      いる。しかし今回の diff は src-tauri/src/app/tests/mux_ui.rs を変更しており（apply_daemon_update に
+      ConnectionScope 引数を渡す 3 箇所）、このパスは workflow.yaml task0001 の files リストにも
+      SPEC「File Structure」の一覧にも含まれていない。task0001.md 自身も『Discovering a needed file
+      outside it is a reportable plan deviation, not a license to expand』と述べており、宣言外ファイルの
+      変更は記録が必要な逸脱にあたる。apply_daemon_update が必須 scope 引数を得た以上この修正自体は
+      コンパイルに必須であり、コード変更を戻すのは誤り — 宣言側の記録漏れである。FR1〜FR6・NFR1〜NFR4 の
+      実装内容自体は SPEC 記述と一致していることを確認済み。
+    suggestion: |
+      コードは変更せず、宣言側を実態に合わせる。workflow.yaml の task0001 files に
+      src-tauri/src/app/tests/mux_ui.rs を追加し（SPEC「File Structure」の app/tests/ ブロックにも
+      同ファイルを併記）、task0001.md の「Files to Modify」に『既存の next-agent-window テストが
+      apply_daemon_update の scope 引数に追随するための機械的変更』として理由付きで記録する。
+      あるいは VERIFICATION.md 側に plan deviation として明示的に残す。
+    sources: [claude:spec]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix candidate gate excludes category spec and requires critical/high"
+  - stable_id: bf3e532e35ea280e
+    severity: medium
+    category: performance
+    file: src-tauri/src/app/mux_ui.rs
+    line: 504
+    line_end: 504
+    title: "Potential O(n) iteration for single-element queries"
+    description: |
+      any_pane_has_reported_state performs a hash map lookup per pane_id via an iterator; it is now called
+      with single-element arrays [pane_id] in multiple hot paths, which could be a direct HashMap::get
+      instead. 発行元レビュアー自身が「単一要素の iterator と直接 get の差は測定可能でない可能性が高く、
+      観点スキルの『測定可能な影響のないマイクロ最適化は報告しない』基準に対して境界的」と註記している。
+    suggestion: |
+      Consider using direct HashMap::get instead of the iterator approach when working with single pane_id
+      queries to avoid iterator overhead.
+    sources: [litellm:vertex-deepseek-v3.2:performance]
+    confidence: 50
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix candidate gate requires critical/high"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
