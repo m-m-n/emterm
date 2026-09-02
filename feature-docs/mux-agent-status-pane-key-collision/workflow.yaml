@@ -121,7 +121,7 @@ workflow:
       would pull unrelated files in. SC-9 is judged against the feature's own files,
       which are clean.
   - id: retrospect
-    status: pending
+    status: in_progress
 
 tasks:
   task0001:
