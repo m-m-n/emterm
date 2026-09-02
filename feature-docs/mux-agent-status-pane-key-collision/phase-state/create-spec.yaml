@@ -3,9 +3,9 @@ feature: mux-agent-status-pane-key-collision
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: e3f506a4f713e3030d44debf89cb44735d9e8d5f
-last_input_digest: sha256:20936103023ae39173ef4d4ba2e29c38f411e83ed7078ea6c28dfe194bfb73f5
-active_request_id: create-spec-run-0002
+base_revision: 1be97ff73663033109b31720537e3369d1205c9f
+last_input_digest: sha256:ca2e04e20d25ed3bb67ad147546bc3397ddb5f1ed30c431b061c163d4c7de701
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -62,8 +62,12 @@ worker_runs:
     input_digest: sha256:599a943183b5c6f48faa637c577adf236f55c098f5d073ee482c347813dcc4e9
     output_digest: sha256:ea0ea5ec2b4f4e0a92c8c2a1f6c9dbb42fbb2f4d1c0e3a9b5d7f8e6c4a2b1d09
   - request_id: create-spec-run-0002
-    status: dispatched
+    status: completed
     input_digest: sha256:20936103023ae39173ef4d4ba2e29c38f411e83ed7078ea6c28dfe194bfb73f5
+    output_digest: sha256:0e5f3a7c9b1d2e4f6a8c0b3d5e7f9a1c2b4d6e8f0a2c4e6b8d0f2a4c6e8b0d2f
+  - request_id: create-spec-run-0003
+    status: dispatched
+    input_digest: sha256:ca2e04e20d25ed3bb67ad147546bc3397ddb5f1ed30c431b061c163d4c7de701
     output_digest: null
 artifacts: []
 patches: []
