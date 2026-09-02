@@ -109,8 +109,10 @@ fn dispatch_next_prev_wrap() {
 #[test]
 fn dispatch_next_agent_window_skips_non_qualifying_and_wraps() {
     let mut app = app_with_mux_windows(4); // panes 100,101,102,103
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
     // Only windows 1 and 3 (panes 101, 103) qualify.
     app.agent_status.apply_daemon_update(
+        scope,
         101,
         Some(crate::agent_status::AgentState::Working),
         None,
@@ -118,6 +120,7 @@ fn dispatch_next_agent_window_skips_non_qualifying_and_wraps() {
         false,
     );
     app.agent_status.apply_daemon_update(
+        scope,
         103,
         Some(crate::agent_status::AgentState::Idle),
         None,
@@ -153,7 +156,9 @@ fn dispatch_next_agent_window_skips_non_qualifying_and_wraps() {
 #[test]
 fn dispatch_next_agent_window_single_qualifying_stays_put() {
     let mut app = app_with_mux_windows(3); // panes 100,101,102
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
     app.agent_status.apply_daemon_update(
+        scope,
         101,
         Some(crate::agent_status::AgentState::Blocked),
         None,
@@ -206,7 +211,9 @@ fn dispatch_next_agent_window_non_mux_tab_is_noop() {
 #[test]
 fn dispatch_next_agent_window_ignores_cleared_status() {
     let mut app = app_with_mux_windows(2); // panes 100,101
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
     app.agent_status.apply_daemon_update(
+        scope,
         101,
         Some(crate::agent_status::AgentState::Working),
         None,
@@ -214,7 +221,7 @@ fn dispatch_next_agent_window_ignores_cleared_status() {
         false,
     );
     app.agent_status
-        .apply_daemon_update(101, None, None, 2, false); // cleared
+        .apply_daemon_update(scope, 101, None, None, 2, false); // cleared
 
     assert_eq!(
         app.dispatch_mux_action(PrefixAction::NextAgentWindow),

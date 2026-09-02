@@ -136,11 +136,19 @@ impl App {
             return self.tabs.is_empty();
         }
         // task0005 AC-6 / task0009 AC-4: discard this tab's agent-status
-        // entries AND its notification rate-limit bookkeeping before
-        // removal (its own plain-tab key plus every mux pane in its window
-        // group, if attached).
+        // entries, its notification rate-limit bookkeeping, AND its
+        // scoped public-pane-id map entries before removal (its own
+        // plain-tab key plus every mux pane in its window group, if
+        // attached). mux-agent-status-pane-key-collision FR4/FR6: the
+        // rate-limit key is resolved from the still-present public-id
+        // mapping BEFORE the map entry is removed below — every key
+        // derived here comes from the closing tab's OWN scope only, never
+        // another tab's same-numbered pane.
         for key in agent_status_keys_for_tab(&self.tabs[idx]) {
             let rate_limit_key = agent_notification_rate_limit_key(&self.mux_public_pane_ids, &key);
+            if let crate::agent_status_model::PaneKey::MuxPane(scope, pane_id) = key {
+                self.mux_public_pane_ids.remove(&(scope, pane_id));
+            }
             self.discard_agent_notification_state(&rate_limit_key);
             self.agent_status.discard(&key);
         }
