@@ -1,0 +1,117 @@
+task_id: task0001
+baseline_failures: []          # cargo test --lib on the unmodified worktree: 3250 passed, 0 failed, 3 ignored
+final_failures: []             # after implementation: 3259 passed, 0 failed, 3 ignored (same 3 pre-existing ignored tests)
+acceptance_tests:
+  AC-1:
+    tests:
+      - agent_status_model::tests::ts1_scoped_mux_panes_sharing_a_wire_pane_id_are_fully_independent
+    red_confirmed: true
+    red_reason: >
+      Pre-fix PaneKey::MuxPane held only the bare wire pane_id and
+      apply_daemon_update had no scope parameter at all, so this test's
+      calls (SCOPE_A / SCOPE_B) could not even be expressed against the
+      old signature. Writing it first forced the model's key-shape change
+      (Test Notes: "write TS-1 first, it forces the key shape") — the red
+      was a compile failure against the pre-change API, not a passing
+      build with wrong behavior.
+
+  AC-2:
+    tests:
+      - app::tests::agent_status::ts7_batch_apply_with_two_scopes_sharing_a_wire_pane_id_stays_independent
+      - app::tests::agent_status::ts8_two_connections_sharing_a_wire_pane_id_stay_independent_through_close
+    red_confirmed: true
+    red_reason: >
+      Confirmed by temporarily reintroducing a dropped-scope bug in
+      apply_agent_status_batch's daemon-update loop (hardcoding
+      ConnectionScope(0) instead of the tagged tab_stable_id): ts8 failed
+      with a None-unwrap panic on tab 1's independently-scoped status
+      (src-tauri/src/app/tests/agent_status.rs:1336), proving the test
+      catches a consumer that derives its key from the wire pane_id alone.
+      Reverted immediately after confirming; full suite re-run green.
+
+  AC-3:
+    tests:
+      - agent_status_model::tests::ts3_any_pane_has_reported_state_does_not_qualify_another_scopes_same_numbered_pane
+      - app::tests::agent_status::ts4_agent_status_keys_for_tab_and_badge_are_disjoint_across_tabs_sharing_a_pane_id
+      - app::tests::agent_status::ts9_agent_status_pane_badge_is_scoped_to_the_queried_connection
+    red_confirmed: true
+    red_reason: >
+      Same key-shape forcing as AC-1: any_pane_has_reported_state,
+      agent_status_keys_for_tab's PaneKey::MuxPane construction, and
+      agent_status_pane_badge all gained a mandatory scope /
+      ConnectionScope parameter that did not exist pre-fix, so these
+      tests could not compile against the old signatures. VC-2 (keyed
+      lookup, no cross-tab scan, no new per-frame allocation) is a code
+      inspection, not a test, and stays out of the `tests` array by
+      design (IMPLEMENTATION.md Open Questions).
+
+  AC-4:
+    tests:
+      - app::tests::agent_status::ts5_public_pane_id_map_and_rate_limit_key_are_scoped
+      - app::tests::agent_status::ts7_batch_apply_with_two_scopes_sharing_a_wire_pane_id_stays_independent
+    red_confirmed: true
+    red_reason: >
+      Pre-fix mux_public_pane_ids was keyed by bare u32 pane_id, so
+      scope0/scope1's identical wire pane_id (1) would collapse onto one
+      map entry (the second on_mux_message's update overwriting the
+      first) — ts5/ts7 assert both entries survive independently, which
+      the old unscoped map could not satisfy. mux_public_pane_id and
+      agent_notification_rate_limit_key's ConnectionScope parameter also
+      did not exist pre-fix, so these tests forced that shape change too.
+
+  AC-5:
+    tests:
+      - app::tests::agent_status::ts6_notification_title_and_visibility_resolve_by_scope_not_by_wire_pane_id
+    red_confirmed: true
+    red_reason: >
+      Pre-fix agent_status_pane_tab_title resolved by wire-pane_id GROUP
+      MEMBERSHIP (`tab.mux_group.as_ref().is_some_and(|g|
+      g.pane_ids().contains(pane_id))`), so with two tabs whose groups
+      both hold pane_id 1, that match arm returns the FIRST tab
+      (tab-a) for both key0 and key1 — ts6's `assert_eq!(...,
+      Some("tab-b"))` for key1 would fail against the old
+      membership-based resolution. Traced through the old arm by
+      inspection (the PaneKey::MuxPane(u32) shape it operated on no
+      longer compiles, so a literal re-run against it is not possible);
+      the failure mode is deterministic from the `.find()` short-circuit
+      on first match.
+
+  AC-6:
+    tests:
+      - agent_status_model::tests::ts2_discard_is_scoped_and_leaves_other_scopes_same_numbered_pane_intact
+      - app::tests::agent_status::ts8_two_connections_sharing_a_wire_pane_id_stay_independent_through_close
+    red_confirmed: true
+    red_reason: >
+      ts8 caught a genuine implementation gap live during this task:
+      close_tab's whole-tab discard loop did not remove the scoped
+      mux_public_pane_ids entry (confirmed absent in the pre-task main
+      tree too — a pre-existing omission this task's file scope
+      explicitly calls out to fix, per task0001.md's "its map removal"
+      wording for tab_lifecycle.rs). ts8 failed with
+      `left: Some("daemon-a-pane1"), right: None` at
+      src-tauri/src/app/tests/agent_status.rs:1367 until tab_lifecycle.rs's
+      close_tab and app/mod.rs's reaped-tab loop were both extended to
+      also remove the scoped map entry.
+
+  AC-7:
+    tests:
+      - agent_status_model::tests::plain_tab_set_mints_revision_and_enqueues_transition
+      - agent_status_model::tests::plain_tab_clear_advances_revision_and_enqueues_transition
+      - agent_status_model::tests::discard_plain_tab_entry_via_tab_key
+      - agent_status_model::tests::same_state_re_report_preserves_seen
+      - agent_status_model::tests::ac6_discard_removes_latch_so_a_later_mark_cannot_resurrect_state
+      - app::tests::agent_status::close_tab_discards_agent_status_entry
+    red_confirmed: false
+    red_reason: >
+      These are PRE-EXISTING plain-tab tests (NFR3: their expectations
+      are frozen, byte-for-byte). They were already green before this
+      task started (part of the 3250-test baseline) and stayed green
+      throughout — that is the point of AC-7, so there is no red state to
+      confirm for them. The build/doc-comment half of AC-7 (VC-1: `git
+      status` confirms crates/mux_ipc/** and
+      src-tauri/src/mux/session/manager.rs are untouched; VC-3: the two
+      named doc comments — PaneKey::MuxPane in agent_status_model.rs and
+      agent_notification_rate_limit_key in app/agent_status.rs — were
+      rewritten to state the new scoping rule) are non-test checks by
+      design (IMPLEMENTATION.md Open Questions), not scenarios with an
+      observable red/green cycle.

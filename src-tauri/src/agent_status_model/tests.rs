@@ -1,11 +1,28 @@
 use super::*;
 
+/// The default connection scope used by every test in this module that
+/// does not itself exercise cross-scope behavior (i.e. every test except
+/// the TS-1..TS-3 scoped-key tests below) — mirrors a single mux-attached
+/// tab's `ConnectionScope`.
+const SCOPE_A: ConnectionScope = ConnectionScope(1);
+/// A second, distinct connection scope — a second mux-attached tab
+/// (SPEC mux-agent-status-pane-key-collision FR1..FR6).
+const SCOPE_B: ConnectionScope = ConnectionScope(2);
+
 fn tab(id: u64) -> PaneKey {
     PaneKey::Tab(id)
 }
 
+/// A mux pane key under the default [`SCOPE_A`] — used throughout the
+/// pre-existing (single-connection) test scenarios.
 fn pane(id: u32) -> PaneKey {
-    PaneKey::MuxPane(id)
+    PaneKey::MuxPane(SCOPE_A, id)
+}
+
+/// A mux pane key under an explicit scope — used by the scoped-key tests
+/// (TS-1..TS-3) that exercise two connections at once.
+fn pane_in(scope: ConnectionScope, id: u32) -> PaneKey {
+    PaneKey::MuxPane(scope, id)
 }
 
 // ── AC-1: plain-tab OSC updates the model like a daemon update would ──
@@ -82,6 +99,7 @@ fn plain_tab_and_daemon_paths_produce_equivalent_status_shape() {
 
     let mut daemon = AgentStatusModel::new();
     daemon.apply_daemon_update(
+        SCOPE_A,
         10,
         Some(AgentState::Blocked),
         Some("agent".to_string()),
@@ -102,17 +120,17 @@ fn plain_tab_and_daemon_paths_produce_equivalent_status_shape() {
 #[test]
 fn daemon_update_real_change_enqueues_transition() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(10, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 10, Some(AgentState::Working), None, 1, false);
     assert_eq!(model.drain_transitions().len(), 1);
 }
 
 #[test]
 fn daemon_update_same_state_re_report_enqueues_nothing() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(10, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 10, Some(AgentState::Working), None, 1, false);
     model.drain_transitions();
 
-    model.apply_daemon_update(10, Some(AgentState::Working), None, 2, false);
+    model.apply_daemon_update(SCOPE_A, 10, Some(AgentState::Working), None, 2, false);
     assert!(model.drain_transitions().is_empty());
     // Revision still advances even though nothing else changed.
     assert_eq!(model.status(&pane(10)).unwrap().revision, 2);
@@ -121,7 +139,7 @@ fn daemon_update_same_state_re_report_enqueues_nothing() {
 #[test]
 fn daemon_update_replay_derived_never_enqueues_even_on_real_change() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(10, Some(AgentState::Blocked), None, 5, true);
+    model.apply_daemon_update(SCOPE_A, 10, Some(AgentState::Blocked), None, 5, true);
     assert!(model.drain_transitions().is_empty());
     assert_eq!(
         model.status(&pane(10)).unwrap().state,
@@ -136,12 +154,12 @@ fn daemon_update_replay_derived_state_change_still_marks_unseen() {
     // note: "seen flags are ... reset to unseen on a real state
     // change" (stated independently of replay_derived).
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(10, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 10, Some(AgentState::Working), None, 1, false);
     model.drain_transitions(); // discard the first (non-replay) transition
     model.mark_seen([&pane(10)]);
     assert!(!model.status(&pane(10)).unwrap().unseen);
 
-    model.apply_daemon_update(10, Some(AgentState::Blocked), None, 2, true);
+    model.apply_daemon_update(SCOPE_A, 10, Some(AgentState::Blocked), None, 2, true);
     assert!(model.status(&pane(10)).unwrap().unseen);
     assert!(model.drain_transitions().is_empty());
 }
@@ -151,9 +169,9 @@ fn daemon_update_replay_derived_state_change_still_marks_unseen() {
 #[test]
 fn aggregate_prefers_blocked_over_everything() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(1, Some(AgentState::Working), None, 1, false);
-    model.apply_daemon_update(2, Some(AgentState::Blocked), None, 1, false);
-    model.apply_daemon_update(3, Some(AgentState::Done), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 2, Some(AgentState::Blocked), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 3, Some(AgentState::Done), None, 1, false);
 
     let panes = vec![pane(1), pane(2), pane(3)];
     let agg = model.aggregate(&panes).unwrap();
@@ -163,17 +181,17 @@ fn aggregate_prefers_blocked_over_everything() {
 #[test]
 fn aggregate_ranks_unseen_done_above_working_above_seen_done_above_idle() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(1, Some(AgentState::Idle), None, 1, false);
-    model.apply_daemon_update(2, Some(AgentState::Done), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Idle), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 2, Some(AgentState::Done), None, 1, false);
     model.mark_seen([&pane(2)]); // seen-done
-    model.apply_daemon_update(3, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 3, Some(AgentState::Working), None, 1, false);
 
     // seen-done(1) < working(2): working wins over idle+seen-done.
     let agg = model.aggregate(&[pane(1), pane(2), pane(3)]).unwrap();
     assert_eq!(agg.state, AgentState::Working);
 
     // unseen-done(3) > working(2): add an unseen-done pane and it wins.
-    model.apply_daemon_update(4, Some(AgentState::Done), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 4, Some(AgentState::Done), None, 1, false);
     let agg = model
         .aggregate(&[pane(1), pane(2), pane(3), pane(4)])
         .unwrap();
@@ -184,7 +202,7 @@ fn aggregate_ranks_unseen_done_above_working_above_seen_done_above_idle() {
 #[test]
 fn aggregate_seen_done_reports_seen_unseen_false() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(1, Some(AgentState::Done), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Done), None, 1, false);
     model.mark_seen([&pane(1)]);
 
     let agg = model.aggregate(&[pane(1)]).unwrap();
@@ -201,9 +219,93 @@ fn aggregate_returns_none_when_no_pane_has_status() {
 #[test]
 fn aggregate_ignores_cleared_panes() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(1, Some(AgentState::Working), None, 1, false);
-    model.apply_daemon_update(1, None, None, 2, false); // cleared
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 1, None, None, 2, false); // cleared
     assert_eq!(model.aggregate(&[pane(1)]), None);
+}
+
+// ── mux-agent-status-pane-key-collision TS-1/TS-2/TS-3: scoped mux keys ──
+//
+// Two mux daemons attached from two different tabs can both mint wire
+// `pane_id` 1. These scenarios pin that the pair (scope, wire pane_id) —
+// not the bare wire `pane_id` — is the model's real key (SPEC FR1/FR2/FR6).
+
+// TS-1 (AC-1): two scopes' same-numbered panes are fully independent.
+#[test]
+fn ts1_scoped_mux_panes_sharing_a_wire_pane_id_are_fully_independent() {
+    let mut model = AgentStatusModel::new();
+    model.apply_daemon_update(
+        SCOPE_A,
+        1,
+        Some(AgentState::Working),
+        Some("agent-a".to_string()),
+        1,
+        false,
+    );
+    model.apply_daemon_update(
+        SCOPE_B,
+        1,
+        Some(AgentState::Blocked),
+        Some("agent-b".to_string()),
+        5,
+        false,
+    );
+
+    let a = model.status(&pane_in(SCOPE_A, 1)).unwrap();
+    assert_eq!(a.state, Some(AgentState::Working));
+    assert_eq!(a.name, Some("agent-a".to_string()));
+    assert_eq!(a.revision, 1);
+    assert!(a.unseen);
+
+    let b = model.status(&pane_in(SCOPE_B, 1)).unwrap();
+    assert_eq!(b.state, Some(AgentState::Blocked));
+    assert_eq!(b.name, Some("agent-b".to_string()));
+    assert_eq!(b.revision, 5);
+    assert!(b.unseen);
+
+    // Applying a further update to scope A's pane 1 must leave scope B's
+    // pane 1 — same wire pane_id — completely untouched.
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Idle), None, 2, false);
+    let b_after = model.status(&pane_in(SCOPE_B, 1)).unwrap();
+    assert_eq!(b_after.state, Some(AgentState::Blocked));
+    assert_eq!(b_after.name, Some("agent-b".to_string()));
+    assert_eq!(b_after.revision, 5);
+    assert!(b_after.unseen);
+
+    // Aggregating over scope A's key set alone never observes scope B's
+    // (higher-priority, Blocked) state.
+    let agg_a = model.aggregate(&[pane_in(SCOPE_A, 1)]).unwrap();
+    assert_eq!(agg_a.state, AgentState::Idle);
+}
+
+// TS-2 (AC-6): discarding one scope's pane leaves the other scope's
+// same-numbered pane fully intact.
+#[test]
+fn ts2_discard_is_scoped_and_leaves_other_scopes_same_numbered_pane_intact() {
+    let mut model = AgentStatusModel::new();
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Blocked), None, 1, false);
+    model.apply_daemon_update(SCOPE_B, 1, Some(AgentState::Working), None, 1, false);
+
+    model.discard(&pane_in(SCOPE_A, 1));
+
+    assert!(model.status(&pane_in(SCOPE_A, 1)).is_none());
+    let b = model.status(&pane_in(SCOPE_B, 1)).unwrap();
+    assert_eq!(b.state, Some(AgentState::Working));
+    assert_eq!(b.revision, 1);
+}
+
+// TS-3 (AC-3): `any_pane_has_reported_state` is scope-qualified — a
+// same-numbered pane reported in another scope must never qualify.
+#[test]
+fn ts3_any_pane_has_reported_state_does_not_qualify_another_scopes_same_numbered_pane() {
+    let mut model = AgentStatusModel::new();
+    model.apply_daemon_update(SCOPE_B, 1, Some(AgentState::Working), None, 1, false);
+
+    assert!(
+        !model.any_pane_has_reported_state(SCOPE_A, &[1]),
+        "scope A's pane 1 never reported — scope B's report must not qualify it"
+    );
+    assert!(model.any_pane_has_reported_state(SCOPE_B, &[1]));
 }
 
 // ── mux-agent-tab-cycle task0001 AC-7: any_pane_has_reported_state ────
@@ -217,9 +319,9 @@ fn any_pane_has_reported_state_true_for_each_reported_state_kind() {
         AgentState::Done,
     ] {
         let mut model = AgentStatusModel::new();
-        model.apply_daemon_update(1, Some(state), None, 1, false);
+        model.apply_daemon_update(SCOPE_A, 1, Some(state), None, 1, false);
         assert!(
-            model.any_pane_has_reported_state(&[1]),
+            model.any_pane_has_reported_state(SCOPE_A, &[1]),
             "{state:?} must qualify"
         );
     }
@@ -228,14 +330,14 @@ fn any_pane_has_reported_state_true_for_each_reported_state_kind() {
 #[test]
 fn any_pane_has_reported_state_false_for_cleared_and_never_reported() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(1, Some(AgentState::Working), None, 1, false);
-    model.apply_daemon_update(1, None, None, 2, false); // cleared
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 1, None, None, 2, false); // cleared
     assert!(
-        !model.any_pane_has_reported_state(&[1]),
+        !model.any_pane_has_reported_state(SCOPE_A, &[1]),
         "cleared pane must not qualify"
     );
     assert!(
-        !model.any_pane_has_reported_state(&[999]),
+        !model.any_pane_has_reported_state(SCOPE_A, &[999]),
         "never-reported pane must not qualify"
     );
 }
@@ -243,18 +345,18 @@ fn any_pane_has_reported_state_false_for_cleared_and_never_reported() {
 #[test]
 fn any_pane_has_reported_state_multi_pane_qualifies_existentially() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(2, Some(AgentState::Idle), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 2, Some(AgentState::Idle), None, 1, false);
     // pane 1 never reported, pane 2 reported Idle — the set qualifies
     // because at least one pane does (existential, FR6).
-    assert!(model.any_pane_has_reported_state(&[1, 2]));
+    assert!(model.any_pane_has_reported_state(SCOPE_A, &[1, 2]));
     // Neither pane in this set ever reported: does not qualify.
-    assert!(!model.any_pane_has_reported_state(&[3, 4]));
+    assert!(!model.any_pane_has_reported_state(SCOPE_A, &[3, 4]));
 }
 
 #[test]
 fn any_pane_has_reported_state_empty_set_is_false() {
     let model = AgentStatusModel::new();
-    assert!(!model.any_pane_has_reported_state(&[]));
+    assert!(!model.any_pane_has_reported_state(SCOPE_A, &[]));
 }
 
 // ── AC-4: counts ignore seen, empty model reports zero ───────────────
@@ -268,13 +370,13 @@ fn counts_are_zero_for_empty_model() {
 #[test]
 fn counts_reflect_semantic_state_regardless_of_seen() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(1, Some(AgentState::Blocked), None, 1, false);
-    model.apply_daemon_update(2, Some(AgentState::Blocked), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Blocked), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 2, Some(AgentState::Blocked), None, 1, false);
     model.mark_seen([&pane(2)]); // seen, still counted as blocked
-    model.apply_daemon_update(3, Some(AgentState::Working), None, 1, false);
-    model.apply_daemon_update(4, Some(AgentState::Done), None, 1, false);
-    model.apply_daemon_update(5, Some(AgentState::Idle), None, 1, false);
-    model.apply_daemon_update(6, None, None, 1, false); // cleared, excluded
+    model.apply_daemon_update(SCOPE_A, 3, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 4, Some(AgentState::Done), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 5, Some(AgentState::Idle), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 6, None, None, 1, false); // cleared, excluded
 
     let counts = model.counts();
     assert_eq!(
@@ -293,8 +395,15 @@ fn counts_reflect_semantic_state_regardless_of_seen() {
 #[test]
 fn mark_seen_clears_unseen_only_for_listed_panes() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(1, Some(AgentState::Blocked), Some("a".into()), 3, false);
-    model.apply_daemon_update(2, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(
+        SCOPE_A,
+        1,
+        Some(AgentState::Blocked),
+        Some("a".into()),
+        3,
+        false,
+    );
+    model.apply_daemon_update(SCOPE_A, 2, Some(AgentState::Working), None, 1, false);
 
     model.mark_seen([&pane(1)]);
 
@@ -320,8 +429,8 @@ fn mark_seen_on_missing_pane_is_a_no_op() {
 #[test]
 fn discard_removes_entry_and_updates_aggregate_and_counts() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(1, Some(AgentState::Blocked), None, 1, false);
-    model.apply_daemon_update(2, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Blocked), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 2, Some(AgentState::Working), None, 1, false);
 
     model.discard(&pane(1));
 
@@ -358,22 +467,22 @@ fn discard_plain_tab_entry_via_tab_key() {
 #[test]
 fn real_state_change_resets_seen_to_unseen() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(1, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Working), None, 1, false);
     model.mark_seen([&pane(1)]);
     assert!(!model.status(&pane(1)).unwrap().unseen);
 
-    model.apply_daemon_update(1, Some(AgentState::Blocked), None, 2, false);
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Blocked), None, 2, false);
     assert!(model.status(&pane(1)).unwrap().unseen);
 }
 
 #[test]
 fn same_state_re_report_preserves_seen() {
     let mut model = AgentStatusModel::new();
-    model.apply_daemon_update(1, Some(AgentState::Working), None, 1, false);
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Working), None, 1, false);
     model.mark_seen([&pane(1)]);
     assert!(!model.status(&pane(1)).unwrap().unseen);
 
-    model.apply_daemon_update(1, Some(AgentState::Working), None, 2, false);
+    model.apply_daemon_update(SCOPE_A, 1, Some(AgentState::Working), None, 2, false);
     assert!(!model.status(&pane(1)).unwrap().unseen);
 }
 
