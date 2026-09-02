@@ -1,16 +1,64 @@
 schema_version: 1
 feature: mux-agent-status-pane-key-collision
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
-base_revision: 56727f1857ddb32ebcdd1fb726f557b4e78e6d89
+base_revision: e9037c21e4922d2235a0787201d47ffb75887380
 last_input_digest: sha256:599a943183b5c6f48faa637c577adf236f55c098f5d073ee482c347813dcc4e9
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-02T09:02:46+09:00"
+    questions:
+      - question_id: requirement.pane-identity-source
+        status: answered
+      - question_id: requirement.fix-scope
+        status: answered
+      - question_id: testing.regression-test-level
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.pane-identity-source:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-02T09:02:46+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [gui_local_connection_scope]
+    freeform: null
+    normalized_answer: "Key agent-status state on (the tab's mux connection identity, wire pane_id). Every attached pane has an identity from attach time, including panes that never reported. No mux wire-protocol change."
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; codex_consulted: true (1 turn); Codex suggested gui_local_connection_scope, orchestrator judged it maps onto that option_id. Recorded as assumption per record_as_assumption: true."
+  requirement.fix-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-02T09:02:46+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [all_root_effects]
+    freeform: null
+    normalized_answer: "Cover every consequence of the shared key: badge aggregation, the pane_id -> public_pane_id map, the notification rate-limit key, notification tab-title resolution, and pane-close discard."
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; codex_consulted: true (1 turn); Codex suggested all_root_effects, orchestrator judged it maps onto that option_id. Recorded as assumption per record_as_assumption: true."
+  testing.regression-test-level:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-02T09:02:46+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [unit_only]
+    freeform: null
+    normalized_answer: "Inline #[cfg(test)] unit tests over AgentStatusModel and the app/agent_status.rs helpers, driving two panes that share a wire pane_id but differ in daemon identity. No two-daemon integration test."
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; codex_consulted: true (1 turn); Codex suggested unit_only, orchestrator judged it maps onto that option_id. Recorded as assumption per record_as_assumption: true."
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-02T09:02:46+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "Accept requirements-analyst's recommendation to skip the design step."
+    resolution_note: "gate: create-spec.design-step; batch-policies.yaml select option_id decide_autonomously."
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:599a943183b5c6f48faa637c577adf236f55c098f5d073ee482c347813dcc4e9
     output_digest: null
 artifacts: []
