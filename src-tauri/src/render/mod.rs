@@ -298,20 +298,30 @@ pub fn draw_terminal(
     let sidebar_visibility = app.mux_sidebar_visibility();
     let sidebar_entries: Vec<crate::ui::mux_sidebar::SidebarEntry> = match sidebar_visibility {
         crate::app::MuxSidebarVisibility::Hidden => Vec::new(),
-        _ => app
-            .active_tab()
-            .and_then(|t| t.mux_group.as_ref())
-            .map(crate::ui::mux_sidebar::build_entries)
-            .unwrap_or_default()
-            .into_iter()
-            // task0006 AC-1: attach each window's pane badge from
-            // `App::agent_status` — `build_entries` stays pure over the mux
-            // group alone.
-            .map(|mut e| {
-                e.badge = app.agent_status_pane_badge(e.pane_id);
-                e
-            })
-            .collect(),
+        _ => {
+            let active_tab = app.active_tab();
+            active_tab
+                .and_then(|t| t.mux_group.as_ref())
+                .map(crate::ui::mux_sidebar::build_entries)
+                .unwrap_or_default()
+                .into_iter()
+                // task0006 AC-1: attach each window's pane badge from
+                // `App::agent_status` — `build_entries` stays pure over the
+                // mux group alone. mux-agent-status-pane-key-collision
+                // FR2: scoped to the SIDEBAR'S OWNING tab (the active tab
+                // these entries were built from), not a bare pane_id
+                // lookup.
+                .map(|mut e| {
+                    if let Some(t) = active_tab {
+                        e.badge = app.agent_status_pane_badge(
+                            crate::agent_status_model::ConnectionScope(t.stable_id),
+                            e.pane_id,
+                        );
+                    }
+                    e
+                })
+                .collect()
+        }
     };
     let sidebar_width = crate::ui::mux_sidebar::sidebar_width(ctx.screen_rect().width());
     if sidebar_visibility == crate::app::MuxSidebarVisibility::Persistent {
