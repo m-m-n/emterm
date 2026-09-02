@@ -10,3 +10,23 @@ records:
     freeform: "auto_record"
     normalized_answer: "auto-record the one unapproved command string"
     resolution_note: "gate: create-spec.command-approval (Step A.5); batch-policies.yaml action auto_record, refusal_patterns hard_fail. Commands declared in workflow.yaml project.components: 4 distinct strings. Already approved (3): 'CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml', 'CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib', 'CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features'. Auto-approved this run (1): 'cargo fmt --all --check' (read-only rustfmt check over the workspace; source: Makefile fmt-check target). No refusal pattern matched."
+  - question_id: implement.deviation-decline.task0001
+    packet_id: null
+    answered_at: "2026-09-02T10:05:00+09:00"
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "declined"
+    normalized_answer: "deviation not auto-added to tasks.task0001.files"
+    resolution_note: >-
+      task_id: task0001. Declined deviation path
+      'src-tauri/src/app/tests/mux_ui.rs' (outside expected_files). Missing
+      evidence part 2 of 3: the report names no acceptance-criterion id
+      (AC-n of task0001's own plan) nor a requirement id registered in
+      workflow.yaml that would otherwise be dropped; the stated rationale is
+      a compilation break from the model-layer signature change, not a named
+      criterion. Parts 1 (path) and 3 (observable outcome) were present.
+      Not auto-added; surfaced as an ordinary deviation for the containment
+      check. Second reported deviation (scoped map removal in
+      src-tauri/src/app/tab_lifecycle.rs and src-tauri/src/app/mod.rs) needs
+      no append: both paths are already declared in tasks.task0001.files.
