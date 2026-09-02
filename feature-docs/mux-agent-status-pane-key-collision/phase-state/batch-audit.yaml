@@ -1,0 +1,12 @@
+schema_version: 1
+feature: mux-agent-status-pane-key-collision
+records:
+  - question_id: create-spec.command-approval
+    packet_id: null
+    answered_at: "2026-09-02T09:19:31+09:00"
+    source: batch-decision-table
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "auto_record"
+    normalized_answer: "auto-record the one unapproved command string"
+    resolution_note: "gate: create-spec.command-approval (Step A.5); batch-policies.yaml action auto_record, refusal_patterns hard_fail. Commands declared in workflow.yaml project.components: 4 distinct strings. Already approved (3): 'CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml', 'CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib', 'CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features'. Auto-approved this run (1): 'cargo fmt --all --check' (read-only rustfmt check over the workspace; source: Makefile fmt-check target). No refusal pattern matched."
