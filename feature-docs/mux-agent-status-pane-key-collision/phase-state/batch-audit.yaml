@@ -30,3 +30,18 @@ records:
       check. Second reported deviation (scoped map removal in
       src-tauri/src/app/tab_lifecycle.rs and src-tauri/src/app/mod.rs) needs
       no append: both paths are already declared in tasks.task0001.files.
+  - question_id: develop.completion
+    packet_id: null
+    answered_at: "2026-09-02T14:35:00+09:00"
+    source: operator-directive
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "open_pr"
+    normalized_answer: "push the integration branch to origin and open a PR against main; keep the branch both locally and remotely; no automatic merge"
+    resolution_note: >-
+      gate: develop.completion (Step C, non-packet gate). The batch default in
+      references/batch-mode.md is "keep branch — no merge, no push, no PR". The
+      operator overrode it at launch time; the directive is recorded in
+      feature-docs/mux-agent-status-pane-key-collision/RUN-DIRECTIVES.md and was
+      restated verbatim on this invocation. Taken: the "PR を作成" branch of Step C
+      plus keeping the local branch. Result: PR https://github.com/m-m-n/emterm/pull/49.
