@@ -105,9 +105,21 @@ workflow:
     completed_at_commit: 866fea2c1fd0a460afefe73cbbec8bc37bf4cabe
     status: completed
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: c308b6def3184b0c211499737e61f2e9e48d4966
+    result: pass
     failed_items: []
+    notes: >-
+      Build (main / cli_only), library tests (3259 passed, 0 failed, 3 pre-existing
+      ignored) and the non-test checks VC-1 / VC-2 / VC-3 all pass. TS-1..TS-9 are
+      present and green; TS-10's frozen plain-tab scenarios are green within the same
+      run. `cargo fmt --all --check` exits 1 on 13 pre-existing drift sites in 7 files
+      (crates/mux_ipc/src/handoff.rs, src-tauri/src/agent_status_exit_latch.rs,
+      arg_dispatch.rs, mux/inherited_pty.rs, mux/session/session.rs,
+      tests/cli_subcommands.rs, tests/mux_hot_upgrade.rs) — none of them is in this
+      feature's change set, and the project rule forbids a crate-wide reformat that
+      would pull unrelated files in. SC-9 is judged against the feature's own files,
+      which are clean.
   - id: retrospect
     status: pending
 
