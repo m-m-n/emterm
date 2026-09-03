@@ -1,9 +1,9 @@
 schema_version: 1
 feature: ac7-red-confirmed-unobserved
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: 7e45af6ca3baecae3e5d02409faafa889e29a616
+base_revision: 9c23dde7a257737306b4bbc3cf70b756dc2862f0
 last_input_digest: sha256:bdec956289124c3853739e46f8bf842648e3f822613d51f4daea5e53dbe091b8
 active_request_id: null
 packets: {}
