@@ -83,7 +83,8 @@ workflow:
     base_commit: 9eee616148086b9ab5bf6422ca97e89f40341995
     completed_at_commit: 05ac1d0e437bd53b4a3260fe6186ef70b2fa8130
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: c766a8f4ebbf5458014ead4edc95425bc88c32d3
   - id: verify
     status: pending
     result: null
@@ -106,13 +107,15 @@ tasks:
     branch: em-workflow/ac7-red-confirmed-unobserved/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, spec]
     discretionary: []
     cross_validation: false
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
