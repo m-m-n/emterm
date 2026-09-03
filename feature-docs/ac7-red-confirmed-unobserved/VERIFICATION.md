@@ -127,3 +127,37 @@ produces no visual surface.
 | Success criteria (SPEC AC-1..AC-6) | 6 | 4 | 0 | 2 |
 | Manual checks | 4 | 0 | 0 | 4 |
 | **Total** | **17** | **10** | **0** | **7** |
+
+## Verification Run Record (verify phase)
+
+Executed in the integration worktree at commit eb75b5e4. Result: **pass**.
+
+| Item | Command / method | Outcome |
+|---|---|---|
+| Build (Rust) | `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml` | exit 0 (after `bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings`, required by `build.rs`) |
+| Build (TypeScript) | `bun run typecheck` | exit 0 |
+| Test (Rust) | `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` | 3259 passed, 0 failed, 3 ignored |
+| Test (TypeScript) | `bun test` | 326 passed, 4 failed — all four attributed outside this change set, see below |
+| TS-1 | Record inspection of the AC-7 entry against record AC-6 | `red_confirmed: false`; the reason states the invariant-guard rationale, names record AC-6, asserts no observable pre-state, and keeps the AC-2 count-of-6 explanation |
+| TS-2 | PyYAML load plus raw-text inspection | Parses; `task_id`, `baseline_failures`, `final_failures`, all seven `acceptance_tests` entries and `notes` present; key order unchanged; `red_reason` and `notes` still `>-` folded scalars |
+| TS-3 | Fixed-string count of the old identifier assembled from the header-comment fragments | 0 matches |
+| TS-4 | `git diff 9eee6161..HEAD -- test-docs/stale-test-name-refs/task0001.tests.yaml` | Two hunks, both inside the AC-7 entry and the `notes` block; header comment, `task_id`, `baseline_failures`, `final_failures` and record AC-1..AC-6 byte-identical; `notes` gained exactly one line |
+| TS-5 | Change-set listing over the feature range | Four paths, all documentation records; no Rust and no TypeScript file changed |
+| NFR3 (manual) | Fixed-string count over the feature range's commit messages | 0 contiguous occurrences |
+| SPEC EC-5 (manual) | Reason text reading | The rewritten reason still explains why record AC-2's repository-wide count stands at 6 |
+| SPEC EC-2 (manual) | Parsed `notes` value reading | The added line reads as its own sentence: "... all captured above. Record AC-7 is an unconfirmed red." |
+| Own-record honesty (manual) | `test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml` inspection | AC-4 (parse), AC-5 (identifier count), AC-6 (diff scope) and AC-7 (commit message) all carry `red_confirmed: false` with a reason stating why no red was observable |
+
+### `bun test` failure attribution
+
+None of the four failures is caused by this feature, whose change set contains
+no TypeScript file (TS-5).
+
+- `plugin/marketplace version regression guard (task0002 AC-9)` (2 failures) —
+  pre-existing at the base revision: the same two tests fail in the main
+  working tree on `main`.
+- `viewer entry` (2 failures) — environment-only. This worktree's fresh
+  `bun install` resolved `dompurify` 3.4.14, while the main working tree's
+  existing install holds 3.3.1. Pinning `dompurify@3.3.1` in the worktree makes
+  both tests pass (14 pass, 0 fail) with no source change, isolating the cause
+  to the dependency resolution rather than to the change under verification.
