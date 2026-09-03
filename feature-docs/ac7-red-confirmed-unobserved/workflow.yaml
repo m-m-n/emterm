@@ -1,0 +1,169 @@
+schema_version: 1
+feature: ac7-red-confirmed-unobserved
+created: 2026-09-03
+base_branch: main
+goal: |
+  test-docs: stale-test-name-refs の task0001.tests.yaml で AC-7 の red_confirmed が観測なしに true
+
+  ## 現象（必須）
+  `test-docs/stale-test-name-refs/task0001.tests.yaml:81` で AC-7 の `red_confirmed: true` になっているが、`red_reason` に書かれている根拠は「書いた後にこのファイルを grep して 0 件だった」という after 状態の確認のみで、before の失敗観測が一つも書かれていない。
+  AC-7 は「この record とコミットメッセージが旧識別子を連結形でしか書かない」という執筆規律の不変条件で、タスク前にはこの record 自体が存在しないため red 状態が観測しようがない。
+  同一 record 内の AC-6 は同種の不変条件ガードを `red_confirmed: false` ＋「Invariant guard, not a red->green criterion」として正しく扱っており、AC-7 だけが内部矛盾している。
+  PR #46 の review round 1 で comprehensive 観点が検出した（stable_id `41b6ef707d9d6692`、medium、confidence 65）。severity medium は auto-fix ゲート（critical/high のみ）の対象外のため `unresolved` のまま残した。
+
+  ## 再現手順（必須）
+  1. `test-docs/stale-test-name-refs/task0001.tests.yaml` の `acceptance_tests` の AC-7 エントリを開く
+  2. `red_confirmed: true` と、その直下の `red_reason` を読む
+  3. `red_reason` が挙げる根拠が after 状態の grep 結果のみで、変更前の red 観測を含まないことを確認する
+  4. 同ファイルの AC-6 エントリと比較すると、同種の不変条件ガードが `red_confirmed: false` で記録されている
+
+  ## 期待する挙動（必須）
+  観測していない red には `true` を書かない。AC-7 は観測可能な事前状態を持たない執筆規律の不変条件なので、AC-6 と同じく `red_confirmed: false` で記録され、その理由が `red_reason` に書かれている。
+
+  ## 完了の定義（必須）
+  - [ ] AC-7 の `red_confirmed` が `false` になっている
+  - [ ] `red_reason` が「観測可能な事前状態が無い執筆規律の不変条件（AC-6 と同じ扱い）」の趣旨に書き換わっている
+  - [ ] 末尾の `notes` に AC-7 が未確認 red である旨が 1 行追記されている
+  - [ ] ファイルが YAML として parse できる
+  - [ ] 旧識別子を連結形でしか書かない規約が維持されている（このファイルに旧識別子の連続文字列が 0 件）
+
+  ## 該当箇所（任意）
+  `test-docs/stale-test-name-refs/task0001.tests.yaml:81`（AC-7 エントリ、`red_reason` は 82-88 行、`notes` は 89-95 行）
+  参考: 同ファイル AC-6 エントリ（正しい扱いの例）
+
+  ## 実害・発生条件（任意）
+  `taskNNNN.tests.yaml` は「後続タスクが失敗の帰属先を判断するための証拠」として読まれる record で、em-workflow の implementer 契約も観測していない red に `true` を書かないことを明記している。裏付けのない `red_confirmed: true` は、後からこの record を読むタスクに誤った前提を渡す。
+  加えて PR #46 自体が「機械可読レコードの記述が実態と食い違うと静かに green になる」問題を直す feature であり、同じクラスの瑕疵を新規レコードに持ち込んでいる。
+  前提: PR #46 https://github.com/m-m-n/emterm/pull/46 のマージ。ブランチ `em-workflow/stale-test-name-refs/integration`
+parent_branch: em-workflow/ac7-red-confirmed-unobserved/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+  components:
+    rust:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --check"
+      e2e_test_command: ""
+    typescript:
+      language: TypeScript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: "bunx biome format ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 9c23dde7a257737306b4bbc3cf70b756dc2862f0
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      The feature edits one YAML documentation record
+      (test-docs/stale-test-name-refs/task0001.tests.yaml). It produces no UI
+      surface, no visual output and no user-facing screen, and touches none of
+      the project's design-system layers, so there is nothing for a design step
+      to specify.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: AC-7 red_confirmed becomes false
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1]
+  FR2:
+    title: AC-7 red_reason states the invariant-guard rationale
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1]
+  FR3:
+    title: notes records AC-7 as an unconfirmed red
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-4]
+  FR4:
+    title: Split-identifier convention preserved
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-3]
+  FR5:
+    title: No other acceptance entry is altered
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-4]
+  NFR1:
+    title: Format fidelity
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-2]
+  NFR2:
+    title: No behavioral surface
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-5]
+  NFR3:
+    title: Commit-message discipline
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Diff containment
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-4]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
