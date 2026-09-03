@@ -100,7 +100,7 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2, NFR3, NFR4]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/ac7-red-confirmed-unobserved/task0001
 
