@@ -1,0 +1,40 @@
+schema_version: 1
+feature: ring-push-blank-note-unconditional
+records:
+  - gate_id: create-spec.requirement-clarification
+    question_id: requirement.tests-yaml-ac5-scope
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-04T08:54:20+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [amend_ac5]
+    options_offered: [amend_ac5, leave_ac5]
+    codex_consulted: true
+    resolution_note: >-
+      Policy action codex_consultation. One combined consultation for the packet
+      (1 turn). Codex suggested amend_ac5; the orchestrator judged the mapping onto
+      the existing option_id and adopted it.
+  - gate_id: create-spec.requirement-clarification
+    question_id: requirement.note-dead-code-mention
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-04T08:54:20+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [include_no_op_fact]
+    options_offered: [include_no_op_fact, omit_no_op_fact]
+    codex_consulted: true
+    resolution_note: >-
+      Same combined consultation. Codex suggested include_no_op_fact; the orchestrator
+      judged the mapping onto the existing option_id and adopted it.
+  - gate_id: create-spec.design-step
+    question_id: design-step.recommendation
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-04T08:54:20+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    options_offered: [decide_autonomously, ask_user]
+    codex_consulted: false
+    resolution_note: >-
+      Policy select / decide_autonomously. Analyst recommendation (skip) accepted
+      without asking the user.
