@@ -1,0 +1,33 @@
+schema_version: 1
+feature: ac7-red-confirmed-unobserved
+phase: create-plan
+status: completed
+generation: 1
+base_revision: 0826c3bdc3ff81b9bed942d01edb320a2de71b9e
+last_input_digest: sha256:2e60f4cbf48deb53631b707699cf74d33119d4bd75ba17d654f0882c8dc55170
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-ac7-red-confirmed-unobserved-001
+    status: completed
+    input_digest: sha256:2e60f4cbf48deb53631b707699cf74d33119d4bd75ba17d654f0882c8dc55170
+    output_digest: null
+artifacts:
+  - path: feature-docs/ac7-red-confirmed-unobserved/IMPLEMENTATION.md
+    sha256: sha256:d016bc6b49e8e5be1c17e9ce64337563bf42397daf2960290ca1ba42d11d5140
+    produced_by: create-plan-ac7-red-confirmed-unobserved-001
+  - path: feature-docs/ac7-red-confirmed-unobserved/VERIFICATION.md
+    sha256: sha256:4283d7feedad41a8871ff0f24c35cb68423cbf93e855de853233373f6b043571
+    produced_by: create-plan-ac7-red-confirmed-unobserved-001
+  - path: feature-docs/ac7-red-confirmed-unobserved/tasks/task0001.md
+    sha256: sha256:a91a271bc59c5ea4ccad6f1dc859516508272d2ccec8c56f7dfce8aa30d5ca51
+    produced_by: create-plan-ac7-red-confirmed-unobserved-001
+patches:
+  - patch_id: create-plan-p0001
+    base_input_digest: sha256:2e60f4cbf48deb53631b707699cf74d33119d4bd75ba17d654f0882c8dc55170
+    applied: true
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

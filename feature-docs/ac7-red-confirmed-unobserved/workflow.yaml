@@ -89,7 +89,19 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Correct the unobserved red claim in the record's AC-7 entry
+    plan: tasks/task0001.md
+    files:
+      - test-docs/stale-test-name-refs/task0001.tests.yaml
+    skills: []
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -105,63 +117,63 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1]
   FR2:
     title: AC-7 red_reason states the invariant-guard rationale
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1]
   FR3:
     title: notes records AC-7 as an unconfirmed red
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-4]
   FR4:
     title: Split-identifier convention preserved
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-3]
   FR5:
     title: No other acceptance entry is altered
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-4]
   NFR1:
     title: Format fidelity
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-2]
   NFR2:
     title: No behavioral surface
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-5]
   NFR3:
     title: Commit-message discipline
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR4:
     title: Diff containment
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-4]
 
 batch:
