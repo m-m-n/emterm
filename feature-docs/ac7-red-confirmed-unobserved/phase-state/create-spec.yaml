@@ -1,14 +1,18 @@
 schema_version: 1
 feature: ac7-red-confirmed-unobserved
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: f626c440070a9aec837e97cd22963f4ed19289e6
-last_input_digest: null
-active_request_id: null
+base_revision: d9978aa3596d7257cc77b6c37b85d3a378edd57d
+last_input_digest: sha256:4e11443fb54df9c3cd3a36a37139a272c0c327fed60d49e229cb86aad858d60d
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:4e11443fb54df9c3cd3a36a37139a272c0c327fed60d49e229cb86aad858d60d
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
