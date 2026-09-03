@@ -3,15 +3,19 @@ feature: ac7-red-confirmed-unobserved
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: bf03545516ccf818831e8d29dc3d93157db37c9f
-last_input_digest: sha256:4e11443fb54df9c3cd3a36a37139a272c0c327fed60d49e229cb86aad858d60d
-active_request_id: null
+base_revision: 16e00a56ec256e0cfaf9618b644fab6b643f3fb5
+last_input_digest: sha256:bdec956289124c3853739e46f8bf842648e3f822613d51f4daea5e53dbe091b8
+active_request_id: create-spec-run-0002
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-spec-run-0001
     status: completed
     input_digest: sha256:4e11443fb54df9c3cd3a36a37139a272c0c327fed60d49e229cb86aad858d60d
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: dispatched
+    input_digest: sha256:bdec956289124c3853739e46f8bf842648e3f822613d51f4daea5e53dbe091b8
     output_digest: null
 artifacts: []
 patches: []
