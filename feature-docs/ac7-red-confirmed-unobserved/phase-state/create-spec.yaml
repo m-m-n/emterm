@@ -1,0 +1,17 @@
+schema_version: 1
+feature: ac7-red-confirmed-unobserved
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: f626c440070a9aec837e97cd22963f4ed19289e6
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
