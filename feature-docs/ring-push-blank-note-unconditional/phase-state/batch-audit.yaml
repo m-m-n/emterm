@@ -1,40 +1,75 @@
 schema_version: 1
 feature: ring-push-blank-note-unconditional
 records:
-  - gate_id: create-spec.requirement-clarification
-    question_id: requirement.tests-yaml-ac5-scope
-    packet_id: create-spec-q0001
-    answered_at: "2026-09-04T08:54:20+09:00"
-    source: batch-codex-consultation
-    answer_mode: select_or_freeform
-    selected_option_ids: [amend_ac5]
-    options_offered: [amend_ac5, leave_ac5]
-    codex_consulted: true
-    resolution_note: >-
-      Policy action codex_consultation. One combined consultation for the packet
-      (1 turn). Codex suggested amend_ac5; the orchestrator judged the mapping onto
-      the existing option_id and adopted it.
-  - gate_id: create-spec.requirement-clarification
-    question_id: requirement.note-dead-code-mention
-    packet_id: create-spec-q0001
-    answered_at: "2026-09-04T08:54:20+09:00"
-    source: batch-codex-consultation
-    answer_mode: select_or_freeform
-    selected_option_ids: [include_no_op_fact]
-    options_offered: [include_no_op_fact, omit_no_op_fact]
-    codex_consulted: true
-    resolution_note: >-
-      Same combined consultation. Codex suggested include_no_op_fact; the orchestrator
-      judged the mapping onto the existing option_id and adopted it.
-  - gate_id: create-spec.design-step
-    question_id: design-step.recommendation
-    packet_id: create-spec-q0001
-    answered_at: "2026-09-04T08:54:20+09:00"
-    source: batch-decision-table
-    answer_mode: single_select
-    selected_option_ids: [decide_autonomously]
-    options_offered: [decide_autonomously, ask_user]
-    codex_consulted: false
-    resolution_note: >-
-      Policy select / decide_autonomously. Analyst recommendation (skip) accepted
-      without asking the user.
+- gate_id: create-spec.requirement-clarification
+  question_id: requirement.tests-yaml-ac5-scope
+  packet_id: create-spec-q0001
+  answered_at: '2026-09-04T08:54:20+09:00'
+  source: batch-codex-consultation
+  answer_mode: select_or_freeform
+  selected_option_ids:
+  - amend_ac5
+  options_offered:
+  - amend_ac5
+  - leave_ac5
+  codex_consulted: true
+  resolution_note: Policy action codex_consultation. One combined consultation for the packet (1 turn).
+    Codex suggested amend_ac5; the orchestrator judged the mapping onto the existing option_id and adopted
+    it.
+- gate_id: create-spec.requirement-clarification
+  question_id: requirement.note-dead-code-mention
+  packet_id: create-spec-q0001
+  answered_at: '2026-09-04T08:54:20+09:00'
+  source: batch-codex-consultation
+  answer_mode: select_or_freeform
+  selected_option_ids:
+  - include_no_op_fact
+  options_offered:
+  - include_no_op_fact
+  - omit_no_op_fact
+  codex_consulted: true
+  resolution_note: Same combined consultation. Codex suggested include_no_op_fact; the orchestrator judged
+    the mapping onto the existing option_id and adopted it.
+- gate_id: create-spec.design-step
+  question_id: design-step.recommendation
+  packet_id: create-spec-q0001
+  answered_at: '2026-09-04T08:54:20+09:00'
+  source: batch-decision-table
+  answer_mode: single_select
+  selected_option_ids:
+  - decide_autonomously
+  options_offered:
+  - decide_autonomously
+  - ask_user
+  codex_consulted: false
+  resolution_note: Policy select / decide_autonomously. Analyst recommendation (skip) accepted without
+    asking the user.
+- gate_id: create-spec.design-system
+  question_id: create-spec.design-system
+  packet_id: null
+  answered_at: '2026-09-04T09:03:32+09:00'
+  source: batch-decision-table
+  answer_mode: single_select
+  selected_option_ids:
+  - top_candidate_or_none
+  options_offered:
+  - top_candidate_or_none
+  codex_consulted: false
+  resolution_note: Policy select / top_candidate_or_none (references/batch-policies.yaml). Candidates
+    were present, so kind resolves to project_native; paths recorded as doc/UI-DESIGN-GUIDELINES.yaml
+    and src-tauri/web-shared/styles.css. Confirmed per create-spec-phase.md 11a even though the design
+    step is skipped.
+- gate_id: create-spec.command-approval
+  question_id: create-spec.command-approval
+  packet_id: null
+  answered_at: '2026-09-04T09:03:32+09:00'
+  source: batch-decision-table
+  answer_mode: multi_select
+  selected_option_ids: []
+  options_offered: []
+  codex_consulted: false
+  resolution_note: 'Policy auto_record. No command required auto-approval: all three of this feature''s
+    commands were already present in bash_guard''s approved list (CARGO_TARGET_DIR=src-tauri/target cargo
+    check --manifest-path crates/term_core/Cargo.toml; CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+    crates/term_core/Cargo.toml --lib; cargo fmt --manifest-path crates/term_core/Cargo.toml --check).
+    Zero new records written.'

@@ -1,78 +1,87 @@
 schema_version: 1
 feature: ring-push-blank-note-unconditional
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: 7021be9c872b7e1b618cd27403112fd1fd974cc1
-last_input_digest: "sha256:87d3f47807f5e6128ecda54393b832e8c9fcb2febfde6920b729a29992490ec7"
+last_input_digest: sha256:e02cfc147e534d44715d0803ccb4f5b0f01e06f0896ba101616f0f6867e20931
 active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
-    issued_at: "2026-09-04T08:54:10+09:00"
+    issued_at: '2026-09-04T08:54:10+09:00'
     questions:
-      - question_id: requirement.tests-yaml-ac5-scope
-        status: answered
-      - question_id: requirement.note-dead-code-mention
-        status: answered
-      - question_id: design-step.recommendation
-        status: answered
+    - question_id: requirement.tests-yaml-ac5-scope
+      status: answered
+    - question_id: requirement.note-dead-code-mention
+      status: answered
+    - question_id: design-step.recommendation
+      status: answered
 answers:
   requirement.tests-yaml-ac5-scope:
     packet_id: create-spec-q0001
-    answered_at: "2026-09-04T08:54:10+09:00"
+    answered_at: '2026-09-04T08:54:10+09:00'
     source: batch-codex-consultation
     answer_mode: select_or_freeform
-    selected_option_ids: [amend_ac5]
+    selected_option_ids:
+    - amend_ac5
     freeform: null
-    normalized_answer: >-
-      Amend test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml AC-5's
-      red_reason to drop the "in this fixture" qualifier, so the NOTE, SPEC FR6,
-      VERIFICATION MT3 and AC-5 all read unconditionally. test-docs/ring-push-blank-row-scope-test/**
-      joins this feature's declared change set.
-    resolution_note: >-
-      Batch gate create-spec.requirement-clarification, policy action
-      codex_consultation (references/batch-policies.yaml). Codex consulted in a
-      single combined consultation for this packet (1 turn, 5-turn ceiling not
-      approached); its suggestion mapped onto the existing option_id amend_ac5 and
-      the orchestrator adopted that mapping. Recorded as an assumption per the
-      policy's record_as_assumption: true.
+    normalized_answer: Amend test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml AC-5's red_reason
+      to drop the "in this fixture" qualifier, so the NOTE, SPEC FR6, VERIFICATION MT3 and AC-5 all read
+      unconditionally. test-docs/ring-push-blank-row-scope-test/** joins this feature's declared change
+      set.
+    resolution_note: 'Batch gate create-spec.requirement-clarification, policy action codex_consultation
+      (references/batch-policies.yaml). Codex consulted in a single combined consultation for this packet
+      (1 turn, 5-turn ceiling not approached); its suggestion mapped onto the existing option_id amend_ac5
+      and the orchestrator adopted that mapping. Recorded as an assumption per the policy''s record_as_assumption:
+      true.'
   requirement.note-dead-code-mention:
     packet_id: create-spec-q0001
-    answered_at: "2026-09-04T08:54:10+09:00"
+    answered_at: '2026-09-04T08:54:10+09:00'
     source: batch-codex-consultation
     answer_mode: select_or_freeform
-    selected_option_ids: [include_no_op_fact]
+    selected_option_ids:
+    - include_no_op_fact
     freeform: null
-    normalized_answer: >-
-      The rewritten NOTE also records that the new-bottom-row clear is consequently
-      always a no-op within a single push, since the eviction-time clear has already
-      emptied that same absolute row.
-    resolution_note: >-
-      Batch gate create-spec.requirement-clarification, policy action
-      codex_consultation. Same single consultation as the question above; Codex's
-      suggestion mapped onto the existing option_id include_no_op_fact and the
-      orchestrator adopted that mapping. Recorded as an assumption per
-      record_as_assumption: true.
+    normalized_answer: The rewritten NOTE also records that the new-bottom-row clear is consequently always
+      a no-op within a single push, since the eviction-time clear has already emptied that same absolute
+      row.
+    resolution_note: 'Batch gate create-spec.requirement-clarification, policy action codex_consultation.
+      Same single consultation as the question above; Codex''s suggestion mapped onto the existing option_id
+      include_no_op_fact and the orchestrator adopted that mapping. Recorded as an assumption per record_as_assumption:
+      true.'
   design-step.recommendation:
     packet_id: create-spec-q0001
-    answered_at: "2026-09-04T08:54:10+09:00"
+    answered_at: '2026-09-04T08:54:10+09:00'
     source: batch-decision-table
     answer_mode: single_select
-    selected_option_ids: [decide_autonomously]
+    selected_option_ids:
+    - decide_autonomously
     freeform: null
-    normalized_answer: >-
-      Accept requirements-analyst's recommendation without asking the user: the design
-      step is recorded as skipped.
-    resolution_note: >-
-      Batch gate create-spec.design-step, policy action select / option_id
-      decide_autonomously (references/batch-policies.yaml).
+    normalized_answer: 'Accept requirements-analyst''s recommendation without asking the user: the design
+      step is recorded as skipped.'
+    resolution_note: Batch gate create-spec.design-step, policy action select / option_id decide_autonomously
+      (references/batch-policies.yaml).
 worker_runs:
-  - request_id: create-spec-run-0001
-    status: needs_user_input
-    input_digest: "sha256:87d3f47807f5e6128ecda54393b832e8c9fcb2febfde6920b729a29992490ec7"
-    output_digest: null
-artifacts: []
+- request_id: create-spec-run-0001
+  status: needs_user_input
+  input_digest: sha256:87d3f47807f5e6128ecda54393b832e8c9fcb2febfde6920b729a29992490ec7
+  output_digest: null
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:e02cfc147e534d44715d0803ccb4f5b0f01e06f0896ba101616f0f6867e20931
+  output_digest: null
+- request_id: create-spec-run-0003
+  status: completed
+  input_digest: sha256:e02cfc147e534d44715d0803ccb4f5b0f01e06f0896ba101616f0f6867e20931
+  output_digest: null
+artifacts:
+- path: feature-docs/ring-push-blank-note-unconditional/REQUIREMENTS.md
+  sha256: sha256:1a1b344b9eb6ccd30bfbda1649d632cb11e52dfbe6e5f65255f0a934beb50804
+  produced_by: create-spec-run-0003
+- path: feature-docs/ring-push-blank-note-unconditional/SPEC.md
+  sha256: sha256:d109c9fd664c89024998e7b4e47802a3086aefce9388caead3994b9730980fd3
+  produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
@@ -80,10 +89,10 @@ resolved_input_cache:
   design_system_candidates:
     resolved_at_generation: 1
     paths:
-      - doc/UI-DESIGN-GUIDELINES.yaml
-      - src-tauri/web-shared/styles.css
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
     digests:
-      doc/UI-DESIGN-GUIDELINES.yaml: "sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef"
-      src-tauri/web-shared/styles.css: "sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb"
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
     truncated: false
 last_error: null
