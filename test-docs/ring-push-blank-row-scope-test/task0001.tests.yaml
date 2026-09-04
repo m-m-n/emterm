@@ -51,7 +51,7 @@ acceptance_tests:
       row-scoped claim (not merely "clearing happened"), and the test body
       carries a comment stating that removing only one of the two clearing
       sites leaves the test green because the evicted absolute row and the
-      new bottom absolute row coincide within a single push in this fixture.
+      new bottom absolute row coincide within a single push.
   AC-6:
     tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
     red_confirmed: true
