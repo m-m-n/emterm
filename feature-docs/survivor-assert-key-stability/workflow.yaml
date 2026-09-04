@@ -1,0 +1,177 @@
+schema_version: 1
+feature: survivor-assert-key-stability
+created: '2026-09-04'
+base_branch: main
+goal: |
+  term_core: survivor 生存アサートがキーの存在しか見ておらず孤児エントリを合格扱いする
+
+  ## 現象（必須）
+  `test_ring_push_blank_clears_recycled_row_overflow_entries` のスクロール後 survivor アサートが、`overflow` / `overflow_ridx` に `abs1` のエントリが残っているかだけを見ている。`abs1` が依然として survivor 行のリングスロットを指しているか、その行の内容自体が生き残っているかは一切観測していない。
+  ```rust
+  assert!(core.overflow.contains_key(&(0u32, abs1)));
+  assert!(
+      core.overflow_ridx
+          .get(&abs1)
+          .map(|cols| cols.contains(&0u32))
+          .unwrap_or(false)
+  );
+  ```
+  survivor キーをスクロール前に取得している設計上の理由は「ビューポート位置がずれてもキーが安定であること」を示す点にあるが、テストはその肝心のずれを確認していない。
+
+  ## 再現手順（必須）
+  1. `crates/term_core/src/ring_buffer.rs` の `ring_push_blank` Step 3 で、塗り潰し対象のスライス添字だけを誤らせる（例: `new_base` を回転後の `ring_head` から算出する）
+  2. `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib` を実行する
+  3. survivor 行のセルが blank 化されているにもかかわらず、`test_ring_push_blank_clears_recycled_row_overflow_entries` は green のまま通る
+
+  overflow 側のクリアは正しい行に当たったままなので `abs1` のエントリは残り、現在のアサートは全て素通りする。
+
+  ## 期待する挙動（必須）
+  「エントリが生きている」と「エントリが孤児として残留している（対応する行の内容は消えた）」を区別できるアサートが入っていること。overflow 側テーブルの寿命・スコープを固定することが本テストの唯一の目的である以上、over-clear の裏返しであるリークを合格扱いしないこと。
+
+  ## 完了の定義（必須）
+  - [ ] LF 後の survival ブロックに `assert_eq!(core.viewport_abs(0) as u32, abs1);` が入り、キーの安定性という設計上の主張が実際に観測されている
+  - [ ] （任意）survivor 行の内容が残っていることも確認している（同ファイルの `test_scroll_up_internal_full_screen_no_scrollback_capacity` と同じ `get_cell_char(col, row)` の使い方）
+  - [ ] 再現手順の変異（Step 3 のスライス添字誤り）でテストが red になることを確認している
+  - [ ] `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib` が green
+  - [ ] `cargo fmt --manifest-path crates/term_core/Cargo.toml --check` が clean
+
+  ## 該当箇所（任意）
+  `crates/term_core/src/ring_buffer/tests.rs:523-529`（survival ブロック）、`crates/term_core/src/ring_buffer.rs:206-217`（Step 3 の塗り潰し）
+
+  ## 実害・発生条件（任意）
+  `ring_push_blank` の塗り潰し先だけが壊れる退行を、行スコープ観測を目的としたこのテストが検出できない。テストの主張（コメントには「its viewport position shifts」と書かれている）と実際の観測範囲がずれている状態でもある。
+
+  由来: feature `ring-push-blank-row-scope-test`（PR: https://github.com/m-m-n/emterm/pull/48）のレビュー round 1、comprehensive 観点 finding `9e7ea750970a2f38`（medium / confidence 65）。severity が medium で auto-fix ゲート（critical/high のみ）の対象外だったため deferred とした。記録は `feature-docs/ring-push-blank-row-scope-test/reviews/round1.yaml`。
+parent_branch: em-workflow/survivor-assert-key-stability/integration
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/src/ui/md3.rs
+    - src-tauri/src/ui/dialog/tokens.rs
+    - src-tauri/web-shared/styles.css
+  components:
+    term_core:
+      language: Rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      format_command: cargo fmt --manifest-path crates/term_core/Cargo.toml --check
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 71056f2620d4c5acc7a173e81d0c1c974157ed60
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 変更対象は crates/term_core/src/ring_buffer/tests.rs の Rust 単体テストのアサートのみで、UI サーフェスにも公開 API にも触れない。デザイントークンに影響する変更点が存在せず、視覚的な成果物も生じないため。
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: null
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: survivor キーの安定性を観測するアサートを追加する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  FR2:
+    title: survivor 行の内容が生存していることを観測するアサートを追加する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+    - TS2
+  FR3:
+    title: 既存のアサートを保持する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  FR4:
+    title: 変異注入でテストが red になることを確認する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS2
+    - TS3
+  FR5:
+    title: 変更範囲をテストファイルに限定する
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS3
+  NFR1:
+    title: 既存テストスタイルへの追従
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  NFR2:
+    title: フォーマット整合
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS4
+  NFR3:
+    title: テスト実行時間への影響なし
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  NFR4:
+    title: 決定性
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
