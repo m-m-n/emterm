@@ -1,0 +1,25 @@
+feature: survivor-assert-key-stability
+collected_at: "2026-09-04T14:41:00+09:00"
+session_ids:
+  - 01a06aee-986e-7434-bc98-8543b53025ff.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    create-plan の dispatch envelope が write_policy に絶対パスを積んでいたため
+    validate-worker-output.py の containment チェックに落ち、orchestrator 側で
+    worktree 相対へ正規化して digest を再計算する手当てが必要になった
+    (phase-state/batch-audit.yaml: create-plan.write-policy-path-form)。
+  - >-
+    implementation-planner に Bash がない dispatch では written_artifacts[].sha256
+    が null で返り、Layer 5 の artifact 検証が orchestrator 計算の digest に
+    フォールバックした (phase-state/batch-audit.yaml: create-plan.artifact-digest-source)。
+  - >-
+    review round1 は findings ゼロ・auto-fix 0 ループ、verify は pass、
+    implement は task0001 単発でコンフリクト再実行なし。deferred finding
+    9e7ea750970a2f38 の解消を目的とした小粒 feature としては一直線に完走した。
