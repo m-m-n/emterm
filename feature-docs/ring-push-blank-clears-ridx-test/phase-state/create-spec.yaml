@@ -1,17 +1,31 @@
 schema_version: 1
 feature: ring-push-blank-clears-ridx-test
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: f626c440070a9aec837e97cd22963f4ed19289e6
-last_input_digest: null
-active_request_id: null
+base_revision: 72fdc6621d6f93937eb991bd567a0ab63bfc468e
+last_input_digest: sha256:d5c18b8501822b01b498fb1ee8f82c77e7d1330eccb10e4fcd5bfca0e7421478
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:d5c18b8501822b01b498fb1ee8f82c77e7d1330eccb10e4fcd5bfca0e7421478
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:370ff237d0b99e75358522891ae9c4e2d82fa9696c5e6d51c5a08247fc5b08c5
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
+    truncated: false
 last_error: null
