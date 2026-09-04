@@ -1,0 +1,25 @@
+round: 1
+executed_at: "2026-09-04T14:37:39+09:00"
+scope:
+  review_mode: diff
+  base_commit: 0fcfc156d554ddbe834f95e1c9bd1556fb4de793
+  head_commit: 942bd3472386e7a5ed9505b8796151218cb7e4d8
+  changed_files:
+  - crates/term_core/src/ring_buffer/tests.rs
+  - test-docs/survivor-assert-key-stability/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - spec
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+- {perspective: comprehensive, source: claude, status: completed}
+- {perspective: spec, source: claude, status: completed}
+findings: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
