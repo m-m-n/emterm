@@ -1,7 +1,7 @@
 schema_version: 1
 feature: ring-push-blank-clears-ridx-test
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 12010cd33ad8a9eedfbaf21c0c2135192367a24a
 last_input_digest: sha256:5e089dbf119a192b58f035ecc7e9ac7caaf3ad0337ce92f639116d089e8bd6c7
