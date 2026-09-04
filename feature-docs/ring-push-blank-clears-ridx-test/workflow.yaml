@@ -92,7 +92,7 @@ workflow:
     status: completed
     completed_at_commit: a6eb0ca674a6bdedeb0ff12fff63bc0197bcc9bf
   - id: implement
-    status: failed
+    status: pending
     base_commit: 42dfedf619a9f6f5c21114855bd68ab6cc1af55e
   - id: review
     status: pending
@@ -112,7 +112,7 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR2, NFR3, NFR4]
-    status: in_progress
+    status: pending
     branch: em-workflow/ring-push-blank-clears-ridx-test/task0001
     notes: null
 
