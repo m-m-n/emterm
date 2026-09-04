@@ -1,0 +1,226 @@
+schema_version: 1
+feature: ring-push-blank-note-unconditional
+created: 2026-09-04
+base_branch: main
+goal: |
+  term_core: ring_push_blank テストの冗長性 NOTE がフィクスチャ依存だと誤記している
+
+  ## 現象（必須）
+  `test_ring_push_blank_clears_recycled_row_overflow_entries` に追加した冗長性 NOTE が、常に成立する性質を「このフィクスチャでは」と限定して書いている。
+  ```rust
+  // NOTE: removing only ONE of the two clearing sites inside
+  // `ring_push_blank` (the eviction-time clear or the new-bottom-row
+  // clear) still leaves this test green, because within a single push in
+  // this 2-row, zero-scrollback fixture the new bottom absolute row
+  // equals the evicted absolute row — the two clearing sites are
+  // mutually redundant for this fixture, not independently pinned by it.
+  ```
+  実際には `crates/term_core/src/ring_buffer.rs` の Step 2/3 が
+  ```rust
+  self.ring_head = (self.ring_head + 1) % rows;
+  let new_bottom_abs = (self.ring_head + rows - 1) % rows;
+  ```
+  の順で評価されるため、`new_bottom_abs` は代数的に回転前の `ring_head`（= `evicted_abs`）へ必ず戻る。`rows` と `scrollback_capacity` の値によらず一致するので、フィクスチャ条件は無関係。
+
+  ## 再現手順（必須）
+  1. `crates/term_core/src/ring_buffer/tests.rs` の `test_ring_push_blank_clears_recycled_row_overflow_entries` 末尾にある NOTE を読む
+  2. `crates/term_core/src/ring_buffer.rs` の `ring_push_blank` の Step 2 / Step 3 と読み比べる
+
+  ## 期待する挙動（必須）
+  NOTE から「in this 2-row, zero-scrollback fixture」の限定句を外し、`new_bottom_abs = (ring_head + rows - 1) % rows` が `ring_head` の前進後に評価されるため常に回転前の `ring_head` へ戻ること、したがってどのビューポート高さ・どのスクロールバック容量でも 2 つの clear site は相互に冗長であり、いかなるフィクスチャでも個別には固定できないことを書く。
+
+  ## 完了の定義（必須）
+  - [ ] NOTE の限定句が外れ、無条件に成立する理由（評価順序）が書かれている
+  - [ ] `feature-docs/ring-push-blank-row-scope-test/SPEC.md` の FR6、`VERIFICATION.md` の MT3、`test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml` の AC-5 と記述が一致している
+  - [ ] `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib` が green
+  - [ ] `cargo fmt --manifest-path crates/term_core/Cargo.toml --check` が clean
+
+  ## 該当箇所（任意）
+  `crates/term_core/src/ring_buffer/tests.rs:517-522`（NOTE）、`crates/term_core/src/ring_buffer.rs:203-224`（2 つの clear site）
+
+  ## 実害・発生条件（任意）
+  - 将来の読者が「行数を増やす／スクロールバックを付ければ 2 つの clear site を個別に固定できる」と誤解して、不可能な作業に着手する
+  - `ring_buffer.rs` の new-bottom-row クリアが単一 push 内では常に no-op（実質デッドコード）であるという事実が NOTE の限定句に隠れる
+  - SPEC FR6 / VERIFICATION MT3 / tests.yaml AC-5 はいずれも無条件の記述であり、コメントだけがドリフトしている
+
+  由来: feature `ring-push-blank-row-scope-test`（PR: https://github.com/m-m-n/emterm/pull/48）のレビュー round 1、comprehensive 観点 finding `680d60eb138fc30b`（medium / confidence 65）。severity が medium で auto-fix ゲート（critical/high のみ）の対象外だったため deferred とした。記録は `feature-docs/ring-push-blank-row-scope-test/reviews/round1.yaml`。
+parent_branch: em-workflow/ring-push-blank-note-unconditional/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+  components:
+    term_core:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path crates/term_core/Cargo.toml --check"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 130dd1125442325d4ca8f628060a2aab6e749cd9
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "The feature has no user-visible surface: it rewrites an English comment block inside a Rust #[cfg(test)] module and one YAML record field. There is no UI, no API, no data model and no architectural choice to design, and the answered create-spec.design-step gate resolved to decide_autonomously, accepting the skip recommendation without asking the user."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 8c911cf8d7ffc291471b09d4b6dbf49418526bed
+  - id: implement
+    status: completed
+    base_commit: 9a1b0cb49cd4849fc6f01fdd3cbe98fa8ded3f0d
+    completed_at_commit: 7af3d59be87de13fa97d79e81e16c99892112bb8
+  - id: review
+    status: completed
+    completed_at_commit: 635dc35d0eb69d6015097cb8a0e8573d85088fd6
+  - id: verify
+    status: completed
+    completed_at_commit: 7ecc1f2b8060d307e471d4d0db3594e2a8d598f9
+    result: pass
+    failed_items: []
+  - id: retrospect
+    status: completed
+    completed_at_commit: 8edd05fa545bd21f554fbbc06b00b493b88beded
+
+tasks:
+  task0001:
+    title: "Rewrite ring_push_blank redundancy NOTE unconditionally and amend sibling AC-5 record"
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/ring_buffer/tests.rs
+      - test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml
+    skills: []
+    domains: []
+    complexity: low
+    requirements:
+      - FR1
+      - FR2
+      - FR3
+      - FR4
+      - FR5
+      - FR6
+      - FR7
+      - NFR1
+      - NFR2
+      - NFR3
+      - NFR4
+      - NFR5
+      - NFR6
+    status: merged
+    branch: em-workflow/ring-push-blank-note-unconditional/task0001
+
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, spec]
+  residual_critical_high: 0
+  needs_rework: false
+  plan:
+    floor: [comprehensive, spec]
+    discretionary: []
+    cross_validation: false
+
+requirements:
+  FR1:
+    title: "NOTE states the unconditional evaluation-order reason"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS2']
+  FR2:
+    title: "Fixture-scoped qualifiers removed from the NOTE"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS3']
+  FR3:
+    title: "The NOTE's existing factual claim is preserved"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS2']
+  FR4:
+    title: "NOTE placement, language and form unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS4']
+  FR5:
+    title: "VERIFICATION MT3 and MT5 remain satisfiable"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS2', 'TS4']
+  FR6:
+    title: "tests.yaml AC-5 red_reason amended to read unconditionally"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS3']
+  FR7:
+    title: "NOTE records the no-op consequence"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS2']
+  NFR1:
+    title: "Change containment — comment and record text only"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS4']
+  NFR2:
+    title: "No behavior change"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS1']
+  NFR3:
+    title: "Comment style consistency"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS1', 'TS4']
+  NFR4:
+    title: "Documents the redundancy, does not remove it"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS4']
+  NFR5:
+    title: "Formatting clean"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS1']
+  NFR6:
+    title: "tests.yaml stays valid and structurally unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: ['task0001']
+    tests: ['TS4']
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
