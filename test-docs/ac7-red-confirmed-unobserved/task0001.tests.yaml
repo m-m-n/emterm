@@ -1,0 +1,88 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, `python3 -c "import yaml; ..."` read
+      acceptance_tests['AC-7']['red_confirmed'] from
+      test-docs/stale-test-name-refs/task0001.tests.yaml as the boolean
+      True. After the edit, the same read returns False.
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, a scripted check of the AC-7 entry's red_reason text
+      found none of the four required elements present (no "invariant
+      guard" phrase, no mention of record AC-6, no "no observable
+      pre-state" phrasing) and it made no direct connection to the record's
+      AC-2 count explanation on its own terms. After the edit, the same
+      script confirms all four elements are present in the rewritten text
+      and that it contains no "confirmed by" / "observed" red-observation
+      language.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, the record's trailing notes block, loaded via
+      PyYAML, did not contain the phrase "AC-7 is an unconfirmed red".
+      After the edit, the loaded notes value ends "... all captured above.
+      Record AC-7 is an unconfirmed red.", confirming the added line reads
+      as its own sentence rather than being welded to the previous one.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the record already
+      parsed as YAML with the expected key set and shape before this task's
+      edit, so there was no observable pre-state to fail. Re-verified after
+      the edit: PyYAML load still exposes task_id, baseline_failures,
+      final_failures, an acceptance_tests mapping with exactly its seven
+      original entries, and notes; the top-level key order in the raw file
+      is unchanged; and red_reason / notes are still written with the `>-`
+      folded block-scalar indicator throughout.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: a whole-file
+      fixed-string count of the old identifier, assembled programmatically
+      from the two fragments in the record's own header comment, was
+      already 0 before this task's edit, so there was no observable
+      pre-state to fail. Re-verified identical (0) after the edit.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: before this task's edit
+      the working tree for the record was clean (`git diff --stat` and
+      `git status --porcelain` both empty for the file), so containment
+      held vacuously with no observable pre-state to fail. After the edit,
+      `git diff` shows exactly two hunks, both confined to the AC-7 entry
+      and the trailing notes block; the header comment, task_id,
+      baseline_failures, final_failures and record AC-1 through record AC-6
+      are untouched by the diff; and `git status --porcelain` for the whole
+      change set lists only this one YAML file, no Rust and no TypeScript
+      file.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No observable pre-state: this task's commit does not exist before the
+      task runs, so the commit message it will carry cannot be checked
+      beforehand. Verified after committing by reading the commit message
+      back and confirming the old identifier appears only in the split
+      prefix/suffix form, never as one contiguous string.
+notes: >-
+  Documentation-record task (task0001.md "Why no source change is needed"
+  section of this feature's own plan; IMPLEMENTATION.md decision D3).
+  Acceptance was verified via PyYAML parse checks, a fixed-string
+  occurrence count assembled from the edited record's own header comment,
+  and git diff/status inspection of the single changed file, all captured
+  above. project_commands (bun test / bun run typecheck) were not run: the
+  task plan's Scope and Out-of-Scope sections state this change set is a
+  YAML documentation edit with no Rust or TypeScript source change and no
+  project rebuild, so those commands would not exercise anything this task
+  touched.

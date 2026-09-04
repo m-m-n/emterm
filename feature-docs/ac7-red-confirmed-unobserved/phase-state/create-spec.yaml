@@ -1,0 +1,31 @@
+schema_version: 1
+feature: ac7-red-confirmed-unobserved
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 9c23dde7a257737306b4bbc3cf70b756dc2862f0
+last_input_digest: sha256:bdec956289124c3853739e46f8bf842648e3f822613d51f4daea5e53dbe091b8
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: sha256:4e11443fb54df9c3cd3a36a37139a272c0c327fed60d49e229cb86aad858d60d
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:bdec956289124c3853739e46f8bf842648e3f822613d51f4daea5e53dbe091b8
+    output_digest: null
+artifacts:
+  - path: feature-docs/ac7-red-confirmed-unobserved/REQUIREMENTS.md
+    sha256: sha256:b0336438ce008cd923e4388f8fb53d96259fbf6f3f0e40b60e18bbf8c20494e1
+    produced_by: create-spec-run-0002
+  - path: feature-docs/ac7-red-confirmed-unobserved/SPEC.md
+    sha256: sha256:62a741549d9a66b7faef2182f03c2d14d8c0de332679a43854e27e1c04ab7598
+    produced_by: create-spec-run-0002
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null

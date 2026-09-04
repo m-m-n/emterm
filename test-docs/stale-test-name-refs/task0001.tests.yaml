@@ -78,14 +78,16 @@ acceptance_tests:
       output after the implementation edits.
   AC-7:
     tests: []
-    red_confirmed: true
+    red_confirmed: false
     red_reason: >-
-      This record and every commit message this task writes spell the old
-      identifier only in concatenated form (OLD_ID = prefix + suffix, per
-      the notation above), never as one contiguous string, which is what
-      keeps the AC-2 repository-wide count at 6 instead of climbing to 7.
-      Confirmed by grepping this file for the contiguous OLD_ID string
-      after writing it and finding zero matches.
+      Invariant guard on writing discipline, not a red->green criterion,
+      treated the same way as record AC-6: this record has no observable
+      pre-state because the task it documents is the very thing that creates
+      the record, so no red state could exist before it. This record and every
+      commit message that task writes spell the old identifier only in
+      concatenated form (OLD_ID = prefix + suffix, per the notation above),
+      never as one contiguous string, which is what keeps the AC-2
+      repository-wide count at 6 instead of climbing to 7.
 notes: >-
   Documentation-record task (task0001.md "Why no source change is needed");
   no Rust test was authored or modified, per NFR3 and IMPLEMENTATION.md D4.
@@ -93,3 +95,4 @@ notes: >-
   inspection, and the project's existing crates/term_core cargo commands
   (check / fmt --check / identifier-filtered test / full lib test suite),
   all captured above.
+  Record AC-7 is an unconfirmed red.
