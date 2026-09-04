@@ -72,7 +72,8 @@ workflow:
     skipped_reason: "The feature has no user-visible surface: it rewrites an English comment block inside a Rust #[cfg(test)] module and one YAML record field. There is no UI, no API, no data model and no architectural choice to design, and the answered create-spec.design-step gate resolved to decide_autonomously, accepting the skip recommendation without asking the user."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 8c911cf8d7ffc291471b09d4b6dbf49418526bed
   - id: implement
     status: pending
     base_commit: null
@@ -85,7 +86,31 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Rewrite ring_push_blank redundancy NOTE unconditionally and amend sibling AC-5 record"
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/ring_buffer/tests.rs
+      - test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml
+    skills: []
+    domains: []
+    complexity: low
+    requirements:
+      - FR1
+      - FR2
+      - FR3
+      - FR4
+      - FR5
+      - FR6
+      - FR7
+      - NFR1
+      - NFR2
+      - NFR3
+      - NFR4
+      - NFR5
+      - NFR6
+    status: pending
 
 review:
   status: pending
@@ -99,91 +124,91 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: ['task0001']
     tests: ['TS2']
   FR2:
     title: "Fixture-scoped qualifiers removed from the NOTE"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: ['task0001']
     tests: ['TS3']
   FR3:
     title: "The NOTE's existing factual claim is preserved"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: ['task0001']
     tests: ['TS2']
   FR4:
     title: "NOTE placement, language and form unchanged"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: ['task0001']
     tests: ['TS4']
   FR5:
     title: "VERIFICATION MT3 and MT5 remain satisfiable"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: ['TS2']
+    tasks: ['task0001']
+    tests: ['TS2', 'TS4']
   FR6:
     title: "tests.yaml AC-5 red_reason amended to read unconditionally"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: ['task0001']
     tests: ['TS3']
   FR7:
     title: "NOTE records the no-op consequence"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: ['task0001']
     tests: ['TS2']
   NFR1:
     title: "Change containment — comment and record text only"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: ['task0001']
     tests: ['TS4']
   NFR2:
     title: "No behavior change"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: ['task0001']
     tests: ['TS1']
   NFR3:
     title: "Comment style consistency"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: ['TS1']
+    tasks: ['task0001']
+    tests: ['TS1', 'TS4']
   NFR4:
     title: "Documents the redundancy, does not remove it"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: ['task0001']
     tests: ['TS4']
   NFR5:
     title: "Formatting clean"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: ['task0001']
     tests: ['TS1']
   NFR6:
     title: "tests.yaml stays valid and structurally unchanged"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: ['task0001']
     tests: ['TS4']
 
 batch:
