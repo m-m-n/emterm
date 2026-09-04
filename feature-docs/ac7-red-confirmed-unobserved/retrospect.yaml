@@ -1,0 +1,25 @@
+feature: ac7-red-confirmed-unobserved
+collected_at: "2026-09-04T08:15:00+09:00"
+session_ids:
+  - 01a0698d-0bf3-71ee-853e-71035bdf630d.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    round1 の findings 4 件はすべて severity medium で、R4 auto-fix ゲート
+    (critical/high のみ) の対象外として unresolved のまま残った。内容は
+    AC-2 / AC-6 の red_reason が観測事実と食い違うという指摘で、この feature
+    自身が直そうとしていた「記録と実態の乖離」と同じクラス。medium が
+    auto-fix ゲートを通らないため、同種の瑕疵が新しい record に再度混入した。
+  - >-
+    review plan の floor は comprehensive + spec のみ、discretionary 追加なし、
+    cross-validation なしで完走した。単一 YAML ドキュメント編集という
+    complexity: low のタスクに対する層構成としては過不足なく見える。
+  - >-
+    task0001 は 1 タスク単独・コンフリクトなし・files 予測どおりで
+    merged まで到達。deviations も conflict_retries もゼロ。

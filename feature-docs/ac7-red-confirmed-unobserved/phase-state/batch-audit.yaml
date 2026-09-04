@@ -1,0 +1,28 @@
+schema_version: 1
+feature: ac7-red-confirmed-unobserved
+records:
+  - question_id: create-spec.command-approval
+    packet_id: null
+    answered_at: "2026-09-03T19:48:05+09:00"
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids: [auto_record]
+    freeform: null
+    normalized_answer: "auto-record the unapproved command string"
+    resolution_note: >-
+      gate: create-spec.command-approval; command: "cargo fmt --check";
+      basis: batch-policies.yaml action auto_record; matched no refusal
+      pattern; read-only format check declared as project.components.rust.format_command
+  - question_id: create-spec.command-approval
+    packet_id: null
+    answered_at: "2026-09-03T19:48:05+09:00"
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids: [auto_record]
+    freeform: null
+    normalized_answer: "auto-record the unapproved command string"
+    resolution_note: >-
+      gate: create-spec.command-approval; command: "bunx biome format .";
+      basis: batch-policies.yaml action auto_record; matched no refusal
+      pattern; read-only format check declared as
+      project.components.typescript.format_command

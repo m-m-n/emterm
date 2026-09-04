@@ -1,0 +1,91 @@
+round: 1
+executed_at: '2026-09-04T08:07:03+09:00'
+scope:
+  review_mode: diff
+  base_commit: 9eee616148086b9ab5bf6422ca97e89f40341995
+  head_commit: c766a8f4ebbf5458014ead4edc95425bc88c32d3
+  changed_files:
+  - test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml
+  - test-docs/stale-test-name-refs/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - spec
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+- perspective: comprehensive
+  source: claude
+  status: completed
+- perspective: spec
+  source: claude
+  status: completed
+findings:
+- stable_id: 938fa120388aa825
+  severity: medium
+  category: spec
+  file: test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml
+  line: 17
+  title: AC-2 の red 証跡が事実と食い違う（AC-2 count linkage は編集前から存在）
+  description: '新規レコードの AC-2 は red_confirmed: true の根拠として「編集前の AC-7 red_reason は四つの必須要素のいずれも持たず、AC-2 カウント説明への直接的な結び付きも無かった」と記す。しかし
+    base revision (9eee6161) の AC-7 red_reason は ''which is what keeps the AC-2 repository-wide count
+    at 6 instead of climbing to 7'' を含んでおり、四番目の要素は編集前から存在した。SPEC の EC-5 も編集前に linkage があったことを前提にしている。実際に欠けていたのは
+    4 要素中 3 つで red 判定自体は妥当だが、根拠テキストが観測していない状態を観測したと述べている。BO-3（新しい機械可読 record に記録／実態の乖離を持ち込まない）に反する。'
+  suggestion: AC-2 の red_reason を「三要素が欠落、四番目（AC-2 カウント linkage）は編集前から存在し保持した」と書き換える。
+  sources:
+  - claude:spec
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: 'severity medium: R4 auto-fix gate は critical/high のみを対象とするため対象外'
+- stable_id: fcf597daae469dce
+  severity: medium
+  category: comprehensive
+  file: test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml
+  line: 18
+  title: AC-2 の red_reason が観測事実と食い違う（4要素のうち (d) は編集前から存在した）
+  description: '同一箇所を comprehensive 観点からも検出。base revision の AC-7 red_reason に AC-2 の 6 vs 7 説明との連結が既に存在したため、「four
+    required elements が none も存在せず」という記述は観測事実と食い違う。criterion が red だったこと自体は 4 要素中 3 要素の欠落で成立するので red_confirmed:
+    true は妥当。'
+  suggestion: 「三つの要素が欠落していたので criterion は red、四番目の linkage は base text に既にあり引き継いだ」と書き換える。
+  sources:
+  - claude:comprehensive
+  confidence: 80
+  resolution: unresolved
+  resolution_reason: 'severity medium: R4 auto-fix gate は critical/high のみを対象とするため対象外'
+- stable_id: aa950a4f5eb99c56
+  severity: medium
+  category: spec
+  file: test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml
+  line: 66
+  title: AC-6 の「change set は この YAML 1 ファイルのみ」という記述が実際の change set と一致しない
+  description: AC-6 red_reason は「git status --porcelain for the whole change set lists only this one YAML
+    file」と断言するが、実装コミット fc7af5d6 は編集対象の record と、この宣言を含む test record 自身の 2 ファイルを含む。feature 全体の change set
+    には feature-docs/ac7-red-confirmed-unobserved/** も入る。SPEC の Declared Change Set と NFR4 の carve-out
+    を落としているため、記録が実態から乖離している。
+  suggestion: 「Rust / TypeScript ファイルが 0 件」という SPEC が実際に要求する主張に限定し、feature-docs / test-docs の workflow
+    生成物を carve-out として明記する。
+  sources:
+  - claude:spec
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: 'severity medium: R4 auto-fix gate は critical/high のみを対象とするため対象外'
+- stable_id: 0ad4478ab62b7550
+  severity: medium
+  category: comprehensive
+  file: test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml
+  line: 66
+  title: AC-6 の red_reason が change set を「YAML 1 ファイルのみ」と誤記している
+  description: 同一箇所を comprehensive 観点からも検出。task0001.md の AC-6 が要求するのは「change set に Rust / TypeScript ファイルが無い」ことだけで、「YAML
+    1 ファイルのみ」は要求より強い over-claim かつ事実と異なる。record が自分自身の存在を数え落としている。
+  suggestion: 「change set は YAML ドキュメントのみ（編集した record と、この per-task test record）で、Rust / TypeScript は含まない」と書き換える。
+  sources:
+  - claude:comprehensive
+  confidence: 80
+  resolution: unresolved
+  resolution_reason: 'severity medium: R4 auto-fix gate は critical/high のみを対象とするため対象外'
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
