@@ -516,10 +516,18 @@ fn test_ring_push_blank_clears_recycled_row_overflow_entries() {
     //
     // NOTE: removing only ONE of the two clearing sites inside
     // `ring_push_blank` (the eviction-time clear or the new-bottom-row
-    // clear) still leaves this test green, because within a single push in
-    // this 2-row, zero-scrollback fixture the new bottom absolute row
-    // equals the evicted absolute row — the two clearing sites are
-    // mutually redundant for this fixture, not independently pinned by it.
+    // clear) still leaves this test green. This holds unconditionally:
+    // on every `ring_push_blank` call that pushes at least one row, the
+    // new bottom absolute row equals the evicted absolute row,
+    // independent of the row count and of the scrollback capacity, so
+    // no fixture can pin the two sites independently. The reason is
+    // evaluation order: `evicted_abs` is captured from `ring_head`
+    // before `Step 1` runs; `Step 2` then rotates `ring_head` by one;
+    // `Step 3` derives `new_bottom_abs` from the rotated `ring_head` —
+    // modulo the row count, the two expressions name the same ring
+    // slot. The new-bottom-row clear is therefore always a no-op
+    // within a single push: whichever eviction-time clear branch ran
+    // has already emptied that same absolute row.
     assert!(core.overflow.contains_key(&(0u32, abs1)));
     assert!(
         core.overflow_ridx
