@@ -1,0 +1,21 @@
+feature: ring-push-blank-note-unconditional
+collected_at: "2026-09-04T09:34:00+09:00"
+session_ids:
+  - 01a069d4-7f02-7275-a6d4-e85e635f4e03
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - test-docs/ring-push-blank-note-unconditional/task0001.tests.yaml
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - "review round1 の deferred 2 件はいずれも medium で、auto-fix ゲート（critical/high のみ）の対象外。
+     いずれも本 feature の NOTE 書き換えが直接生んだドリフト（Step 3 ブロック全体への一般化、
+     兄弟 feature 記録の行番号陳腐化）であり、別タスクとして起票する"
+  - "task0001 の files 予測に test-docs/ring-push-blank-note-unconditional/task0001.tests.yaml が
+     含まれていなかったが、これは implementer が TDD 記録として新規に書く自 feature のテスト記録であり、
+     計画時に予測されない性質のもの。予測ミスとしての是正価値は低い"
