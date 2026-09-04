@@ -1,11 +1,11 @@
 schema_version: 1
 feature: survivor-assert-key-stability
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: 4a49e7d22c879564daa6503776f72f7b54fa1cea
+base_revision: 05d820877a99a406096b8a132fdcc871f78a6e3d
 last_input_digest: sha256:c13ca25e3d963d6a36ac48c1163262513857b9b4e799ebd674307f6936f31c40
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -14,10 +14,16 @@ worker_runs:
     input_digest: sha256:453038135682f673ca1d673630a918990c62a85aac4f77a4833917f0db36c0f1
     output_digest: sha256:9b5bae5f75555c188f6f96f8be1b6d0b7c3b8338a72888a26acc934e8ce21daa
   - request_id: create-spec-run-0002
-    status: dispatched
+    status: completed
     input_digest: sha256:c13ca25e3d963d6a36ac48c1163262513857b9b4e799ebd674307f6936f31c40
-    output_digest: null
-artifacts: []
+    output_digest: sha256:9fd55e61145bd2b58fae8361a2edc18d8042372184563f663305217647472759
+artifacts:
+  - path: feature-docs/survivor-assert-key-stability/REQUIREMENTS.md
+    sha256: sha256:e360706db4da5fe9bf8799cf4f625ca4135dc5e7b6470338d79060e69bb849ad
+    produced_by: create-spec-run-0002
+  - path: feature-docs/survivor-assert-key-stability/SPEC.md
+    sha256: sha256:9fd55e61145bd2b58fae8361a2edc18d8042372184563f663305217647472759
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
