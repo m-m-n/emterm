@@ -89,7 +89,8 @@ workflow:
       及ばない。デザイン成果物（画面・トークン・レイアウト）を要する要素が無い。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: a6eb0ca674a6bdedeb0ff12fff63bc0197bcc9bf
   - id: implement
     status: pending
     base_commit: null
