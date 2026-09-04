@@ -1,0 +1,70 @@
+round: 1
+executed_at: "2026-09-04T09:28:28+09:00"
+scope:
+  review_mode: diff
+  base_commit: 9a1b0cb49cd4849fc6f01fdd3cbe98fa8ded3f0d
+  head_commit: 635dc35d0eb69d6015097cb8a0e8573d85088fd6
+  changed_files:
+    - crates/term_core/src/ring_buffer/tests.rs
+    - test-docs/ring-push-blank-note-unconditional/task0001.tests.yaml
+    - test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml
+plan:
+  floor: [comprehensive, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+findings:
+  - stable_id: 28243eee57171239
+    severity: medium
+    category: comprehensive
+    file: crates/term_core/src/ring_buffer/tests.rs
+    line: 528
+    line_end: 530
+    title: "NOTE の「new-bottom-row clear は常に no-op」は Step 3 ブロック全体には当てはまらない"
+    description: |
+      書き換えられた NOTE の結論文が、テストの感度に関する記述（片方を消してもグリーンのまま）から、
+      製品コードに対する断定（The new-bottom-row clear is therefore always a no-op）へ踏み込んでいる。
+      この断定が正しいのは Step 3 の overflow / overflow_ridx クリア対だけで、Step 3 ブロック全体では
+      成り立たない。ring_buffer.rs の ring_push_blank Step 3 は (a) slice.fill(Cell::EMPTY / bce) による
+      セル消去、(b) self.ring_wrapped[new_bottom_abs] = false、(c) overflow / overflow_ridx クリア、の
+      3 つを行う。Step 1 の 3 分岐はいずれも overflow 側しかクリアせず、ring_wrapped への書き込みは
+      関数内で 1 箇所のみ、セル消去も Step 3 のみ。つまり (a)(b) は eviction 側に対応物が存在せず
+      no-op ではない。new_bottom_abs == evicted_abs という NOTE の中核主張自体は正しい。問題は、その
+      正しい前提から the new-bottom-row clear is always a no-op という広すぎる結論を導いている点。
+    suggestion: |
+      結論文を overflow クリアに限定し、セル fill と ring_wrapped リセットには eviction 側の対応物が
+      無く冗長ではない旨を 1-2 行追記する。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium severity — auto-fix ゲート（critical/high のみ）の対象外。別タスクとして起票"
+  - stable_id: 38eeec827d9fed29
+    severity: medium
+    category: comprehensive
+    file: test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml
+    line: 77
+    line_end: 78
+    title: "NOTE 拡張で survivor assertion が 523→531 行に移動し、旧記録の行番号参照が陳腐化"
+    description: |
+      本 diff は tests.rs の NOTE を 8 行から 16 行へ拡張しており、survivor assertion
+      assert!(core.overflow.contains_key(&(0u32, abs1))); は 523 行目から 531 行目へ移動した。
+      現在の 523 行目は NOTE 内のコメント行。ところが同じ diff で編集された
+      ring-push-blank-row-scope-test の記録では、AC-6 の結び「The failing line (523) is a
+      survivor-row assertion」と AC-4 の tests.rs:523:5 が 523 行を指したまま残っている。前者は
+      現在形でファイルの状態を主張する文なので、いまや偽。AC-6 の cargo test 逐語トランスクリプトは
+      当時の実行結果そのものなので書き換えるべきではない。
+    suggestion: |
+      逐語トランスクリプトはそのまま残し、行番号を現在形で主張している散文だけを直す。あるいは
+      行番号を引かずアサーション式そのもので同定する形に書き換える。
+    sources: [claude:comprehensive]
+    confidence: 65
+    resolution: deferred
+    resolution_reason: "medium severity — auto-fix ゲート（critical/high のみ）の対象外。別タスクとして起票"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

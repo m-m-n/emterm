@@ -1,0 +1,114 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Comment-only criterion, not test-observable: this task executes no
+      code path. Verified by inspection of the rewritten NOTE in
+      crates/term_core/src/ring_buffer/tests.rs, which now states "on every
+      `ring_push_blank` call that pushes at least one row, the new bottom
+      absolute row equals the evicted absolute row, independent of the row
+      count and of the scrollback capacity, so no fixture can pin the two
+      sites independently", followed by the evaluation-order reason:
+      `evicted_abs` is captured from `ring_head` before `Step 1` runs,
+      `Step 2` rotates `ring_head` by one, and `Step 3` derives
+      `new_bottom_abs` from the rotated `ring_head`, so modulo the row count
+      the two expressions name the same ring slot. Cross-checked against
+      ring_buffer.rs (read-only): evicted_abs is captured at the top of
+      `ring_push_blank` before the Step-1 branches run, `self.ring_head =
+      (self.ring_head + 1) % rows` is Step 2, and `new_bottom_abs =
+      (self.ring_head + rows - 1) % rows` in Step 3 uses the rotated head,
+      matching the NOTE's claim.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Comment-only criterion, not test-observable. Verified by a
+      case-insensitive grep of the rewritten NOTE block (lines 517-530 of
+      crates/term_core/src/ring_buffer/tests.rs after the edit) for
+      `fixture`, `2-row` and `zero-scrollback`: the only match is the
+      phrase "no fixture can pin the two sites independently", which
+      asserts universality across all fixtures rather than scoping the
+      claim to one, matching the wording IMPLEMENTATION.md's C2 uses for
+      this exact purpose. Neither `in this 2-row, zero-scrollback fixture`
+      nor `for this fixture, not independently pinned by it` (nor `2-row`
+      or `zero-scrollback` in any form) appears anywhere in the NOTE.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Comment-only criterion, not test-observable. Verified by inspection:
+      the rewritten NOTE still opens with "removing only ONE of the two
+      clearing sites inside `ring_push_blank` (the eviction-time clear or
+      the new-bottom-row clear) still leaves this test green" (C1,
+      preserved verbatim in substance from the prior NOTE), and closes with
+      "The new-bottom-row clear is therefore always a no-op within a single
+      push: whichever eviction-time clear branch ran has already emptied
+      that same absolute row" (C4, newly added consequence statement).
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Comment-only criterion, not test-observable. Verified by inspection:
+      the NOTE is still an English `// ` line-comment block starting
+      immediately after the existing `//` separator line and immediately
+      above the survivor assertion `assert!(core.overflow.contains_key(&
+      (0u32, abs1)));`, inside the same inline `#[cfg(test)]` module, at the
+      same nesting depth as before. Its wrapped lines run 50-72 characters
+      wide (with the `    // ` prefix), matching the surrounding comment
+      blocks in the same test (e.g. lines 465-469 run 36-75 chars, lines
+      479-482 run 65-73 chars). `git diff` confirms the separate
+      explanatory comment block above the `#[test]` attribute (lines
+      434-445, describing what the test proves) has zero changed lines.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Comment-only / record-amendment criterion, not test-observable.
+      Verified by `git diff` on
+      test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml: exactly
+      one line changed, inside AC-5's `red_reason` folded (`>`) scalar,
+      removing the trailing words "in this fixture" so the sentence now
+      ends "...coincide within a single push." `red_confirmed: false` and
+      `tests: []` are unchanged on that entry, the rest of the sentence's
+      wording is untouched, and `python3 -c "import yaml; yaml.safe_load(...)"`
+      confirms the file still parses to the same key structure (task_id,
+      baseline_failures, final_failures, acceptance_tests with the same six
+      AC keys) with the folded block-scalar style and 6-space indentation
+      preserved.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Checked against the integrated diff, not memory. `git diff --stat`
+      after the edit shows exactly two files changed:
+      crates/term_core/src/ring_buffer/tests.rs (comment lines only, inside
+      the inline `#[cfg(test)]` module) and
+      test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml (one
+      line inside AC-5's red_reason scalar). `git diff --
+      crates/term_core/src/ring_buffer.rs` produced no output (byte
+      identical, confirmed also by an unchanged `cargo test` pass/fail
+      count). No assertion, fixture-construction, or test-name line was
+      altered in tests.rs; `git diff` on that file shows only lines inside
+      the NOTE comment block replaced. The redundant new-bottom-row clear
+      in ring_buffer.rs is untouched (described only, per D2).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Whole-command outcome, not a per-test criterion; no code path
+      changes so there is no red state to observe here (comment-only
+      change). Baseline run BEFORE the edit (via `git stash` of the
+      in-progress tests.rs edit, to capture a true pre-edit baseline):
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      crates/term_core/Cargo.toml --lib` -> 825 passed; 0 failed; 13
+      ignored; 0 measured; 0 filtered out. `cargo fmt --manifest-path
+      crates/term_core/Cargo.toml --check` produced no output. After
+      restoring the edit and applying the AC-5 YAML amendment, the same
+      test command produced the identical result: 825 passed; 0 failed;
+      13 ignored; 0 measured; 0 filtered out, and `cargo fmt` again
+      produced no output. Counts match the expected 825 / 0 / 13 from the
+      task plan exactly, with no test added or removed.
