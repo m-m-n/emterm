@@ -92,7 +92,7 @@ workflow:
   failed_items: []
   completed_at_commit: 6c14c7eb517effedc754d5711cee04fa6dfd635f
 - id: retrospect
-  status: pending
+  status: in_progress
 tasks:
   task0001:
     title: survivor row key-stability and content observations
