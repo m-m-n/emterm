@@ -102,7 +102,18 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Strengthen test_ring_push_blank_clears_ridx with a survivor-row fixture"
+    plan: tasks/task0001.md
+    files: [crates/term_core/src/ring_buffer/tests.rs]
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR2, NFR3, NFR4]
+    status: pending
+    branch: null
+    notes: null
 
 review:
   status: pending
@@ -118,84 +129,84 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS4]
   FR2:
     title: "絶対行番号を push 前に控える"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS4]
   FR3:
     title: "反空虚性（anti-vacuity）の事前 assert"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS4]
   FR4:
     title: "1 回 push 直後の行スコープ assert"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS4]
   FR5:
     title: "行スコープ assert のタイミング制約"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS4]
   FR6:
     title: "既存の空判定 assert の保持"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS2, TS4]
   FR7:
     title: "被覆範囲を doc コメントに明記"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   FR8:
     title: "変異による red 確認"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3]
   NFR1:
     title: "production コード無変更"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3]
   NFR2:
     title: "既存テストスタイルへの追随"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR3:
     title: "決定性と実行時間"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   NFR4:
     title: "書式"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
 
 batch:
