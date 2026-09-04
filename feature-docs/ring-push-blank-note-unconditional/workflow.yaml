@@ -110,7 +110,7 @@ tasks:
       - NFR4
       - NFR5
       - NFR6
-    status: in_progress
+    status: merged
     branch: em-workflow/ring-push-blank-note-unconditional/task0001
 
 review:
