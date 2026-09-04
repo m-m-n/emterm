@@ -1,0 +1,79 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_ridx]
+    red_confirmed: true
+    red_reason: >-
+      Observed via the AC-5 production mutation run: with the compress
+      branch's row-scoped `overflow_clear_row`/`overflow_ridx_clear_row`
+      calls temporarily replaced by whole-table `.clear()`, the test failed
+      at the post-push survivor-row assertion
+      `assert!(core.overflow.contains_key(&(1u32, abs_survivor)))`
+      (ring_buffer/tests.rs:481), proving the row-scope assertions are not
+      vacuous.
+  AC-2:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_ridx]
+    red_confirmed: true
+    red_reason: >-
+      Observed directly: with the fixture's overflow-bound content
+      temporarily replaced by single-ASCII-character (inline-sized) strings,
+      the pre-push anti-vacuity assertion
+      `assert!(core.overflow.contains_key(&(0u32, abs_recycled)))`
+      (ring_buffer/tests.rs:455) failed, proving the anti-vacuity guard
+      actually fires when content stays inline. Reverted immediately after
+      observation; the fixture content in the committed test is the
+      4-person/3-person family ZWJ sequences, unaffected by this temporary
+      check.
+  AC-3:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_ridx]
+    red_confirmed: false
+    red_reason: >-
+      Unchanged from the pre-existing test: the total push count (5) and the
+      final `overflow`/`overflow_ridx` emptiness assertions were carried
+      forward verbatim from the prior version of this test, which already
+      passed before this task's edits. This criterion is a non-regression
+      guard (nothing was deleted or restructured), not new behavior with an
+      independent red state to observe.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Doc-comment content (Proved / Not proved / structural reason), verified
+      by inspection per IMPLEMENTATION.md's Open Questions (no automated test
+      scenario is prescribed for this criterion; verified manually that the
+      three required elements are present in the doc comment above
+      test_ring_push_blank_clears_ridx).
+  AC-5:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_ridx]
+    red_confirmed: true
+    red_reason: >-
+      Temporarily replaced the compress branch's row-scoped clear calls
+      (crates/term_core/src/ring_buffer.rs lines 177-179, inside the
+      scrollback_capacity > 0 branch of ring_push_blank) with
+      `self.overflow.clear(); self.overflow_ridx.clear();`. Ran
+      `cargo test --lib ring_push_blank_clears_ridx` and observed
+      test_ring_push_blank_clears_ridx FAILED, panicking at
+      ring_buffer/tests.rs:481 on
+      `assert!(core.overflow.contains_key(&(1u32, abs_survivor)))`. Reverted
+      via `git checkout -- crates/term_core/src/ring_buffer.rs`;
+      `git status --porcelain crates/term_core/src/ring_buffer.rs` and
+      `git diff --stat` confirmed zero diff against the task's base commit
+      afterward.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/test-suite exit-code criterion, not itself translatable into a
+      single failing test. Verified green: `CARGO_TARGET_DIR=src-tauri/target
+      cargo test --manifest-path crates/term_core/Cargo.toml --lib` exits 0,
+      825 passed, 0 failed, run without any thread-count restriction.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Format/scope criterion, not a test. Verified: `cargo fmt
+      --manifest-path crates/term_core/Cargo.toml --check` reports no diff,
+      and `git status --porcelain` shows only
+      crates/term_core/src/ring_buffer/tests.rs modified.
