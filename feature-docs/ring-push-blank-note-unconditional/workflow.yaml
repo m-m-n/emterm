@@ -79,7 +79,8 @@ workflow:
     base_commit: 9a1b0cb49cd4849fc6f01fdd3cbe98fa8ded3f0d
     completed_at_commit: 7af3d59be87de13fa97d79e81e16c99892112bb8
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 635dc35d0eb69d6015097cb8a0e8573d85088fd6
   - id: verify
     status: pending
     result: null
@@ -115,8 +116,9 @@ tasks:
     branch: em-workflow/ring-push-blank-note-unconditional/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, spec]
   residual_critical_high: 0
   needs_rework: false
   plan:
