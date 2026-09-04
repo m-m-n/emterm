@@ -1,22 +1,22 @@
 schema_version: 1
 feature: ring-push-blank-clears-ridx-test
 phase: create-spec
-status: failed
-generation: 1
-base_revision: 8dec867643af759d332826abfed4dceffeed4d17
-last_input_digest: sha256:d5c18b8501822b01b498fb1ee8f82c77e7d1330eccb10e4fcd5bfca0e7421478
+status: initialized
+generation: 2
+base_revision: e1a36833c6e204cc3e512111c4cf70c1708c2e64
+last_input_digest: null
 active_request_id: null
 packets:
   create-spec-q0001:
-    status: issued
+    status: obsolete
     issued_at: "2026-09-04T18:38:25+09:00"
     questions:
       - question_id: requirement.test-disposition
-        status: issued
+        status: obsolete
       - question_id: requirement.emptiness-assertion-retention
-        status: issued
+        status: obsolete
       - question_id: design-step.recommendation
-        status: issued
+        status: obsolete
 answers: {}
 worker_runs:
   - request_id: create-spec-run-0001
@@ -25,30 +25,15 @@ worker_runs:
     output_digest: sha256:c17d8a4243aeabb4006bd7215f347ec755d00e583da144319f13012909edafa1
 artifacts: []
 patches: []
-progress_fingerprint: sha256:79927a305abed576ca991cccc642e373035fd98514b08a5d9b706dbb97bf52c4
+progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache:
-  design_system_candidates:
-    generation_digest: sha256:370ff237d0b99e75358522891ae9c4e2d82fa9696c5e6d51c5a08247fc5b08c5
-    resolved_at_generation: 1
-    paths:
-      - doc/UI-DESIGN-GUIDELINES.yaml
-      - src-tauri/web-shared/styles.css
-    digests:
-      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
-      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
-    truncated: false
-last_error:
-  kind: gate_fail_closed
-  at: "2026-09-04T18:38:25+09:00"
-  question_id: requirement.test-disposition
-  gate_id: create-spec.requirement-clarification
-  detail: >-
-    references/question-resolution.md の Fail-closed classification に該当。
-    requirements-analyst が返した packet create-spec-q0001 の assumptions[] のうち
-    A3 (「受け入れ条件に『2 つの clear site を独立に固定する』を含めない」) が
-    reversible: false を宣言し、related_question_ids で
-    requirement.test-disposition を名指ししている。この条件は batch の
-    policy lookup / Codex 相談 / on_unanswered のいずれよりも前に評価され、
-    上書き不能な即時 abort となる。よって create-spec は
-    workflow.yaml を作成せずに中断した。
+resolved_input_cache: {}
+last_error: null
+restart_note: >-
+  generation 1 は create-spec.requirement-clarification の fail-closed abort
+  (assumption A3 が reversible: false) で failed に終わった。Notion タスクの
+  申し送り「不明瞭な点はセカンドオピニオンエージェントと議論して決定して良い」に
+  基づき、Codex セカンドオピニオンとの議論で決定 1 (強化する) / 決定 2 (空判定も
+  残す) を確定し、Notion タスクへコメントでフィードバックした。確定した決定を
+  launch-time のタスク記述に折り込んだため input が変わり、generation 2 として
+  最初の worker dispatch からやり直す。generation 1 の packet は obsolete。
