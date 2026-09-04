@@ -1,11 +1,11 @@
 schema_version: 1
 feature: ring-push-blank-clears-ridx-test
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 2
-base_revision: e1a36833c6e204cc3e512111c4cf70c1708c2e64
-last_input_digest: null
-active_request_id: null
+base_revision: 6d5cbf86da2dd36740a9459b26e8ee824070aea0
+last_input_digest: sha256:0eeb96bd446fda5f6e03037d92b0ee42095da03ac0141a3ddd497a88acd37041
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: obsolete
@@ -23,6 +23,10 @@ worker_runs:
     status: needs_user_input
     input_digest: sha256:d5c18b8501822b01b498fb1ee8f82c77e7d1330eccb10e4fcd5bfca0e7421478
     output_digest: sha256:c17d8a4243aeabb4006bd7215f347ec755d00e583da144319f13012909edafa1
+  - request_id: create-spec-run-0002
+    status: dispatched
+    input_digest: sha256:0eeb96bd446fda5f6e03037d92b0ee42095da03ac0141a3ddd497a88acd37041
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
