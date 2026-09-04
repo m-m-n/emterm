@@ -1,21 +1,31 @@
 schema_version: 1
 feature: ring-push-blank-clears-ridx-test
 phase: create-spec
-status: dispatching
+status: failed
 generation: 1
-base_revision: 72fdc6621d6f93937eb991bd567a0ab63bfc468e
+base_revision: 8dec867643af759d332826abfed4dceffeed4d17
 last_input_digest: sha256:d5c18b8501822b01b498fb1ee8f82c77e7d1330eccb10e4fcd5bfca0e7421478
-active_request_id: create-spec-run-0001
-packets: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: issued
+    issued_at: "2026-09-04T18:38:25+09:00"
+    questions:
+      - question_id: requirement.test-disposition
+        status: issued
+      - question_id: requirement.emptiness-assertion-retention
+        status: issued
+      - question_id: design-step.recommendation
+        status: issued
 answers: {}
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:d5c18b8501822b01b498fb1ee8f82c77e7d1330eccb10e4fcd5bfca0e7421478
-    output_digest: null
+    output_digest: sha256:c17d8a4243aeabb4006bd7215f347ec755d00e583da144319f13012909edafa1
 artifacts: []
 patches: []
-progress_fingerprint: null
+progress_fingerprint: sha256:79927a305abed576ca991cccc642e373035fd98514b08a5d9b706dbb97bf52c4
 stale_redispatch_count: 0
 resolved_input_cache:
   design_system_candidates:
@@ -28,4 +38,17 @@ resolved_input_cache:
       doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
       src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
     truncated: false
-last_error: null
+last_error:
+  kind: gate_fail_closed
+  at: "2026-09-04T18:38:25+09:00"
+  question_id: requirement.test-disposition
+  gate_id: create-spec.requirement-clarification
+  detail: >-
+    references/question-resolution.md の Fail-closed classification に該当。
+    requirements-analyst が返した packet create-spec-q0001 の assumptions[] のうち
+    A3 (「受け入れ条件に『2 つの clear site を独立に固定する』を含めない」) が
+    reversible: false を宣言し、related_question_ids で
+    requirement.test-disposition を名指ししている。この条件は batch の
+    policy lookup / Codex 相談 / on_unanswered のいずれよりも前に評価され、
+    上書き不能な即時 abort となる。よって create-spec は
+    workflow.yaml を作成せずに中断した。
