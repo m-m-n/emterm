@@ -527,6 +527,23 @@ fn test_ring_push_blank_clears_recycled_row_overflow_entries() {
             .map(|cols| cols.contains(&0u32))
             .unwrap_or(false)
     );
+
+    // Post-assert, survival (new): the survivor row's ring slot key is still
+    // the key backing viewport row 0 after the scroll (AC-1), and the
+    // survivor row's own content — the base character plus its combining
+    // marks, derived from the fixture's own mark sequence rather than
+    // transcribed here — is still readable at that row (AC-2). A defect
+    // confined to the blank-push routine's Step 3 fill target (corrupting
+    // only the slice actually cleared, while the overflow-clear side still
+    // targets the correct absolute row) leaves every assertion above green
+    // but blanks the survivor row's content, which only the AC-2 observation
+    // below can catch.
+    assert_eq!(core.viewport_abs(0) as u32, abs1);
+
+    let expected_survivor_grapheme: String = std::iter::once(char::from_u32(0x67).unwrap())
+        .chain(marks.iter().map(|&m| char::from_u32(m).unwrap()))
+        .collect();
+    assert_eq!(core.get_cell_char(0, 0), expected_survivor_grapheme);
 }
 
 // ── Scroll event tests ──────────────────────────────────
