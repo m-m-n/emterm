@@ -116,7 +116,8 @@ workflow:
       M4: pass
     excluded_requirements: []
   - id: retrospect
-    status: in_progress
+    status: completed
+    completed_at_commit: 1252ae4c38799aa1ef1d821d369caf9c71a73e2f
 
 tasks:
   task0001:
