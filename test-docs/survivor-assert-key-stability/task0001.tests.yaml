@@ -1,0 +1,72 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
+    red_confirmed: false
+    red_reason: >-
+      The task's sanctioned red-check mutation (Step 3 fill-target slice
+      index corrupted, overflow-clear side left pointed at the correct
+      absolute row) intentionally leaves this assertion green — the task
+      plan's own Test Notes require treating AC-4 as the joint gate for AC-1
+      and AC-2, since only AC-2's content observation can turn red under
+      that mutation ("Expect the key observation to stay green under the
+      mutation... do not 'fix' it by strengthening the key observation
+      instead"). No alternative production mutation was introduced to
+      independently red this assertion, since Out of Scope restricts the
+      production change to that one sanctioned Step 3 mutation.
+  AC-2:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
+    red_confirmed: true
+    red_reason: >-
+      Under the Step 3 fill-target mutation (fill base derived from
+      self.ring_head post-rotation instead of new_bottom_abs, overflow-clear
+      side left correct) the assertion failed at
+      crates/term_core/src/ring_buffer/tests.rs:546:
+      `assertion `left == right` failed / left: " " / right:
+      "g\u{301}\u{302}\u{303}\u{304}\u{305}\u{306}\u{307}\u{308}"`. Reverting
+      the mutation restored a green run of the full crate suite (825
+      passed, 0 failed).
+  AC-3:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
+    red_confirmed: false
+    red_reason: >-
+      Preservation criterion, not a new observable outcome: verified by
+      `git diff` showing the insertion is strictly additive (no existing
+      line changed) and by the pre-existing pre-scroll anti-vacuity and
+      recycled-row removal assertions still passing in the full suite run.
+      Nothing to red here.
+  AC-4:
+    tests: [ring_buffer::tests::test_ring_push_blank_clears_recycled_row_overflow_entries]
+    red_confirmed: true
+    red_reason: >-
+      Confirmed via the red-check procedure itself: with the Step 3
+      fill-target slice index corrupted and the overflow-clear side left
+      correct, the test failed and the reported failure was the AC-2
+      content assertion (see AC-2 above). Reverting the mutation made it
+      pass again; `git diff --stat -- crates/term_core/src/ring_buffer.rs`
+      showed no output after restoration.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Outcome check, not a red/green test: verified by running
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path
+      crates/term_core/Cargo.toml --lib` with no mutation in place —
+      825 passed, 0 failed, 13 ignored (matches the pre-task baseline).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Outcome check, not a red/green test: verified by
+      `git diff --stat -- crates/term_core/src/ring_buffer.rs` reporting no
+      output after the red-check mutation was reverted, confirming the
+      production file is byte-identical to its pre-task content.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Outcome check, not a red/green test: verified by
+      `cargo fmt --manifest-path crates/term_core/Cargo.toml --check`
+      reporting no diff.
