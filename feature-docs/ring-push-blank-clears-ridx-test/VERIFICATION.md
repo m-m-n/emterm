@@ -87,20 +87,20 @@ empty in `workflow.yaml`), and the change is confined to one unit test inside
 
 ## Manual Testing (E2E Not Possible)
 
-- [ ] **M1 — Doc-comment coverage boundary (FR7, AC4)**: read the doc comment of
+- [x] **M1 — Doc-comment coverage boundary (FR7, AC4)**: read the doc comment of
       `test_ring_push_blank_clears_ridx` and confirm it states all three of:
       what the test proves (nothing beyond the evicted row is cleared); what it
       does not prove (that the compress branch's clear site fired); and the
       structural reason — within one push the new viewport's bottom absolute row
       equals the evicted absolute row, so the eviction-time clear and the
       unconditional bottom-row clear cannot be told apart by any fixture.
-- [ ] **M2 — Style conformance and dependency hygiene (NFR2)**: confirm the test
+- [x] **M2 — Style conformance and dependency hygiene (NFR2)**: confirm the test
       mirrors the sibling test
       `test_ring_push_blank_clears_recycled_row_overflow_entries` in structure
       (capture absolute row keys, pre-assert non-vacuity, operate, post-assert
       removal and survival) and phrasing, that it remains inside the crate's
       inline test module, and that no manifest file appears in the change set.
-- [ ] **M3 — TS3 mutation procedure (FR8, AC5)**: carried out as follows, and
+- [x] **M3 — TS3 mutation procedure (FR8, AC5)**: carried out as follows, and
       recorded with its observed output:
       1. Edit `crates/term_core/src/ring_buffer.rs` so the compress branch's
          row-scoped clear calls become clear-everything calls on both tables.
@@ -110,7 +110,7 @@ empty in `workflow.yaml`), and the change is confined to one unit test inside
       4. Restore the file and confirm its diff is empty.
       5. Re-run the test command and confirm everything is green again (this
          re-run is TS4).
-- [ ] **M4 — Anti-vacuity spot check (FR3)**: confirm that the pre-assertions
+- [x] **M4 — Anti-vacuity spot check (FR3)**: confirm that the pre-assertions
       fire against the fixture actually chosen, not merely against the baseline
       fixture named in SPEC.md — i.e. that the content written to the two rows
       really does exceed the inline per-cell capacity.

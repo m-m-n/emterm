@@ -99,9 +99,22 @@ workflow:
     status: completed
     completed_at_commit: 9ddadedb06d9090222479d81b1bc2c5f9cdb75a4
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 10b71d18fa775536b6a2ddc80f7fa7d8d8325726
+    result: pass
     failed_items: []
+    scenarios:
+      TS1: pass
+      TS2: pass
+      TS3: pass
+      TS4: pass
+      TS5: pass
+    manual_items:
+      M1: pass
+      M2: pass
+      M3: pass
+      M4: pass
+    excluded_requirements: []
   - id: retrospect
     status: pending
 
