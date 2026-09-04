@@ -1,0 +1,203 @@
+schema_version: 1
+feature: ring-push-blank-clears-ridx-test
+created: 2026-09-04
+base_branch: main
+goal: |
+  term_core: test_ring_push_blank_clears_ridx も全消し退行を検出できない（強化するか意図的に残すか決める）
+
+  出典: Notion タスク https://www.notion.so/3c13509ec8ee81a89448c95fd2e1e9f4 （種別: バグ）
+
+  ## 申し送り
+  不明瞭な点はセカンドオピニオンエージェントと議論して決定して良い
+  決めたことは本Notionにフィードバックする
+
+  ## 現象（必須）
+  `test_ring_push_blank_clears_ridx`（`crates/term_core/src/ring_buffer/tests.rs:417` 付近）は `overflow.is_empty()` / `overflow_ridx.is_empty()` しか assert していない。全消し（`self.overflow.clear()`）へ退行した実装でもこの assert は自明に満たされるため、行スコープの喪失を検出できない。
+  兄弟テストの `test_ring_push_blank_clears_recycled_row_overflow_entries` は feature `ring-push-blank-row-scope-test`（PR: https://github.com/m-m-n/emterm/pull/48 ）で survivor 行を足して行スコープを観測できるようにしたが、こちらは手つかずのまま残っている。
+
+  ## 再現手順（必須）
+  1. `crates/term_core/src/ring_buffer.rs` の `ring_push_blank` の row-scoped clear（`overflow_clear_row` / `overflow_ridx_clear_row`）を `self.overflow.clear()` / `self.overflow_ridx.clear()` に置き換える
+  2. `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib` を実行する
+  3. `test_ring_push_blank_clears_ridx` は green のまま通る
+
+  ## 確定済みの決定（2026-09-04、Codex セカンドオピニオンとの議論で確定・Notion タスクへフィードバック済み）
+
+  これらは既に決定済みであり、再度の確認・質問は不要。仕様・受け入れ条件はこの決定に従って書くこと。
+
+  **決定 1: 強化する。** `test_ring_push_blank_clears_ridx` に survivor 行を fixture へ足し、scrollback 有効の compress 分岐（`crates/term_core/src/ring_buffer.rs:177-180` 付近）が「退避した行以外の overflow エントリを消していない」ことを観測する assert を追加する。「意図的に空判定のまま残す」は採らない。
+
+  **決定 2: 既存の空判定 assert も残す（両方残す）。** 1 回 push した時点で行スコープを assert し、そのまま残り 4 回を push して既存の `overflow.is_empty()` / `overflow_ridx.is_empty()` を維持する。前者は「単一 eviction で過剰に消していない」こと、後者は「全行が巡回した後に最終的に空になる」ことで、検証している性質が別物のため、片方への置換は被覆を落とす。
+
+  **確定した fixture 形（実装の指針。細部は実装時に調整してよい）**
+  - `TerminalCore::new(10, 3, 2)`（cols=10, rows=3, scrollback capacity=2）
+  - push 前に row 0（回収される行）と row 1（survivor）へ overflow 行きの content を置く。`long = "👨‍👩‍👧‍👦"` を `set_cell` で row 0 col 0 と row 1 col 1 に置く形が基本
+  - push 前に survivor / 回収行の絶対行番号を控える（`ring_head` が push ごとに回るため、push 後の viewport 相対座標は同じ絶対行を指さない）
+  - 1 回 push した時点で、回収行側の `overflow` / `overflow_ridx` エントリが消え、survivor 行側のエントリが残っていることを assert する（`overflow` と `overflow_ridx` は独立に確認する）
+  - 行スコープの assert は push 回数が rows に達する前に行う（survivor 自身が退避される前）
+  - その後 4 回 push（合計 5 回、既存と同数）して、既存の `overflow.is_empty()` / `overflow_ridx.is_empty()` をそのまま残す
+
+  ## 重要な構造的制約（調査で確定済み。受け入れ条件に含めること）
+
+  `ring_push_blank` の clear site は 2 つではなく **3 つ**ある — 分岐別の eviction 時 clear（compress 分岐 / scrollback 無効分岐）に加えて、Step 3 の「新しい viewport 最下行を無条件に clear する」site がある。1 回の push 内で `new_bottom_abs == evicted_abs` が rows に依らず常に成立するため、eviction 時 clear と Step 3 の無条件 clear は必ず同一の絶対行を対象とする。
+
+  したがって「compress 分岐の clear site が実際に発火した」ことを「Step 3 の無条件 clear が肩代わりした」場合と区別することは、どんな fixture でも原理的に不可能。これは恒久的なテスト設計上の天井であり、より巧妙な fixture で解消しようとしないこと。
+
+  強化後のテストが証明できるのは「compress 分岐が退避行以外を巻き込んで消していない」ことであって「compress 分岐の clear site が発火した」ことではない。**この被覆範囲をテスト本体の doc コメントに明記すること**を受け入れ条件に含める。
+
+  ## 完了の定義（必須）
+  - [ ] `test_ring_push_blank_clears_ridx` に survivor 行を足し、compress 分岐の行スコープを観測する assert が入っている
+  - [ ] 既存の「5 回 push 後に両テーブルが空」という assert が残っている
+  - [ ] 再現手順の変異（row-scoped clear を全消しに置換）でテストが red になることを確認している
+  - [ ] テストが証明できる範囲（過剰に消していないことは示すが、compress 分岐の clear site が発火したことは示さない）が doc コメントに明記されている
+  - [ ] `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib` が green
+  - [ ] `cargo fmt --manifest-path crates/term_core/Cargo.toml --check` が clean
+
+  ## 該当箇所（任意）
+  `crates/term_core/src/ring_buffer/tests.rs:417` 付近（`test_ring_push_blank_clears_ridx`）、`crates/term_core/src/ring_buffer.rs`（`ring_push_blank` の clear site）
+
+  ## 実害・発生条件（任意）
+  行スコープを失う退行が入った場合、兄弟テスト側では検出できる（PR #48 で対応済み）が、このテストは緑のまま通るため「テストが名前ほどには観測していない」状態が 1 箇所残る。退行そのものは「生きている行の長い書記素クラスタ内容が失われる」描画バグとして現れる。
+  由来: feature `ring-push-blank-row-scope-test` の create-spec で、SPEC.md の FR7 として `status: excluded` にした項目。
+parent_branch: em-workflow/ring-push-blank-clears-ridx-test/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+  components:
+    term_core:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path crates/term_core/Cargo.toml --check"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 20fdcd3415b6b8bd38df00498841299a906ba90e
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      変更対象は crates/term_core/src/ring_buffer/tests.rs のテスト 1 本のみで、
+      production コード・UI・レンダリング・ユーザー可視の振る舞いに一切変更が
+      及ばない。デザイン成果物（画面・トークン・レイアウト）を要する要素が無い。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "survivor 行を含む fixture への差し替え"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS4]
+  FR2:
+    title: "絶対行番号を push 前に控える"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS4]
+  FR3:
+    title: "反空虚性（anti-vacuity）の事前 assert"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS4]
+  FR4:
+    title: "1 回 push 直後の行スコープ assert"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS4]
+  FR5:
+    title: "行スコープ assert のタイミング制約"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS4]
+  FR6:
+    title: "既存の空判定 assert の保持"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2, TS4]
+  FR7:
+    title: "被覆範囲を doc コメントに明記"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: "変異による red 確認"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3]
+  NFR1:
+    title: "production コード無変更"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3]
+  NFR2:
+    title: "既存テストスタイルへの追随"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "決定性と実行時間"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS4]
+  NFR4:
+    title: "書式"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

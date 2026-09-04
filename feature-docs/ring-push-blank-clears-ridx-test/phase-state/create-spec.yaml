@@ -1,11 +1,11 @@
 schema_version: 1
 feature: ring-push-blank-clears-ridx-test
 phase: create-spec
-status: dispatching
+status: completed
 generation: 2
 base_revision: 6d5cbf86da2dd36740a9459b26e8ee824070aea0
 last_input_digest: sha256:0eeb96bd446fda5f6e03037d92b0ee42095da03ac0141a3ddd497a88acd37041
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: obsolete
@@ -27,7 +27,17 @@ worker_runs:
     status: completed
     input_digest: sha256:0eeb96bd446fda5f6e03037d92b0ee42095da03ac0141a3ddd497a88acd37041
     output_digest: sha256:940fae1722461c3169b5146f748ed1a27c506549c973a9feb4b42c2199995a22
-artifacts: []
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:940fae1722461c3169b5146f748ed1a27c506549c973a9feb4b42c2199995a22
+    output_digest: sha256:33f543974914321f0f1bd3cb2c3b6a848d3d27e5d99e1a584cb51af375070e4c
+artifacts:
+  - path: feature-docs/ring-push-blank-clears-ridx-test/REQUIREMENTS.md
+    sha256: sha256:276eb3c4d296221ceeb04110bb7b0c56b8ad4c3fa8ea586ae801442f84a125c7
+    produced_by: create-spec-run-0003
+  - path: feature-docs/ring-push-blank-clears-ridx-test/SPEC.md
+    sha256: sha256:33f543974914321f0f1bd3cb2c3b6a848d3d27e5d99e1a584cb51af375070e4c
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
