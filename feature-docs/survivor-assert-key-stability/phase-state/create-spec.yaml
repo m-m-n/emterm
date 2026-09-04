@@ -3,15 +3,19 @@ feature: survivor-assert-key-stability
 phase: create-spec
 status: dispatching
 generation: 1
-f626c440070a9aec837e97cd22963f4ed19289e6
-last_input_digest: sha256:453038135682f673ca1d673630a918990c62a85aac4f77a4833917f0db36c0f1
-active_request_id: create-spec-run-0001
+base_revision: 4a49e7d22c879564daa6503776f72f7b54fa1cea
+last_input_digest: sha256:c13ca25e3d963d6a36ac48c1163262513857b9b4e799ebd674307f6936f31c40
+active_request_id: create-spec-run-0002
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: completed
     input_digest: sha256:453038135682f673ca1d673630a918990c62a85aac4f77a4833917f0db36c0f1
+    output_digest: sha256:9b5bae5f75555c188f6f96f8be1b6d0b7c3b8338a72888a26acc934e8ce21daa
+  - request_id: create-spec-run-0002
+    status: dispatched
+    input_digest: sha256:c13ca25e3d963d6a36ac48c1163262513857b9b4e799ebd674307f6936f31c40
     output_digest: null
 artifacts: []
 patches: []
