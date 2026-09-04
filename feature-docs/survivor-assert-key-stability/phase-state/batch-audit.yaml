@@ -1,0 +1,39 @@
+schema_version: 1
+feature: survivor-assert-key-stability
+records:
+  - gate_id: null
+    phase: create-plan
+    question_id: create-plan.write-policy-path-form
+    answered_at: "2026-09-04T14:27:00+09:00"
+    source: orchestrator
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: normalize-to-worktree-relative
+    normalized_answer: normalize-to-worktree-relative
+    resolution_note: >-
+      The create-plan dispatch envelope was built with absolute paths in
+      write_policy.targets / allowed_write_roots, but the write-policy model
+      (references/contracts/spec-writer-contract.md) uses worktree-relative
+      paths and scripts/validate-worker-output.py rejects absolute paths in
+      its containment check. The planner wrote exactly the three intended
+      artifacts either way, so the envelope, the worker output's
+      written_artifacts paths and digest_source.write_policy_digest were
+      normalized to the worktree-relative form and input_digest recomputed
+      consistently on both sides (sha256:c34c5759...) rather than
+      re-dispatching the planner. Codex was not consulted.
+  - gate_id: null
+    phase: create-plan
+    question_id: create-plan.artifact-digest-source
+    answered_at: "2026-09-04T14:27:00+09:00"
+    source: orchestrator
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: orchestrator-computed
+    normalized_answer: orchestrator-computed
+    resolution_note: >-
+      implementation-planner returned written_artifacts[].sha256 as null
+      (it had no Bash tool in this dispatch and warned about it). Layer 5
+      artifact validation was therefore performed with orchestrator-computed
+      digests read from the files themselves, which confirms existence but
+      cannot independently confirm the worker's own view of the content.
+      Codex was not consulted.
