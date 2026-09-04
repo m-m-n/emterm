@@ -1,0 +1,21 @@
+schema_version: 1
+feature: ring-push-blank-clears-ridx-test
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 3e983dd2e6ef308907eaa89b5f944196bd1b4f81
+last_input_digest: sha256:5e089dbf119a192b58f035ecc7e9ac7caaf3ad0337ce92f639116d089e8bd6c7
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:5e089dbf119a192b58f035ecc7e9ac7caaf3ad0337ce92f639116d089e8bd6c7
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
