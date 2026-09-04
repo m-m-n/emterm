@@ -112,7 +112,7 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, NFR1, NFR2, NFR3, NFR4]
-    status: in_progress
+    status: merged
     branch: em-workflow/ring-push-blank-clears-ridx-test/task0001
     notes: null
 
