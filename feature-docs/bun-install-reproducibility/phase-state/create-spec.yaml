@@ -3,14 +3,53 @@ feature: bun-install-reproducibility
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: 6240e11c442f5bc52f7392ca3e66f0a306ac0d1e
+base_revision: 57d42e00aaddf7b49b01cf4494147baaaeb3f0e6
 last_input_digest: sha256:2483ad1f2e335f7051f5b52a331ff4d925562ef91e502dd0d5eae758a2b79483
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-05T15:15:35+09:00"
+    questions:
+      - question_id: requirement.remediation-approach
+        status: answered
+      - question_id: requirement.package-lock-disposition
+        status: answered
+      - question_id: requirement.ci-clean-install-scope
+        status: answered
+      - question_id: design-step.needed
+        status: obsolete
+answers:
+  requirement.remediation-approach:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T15:15:35+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [lock_plus_root_cause]
+    freeform: null
+    normalized_answer: "bun.lock をコミットして依存解決を凍結したうえで、dompurify 3.4.x で h1 が失われる機序を特定し、3.4.x へ安全に上げられる状態まで持っていく"
+    resolution_note: "gate: create-spec.requirement-clarification (batch policy action codex_consultation); codex_consulted: true; Codex suggested lock_plus_root_cause and the orchestrator judged it maps onto that option_id. 理由: DOMPurify は子 WebView の唯一の XSS 防御であり、3.3.1 への凍結だけではサニタイザの更新経路を塩漬けにする。record_as_assumption: true"
+  requirement.package-lock-disposition:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T15:15:35+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [remove_package_lock]
+    freeform: null
+    normalized_answer: "stale な package-lock.json を削除し、bun のロックを唯一の依存グラフの真実にする"
+    resolution_note: "gate: create-spec.requirement-clarification (batch policy action codex_consultation); codex_consulted: true; Codex suggested remove_package_lock and the orchestrator judged it maps onto that option_id. 理由: stale ロックからの毎回移行が解決ぶれの根本原因の一部。record_as_assumption: true"
+  requirement.ci-clean-install-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T15:15:35+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [include_ci_verification]
+    freeform: null
+    normalized_answer: "CI 設定 (.github/workflows/release.yml) を調査し、クリーンインストール経路で viewer entry テストが走ることの確認（必要なら CI 設定の修正）まで本フィーチャに含める"
+    resolution_note: "gate: create-spec.requirement-clarification (batch policy action codex_consultation); codex_consulted: true; Codex suggested include_ci_verification and the orchestrator judged it maps onto that option_id. リポジトリに .github/workflows/release.yml が実在することを確認済み。record_as_assumption: true"
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:2483ad1f2e335f7051f5b52a331ff4d925562ef91e502dd0d5eae758a2b79483
     output_digest: null
 artifacts: []
@@ -31,3 +70,7 @@ resolved_input_cache:
       src-tauri/web-shared/components/md3-select.css: sha256:b09cdb7c03aecfd24ac44581995a8f75188c4929c744af5e065f5a2a947ae9cd
     truncated: false
 last_error: null
+protocol_deviations:
+  - request_id: create-spec-run-0001
+    detail: "question design-step.needed (gate create-spec.design-step) offered option_ids skip_design / run_design instead of the vocabulary the analyst contract's '## Gate option vocabulary' section declares (decide_autonomously / ask_user). The packet's question was marked obsolete and the correction is folded into the re-dispatch rather than resolved by label matching."
+
