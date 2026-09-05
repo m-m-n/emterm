@@ -1,0 +1,53 @@
+schema_version: 1
+feature: ring-push-blank-clears-ridx-test
+phase: create-spec
+status: completed
+generation: 2
+base_revision: 6d5cbf86da2dd36740a9459b26e8ee824070aea0
+last_input_digest: sha256:0eeb96bd446fda5f6e03037d92b0ee42095da03ac0141a3ddd497a88acd37041
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: obsolete
+    issued_at: "2026-09-04T18:38:25+09:00"
+    questions:
+      - question_id: requirement.test-disposition
+        status: obsolete
+      - question_id: requirement.emptiness-assertion-retention
+        status: obsolete
+      - question_id: design-step.recommendation
+        status: obsolete
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: sha256:d5c18b8501822b01b498fb1ee8f82c77e7d1330eccb10e4fcd5bfca0e7421478
+    output_digest: sha256:c17d8a4243aeabb4006bd7215f347ec755d00e583da144319f13012909edafa1
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:0eeb96bd446fda5f6e03037d92b0ee42095da03ac0141a3ddd497a88acd37041
+    output_digest: sha256:940fae1722461c3169b5146f748ed1a27c506549c973a9feb4b42c2199995a22
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:940fae1722461c3169b5146f748ed1a27c506549c973a9feb4b42c2199995a22
+    output_digest: sha256:33f543974914321f0f1bd3cb2c3b6a848d3d27e5d99e1a584cb51af375070e4c
+artifacts:
+  - path: feature-docs/ring-push-blank-clears-ridx-test/REQUIREMENTS.md
+    sha256: sha256:276eb3c4d296221ceeb04110bb7b0c56b8ad4c3fa8ea586ae801442f84a125c7
+    produced_by: create-spec-run-0003
+  - path: feature-docs/ring-push-blank-clears-ridx-test/SPEC.md
+    sha256: sha256:33f543974914321f0f1bd3cb2c3b6a848d3d27e5d99e1a584cb51af375070e4c
+    produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
+restart_note: >-
+  generation 1 は create-spec.requirement-clarification の fail-closed abort
+  (assumption A3 が reversible: false) で failed に終わった。Notion タスクの
+  申し送り「不明瞭な点はセカンドオピニオンエージェントと議論して決定して良い」に
+  基づき、Codex セカンドオピニオンとの議論で決定 1 (強化する) / 決定 2 (空判定も
+  残す) を確定し、Notion タスクへコメントでフィードバックした。確定した決定を
+  launch-time のタスク記述に折り込んだため input が変わり、generation 2 として
+  最初の worker dispatch からやり直す。generation 1 の packet は obsolete。

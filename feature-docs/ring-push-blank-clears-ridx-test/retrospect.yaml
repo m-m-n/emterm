@@ -1,0 +1,27 @@
+feature: ring-push-blank-clears-ridx-test
+collected_at: "2026-09-05T08:49:00+09:00"
+session_ids: ["01a06ed1-f75d-70e3-8902-f2dfd8b1cc51.jsonl"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - |
+    create-spec が generation 1 で fail-closed abort（assumption A3 が
+    reversible: false）となり、Notion タスクの申し送りによる授権で Codex
+    セカンドオピニオンに相談して決定 1 / 決定 2 を確定した。決定を launch-time
+    のタスク記述へ折り込んで generation 2 を回す形が有効だった。
+  - |
+    implement フェーズで、前セッションの implementer エージェント
+    (a1dfbdc6a731ace57) が terminal イベントを残さず消失した。harness の停止
+    ツールも解決できず、journal.jsonl へ operator repair の failed イベントを
+    手書きして I.2.c を通す必要があった。セッションをまたぐ in-flight
+    implementer の扱いに手当ての余地がある。
+  - |
+    ring_push_blank の clear site が 3 つあり、eviction 時 clear と Step 3 の
+    無条件 clear が常に同一絶対行を対象とするため「compress 分岐の clear site が
+    発火した」ことは原理的に観測不能。この天井を SPEC 段階で確定し、テストの
+    doc コメントに被覆範囲として明記する形に落とした。
