@@ -83,7 +83,7 @@ workflow:
       TypeScript file, so those commands exercise nothing this feature touched.
       No requirement carries status: excluded, so no scenario was excluded.
   - id: retrospect
-    status: pending
+    status: in_progress
 
 tasks:
   task0001:
