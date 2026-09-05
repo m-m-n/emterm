@@ -7,6 +7,41 @@ import { Window } from "happy-dom";
 
 const window = new Window();
 
+// happy-dom's Node.prototype.nodeName getter is an abstract stub that
+// always returns "" — each concrete subclass (Element, Text, Comment, ...)
+// defines its own overriding nodeName getter instead. That is transparent
+// to ordinary property access (`node.nodeName` resolves through the normal
+// prototype chain to the subclass's getter), but a library that reads
+// `Object.getOwnPropertyDescriptor(Node.prototype, "nodeName")` directly —
+// bypassing the override — gets the base stub instead, so every node
+// reports an empty node name. Real browsers implement nodeName as a single
+// dispatching getter directly on Node.prototype, so this divergence is
+// invisible there. Patch the stub to walk the prototype chain to the
+// nearest actual override, matching what normal property access already
+// does, so the test DOM environment matches browser-observable behavior.
+{
+  const NodeCtor = (window as unknown as { Node: { prototype: object } }).Node;
+  const nodeProto = NodeCtor.prototype;
+  const baseDescriptor = Object.getOwnPropertyDescriptor(nodeProto, "nodeName");
+  if (baseDescriptor?.get) {
+    Object.defineProperty(nodeProto, "nodeName", {
+      configurable: true,
+      enumerable: baseDescriptor.enumerable,
+      get(this: object) {
+        let proto = Object.getPrototypeOf(this);
+        while (proto && proto !== nodeProto) {
+          const descriptor = Object.getOwnPropertyDescriptor(proto, "nodeName");
+          if (descriptor?.get) {
+            return descriptor.get.call(this);
+          }
+          proto = Object.getPrototypeOf(proto);
+        }
+        return baseDescriptor.get?.call(this);
+      },
+    });
+  }
+}
+
 // Register global DOM objects
 globalThis.document = window.document as unknown as Document;
 globalThis.window = window as unknown as Window & typeof globalThis;
