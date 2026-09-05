@@ -1,0 +1,77 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - tabs::tests::mux_link::detached_queues_group_pane_ids_for_agent_status_drain_then_drains_once
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, the drain returned an empty Vec instead of [10, 20]:
+      "assertion `left == right` failed: the drain returns exactly the
+      departing group's wire pane ids\n  left: []\n right: [10, 20]".
+  AC-2:
+    tests:
+      - tabs::tests::mux_link::pane_exit_emptying_group_does_not_double_queue_pane_ids
+    red_confirmed: false
+    red_reason: >-
+      Per the task plan's Test Notes, AC-2 is a guard against the AC-1
+      change introducing a double push on the pane-exit path (which never
+      reaches the detach handler at all — the group empties via PtyExited,
+      not Detached). It is expected to pass both before and after the
+      one-site change; confirmed green in both states.
+  AC-3:
+    tests:
+      - app::tests::agent_status::ac3_detach_releases_model_entry_public_id_and_rate_limit_identity
+    red_confirmed: true
+    red_reason: >-
+      Before the fix: "assertion `left == right` failed: the aggregated
+      badge reports nothing for the released pane\n  left: Some(Aggregated
+      { state: Blocked, unseen: false })\n right: None" — the model entry,
+      public-pane-id mapping and rate-limit record all survived the
+      detach.
+  AC-4:
+    tests:
+      - app::tests::agent_status::ac4_reattach_on_same_tab_reusing_wire_pane_id_starts_with_a_clean_slate
+    red_confirmed: true
+    red_reason: >-
+      Before the fix: "assertion `left == right` failed: the tab's
+      aggregated badge starts clean after re-attach\n  left:
+      Some(Aggregated { state: Working, unseen: false })\n right: None" —
+      the re-attached pane inherited the previous connection's state.
+  AC-5:
+    tests:
+      - app::tests::agent_status::ac5_detach_leaves_the_tabs_own_plain_tab_entry_and_latch_intact
+    red_confirmed: false
+    red_reason: >-
+      This scenario passed before the one-site change too: the
+      closed-panes teardown (unchanged by this task) only ever constructs
+      PaneKey::MuxPane keys, and the detach handler's new queueing pushes
+      only the group's u32 wire pane ids (never the tab's own u64
+      stable_id), so the tab's own PaneKey::Tab entry and its
+      inferred-clear latch were never reachable by either the pre-fix or
+      post-fix code path. The test is kept as a regression guard (D4) —
+      verified green in both states — rather than reported as a false
+      "true".
+  AC-6:
+    tests:
+      - app::tests::agent_status::ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouched
+    red_confirmed: true
+    red_reason: >-
+      Before the fix: "assertion `left == right` failed: tab 0's own
+      scope is released\n  left: Some(AgentStatus { state: Some(Blocked),
+      name: Some(\"agent-a\"), revision: 1, unseen: true })\n right: None"
+      — detaching tab 0 had no effect on either tab's entries, since
+      nothing released tab 0's either.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Documentation-only criterion with no test of its own, as specified
+      by the task plan's Test Notes ("a documentation assertion, verified
+      by reading the corrected comment, with no test of its own"). The
+      `ConnectionScope` doc comment in agent_status_model.rs was rewritten
+      to state that the scope VALUE is constant for the tab while the
+      entries it keys are released at detach and re-minted on the next
+      attach, replacing the prior claim that the entries survive "across
+      detach and re-attach".

@@ -39,9 +39,21 @@ use crate::agent_status_exit_latch::AgentStatusExitLatch;
 /// first status update, unlike the daemon-minted `public_pane_id`), but
 /// named after the *connection* it identifies rather than the tab that
 /// currently supplies it, so the name survives if a dedicated mux client
-/// object later replaces the tab as the connection owner. Constant for
-/// the tab's whole lifetime, including across detach and re-attach; never
+/// object later replaces the tab as the connection owner. Never
 /// transmitted on the wire; never rendered to the user.
+///
+/// The scope VALUE is constant for a given tab: every derivation site
+/// computes it from the tab's own `stable_id`, unaffected by detach or
+/// re-attach. The ENTRIES it keys are not similarly persistent —
+/// mux-detach-agent-status-cleanup task0001 (D1/D3): a daemon-confirmed
+/// detach releases every entry keyed by this scope (the model entry, the
+/// scoped public-pane-id mapping and the notification rate-limit
+/// identity, per pane), and a later re-attach re-mints them from the new
+/// connection's first report. A doc comment that once read "constant for
+/// the tab's whole lifetime, including across detach and re-attach" was
+/// corrected here: that phrasing described the scope value, but read as a
+/// promise about the entries it keys, which the implementation never
+/// provided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConnectionScope(pub u64);
 

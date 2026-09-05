@@ -1407,3 +1407,290 @@ fn ts9_agent_status_pane_badge_is_scoped_to_the_queried_connection() {
     assert_eq!(badge_a.state, crate::agent_status::AgentState::Idle);
     assert_eq!(badge_b.state, crate::agent_status::AgentState::Blocked);
 }
+
+// ── mux-detach-agent-status-cleanup task0001 AC-3..AC-6: a
+// daemon-confirmed detach releases the departing connection's
+// agent-status entries, scoped public-pane-id mappings and notification
+// rate-limit state. Application-level scenarios built with the direct
+// group-seeding construction the scoping tests above already use
+// (`ts4_...` / `ts6_...`), delivered through `App::on_mux_message` +
+// `pump_all` — mirroring those tests' own pattern rather than a plain
+// tab's `Welcome`-driven seeding. ─────────────────────────────────────
+
+fn seed_mux_group(app: &mut App, tab_idx: usize, pane_id: u32) {
+    let mut group = crate::mux::window_group::MuxWindowGroup::new();
+    group.seed(
+        vec![crate::mux::window_group::MuxWindow {
+            id: 0,
+            name: "w0".to_string(),
+        }],
+        vec![pane_id],
+        0,
+    );
+    app.tabs[tab_idx].mux_group = Some(group);
+}
+
+fn detached_frame() -> MuxMessage {
+    MuxMessage {
+        msg_type: MessageType::Detached,
+        pane_id: 0,
+        payload: Vec::new(),
+    }
+}
+
+/// AC-3 (SPEC AC-1, AC-3; TS-1): after a mux-attached tab has reported a
+/// pane state and learned that pane's public id, a daemon-confirmed
+/// detach delivered through `App::on_mux_message` and pumped once
+/// releases the model entry (the pane's aggregated badge reports
+/// nothing), the scoped public-pane-id mapping (the lookup for (this
+/// tab's scope, this wire pane id) returns nothing), and the pane's
+/// notification rate-limit identity — a later report under the SAME
+/// public id is not suppressed by the previous connection's record.
+#[test]
+fn ac3_detach_releases_model_entry_public_id_and_rate_limit_identity() {
+    use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+    let (mut app, sink) = app_with_test_sink();
+    app.spawn_initial_tab();
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
+    seed_mux_group(&mut app, 0, 7);
+
+    let update = AgentStatusUpdateMsg {
+        pane_id: 7,
+        public_pane_id: "xyz-7".to_string(),
+        state: Some(WireState::Blocked),
+        name: None,
+        revision: 1,
+        replay_derived: false,
+    };
+    app.on_mux_message(
+        0,
+        MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update),
+    );
+    app.pump_all();
+
+    assert_eq!(app.mux_public_pane_id(scope, 7), Some("xyz-7"));
+    assert!(app.agent_status_pane_badge(scope, 7).is_some());
+    // The pump's own transition-drain already fired once for this real
+    // Set (None -> Blocked) and armed "xyz-7"'s rate-limit window under
+    // the daemon-learned public id — the same key
+    // `agent_notification_rate_limit_key` derives.
+    assert_eq!(sink.calls().len(), 1);
+    let t = agent_transition(crate::notifications::AgentState::Blocked);
+    assert!(
+        !app.maybe_notify_agent_transition("xyz-7", false, &t, "shell"),
+        "the rate-limit window armed by pump_all's own drain is still open"
+    );
+
+    app.on_mux_message(0, detached_frame());
+    app.pump_all();
+
+    assert_eq!(
+        app.agent_status_pane_badge(scope, 7),
+        None,
+        "the aggregated badge reports nothing for the released pane"
+    );
+    assert_eq!(
+        app.mux_public_pane_id(scope, 7),
+        None,
+        "the scoped public-pane-id mapping is released"
+    );
+    assert!(
+        app.maybe_notify_agent_transition("xyz-7", false, &t, "shell"),
+        "the previous connection's rate-limit record for the released \
+         public id must be gone, so a later report under the same id is \
+         not suppressed"
+    );
+}
+
+/// AC-4 (SPEC AC-2; TS-2): after a detach released the previous
+/// connection's entries, a fresh attach on the SAME tab that reuses the
+/// same wire pane id leaves both the tab's aggregated badge and the
+/// per-pane badge reporting nothing — no state and no agent name from
+/// the previous connection — until the new connection's first status
+/// update arrives. The re-attach `Welcome` is built locally, in the
+/// shape of the fixture `ts8_...` above already uses, rather than
+/// reaching into the tab-layer test module's private helper.
+#[test]
+fn ac4_reattach_on_same_tab_reusing_wire_pane_id_starts_with_a_clean_slate() {
+    use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+    let mut app = App::new();
+    app.spawn_initial_tab();
+    let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
+    seed_mux_group(&mut app, 0, 7);
+
+    let update = AgentStatusUpdateMsg {
+        pane_id: 7,
+        public_pane_id: "xyz-7".to_string(),
+        state: Some(WireState::Working),
+        name: Some("claude".to_string()),
+        revision: 1,
+        replay_derived: false,
+    };
+    app.on_mux_message(
+        0,
+        MuxMessage::control(MessageType::AgentStatusUpdate, 7, &update),
+    );
+    app.pump_all();
+    assert!(app.agent_status_pane_badge(scope, 7).is_some());
+
+    app.on_mux_message(0, detached_frame());
+    app.pump_all();
+
+    let re_attach = MuxMessage::control(
+        MessageType::Welcome,
+        0,
+        &WelcomeMsg::Accepted {
+            server_version: 1,
+            sessions: vec![SessionInfo {
+                id: 2,
+                name: "main2".to_string(),
+                window_count: 1,
+                pane_count: 1,
+                active_window_index: 0,
+                windows: vec![WindowInfo {
+                    id: 0,
+                    name: "w0".to_string(),
+                    active_pane_id: 7,
+                }],
+            }],
+        },
+    );
+    app.on_mux_message(0, re_attach);
+    app.pump_all();
+
+    assert_eq!(
+        app.agent_status_badge_for(&app.tabs[0]),
+        None,
+        "the tab's aggregated badge starts clean after re-attach"
+    );
+    assert_eq!(
+        app.agent_status_pane_badge(scope, 7),
+        None,
+        "the per-pane badge starts clean after re-attach — no state and \
+         no agent name from the previous connection — until the new \
+         connection's first status update arrives"
+    );
+}
+
+/// AC-5 (SPEC AC-4): a detach on a tab whose own plain-tab key already
+/// holds a state leaves that entry reporting its state after the pump —
+/// the closed-panes teardown only ever constructs mux-pane keys (D4) —
+/// and leaves the tab's per-tab inferred-clear latch armed: a live
+/// `D`->`A` pair still fires the inferred clear exactly as it would have
+/// before the detach.
+#[test]
+fn ac5_detach_leaves_the_tabs_own_plain_tab_entry_and_latch_intact() {
+    let mut app = App::new();
+    app.spawn_initial_tab();
+    let stable_id = app.tabs[0].stable_id;
+    seed_mux_group(&mut app, 0, 7);
+
+    app.agent_status.apply_plain_tab_event(
+        stable_id,
+        crate::agent_status::AgentStatusEvent::Set {
+            state: crate::agent_status::AgentState::Working,
+            name: Some("claude".to_string()),
+        },
+    );
+    app.agent_status.record_latch_set(stable_id);
+
+    app.on_mux_message(0, detached_frame());
+    app.pump_all();
+
+    let plain_key = crate::agent_status_model::PaneKey::Tab(stable_id);
+    let status = app
+        .agent_status
+        .status(&plain_key)
+        .expect("the tab's own plain-tab entry survives the detach");
+    assert_eq!(status.state, Some(crate::agent_status::AgentState::Working));
+
+    app.agent_status
+        .record_live_prompt_mark(stable_id, crate::prompts::PromptMarkKind::CommandEnd);
+    app.agent_status
+        .record_live_prompt_mark(stable_id, crate::prompts::PromptMarkKind::PromptStart);
+    let status = app
+        .agent_status
+        .status(&plain_key)
+        .expect("entry is still tracked after the inferred clear");
+    assert_eq!(
+        status.state, None,
+        "the live D->A pair fired the inferred clear, proving the \
+         per-tab latch survived the detach still armed"
+    );
+}
+
+/// AC-6 (SPEC AC-5): with two tabs whose groups both hold wire pane id
+/// 1, detaching the first tab releases only its own scope's entries —
+/// the second tab's model entry, its public-pane-id mapping and its
+/// derived notification rate-limit key for the SAME wire pane id are
+/// unchanged.
+#[test]
+fn ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouched() {
+    use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
+
+    let mut app = App::new();
+    app.spawn_initial_tab(); // tab 0
+    app.spawn_new_tab(); // tab 1
+    seed_mux_group(&mut app, 0, 1);
+    seed_mux_group(&mut app, 1, 1); // SAME wire pane_id on both tabs
+
+    let scope0 = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
+    let scope1 = crate::agent_status_model::ConnectionScope(app.tabs[1].stable_id);
+
+    let update0 = AgentStatusUpdateMsg {
+        pane_id: 1,
+        public_pane_id: "daemon-a-1".to_string(),
+        state: Some(WireState::Blocked),
+        name: Some("agent-a".to_string()),
+        revision: 1,
+        replay_derived: false,
+    };
+    app.on_mux_message(
+        0,
+        MuxMessage::control(MessageType::AgentStatusUpdate, 1, &update0),
+    );
+    let update1 = AgentStatusUpdateMsg {
+        pane_id: 1,
+        public_pane_id: "daemon-b-1".to_string(),
+        state: Some(WireState::Idle),
+        name: Some("agent-b".to_string()),
+        revision: 1,
+        replay_derived: false,
+    };
+    app.on_mux_message(
+        1,
+        MuxMessage::control(MessageType::AgentStatusUpdate, 1, &update1),
+    );
+    app.pump_all();
+
+    let key0 = crate::agent_status_model::PaneKey::MuxPane(scope0, 1);
+    let key1 = crate::agent_status_model::PaneKey::MuxPane(scope1, 1);
+    let rate_key1_before = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key1);
+
+    // Detach tab 0 only.
+    app.on_mux_message(0, detached_frame());
+    app.pump_all();
+
+    assert_eq!(
+        app.agent_status.status(&key0),
+        None,
+        "tab 0's own scope is released"
+    );
+    let status1 = app
+        .agent_status
+        .status(&key1)
+        .expect("tab 1's model entry for the SAME wire pane id is untouched");
+    assert_eq!(status1.state, Some(crate::agent_status::AgentState::Idle));
+    assert_eq!(
+        app.mux_public_pane_id(scope1, 1),
+        Some("daemon-b-1"),
+        "tab 1's public-pane-id mapping is untouched"
+    );
+    let rate_key1_after = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key1);
+    assert_eq!(
+        rate_key1_before, rate_key1_after,
+        "tab 1's derived rate-limit key is unchanged"
+    );
+}
