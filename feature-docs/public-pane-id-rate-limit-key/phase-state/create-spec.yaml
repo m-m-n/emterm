@@ -1,16 +1,81 @@
 schema_version: 1
 feature: public-pane-id-rate-limit-key
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
-base_revision: 0f03fcc7ed24d4d51656d02bc93c0b15da4042b2
+base_revision: 131cf029bfbb40cc75a8368b75729a5990939614
 last_input_digest: sha256:3a9721a26c55999a4adb340635a7907772ef642e3458a429f2de114bc27d5b60
-active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-05T10:35:06+09:00"
+    questions:
+      - question_id: requirement.fix-approach
+        status: answered
+      - question_id: requirement.sidebar-public-id
+        status: answered
+      - question_id: design.design-step
+        status: answered
+answers:
+  requirement.fix-approach:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T10:35:06+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [namespace_learned_key]
+    freeform: null
+    normalized_answer: >-
+      Namespace the derived key. In the MuxPane branch of
+      agent_notification_rate_limit_key, return format!("muxpub:{}:{}", scope.0, id)
+      instead of the raw daemon string. Learning at ingest is left untouched;
+      no ingest-time PublicPaneId::parse validation is required by this feature.
+    resolution_note: >-
+      gate create-spec.requirement-clarification -> batch-policies.yaml
+      action: codex_consultation (record_as_assumption: true). One Codex turn
+      (run_codex_exec.sh readonly). Codex suggested namespace_learned_key,
+      which maps onto an existing option_id; the orchestrator judged the
+      mapping and adopted it. Rationale carried forward: a "muxpub:<scope>:"
+      prefix is structurally disjoint from both reserved forms "tab:" and
+      "mux:" and from other scopes, so it closes the reported cross-victim
+      collision without changing App::mux_public_pane_id's observable value
+      and without invalidating the five existing fixtures whose
+      public_pane_id values fail PublicPaneId::parse.
+  requirement.sidebar-public-id:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T10:35:06+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [drop_unparseable]
+    freeform: null
+    normalized_answer: >-
+      Moot under the chosen fix approach. This question is conditional on
+      validate_on_ingest, which was not chosen, so App::mux_public_pane_id's
+      behaviour is unchanged by this feature and no malformed-id drop occurs.
+      Recorded answer applies only if ingest validation is added later.
+    resolution_note: >-
+      gate create-spec.requirement-clarification -> codex_consultation.
+      depends_on requirement.fix-approach, which resolved to
+      namespace_learned_key, so the precondition of this question does not
+      hold. Codex suggested drop_unparseable; it maps onto an existing
+      option_id and is recorded for the conditional case only. Non-blocking
+      question; it constrains no requirement in this feature.
+  design.design-step:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T10:35:06+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: >-
+      Accept requirements-analyst's design_step_recommendation (skip) without
+      asking the user. The design step is set to skipped.
+    resolution_note: >-
+      gate create-spec.design-step -> batch-policies.yaml
+      option_id: decide_autonomously.
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:3a9721a26c55999a4adb340635a7907772ef642e3458a429f2de114bc27d5b60
     output_digest: null
 artifacts: []
