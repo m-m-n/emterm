@@ -3,9 +3,9 @@ feature: mux-detach-agent-status-cleanup
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: 0c431e921f6117ce5a48e656f2a199fea8d84989
+base_revision: cb871dd256b6a50a912eaec075777d78e5a25ac0
 last_input_digest: sha256:4ec413ba49910df799e9d679b7b2c05d46b5d5e09b0ebc2c9a10a0b2d53f1712
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -89,10 +89,16 @@ worker_runs:
     input_digest: sha256:a0fb518530f2b18d6c2af1fb98473544504f5ea973c1e9c6be1f7ff1fed58eef
     output_digest: null
   - request_id: create-spec-run-0003
-    status: dispatched
+    status: completed
     input_digest: sha256:4ec413ba49910df799e9d679b7b2c05d46b5d5e09b0ebc2c9a10a0b2d53f1712
     output_digest: null
-artifacts: []
+artifacts:
+  - path: feature-docs/mux-detach-agent-status-cleanup/REQUIREMENTS.md
+    sha256: sha256:cac031b87c25a1a7386f5e495e00ae8a9173ea79e6692938716a87c998ad0d71
+    produced_by: create-spec-run-0003
+  - path: feature-docs/mux-detach-agent-status-cleanup/SPEC.md
+    sha256: sha256:83dca527174c6c26a592f744b2228a97cf01da26c66c8a86b9a6eb7e1fd02bed
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
