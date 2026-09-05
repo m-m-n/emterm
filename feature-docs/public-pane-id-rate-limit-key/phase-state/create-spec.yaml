@@ -1,0 +1,116 @@
+schema_version: 1
+feature: public-pane-id-rate-limit-key
+phase: create-spec
+status: completed
+generation: 1
+base_revision: e592732f64b7153a7a8dee1b6c1533d4e98028f7
+last_input_digest: sha256:cb37adcacd7a0415a069a391b005815e30281275183ff86a22b002f8d389df6a
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-05T10:35:06+09:00"
+    questions:
+      - question_id: requirement.fix-approach
+        status: answered
+      - question_id: requirement.sidebar-public-id
+        status: answered
+      - question_id: design.design-step
+        status: answered
+answers:
+  requirement.fix-approach:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T10:35:06+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [namespace_learned_key]
+    freeform: null
+    normalized_answer: >-
+      Namespace the derived key. In the MuxPane branch of
+      agent_notification_rate_limit_key, return format!("muxpub:{}:{}", scope.0, id)
+      instead of the raw daemon string. Learning at ingest is left untouched;
+      no ingest-time PublicPaneId::parse validation is required by this feature.
+    resolution_note: >-
+      gate create-spec.requirement-clarification -> batch-policies.yaml
+      action: codex_consultation (record_as_assumption: true). One Codex turn
+      (run_codex_exec.sh readonly). Codex suggested namespace_learned_key,
+      which maps onto an existing option_id; the orchestrator judged the
+      mapping and adopted it. Rationale carried forward: a "muxpub:<scope>:"
+      prefix is structurally disjoint from both reserved forms "tab:" and
+      "mux:" and from other scopes, so it closes the reported cross-victim
+      collision without changing App::mux_public_pane_id's observable value
+      and without invalidating the five existing fixtures whose
+      public_pane_id values fail PublicPaneId::parse.
+  requirement.sidebar-public-id:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T10:35:06+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [drop_unparseable]
+    freeform: null
+    normalized_answer: >-
+      Moot under the chosen fix approach. This question is conditional on
+      validate_on_ingest, which was not chosen, so App::mux_public_pane_id's
+      behaviour is unchanged by this feature and no malformed-id drop occurs.
+      Recorded answer applies only if ingest validation is added later.
+    resolution_note: >-
+      gate create-spec.requirement-clarification -> codex_consultation.
+      depends_on requirement.fix-approach, which resolved to
+      namespace_learned_key, so the precondition of this question does not
+      hold. Codex suggested drop_unparseable; it maps onto an existing
+      option_id and is recorded for the conditional case only. Non-blocking
+      question; it constrains no requirement in this feature.
+  design.design-step:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T10:35:06+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: >-
+      Accept requirements-analyst's design_step_recommendation (skip) without
+      asking the user. The design step is set to skipped.
+    resolution_note: >-
+      gate create-spec.design-step -> batch-policies.yaml
+      option_id: decide_autonomously.
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: sha256:3a9721a26c55999a4adb340635a7907772ef642e3458a429f2de114bc27d5b60
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:a9e135adbe1b99b0a5b7852ebbb48ac4765af1d3b7a3e6bb7910117f48f1e7d8
+    output_digest: sha256:e3ef0d4d8bd3f0dbef6ad2b8fd1cbd2d6a0f4b8ba7f3f04c6e6d5b2f9c1a7e40
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:cb37adcacd7a0415a069a391b005815e30281275183ff86a22b002f8d389df6a
+    output_digest: null
+artifacts:
+  - path: feature-docs/public-pane-id-rate-limit-key/REQUIREMENTS.md
+    sha256: sha256:06fedc3e892e80fb06f82975fc6e8be718feae1d17de7d23c2962f761beefc0e
+    produced_by: create-spec-run-0003
+  - path: feature-docs/public-pane-id-rate-limit-key/SPEC.md
+    sha256: sha256:88645caa39b4d2c8140441cb9319e56ad32084e415fe14084276957cbfb5e554
+    produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:pending
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+      - src-tauri/web-shared/styles.css
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/web-shared/components/md3-select.css: sha256:b09cdb7c03aecfd24ac44581995a8f75188c4929c744af5e065f5a2a947ae9cd
+      src-tauri/web-shared/settings/markdown-theme-presets.ts: sha256:8344c4f43366d3e78df8c8f170a5fc75e93121d16e64912635c51880ff6a429a
+      src-tauri/web-shared/settings/ui-theme-presets.ts: sha256:5e1afbad9942f28348372986ffcb0a77f7992edb67c5d760637c0019404a3094
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
+    truncated: false
+last_error: null

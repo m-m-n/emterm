@@ -1,0 +1,258 @@
+schema_version: 1
+feature: public-pane-id-rate-limit-key
+created: 2026-09-05
+base_branch: main
+goal: |
+  # daemon 由来の public_pane_id を無検証で通知レート制限キーに使っている
+
+  種別: バグ
+  Notion: https://www.notion.so/3cf3509ec8ee8143bdaff4b6f96a83c7
+
+  ## 現象（必須）
+  mux daemon から届いた `public_pane_id` を、形式検証を通さずそのまま通知のレート制限キーと
+  して使っている。この文字列は SSH 越しのリモートホスト上で動く外部プロセス（信頼境界の
+  向こう側）が完全に制御できる。
+  レート制限キー空間は全タブ・全接続で共有された単一の `String` 空間で、プレーンタブは
+  `"tab:<stable_id>"`、未学習の mux ペインは `"mux:<scope>:<pane_id>"` という予約形を使う。
+  daemon が `public_pane_id` に `"tab:5"` や `"mux:1:7"` を入れて送ると、被害側のタブ／接続と
+  レート制限バケットを共有できてしまう。
+  PR https://github.com/m-m-n/emterm/pull/49 の
+  review round 1 で検出された medium finding（`b0b18cfdd15773d2`、security 観点、confidence 60）。
+
+  ## 再現手順（必須）
+  1. 改変した（あるいは侵害された）mux daemon を用意し、`AgentStatusUpdate` の
+     `public_pane_id` に `"tab:<被害タブの stable_id>"` を入れて送るようにする
+  2. eMterm のタブ 1 でその daemon に attach し、タブ 2 では通常のプレーンタブを使う
+  3. 攻撃側パネルでエージェント通知を連発する
+  4. タブ 2 の Blocked / Done 通知が抑止されることを確認する
+  5. 攻撃側パネルを閉じ、`discard_agent_notification_state("tab:5")` が被害側のレート制限
+     状態を消すことを確認する
+
+  ## 期待する挙動（必須）
+  daemon 由来の `public_pane_id` は、レート制限キーとして使う前に形式検証を通す。あるいは
+  GUI 側の名前空間で包み、他タブ／他接続のキーと構造的に衝突しない形にする。
+
+  ## 完了の定義（必須）
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所（任意）
+  - `src-tauri/src/app/agent_status.rs:108-111` — `agent_notification_rate_limit_key` が
+    `update.public_pane_id` をそのまま返している
+  - `src-tauri/src/app/agent_status.rs:310` — `mux_public_pane_ids.insert`。ここで検証せずに
+    学習している
+  - `src-tauri/src/app/mod.rs:439` — `App::agent_notification_rate_limiter`。全タブ・全接続で
+    共有された単一のキー空間
+  - `crates/mux_ipc/src/protocol.rs` — `PublicPaneId::parse` が既にあるが、この経路では
+    通っていない
+  - `src-tauri/src/app/agent_status.rs:88-95` — 「`"mux:"` 接頭辞により `"tab:"` と衝突しない」
+    と述べる doc コメント。成り立つのは fallback 分岐だけで、学習済み ID 分岐には当てはまらない
+
+  ## 実害・発生条件（任意）
+  発生条件: 改変された、あるいは侵害された mux daemon に attach すること。信頼できる自分の
+  サーバーだけに接続している限りは発生しない。
+  想定される修正方針は 2 つ。
+  - (a) 受信時に検証する: `apply_agent_status_batch` で `mux_public_pane_ids` に入れる前に
+    `mux_ipc::protocol::PublicPaneId::parse` を通し、失敗したら学習せず fallback キーを使う。
+    parse は incarnation が小文字 hex であること・`-` 区切り・数値の pane 番号を要求するので、
+    `"tab:5"` / `"mux:1:7"` のような予約形はそもそも作れなくなる
+  - (b) 学習済み ID も名前空間で隔離する: `agent_notification_rate_limit_key` の MuxPane 分岐で
+    daemon 文字列を生のまま返さず、`format!("muxpub:{}:{}", scope.0, id)` のようにスコープ込みで
+    包む。レート制限キーは内部専用なので互換性の影響なしに適用できる
+parent_branch: em-workflow/public-pane-id-rate-limit-key/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    webviews:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: e592732f64b7153a7a8dee1b6c1533d4e98028f7
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      No user-visible surface changes. The feature alters one internal derived
+      string inside a single existing function plus two doc comments; it touches
+      no UI layout, no design token, no CSS, no egui widget and no WebView. The
+      requirements-analyst recommended skip and the create-spec.design-step gate
+      resolved to decide_autonomously (batch-decision-table), accepting it.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: 1991667c45afcf297422b9004751dddf6e80aacd
+  - id: implement
+    status: completed
+    base_commit: bb89e61871249b067373b6029d6423dab68c7eb1
+    completed_at_commit: ec4cf26d806a231051f2b426a8d2fc0c84a287c5
+  - id: review
+    status: completed
+    completed_at_commit: d0b24427a71441cd2cae8d7735e721054ebdd40d
+  - id: verify
+    status: completed
+    completed_at_commit: 38f7e0a672078b103191f9b023cc8de446762b21
+    result: pass
+    failed_items: []
+    notes: >-
+      Build: main (cargo check) ok, cli (--no-default-features) ok, webviews
+      (bun run typecheck) ok. Tests: cargo test --lib 3261 passed / 0 failed.
+      bun test 328 pass / 2 fail — both failures are the pre-existing
+      plugin/marketplace version regression guard (task0002 AC-9), reproduced
+      identically on the base_branch (main) baseline and touching no file in
+      this feature's change set, so they are not a regression (VERIFICATION.md
+      declares bun test a no-regression check only; no TypeScript is touched).
+      Scenarios: TS-1 agent_notification_rate_limit_key_prefers_public_pane_id_falls_back_to_prefixed_id;
+      TS-2 ..._learned_id_matching_a_tab_key_cannot_reach_that_tab;
+      TS-3 ..._learned_id_matching_an_unlearned_fallback_cannot_reach_that_pane;
+      TS-4 ts5_public_pane_id_map_and_rate_limit_key_are_scoped +
+      ts8_two_connections_sharing_a_wire_pane_id_stay_independent_through_close;
+      TS-5 maybe_notify_agent_transition_ac4_rate_limits_per_pane +
+      discard_agent_notification_state_reopens_the_rate_limit_window;
+      TS-6 pump_all_learns_public_pane_id_from_daemon_agent_status_update;
+      TS-7 review-verified — both doc comments (agent_status.rs
+      agent_notification_rate_limit_key, mod.rs agent_notification_rate_limiter)
+      describe the post-change namespaced behaviour and no longer claim the
+      "mux:" prefix protects the learned-id branch, and the CLI-only check
+      compiles. SUC-1..SUC-8 satisfied. No requirement is `excluded`, so no
+      scenario was skipped. MT-1/MT-2/MT-3 remain optional manual checks.
+  - id: retrospect
+    status: completed
+    completed_at_commit: 4682c12693066088a4434f563b9270884efc7da9
+
+tasks:
+  task0001:
+    title: Namespace the learned public pane id in the notification rate-limit key
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/app/agent_status.rs
+      - src-tauri/src/app/mod.rs
+      - src-tauri/src/app/tab_lifecycle.rs
+      - src-tauri/src/app/tests/agent_status.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4, NFR5]
+    status: merged
+    branch: em-workflow/public-pane-id-rate-limit-key/task0001
+
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, architecture, spec]
+  residual_critical_high: 0
+  needs_rework: false
+  plan:
+    floor: [comprehensive, security, architecture, spec]
+    discretionary: []
+    cross_validation: true
+
+requirements:
+  FR1:
+    title: Namespace the learned public_pane_id in the derived rate-limit key
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3, TS-4]
+  FR2:
+    title: Unlearned-pane fallback key unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1, TS-3]
+  FR3:
+    title: Plain-tab key unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-1]
+  FR4:
+    title: Single derivation point preserved across every call site
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-5]
+  FR5:
+    title: Correct the two stale doc comments
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-7]
+  FR6:
+    title: Ingest-time learning and the public-id query surface stay unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-6]
+  NFR1:
+    title: Compatibility - internal-only key, no wire/persisted/UI exposure
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: []
+  NFR2:
+    title: Performance - O(1) derivation, off the render path
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: []
+  NFR3:
+    title: Behavioural stability outside the key derivation
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-4, TS-6]
+  NFR4:
+    title: Build gating - CLI-only --no-default-features build unaffected
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-7]
+  NFR5:
+    title: Documentation accuracy in the touched region
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS-7]
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

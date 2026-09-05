@@ -81,20 +81,31 @@ pub(super) fn agent_status_pane_tab_title<'a>(
 }
 
 /// Resolve the per-pane notification rate-limit key for `pane` (task0009
-/// Design: "Resolve rate_limit_key"). Mux panes prefer the daemon-learned
-/// `public_pane_id`, looked up by the pane's scoped key — (`ConnectionScope`,
-/// wire `pane_id`) — so two connections' same-numbered panes never share a
-/// learned id (mux-agent-status-pane-key-collision FR3/FR4/D4); plain tabs
-/// use a prefixed stable-id string. When no public id was ever learned, the
-/// fallback embeds BOTH the scope and the wire `pane_id`
-/// (`"mux:<scope>:<pane_id>"`) so two connections' unlearned panes still
-/// derive distinct keys, and the existing `"mux:"` prefix keeps that
-/// fallback from ever colliding with a plain-tab key (`"tab:"`). Shared by
-/// every discard site (`close_tab`, the reaped-tab loop, `pump_all`'s
-/// closed-mux-pane loop) and the transition-drain loop so all four derive
-/// the same key for the same pane. Takes `mux_public_pane_ids` explicitly
-/// (rather than `&App`) so it is testable without constructing a full
-/// `App`.
+/// Design: "Resolve rate_limit_key"; public-pane-id-rate-limit-key
+/// AC-1/AC-2/AC-3/AC-7). Produces exactly one of three mutually disjoint
+/// forms, each starting with its OWN code-owned literal prefix before any
+/// daemon-controlled byte can appear — disjointness comes from the prefix,
+/// never from inspecting the daemon-supplied string:
+///
+/// - Plain tab: `"tab:<stable_id>"`, entirely code-owned.
+/// - Mux pane, no learned id: `"mux:<scope>:<pane_id>"` — embeds BOTH the
+///   scope and the wire `pane_id` so two connections' unlearned panes
+///   still derive distinct keys (mux-agent-status-pane-key-collision
+///   FR3/FR4/D4).
+/// - Mux pane, learned id: `"muxpub:<scope>:<learned>"` — the
+///   daemon-learned `public_pane_id`, looked up by the pane's scoped key
+///   ((`ConnectionScope`, wire `pane_id`)), is embedded verbatim ONLY
+///   after the namespace prefix and the scope. The learned string is
+///   NEVER returned unwrapped: doing so would let a daemon-controlled
+///   string collide with a plain-tab key or with another pane's fallback
+///   key (public-pane-id-rate-limit-key AC-2/AC-3). An empty learned
+///   string still takes this branch — there is no failure path.
+///
+/// Shared by every discard site (`close_tab`, the reaped-tab loop,
+/// `pump_all`'s closed-mux-pane loop) and the transition-drain loop so all
+/// four derive the same key for the same pane. Takes `mux_public_pane_ids`
+/// explicitly (rather than `&App`) so it is testable without constructing
+/// a full `App`.
 pub(super) fn agent_notification_rate_limit_key(
     mux_public_pane_ids: &std::collections::HashMap<
         (crate::agent_status_model::ConnectionScope, u32),
@@ -105,10 +116,10 @@ pub(super) fn agent_notification_rate_limit_key(
     use crate::agent_status_model::PaneKey;
     match pane {
         PaneKey::Tab(id) => format!("tab:{id}"),
-        PaneKey::MuxPane(scope, pane_id) => mux_public_pane_ids
-            .get(&(*scope, *pane_id))
-            .cloned()
-            .unwrap_or_else(|| format!("mux:{}:{pane_id}", scope.0)),
+        PaneKey::MuxPane(scope, pane_id) => match mux_public_pane_ids.get(&(*scope, *pane_id)) {
+            Some(learned) => format!("muxpub:{}:{learned}", scope.0),
+            None => format!("mux:{}:{pane_id}", scope.0),
+        },
     }
 }
 

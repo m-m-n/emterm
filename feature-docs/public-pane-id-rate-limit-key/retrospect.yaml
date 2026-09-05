@@ -1,0 +1,35 @@
+feature: public-pane-id-rate-limit-key
+collected_at: "2026-09-05T14:05:00+09:00"
+session_ids:
+  - 01a06f8f-35d6-74d9-a3ef-f35972c507d7
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    round1 の unresolved 5 件はいずれも medium で、うち 4 件が同じ根に帰着する:
+    レート制限キーの同一性を daemon 由来の可変文字列 (learned public_pane_id) に
+    依存させたまま名前空間だけを足した点。0810c3130449c0dc / 0247047963c1c329 は
+    同一 scope 内での learned 衝突・空文字列潰れ・ID ローテーションによるバケット
+    回避と HashMap 残留を指摘し、どちらも「コード所有の (ConnectionScope, pane_id)
+    でキーする」ことを推奨している。導出元マップが既に (scope, pane_id) キーである
+    以上、learned 文字列は同一性の情報量を足していない — 信頼境界の向こうから来た
+    値を「包む」だけでなく「使わない」選択肢を先に評価する価値がある。
+  - >-
+    5a34a1be0ea64cac / e556ade181d601b8 は doc の契約ドリフト。AC-7 が導出関数と
+    フィールド doc の更新だけを要求していたため、実際にキーを受け取る enforcement
+    境界 (maybe_notify_agent_transition, notifications.rs の
+    AgentNotificationRateLimiter) の doc が旧契約のまま残った。不変条件を新設する
+    タスクの受け入れ条件は「その不変条件を破れる全 API の doc / 型」を列挙させる形
+    にすると取りこぼしにくい。
+  - >-
+    verify で bun test の 2 件失敗を base_branch ベースラインと突き合わせて
+    pre-existing と判定できた。VERIFICATION.md が「bun test は no-regression
+    チェックのみ」と宣言していたことが判断の根拠として効いた。
+  - >-
+    implement は task0001 単独・コンフリクト 0・files 予測ズレ 0 で通った。
+    review も auto-fix 0 loop / residual critical-high 0。
