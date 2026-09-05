@@ -95,9 +95,39 @@ workflow:
     status: completed
     completed_at_commit: 192342feb9d88972c1c202b761e0905957d9e638
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: d6fb0380b266807de177ccb332dc5cbf711e984c
+    result: pass
     failed_items: []
+    notes: |
+      Ran in the integration worktree from a clean `bun install --frozen-lockfile`
+      (dompurify resolved to 3.4.14 from the committed bun.lock).
+      Build (bun run build:viewer && bun run build:settings): pass.
+      Tests (bun test): 345 pass / 0 fail across 18 files — the two marketplace
+      version-guard failures the SPEC excluded as pre-existing (ASM-4) now pass as
+      well, after task0004 re-pinned them.
+      Typecheck (bun run typecheck): pass.
+      Format (bunx biome check .): 1 error in src-tauri/web-shared/settings/types.ts.
+      Pre-existing and out of scope — the identical single error reproduces on `main`
+      (biome 2.5.0 in both trees) and that file is not in this feature's diff.
+      Scenarios: TS-1 pass (fresh worktree install -> 14 pass / 0 fail),
+      TS-2 pass (two independent clean installs both resolve dompurify 3.4.14),
+      TS-3 pass (declaration drift under --frozen-lockfile exits 1 with
+      "lockfile had changes, but lockfile is frozen"),
+      TS-4 pass (entry heading assertions pass in both the integration worktree and a
+      fresh worktree; entry.test.ts is byte-identical to the feature base commit),
+      TS-5 pass (renderer sanitizer-boundary tests 2 pass / 0 fail; renderer.ts
+      unchanged vs the base commit, so no tag/attribute/URI surface was widened),
+      TS-6 pass, TS-7 pass, TS-9 pass (bun.lock tracked, no ignore rule matches;
+      package-lock.json absent from both the index and the working tree),
+      TS-10 pass (bun test exactly as ci.yml's test step invokes it -> 0 failing).
+      TS-8 (observe a real CI run on the integration branch) is a Manual item and was
+      not executable in this unattended run — the branch has no pushed CI run yet.
+      Its mechanical half is covered: ci-workflows.test.ts 13 pass / 0 fail, exactly
+      one workflow runs the suite, and release.yml's two install steps were moved to
+      --frozen-lockfile.
+      Also deferred as manual: re-running by hand the observation procedure in
+      doc/dompurify-h1-sanitization.md.
   - id: retrospect
     status: pending
 
