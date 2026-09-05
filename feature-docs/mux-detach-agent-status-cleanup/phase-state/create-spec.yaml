@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-detach-agent-status-cleanup
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
-base_revision: 7dd8b6c2d67390b6489394fe1302d74c7e17c02e
-last_input_digest: sha256:0006ff3583d6192b5c7c45a6f660cc9c5c568dcf2211ed97b85b1599dc278cff
-active_request_id: create-spec-run-0001
+base_revision: bed4fb063ba3e5f19241be44ec165749c2fcf91b
+last_input_digest: sha256:a0fb518530f2b18d6c2af1fb98473544504f5ea973c1e9c6be1f7ff1fed58eef
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: answered
@@ -83,6 +83,10 @@ worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
     input_digest: sha256:0006ff3583d6192b5c7c45a6f660cc9c5c568dcf2211ed97b85b1599dc278cff
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: dispatched
+    input_digest: sha256:a0fb518530f2b18d6c2af1fb98473544504f5ea973c1e9c6be1f7ff1fed58eef
     output_digest: null
 artifacts: []
 patches: []
