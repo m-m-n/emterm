@@ -1,11 +1,11 @@
 schema_version: 1
 feature: public-pane-id-rate-limit-key
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: 560fdf59674e96f13069c4c1c41b1ead2f5fb3ca
+base_revision: e592732f64b7153a7a8dee1b6c1533d4e98028f7
 last_input_digest: sha256:cb37adcacd7a0415a069a391b005815e30281275183ff86a22b002f8d389df6a
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -83,10 +83,16 @@ worker_runs:
     input_digest: sha256:a9e135adbe1b99b0a5b7852ebbb48ac4765af1d3b7a3e6bb7910117f48f1e7d8
     output_digest: sha256:e3ef0d4d8bd3f0dbef6ad2b8fd1cbd2d6a0f4b8ba7f3f04c6e6d5b2f9c1a7e40
   - request_id: create-spec-run-0003
-    status: dispatched
+    status: completed
     input_digest: sha256:cb37adcacd7a0415a069a391b005815e30281275183ff86a22b002f8d389df6a
     output_digest: null
-artifacts: []
+artifacts:
+  - path: feature-docs/public-pane-id-rate-limit-key/REQUIREMENTS.md
+    sha256: sha256:06fedc3e892e80fb06f82975fc6e8be718feae1d17de7d23c2962f761beefc0e
+    produced_by: create-spec-run-0003
+  - path: feature-docs/public-pane-id-rate-limit-key/SPEC.md
+    sha256: sha256:88645caa39b4d2c8140441cb9319e56ad32084e415fe14084276957cbfb5e554
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
