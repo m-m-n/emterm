@@ -1,14 +1,18 @@
 schema_version: 1
 feature: mux-detach-agent-status-cleanup
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: 0f03fcc7ed24d4d51656d02bc93c0b15da4042b2
-last_input_digest: null
-active_request_id: null
+base_revision: 3be09a815d7843792b791564db26b7f862b9d636
+last_input_digest: sha256:0006ff3583d6192b5c7c45a6f660cc9c5c568dcf2211ed97b85b1599dc278cff
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:0006ff3583d6192b5c7c45a6f660cc9c5c568dcf2211ed97b85b1599dc278cff
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
