@@ -129,7 +129,8 @@ workflow:
       Also deferred as manual: re-running by hand the observation procedure in
       doc/dompurify-h1-sanitization.md.
   - id: retrospect
-    status: in_progress
+    status: completed
+    completed_at_commit: cd1dfecfdb15796fb772fa71c7d3f1db223744cb
 
 tasks:
   task0001:
