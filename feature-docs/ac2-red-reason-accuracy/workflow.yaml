@@ -1,0 +1,139 @@
+schema_version: 1
+feature: ac2-red-reason-accuracy
+created: 2026-09-05
+base_branch: main
+goal: |-
+  AC-2 の red 証跡が観測事実と食い違う（AC-2 count linkage は編集前から存在）
+
+  ## 現象（必須）
+  `test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml:17-18` の AC-2 エントリで、`red_confirmed: true` の根拠として「編集前の AC-7 red_reason は四つの必須要素のいずれも持たず、AC-2 カウント説明への直接的な結び付きも無かった」と記されている。
+  しかし base revision (9eee6161) の AC-7 `red_reason` は `which is what keeps the AC-2 repository-wide count at 6 instead of climbing to 7` を含んでおり、四番目の要素（AC-2 カウント linkage）は編集前から存在した。SPEC の EC-5 も編集前に linkage があったことを前提にしている。
+  実際に欠けていたのは 4 要素中 3 つで red 判定自体は妥当だが、根拠テキストが観測していない状態を観測したと述べている。
+  ## 再現手順（必須）
+  1. ブランチ `em-workflow/ac7-red-confirmed-unobserved/integration`（PR https://github.com/m-m-n/emterm/pull/50 ）を checkout する
+  2. `test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml` の AC-2 エントリ（17-18 行付近）の `red_reason` を読む
+  3. `git show 9eee6161:test-docs/stale-test-name-refs/task0001.tests.yaml` で base revision の AC-7 `red_reason` を読む
+  4. base 側に AC-2 カウント linkage の記述が既に存在することを確認し、AC-2 の `red_reason` の「four required elements のいずれも存在しなかった」という主張と食い違うことを確認する
+  ## 期待する挙動（必須）
+  AC-2 の `red_reason` が観測事実と一致している。すなわち「三要素が欠落していたため criterion は red、四番目（AC-2 カウント linkage）は編集前から存在し保持した」という趣旨に書き換わっている。`red_confirmed: true` 自体は妥当なので変更しない。
+  ## 完了の定義（必須）
+  - [ ] AC-2 の `red_reason` が「4 要素中 3 要素が欠落」「4 番目の AC-2 カウント linkage は base に既存」と正しく記述されている
+  - [ ] `red_confirmed: true` は維持されている
+  - [ ] ファイルが YAML として parse できる
+  - [ ] 他の acceptance エントリを変更していない
+  ## 該当箇所（任意）
+  `test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml:17`（AC-2 エントリ、`red_reason`）
+  比較対象: `git show 9eee6161:test-docs/stale-test-name-refs/task0001.tests.yaml` の AC-7 `red_reason`
+  ## 実害・発生条件（任意）
+  `taskNNNN.tests.yaml` は「後続タスクが失敗の帰属先を判断するための証拠」として読まれる機械可読レコード。根拠テキストが実態と乖離していると、後からこのレコードを読むタスクに誤った前提を渡す。
+  由来: PR #50 の feature `ac7-red-confirmed-unobserved` review round 1。stable_id `938fa120388aa825`（spec 観点、confidence 85）および `fcf597daae469dce`（comprehensive 観点、confidence 80）。severity medium のため auto-fix ゲート（critical/high のみ）の対象外で `unresolved` のまま残した。
+parent_branch: em-workflow/ac2-red-reason-accuracy/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    rust:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --check"
+      e2e_test_command: ""
+    typescript:
+      language: TypeScript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: "bunx biome format ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: fff8c22182413c1d22da13bfcc97002fe1b8dd41
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Single-file YAML documentation-text correction with no UI, no visual surface, no new module boundary and no API change; the detected design-system files are untouched by it."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  rounds: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
+
+requirements:
+  FR1:
+    title: "State the correct count of missing elements"
+    status: resolved
+    tasks: []
+    tests: []
+  FR2:
+    title: "Record the fourth element as pre-existing and preserved"
+    status: resolved
+    tasks: []
+    tests: []
+  FR3:
+    title: "Enumerate the three genuinely absent elements"
+    status: resolved
+    tasks: []
+    tests: []
+  FR4:
+    title: "Preserve the accurate post-edit half"
+    status: resolved
+    tasks: []
+    tests: []
+  FR5:
+    title: "Keep the red verdict"
+    status: resolved
+    tasks: []
+    tests: []
+  FR6:
+    title: "Confine the change to the AC-2 entry"
+    status: resolved
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Parseability"
+    status: resolved
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Formatting fidelity"
+    status: resolved
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Language"
+    status: resolved
+    tasks: []
+    tests: []
+  NFR4:
+    title: "No unobserved assertion"
+    status: resolved
+    tasks: []
+    tests: []
+  NFR5:
+    title: "No build impact"
+    status: resolved
+    tasks: []
+    tests: []

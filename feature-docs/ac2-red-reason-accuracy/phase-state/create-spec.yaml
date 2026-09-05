@@ -1,11 +1,11 @@
 schema_version: 1
 feature: ac2-red-reason-accuracy
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: cee570095053e5d79c500c84ecc93011ac62239a
-last_input_digest: sha256:8760e100f246a5790d684ac09b9ed42b9be6c498dda065f574fd501211b7d073
-active_request_id: create-spec-run-0002
+last_input_digest: sha256:aff6662c5975dc6b117d7247ebc55e87a5784f444790f79ac544a456975e713f
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -14,7 +14,18 @@ worker_runs:
   input_digest: sha256:8760e100f246a5790d684ac09b9ed42b9be6c498dda065f574fd501211b7d073
   output_digest: null
   worker: requirements-analyst
-artifacts: []
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:aff6662c5975dc6b117d7247ebc55e87a5784f444790f79ac544a456975e713f
+  output_digest: null
+  worker: spec-writer
+artifacts:
+- path: feature-docs/ac2-red-reason-accuracy/REQUIREMENTS.md
+  sha256: sha256:ea7a4007d06d41e57e6dae0aeaebfb6352cbcae2de7eb13fd500d6a7a37d3161
+  produced_by: create-spec-run-0002
+- path: feature-docs/ac2-red-reason-accuracy/SPEC.md
+  sha256: sha256:1e7f0811073adbecd798f98629770eaea37b1f7ba40855da317ce32fd64f3e37
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
