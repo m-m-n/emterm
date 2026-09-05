@@ -3,9 +3,9 @@ feature: bun-install-reproducibility
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: 57d42e00aaddf7b49b01cf4494147baaaeb3f0e6
-last_input_digest: sha256:2483ad1f2e335f7051f5b52a331ff4d925562ef91e502dd0d5eae758a2b79483
-active_request_id: create-spec-run-0001
+base_revision: cc8c08b6dc3c1809d8e1778074250deed6b066fb
+last_input_digest: sha256:4d19548ca7f87d128559c7e109197017efad83895fa48069c4d63c7589f52ddb
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
     status: answered
@@ -51,6 +51,10 @@ worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
     input_digest: sha256:2483ad1f2e335f7051f5b52a331ff4d925562ef91e502dd0d5eae758a2b79483
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: dispatched
+    input_digest: sha256:4d19548ca7f87d128559c7e109197017efad83895fa48069c4d63c7589f52ddb
     output_digest: null
 artifacts: []
 patches: []
