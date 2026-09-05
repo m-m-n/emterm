@@ -88,7 +88,7 @@ workflow:
     status: completed
     completed_at_commit: cbbf5acc9a420889866021597204443c2e9a1b9a
   - id: implement
-    status: completed
+    status: pending
     base_commit: 7187701ae56f0735d3d31fd415c641ac328ba549
     completed_at_commit: 68f375005663507ee8a5f54eff891ab3b01481dd
   - id: review
@@ -146,6 +146,22 @@ tasks:
     status: merged
     branch: em-workflow/bun-install-reproducibility/task0003
     notes: null
+  task0004:
+    title: "CI ゲートを着地時点で緑にする（陳腐化した version guard の再ピン）"
+    plan: tasks/task0004.md
+    files:
+      - plugins/emterm/skills/skills.test.ts
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR7, FR8]
+    status: pending
+    branch: null
+    notes: null
+    provenance:
+      source: review
+      source_ids: [6e13980c23d35e55]
+      review_round: 1
 
 review:
   status: pending
@@ -213,15 +229,15 @@ requirements:
     status: assumed
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0003]
-    tests: [TS-8]
+    tasks: [task0003, task0004]
+    tests: [TS-8, TS-10]
   FR8:
     title: "Lockfile drift fails loudly in CI"
     status: assumed
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0002, task0003]
-    tests: [TS-3]
+    tasks: [task0002, task0003, task0004]
+    tests: [TS-3, TS-10]
   NFR1:
     title: "Sanitization strictness is not relaxed"
     status: ok
@@ -252,5 +268,5 @@ requirements:
     tests: [TS-2]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework_count: 0
