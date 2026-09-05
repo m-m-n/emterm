@@ -1,0 +1,189 @@
+round: 2
+executed_at: "2026-09-05T17:05:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 7187701ae56f0735d3d31fd415c641ac328ba549
+  head_commit: f962015730b65a3116e60ba6640083a369836e76
+  changed_files:
+    - .github/workflows/ci.yml
+    - .github/workflows/release.yml
+    - .gitignore
+    - bun.lock
+    - ci-workflows.test.ts
+    - doc/dompurify-h1-sanitization.md
+    - package.json
+    - plugins/emterm/skills/skills.test.ts
+    - src-tauri/web-shared/markdown/renderer.test.ts
+    - test-docs/bun-install-reproducibility/task0001.tests.yaml
+    - test-docs/bun-install-reproducibility/task0002.tests.yaml
+    - test-docs/bun-install-reproducibility/task0003.tests.yaml
+    - test-docs/bun-install-reproducibility/task0004.tests.yaml
+    - test-setup.ts
+  scope_notes: >-
+    package-lock.json is deleted by this diff (6049 lines removed, deletion
+    only). It is absent from changed_files because it no longer exists on
+    disk; every reviewer and the evaluator were told about the deletion
+    explicitly and treated it as part of the reviewed change.
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+    - perspective: license
+      reason: "diff が package.json / bun.lock / package-lock.json という依存マニフェストとロックファイルに触れているため（R1 Layer 2 の必須チェック）"
+  cross_validation: true
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "license#0", perspective: license, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: vertex-glm-5.2, status: completed, skip_reason: null}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed, skip_reason: null}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: cc9fd2586bd2b1e0
+    severity: medium
+    category: comprehensive
+    file: .github/workflows/ci.yml
+    line: 21
+    title: "The reproducibility gate itself runs on an unpinned Bun toolchain"
+    description: >-
+      Independently verified at .github/workflows/ci.yml:21 (`bun-version: latest`)
+      and .github/workflows/ci.yml:13 (`runs-on: ubuntu-latest`). The feature's
+      stated objective is that `bun install` resolve an identical dependency graph
+      in every environment (SPEC Objectives, NFR4), and `--frozen-lockfile`
+      delivers that for package versions — but the resolver, runtime and test
+      runner executing that lockfile are re-selected on every run. A Bun release
+      landing between a green CI run and a release build means the same commit was
+      tested and packaged by different toolchains with no reviewed repository
+      change; release.yml's two build jobs select their Bun independently of
+      ci.yml, so they can also disagree with each other. ci-workflows.test.ts
+      asserts only the presence and ordering of the frozen-lockfile install steps
+      and never asserts `bun-version: latest`, so pinning breaks no test.
+    suggestion: >-
+      Set one exact Bun version (e.g. `bun-version: 1.3.5`, matching the
+      `bun-types` entry already locked at bun.lock:147) in ci.yml and in both
+      release.yml build jobs, and bump it deliberately in the same commit that
+      regenerates bun.lock.
+    sources: [codex:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: >-
+      Below the Phase R4 candidate gate (severity medium). Same site as round-1
+      finding 14fd0bd36f883ab0, re-reported with a rewritten title so the
+      recomputed stable_id differs.
+  - stable_id: e7bbf92f7fdf623c
+    severity: medium
+    category: comprehensive
+    file: .github/workflows/ci.yml
+    line: 16
+    title: "New workflow runs movable action tags with inherited token scope and persisted credentials"
+    description: >-
+      Independently verified: the new workflow uses `actions/checkout@v4` (line 16)
+      and `oven-sh/setup-bun@v2` (line 19), declares no `permissions:` block, and
+      does not disable checkout's credential persistence. Both tags are mutable, so
+      a retagged upstream release executes on the next push to main without any
+      repository change; the frozen lockfile constrains npm packages only and gives
+      no coverage over the actions themselves. With no `permissions:` block the job
+      token inherits the repository default, and the persisted `.git` credential
+      remains available to every subsequent step — including `bun install`'s
+      postinstall scripts. The security perspective returned empty this round,
+      framing its scope as regressions rather than newly introduced surface; this
+      is a new workflow file, so the surface is new even though the pattern matches
+      the existing release.yml.
+    suggestion: >-
+      Add `permissions: { contents: read }` at the job or workflow level, set
+      `with: { persist-credentials: false }` on the checkout step, and pin both
+      actions to reviewed commit SHAs (keeping the version as a trailing comment).
+      Applying the same treatment to release.yml keeps the two workflows
+      consistent rather than leaving ci.yml as the sole hardened file.
+    sources: [codex:comprehensive]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >-
+      Below the Phase R4 candidate gate (severity medium). Same site as round-1
+      finding 743171602af23c63.
+  - stable_id: 9c13251e970fe4c0
+    severity: medium
+    category: comprehensive
+    file: bun.lock
+    line: 59
+    title: "The now-sole lockfile carries an empty integrity digest for a runtime dependency"
+    description: >-
+      Independently verified by scanning bun.lock: exactly 9 entries have an empty
+      trailing integrity field. Eight are dev-only (@types/node:135,
+      @types/whatwg-mimetype:139, bun-types:147, typescript:287, undici-types:289,
+      whatwg-mimetype:293, @types/ws/@types/node:305, and its undici-types:317),
+      but line 59 — `"@tauri-apps/api": ["@tauri-apps/api@2.9.1", "", {}, ""]` — is
+      a declared runtime dependency of package.json. Every other resolved entry
+      does carry a sha512, so the gap is entry-specific rather than a format-wide
+      property. SPEC Security Considerations justifies FR1/FR2 on the grounds that
+      committing bun.lock makes the resolved graph a single reviewable source of
+      truth, and package-lock.json — the previous second opinion on package bytes —
+      is deleted by this same diff. For these 9 entries the committed lockfile pins
+      the version string but not the content.
+    suggestion: >-
+      Regenerate the lockfile against a cold Bun cache (`bun pm cache rm` then a
+      fresh install), confirm the 9 entries gain sha512 digests and that no version
+      string moves, and commit the regenerated file. If an entry legitimately
+      cannot carry a digest, record why alongside the FR4 finding in
+      doc/dompurify-h1-sanitization.md. Not a safe mechanical auto-fix — it needs a
+      human-reviewed lockfile diff.
+    sources: [codex:comprehensive]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: >-
+      Below the Phase R4 candidate gate (severity medium). Same site as round-1
+      finding 3abf55bdac5196d3. The evaluator explicitly excluded it from bounded
+      auto-fix as requiring a human-reviewed lockfile diff.
+evaluation:
+  round_summary: >-
+    Round 2, cross_validation on, review_mode diff. Five perspectives dispatched,
+    all completed, unreviewed_perspectives empty. Reviewer output totalled three
+    medium findings (all from comprehensive#0) and four empty results; no critical
+    or high finding was reported by any run this round, so dismissed_sites is
+    empty. No injection attempt, role override, or embedded instruction was
+    present in any reviewer output. Independent inspection: comprehensive#0
+    corroborated (all three sites confirmed first-hand); security#0 recorded as
+    `findings` — the evaluator's own inspection surfaced the workflow token-scope
+    and runtime-dependency integrity exposure that the empty security result did
+    not report, both already carried under comprehensive#0; license#0
+    corroborated (package.json's only dependency change is the dompurify range
+    ^3.3.1 -> ^3.4.14, resolved to 3.4.14, Apache-2.0/MPL-2.0 dual, compatible;
+    @upsetjs/venn.js is transitive via mermaid 11.17.2 and MIT); architecture#0
+    corroborated (no runtime module boundary, feature gate, or src-tauri/src layer
+    is touched; the test-setup.ts nodeName patch is confined to the happy-dom test
+    environment); spec#0 corroborated (AC-2, AC-3, AC-7, AC-8, FR8 and FR5 all
+    verified against the diff). Round-1 carried item 6e13980c23d35e55 ("the newly
+    added CI gate is red from the moment it lands") is resolved in substance and
+    verified directly: task0004 re-pinned the two version-regression-guard
+    assertions from 0.1.0 to 0.1.1, and plugin.json:3 / marketplace.json:10 both
+    report 0.1.1, so the guard was stale rather than the versions wrong. The suite
+    could not be executed end-to-end from the integration worktree (no
+    node_modules; installing would be a write). Not inspected within budget:
+    doc/dompurify-h1-sanitization.md, src-tauri/web-shared/markdown/renderer.test.ts,
+    and the four test-docs/*.tests.yaml records. Two sub-threshold notes: task0004
+    repaired two marketplace-guard failures that SPEC AC-10/ASM-4 declared out of
+    scope (a benign expansion that was the prerequisite for the round-1 red-gate
+    item), and ci.yml runs `bun test` but not `bun run typecheck`, which no FR or
+    AC requires.
+  recommended_action: auto_fix
+  action_rationale: >-
+    No critical or high finding survives this round, and the round-1 blocker (CI
+    red on landing) is verifiably addressed, so another full review round would
+    re-litigate the same three mediums a third time without new information. Two
+    of the three are mechanical, single-file, test-safe edits to ci.yml; the third
+    (bun.lock integrity digests) requires a cold-cache lockfile regeneration and a
+    human-reviewed diff and should be tracked as a follow-up rather than
+    machine-applied.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  notes: >-
+    No Phase R4 candidate existed: the candidate gate requires severity in
+    {critical, high} and all three surviving findings are medium. The evaluator's
+    `recommended_action: auto_fix` is advice only and never overrides the
+    candidate gate (Phase R3b, "recommended_action is advice, never a decision").
+residual_critical_high: 0
+rework_required: false
