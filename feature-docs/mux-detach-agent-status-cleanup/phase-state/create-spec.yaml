@@ -1,16 +1,87 @@
 schema_version: 1
 feature: mux-detach-agent-status-cleanup
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
-base_revision: 3be09a815d7843792b791564db26b7f862b9d636
+base_revision: 7dd8b6c2d67390b6489394fe1302d74c7e17c02e
 last_input_digest: sha256:0006ff3583d6192b5c7c45a6f660cc9c5c568dcf2211ed97b85b1599dc278cff
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-05T09:19:22+09:00"
+    questions:
+      - question_id: fr.detach-paths
+        status: answered
+      - question_id: fr.scope-generation
+        status: answered
+      - question_id: ec.plain-tab-entry
+        status: answered
+      - question_id: design.step
+        status: answered
+answers:
+  fr.detach-paths:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T09:19:22+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [all_mux_exit_paths]
+    freeform: null
+    normalized_answer: >-
+      The requirement covers every transition out of mux mode that clears
+      mux_group -- confirmed detach, bridge death, connection loss, PTY close --
+      not only the daemon-confirmed Detached frame.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action
+      codex_consultation; codex_consulted: true; Codex suggested
+      all_mux_exit_paths and it mapped onto an existing option_id; recorded as an
+      assumption per record_as_assumption: true.
+  fr.scope-generation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T09:19:22+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [discard_only]
+    freeform: null
+    normalized_answer: >-
+      Option (a) only: queue the group's pane ids at detach and reuse the existing
+      closed_panes teardown. ConnectionScope stays ConnectionScope(tab.stable_id);
+      its doc comment is corrected to match the implemented behaviour.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action
+      codex_consultation; codex_consulted: true; Codex suggested discard_only and
+      it mapped onto an existing option_id; recorded as an assumption per
+      record_as_assumption: true.
+  ec.plain-tab-entry:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T09:19:22+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [mux_panes_only]
+    freeform: null
+    normalized_answer: >-
+      Detach discards PaneKey::MuxPane entries only; the tab's own
+      PaneKey::Tab(stable_id) entry and inferred-clear latch survive.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action
+      codex_consultation; codex_consulted: true; Codex suggested mux_panes_only
+      and it mapped onto an existing option_id; recorded as an assumption per
+      record_as_assumption: true.
+  design.step:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-05T09:19:22+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: >-
+      Accept requirements-analyst's design_step_recommendation (skip).
+    resolution_note: >-
+      gate: create-spec.design-step; references/batch-policies.yaml
+      option_id: decide_autonomously.
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:0006ff3583d6192b5c7c45a6f660cc9c5c568dcf2211ed97b85b1599dc278cff
     output_digest: null
 artifacts: []
