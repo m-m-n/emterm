@@ -1,0 +1,22 @@
+schema_version: 1
+feature: ac2-red-reason-accuracy
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 87adf9a7eb81fdcb6905f9237d9dc6c557c09a5d
+last_input_digest: sha256:f315897c4b707a6ec0cdcd58c649c2285e3d6764398254408b2c777ce0a15fcc
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:f315897c4b707a6ec0cdcd58c649c2285e3d6764398254408b2c777ce0a15fcc
+  output_digest: null
+  worker: implementation-planner
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
