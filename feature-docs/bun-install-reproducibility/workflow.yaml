@@ -88,8 +88,9 @@ workflow:
     status: completed
     completed_at_commit: cbbf5acc9a420889866021597204443c2e9a1b9a
   - id: implement
-    status: in_progress
+    status: completed
     base_commit: 7187701ae56f0735d3d31fd415c641ac328ba549
+    completed_at_commit: 68f375005663507ee8a5f54eff891ab3b01481dd
   - id: review
     status: pending
   - id: verify
@@ -114,7 +115,7 @@ tasks:
     domains: [input-handling, ui, config-infra]
     complexity: high
     requirements: [FR3, FR4, FR5, FR6, NFR1, NFR2]
-    status: in_progress
+    status: merged
     branch: em-workflow/bun-install-reproducibility/task0001
     notes: null
   task0002:
