@@ -44,6 +44,7 @@ graph rather than whatever the local dependency directory happens to hold.
 | TS-7 | Bundle build: build the viewer and settings bundles from the clean, locked install | Both succeed and produce the embedded assets | Integration |
 | TS-8 | CI end-to-end: the CI run itself shows the clean install and test steps executing, with the viewer entry tests in the output | The run shows both steps and the entry test output | Manual |
 | TS-9 | Lockfile is not ignored: check the ignore rules for the lockfile and its tracking state | No matching ignore rule; the lockfile is tracked, not untracked | Integration |
+| TS-10 | CI gate signal integrity: from a clean, frozen install on the integration branch, run the whole test suite exactly as the CI workflow's test step invokes it | Zero failing tests, so a failure of that step attributes to lockfile drift or a regression rather than to a permanently red assertion | Integration |
 
 ## Code Quality Verification
 
@@ -78,8 +79,8 @@ graph rather than whatever the local dependency directory happens to hold.
 | FR4 | task0001 | TS-4 |
 | FR5 | task0001, task0002 | TS-4, TS-5 |
 | FR6 | task0001 | TS-4 |
-| FR7 | task0003 | TS-8 |
-| FR8 | task0002, task0003 | TS-3 |
+| FR7 | task0003, task0004 | TS-8, TS-10 |
+| FR8 | task0002, task0003, task0004 | TS-3, TS-10 |
 | NFR1 | task0001 | TS-5 |
 | NFR2 | task0001 | TS-6 |
 | NFR3 | task0003 | TS-7 |
@@ -125,7 +126,7 @@ CI-level end-to-end observation is handled as a manual item below.
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build | 2 | 2 | 0 | 0 |
-| Test scenarios | 9 | 8 | 0 | 1 |
+| Test scenarios | 10 | 9 | 0 | 1 |
 | Code quality | 1 | 1 | 0 | 0 |
 | Success criteria | 10 | 8 | 0 | 2 |
 | Security / supply chain / license | 3 | 1 | 0 | 2 |
