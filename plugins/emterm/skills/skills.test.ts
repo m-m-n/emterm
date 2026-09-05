@@ -275,12 +275,13 @@ describe("plugins/emterm/skills/display-image/SKILL.md protocol example (task000
 });
 
 describe("plugins/emterm/skills/mux-send/SKILL.md rework (task0007, findings sc-heredoc-delimiter-collision + cm-heredoc-trailing-newline-executes)", () => {
-  const content = readFileSync(join(SKILLS_DIR, "mux-send", "SKILL.md"), "utf-8");
+  const content = readFileSync(
+    join(SKILLS_DIR, "mux-send", "SKILL.md"),
+    "utf-8",
+  );
 
   test("AC-1: the primary --stdin form for untrusted text is file redirection, and no heredoc form is present", () => {
-    expect(content).toContain(
-      "emterm mux send --pane <id> --stdin < '<file>'",
-    );
+    expect(content).toContain("emterm mux send --pane <id> --stdin < '<file>'");
     // The regression guard that matters most (task0007.md 'Test Notes'),
     // widened in task0010 (finding cm-heredoc-guard-too-narrow): the
     // original guard rejected only the two characters that open a QUOTED
@@ -326,7 +327,10 @@ describe("plugins/emterm/skills/mux-send/SKILL.md rework (task0007, findings sc-
 });
 
 describe("plugins/emterm/skills/mux-send/SKILL.md staging-file + redirect-path hardening (task0010, findings sc-stagefile-unspecified, sc-redirect-path-unruled, sc-consent-vs-invoke-as-is, sp-text-example-unbalanced)", () => {
-  const content = readFileSync(join(SKILLS_DIR, "mux-send", "SKILL.md"), "utf-8");
+  const content = readFileSync(
+    join(SKILLS_DIR, "mux-send", "SKILL.md"),
+    "utf-8",
+  );
 
   test("AC-1: the staging file MUST be created with the Write tool, and Bash-based creation (heredoc, printf, echo, interpolated-variable redirect) is forbidden for untrusted text", () => {
     expect(content).toMatch(/MUST be created with the Write tool/);
@@ -377,9 +381,7 @@ describe("plugins/emterm/skills/mux-send/SKILL.md staging-file + redirect-path h
 
   test("AC-9: the --text embedded-quote example shows the complete quoted value, including the outer quotes, not the splice substring alone", () => {
     expect(content).toContain("'it'\\''s'");
-    expect(content).toContain(
-      "emterm mux send --pane <id> --text 'it'\\''s'",
-    );
+    expect(content).toContain("emterm mux send --pane <id> --text 'it'\\''s'");
   });
 });
 
@@ -423,7 +425,9 @@ describe("plugins/emterm/README.md (task0002)", () => {
   });
 
   test("AC-4: no longer contains the up-to-3-seconds-per-prompt limitation", () => {
-    expect(content).not.toMatch(/3\s*s(econds)?\s*per\s*(Claude Code\s*)?prompt/i);
+    expect(content).not.toMatch(
+      /3\s*s(econds)?\s*per\s*(Claude Code\s*)?prompt/i,
+    );
   });
 
   test("AC-5: still contains the mux-agent-status-api drain-wiring limitation", () => {
@@ -492,14 +496,14 @@ describe("feature-docs/emterm-plugin-runtime-fixes/{SPEC,VERIFICATION}.md byte h
 });
 
 describe("plugin/marketplace version regression guard (task0002 AC-9)", () => {
-  test("plugin.json still reports version 0.1.0", () => {
+  test("plugin.json still reports version 0.1.1", () => {
     const pluginJson = JSON.parse(
       readFileSync(join(PLUGIN_DIR, ".claude-plugin", "plugin.json"), "utf-8"),
     ) as { version: string };
-    expect(pluginJson.version).toBe("0.1.0");
+    expect(pluginJson.version).toBe("0.1.1");
   });
 
-  test("marketplace.json still reports the emterm plugin entry as version 0.1.0", () => {
+  test("marketplace.json still reports the emterm plugin entry as version 0.1.1", () => {
     const marketplaceJson = JSON.parse(
       readFileSync(
         join(MARKETPLACE_ROOT, ".claude-plugin", "marketplace.json"),
@@ -507,6 +511,6 @@ describe("plugin/marketplace version regression guard (task0002 AC-9)", () => {
       ),
     ) as { plugins: Array<{ name: string; version: string }> };
     const entry = marketplaceJson.plugins.find((p) => p.name === "emterm");
-    expect(entry?.version).toBe("0.1.0");
+    expect(entry?.version).toBe("0.1.1");
   });
 });
