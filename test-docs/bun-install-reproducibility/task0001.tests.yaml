@@ -1,0 +1,92 @@
+task_id: task0001
+baseline_failures:
+  - "plugin/marketplace version regression guard (task0002 AC-9) > plugin.json still reports version 0.1.0"
+  - "plugin/marketplace version regression guard (task0002 AC-9) > marketplace.json still reports the emterm plugin entry as version 0.1.0"
+  - "viewer entry > renders an injected sample into the fullscreen content structure"
+  - "viewer entry > parses the shared Rust/TS payload fixture with all fields"
+final_failures:
+  - "plugin/marketplace version regression guard (task0002 AC-9) > plugin.json still reports version 0.1.0"
+  - "plugin/marketplace version regression guard (task0002 AC-9) > marketplace.json still reports the emterm plugin entry as version 0.1.0"
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Document criterion. Verified by re-running doc/dompurify-h1-sanitization.md's
+      Step 1 procedure verbatim (script + PURIFY_CONFIG copied from
+      renderer.ts, dompurify 3.4.14, happy-dom 20.14.0): observed output was
+      "Title\n<p>Hello <strong>world</strong>.</p>" (the <h1> tag lost) before
+      any implementation existed, matching the document's stated observation
+      exactly. The document names layer 3 (the dompurify/happy-dom
+      interaction) and records the adopted version's license line
+      "(MPL-2.0 OR Apache-2.0)" read from node_modules/dompurify/package.json.
+  AC-2:
+    tests:
+      - "viewer entry > renders an injected sample into the fullscreen content structure"
+      - "viewer entry > parses the shared Rust/TS payload fixture with all fields"
+    red_confirmed: true
+    red_reason: >-
+      Both tests were part of the 4a baseline failure set, captured by
+      running `bun test` before any implementation file was touched:
+      "error: Received value must be an array type, or both received and
+      expected values must be strings" at
+      content.querySelector("h1")?.textContent — h1 was absent from the
+      sanitized output. `bun test src-tauri/viewer/web/entry.test.ts` now
+      reports 14 pass / 0 fail.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Diff-shaped criterion, not a test. `git diff --stat
+      src-tauri/viewer/web/entry.test.ts` against this task's base commit
+      shows zero output (byte-identical) after the implementation commit —
+      the file was never opened for editing during this task.
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Diff-shaped criterion. `git diff --stat
+      src-tauri/web-shared/markdown/renderer.ts` against this task's base
+      commit shows zero output — the sanitize call and PURIFY_CONFIG were
+      never touched, so no allowed tag/attribute was added, no forbid entry
+      removed, and no URI pattern widened.
+  AC-5:
+    tests:
+      - "MarkdownRenderer sanitizer boundary — heading survival > AC-5a: a document whose first block is a level-1 heading keeps that heading and its text"
+      - "MarkdownRenderer sanitizer boundary — heading survival > AC-5b: a document whose heading was preceded by front matter keeps that heading and its text, after the body is extracted"
+    red_confirmed: true
+    red_reason: >-
+      Watched both fail with test-setup.ts's Node.prototype.nodeName patch
+      temporarily reverted (git stash) while the rest of the implementation
+      stayed in place: "error: expect(received).not.toBeNull() / Received:
+      null" at container.querySelector("h1") for both AC-5a and AC-5b.
+      Restoring the patch turned both green (2 pass / 0 fail) with no other
+      change.
+  AC-6:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      4a baseline: `bun test` reported 326 pass / 4 fail. After the
+      implementation and the parent merge: `bun test` reports 343 pass / 2
+      fail, with the 2 remaining failures both under "plugin/marketplace
+      version regression guard (task0002 AC-9)" — the ASM-4 exclusion — and
+      no other failure. `bun run typecheck` exits 0 (no stdout beyond the
+      `$ tsc --noEmit` command echo).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not independently red/green-able as a failing-then-passing check: the
+      integration branch's already-committed bun.lock (from task0002, merged
+      into this branch) had already resolved dompurify to 3.4.14 under its
+      old "^3.3.1" declared range (caret already permitted the 3.4.x line),
+      so `bun install --frozen-lockfile` exits 0 both before and after this
+      task regenerates bun.lock from the merged declaration — verified by
+      swapping bun.lock's content between the pre-regeneration (merge
+      commit 578bd9dd) and post-regeneration (this task's HEAD) states in
+      the working tree and running `bun install --frozen-lockfile` against
+      each: both exit 0, "Checked 142 installs across 147 packages (no
+      changes)". The regeneration is committed per the D2 sync duty (this
+      task integrates second) even though it produced only a one-line
+      cosmetic diff (the "^3.3.1" -> "^3.4.14" range mirror), and the
+      positive frozen-install outcome on the committed state is confirmed.
