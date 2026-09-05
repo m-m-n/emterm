@@ -98,7 +98,52 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "dompurify h1 消失機構の特定と安全なバージョン採用"
+    plan: tasks/task0001.md
+    files:
+      - doc/dompurify-h1-sanitization.md
+      - src-tauri/web-shared/markdown/renderer.test.ts
+      - package.json
+      - bun.lock
+      - src-tauri/web-shared/markdown/renderer.ts
+      - test-setup.ts
+    skills: [frontend-impl]
+    domains: [input-handling, ui, config-infra]
+    complexity: high
+    requirements: [FR3, FR4, FR5, FR6, NFR1, NFR2]
+    status: pending
+    branch: null
+    notes: null
+  task0002:
+    title: "依存グラフの凍結（lockfile のコミットと npm lockfile の削除）"
+    plan: tasks/task0002.md
+    files:
+      - .gitignore
+      - bun.lock
+      - package-lock.json
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR8, NFR4]
+    status: pending
+    branch: null
+    notes: null
+  task0003:
+    title: "CI のクリーンインストール経路とテスト実行"
+    plan: tasks/task0003.md
+    files:
+      - .github/workflows/ci.yml
+      - ci-workflows.test.ts
+      - .github/workflows/release.yml
+    skills: [infra-impl]
+    domains: [config-infra]
+    complexity: medium
+    requirements: [FR7, FR8, NFR3]
+    status: pending
+    branch: null
+    notes: null
 
 review:
   status: pending
@@ -114,85 +159,85 @@ requirements:
     status: assumed
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-9, TS-1]
   FR2:
     title: "Delete the stale package-lock.json"
     status: assumed
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-1]
   FR3:
     title: "Clean-worktree viewer entry tests pass"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002]
+    tests: [TS-1, TS-4]
   FR4:
     title: "Identify the dompurify 3.4.x h1-loss mechanism"
     status: assumed
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4]
   FR5:
     title: "Reach a state where dompurify 3.4.x is safely adoptable"
     status: assumed
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002]
+    tests: [TS-4, TS-5]
   FR6:
     title: "Preserve the h1 regression coverage"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4]
   FR7:
     title: "Viewer entry tests run on a clean, locked install in CI"
     status: assumed
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-8]
   FR8:
     title: "Lockfile drift fails loudly in CI"
     status: assumed
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002, task0003]
+    tests: [TS-3]
   NFR1:
     title: "Sanitization strictness is not relaxed"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
   NFR2:
     title: "Rendered output is unchanged for currently-passing cases"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-6]
   NFR3:
     title: "GUI build inputs stay buildable on both platforms"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-7]
   NFR4:
     title: "Reproducibility is verifiable, not asserted"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-2]
 
 batch:
   review_rework_count: 0
