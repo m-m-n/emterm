@@ -1,7 +1,7 @@
 schema_version: 1
 feature: ac2-red-reason-accuracy
 phase: create-plan
-status: dispatching
+status: applying_patch
 generation: 1
 base_revision: 87adf9a7eb81fdcb6905f9237d9dc6c557c09a5d
 last_input_digest: sha256:f315897c4b707a6ec0cdcd58c649c2285e3d6764398254408b2c777ce0a15fcc
@@ -10,12 +10,25 @@ packets: {}
 answers: {}
 worker_runs:
 - request_id: create-plan-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:f315897c4b707a6ec0cdcd58c649c2285e3d6764398254408b2c777ce0a15fcc
   output_digest: null
   worker: implementation-planner
-artifacts: []
-patches: []
+artifacts:
+- path: feature-docs/ac2-red-reason-accuracy/IMPLEMENTATION.md
+  sha256: sha256:2c35efd0e439d797d0a26d756874b3ecbc1ebda558b841078c56632069d08d53
+  produced_by: create-plan-run-0001
+- path: feature-docs/ac2-red-reason-accuracy/VERIFICATION.md
+  sha256: sha256:ff7eb76d48a169ae1e63681c7da6b8252ccb55e1c4d155f438227a7c18dd9671
+  produced_by: create-plan-run-0001
+- path: feature-docs/ac2-red-reason-accuracy/tasks/task0001.md
+  sha256: sha256:f30a3eb00652ff478923b781b23b2196bd7da123b67909e5a9e41caf2ec6d3b6
+  produced_by: create-plan-run-0001
+patches:
+- patch_id: ac2-red-reason-accuracy-p0001
+  status: validated
+  base_input_digest: sha256:f315897c4b707a6ec0cdcd58c649c2285e3d6764398254408b2c777ce0a15fcc
+  base_workflow_blob: cfb4ff2c3cd4f48da3932baa4b9cec7847e14664
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
