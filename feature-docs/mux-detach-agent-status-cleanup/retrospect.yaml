@@ -1,0 +1,31 @@
+feature: mux-detach-agent-status-cleanup
+collected_at: "2026-09-05T10:30:00+09:00"
+session_ids: ["01a06f22-262c-70ab-84ca-1be445e7da5b.jsonl"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: >-
+        NFR1 demands bounded growth of AgentStatusModel entries,
+        mux_public_pane_ids and notification rate-limit state across repeated
+        detach cycles; a leak or an O(n) drain in the new closed_panes batching
+        path is what this perspective checks.
+  declined_findings: []
+lessons_candidates:
+  - >-
+    Single-task feature ran clean end to end: review round 1 produced zero
+    findings, auto-fix loops 0, verify passed on the first attempt with 3265
+    tests green. No rework rounds consumed (review 0 / verify 0).
+  - >-
+    The task originated from PR #49 review round 1 (two medium findings
+    b1653f41bb3c8838 / 09b9f3c73fd673e6 folded into one bug), so the spec
+    arrived with the fix approach already narrowed to option (a) — queueing
+    group.pane_ids() into pending_closed_agent_status_panes. Pre-narrowed
+    specs appear to correlate with clean single-task runs.
+  - >-
+    Three create-spec gate answers were resolved by Codex consultation and
+    recorded as assumptions (record_as_assumption: true) rather than blocking;
+    none of them turned out to need revision downstream.
