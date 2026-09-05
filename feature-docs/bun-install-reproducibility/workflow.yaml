@@ -128,7 +128,7 @@ tasks:
     domains: [config-infra]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR8, NFR4]
-    status: in_progress
+    status: merged
     branch: em-workflow/bun-install-reproducibility/task0002
     notes: null
   task0003:
