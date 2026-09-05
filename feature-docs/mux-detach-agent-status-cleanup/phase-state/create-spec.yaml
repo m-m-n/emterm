@@ -1,0 +1,17 @@
+schema_version: 1
+feature: mux-detach-agent-status-cleanup
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: 0f03fcc7ed24d4d51656d02bc93c0b15da4042b2
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
