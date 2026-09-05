@@ -1,11 +1,11 @@
 schema_version: 1
 feature: ac2-red-reason-accuracy
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 87adf9a7eb81fdcb6905f9237d9dc6c557c09a5d
 last_input_digest: sha256:f315897c4b707a6ec0cdcd58c649c2285e3d6764398254408b2c777ce0a15fcc
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -26,7 +26,7 @@ artifacts:
   produced_by: create-plan-run-0001
 patches:
 - patch_id: ac2-red-reason-accuracy-p0001
-  status: validated
+  status: applied
   base_input_digest: sha256:f315897c4b707a6ec0cdcd58c649c2285e3d6764398254408b2c777ce0a15fcc
   base_workflow_blob: cfb4ff2c3cd4f48da3932baa4b9cec7847e14664
 progress_fingerprint: null
