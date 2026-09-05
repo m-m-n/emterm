@@ -1,0 +1,100 @@
+task_id: task0001
+baseline_failures:
+  - mux::inherited_pty::tests::dropping_the_adapter_closes_the_owned_descriptor
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - app::tests::agent_status::agent_notification_rate_limit_key_prefers_public_pane_id_falls_back_to_prefixed_id
+    red_confirmed: true
+    red_reason: >-
+      assertion `left == right` failed: left: "xyz-7", right: "muxpub:1:xyz-7"
+      (old code returned the learned string verbatim instead of the
+      namespaced form)
+  AC-2:
+    tests:
+      - app::tests::agent_status::agent_notification_rate_limit_key_learned_id_matching_a_tab_key_cannot_reach_that_tab
+    red_confirmed: true
+    red_reason: >-
+      assertion `left != right` failed: both sides were "tab:5" (old code let
+      a daemon-supplied learned id equal to a plain tab's key reach that
+      tab's rate-limit bucket)
+  AC-3:
+    tests:
+      - app::tests::agent_status::agent_notification_rate_limit_key_learned_id_matching_an_unlearned_fallback_cannot_reach_that_pane
+    red_confirmed: true
+    red_reason: >-
+      assertion `left != right` failed: both sides were "mux:1:8" (old code
+      let a daemon-supplied learned id equal to an unlearned pane's fallback
+      key reach that pane's rate-limit bucket)
+  AC-4:
+    tests:
+      - app::tests::agent_status::ts5_public_pane_id_map_and_rate_limit_key_are_scoped
+    red_confirmed: true
+    red_reason: >-
+      assertion `left == right` failed: left: "daemon-a-1", right:
+      "muxpub:18:daemon-a-1" (old code returned the learned string verbatim;
+      new assertion expects the scope-qualified namespaced form built from
+      the runtime-observed scope id)
+  AC-5:
+    tests:
+      - app::tests::agent_status::pump_all_closed_mux_pane_discards_agent_notification_rate_limit_state
+    red_confirmed: false
+    red_reason: >-
+      This test already passed against the old code: it derives its
+      rate-limit key via agent_notification_rate_limit_key (not a literal
+      string) both before and after the close, so arm/discard agreement was
+      already true under the old (unnamespaced) derivation too — the
+      property AC-5 protects (arm and discard agree through the real call
+      sites) pre-existed for this key. What changed is the test's OWN
+      assertion style: it previously named the literal key string "xyz-7"
+      directly in two `maybe_notify_agent_transition` calls, which is
+      exactly the pattern AC-5 says the scenario "must not" do, and which
+      would have gone stale (silently checking the wrong key) the moment
+      the derivation started namespacing learned ids. The fix replaces
+      those literal-string calls with a `rate_limit_key` value obtained
+      from the shared derivation, resolved before the PtyExited removal
+      (mirroring CD-2's derive-before-removal ordering) and reused for both
+      the arm-check and the post-close re-arm check. No production behavior
+      change was needed for this criterion; the test itself was the defect
+      being fixed. See also unconfirmed_reds in the report.
+  AC-6:
+    tests:
+      - app::tests::agent_status::ts5_public_pane_id_map_and_rate_limit_key_are_scoped
+    red_confirmed: false
+    red_reason: >-
+      The public-id accessor and the ingest path are explicitly out of
+      scope for this task (they must stay byte-identical) — this criterion
+      is a regression guard for an unchanged invariant, not new behavior,
+      so there is no implementation change that could turn it red. The
+      existing assertions `assert_eq!(app.mux_public_pane_id(scope0, 1),
+      Some("daemon-a-1"))` / `Some("daemon-b-1")` in the same scenario
+      already exercise it: both "daemon-a-1" and "daemon-b-1" fail
+      mux_ipc::protocol::PublicPaneId::parse (their `rsplit_once('-')`
+      incarnation segments "daemon-a" / "daemon-b" contain non-hex
+      characters), and the accessor returns them unchanged regardless.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not test-translatable per the task plan (no doc-drift test covers
+      these two comments; adding one is explicitly out of scope). Verified
+      by direct inspection instead: the derivation's doc comment in
+      src-tauri/src/app/agent_status.rs and the `agent_notification_rate_limiter`
+      field doc in src-tauri/src/app/mod.rs were both rewritten to state
+      the post-change truth (three mutually-disjoint forms, each starting
+      with its own code-owned prefix before any daemon byte appears; the
+      learned string is never returned unwrapped) and no longer claim the
+      mux prefix protects the learned-id branch. Flagged for the review
+      perspective (TS-7) per the task plan's instruction.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build-outcome criterion, not a unit scenario, so there is no
+      "red" state to observe before implementation — this is a
+      post-implementation regression check, not a red-green cycle. Verified
+      after the change: the default-feature test command (`cargo test
+      --lib`) ran green (3261 passed) and the CLI-only feature check
+      (`cargo check --no-default-features`) compiled cleanly, confirming
+      nothing leaked outside the GUI feature gate.
