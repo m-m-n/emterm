@@ -155,8 +155,8 @@ tasks:
     domains: [config-infra]
     complexity: low
     requirements: [FR7, FR8]
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/bun-install-reproducibility/task0004
     notes: null
     provenance:
       source: review
