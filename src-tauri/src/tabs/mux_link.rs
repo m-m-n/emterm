@@ -875,6 +875,20 @@ impl Tab {
         // session name (status-bar mux badge clears). Port of the
         // WebView `onDetached → exitMuxMode`.
         log::info!("mux apc: detached from session for tab {:?}", self.title);
+        // mux-detach-agent-status-cleanup task0001 (D1/D2): read the
+        // departing group's wire pane ids and queue each onto the
+        // closed-agent-status-pane latch BEFORE the group is cleared below
+        // — once cleared, the ids it held are unrecoverable and the
+        // release obligation would be silently lost. `App::pump_all`
+        // drains this latch (mirroring the `PtyExited` arm's own queueing)
+        // and tags each id with this tab's stable id so the batch apply's
+        // closed-panes arm releases the model entry, the scoped
+        // public-pane-id mapping and the notification rate-limit identity
+        // for each pane (SPEC AC-1).
+        if let Some(group) = self.mux_group.as_ref() {
+            self.pending_closed_agent_status_panes
+                .extend_from_slice(group.pane_ids());
+        }
         self.mux_group = None;
         self.mux_session_name = None;
         // Restore pre-mux routing: the next pump parses the PTS stream
