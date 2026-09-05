@@ -1,11 +1,11 @@
 schema_version: 1
 feature: bun-install-reproducibility
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: 9df33b4c147f2fcd7fdaa84949257da4f745d590
+base_revision: 5b8f2aa88d0dd0a41afa2af8b5b9064e239ce7e6
 last_input_digest: sha256:1d4d6a593ce3af0a40fd07783191e22982b38fa78683630c27952a8b93281c9d
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -57,12 +57,18 @@ worker_runs:
     input_digest: sha256:4d19548ca7f87d128559c7e109197017efad83895fa48069c4d63c7589f52ddb
     output_digest: null
   - request_id: create-spec-run-0003
-    status: dispatched
+    status: completed
     input_digest: sha256:1d4d6a593ce3af0a40fd07783191e22982b38fa78683630c27952a8b93281c9d
     output_digest: null
-artifacts: []
+artifacts:
+  - path: feature-docs/bun-install-reproducibility/REQUIREMENTS.md
+    sha256: sha256:dd43e95f15c8b71c4bcb12c40aa24da1345ad2810d4d2544eb2f891cc61ab0aa
+    produced_by: create-spec-run-0003
+  - path: feature-docs/bun-install-reproducibility/SPEC.md
+    sha256: sha256:21fe71d6fe94d1d544f34139bb23e5f7db46113f6de3bcc1bda75c13305cf2ed
+    produced_by: create-spec-run-0003
 patches: []
-progress_fingerprint: null
+progress_fingerprint: sha256:30f5daa37823e47fc54d77c7d70b9b7c06f58ec9b893494d7135b04757fff276
 stale_redispatch_count: 0
 resolved_input_cache:
   design_system_candidates:
