@@ -26,9 +26,5 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      # plugins/emterm/skills/skills.test.ts is excluded: its version-guard
-      # assertions are pinned to a stale plugin version (pre-existing
-      # failure, tracked separately) and would make this gate permanently
-      # red, masking real lockfile-drift failures.
       - name: Run bun test suite
-        run: bun test --ignore plugins/emterm/skills/skills.test.ts
+        run: bun test
