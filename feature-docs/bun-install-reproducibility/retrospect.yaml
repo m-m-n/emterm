@@ -1,0 +1,58 @@
+feature: bun-install-reproducibility
+collected_at: "2026-09-05T17:11:00+09:00"
+session_ids:
+  - 01a0709e-4310-74dd-b1dc-ea647261f80c
+signals:
+  review_critical_high:
+    - stable_id: 6e13980c23d35e55
+      category: comprehensive
+      file: .github/workflows/ci.yml
+      title: "The newly added CI gate is red from the moment it lands"
+      resolution: unresolved
+      note: >-
+        Round 1. Not auto-fixed in R4; converted into rework task0004
+        (provenance.source_ids). Round 2 did not re-raise it.
+    - stable_id: c8eb86745c3c70cd
+      category: spec
+      file: .github/workflows/ci.yml
+      title: "CI test command uses invalid exclusion flag so entry tests never run"
+      resolution: fixed
+    - stable_id: 56534abb2b9d2184
+      category: comprehensive
+      file: .github/workflows/ci.yml
+      title: "The attempted exclusion runs only the known-failing test file"
+      resolution: fixed
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: license
+      reason: >-
+        diff が package.json / bun.lock / package-lock.json という依存マニフェストと
+        ロックファイルに触れているため（R1 Layer 2 の必須チェック）
+  declined_findings: []
+lessons_candidates:
+  - >-
+    round1 の high 2 件 (c8eb86745c3c70cd / 56534abb2b9d2184) はどちらも同一サイト
+    .github/workflows/ci.yml のテスト実行コマンドで、「既知失敗テストを除外しようとして
+    存在しないフラグを使い、結果的にスイート全体が走らない／逆に失敗ファイルだけが走る」
+    という同型の誤り。CI のテスト実行行を書くタスクでは、除外指定ではなく
+    「落ちているテスト自体を直して素のスイートを走らせる」を既定にすると、この 2 件は
+    どちらも発生しなかった。実際 task0004 がその方針で着地している。
+  - >-
+    review round1/round2 に共通して残った medium 3 件は、いずれも同じ 3 サイト
+    (ci.yml の Bun toolchain 未ピン、movable action tag + 既定トークンスコープ、
+    bun.lock の integrity digest 空) を指しており、round をまたいで stable_id が
+    再計算されて別 ID になっている。同一サイトの繰り返し指摘を横断で数える手段が
+    現状ないため、「medium が 2 ラウンド続けて同じサイトに出たら候補ゲートを
+    下げる」といった判断が機械的にできていない。
+  - >-
+    verify の TS-8 (実 CI ラン観測) は無人ランでは実行不能なまま pass 判定に含めず
+    Manual として残った。CI 観測を要求する検証シナリオは、batch 実行では原理的に
+    埋められないため、SPEC 段階で「手動」と明示して verify の合否から外す設計に
+    しておくと、verify の notes が長くならない。
+  - >-
+    biome check の既存エラー 1 件 (src-tauri/web-shared/settings/types.ts) が
+    feature の diff 外なのに verify の format ステップで毎回引っかかる。main でも
+    同一エラーが再現することを verify が都度確認して切り分けており、これは本 feature が
+    まさに解決した「クリーン環境でだけ落ちる無関係な失敗」と同じ構図。
