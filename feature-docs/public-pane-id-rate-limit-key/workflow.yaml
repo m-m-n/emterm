@@ -144,7 +144,8 @@ workflow:
       compiles. SUC-1..SUC-8 satisfied. No requirement is `excluded`, so no
       scenario was skipped. MT-1/MT-2/MT-3 remain optional manual checks.
   - id: retrospect
-    status: in_progress
+    status: completed
+    completed_at_commit: 4682c12693066088a4434f563b9270884efc7da9
 
 tasks:
   task0001:
