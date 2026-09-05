@@ -129,7 +129,7 @@ workflow:
       Also deferred as manual: re-running by hand the observation procedure in
       doc/dompurify-h1-sanitization.md.
   - id: retrospect
-    status: pending
+    status: in_progress
 
 tasks:
   task0001:
