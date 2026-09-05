@@ -1,0 +1,171 @@
+round: 1
+executed_at: "2026-09-05T12:04:40+09:00"
+scope:
+  review_mode: diff
+  base_commit: bb89e61871249b067373b6029d6423dab68c7eb1
+  head_commit: d0b24427a71441cd2cae8d7735e721054ebdd40d
+  changed_files:
+    - src-tauri/src/app/agent_status.rs
+    - src-tauri/src/app/mod.rs
+    - src-tauri/src/app/tests/agent_status.rs
+    - test-docs/public-pane-id-rate-limit-key/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: security, source: claude, status: completed}
+  - {perspective: security, source: codex, status: completed}
+  - {perspective: architecture, source: claude, status: completed}
+  - {perspective: architecture, source: litellm, model: vertex-glm-5.2, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: spec, source: litellm, model: muse-spark, status: completed}
+findings:
+  - stable_id: 0810c3130449c0dc
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/app/agent_status.rs
+    line: 119
+    line_end: 122
+    title: "learned-id ブランチは同一スコープ内での daemon 由来キー衝突を防げていない"
+    description: >-
+      今回の変更は tab キー (AC-2) と未学習フォールバックキー (AC-3) との衝突は塞いだが、
+      learned 同士の衝突は残っている。キーは `muxpub:<scope>:<learned>` なので、同じ mux
+      接続 (同一 scope) の 2 つの pane に対して daemon が同一の `public_pane_id` を返すと、
+      両 pane が同一の rate-limit バケットを共有する。最も現実的なのは空文字列のケースで、
+      doc 自身が "An empty learned string still takes this branch" と認めているとおり、
+      空 id を送る daemon では当該接続の全 pane が `muxpub:<scope>:` という単一キーに潰れ、
+      片方の blocked/done 通知が他方の直近通知で抑止され、片方の pane クローズ時の discard
+      が他方の限流状態まで消す。`mux_public_pane_ids` は (scope, pane_id) でキーされた
+      マップなので、learned 文字列は (scope, pane_id) 以上の同一性を足していない。
+      副作用として、daemon 再起動 + 再接続で incarnation が変わると同一 pane のキーが
+      生存中に変化し、arm 済みの旧 `muxpub:<scope>:<old>` エントリはどの discard サイト
+      からも参照されず `last_fired` に残留する。テストも同一 scope での learned 重複 /
+      空文字列のケースを一切カバーしていない。
+    suggestion: >-
+      いずれか。(a) mux pane のキーを learned id に依存させず常に `mux:<scope>:<pane_id>`
+      にする — 導出元マップが既に (scope, pane_id) キーなので同一性の情報量は変わらず、
+      キーは完全にコード所有・単射になり、上記の衝突も生存中のキー変化による残留も同時に
+      消える。(b) learned id を残すなら wire pane_id を learned の前に入れて
+      `muxpub:<scope>:<pane_id>:<learned>` とし、1 接続内の 2 pane が決してエイリアス
+      しないようにする。どちらを採る場合も「同一 scope・異なる pane_id で daemon が同じ
+      learned id (および空文字列) を返しても導出キーが異なる」ケースをテストに追加する。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix gate is critical/high only; filed as a follow-up task"
+  - stable_id: 0247047963c1c329
+    severity: medium
+    category: security
+    file: src-tauri/src/app/agent_status.rs
+    line: 120
+    line_end: 120
+    title: "Daemon-controlled IDs can still bypass and grow the rate limiter"
+    description: >-
+      The new prefix prevents cross-namespace collisions, but the learned-ID branch still
+      uses mutable daemon-controlled data as the bucket identity. The ingest path overwrites
+      the learned ID on every update (lines 321-322), so a malicious mux peer can rotate
+      `public_pane_id` for one pane to obtain a fresh bucket for every qualifying transition,
+      bypassing the per-pane notification limit. Each fired key remains in the rate limiter's
+      non-pruning `HashMap`; pane closure discards only the currently mapped key, allowing
+      stale entries and memory growth. Duplicate IDs can also make learned panes in the same
+      scope share a bucket.
+    suggestion: >-
+      Key the limiter with a code-owned structured identity such as `(ConnectionScope,
+      pane_id)`. If public IDs must remain part of the identity, enforce an immutable,
+      one-to-one association at ingestion and remove the old limiter entry whenever an
+      accepted ID changes. Add tests for duplicate and rotating public IDs.
+    sources: [codex:security]
+    confidence: 65
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix gate is critical/high only; filed as a follow-up task (same site as 0810c3130449c0dc)"
+  - stable_id: 5a34a1be0ea64cac
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/app/agent_status.rs
+    line: 181
+    line_end: 183
+    title: "maybe_notify_agent_transition の doc が「生の public_pane_id を渡す」旧契約のまま残っている"
+    description: >-
+      AC-7 で導出関数と `agent_notification_rate_limiter` フィールドの doc は更新されたが、
+      実際にキーを受け取る API 側の doc が取り残されている。`maybe_notify_agent_transition`
+      は `pane_key` を "task0005's mux public_pane_id, or a caller-chosen stable key for
+      plain tabs" と説明しており、引数型も `impl Into<String>` で任意の文字列を受け付ける。
+      新しい呼び出し元が `app.mux_public_pane_id(scope, id)` の戻り値をそのまま渡せば
+      namespace 前置を迂回して AC-2/AC-3 の不変条件が再び破れる。
+      `src-tauri/src/notifications.rs:291` の `AgentNotificationRateLimiter` の doc も
+      同じ旧契約を述べている。
+    suggestion: >-
+      両 doc を「キーは必ず `agent_status::agent_notification_rate_limit_key` の戻り値で
+      あり、daemon 由来の `public_pane_id` を単独で渡してはならない」という post-change の
+      真値に書き換える。より強く守るなら `pane_key: impl Into<String>` をやめ、導出関数が
+      返す newtype (例 `AgentRateLimitKey(String)`) を受け取る形にして、生文字列を渡す
+      経路を型で塞ぐ。
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix gate is critical/high only; filed as a follow-up task"
+  - stable_id: e556ade181d601b8
+    severity: medium
+    category: architecture
+    file: src-tauri/src/app/agent_status.rs
+    line: 181
+    line_end: 186
+    title: "rate_limit_key の新不変条件が enforcement 境界の API 契約に反映されておらず、契約ドリフトが残る"
+    description: >-
+      この変更は「rate-limit key は必ず agent_notification_rate_limit_key が生成した、
+      コード所有のプレフィックス付き文字列である」という不変条件を新設し、導出関数の doc と
+      `App::agent_notification_rate_limiter` フィールド doc に明記した。しかし、その鍵を
+      実際に受け取って限流器を arm する公開メソッド `maybe_notify_agent_transition` の doc
+      は旧契約のまま残っており、SSOT (導出関数) と消費者側 API の契約記述が矛盾している。
+      シグネチャが `pane_key: impl Into<String>`、discard 側が `&str` であるため型レベルの
+      防護は無く、不変条件は呼び出し規約のみで支えられている
+      (`AgentNotificationRateLimiter<K>` は既に K でジェネリックなので newtype 化のコストは
+      低い)。AC-7 は doc 更新対象を 2 箇所に限定していたため、同一ファイル内のこの 3 箇所目
+      が取り残された形。
+    suggestion: >-
+      最小の対処は公開メソッド doc を新契約に合わせること。併せて (別対応でも可)、規約では
+      なく型で不変条件を担保する案: 導出関数だけが構築できる newtype
+      (例 `pub(super) struct AgentRateLimitKey(String)`) を導入し、
+      `maybe_notify_agent_transition` / `discard_agent_notification_state` /
+      `AgentNotificationRateLimiter<AgentRateLimitKey>` をそれで受けるようにすると、生の
+      daemon 文字列を渡す経路がコンパイル時に塞がる。
+    sources: [claude:architecture]
+    confidence: 75
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix gate is critical/high only; filed as a follow-up task (same site as 5a34a1be0ea64cac)"
+  - stable_id: 4a70b8aeace187d0
+    severity: medium
+    category: spec
+    file: src-tauri/src/app/tests/agent_status.rs
+    line: 1221
+    line_end: 1223
+    title: "AC-4 の「同一 public id 文字列」ケースが検証されていない"
+    description: >-
+      SPEC AC-4 は「Two connections that both learn the identical public id string for their
+      own pane derive different keys, because the scope component differs」を要求し、EC-4 は
+      そのケースを ts5 (TS-4) がカバー済みと明記している。しかし
+      `ts5_public_pane_id_map_and_rate_limit_key_are_scoped` が投入する learned id は
+      `"daemon-a-1"` と `"daemon-b-1"` で互いに異なる文字列なので、`assert_ne!(rate_key0,
+      rate_key1)` は scope 成分ではなく learned 文字列そのものの違いで通る。旧実装でも同じ
+      assert は成立していた。したがって AC-4 が守ろうとしている性質と EC-4 が「カバー済み」
+      と主張しているケースは、どのテストでも実行されていない。派生ロジック自体は
+      `format!("muxpub:{}:{learned}", scope.0)` で scope を含むため実装は正しく、これは実装
+      欠陥ではなく AC-4/EC-4 に対する検証欠落。
+    suggestion: >-
+      ts5 に、両接続が byte-identical な learned id を持つケースの assert を追加する
+      (単体派生ヘルパで十分なので新規 `#[test]` でもよい)。あるいは ts5 の 2 デーモンの
+      fixture を同一文字列に変更し、既存の `assert_ne!` が scope 成分のみで成立するように
+      する。後者を選ぶ場合は AC-6 用の `mux_public_pane_id` assert が両 scope を区別できる
+      形を保つこと。
+    sources: [claude:spec]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity — auto-fix gate is critical/high only; filed as a follow-up task"
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

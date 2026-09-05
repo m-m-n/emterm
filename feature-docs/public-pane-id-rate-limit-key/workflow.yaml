@@ -114,7 +114,8 @@ workflow:
     base_commit: bb89e61871249b067373b6029d6423dab68c7eb1
     completed_at_commit: ec4cf26d806a231051f2b426a8d2fc0c84a287c5
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: d0b24427a71441cd2cae8d7735e721054ebdd40d
   - id: verify
     status: pending
     result: null
@@ -139,8 +140,9 @@ tasks:
     branch: em-workflow/public-pane-id-rate-limit-key/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, architecture, spec]
   residual_critical_high: 0
   needs_rework: false
   plan:
