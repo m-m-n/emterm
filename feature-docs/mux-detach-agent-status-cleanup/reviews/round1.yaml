@@ -1,0 +1,34 @@
+round: 1
+executed_at: "2026-09-05T10:12:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: f67c63fb31db850cd127d9c8238b15bb094f0d82
+  head_commit: ff515bbcc597d24289eca8fb1a53183b82b5de01
+  changed_files:
+    - src-tauri/src/agent_status_model.rs
+    - src-tauri/src/app/tests/agent_status.rs
+    - src-tauri/src/tabs/mux_link.rs
+    - src-tauri/src/tabs/tests/mux_link.rs
+    - test-docs/mux-detach-agent-status-cleanup/task0001.tests.yaml
+plan:
+  floor: [comprehensive, spec]
+  discretionary:
+    - perspective: performance
+      reason: >-
+        The fix is a state-lifecycle teardown whose NFR1 demands bounded growth
+        of AgentStatusModel entries, mux_public_pane_ids and notification
+        rate-limit state across repeated detach cycles; a leak or an O(n) drain
+        in the new closed_panes batching path is exactly what this perspective
+        checks.
+  cross_validation: false
+perspective_runs:
+  - {perspective: comprehensive, source: claude, status: completed}
+  - {perspective: spec, source: claude, status: completed}
+  - {perspective: performance, source: claude, status: completed}
+findings: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false

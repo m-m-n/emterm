@@ -108,7 +108,8 @@ workflow:
     base_commit: f67c63fb31db850cd127d9c8238b15bb094f0d82
     completed_at_commit: 3bcfc92ba730b656aaf59f0d3c805771aaff3b59
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: ff515bbcc597d24289eca8fb1a53183b82b5de01
   - id: verify
     status: pending
     result: null
@@ -134,8 +135,9 @@ tasks:
     branch: em-workflow/mux-detach-agent-status-cleanup/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, spec, performance]
   residual_critical_high: 0
   needs_rework: false
   plan:
