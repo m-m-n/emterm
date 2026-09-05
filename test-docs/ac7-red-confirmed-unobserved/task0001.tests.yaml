@@ -14,14 +14,16 @@ acceptance_tests:
     tests: []
     red_confirmed: true
     red_reason: >-
-      Before the edit, a scripted check of the AC-7 entry's red_reason text
-      found none of the four required elements present (no "invariant
-      guard" phrase, no mention of record AC-6, no "no observable
-      pre-state" phrasing) and it made no direct connection to the record's
-      AC-2 count explanation on its own terms. After the edit, the same
-      script confirms all four elements are present in the rewritten text
-      and that it contains no "confirmed by" / "observed" red-observation
-      language.
+      Before the edit, a scripted check of the described record's AC-7
+      entry's red_reason text found three of the four required elements
+      missing (no "invariant guard" phrase, no mention of the described
+      record's AC-6 entry, no "no observable pre-state" phrasing). The
+      fourth, the linkage to the described record's AC-2 repository-wide
+      count explanation, was already present in the base text and was
+      preserved by the edit rather than introduced by it. After the edit,
+      the same script confirms all four elements are present in the
+      rewritten text and that it contains no "confirmed by" / "observed"
+      red-observation language.
   AC-3:
     tests: []
     red_confirmed: true
