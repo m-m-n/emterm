@@ -108,7 +108,7 @@ workflow:
     base_commit: f67c63fb31db850cd127d9c8238b15bb094f0d82
     completed_at_commit: 3bcfc92ba730b656aaf59f0d3c805771aaff3b59
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -134,10 +134,21 @@ tasks:
     branch: em-workflow/mux-detach-agent-status-cleanup/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
   residual_critical_high: 0
   needs_rework: false
+  plan:
+    floor: [comprehensive, spec]
+    discretionary:
+      - perspective: performance
+        reason: >-
+          The fix is a state-lifecycle teardown whose NFR1 demands bounded
+          growth of AgentStatusModel entries, mux_public_pane_ids and
+          notification rate-limit state across repeated detach cycles; a
+          leak or an O(n) drain in the new closed_panes batching path is
+          exactly what this perspective checks.
+    cross_validation: false
 
 requirements:
   FR1:
