@@ -92,7 +92,7 @@ workflow:
     base_commit: 7187701ae56f0735d3d31fd415c641ac328ba549
     completed_at_commit: 68f375005663507ee8a5f54eff891ab3b01481dd
   - id: review
-    status: in_progress
+    status: pending
   - id: verify
     status: pending
     result: null
@@ -148,17 +148,22 @@ tasks:
     notes: null
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
   plan:
     floor: [comprehensive, security, architecture, spec]
     discretionary:
       - perspective: license
         reason: "diff が package.json / bun.lock / package-lock.json という依存マニフェストとロックファイルに触れているため（R1 Layer 2 の必須チェック）"
     cross_validation: true
-  perspectives: {}
-  residual_critical_high: 0
-  needs_rework: false
+  perspectives:
+    comprehensive: {runs: 2, status: completed, source: codex}
+    security: {runs: 2, status: completed, source: codex}
+    license: {runs: 2, status: completed, source: codex}
+    architecture: {runs: 2, status: completed, source: "litellm:vertex-glm-5.2"}
+    spec: {runs: 2, status: completed, source: "litellm:muse-spark"}
+  residual_critical_high: 1
+  needs_rework: true
 
 requirements:
   FR1:

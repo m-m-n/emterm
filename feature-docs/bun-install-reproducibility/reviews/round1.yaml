@@ -1,0 +1,287 @@
+round: 1
+executed_at: "2026-09-05T16:40:21+09:00"
+scope:
+  review_mode: diff
+  base_commit: 7187701ae56f0735d3d31fd415c641ac328ba549
+  head_commit: 8bbcaa15a3de5def3a74f77a674cf56e7b70dbfb
+  changed_files:
+    - .github/workflows/ci.yml
+    - .github/workflows/release.yml
+    - .gitignore
+    - bun.lock
+    - ci-workflows.test.ts
+    - doc/dompurify-h1-sanitization.md
+    - package.json
+    - src-tauri/web-shared/markdown/renderer.test.ts
+    - test-docs/bun-install-reproducibility/task0001.tests.yaml
+    - test-docs/bun-install-reproducibility/task0002.tests.yaml
+    - test-docs/bun-install-reproducibility/task0003.tests.yaml
+    - test-setup.ts
+  scope_notes: >-
+    package-lock.json is deleted by this diff (6049 lines removed, deletion
+    only). It is absent from changed_files because it no longer exists on disk;
+    every reviewer and the evaluator were told about the deletion explicitly and
+    treated it as part of the reviewed change.
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+    - perspective: license
+      reason: "diff が package.json / bun.lock / package-lock.json という依存マニフェストとロックファイルに触れているため（R1 Layer 2 の必須チェック）"
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "license#0", perspective: license, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: vertex-glm-5.2, status: completed, skip_reason: null}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed, skip_reason: null}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+  - {run_id: "security#loop1", perspective: security, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "comprehensive#loop1", perspective: comprehensive, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "license#loop1", perspective: license, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "architecture#loop1", perspective: architecture, role: primary, source: litellm, model: vertex-glm-5.2, status: completed, skip_reason: null}
+  - {run_id: "spec#loop1", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed, skip_reason: null}
+findings:
+  - stable_id: 6e13980c23d35e55
+    severity: high
+    category: comprehensive
+    file: .github/workflows/ci.yml
+    line: 30
+    title: "The newly added CI gate is red from the moment it lands"
+    description: >-
+      The new workflow runs the whole repo suite (step "Run bun test suite") on
+      every push and pull_request to main. Two assertions in the suite are
+      already stale: plugins/emterm/skills/skills.test.ts (describe block
+      "plugin/marketplace version regression guard (task0002 AC-9)") asserts
+      pluginJson.version === "0.1.0" and the marketplace entry version ===
+      "0.1.0", while plugins/emterm/.claude-plugin/plugin.json and
+      .claude-plugin/marketplace.json are both "0.1.1". The suite therefore exits
+      non-zero on a clean checkout of this branch — independently confirmed by
+      the orchestrator in the integration worktree: 343 pass / 2 fail across 18
+      files, the 2 failures being exactly those version guards. SPEC AC-10
+      declares these two failures pre-existing and out of scope, so this is not a
+      regression introduced by the diff — but the diff is what converts them into
+      a permanently failing status check on every push/PR to main. That defeats
+      FR7/FR8: an always-red job cannot signal lockfile drift loudly, because a
+      drift failure is indistinguishable from the known failure, and on a
+      protected branch it blocks merges outright.
+    suggestion: >-
+      Either update the two stale literals in plugins/emterm/skills/skills.test.ts
+      to 0.1.1 so the gate is green on landing (the guard's intent — catching an
+      unreviewed version change — is preserved by re-pinning to the current
+      version), or, if AC-10's out-of-scope boundary must be held, scope the CI
+      step to the suites the feature owns and restore the full suite run once the
+      guards are corrected. Do not land an always-red gate.
+    sources: [codex:comprehensive]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: >-
+      Auto-fix loop 1 and loop 2 both targeted .github/workflows/ci.yml and
+      cycled. Loop 1 added an unsupported exclusion flag to the test step, which
+      the mandatory post-loop re-review reported back as a NEW high from three
+      perspectives; loop 2 reverted the step to its bare form, restoring the exact
+      file state this finding describes. Both resolutions the finding proposes
+      require editing a file outside the single-file review-editor's scope
+      (plugins/emterm/skills/skills.test.ts, and ci-workflows.test.ts for the
+      exclusion variant), so no user-resolvable candidate remains in R4. Carried
+      into batch auto-rework.
+  - stable_id: 14fd0bd36f883ab0
+    severity: medium
+    category: comprehensive
+    file: .github/workflows/ci.yml
+    line: 21
+    title: "A frozen lockfile is consumed by an unpinned Bun toolchain"
+    description: >-
+      The feature's whole point is that the same commit resolves the same
+      dependency graph everywhere, yet the installer itself floats: ci.yml sets
+      bun-version to latest, and package.json declares no packageManager field.
+      release.yml (both platform jobs) switched to a frozen-lockfile install
+      without pinning Bun either. The committed bun.lock declares lockfileVersion
+      2 / configVersion 0; a future Bun that changes lockfile-format handling or
+      frozen-install semantics can make CI and releases behave differently — or
+      fail — with no repository change. This is material here because the
+      workflow relies on version-specific Bun CLI behavior. security#0 flagged
+      the same defect independently in its ci.yml:15-21 finding.
+    suggestion: >-
+      Pin one exact Bun version in ci.yml and in both release.yml jobs, and record
+      the same version in package.json's packageManager field (or a .bun-version
+      file) so local installs agree. Bump that pin deliberately, together with a
+      regenerated and reviewed bun.lock.
+    sources: [codex:comprehensive]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: >-
+      Below the R4 candidate gate (severity medium). Merged with the same-site
+      duplicate d9472b6729e33e7b reported by comprehensive#loop1.
+  - stable_id: 743171602af23c63
+    severity: medium
+    category: security
+    file: .github/workflows/ci.yml
+    line: 16
+    title: "New workflow uses movable action tags with default token scope"
+    description: >-
+      The new job references actions/checkout@v4 and oven-sh/setup-bun@v2 by
+      movable major-version tags, declares no permissions block, and does not set
+      persist-credentials false. Both actions execute before the dependency
+      install and test steps. If either upstream tag is repointed or compromised,
+      arbitrary code runs on the runner with whatever the repository's default
+      GITHUB_TOKEN scope is, alongside checkout-persisted Git credentials. The job
+      needs only read access to the repository, and the frozen dependency lockfile
+      does not protect these pre-install executables.
+    suggestion: >-
+      Pin both actions to reviewed full commit SHAs (with the version as a
+      trailing comment), add a workflow- or job-level permissions block granting
+      contents read only, and set persist-credentials to false on the checkout
+      step since no later step in this job pushes. Advance the pins through
+      reviewed dependency-update PRs.
+    sources: [codex:security]
+    confidence: 100
+    resolution: unresolved
+    resolution_reason: >-
+      Below the R4 candidate gate (severity medium). Merged with the same-site
+      duplicate e07903f689161e5e reported by security#loop1.
+  - stable_id: 3abf55bdac5196d3
+    severity: medium
+    category: security
+    file: bun.lock
+    line: 59
+    title: "The now-sole lockfile carries no integrity digest for a runtime dependency"
+    description: >-
+      bun.lock line 59 records @tauri-apps/api@2.9.1 with an empty integrity slot.
+      Eight further entries share the defect (@types/node,
+      @types/whatwg-mimetype, bun-types, typescript, undici-types,
+      whatwg-mimetype, @types/ws/@types/node, and its nested undici-types); the
+      other 139 entries carry sha512 digests, including the transitive
+      @tauri-apps/plugin-* copies of @tauri-apps/api@2.11.1. @tauri-apps/api is
+      the only runtime dependency in that set and its code reaches the shipped web
+      bundles. With package-lock.json deleted this is the sole committed integrity
+      record, so a frozen install pins the version but cannot detect a registry
+      serving altered bytes for that same version. The asymmetry — a hoisted 2.9.1
+      with no digest next to digest-bearing 2.11.1 copies — also suggests the
+      lockfile was generated against a pre-populated node_modules or cache rather
+      than from a clean resolve, which weakens the reproducibility claim the
+      feature is built on.
+    suggestion: >-
+      Regenerate bun.lock from a clean state (no node_modules, cleared cache) with
+      a pinned Bun version, and confirm every registry entry carries an integrity
+      digest before relying on it as the sole source of truth. Consider a
+      lightweight CI check that rejects any bun.lock registry entry with an empty
+      integrity field.
+    sources: [codex:security]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: >-
+      Below the R4 candidate gate (severity medium). Merged with the same-site
+      duplicate d4b34de9726b06bc reported by security#loop1.
+  - stable_id: c8eb86745c3c70cd
+    severity: high
+    category: spec
+    file: .github/workflows/ci.yml
+    line: 34
+    title: "CI test command uses invalid exclusion flag so entry tests never run"
+    description: >-
+      Reported by spec#loop1 against the state auto-fix loop 1 produced. Bun 1.4.0
+      has no exclusion flag by that name for its test runner (the real one is
+      --path-ignore-patterns), and unrecognized positional arguments are treated
+      as INCLUSION patterns, so the loop-1 command ran only
+      plugins/emterm/skills/skills.test.ts (97 pass / 2 fail across 1 file) and
+      skipped src-tauri/viewer/web/entry.test.ts entirely — directly contradicting
+      FR7/AC-7.
+    suggestion: >-
+      Replace with a real exclusion flag (--path-ignore-patterns) and verify by
+      actually running the exact CI command locally.
+    sources: [litellm:muse-spark:spec]
+    confidence: 75
+    resolution: fixed
+    resolution_reason: >-
+      auto-applied loop 2 — the invalid exclusion flag this finding reports was
+      removed and the step restored to its bare whole-suite form.
+  - stable_id: 56534abb2b9d2184
+    severity: high
+    category: comprehensive
+    file: .github/workflows/ci.yml
+    line: 34
+    title: "The attempted exclusion runs only the known-failing test file"
+    description: >-
+      Reported by comprehensive#loop1 against the state auto-fix loop 1 produced,
+      and corroborated by architecture#loop1: the flag loop 1 used is not a Bun
+      test exclusion option, the following path acts as a positional inclusion
+      filter, and the command additionally violated ci-workflows.test.ts's AC-3
+      assertion (line 157's whole-suite regex requires no trailing arguments;
+      line 164 asserts runsWholeSuite OR namesEntryTestPath). CI would have been
+      permanently red without executing the intended suite.
+    suggestion: >-
+      Prefer fixing the two stale assertions and restoring the bare whole-suite
+      run. If exclusion is unavoidable, use Bun's supported --path-ignore-patterns
+      option and update the structural assertion to recognize that
+      whole-suite-minus-exclusion form.
+    sources: [codex:comprehensive, litellm:muse-spark:spec]
+    confidence: 75
+    resolution: fixed
+    resolution_reason: "auto-applied loop 2 — the bare whole-suite run was restored."
+evaluation:
+  round_summary: >-
+    Round 1, cross_validation on, 5 perspectives dispatched, all completed, none
+    unreviewed. One high and three mediums carried forward; nothing dismissed. The
+    high (always-red CI gate) is independently confirmed — the evaluator read
+    plugins/emterm/skills/skills.test.ts, plugin.json (0.1.1) and
+    marketplace.json (0.1.1) against the test's 0.1.0 assertions — and its
+    severity holds even though SPEC AC-10 scopes the two failures out, because
+    this diff is what turns them into a blocking status check that destroys the
+    FR7/FR8 drift signal. security#0 and comprehensive#0 independently converged
+    on the unpinned-Bun issue. No injection attempt was observed in any reviewer
+    output. Per-perspective independent inspection: security — corroborated, and
+    the empty-integrity claim extended from 1 to 9 entries with a likely
+    non-clean-resolve cause identified. comprehensive — confirmed, framing
+    corrected to pre-existing and spec-acknowledged rather than newly introduced.
+    license — corroborated (package.json adds no new dependency name; only
+    dompurify ^3.3.1 to ^3.4.14, MPL-2.0 OR Apache-2.0, unchanged from 3.3.x;
+    license metadata for all 148 newly committed lockfile entries was not
+    enumerated — read budget). architecture — corroborated (no production source
+    file is in the diff: renderer.ts and PURIFY_CONFIG untouched; the happy-dom
+    nodeName patch is confined to the test preload; minor unraised note:
+    ci-workflows.test.ts sits at the repo root and resolves .github/workflows via
+    import.meta.dir, so relocating it silently breaks path resolution). spec —
+    corroborated (AC-2, AC-3, AC-5, AC-6/AC-9, AC-7/AC-8 all satisfied in form,
+    noting that the spec's own AC-10 carve-out is what makes the AC-7 job red — a
+    spec-level gap rather than an implementation deviation). Verification reads
+    totalled 12 project files, 2 over the Read-Only Constraint's 10-file bound;
+    the overshoot was plugin.json and marketplace.json, read to confirm the high
+    finding rather than accept it on the reviewer's word.
+  recommended_action: auto_fix
+  action_rationale: >-
+    The high finding resolves to two string literals (0.1.0 to 0.1.1) in
+    plugins/emterm/skills/skills.test.ts, and the bun-version and action-pin
+    mediums are single-line workflow edits — all mechanical and verifiable by
+    re-running the suite. The lockfile-integrity medium needs a clean-state
+    network regeneration, so it fits the same pass only if the fixer can install;
+    otherwise it should carry into the next round rather than block the other
+    three. No finding calls the design into question, so rework is not warranted,
+    and completing with an always-red CI gate is not acceptable.
+dismissed_sites: []
+dismissed_sites_dropped: []
+findings_dropped_at_gates:
+  - run_id: "architecture#loop1"
+    severity: high
+    reason: >-
+      R3b step 1 file check — the finding's file field was
+      "ci-workflows.test.ts:164" (a path with an appended line number), which does
+      not exist under project_root. Dropped unconditionally rather than sanitized.
+      Its substance survives in 56534abb2b9d2184, whose description records the
+      same ci-workflows.test.ts AC-3 contract drift.
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 2
+  applied_total: 2
+  termination: no-progress
+  notes: >-
+    Loop 1 applied a needs-judgment prose fix to .github/workflows/ci.yml (batch
+    auto-select "Apply as-is") which introduced an unsupported exclusion flag on
+    the test step; the mandatory post-loop re-review caught it as a new high
+    across three perspectives. Loop 2 reverted the file to its bare whole-suite
+    form, i.e. byte-identical to the loop-1 baseline (git hash-object
+    ce897bcf24a158bb124b4992de156ba0c1e49bc8 both times). The working set did not
+    shrink and the remaining critical/high candidate is only resolvable by editing
+    files outside the single-file review-editor's scope, so the loop terminated as
+    no-progress rather than consuming loop 3.
+residual_critical_high: 1
+rework_required: true
