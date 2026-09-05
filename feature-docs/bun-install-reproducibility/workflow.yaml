@@ -114,8 +114,8 @@ tasks:
     domains: [input-handling, ui, config-infra]
     complexity: high
     requirements: [FR3, FR4, FR5, FR6, NFR1, NFR2]
-    status: pending
-    branch: null
+    status: in_progress
+    branch: em-workflow/bun-install-reproducibility/task0001
     notes: null
   task0002:
     title: "依存グラフの凍結（lockfile のコミットと npm lockfile の削除）"
@@ -128,8 +128,8 @@ tasks:
     domains: [config-infra]
     complexity: medium
     requirements: [FR1, FR2, FR3, FR8, NFR4]
-    status: pending
-    branch: null
+    status: merged
+    branch: em-workflow/bun-install-reproducibility/task0002
     notes: null
   task0003:
     title: "CI のクリーンインストール経路とテスト実行"
@@ -142,8 +142,8 @@ tasks:
     domains: [config-infra]
     complexity: medium
     requirements: [FR7, FR8, NFR3]
-    status: pending
-    branch: null
+    status: merged
+    branch: em-workflow/bun-install-reproducibility/task0003
     notes: null
 
 review:
