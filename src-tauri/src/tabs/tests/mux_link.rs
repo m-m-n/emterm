@@ -626,6 +626,61 @@ fn detached_cancels_in_flight_offthread_switch() {
     );
 }
 
+// ── mux-detach-agent-status-cleanup task0001 AC-1/AC-2: detach queues
+// the departing group's wire pane ids onto the closed-agent-status-pane
+// latch, without double-pushing an id the pane-exit path already
+// queued ──────────────────────────────────────────────────────────────
+
+#[test]
+fn detached_queues_group_pane_ids_for_agent_status_drain_then_drains_once() {
+    // AC-1 (SPEC AC-1; TS-5): a daemon-confirmed detach on a tab holding a
+    // seeded mux group makes the closed-agent-status-pane drain return
+    // exactly that group's wire pane ids; a second, immediately following
+    // drain in the same pump returns nothing (single-shot).
+    let mut tab = test_tab();
+    tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+    let changed = tab.apply_mux_message(MuxMessage {
+        msg_type: MessageType::Detached,
+        pane_id: 0,
+        payload: Vec::new(),
+    });
+    assert!(changed);
+    let mut drained = tab.take_closed_agent_status_panes();
+    drained.sort_unstable();
+    assert_eq!(
+        drained,
+        vec![10, 20],
+        "the drain returns exactly the departing group's wire pane ids"
+    );
+    assert!(
+        tab.take_closed_agent_status_panes().is_empty(),
+        "a second drain in the same pump returns nothing"
+    );
+}
+
+#[test]
+fn pane_exit_emptying_group_does_not_double_queue_pane_ids() {
+    // AC-2 (SPEC AC-1; TS-6): a pane-exit sequence that removes every
+    // window of a group yields each removed wire pane id exactly once —
+    // the detach-side queueing (added for AC-1) must never combine with
+    // the pane-exit path's own queueing to double-push an id. This
+    // scenario never reaches the detach handler at all (the group empties
+    // via PtyExited, not Detached), so it is a guard against the AC-1
+    // change regressing this path, not a red-before/green-after case.
+    let mut tab = test_tab();
+    tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+    tab.apply_mux_message(pty_exited(10));
+    tab.apply_mux_message(pty_exited(20));
+    assert!(tab.mux_group.is_none(), "the group emptied");
+    let mut drained = tab.take_closed_agent_status_panes();
+    drained.sort_unstable();
+    assert_eq!(
+        drained,
+        vec![10, 20],
+        "each removed pane id is queued exactly once"
+    );
+}
+
 // ── TS-9: RenameWindow inbound ────────────────────────────────────────
 
 #[test]
