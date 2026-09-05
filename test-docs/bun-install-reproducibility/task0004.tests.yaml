@@ -1,0 +1,64 @@
+task_id: task0004
+baseline_failures:
+  - "plugin/marketplace version regression guard (task0002 AC-9) > plugin.json still reports version 0.1.0"
+  - "plugin/marketplace version regression guard (task0002 AC-9) > marketplace.json still reports the emterm plugin entry as version 0.1.0"
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - "plugin/marketplace version regression guard (task0002 AC-9) > plugin.json still reports version 0.1.1"
+      - "plugin/marketplace version regression guard (task0002 AC-9) > marketplace.json still reports the emterm plugin entry as version 0.1.1"
+    red_confirmed: true
+    red_reason: >-
+      Ran `bun test` on a clean, frozen-lockfile install before any edit
+      (baseline in 4a): both assertions failed comparing against the stale
+      pinned "0.1.0" while plugin.json / marketplace.json both declare
+      "0.1.1" (expect(received).toBe(expected): Expected "0.1.0", Received
+      "0.1.1" for each). After re-pinning both expected values and both test
+      names to "0.1.1", the whole suite (345 tests) passes with 0 failures.
+  AC-2:
+    tests: []
+    red_reason: >-
+      Verified by execution, not a dedicated test: `bun install
+      --frozen-lockfile` on the clean worktree (no prior node_modules)
+      followed by `bun test` (the CI test step's exact invocation) completed
+      with 345 pass / 0 fail after the AC-1 change, versus 343 pass / 2 fail
+      on the same clean install before the change.
+    red_confirmed: true
+  AC-3:
+    tests: []
+    red_reason: >-
+      Reversible manual experiment (not a permanent automated test, per the
+      task's Test Notes). For plugin.json: version temporarily changed
+      0.1.1 -> 9.9.9, `bun test -t "plugin.json still reports version"`
+      failed (Expected "0.1.1", Received "9.9.9"); version restored via `git
+      checkout -- plugins/emterm/.claude-plugin/plugin.json`, same filtered
+      run passed (1 pass / 0 fail). For marketplace.json: version
+      temporarily changed 0.1.1 -> 9.9.9 on the emterm plugin entry, `bun
+      test -t "marketplace.json still reports the emterm plugin entry"`
+      failed (Expected "0.1.1", Received "9.9.9"); version restored via `git
+      checkout -- .claude-plugin/marketplace.json`, same filtered run passed
+      (1 pass / 0 fail). Working tree confirmed clean of these manifests
+      (`git status --porcelain`) after each restore.
+    red_confirmed: true
+  AC-4:
+    tests:
+      - "ci-workflows.test.ts (whole file, unmodified)"
+    red_reason: >-
+      Verified by diff, not a new test: `git status --porcelain` /
+      `git diff --stat` throughout the task show only
+      `plugins/emterm/skills/skills.test.ts` modified; `.github/workflows/ci.yml`
+      and `ci-workflows.test.ts` are untouched (byte-identical to the base
+      commit), and ci-workflows.test.ts passes as part of the 345-test whole
+      suite run.
+    red_confirmed: false
+  AC-5:
+    tests: []
+    red_reason: >-
+      Verified by inspection, not a test: no existing test was deleted,
+      skipped, or had its matcher/selector loosened; `git status --porcelain`
+      shows only `plugins/emterm/skills/skills.test.ts` modified (plus this
+      task's own test-docs record). This criterion states a negative
+      constraint on the change itself rather than an observable runtime
+      outcome, so there is nothing to red/green.
+    red_confirmed: false
