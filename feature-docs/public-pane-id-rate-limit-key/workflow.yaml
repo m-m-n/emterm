@@ -117,9 +117,32 @@ workflow:
     status: completed
     completed_at_commit: d0b24427a71441cd2cae8d7735e721054ebdd40d
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 38f7e0a672078b103191f9b023cc8de446762b21
+    result: pass
     failed_items: []
+    notes: >-
+      Build: main (cargo check) ok, cli (--no-default-features) ok, webviews
+      (bun run typecheck) ok. Tests: cargo test --lib 3261 passed / 0 failed.
+      bun test 328 pass / 2 fail — both failures are the pre-existing
+      plugin/marketplace version regression guard (task0002 AC-9), reproduced
+      identically on the base_branch (main) baseline and touching no file in
+      this feature's change set, so they are not a regression (VERIFICATION.md
+      declares bun test a no-regression check only; no TypeScript is touched).
+      Scenarios: TS-1 agent_notification_rate_limit_key_prefers_public_pane_id_falls_back_to_prefixed_id;
+      TS-2 ..._learned_id_matching_a_tab_key_cannot_reach_that_tab;
+      TS-3 ..._learned_id_matching_an_unlearned_fallback_cannot_reach_that_pane;
+      TS-4 ts5_public_pane_id_map_and_rate_limit_key_are_scoped +
+      ts8_two_connections_sharing_a_wire_pane_id_stay_independent_through_close;
+      TS-5 maybe_notify_agent_transition_ac4_rate_limits_per_pane +
+      discard_agent_notification_state_reopens_the_rate_limit_window;
+      TS-6 pump_all_learns_public_pane_id_from_daemon_agent_status_update;
+      TS-7 review-verified — both doc comments (agent_status.rs
+      agent_notification_rate_limit_key, mod.rs agent_notification_rate_limiter)
+      describe the post-change namespaced behaviour and no longer claim the
+      "mux:" prefix protects the learned-id branch, and the CLI-only check
+      compiles. SUC-1..SUC-8 satisfied. No requirement is `excluded`, so no
+      scenario was skipped. MT-1/MT-2/MT-3 remain optional manual checks.
   - id: retrospect
     status: pending
 
