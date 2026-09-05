@@ -1,0 +1,21 @@
+schema_version: 1
+feature: mux-detach-agent-status-cleanup
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: a74f89e75ac02348ec16fcc45464a44bad4c050a
+last_input_digest: sha256:d831e161aa6e205b0c7f08e5e4753eb08611ebc6b8dbd56b7a91de762c1e0efd
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:d831e161aa6e205b0c7f08e5e4753eb08611ebc6b8dbd56b7a91de762c1e0efd
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
