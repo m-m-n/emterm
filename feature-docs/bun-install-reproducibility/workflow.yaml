@@ -1,0 +1,199 @@
+schema_version: 1
+feature: bun-install-reproducibility
+created: 2026-09-05
+base_branch: main
+goal: |-
+  bun install の依存解決ぶれで viewer entry テストがクリーン環境だけ落ちる（dompurify 3.4.14）
+
+  ## 現象（必須）
+  `package.json` は `dompurify` を `^3.3.1` で宣言していて、リポジトリには bun のロック
+  ファイルがコミットされていない（`bun install` は `package-lock.json` からの移行を毎回
+  行い、生成した `bun.lock` は gitignore 済み）。このため新しい worktree や CI のような
+  クリーンな環境で `bun install` すると `dompurify` が 3.4.14 に解決され、
+  `src-tauri/viewer/web/entry.test.ts` の 2 件が落ちる。
+  ```plain text
+  (fail) viewer entry > renders an injected sample into the fullscreen content structure
+  (fail) viewer entry > parses the shared Rust/TS payload fixture with all fields
+  error: Received value must be an array type, or both received and expected values must be strings.
+    at src-tauri/viewer/web/entry.test.ts:128:54
+  ```
+  `128` 行目は `expect(content.querySelector("h1")?.textContent).toContain("Hi")` で、
+  `h1` が見つからず `textContent` が `undefined` になっている。サニタイズ結果が
+  dompurify のバージョン差で変わっている。
+  メイン作業ツリーは既存のインストール済み `node_modules` に 3.3.1 を保持しているため、
+  そこでは再現しない。`marked` と `happy-dom` のバージョン差は無関係であることを
+  個別にピン留めして切り分け済み。
+  ## 再現手順（必須）
+  1. `git worktree add <path> <任意のブランチ>` でクリーンな作業ツリーを作る
+  2. その作業ツリーで `bun install` を実行する（`dompurify` が 3.4.14 に解決される）
+  3. `bun test src-tauri/viewer/web/entry.test.ts` を実行する → 2 件 fail
+  4. `bun add dompurify@3.3.1` してから同じテストを実行する → 14 pass / 0 fail
+  ## 期待する挙動（必須）
+  どの環境で `bun install` しても同じ依存バージョンに解決され、`bun test` の結果が
+  作業ツリーによって変わらない。あるいは、viewer entry のテストが dompurify のパッチ
+  バージョン差でサニタイズ結果が変わっても壊れない書き方になっている。
+  ## 完了の定義（必須）
+  - [ ] クリーンな作業ツリーで `bun install` → `bun test` したとき、viewer entry の
+  2 件が pass する
+  - [ ] 依存の解決が環境間で再現するようになっている（ロックファイルのコミット、
+  または該当依存のバージョン固定）
+  - [ ] 再発を検出するテストがある（既存の viewer entry テストで足りるなら、それが
+  クリーン環境の CI で走ることを確認する）
+  ## 該当箇所（任意）
+  `src-tauri/viewer/web/entry.test.ts:128`（`h1` の textContent を検証している行）
+  `package.json`（`dompurify` の `^3.3.1` 宣言、および bun ロックファイルの非コミット）
+  ## 実害・発生条件（任意）
+  em-workflow の integration worktree のように、クリーンな環境で `bun install` してから
+  `bun test` を回す経路すべてで発生する。verify フェーズがこの 2 件を毎回「変更と無関係な
+  失敗」として切り分ける必要があり、本物の退行を見落とすリスクになる。CI をクリーン
+  インストールで回している場合も同じ形で落ちる。
+  なお、同じ `bun test` で落ちる
+  `plugin/marketplace version regression guard (task0002 AC-9)` の 2 件は `main` でも
+  落ちる別件で、この起票の対象ではない。
+parent_branch: em-workflow/bun-install-reproducibility/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    web:
+      language: TypeScript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: "bunx biome check ."
+      e2e_test_command: ""
+    types:
+      language: TypeScript
+      build_command: "bun run typecheck"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 5b8f2aa88d0dd0a41afa2af8b5b9064e239ce7e6
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "Dependency-resolution and CI-reproducibility work with no user-visible surface. No visual input, no design-system file is a target of this change, and the one runtime code path that may be touched (markdown sanitization in src-tauri/web-shared/markdown/renderer.ts) is required by FR6/NFR1/NFR2 to preserve — not change — the rendered output."
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Commit the bun lockfile"
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "Delete the stale package-lock.json"
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "Clean-worktree viewer entry tests pass"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "Identify the dompurify 3.4.x h1-loss mechanism"
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: "Reach a state where dompurify 3.4.x is safely adoptable"
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: "Preserve the h1 regression coverage"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: "Viewer entry tests run on a clean, locked install in CI"
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: "Lockfile drift fails loudly in CI"
+    status: assumed
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Sanitization strictness is not relaxed"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Rendered output is unchanged for currently-passing cases"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "GUI build inputs stay buildable on both platforms"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Reproducibility is verifiable, not asserted"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
