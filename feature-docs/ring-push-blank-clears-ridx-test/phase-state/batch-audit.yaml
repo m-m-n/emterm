@@ -1,0 +1,28 @@
+schema_version: 1
+feature: ring-push-blank-clears-ridx-test
+records:
+  - question_id: requirement.test-disposition
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-04T19:00:55+09:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "強化する（survivor 行を足して compress 分岐の行スコープを観測する）"
+    normalized_answer: "強化する。survivor 行を fixture に足し、scrollback 有効の compress 分岐が退避行以外の overflow エントリを消していないことを観測する assert を追加する。"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (generation 1 で fail-closed abort);
+      codex_consulted: true; Notion タスクの申し送りによる授権に基づき second-opinion
+      エージェント経由で Codex に相談し決定。決定内容は Notion タスクへコメント投稿済み
+      (discussion 3d13509e-c8ee-8182-a199-001c57ba1e38)。決定は launch-time タスク記述へ
+      折り込み、generation 2 の入力とした。
+  - question_id: requirement.emptiness-assertion-retention
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-04T19:00:55+09:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "両方残す（1 回 push 時点で行スコープを assert し、5 回 push 後の空判定も維持）"
+    normalized_answer: "既存の空判定 assert を残したうえで行スコープ観測を追加する。両者は検証する性質が別物のため置換しない。"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (generation 1 で fail-closed abort);
+      codex_consulted: true; 上記と同一の相談で決定。

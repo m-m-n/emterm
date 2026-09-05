@@ -413,15 +413,82 @@ fn test_scroll_up_internal_full_screen_no_scrollback_capacity() {
     assert_eq!(core.scrollback_count(), 0); // no room for scrollback
 }
 
+// Proved: `ring_push_blank`'s scrollback-enabled compress branch clears the
+// `overflow` / `overflow_ridx` entries of the row it evicts and does not
+// sweep away the entries of any other row — the survivor row's entries
+// remain intact across the same push. Not proved: that the compress
+// branch's own row-scoped clear call is what fired, as opposed to the
+// unconditional new-viewport-bottom clear that runs after every push.
+// Within a single push the new bottom absolute row always equals the
+// evicted absolute row, independent of the row count, so the eviction-time
+// clear and the unconditional bottom-row clear necessarily target the same
+// absolute row and no fixture can distinguish them (mirrors the same
+// structural ceiling documented on
+// `test_ring_push_blank_clears_recycled_row_overflow_entries`, which
+// exercises the scrollback-disabled eviction branch instead).
 #[test]
 fn test_ring_push_blank_clears_ridx() {
-    let mut core = TerminalCore::new(10, 3, 2); // 2 scrollback lines
-    let long = "👨‍👩‍👧‍👦";
-    core.set_cell(0, 0, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-    assert!(!core.overflow_ridx.is_empty());
+    let mut core = TerminalCore::new(10, 3, 2); // 10 cols, 3 rows, 2 scrollback lines
 
-    // Push enough blanks to evict the overflow row out of viewport AND scrollback
-    for _ in 0..5 {
+    // Overflow-bound content: multi-codepoint ZWJ grapheme clusters that
+    // exceed the 16-byte inline cell capacity, so they are genuinely stored
+    // in the `overflow` / `overflow_ridx` side tables rather than inline.
+    let recycled_content = "👨‍👩‍👧‍👦"; // 4-person family
+    let survivor_content = "👨‍👩‍👧"; // 3-person family
+
+    // Recycled row: viewport row 0, the row the first push evicts.
+    core.set_cell(0, 0, recycled_content, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    // Survivor row: viewport row 1, not evicted by the first push.
+    core.set_cell(1, 1, survivor_content, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+    // Absolute row numbers, captured before the push rotates the ring head.
+    // Viewport-relative indices do not denote the same absolute row after a
+    // push, so every later assertion below reuses these verbatim.
+    let abs_recycled = core.viewport_abs(0) as u32;
+    let abs_survivor = core.viewport_abs(1) as u32;
+
+    // Pre-assert non-vacuity (anti-vacuity guard): both rows genuinely hold
+    // overflow-bound content before the push, independently through both
+    // tables, so a fixture that fails to exceed the inline cap cannot
+    // silently make the post-push "entry is gone" assertions pass for the
+    // wrong reason.
+    assert!(core.overflow.contains_key(&(0u32, abs_recycled)));
+    assert!(
+        core.overflow_ridx
+            .get(&abs_recycled)
+            .map(|cols| cols.contains(&0u32))
+            .unwrap_or(false)
+    );
+    assert!(core.overflow.contains_key(&(1u32, abs_survivor)));
+    assert!(
+        core.overflow_ridx
+            .get(&abs_survivor)
+            .map(|cols| cols.contains(&1u32))
+            .unwrap_or(false)
+    );
+
+    // Push one blank row: the compress branch runs (scrollback capacity >
+    // 0), evicting the recycled row into scrollback.
+    core.ring_push_blank(PackedColor::DEFAULT);
+
+    // Post-assert row scope, as four independent assertions: the recycled
+    // row's entries are gone from both tables, while the survivor row's
+    // entries remain in both. Never merge these into two combined
+    // assertions — a regression that drops only one table while keeping the
+    // other must still be caught.
+    assert!(!core.overflow.contains_key(&(0u32, abs_recycled)));
+    assert!(!core.overflow_ridx.contains_key(&abs_recycled));
+    assert!(core.overflow.contains_key(&(1u32, abs_survivor)));
+    assert!(
+        core.overflow_ridx
+            .get(&abs_survivor)
+            .map(|cols| cols.contains(&1u32))
+            .unwrap_or(false)
+    );
+
+    // Push four more blanks (five in total, the pre-existing count) to
+    // evict the overflow rows out of viewport AND scrollback.
+    for _ in 0..4 {
         core.ring_push_blank(PackedColor::DEFAULT);
     }
     // Overflow side-table should be drained (the data was moved into CharTable
