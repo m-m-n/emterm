@@ -1,0 +1,206 @@
+schema_version: 1
+feature: mux-detach-agent-status-cleanup
+created: 2026-09-05
+base_branch: main
+goal: |
+  # detach 時にエージェント状態エントリが破棄されず、再アタッチで前接続の状態を引き継ぐ
+
+  種別: バグ
+  Notion: https://www.notion.so/3cf3509ec8ee8156bdefed9e9408c675
+
+  ## 現象（必須）
+  mux から detach しても、そのタブが持っていたエージェント状態エントリが破棄されない。
+  結果として次の 2 つが起きる。
+  1. 旧セッションの `AgentStatusModel` エントリ・`mux_public_pane_ids` の公開 ID・通知の
+  レート制限状態がプロセス終了まで残り続ける。`ConnectionScope` 導入でキーがスコープ付きに
+  なったため、別タブの同番号 `pane_id` による上書き再利用も起きなくなり、detach のたびに
+  単調増加する。
+  1. 同じタブから別ホストの daemon（別 incarnation）へ re-attach すると、`ConnectionScope` が
+  タブの `stable_id` 由来で不変なため、新 daemon の wire `pane_id` が旧セッションの残存
+  エントリに衝突する。新 daemon がその pane を報告するまで、バッジ・mux サイドバーには
+  旧ホストの state と agent name が表示され、通知のレート制限アイデンティティも旧ホストの
+  `public_pane_id` のまま解決される。
+  PR https://github.com/m-m-n/emterm/pull/49 の
+  review round 1 で検出された medium finding 2 件（`b1653f41bb3c8838` / `09b9f3c73fd673e6`）が
+  同一シナリオを指しており、それを 1 件にまとめたもの。
+
+  ## 再現手順（必須）
+  1. eMterm でタブ 1 を開き、サーバー 1 に SSH 接続して `emterm mux` で attach する
+  2. そのタブのウィンドウ 1 で Claude Code を起動し、`working` / `done` などに状態遷移させる
+  3. mux から detach する
+  4. 同じタブでサーバー 2 に SSH 接続して `emterm mux` で attach する
+  5. 新 daemon 側でまだエージェントを起動していない状態で、タブのバッジを見る
+
+  ## 期待する挙動（必須）
+  detach した時点で、そのタブが保持していた mux ペインのエージェント状態・公開 ID・通知の
+  レート制限状態が破棄される。re-attach 後のバッジは新しい接続のペインの状態だけを表示し、
+  前ホストの状態を引き継がない。
+
+  ## 完了の定義（必須）
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある
+
+  ## 該当箇所（任意）
+  - `src-tauri/src/tabs/mux_link.rs:872-912` — `Tab::handle_detached`。`mux_group = None` に
+  するだけで `pending_closed_agent_status_panes` へ何も積んでいない
+  - `src-tauri/src/app/tab_lifecycle.rs:147-151`、`src-tauri/src/app/mod.rs:1483-1487` —
+  close_tab / pump_all の reaped ループ。PR #49 が追加した「MuxPane キーの破棄 +
+  `mux_public_pane_ids` の削除」はここを通るが、detach 経路からは到達しない
+  - `src-tauri/src/agent_status_model.rs:30-46` — `ConnectionScope` の doc コメントが
+  「Constant for the tab's whole lifetime, including across detach and re-attach」と
+  明記しており、実挙動と食い違っている
+
+  ## 実害・発生条件（任意）
+  発生条件: mux から detach すること。1 タブでの detach → re-attach だけで再現し、複数
+  サーバーは必須ではない（別ホストへ re-attach したときに表示の混線として顕在化する）。
+  想定される修正方針は 2 つ。
+  - (a) `handle_detached` で `mux_group` をクリアする前に `group.pane_ids()` を
+  `pending_closed_agent_status_panes` へ積み、既存の `closed_panes` バッチ経路に
+  モデルエントリ・レート制限状態・スコープ付き `mux_public_pane_ids` をまとめて破棄させる
+  - (b) `ConnectionScope` を `(stable_id, attach 世代カウンタ)` から導出して attach ごとに
+  世代を進める。この場合も残留メモリ回収のために (a) の破棄は併用が望ましい
+  PR #49 のレビューでは (a) が最小の手当てとして挙がっている。
+parent_branch: em-workflow/mux-detach-agent-status-cleanup/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    rust:
+      language: Rust
+      build_command: "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: ""
+      e2e_test_command: ""
+    rust-cli:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 6680c56bc9d22fb44f6af86bd18da54ea0067190
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      Internal state-lifecycle bug fix with no new or changed user-facing
+      surface: no new widget, no layout change, no new colour/typography/spacing
+      decision, and no design-token consumption. The only visible effect is that
+      an existing badge and sidebar entry stop showing stale data, rendered by
+      the unchanged render/mod.rs / ui::tab_bar / ui::mux_sidebar path.
+      Resolved via gate create-spec.design-step, option decide_autonomously.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: Every mux-exit path discards the group's pane entries
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-5, TS-6]
+  FR2:
+    title: Detach reuses the existing closed_panes teardown, no new path
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-5, TS-6]
+  FR3:
+    title: All three pieces of per-pane state are released
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-4]
+  FR4:
+    title: ConnectionScope keeps its stable_id derivation; its doc is corrected
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-2]
+  FR5:
+    title: Only MuxPane entries are discarded at detach
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-3]
+  FR6:
+    title: Post-re-attach badge reflects only the new connection
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2]
+  NFR1:
+    title: Bounded state growth across repeated detach cycles
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: No wire-protocol, daemon or user-visible-setting change
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Preserved per-tab scoping guarantees
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-4]
+  NFR4:
+    title: Tab layer keeps the latch-and-drain indirection (no new borrow path)
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-5]
+  NFR5:
+    title: CLI-only build unaffected
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0
