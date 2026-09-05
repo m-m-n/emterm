@@ -1,20 +1,33 @@
 schema_version: 1
 feature: public-pane-id-rate-limit-key
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
-base_revision: c0532b3031e274602cbe5b256b58ec31f7e45f7e
+base_revision: 1991667c45afcf297422b9004751dddf6e80aacd
 last_input_digest: sha256:b9f5c32537f15360aede7213e76d4fa21242496073dff620b4b5a5299ac0646c
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-plan-run-0001
-    status: dispatched
+    status: completed
     input_digest: sha256:b9f5c32537f15360aede7213e76d4fa21242496073dff620b4b5a5299ac0646c
     output_digest: null
-artifacts: []
-patches: []
+artifacts:
+  - path: feature-docs/public-pane-id-rate-limit-key/IMPLEMENTATION.md
+    sha256: sha256:4cb7439e3a666cef01177ee378438556ea6ce24ebe234c2dd328d285ccd5d5b7
+    produced_by: create-plan-run-0001
+  - path: feature-docs/public-pane-id-rate-limit-key/VERIFICATION.md
+    sha256: sha256:6e9e4cd6fadf8792fe9e71ca50064e78419bf2ffa88b08a58f940ead9db78700
+    produced_by: create-plan-run-0001
+  - path: feature-docs/public-pane-id-rate-limit-key/tasks/task0001.md
+    sha256: sha256:1b17eaae7200d83c356add81fd322d64903c60f515fa9bdf6efdfd9b631ce10c
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: create-plan-p0001
+    operation: replace_planning
+    applied: true
+    applied_at_commit: 1991667c45afcf297422b9004751dddf6e80aacd
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}

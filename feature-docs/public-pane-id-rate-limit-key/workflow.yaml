@@ -107,7 +107,8 @@ workflow:
       resolved to decide_autonomously (batch-decision-table), accepting it.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 1991667c45afcf297422b9004751dddf6e80aacd
   - id: implement
     status: pending
     base_commit: null
@@ -120,7 +121,21 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Namespace the learned public pane id in the notification rate-limit key
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/app/agent_status.rs
+      - src-tauri/src/app/mod.rs
+      - src-tauri/src/app/tab_lifecycle.rs
+      - src-tauri/src/app/tests/agent_status.rs
+    skills: [backend-impl]
+    domains: [input-handling]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4, NFR5]
+    status: pending
+    branch: null
 
 review:
   status: pending
@@ -134,78 +149,78 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3, TS-4]
   FR2:
     title: Unlearned-pane fallback key unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-3]
   FR3:
     title: Plain-tab key unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1]
   FR4:
     title: Single derivation point preserved across every call site
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-5]
   FR5:
     title: Correct the two stale doc comments
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-7]
   FR6:
     title: Ingest-time learning and the public-id query surface stay unchanged
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-6]
   NFR1:
     title: Compatibility - internal-only key, no wire/persisted/UI exposure
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR2:
     title: Performance - O(1) derivation, off the render path
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR3:
     title: Behavioural stability outside the key derivation
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4, TS-6]
   NFR4:
     title: Build gating - CLI-only --no-default-features build unaffected
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-7]
   NFR5:
     title: Documentation accuracy in the touched region
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-7]
 
 batch:
   review_rework_count: 0
