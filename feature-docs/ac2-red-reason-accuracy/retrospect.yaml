@@ -1,0 +1,25 @@
+feature: ac2-red-reason-accuracy
+collected_at: "2026-09-06T00:32:00+09:00"
+session_ids: ["01a07232-04a4-76bf-b5b8-4c879b2b18f3"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - >-
+    Round 1 produced one medium finding (stable_id 38b373af929abc3d) against the
+    workflow-generated test record test-docs/ac2-red-reason-accuracy/task0001.tests.yaml:
+    its AC-7 red_reason states a whole-change-set `git status --porcelain` result that was
+    true only before the record file itself was written. The finding is the same
+    record/reality gap class this feature was created to close. It stayed `unresolved`
+    because severity medium is outside the Phase R4 auto-fix gate (critical/high only).
+  - >-
+    Root cause is upstream of the implementer: the task plan's AC-7 and the SPEC's
+    Success Criteria bullet are literally unsatisfiable, because the implement phase always
+    creates test-docs/{feature}/task0001.tests.yaml, which the SPEC's own Declared Change Set
+    superset (test-docs/{feature}/**) permits. Acceptance criteria phrased as
+    "git status lists only <the target file>" will keep failing this way for any feature
+    whose change set is a single file.
