@@ -432,10 +432,14 @@ pub struct App {
     /// the render path, auto-dismissed by [`App::pump_sftp`]).
     pub restart_toast: RestartToast,
     /// Per-pane rate limiter for agent-status (blocked/done) desktop
-    /// notifications (task0007 AC-4). Keyed by whatever stable pane
-    /// identity the caller of [`App::maybe_notify_agent_transition`]
-    /// supplies (a mux pane's `public_pane_id`, or a caller-chosen key for
-    /// plain tabs).
+    /// notifications (task0007 AC-4). Keyed by the string
+    /// [`agent_status::agent_notification_rate_limit_key`] produces — never
+    /// a daemon-supplied `public_pane_id` on its own: the derivation always
+    /// wraps a learned id behind a code-owned namespace prefix and the
+    /// connection scope before any daemon-controlled byte appears
+    /// (public-pane-id-rate-limit-key AC-1/AC-7), so this rate limiter can
+    /// never be armed or discarded by a daemon-chosen string that collides
+    /// with another pane's or tab's key.
     agent_notification_rate_limiter: crate::notifications::AgentNotificationRateLimiter<String>,
 }
 
