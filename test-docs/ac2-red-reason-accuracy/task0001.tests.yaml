@@ -1,0 +1,117 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, a PyYAML load of
+      test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml followed
+      by a scripted check on acceptance_tests['AC-2']['red_reason'] failed:
+      the loaded string contained "none of the four" and "made no direct
+      connection", and did not contain "three of the four". After the
+      edit, the same check on the reloaded string passes: it contains
+      "three of the four" and no longer contains "none of the four" or
+      "made no direct connection".
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Evidence read (IMPLEMENTATION.md D2), performed before any rewrite:
+      `git show 9eee616148086b9ab5bf6422ca97e89f40341995:test-docs/stale-test-name-refs/task0001.tests.yaml`
+      was read and its AC-7 entry's red_reason was found to already state
+      "which is what keeps the AC-2 repository-wide count at 6 instead of
+      climbing to 7" — the linkage to the described record's AC-2
+      repository-wide count explanation was present at that revision,
+      confirming assumption A-1 and clearing the rewrite to proceed. That
+      same base-revision text did not contain an "invariant guard" phrase,
+      a mention of the described record's AC-6 entry, or a "no observable
+      pre-state" phrasing, confirming those three (and only those three)
+      were genuinely absent. Before the target record's edit, a scripted
+      check on the loaded AC-2 red_reason string failed: it did not
+      contain "already present in the base text" or "rather than
+      introduced". After the edit, the same check on the reloaded string
+      passes.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the three absent-element
+      names and the accurate post-edit half were already present in the
+      target record's AC-2 red_reason before this task's edit, so there was
+      no observable pre-state to fail. Re-verified after the edit: the
+      loaded string still contains the "invariant guard" phrase, a mention
+      of the described record's AC-6 entry, the "no observable pre-state"
+      phrasing, "all four elements are present", and the exact
+      `"confirmed by" / "observed"` clause.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the target record's
+      AC-2 entry already had red_confirmed: true and an English-language
+      red_reason before this task's edit, so there was no observable
+      pre-state to fail. Re-verified after the edit: PyYAML load still
+      returns red_confirmed is True for AC-2, and the rewritten scalar is
+      ASCII/English throughout.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the target record
+      already parsed as YAML with the expected key set and shape, and its
+      folded scalars already used the `>-` indicator at their existing
+      indentation, before this task's edit, so there was no observable
+      pre-state to fail. Re-verified after the edit: PyYAML load exposes
+      task_id, baseline_failures, final_failures, an acceptance_tests
+      mapping with exactly its seven original entries (AC-1..AC-7), and
+      notes; the top-level key order in the raw file is unchanged; and
+      `git diff` shows the rewritten AC-2 red_reason is still introduced by
+      `red_reason: >-` at the same indentation as every other folded
+      scalar in the file.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: before this task's edit
+      the working tree for the target record was clean (`git status
+      --porcelain` empty for the file), so containment held vacuously with
+      no observable pre-state to fail. After the edit, `git diff` for the
+      file shows exactly one hunk, confined to the AC-2 entry's red_reason
+      scalar; task_id, baseline_failures, final_failures, the AC-2 entry's
+      tests and red_confirmed values, the AC-1 and AC-3 through AC-7
+      entries, and the trailing notes block are byte-identical to the base
+      revision (confirmed by diffing only those regions).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: before this task's edit
+      the change set was empty and a repository-wide fixed-string search
+      for the old identifier (assembled from the described record's own
+      header-comment fragments, `test_relocate_widened_base_via_wrap_` +
+      `no_panic_when_column_one_does_not_exist`) already returned zero
+      contiguous occurrences, so there was no observable pre-state to
+      fail. Re-verified after the edit: `git status --porcelain` for the
+      whole change set lists only
+      test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml, no Rust
+      and no TypeScript file; the same fixed-string search across this
+      task's diff, its own record (this file), and its commit messages
+      still returns zero contiguous occurrences.
+notes: >-
+  Documentation-record task (task0001.md; IMPLEMENTATION.md decisions
+  D2-D5). The evidence read of the described record
+  (test-docs/stale-test-name-refs/task0001.tests.yaml) at revision
+  9eee616148086b9ab5bf6422ca97e89f40341995 confirmed assumption A-1: the
+  linkage to the described record's AC-2 repository-wide count explanation
+  was already present in its AC-7 red_reason before the edit that feature
+  made, while the "invariant guard" phrase, the AC-6 mention, and the "no
+  observable pre-state" phrasing were genuinely absent there. Acceptance
+  was verified via PyYAML parse/assertion checks on the target record's
+  AC-2 red_reason (AC-1, AC-2, AC-3), a PyYAML shape/format inspection
+  (AC-4, AC-5), and git diff/status inspection of the single changed file
+  (AC-6, AC-7), all captured above. project_commands were run despite the
+  change being YAML-only: `bun test` (345 pass, 0 fail, matching baseline)
+  and `bun run typecheck` (clean) both confirm no regression, though
+  neither exercises the edited YAML content directly.
