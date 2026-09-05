@@ -101,7 +101,8 @@ workflow:
       Resolved via gate create-spec.design-step, option decide_autonomously.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: a053637e821ebdf2708c0f3093a6dffa925c6393
   - id: implement
     status: pending
     base_commit: null
@@ -114,7 +115,22 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: Detach releases the mux group's agent-status state
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/tabs/mux_link.rs
+      - src-tauri/src/agent_status_model.rs
+      - src-tauri/src/tabs/tests/mux_link.rs
+      - src-tauri/src/app/tests/agent_status.rs
+    skills: [frontend-impl]
+    domains: [ui]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4, NFR5]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -128,77 +144,77 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-5, TS-6]
   FR2:
     title: Detach reuses the existing closed_panes teardown, no new path
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-5, TS-6]
   FR3:
     title: All three pieces of per-pane state are released
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-4]
   FR4:
     title: ConnectionScope keeps its stable_id derivation; its doc is corrected
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-2]
   FR5:
     title: Only MuxPane entries are discarded at detach
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-3]
   FR6:
     title: Post-re-attach badge reflects only the new connection
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2]
   NFR1:
     title: Bounded state growth across repeated detach cycles
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2]
   NFR2:
     title: No wire-protocol, daemon or user-visible-setting change
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR3:
     title: Preserved per-tab scoping guarantees
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-4]
   NFR4:
     title: Tab layer keeps the latch-and-drain indirection (no new borrow path)
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-5]
   NFR5:
     title: CLI-only build unaffected
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
 
 batch:

@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-detach-agent-status-cleanup
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: a74f89e75ac02348ec16fcc45464a44bad4c050a
 last_input_digest: sha256:d831e161aa6e205b0c7f08e5e4753eb08611ebc6b8dbd56b7a91de762c1e0efd
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -25,7 +25,7 @@ artifacts:
     produced_by: create-plan-run-0001
 patches:
   - patch_id: create-plan-p0001
-    status: validated
+    status: applied
     base_input_digest: sha256:d831e161aa6e205b0c7f08e5e4753eb08611ebc6b8dbd56b7a91de762c1e0efd
     base_workflow_blob: b1333d0d29455126f6eadf1088a1d63bb284c6c5
 progress_fingerprint: null
