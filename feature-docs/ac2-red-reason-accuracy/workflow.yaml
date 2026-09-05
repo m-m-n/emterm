@@ -62,7 +62,8 @@ workflow:
     skipped_reason: "Single-file YAML documentation-text correction with no UI, no visual surface, no new module boundary and no API change; the detected design-system files are untouched by it."
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: ff34af1911185db314c5612171d73ce2e488350b
   - id: implement
     status: pending
   - id: review
@@ -72,7 +73,19 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Rewrite the target record's AC-2 red_reason to the observed count"
+    plan: tasks/task0001.md
+    files:
+      - test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml
+    skills: []
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4, NFR5]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   rounds: []
@@ -85,55 +98,55 @@ requirements:
   FR1:
     title: "State the correct count of missing elements"
     status: resolved
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
   FR2:
     title: "Record the fourth element as pre-existing and preserved"
     status: resolved
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-4]
   FR3:
     title: "Enumerate the three genuinely absent elements"
     status: resolved
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
   FR4:
     title: "Preserve the accurate post-edit half"
     status: resolved
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
   FR5:
     title: "Keep the red verdict"
     status: resolved
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2]
   FR6:
     title: "Confine the change to the AC-2 entry"
     status: resolved
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3]
   NFR1:
     title: "Parseability"
     status: resolved
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
   NFR2:
     title: "Formatting fidelity"
     status: resolved
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
   NFR3:
     title: "Language"
     status: resolved
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR4:
     title: "No unobserved assertion"
     status: resolved
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4]
   NFR5:
     title: "No build impact"
     status: resolved
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3]
