@@ -1,14 +1,19 @@
 schema_version: 1
 feature: ac2-red-reason-accuracy
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
 base_revision: cee570095053e5d79c500c84ecc93011ac62239a
-last_input_digest: null
-active_request_id: null
+last_input_digest: sha256:8760e100f246a5790d684ac09b9ed42b9be6c498dda065f574fd501211b7d073
+active_request_id: create-spec-run-0002
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:8760e100f246a5790d684ac09b9ed42b9be6c498dda065f574fd501211b7d073
+  output_digest: null
+  worker: requirements-analyst
 artifacts: []
 patches: []
 progress_fingerprint: null
