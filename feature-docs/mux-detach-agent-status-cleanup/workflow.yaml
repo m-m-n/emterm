@@ -111,9 +111,29 @@ workflow:
     status: completed
     completed_at_commit: ff515bbcc597d24289eca8fb1a53183b82b5de01
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 0094fb694c75a8ff85ffbaabbda7596e2739f030
+    result: pass
     failed_items: []
+    summary: >-
+      Build (rust, GUI default features) exit 0; build (rust-cli,
+      --no-default-features) exit 0; test (rust, --lib --test-threads=1)
+      exit 0 with 3265 passed / 0 failed / 3 ignored. All six SPEC test
+      scenarios present and green: TS-1
+      app::tests::agent_status::ac3_detach_releases_model_entry_public_id_and_rate_limit_identity,
+      TS-2 ...::ac4_reattach_on_same_tab_reusing_wire_pane_id_starts_with_a_clean_slate,
+      TS-3 ...::ac5_detach_leaves_the_tabs_own_plain_tab_entry_and_latch_intact,
+      TS-4 ...::ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouched,
+      TS-5 tabs::tests::mux_link::detached_queues_group_pane_ids_for_agent_status_drain_then_drains_once,
+      TS-6 tabs::tests::mux_link::pane_exit_emptying_group_does_not_double_queue_pane_ids.
+      AC-6 confirmed by reading the corrected ConnectionScope doc comment
+      (agent_status_model.rs): it now states the scope VALUE is constant
+      while the ENTRIES it keys are released at detach. NFR2 confirmed by
+      change-set containment (diff touches only src-tauri/src GUI modules
+      plus test-docs; no mux_ipc wire crate, no settings surface). NFR5
+      confirmed by the CLI-only build. No requirement is marked excluded.
+      Manual scenarios MT-1..MT-4 remain outstanding for the user (they
+      need two real daemons and human reading of the badge).
   - id: retrospect
     status: pending
 
