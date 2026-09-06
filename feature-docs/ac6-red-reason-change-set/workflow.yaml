@@ -1,0 +1,158 @@
+schema_version: 1
+feature: ac6-red-reason-change-set
+created: 2026-09-06
+base_branch: main
+goal: |-
+  AC-6 の red_reason が change set を「YAML 1 ファイルのみ」と誤記している
+
+  ## 現象（必須）
+  `test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml:66` の AC-6 `red_reason` が `git status --porcelain for the whole change set lists only this one YAML file` と断言している。
+  実際には実装コミット fc7af5d6 が、編集対象の record と、この宣言を含む test record 自身の 2 ファイルを含む。feature 全体の change set には `feature-docs/ac7-red-confirmed-unobserved/**` も入る。record が自分自身の存在を数え落としている。
+  加えて `task0001.md` の AC-6 が要求するのは「change set に Rust / TypeScript ファイルが無い」ことだけで、「YAML 1 ファイルのみ」は要求より強い over-claim。SPEC の Declared Change Set と NFR4 の carve-out を落としている。
+  ## 再現手順（必須）
+  1. ブランチ `em-workflow/ac7-red-confirmed-unobserved/integration`（PR https://github.com/m-m-n/emterm/pull/50 ）を checkout する
+  2. `test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml` の AC-6 エントリ（66 行付近）の `red_reason` を読む
+  3. `git show --stat fc7af5d6` で実装コミットの change set を見る
+  4. 2 ファイル以上が含まれており、`red_reason` の「only this one YAML file」と食い違うことを確認する
+  ## 期待する挙動（必須）
+  AC-6 の `red_reason` が実際の change set と一致し、かつ AC-6 が本来要求する主張（Rust / TypeScript ファイルが 0 件）に限定されている。`feature-docs/` / `test-docs/` の workflow 生成物は carve-out として明記されている。
+  ## 完了の定義（必須）
+  - [ ] AC-6 の `red_reason` が「change set は YAML ドキュメントのみ（編集した record と、この per-task test record）で、Rust / TypeScript は含まない」趣旨になっている
+  - [ ] `feature-docs/` 配下の workflow 生成物が carve-out として明記されている
+  - [ ] ファイルが YAML として parse できる
+  - [ ] 他の acceptance エントリを変更していない
+  ## 該当箇所（任意）
+  `test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml:66`（AC-6 エントリ、`red_reason`）
+  参照: `task0001.md` の AC-6 定義、SPEC の Declared Change Set / NFR4
+  ## 実害・発生条件（任意）
+  `taskNNNN.tests.yaml` は後続タスクが読む機械可読レコード。change set の記述が実態より狭いと、レコードを根拠に「この feature は 1 ファイルしか触っていない」と誤認され、影響範囲の判断を誤らせる。
+  由来: PR #50 の feature `ac7-red-confirmed-unobserved` review round 1。stable_id `aa950a4f5eb99c56`（spec 観点、confidence 85）および `0ad4478ab62b7550`（comprehensive 観点、confidence 80）。severity medium のため auto-fix ゲート（critical/high のみ）の対象外で `unresolved` のまま残した。
+parent_branch: em-workflow/ac6-red-reason-change-set/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    rust:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --check"
+      e2e_test_command: ""
+    typescript:
+      language: TypeScript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: "bunx biome format ."
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 28559da18f9061e68466d4b731278c6d427a7fdf
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      No user-visible surface is involved. The change set is a prose revision
+      inside one machine-readable YAML record under test-docs/; there is no UI,
+      no rendered output, no design-token consumer, and no interaction affected.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Correct the AC-6 change-set statement"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "State the workflow-artifact carve-out explicitly"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "Limit the claim to what AC-6 requires"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "Preserve the surrounding AC-6 evidence"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: "Change no other acceptance entry"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Parseability"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Formatting fidelity"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Documentation-only change set"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "After-the-fact verifiability"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework_count: 0

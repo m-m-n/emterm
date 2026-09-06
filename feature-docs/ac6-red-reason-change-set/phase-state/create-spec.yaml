@@ -1,15 +1,31 @@
 schema_version: 1
 feature: ac6-red-reason-change-set
 phase: create-spec
-status: in_progress
+status: completed
 generation: 1
 base_revision: e3f95dda72d9dcac0f83073b0ad331fc941a1ecb
-last_input_digest: null
+last_input_digest: sha256:025a39f1e263204bb3330d30609a3bbd05d1f6d71b5b1189ebba9098a0cf9044
 active_request_id: null
 packets: {}
 answers: {}
-worker_runs: []
-artifacts: []
+worker_runs:
+- request_id: create-spec-run-0001
+  status: completed
+  input_digest: sha256:094dd35a9d55c6f2c9af89ec3a0f1d45f3fafd7a4b90ae26de381cb221ea61c9
+  output_digest: null
+  worker: requirements-analyst
+- request_id: create-spec-run-0002
+  status: completed
+  input_digest: sha256:025a39f1e263204bb3330d30609a3bbd05d1f6d71b5b1189ebba9098a0cf9044
+  output_digest: null
+  worker: spec-writer
+artifacts:
+- path: feature-docs/ac6-red-reason-change-set/REQUIREMENTS.md
+  sha256: sha256:a98e3f3a0557732a43df3fbe07f1dfa20e7cfce0648bdb7a1a281fddca562b0f
+  produced_by: create-spec-run-0002
+- path: feature-docs/ac6-red-reason-change-set/SPEC.md
+  sha256: sha256:5c6701d338b4b524bfd04217cc208d344d8bb511c6828e6ea3e86e19dda6ef0e
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
