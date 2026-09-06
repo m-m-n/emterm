@@ -84,7 +84,8 @@ workflow:
     completed_at_commit: a7cab3ced700b59736e51b353ebb29b6b83715fb
     base_commit: 398f277076273cf556a2a0dad923e1ac92e8c455
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: a94a500da73e963dbcf1a262c5a8a58d42d0669e
   - id: verify
     status: pending
     result: null
@@ -107,13 +108,15 @@ tasks:
     notes: null
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, spec]
     discretionary: []
     cross_validation: false
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 
