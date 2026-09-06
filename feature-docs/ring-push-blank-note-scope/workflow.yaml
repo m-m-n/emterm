@@ -1,0 +1,158 @@
+schema_version: 1
+feature: ring-push-blank-note-scope
+created: 2026-09-06
+base_branch: main
+goal: |
+  # term_core: ring_push_blank の冗長性 NOTE が Step 3 全体を always a no-op と断定している
+
+  種別: バグ
+  Notion: https://www.notion.so/3d13509ec8ee818481a4fe4edb486104
+
+  ## 現象（必須）
+  `crates/term_core/src/ring_buffer/tests.rs` の `test_ring_push_blank_clears_recycled_row_overflow_entries` に置かれた冗長性 NOTE の結論文が、製品コードに対して広すぎる断定になっている。
+  現在の結論文は「The new-bottom-row clear is therefore always a no-op within a single push」と書いており、Step 3 ブロック全体が単一 push 内で常に no-op であると読める。
+  実際に no-op なのは Step 3 の overflow / overflow_ridx クリア対だけで、Step 3 ブロック全体では成り立たない。`ring_push_blank` の Step 3 は次の 3 つを行う。
+  1. `slice.fill(Cell::EMPTY / bce)` によるセル消去
+  2. `self.ring_wrapped[new_bottom_abs] = false;`
+  3. overflow / overflow_ridx のクリア
+  Step 1 の 3 分岐（scrollback_bypass / scrollback_capacity > 0 / disabled）はいずれも overflow 側しかクリアしない。`ring_wrapped` への書き込みは関数内で 1 箇所のみ、セル消去も Step 3 のみ。つまり 1 と 2 は eviction 側に対応物が存在せず、no-op ではない。
+  なお `new_bottom_abs == evicted_abs` という NOTE の中核主張自体は正しい（`rows >= 1` のとき `((H+1)%R + R-1)%R == H`）ので、そこは問題ない。問題は、その正しい前提から広すぎる結論を導いている点。
+
+  ## 再現手順（必須）
+  1. `crates/term_core/src/ring_buffer/tests.rs` の `test_ring_push_blank_clears_recycled_row_overflow_entries` 末尾の NOTE を読む
+  2. `crates/term_core/src/ring_buffer.rs` の `ring_push_blank` の Step 1 の 3 分岐と Step 3 を読み比べる
+  3. Step 3 のうち eviction 側に対応物があるのは overflow / overflow_ridx クリアだけであることを確認する
+
+  ## 期待する挙動（必須）
+  NOTE の結論文を overflow クリアに限定し、セル fill と `ring_wrapped[new_bottom_abs] = false` には eviction 側の対応物が無いため冗長ではない旨を 1〜2 行追記する。
+
+  ## 完了の定義（必須）
+  - [ ] NOTE の「always a no-op」が overflow / overflow_ridx クリアに限定されている
+  - [ ] セル fill と `ring_wrapped` リセットは eviction 側に対応物が無く必須である旨が書かれている
+  - [ ] `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib` が green
+  - [ ] `cargo fmt --manifest-path crates/term_core/Cargo.toml --check` が clean
+
+  ## 該当箇所（任意）
+  `crates/term_core/src/ring_buffer/tests.rs:528-530`（NOTE の結論文）、`crates/term_core/src/ring_buffer.rs` の `ring_push_blank` Step 1 / Step 3
+
+  ## 実害・発生条件（任意）
+  - この NOTE の目的は「どのクリア箇所が効いているか」を将来の保守者に伝えることなので、断定が広すぎると誤読を誘発する
+  - 当該テストは overflow / overflow_ridx しか検査していないため、Step 3 ブロックを丸ごと削除してもテストはグリーンのまま通る
+  - その削除が入ると、リサイクル行に stale な `wrapped=true` と退避前のセル内容が残る
+
+  由来: feature `ring-push-blank-note-unconditional` のレビュー round 1、comprehensive 観点 finding `28243eee57171239`（medium / confidence 65）。severity が medium で auto-fix ゲート（critical/high のみ）の対象外だったため deferred とした。記録は `feature-docs/ring-push-blank-note-unconditional/reviews/round1.yaml`。
+parent_branch: em-workflow/ring-push-blank-note-scope/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/web-shared/settings/ui-theme-presets.ts
+      - src-tauri/web-shared/settings/markdown-theme-presets.ts
+      - src-tauri/web-shared/components/md3-select.css
+      - src-tauri/web-shared/components/md3-select.ts
+  components:
+    term_core:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path crates/term_core/Cargo.toml --check"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 81ae6b49f6d96a206ec64a76ab4b59a171c8bbb7
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      Comment-only edit inside an existing Rust test file. No UI surface, no
+      user-visible behaviour, no new module or public API, and no
+      design-system file is touched, so there is nothing for a design step to
+      produce.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: Narrow the "always a no-op" conclusion to the overflow clear pair
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Record that the cell fill and the `ring_wrapped` reset are not redundant
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Preserve the NOTE's still-correct reasoning
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Comment-only change, confined to the test file
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Formatting — cargo fmt stays clean, ~72-column wrap
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: Wording register — English, matching surrounding comments
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Behavioural neutrality — zero behavioural change
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
