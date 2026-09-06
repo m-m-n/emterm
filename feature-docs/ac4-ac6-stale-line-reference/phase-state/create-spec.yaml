@@ -3,19 +3,23 @@ feature: ac4-ac6-stale-line-reference
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: dc88fec3a572fa0d29533b7717f44a12d998b630
-last_input_digest: sha256:743ae90ca3691a6ce8d87bb853c90499f94336d22a72b4b5f7877aa61f8d9282
-active_request_id: create-spec-run-0001
+base_revision: 8c6e2e1d47a56660f11ad1778923a961a5b39b3f
+last_input_digest: sha256:7d9660044e164a72b2d978f812550fc3aaf466e0a6c2d3d454f9eec8a123597d
+active_request_id: create-spec-run-0002
 packets: {}
 answers: {}
 worker_runs:
 - request_id: create-spec-run-0001
-  status: dispatched
+  status: completed
   input_digest: sha256:743ae90ca3691a6ce8d87bb853c90499f94336d22a72b4b5f7877aa61f8d9282
+  output_digest: sha256:7bc31bcf8273ca509496d02021dda2de0b7a2737d61b334d90b102235e321990
+- request_id: create-spec-run-0002
+  status: dispatched
+  input_digest: sha256:7d9660044e164a72b2d978f812550fc3aaf466e0a6c2d3d454f9eec8a123597d
   output_digest: null
 artifacts: []
 patches: []
-progress_fingerprint: null
+progress_fingerprint: sha256:a8400112bb7ed841671f5627dd5f8d1a00eb49889c82e2f298bf056cae6f9795
 stale_redispatch_count: 0
 resolved_input_cache:
   design_system_candidates:
