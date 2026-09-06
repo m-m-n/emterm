@@ -1,0 +1,60 @@
+schema_version: 1
+feature: ac4-ac6-stale-line-reference
+phase: create-plan
+status: applying_patch
+generation: 1
+base_revision: d2889d1647d39a30951d04fa71533bdabdce7ac7
+last_input_digest: sha256:6eb985ac1cad64fa5e3987bf7fd691963c203baea8c799d64aae9a562a3ea723
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: completed
+  input_digest: sha256:6eb985ac1cad64fa5e3987bf7fd691963c203baea8c799d64aae9a562a3ea723
+  output_digest: sha256:73415c7d12564c439519b5a002c689b632d52584843ec042782328a9d48b3aff
+artifacts:
+- path: feature-docs/ac4-ac6-stale-line-reference/IMPLEMENTATION.md
+  sha256: sha256:bb7e5015328c3d33aedb8aad48c622e3f483b3dc6452579ae6a856a6321b788e
+  produced_by: create-plan-run-0001
+- path: feature-docs/ac4-ac6-stale-line-reference/VERIFICATION.md
+  sha256: sha256:0122638faa7e23ccc334f428d5cc18fa29d653c0778a11b8df7f059c9c93dfcf
+  produced_by: create-plan-run-0001
+- path: feature-docs/ac4-ac6-stale-line-reference/tasks/task0001.md
+  sha256: sha256:b6188e295c01958e67b13943bef7111de3b4301c8c387c427d5d1a5b606ce104
+  produced_by: create-plan-run-0001
+patches:
+- patch_id: create-plan-p0001
+  status: applied
+  base_input_digest: sha256:6eb985ac1cad64fa5e3987bf7fd691963c203baea8c799d64aae9a562a3ea723
+  base_workflow_blob: 5aae364378e8ab6b130aab8f55197c37aa8ed8aa
+progress_fingerprint: sha256:e950597ca86c7d02c019f1473c10eada87dd55e2fa0441b14667c9a93f908e2d
+stale_redispatch_count: 0
+resolved_input_cache:
+  project_design_system:
+    generation_digest: sha256:370ff237d0b99e75358522891ae9c4e2d82fa9696c5e6d51c5a08247fc5b08c5
+    resolved_at_generation: 1
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
+    truncated: false
+  reference_scan_targets:
+    generation_digest: sha256:4e2bc6f5b60033a8289c7d179cef1bc11eeec9575bf8d66b3d4916621d88fb6e
+    resolved_at_generation: 1
+    paths:
+    - crates/term_core/src/ring_buffer/tests.rs
+    - test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml
+    digests:
+      crates/term_core/src/ring_buffer/tests.rs: sha256:88d053886275329932248bb249aca6e91218495938caafff963ab8ed67db00c4
+      test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml: sha256:5ff71702b84b95ba34721fddaece9b05f6cff2cb0aa2d64f3ff7ba60c14d94df
+    truncated: false
+  e2e:
+    generation_digest: sha256:549cc09a68bbf8d8c433c1c74704a68ce7dbbb4799a0847bc88f825b613d91f7
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
+last_error: null
