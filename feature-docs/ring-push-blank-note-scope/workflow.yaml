@@ -101,7 +101,7 @@ tasks:
     domains: []
     complexity: low
     requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2, NFR3]
-    status: in_progress
+    status: merged
     branch: em-workflow/ring-push-blank-note-scope/task0001
     notes: null
 
