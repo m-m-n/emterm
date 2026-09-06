@@ -72,7 +72,8 @@ workflow:
     completed_at_commit: 83d317ec119b8520aeef6e22a360f1a19bdd33f4
     base_commit: b1201f1d75c71a3201801ce935e25d1b8905fe45
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 3098b850208f2d3ba96e56b5ea6b030bfc5710f1
   - id: verify
     status: pending
     result: null
@@ -95,13 +96,16 @@ tasks:
     notes: null
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor: [comprehensive, architecture, spec]
     discretionary: []
     cross_validation: false
-  perspectives: {}
+  perspectives:
+    comprehensive: {source: codex, status: completed, findings: 0}
+    architecture: {source: "litellm:vertex-glm-5.2", status: completed, findings: 0}
+    spec: {source: "litellm:muse-spark", status: completed, findings: 0}
   residual_critical_high: 0
   needs_rework: false
 
