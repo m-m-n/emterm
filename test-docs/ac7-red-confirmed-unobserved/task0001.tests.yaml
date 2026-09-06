@@ -65,9 +65,16 @@ acceptance_tests:
       `git diff` shows exactly two hunks, both confined to the AC-7 entry
       and the trailing notes block; the header comment, task_id,
       baseline_failures, final_failures and record AC-1 through record AC-6
-      are untouched by the diff; and `git status --porcelain` for the whole
-      change set lists only this one YAML file, no Rust and no TypeScript
-      file.
+      are untouched by the diff; and the task's change set is YAML
+      documentation only, naming both
+      test-docs/stale-test-name-refs/task0001.tests.yaml (the record this
+      task edits) and
+      test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml (this
+      task's own per-task test record), containing no Rust file and no
+      TypeScript file; the workflow-generated documents under
+      feature-docs/ac7-red-confirmed-unobserved/** and the test-docs/
+      record tree are an expected carve-out of that change set and do not
+      affect the no-Rust/no-TypeScript claim.
   AC-7:
     tests: []
     red_confirmed: false
