@@ -86,9 +86,24 @@ workflow:
   status: completed
   completed_at_commit: 2f52751cd91bfe746d607d7a43d6f847079c422b
 - id: verify
-  status: pending
-  result: null
+  status: completed
+  result: pass
   failed_items: []
+  completed_at_commit: fc2a78d348ced9b85456c3a4557024c60ce64c6d
+  notes: |
+    TS-1..TS-6 pass. Build (cargo check), test (838 tests: 825 passed / 0 failed
+    / 13 ignored) and format (cargo fmt --check clean) guards all unchanged from
+    baseline; no Rust file is in the change set (TS-6). SC-1..SC-7 satisfied:
+    the bare present-tense claim is gone from AC-6, AC-4's :523:5 reference now
+    reads "reported at the time of that run", the 7-line cargo test transcript
+    is byte-identical, the file parses as valid YAML with AC-1/2/3/5/7 and every
+    tests: / red_confirmed: field unchanged, both passages name the post-scroll
+    survival assertion and distinguish it from the pre-scroll anti-vacuity
+    guard, and the cited "now line 606" was re-derived against the working tree
+    (558 = pre-scroll guard, 606 = post-scroll survival assertion).
+    E2E: not applicable (e2e_test_command is empty; no end-to-end surface).
+    The 3 judgment checks under "Manual Testing" require a human reader and were
+    not performed in this unattended run.
 - id: retrospect
   status: pending
 tasks:
