@@ -1,17 +1,83 @@
 schema_version: 1
 feature: ac4-ac6-stale-line-reference
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: 5dde9784012226e646513b3e480b94977b516654
-last_input_digest: null
-active_request_id: null
+base_revision: dc88fec3a572fa0d29533b7717f44a12d998b630
+last_input_digest: sha256:743ae90ca3691a6ce8d87bb853c90499f94336d22a72b4b5f7877aa61f8d9282
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+- request_id: create-spec-run-0001
+  status: dispatched
+  input_digest: sha256:743ae90ca3691a6ce8d87bb853c90499f94336d22a72b4b5f7877aa61f8d9282
+  output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: sha256:3fa28d9b01e1b7322fa84c6a256eb12e651b6e5e62ec2f2a6f6bc5883eb03990
+    resolved_at_generation: 1
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/components/md3-select.css
+    - src-tauri/web-shared/settings/markdown-theme-presets.ts
+    - src-tauri/web-shared/settings/ui-theme-presets.ts
+    - src-tauri/web-shared/styles.css
+    - src-tauri/web-shared/styles/data-viewer.css
+    - src-tauri/web-shared/styles/settings-panel.css
+    - src-tauri/web-shared/styles/status-bar.css
+    - src-tauri/web-shared/styles/tab-bar.css
+    digests:
+      doc/UI-DESIGN-GUIDELINES.yaml: sha256:ec2f336bac1c12368464de8686420afc3587aeacf18cfd38f18e09b126bc8eef
+      src-tauri/web-shared/components/md3-select.css: sha256:b09cdb7c03aecfd24ac44581995a8f75188c4929c744af5e065f5a2a947ae9cd
+      src-tauri/web-shared/settings/markdown-theme-presets.ts: sha256:8344c4f43366d3e78df8c8f170a5fc75e93121d16e64912635c51880ff6a429a
+      src-tauri/web-shared/settings/ui-theme-presets.ts: sha256:5e1afbad9942f28348372986ffcb0a77f7992edb67c5d760637c0019404a3094
+      src-tauri/web-shared/styles.css: sha256:a3c02c71242b2b83a4e390276d525d3a20228b75edd9180f07e4a873083054cb
+      src-tauri/web-shared/styles/data-viewer.css: sha256:f9e52eddb4095005dd6332bd926225cd71fbeefe6ca5ceaabde07019bd37d83b
+      src-tauri/web-shared/styles/settings-panel.css: sha256:9888a9d5f95bcbe97d182a57674a6de1070a92e22e7ef9600711ffc89298d2ce
+      src-tauri/web-shared/styles/status-bar.css: sha256:340ca36149748d8c33599e10edadf03c8b518532b3243d7929c48516fc9c4b1e
+      src-tauri/web-shared/styles/tab-bar.css: sha256:ed61cb383c32e63c6a61ffd998bd77373e60201f5a1cdecab18b4d90e9e2f049
+    truncated: false
+  reference_scan_targets:
+    generation_digest: sha256:4e2bc6f5b60033a8289c7d179cef1bc11eeec9575bf8d66b3d4916621d88fb6e
+    resolved_at_generation: 1
+    paths:
+    - crates/term_core/src/ring_buffer/tests.rs
+    - test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml
+    digests:
+      crates/term_core/src/ring_buffer/tests.rs: sha256:88d053886275329932248bb249aca6e91218495938caafff963ab8ed67db00c4
+      test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml: sha256:5ff71702b84b95ba34721fddaece9b05f6cff2cb0aa2d64f3ff7ba60c14d94df
+    truncated: false
+  package_files:
+    generation_digest: sha256:8c6b6fa020a59a2fad99721614231eb23368543249043e745176f02288c1dddb
+    resolved_at_generation: 1
+    paths:
+    - Cargo.toml
+    - bunfig.toml
+    - crates/app_settings/Cargo.toml
+    - crates/mux_ipc/Cargo.toml
+    - crates/term_core/Cargo.toml
+    - crates/term_images/Cargo.toml
+    - package.json
+    - src-tauri/Cargo.toml
+    digests:
+      Cargo.toml: sha256:2298e42884286bdb7d80b31bade40fdcbcad1007e7be5f1f069b2880a6aeabfc
+      bunfig.toml: sha256:e253f5d13effd5a8ad785de3adbc4f911affcd34d5cee556ae60aedcf6f06411
+      crates/app_settings/Cargo.toml: sha256:d5d757853818593f6428330a701d2f0c1d6281f635723eb481fd509ec80afaf3
+      crates/mux_ipc/Cargo.toml: sha256:f1c645dfa5b238c9e881ab6ee868e61fe8c6ad2c96aad0f44cc442ecaec5fcc1
+      crates/term_core/Cargo.toml: sha256:670d5ae571d35415ddca5572af4589c4c7d1f1c64be61831c8622cea88eb3cac
+      crates/term_images/Cargo.toml: sha256:3c8ff743e5b10dbc429e4677c9e2d5ea6aefc49ca50d06a398f2089d9e0e1a49
+      package.json: sha256:f74901f5ef1ce2fac35341bb4ce14201d3c633f2e95c54c8f3d664cd6df559e2
+      src-tauri/Cargo.toml: sha256:11a41803a116b59483e94be3d16a4a14a392661f0b63ce9b6571b07e34dc3191
+    truncated: false
+  e2e:
+    generation_digest: sha256:549cc09a68bbf8d8c433c1c74704a68ce7dbbb4799a0847bc88f825b613d91f7
+    resolved_at_generation: 1
+    paths: []
+    digests: {}
+    truncated: false
 last_error: null
