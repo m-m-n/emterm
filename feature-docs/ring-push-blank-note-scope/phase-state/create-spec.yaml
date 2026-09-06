@@ -1,11 +1,11 @@
 schema_version: 1
 feature: ring-push-blank-note-scope
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 677c457462075aea7adeadfba8e1f6e16ee3ef25
 last_input_digest: sha256:6b4d535dac75a6c2084be68a3db165dc83764e8842261a9dc12177481a8d8b8c
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -13,7 +13,17 @@ worker_runs:
     status: completed
     input_digest: sha256:6b4d535dac75a6c2084be68a3db165dc83764e8842261a9dc12177481a8d8b8c
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:6b4d535dac75a6c2084be68a3db165dc83764e8842261a9dc12177481a8d8b8c
+    output_digest: null
+artifacts:
+  - path: feature-docs/ring-push-blank-note-scope/REQUIREMENTS.md
+    sha256: sha256:ce6259d22345f99599d7c826f76d5936b723bfb907f507b8db30fbf61fe9e43a
+    produced_by: create-spec-run-0002
+  - path: feature-docs/ring-push-blank-note-scope/SPEC.md
+    sha256: sha256:d0ec78e44f16d09263813cab0dcd13f90660e37eab9585fa8d6954c32e886ad2
+    produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
