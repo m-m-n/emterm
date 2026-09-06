@@ -89,7 +89,7 @@ tasks:
     domains: [api-contract]
     complexity: low
     requirements: [FR1, FR2, FR3, FR4, FR5, NFR1, NFR2, NFR3, NFR4]
-    status: in_progress
+    status: merged
     branch: em-workflow/ac6-red-reason-change-set/task0001
     notes: null
 
