@@ -1,0 +1,186 @@
+schema_version: 1
+feature: ac4-ac6-stale-line-reference
+created: '2026-09-06'
+base_branch: main
+goal: |
+  Notion タスク: test-docs: ring-push-blank-row-scope-test の AC-4/AC-6 が旧行番号 523 を現在形で指している
+  種別: バグ
+  URL: https://www.notion.so/3d13509ec8ee8179b1ffc467194bcd62
+
+  ## 現象（必須）
+  `test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml` の AC-4 / AC-6 が、いまや存在しない位置を指す行番号参照を現在形で持っている。
+  feature `ring-push-blank-note-unconditional` の実装で `crates/term_core/src/ring_buffer/tests.rs` の NOTE が 8 行から 16 行へ拡張された。その結果 survivor assertion
+  ```rust
+  assert!(core.overflow.contains_key(&(0u32, abs1)));
+  ```
+  は 523 行目から 531 行目へ移動した。現在の 523 行目は NOTE 内のコメント行（`// no fixture can pin the two sites independently. The reason is`）。
+  ところが同記録には次の記述が 523 行を指したまま残っている。
+  - AC-6 の結び: `The failing line (523) is a survivor-row assertion`
+  - AC-4: `this exact survival assertion failed first: ... at crates/term_core/src/ring_buffer/tests.rs:523:5`
+  前者は現在形でファイルの状態を主張する文なので、いまや偽。
+
+  ## 再現手順（必須）
+  1. `test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml` の AC-4 と AC-6 を読む
+  2. `crates/term_core/src/ring_buffer/tests.rs` の 523 行目を開き、survivor assertion ではなく NOTE のコメント行であることを確認する
+  3. survivor assertion が 531 行目にあることを確認する
+
+  ## 期待する挙動（必須）
+  行番号を現在形で主張している散文だけを直す。逐語トランスクリプト（AC-6 の `cargo test` 出力、`panicked at ...:523:5`）は当時の実行結果そのものなので書き換えない。
+  対処は次のどちらか。
+  - 「当時の行番号」である旨を添える（例: `The failing line (523 at the time of that run; the same assertion now sits at line 531 after the NOTE was extended) is a survivor-row assertion, ...`）
+  - 行番号を引かず、アサーション式そのもの（`core.overflow.contains_key(&(0u32, abs1))`）で同定する形に書き換える（以後の行移動で再び陳腐化しない）
+
+  ## 完了の定義（必須）
+  - [ ] AC-6 の結びと AC-4 の散文が、現在の行番号か「当時の行番号」である旨のどちらかで正しくなっている
+  - [ ] AC-6 の `cargo test` 逐語トランスクリプトは変更されていない
+  - [ ] YAML として妥当なまま（構造・他フィールドは不変）
+
+  ## 該当箇所（任意）
+  `test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml` の AC-4 と AC-6（77-78 行付近）。逐語トランスクリプトは AC-6 の 69-75 行。
+
+  ## 実害・発生条件（任意）
+  - 将来 AC-4 / AC-6 のミューテーションを再実行して裏を取ろうとした人が、アサーションではなく NOTE のコメント行へ誘導される
+  - feature `ring-push-blank-note-unconditional` は同じファイルの AC-5 から「in this fixture」を削って記録とコードの整合を取りに行ったのに、同じ編集が生んだこの参照ズレだけが放置されており、方針として不整合
+
+  由来: feature `ring-push-blank-note-unconditional` のレビュー round 1、comprehensive 観点 finding `38eeec827d9fed29`（medium / confidence 65）。severity が medium で auto-fix ゲート（critical/high のみ）の対象外だったため deferred とした。記録は `feature-docs/ring-push-blank-note-unconditional/reviews/round1.yaml`。
+parent_branch: em-workflow/ac4-ac6-stale-line-reference/integration
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+  components:
+    term_core:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      format_command: cargo fmt --manifest-path crates/term_core/Cargo.toml --check
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 7d327350e11fe9d313c13e9229b3ecae4c810673
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: Documentation-only correction to prose inside a YAML test record. There is no UI surface, no user-visible behavior, no new module, and no interface to design.
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: null
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Correct AC-6's closing prose
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-3
+    - TS-4
+  FR2:
+    title: Correct AC-4's prose
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-4
+  FR3:
+    title: Leave the verbatim transcript untouched
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+  FR4:
+    title: Disambiguate the assertion when identifying it by expression
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-5
+  FR5:
+    title: Any newly written line number must be verified against the file at edit time
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-5
+  FR6:
+    title: Preserve YAML validity and surrounding structure
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+    - TS-2
+  FR7:
+    title: Scope is documentation only
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-6
+  NFR1:
+    title: Durability against future line drift
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-5
+  NFR2:
+    title: Historical fidelity of the record
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-4
+  NFR3:
+    title: Diff minimality
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}

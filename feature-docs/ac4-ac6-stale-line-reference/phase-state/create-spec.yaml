@@ -1,23 +1,38 @@
 schema_version: 1
 feature: ac4-ac6-stale-line-reference
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: 8c6e2e1d47a56660f11ad1778923a961a5b39b3f
+base_revision: 7d327350e11fe9d313c13e9229b3ecae4c810673
 last_input_digest: sha256:7d9660044e164a72b2d978f812550fc3aaf466e0a6c2d3d454f9eec8a123597d
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets: {}
-answers: {}
+answers:
+  create-spec.design-system:
+    packet_id: null
+    answered_at: '2026-09-06T23:26:21+09:00'
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids:
+    - top_candidate_or_none
+    freeform: null
+    normalized_answer: 'project_native; paths: doc/UI-DESIGN-GUIDELINES.yaml, src-tauri/web-shared/styles.css'
 worker_runs:
 - request_id: create-spec-run-0001
   status: completed
   input_digest: sha256:743ae90ca3691a6ce8d87bb853c90499f94336d22a72b4b5f7877aa61f8d9282
   output_digest: sha256:7bc31bcf8273ca509496d02021dda2de0b7a2737d61b334d90b102235e321990
 - request_id: create-spec-run-0002
-  status: dispatched
+  status: completed
   input_digest: sha256:7d9660044e164a72b2d978f812550fc3aaf466e0a6c2d3d454f9eec8a123597d
-  output_digest: null
-artifacts: []
+  output_digest: sha256:e9277ec9985c74496071b07529e5c78fd62ebed2921fd9986daa275b191eade6
+artifacts:
+- path: feature-docs/ac4-ac6-stale-line-reference/REQUIREMENTS.md
+  sha256: sha256:72549e4c8fb2f485873223bde4bd16612d3e394277703036e7d0c39f4028f5be
+  produced_by: create-spec-run-0002
+- path: feature-docs/ac4-ac6-stale-line-reference/SPEC.md
+  sha256: sha256:8a96049464b98543c7f481e8c5fe665e4a915fff01105279e44a2880f2820717
+  produced_by: create-spec-run-0002
 patches: []
 progress_fingerprint: sha256:a8400112bb7ed841671f5627dd5f8d1a00eb49889c82e2f298bf056cae6f9795
 stale_redispatch_count: 0
