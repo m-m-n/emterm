@@ -1,14 +1,18 @@
 schema_version: 1
 feature: ring-push-blank-note-scope
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
 base_revision: 677c457462075aea7adeadfba8e1f6e16ee3ef25
-last_input_digest: null
-active_request_id: null
+last_input_digest: sha256:6b4d535dac75a6c2084be68a3db165dc83764e8842261a9dc12177481a8d8b8c
+active_request_id: create-spec-run-0002
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: sha256:6b4d535dac75a6c2084be68a3db165dc83764e8842261a9dc12177481a8d8b8c
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
