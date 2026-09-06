@@ -1,0 +1,17 @@
+schema_version: 1
+feature: ac4-ac6-stale-line-reference
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: 5dde9784012226e646513b3e480b94977b516654
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
