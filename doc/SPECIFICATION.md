@@ -93,6 +93,7 @@ Full-featured VT100/VT220/xterm ANSI escape sequence parser implemented as a pur
 - Application cursor keys (DECCKM), alternate screen (DECSET 47/1047/1049)
 - Device attributes: DA1 (`CSI c`) and DA2 (`CSI > c`) report a VT500 conformance level, reflecting implemented capabilities (132-column mode, Sixel graphics, ANSI color)
 - Device-query responses (DA1/DA2/DSR/XTWINOPS) are delivered back to the application that issued the query rather than rendered as visible text, including at `tmux` startup and during tab-switch-triggered resizes
+- Wide (double-width) character pairs keep the grid's width invariant: overwriting, erasing, or inserting/deleting on just one half of a pair blanks the surviving half to a single-width space, across the print, erase (EL/ED), and edit (ICH/DCH/ECH) paths
 
 **Handler Architecture:**
 - `TerminalStateAccessor` trait provides a clean interface for handler access
@@ -545,6 +546,7 @@ Notification system for terminal activity in background tabs.
 - Notification on bell character (BEL) or any output activity
 - Click on OS notification to focus the tab
 - Throttling to prevent notification spam during high-frequency output
+- Notification title/body text is escaped against markup before being sent to a notification server that reports markup support, and is not written to the log file
 
 ---
 
@@ -1192,8 +1194,10 @@ Panes report the state of an AI agent running in them via an OSC 777 sequence; e
 - Tab/window list badges aggregate per-pane state with priority: blocked > unseen done > working > seen done > idle; each state renders as an emoji badge — working ⚡, idle 💤, blocked ❓ (unseen) / ❔ (seen), done ✅ (unseen) / 💤 (seen, same badge as idle) — falling back to a plain circle indicator if the emoji texture fails to load
 - Badge auto-clear: if a pane's shell returns to an interactive prompt (detected via an OSC 133 command-end mark followed by a prompt-start mark) after a status was set without an explicit `clear`/`done` report, the badge clears automatically; applies to both plain tabs and mux panes; panes whose shell does not emit OSC 133 do not auto-clear
 - The status bar carries no agent-status summary; badges are the only always-visible surface
-- OS notification on real transitions to blocked/done for non-visible panes; suppressed for same-state re-reports, name-only changes, and replay; rate-limited; gated by a dedicated agent-notification setting (default on) plus the global notification setting
-- Settings > Agent category holds independent per-event notification toggles (`agent_notify_on_done`, `agent_notify_on_blocked`), both default on; existing `settings.json` files without these keys deserialize with the defaults
+- OS notification on real transitions to blocked/done; suppressed for same-state re-reports, name-only changes, and replay; rate-limited; gated by a dedicated agent-notification setting (default on) plus the global notification setting
+- Notifications for a visible pane (the focused window's active tab) fire by default (`agent_notify_visible_pane`, default on); turning it off restores suppression for visible panes while non-visible panes are unaffected
+- Settings > Agent category holds independent per-event notification toggles (`agent_notify_on_done`, `agent_notify_on_blocked`) and the visible-pane toggle (`agent_notify_visible_pane`), all default on; existing `settings.json` files without these keys deserialize with the defaults
+- Agent-status state is scoped per mux connection, so one eMterm process attached to multiple mux daemons keeps each daemon's panes separate; state (including the rate-limit and public-pane-id bookkeeping) is released when a tab detaches from mux mode
 - Public opaque, non-reusable pane IDs; `EMTERM_PANE_ID` is injected into each mux pane's environment for `--pane current` resolution
 
 **Agent-Facing CLI Commands:**
