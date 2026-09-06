@@ -1,0 +1,55 @@
+phase: verify
+feature: ac6-red-reason-change-set
+result: pass
+scenarios:
+  TS-1: pass   # YAML safe_load ok; acceptance_tests == AC-1..AC-7; top-level keys == {task_id, baseline_failures, final_failures, acceptance_tests, notes}; AC-6.red_confirmed == false
+  TS-2: pass   # single-file phrase absent (count 0); no count / sole-entry assertion in any wording
+  TS-3: pass   # "no Rust file", "no TypeScript file", both record paths present
+  TS-4: pass   # feature-docs/ named as an expected carve-out
+  TS-5: pass   # task_id / baseline_failures / final_failures / notes / AC-1..AC-5, AC-7 byte-identical to main; diff is 1 hunk confined to AC-6 red_reason
+  TS-6: pass   # ">-" folded indicator retained; top-level key order unchanged; 2-space indent and matching wrap width
+  TS-7: pass   # change set contains no .rs / .ts / .css and nothing under src-tauri/, crates/, scripts/; paths limited to the record, feature-docs/ac6-red-reason-change-set/**, test-docs/ac6-red-reason-change-set/**
+  TS-8: pass   # manual judgment: red_confirmed:false, invariant-guard framing, clean pre-state observation, two-hunk git diff observation and untouched-keys list all intact; replacement clause is a category assertion ("YAML documentation only ... no Rust file and no TypeScript file"), not a substituted exhaustive enumeration; every assertion is re-checkable from the record plus the ac7 task's own commit
+spec_success_criteria:
+  AC-1: pass
+  AC-2: pass
+  AC-3: pass
+  AC-4: pass
+  AC-5: pass
+  AC-6: pass
+regression_baseline:
+  rust_build: pass       # CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml (after bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings)
+  typescript_build: pass # bun run typecheck
+  typescript_test: pass  # bun test -> 345 pass / 0 fail
+  rust_test: pre_existing_failure
+  rust_format: pre_existing_failure
+  typescript_format: pre_existing_failure
+pre_existing_conditions:
+  - id: PE-1
+    command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+    detail: >-
+      app::tests::agent_status::ac3_detach_releases_model_entry_public_id_and_rate_limit_identity
+      fails ("the rate-limit window armed by pump_all's own drain is still open",
+      src-tauri/src/app/tests/agent_status.rs:1570). 3266 passed / 1 failed,
+      reproduced on two consecutive runs (not flaky).
+    attribution: >-
+      Not attributable to this feature. `git diff --name-only main...HEAD` lists no
+      .rs file, so the Rust sources on this branch are byte-identical to main;
+      the failure is inherited from the base commit. Recorded per VERIFICATION.md
+      "Build Verification" (a failure that also reproduces on the base commit is a
+      pre-existing condition).
+  - id: PE-2
+    command: "cargo fmt --check"
+    detail: >-
+      rustfmt drift in crates/mux_ipc/src/handoff.rs, src-tauri/src/agent_status_exit_latch.rs,
+      src-tauri/src/arg_dispatch.rs, src-tauri/src/mux/inherited_pty.rs,
+      src-tauri/src/mux/session/session.rs, src-tauri/tests/cli_subcommands.rs,
+      src-tauri/tests/mux_hot_upgrade.rs.
+    attribution: >-
+      Not attributable to this feature. None of the listed files is in the change set.
+  - id: PE-3
+    command: "bunx biome format ."
+    detail: "format drift in src-tauri/web-shared/settings/types.ts"
+    attribution: >-
+      Not attributable to this feature. The file is not in the change set.
+excluded_requirements: []
