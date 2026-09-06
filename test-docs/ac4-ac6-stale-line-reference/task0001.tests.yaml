@@ -1,0 +1,88 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >
+      No compiled test covers this; checked against the YAML-parsed value of
+      the record's AC-6 red_reason (D4). Pre-edit: the literal present-tense
+      phrase "The failing line (523) is a survivor-row assertion" was
+      present and no "at the time of that run"-style qualifier existed
+      anywhere in the value — check failed with "present-tense claim still
+      present: 'The failing line (523) is a survivor-row assertion'".
+      Post-edit: the phrase is gone and the qualifier is present, bound to
+      the same 523 — check passes.
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >
+      No compiled test covers this; checked against the YAML-parsed value of
+      the record's AC-4 red_reason (D4). Pre-edit: the literal present-tense
+      location phrase "tests.rs:523:5. That is a survivor-row assertion (not
+      a recycled-row one)" was present — check failed with "present-tense
+      location claim still present". Post-edit: that phrase is gone and the
+      `:523:5` reference instead carries "reported at the time of that
+      run" — check passes.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >
+      Checked both the record's AC-4 and AC-6 red_reason parsed values for
+      the two qualifier phrases "post-scroll survival assertion" and
+      "pre-scroll anti-vacuity guard". Pre-edit: neither phrase appeared in
+      either entry — check failed listing both entries as missing both
+      phrases. Post-edit: both entries carry both phrases, distinguishing
+      the assertion the AC-4/AC-6 mutation fails from its textually
+      identical pre-scroll twin — check passes.
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >
+      Re-derived the post-scroll survival assertion's current line number by
+      scanning the working tree's crates/term_core/src/ring_buffer/tests.rs
+      for the two `assert!(core.overflow.contains_key(&(0u32, abs1)))`
+      occurrences and taking the later one (558 = pre-scroll anti-vacuity
+      guard, 606 = post-scroll survival assertion, at the moment of this
+      edit). Checked that both corrected passages' current-line mentions
+      equal that re-derived number. Pre-edit: the AC-4 entry contained no
+      "now line NNN" mention at all — check failed. Post-edit: the AC-4
+      entry reads "(now line 606)" and the AC-6 entry reads "(now at line
+      606)", both matching the re-derived number — check passes.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Regression guard, not a red/green criterion: this already held before
+      any edit (the transcript is line-position-adjacent to, but outside,
+      the two rewritten passages). Extracted the transcript block (from the
+      "... FAILED" line through the "test result: FAILED ..." line,
+      inclusive) from the pre-edit and post-edit file content and compared
+      them line-for-line; both extractions are 7 lines and byte-identical,
+      including the "panicked at
+      crates/term_core/src/ring_buffer/tests.rs:523:5:" line. `git diff`
+      confirms no changed line falls inside this range.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Regression guard, not a red/green criterion: this already held before
+      any edit since the edit only ever rewrites prose inside two existing
+      `red_reason` scalars. Parsed both the pre-edit and post-edit file with
+      a YAML loader and compared `task_id`, `baseline_failures`,
+      `final_failures`, the `acceptance_tests` key set, and every entry's
+      `tests:` / `red_confirmed:` field; all identical across the edit, and
+      the post-edit file parses without error.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Regression guard, not a red/green criterion: this is vacuously true
+      before any edit exists (an empty diff is trivially "confined" to
+      nothing). Post-edit, `git diff --name-only` against the parent branch
+      lists exactly one changed file
+      (test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml), and
+      every added line in that file's diff begins with exactly 6 spaces of
+      indentation (checked programmatically, not by eye). No other file in
+      the repository was touched.

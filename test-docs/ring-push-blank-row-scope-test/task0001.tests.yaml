@@ -38,10 +38,13 @@ acceptance_tests:
       clear replaced by an unconditional `self.overflow.clear()` /
       `self.overflow_ridx.clear()` at every clearing site inside
       `ring_push_blank`, this exact survival assertion failed first:
-      `assertion failed: core.overflow.contains_key(&(0u32, abs1))` at
-      crates/term_core/src/ring_buffer/tests.rs:523:5. That is a
-      survivor-row assertion (not a recycled-row one), which is the evidence
-      this criterion requires.
+      `assertion failed: core.overflow.contains_key(&(0u32, abs1))`,
+      reported at the time of that run at
+      crates/term_core/src/ring_buffer/tests.rs:523:5 (now line 606).
+      That is the post-scroll survival assertion, not the textually
+      identical pre-scroll anti-vacuity guard earlier in the same test,
+      and not a recycled-row assertion — which is the evidence this
+      criterion requires.
   AC-5:
     tests: []
     red_confirmed: false
@@ -74,8 +77,12 @@ acceptance_tests:
 
       test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 837 filtered out
 
-      The failing line (523) is a survivor-row assertion, matching the
-      requirement that the failure not land on a recycled-row assertion.
+      At the time of that run, the failure was reported at line 523 —
+      the assertion `core.overflow.contains_key(&(0u32, abs1))`, which
+      is the post-scroll survival assertion (now at line 606), not the
+      textually identical pre-scroll anti-vacuity guard earlier in the
+      same test. This still matches the requirement that the failure
+      not land on a recycled-row assertion.
       The mutation was then reverted via `git checkout --
       crates/term_core/src/ring_buffer.rs`; `git hash-object
       crates/term_core/src/ring_buffer.rs` before (875895f68535d87e3b91fad
