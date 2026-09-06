@@ -1,0 +1,148 @@
+task_id: task0001
+baseline_failures:
+  - "build: cargo test --manifest-path src-tauri/Cargo.toml --lib fails to
+    compile — build.rs panics with build_rs.font_missing: bundled font
+    missing at assets/fonts/Noto-COLRv1.ttf. Pre-existing environment
+    issue (missing bundled font asset), unrelated to this task's
+    documentation-only change. Per IMPLEMENTATION.md decision D-4, this
+    command is not an acceptance gate for this feature."
+final_failures:
+  - "build: cargo test --manifest-path src-tauri/Cargo.toml --lib fails to
+    compile — identical build_rs.font_missing panic, re-verified
+    unchanged after the edit. No regression: this task touched no Rust
+    or TypeScript source."
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the record already
+      parsed with `acceptance_tests` keys exactly {AC-1..AC-7} and
+      top-level keys exactly {task_id, baseline_failures, final_failures,
+      acceptance_tests, notes} before this task's edit — a PyYAML load
+      confirmed both sets pre-edit. Re-verified identical post-edit.
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, a PyYAML load of the AC-6 red_reason counted 1
+      occurrence of the clause "lists only this one YAML file" — the
+      sole-entry, whole-change-set claim this task removes. After the
+      edit, the same count is 0, and a scan for file-count / sole-entry
+      phrasing ("one file", "two files", "sole entry", "only one",
+      "exactly two files", "exactly these") also returns none present.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, the AC-6 red_reason named neither
+      test-docs/stale-test-name-refs/task0001.tests.yaml nor
+      test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml, and did
+      not contain the phrase "YAML documentation only" (confirmed via
+      PyYAML load and substring checks on the loaded text). After the
+      edit, the loaded red_reason states the change set is YAML
+      documentation only, names both paths verbatim, and states it
+      contains no Rust file and no TypeScript file.
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, a substring check of the loaded AC-6 red_reason
+      for "feature-docs/" returned 0 occurrences — no carve-out was
+      named. After the edit, the same check finds
+      feature-docs/ac7-red-confirmed-unobserved/** named explicitly as
+      an expected carve-out, alongside the test-docs/ record tree.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: before this task's
+      edit, the AC-6 entry already had red_confirmed: false and its
+      red_reason already contained the invariant-guard framing, the
+      clean pre-state observation, the two-hunk git diff observation and
+      the untouched-keys list — all four substring checks passed
+      pre-edit via PyYAML load. Re-verified identical post-edit; only the
+      closing change-set clause changed.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: comparing `git show
+      HEAD:<path>` (the committed pre-edit version, taken before this
+      task's commit) against the post-edit working-tree file after
+      loading both with PyYAML, every acceptance_tests entry other than
+      AC-6 is equal, and task_id, baseline_failures, final_failures and
+      notes are equal. This holds by construction of the edit (only the
+      AC-6 red_reason scalar was touched), so there was no observable
+      pre-state to fail; re-verified as true after the edit.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the file already used
+      the `>-` folded block-scalar indicator for every red_reason and for
+      notes, and the top-level key order (task_id, baseline_failures,
+      final_failures, acceptance_tests, notes) was already fixed before
+      this task's edit — grep confirmed both pre-edit. Re-verified
+      identical post-edit: the AC-6 red_reason keeps `>-`, key order is
+      unchanged, and the new lines keep the surrounding 6-space
+      indentation and a comparable line-wrap width (mostly 60-75
+      characters, matching the file's existing entries; the few shorter
+      lines are forced by unbreakable long file-path tokens, the same
+      pattern already present in the file's AC-1 entry).
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Human-judgment check, no mechanical form: reading the rewritten
+      clause, each of its three assertions names a durable source. (a)
+      "the task's change set is YAML documentation only, naming both
+      test-docs/stale-test-name-refs/task0001.tests.yaml ... and
+      test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml" is
+      re-checkable from the record's own AC-1 entry (which already names
+      the first path) plus the ac7 task's commit file list. (b)
+      "containing no Rust file and no TypeScript file" is re-checkable
+      via `git show --stat` / `git diff-tree --name-only` on the ac7
+      task's commit and inspecting extensions. (c) the
+      feature-docs/ac7-red-confirmed-unobserved/** and test-docs/
+      carve-out is re-checkable the same way, by matching the commit's
+      file list against those path globs. No clause depends on
+      transient working-tree state observed while making this edit; all
+      three refer to the record plus the ac7 commit alone.
+  AC-9:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: `git status
+      --porcelain` in the worktree, taken immediately before writing
+      this test record (with only the target YAML edited and nothing
+      else yet staged or created), listed exactly one modified path,
+      test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml, and no
+      path under src-tauri/, crates/ or scripts/ and no .rs / .ts / .css
+      path. This task's own workflow-generated artifacts
+      (feature-docs/ac6-red-reason-change-set/** and
+      test-docs/ac6-red-reason-change-set/**) are produced by the
+      workflow and this test record itself, as declared in the task
+      plan's Scope section; they are not additional modified source.
+notes: >-
+  Documentation-record task (task0001.md Design section "Blocking
+  precondition"; IMPLEMENTATION.md decision D-3). No test harness,
+  fixture or script file is committed by this task — all assertions
+  above were run as ad-hoc python3 (PyYAML) and git commands against
+  test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml, both
+  before and after the edit, per the task plan's Test Notes. AC-2 and
+  AC-4 are the red-to-green criteria the task plan calls out explicitly;
+  AC-3 also had an observable pre-state (the naming and
+  "YAML documentation only" phrasing were absent) and is recorded as
+  red-confirmed accordingly, since the task plan's own Design section
+  requires those exact assertions to be present. AC-1, AC-5, AC-6, AC-7
+  and AC-9 are invariant guards verified to hold both before and after.
+  AC-8 is the human-judgment check the task plan calls for; it has no
+  mechanical form. project_commands.build/format were not run: this
+  change touches no Rust or TypeScript source, and IMPLEMENTATION.md
+  decision D-4 states the project's build/test commands are not part of
+  this feature's acceptance gate. project_commands.test (cargo test
+  --lib) was run before and after per the implementer workflow's
+  baseline requirement; both runs fail identically at the build-script
+  stage due to a pre-existing missing bundled font asset
+  (assets/fonts/Noto-COLRv1.ttf), unrelated to this task.
