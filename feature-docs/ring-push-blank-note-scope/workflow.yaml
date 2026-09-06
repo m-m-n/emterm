@@ -87,8 +87,9 @@ workflow:
     status: completed
     completed_at_commit: a94a500da73e963dbcf1a262c5a8a58d42d0669e
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: e7376bcbe4fade6dad129ce9fe56b30e1a073313
+    result: pass
     failed_items: []
   - id: retrospect
     status: pending
