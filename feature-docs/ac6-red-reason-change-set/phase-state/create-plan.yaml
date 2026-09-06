@@ -1,0 +1,21 @@
+schema_version: 1
+feature: ac6-red-reason-change-set
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: b052ae5bc81f0e6f19d891c623c624ed1c77b307
+last_input_digest: sha256:4d56ef16ff2e987c30bd8965b139a79547a2b43eb8de723d612fafbeabf5b77e
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:4d56ef16ff2e987c30bd8965b139a79547a2b43eb8de723d612fafbeabf5b77e
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
