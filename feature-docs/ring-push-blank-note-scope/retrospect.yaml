@@ -1,0 +1,14 @@
+feature: ring-push-blank-note-scope
+collected_at: "2026-09-06T23:05:00+09:00"
+session_ids: ["01a076f3-f97b-73f2-80f3-e6e761375cb6"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1: codex primary run comprehensive#0 skipped with skip_reason rate_limited; the perspective was still covered by the litellm run comprehensive#1 (vertex-glm-5.2), so the round completed without a coverage gap."
+  - "evaluator recorded a sub-medium nit not raised as a finding: test-docs/ring-push-blank-note-scope/task0001.tests.yaml AC-6 states column ranges (61-70 / 61-76) that do not match measurement (41-69 / 63-72). Documentation-only inaccuracy in a workflow-generated record."
