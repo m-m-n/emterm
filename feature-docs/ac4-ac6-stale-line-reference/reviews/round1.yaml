@@ -1,0 +1,63 @@
+round: 1
+executed_at: "2026-09-07T00:01:20+09:00"
+scope:
+  review_mode: diff
+  base_commit: 928cf3df1d1c1f91eaec5dc6ea6f52397841ea4e
+  head_commit: 2f52751cd91bfe746d607d7a43d6f847079c422b
+  changed_files:
+  - test-docs/ac4-ac6-stale-line-reference/task0001.tests.yaml
+  - test-docs/ring-push-blank-row-scope-test/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - spec
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+- run_id: "comprehensive#0"
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: skipped
+  skip_reason: "rate_limited"
+- run_id: "comprehensive#1"
+  perspective: comprehensive
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: completed
+  skip_reason: null
+- run_id: "spec#0"
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: "evaluator"
+  role: evaluator
+  source: claude
+  status: completed
+findings: []
+evaluation:
+  round_summary: |
+    Round 1, diff mode, two workflow-generated YAML test records under review; no injection attempts or instruction-like content were present in any reviewer output. Per-perspective coverage of the two dispatched runs (comprehensive#0 was skipped as rate_limited and carried no output to corroborate): comprehensive (comprehensive#1) - corroborated; I independently reproduced its sole finding via `git diff --name-only` on the delivered task commit, confirmed the two-file changeset, and surfaced no additional issues, but demoted the finding to low after establishing the reported command output was accurate when captured and that the substantive scope guarantee holds. spec (spec#0) - corroborated; its empty findings set was independently checked rather than accepted on its face. I verified FR1/FR2 (both AC-4 and AC-6 passages now bind 523 to 'at the time of that run' and the bare present-tense claim is gone), FR4 (both passages carry 'post-scroll survival assertion' and 'pre-scroll anti-vacuity guard'), FR5/NFR1 (grep of crates/term_core/src/ring_buffer/tests.rs returns the identical assertion at exactly lines 558 and 606, confirming 606 as the post-scroll survivor and validating the '(now line 606)' / '(now at line 606)' citations; line 523 now holds `for &m in &marks {`, confirming the drift being fixed), FR3/NFR2 (the 7-line cargo test transcript is byte-identical pre/post - md5 21e419e2d839043938a9d491da045bc1 on both sides - with 523 preserved inside it), FR6 (both records parse as valid YAML with an unchanged top-level and AC-1..AC-7 key set; a parsed-field comparison shows task_id, baseline_failures, final_failures and every tests: / red_confirmed: field identical, with only AC-4 and AC-6 red_reason altered), and NFR3/FR7 (all 13 added lines carry exactly 6 spaces of continuation indentation; no Rust source or test code touched). Six files inspected, within the 10-file read budget. No critical or high findings were reported by any run, so dismissed_sites is empty.
+  recommended_action: "complete"
+  action_rationale: |
+    Every functional and non-functional requirement in scope was independently verified as satisfied, including the two claims most prone to silent error (the re-derived line 606 and the byte-identical transcript), which I checked against the working tree and by hash rather than trusting the record. No critical or high finding exists in the round. The single carried finding is a low-severity wording-scope imprecision in a workflow-generated evidence artifact whose underlying scope guarantee is verified intact, and whose most defensible fix is narrowing prose rather than changing any reported result - not grounds for another round, rework, or auto-fix.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+notes: |
+  The single evaluated finding (comprehensive#1, AC-7 "exactly one changed file"
+  wording in test-docs/ac4-ac6-stale-line-reference/task0001.tests.yaml:84) was
+  demoted by the evaluator from medium to low and therefore dropped by the
+  Phase R3b step-2 severity gate (severity must be one of critical/high/medium).
+  Its full text is preserved in evaluation.round_summary above. It gates nothing:
+  residual_critical_high is 0.
