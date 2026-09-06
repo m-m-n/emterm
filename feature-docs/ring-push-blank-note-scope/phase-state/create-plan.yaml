@@ -3,7 +3,7 @@ feature: ring-push-blank-note-scope
 phase: create-plan
 status: applying_patch
 generation: 1
-base_revision: 1c5ea4db767546fc5b94fc2b722fc45ac8c439b9
+base_revision: cf7765c00a5ca2e51701dcde206ed49466808539
 last_input_digest: sha256:9fe38d26cf682862bb759a8e5754a2daafd44c15a289978b5fc7ae1f144654e2
 active_request_id: null
 packets: {}
@@ -25,7 +25,7 @@ artifacts:
     produced_by: create-plan-run-0001
 patches:
   - patch_id: ring-push-blank-note-scope-p0001
-    status: validated
+    status: applied
     base_input_digest: sha256:9fe38d26cf682862bb759a8e5754a2daafd44c15a289978b5fc7ae1f144654e2
     base_workflow_blob: 1144c2b71df290f04d2f427daa0779c06f0d8700
 progress_fingerprint: null

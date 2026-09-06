@@ -90,7 +90,19 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Narrow the ring_push_blank redundancy NOTE to the overflow clear pair"
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/ring_buffer/tests.rs
+    skills: []
+    domains: []
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, NFR1, NFR2, NFR3]
+    status: pending
+    branch: null
+    notes: null
 
 review:
   status: pending
@@ -106,50 +118,50 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3]
   FR2:
     title: Record that the cell fill and the `ring_wrapped` reset are not redundant
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3]
   FR3:
     title: Preserve the NOTE's still-correct reasoning
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3, TS-4]
   FR4:
     title: Comment-only change, confined to the test file
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4, TS-1]
   NFR1:
     title: Formatting — cargo fmt stays clean, ~72-column wrap
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2]
   NFR2:
     title: Wording register — English, matching surrounding comments
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3]
   NFR3:
     title: Behavioural neutrality — zero behavioural change
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-4]
 
 batch:
   review_rework_count: 0
