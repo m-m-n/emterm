@@ -1,9 +1,9 @@
 schema_version: 1
 feature: ring-push-blank-note-scope
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
-base_revision: cf7765c00a5ca2e51701dcde206ed49466808539
+base_revision: 1026744ac7e2f6a07af5b9665695cb1dd2c1173a
 last_input_digest: sha256:9fe38d26cf682862bb759a8e5754a2daafd44c15a289978b5fc7ae1f144654e2
 active_request_id: null
 packets: {}
