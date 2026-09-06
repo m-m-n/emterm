@@ -1,0 +1,16 @@
+feature: ac4-ac6-stale-line-reference
+collected_at: "2026-09-07T01:06:00+09:00"
+session_ids:
+  - 01a07776-71fc-76a6-8d7e-6523faeffe7c
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - "review round 1: comprehensive#0 (codex) was skipped with skip_reason rate_limited; the perspective was covered by the litellm fallback run comprehensive#1 (vertex-glm-5.2)."
+  - "The single review finding raised in round 1 was demoted to low by the evaluator and left no residual critical/high; auto-fix never engaged."
+  - "verify recorded that the 3 judgment checks under VERIFICATION.md 'Manual Testing' require a human reader and were not performed in this unattended run."
