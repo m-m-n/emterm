@@ -1,7 +1,7 @@
 schema_version: 1
 feature: ac4-ac6-stale-line-reference
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: d2889d1647d39a30951d04fa71533bdabdce7ac7
 last_input_digest: sha256:6eb985ac1cad64fa5e3987bf7fd691963c203baea8c799d64aae9a562a3ea723
