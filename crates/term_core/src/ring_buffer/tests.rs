@@ -592,9 +592,17 @@ fn test_ring_push_blank_clears_recycled_row_overflow_entries() {
     // before `Step 1` runs; `Step 2` then rotates `ring_head` by one;
     // `Step 3` derives `new_bottom_abs` from the rotated `ring_head` —
     // modulo the row count, the two expressions name the same ring
-    // slot. The new-bottom-row clear is therefore always a no-op
-    // within a single push: whichever eviction-time clear branch ran
-    // has already emptied that same absolute row.
+    // slot. Step 3's overflow / overflow_ridx clear pair for that
+    // slot is therefore always a no-op within a single push:
+    // whichever eviction-time clear branch ran has already emptied
+    // that same pair for that same absolute row. This "always a
+    // no-op" claim covers only that clear pair — it says nothing
+    // about the rest of Step 3. Step 3 also fills the new bottom
+    // row's cells and resets its `ring_wrapped` flag, and neither
+    // action has a counterpart on the eviction side: Step 1 never
+    // fills cells, and it only ever reads `ring_wrapped`, never
+    // resets it. Both the cell fill and the `ring_wrapped` reset are
+    // therefore required, not redundant.
     assert!(core.overflow.contains_key(&(0u32, abs1)));
     assert!(
         core.overflow_ridx

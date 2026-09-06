@@ -1,0 +1,69 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Comment-prose property, not machine-assertable. This task introduces no
+      behaviour change, so there is no failing test to write first (see task
+      plan "Test Notes" / IMPLEMENTATION.md D3). Verified by reading the
+      revised NOTE: the "always a no-op" sentence now names Step 3's overflow
+      / overflow_ridx clear pair explicitly, and the following sentence states
+      the claim "covers only that clear pair", so it can no longer be read as
+      describing the whole Step 3 block.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Comment-prose property, same TDD-awkward reasoning as AC-1. Verified by
+      reading the revised NOTE: it states that Step 3's cell fill and its
+      `ring_wrapped` reset have no eviction-side counterpart (Step 1 never
+      fills cells and only reads, never resets, `ring_wrapped`) and are
+      therefore required.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Comment-prose property. Verified by diffing against the pre-edit text:
+      the two clearing-site identification, the evaluation-order argument
+      (evicted_abs captured before Step 1, ring_head rotated in Step 2,
+      new_bottom_abs derived in Step 3), and the same-ring-slot conclusion are
+      all present and byte-identical to before; only the final "always a
+      no-op" sentence is narrowed and new sentences are appended after it.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by inspecting `git diff`: the only hunk touches comment lines
+      inside `crates/term_core/src/ring_buffer/tests.rs` (the NOTE block). No
+      assertion, fixture, test name, or production source line is present in
+      the diff, and the test count is unchanged (825 passed / 13 ignored,
+      before and after).
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No new test; this is a before/after invariance check per the task
+      plan's Test Notes. Ran `CARGO_TARGET_DIR=src-tauri/target cargo test
+      --manifest-path crates/term_core/Cargo.toml --lib` before editing
+      (825 passed; 0 failed; 13 ignored) and again after editing (identical:
+      825 passed; 0 failed; 13 ignored). The comment-only change never put the
+      suite in a red state, so there is nothing to confirm red for.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No new test. Ran `cargo fmt --manifest-path crates/term_core/Cargo.toml
+      --check` after the edit: no diff reported. Appended lines were measured
+      against the surrounding NOTE's existing line-length range (61-76 columns
+      including the "    // " prefix) and kept within it (61-70 columns).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Comment-prose property. Verified by reading the appended text: it is
+      English, declarative, and refers to the phases as Step 1 / Step 2 /
+      Step 3, matching the surrounding NOTE and IMPLEMENTATION.md
+      "Conventions".
