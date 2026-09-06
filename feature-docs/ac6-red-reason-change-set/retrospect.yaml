@@ -1,0 +1,26 @@
+feature: ac6-red-reason-change-set
+collected_at: "2026-09-06T14:58:00+09:00"
+session_ids: ["01a0754a-8aa7-7253-8bd0-c8e5a1630c5d"]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - note: >-
+      Round 1 の全観点（comprehensive=codex, architecture=vertex-glm-5.2,
+      spec=muse-spark）が findings 0 を返し、evaluator の独立検査で出た唯一の
+      finding も Phase R3b で severity=low かつ file が絶対パスのため drop。
+      auto-fix は 0 ループで clean 終了し、rework は発生しなかった。
+      prose 単独の YAML レコード修正という change set の狭さと整合する。
+  - note: >-
+      verify で PE-1..PE-3（rust --lib テスト 1 件失敗 / cargo fmt --check drift /
+      biome format drift）を pre-existing として記録。いずれも change set 外の
+      ファイル由来で、この feature には非帰属。base commit 由来の赤が
+      documentation-only feature の verify を毎回汚すため、regression baseline の
+      取り方（base commit での事前計測を必須にする等）は再検討の余地あり。
+  - note: >-
+      task は 1 件のみ・conflict_retries 0・files 予測の逸脱 0。
+      1 ファイル prose 修正では計画粒度と実装が完全に一致した。
