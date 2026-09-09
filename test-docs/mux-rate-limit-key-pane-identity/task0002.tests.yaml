@@ -1,0 +1,74 @@
+task_id: task0002
+baseline_failures:
+  - app::tests::agent_status::ac3_detach_releases_model_entry_public_id_and_rate_limit_identity
+final_failures:
+  - app::tests::agent_status::ac3_detach_releases_model_entry_public_id_and_rate_limit_identity
+acceptance_tests:
+  AC-1:
+    tests: [notifications::tests::record_evicts_a_key_expired_by_a_full_cooldown_period]
+    red_confirmed: true
+    red_reason: >-
+      Before the eviction sweep existed, the test failed at
+      `assert!(!limiter.last_fired.contains_key("pane-1"))` with
+      "assertion failed: !limiter.last_fired.contains_key(\"pane-1\")" —
+      pane-1 was still present after recording pane-2 a full cooldown
+      period later, because `record` only ever inserted.
+  AC-2:
+    tests: [notifications::tests::is_within_limit_is_pure_and_record_spares_an_unexpired_sibling]
+    red_confirmed: false
+    red_reason: >-
+      This property already held under the pre-task insert-only `record`
+      (it never evicted anything, so a still-unexpired sibling was never
+      collateral damage). The test passed before the sweep was added and
+      continues to pass after — it now also guards that the new sweep does
+      not regress this invariant, per the task plan's decision-neutrality
+      requirement.
+  AC-3:
+    tests: [notifications::tests::is_within_limit_is_pure_and_record_spares_an_unexpired_sibling]
+    red_confirmed: false
+    red_reason: >-
+      `is_within_limit` is unchanged by this task (the task plan explicitly
+      keeps pruning out of the read path) and was already read-only before
+      any implementation work, so the test asserting its purity was already
+      green. Retained as the regression guard for CD-3 (pruning must not be
+      placed in the read path).
+  AC-4:
+    tests: [notifications::tests::rate_limiter_discard_drops_bookkeeping_for_closed_pane]
+    red_confirmed: false
+    red_reason: >-
+      TS-11 per the task plan: existing regression test, kept unmodified.
+      `discard` is untouched by this task, so the test was green
+      before and after; it guards that expiry eviction did not disturb
+      close-time discard (CD-4).
+  AC-5:
+    tests: [notifications::tests::record_evicts_a_key_expired_by_a_full_cooldown_period]
+    red_confirmed: true
+    red_reason: >-
+      Same red observation as AC-1 — the boundary assertion in this test
+      (elapsed exactly equal to the cooldown period, matching
+      `is_within_limit`'s own `>=` comparison) failed before the sweep
+      existed because nothing was ever evicted. The implemented predicate
+      (`duration_since(prev) < AGENT_NOTIFICATION_RATE_LIMIT`) is the
+      logical negation of `is_within_limit`'s own `>=` comparison against
+      the same constant, so the two can never disagree on any key's
+      expiry state.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No observable-behavior test targets a structural absence claim.
+      Verified by inspection of the diff (git diff -- src-tauri/src/notifications.rs):
+      no new `pub` item was added, no dependency was added to Cargo.toml,
+      and the sweep predicate (`self.last_fired.retain(|_, prev| ...)`)
+      compares only `Instant` values from the generic `K: Eq + Hash +
+      Clone` map — it never inspects, parses, or branches on `K`'s shape.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verified by running the two project commands directly rather than by
+      a red/green unit test: `CARGO_TARGET_DIR=src-tauri/target cargo test
+      --manifest-path src-tauri/Cargo.toml --lib` and `CARGO_TARGET_DIR=src-tauri/target
+      cargo check --manifest-path src-tauri/Cargo.toml --no-default-features`
+      both passed from this task's worktree (the former with only the
+      pre-existing baseline failure, unrelated to this task's files).

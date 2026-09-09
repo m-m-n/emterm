@@ -322,8 +322,21 @@ impl<K: Eq + Hash + Clone> AgentNotificationRateLimiter<K> {
         }
     }
 
-    /// Record a fired notification's timestamp, (re)arming the window.
+    /// Record a fired notification's timestamp, (re)arming the window, and
+    /// evict every entry that can no longer affect any decision — every key
+    /// whose elapsed time relative to `now` is at least
+    /// [`AGENT_NOTIFICATION_RATE_LIMIT`], the same threshold and comparison
+    /// [`Self::is_within_limit`] itself uses. An entry the sweep drops is by
+    /// construction one the read check would already answer "allowed" for,
+    /// so pruning it changes no observable throttling decision. The entry
+    /// being recorded here always survives its own sweep pass (its elapsed
+    /// time relative to `now` is zero). Pruning is lazy — a key with no
+    /// further fires keeps its entry until some other key's `record` call
+    /// sweeps past it — and eviction does not shrink the map's allocated
+    /// capacity; both are accepted (see task plan "Accepted limits").
     pub fn record(&mut self, key: K, now: Instant) {
+        self.last_fired
+            .retain(|_, prev| now.duration_since(*prev) < AGENT_NOTIFICATION_RATE_LIMIT);
         self.last_fired.insert(key, now);
     }
 
@@ -975,6 +988,57 @@ mod tests {
         assert!(!limiter.is_within_limit(&"pane-1", now));
         limiter.discard(&"pane-1");
         assert!(limiter.is_within_limit(&"pane-1", now));
+    }
+
+    // TS-9 (AC-1): recording a second key a full cooldown period after the
+    // first key's fire evicts the now-expired first key from the map, while
+    // the second key is present and (having just fired) throttled.
+    #[test]
+    fn record_evicts_a_key_expired_by_a_full_cooldown_period() {
+        let mut limiter: AgentNotificationRateLimiter<&str> =
+            AgentNotificationRateLimiter::default();
+        let now = Instant::now();
+        limiter.record("pane-1", now);
+        assert!(limiter.last_fired.contains_key("pane-1"));
+
+        // Boundary: elapsed exactly equal to the cooldown period counts as
+        // expired, matching `is_within_limit`'s own `>=` comparison.
+        let later = now + AGENT_NOTIFICATION_RATE_LIMIT;
+        limiter.record("pane-2", later);
+
+        assert!(!limiter.last_fired.contains_key("pane-1"));
+        assert!(limiter.last_fired.contains_key("pane-2"));
+        assert!(!limiter.is_within_limit(&"pane-2", later));
+    }
+
+    // TS-10 (AC-2/AC-3): the read-only check performs no mutation even when
+    // called repeatedly well past the cooldown period and never arms a
+    // window for a key that never fired; and a record made before a sibling
+    // key has expired leaves that sibling present with its original instant
+    // unchanged (no collateral eviction of a still-unexpired entry).
+    #[test]
+    fn is_within_limit_is_pure_and_record_spares_an_unexpired_sibling() {
+        let mut limiter: AgentNotificationRateLimiter<&str> =
+            AgentNotificationRateLimiter::default();
+        let now = Instant::now();
+        limiter.record("pane-1", now);
+
+        // Repeated read-only checks, well past the cooldown period, must not
+        // mutate the limiter's contents.
+        let far_future = now + AGENT_NOTIFICATION_RATE_LIMIT * 100;
+        assert!(limiter.is_within_limit(&"pane-1", far_future));
+        assert!(limiter.is_within_limit(&"pane-1", far_future));
+        assert!(limiter.last_fired.contains_key("pane-1"));
+        assert_eq!(limiter.last_fired.get("pane-1"), Some(&now));
+        // Never arms a window for a key that never fired.
+        assert!(!limiter.last_fired.contains_key("pane-2"));
+
+        // A record for a different key, made while pane-1 is still inside
+        // its cooldown window, must not evict pane-1.
+        let inside_window = now + AGENT_NOTIFICATION_RATE_LIMIT - Duration::from_millis(1);
+        limiter.record("pane-2", inside_window);
+        assert!(limiter.last_fired.contains_key("pane-1"));
+        assert_eq!(limiter.last_fired.get("pane-1"), Some(&now));
     }
 
     #[test]
