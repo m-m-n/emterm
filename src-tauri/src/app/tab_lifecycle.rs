@@ -139,13 +139,14 @@ impl App {
         // entries, its notification rate-limit bookkeeping, AND its
         // scoped public-pane-id map entries before removal (its own
         // plain-tab key plus every mux pane in its window group, if
-        // attached). mux-agent-status-pane-key-collision FR4/FR6: the
-        // rate-limit key is resolved from the still-present public-id
-        // mapping BEFORE the map entry is removed below — every key
-        // derived here comes from the closing tab's OWN scope only, never
-        // another tab's same-numbered pane.
+        // attached). mux-agent-status-pane-key-collision FR4/FR6: every
+        // key derived here comes from the closing tab's OWN scope only,
+        // never another tab's same-numbered pane
+        // (mux-rate-limit-key-pane-identity CD-2: the rate-limit key is a
+        // pure function of that scope and the wire pane id, so it is
+        // unaffected by when the map entry below is removed).
         for key in agent_status_keys_for_tab(&self.tabs[idx]) {
-            let rate_limit_key = agent_notification_rate_limit_key(&self.mux_public_pane_ids, &key);
+            let rate_limit_key = agent_notification_rate_limit_key(&key);
             if let crate::agent_status_model::PaneKey::MuxPane(scope, pane_id) = key {
                 self.mux_public_pane_ids.remove(&(scope, pane_id));
             }
