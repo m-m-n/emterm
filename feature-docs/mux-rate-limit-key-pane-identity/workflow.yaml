@@ -125,7 +125,7 @@ tasks:
   task0001:
     title: "Code-owned rate-limit key derivation for mux panes"
     plan: tasks/task0001.md
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-rate-limit-key-pane-identity/task0001
     files:
       - src-tauri/src/app/agent_status.rs
