@@ -1,0 +1,41 @@
+schema_version: 1
+feature: mux-rate-limit-key-pane-identity
+phase: create-spec
+status: dispatching
+generation: 1
+base_revision: 1fe8444b550d5e16cd0f7ef5b3610a4001981eb9
+last_input_digest: sha256:3174663493b8dcb190d58a9768d7e187804f54e9f224dde4961e6081d35b510a
+active_request_id: create-spec-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:3174663493b8dcb190d58a9768d7e187804f54e9f224dde4961e6081d35b510a
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  design_system_candidates:
+    generation_digest: null
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+    truncated: false
+  e2e_discovery:
+    resolved_at_generation: 1
+    paths:
+      - test/README.md
+    truncated: false
+  reference_scan_targets:
+    resolved_at_generation: 1
+    paths:
+      - src-tauri/src/app/agent_status.rs
+      - src-tauri/src/app/mod.rs
+      - src-tauri/src/notifications.rs
+    truncated: false
+last_error: null
