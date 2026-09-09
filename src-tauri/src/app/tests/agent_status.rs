@@ -239,12 +239,13 @@ fn maybe_notify_agent_transition_reads_event_type_toggles_from_settings() {
     assert_eq!(sink.calls().len(), 1);
 }
 
-// AC-6: the fire/suppress judgement never depends on `pane_key`'s
-// format — a plain-tab-shaped key (`"tab:<id>"`, see
-// `agent_notification_rate_limit_key`) and a mux-pane-shaped key (the
-// daemon's `public_pane_id`, e.g. `"xyz-7"`) produce identical
-// decisions for identical settings/visibility/state inputs, both when
-// firing and when suppressed by an event-type toggle.
+// AC-6 (public-pane-id-rate-limit-key TS-8): the fire/suppress judgement
+// never depends on `pane_key`'s format — a plain-tab-shaped key
+// (`"tab:<id>"`) and a mux-pane-shaped key (`"mux:<scope>:<pane_id>"`,
+// see `agent_notification_rate_limit_key` — entirely code-owned, never a
+// daemon identifier) produce identical decisions for identical
+// settings/visibility/state inputs, both when firing and when suppressed
+// by an event-type toggle.
 #[test]
 fn maybe_notify_agent_transition_ac6_judgement_independent_of_pane_key_format() {
     let (mut app, sink) = app_with_test_sink();
@@ -252,7 +253,7 @@ fn maybe_notify_agent_transition_ac6_judgement_independent_of_pane_key_format() 
 
     // Both key formats fire under the default (all-ON) settings.
     assert!(app.maybe_notify_agent_transition("tab:42", false, &t, "shell"));
-    assert!(app.maybe_notify_agent_transition("xyz-7", false, &t, "shell"));
+    assert!(app.maybe_notify_agent_transition("mux:1:7", false, &t, "shell"));
     assert_eq!(sink.calls().len(), 2);
 
     // Flip the event-type toggle matching this transition's state
@@ -260,7 +261,7 @@ fn maybe_notify_agent_transition_ac6_judgement_independent_of_pane_key_format() 
     // rate limiter from the block above cannot explain the result).
     with_setting(&mut app, |s| s.agent_notify_on_blocked = false);
     assert!(!app.maybe_notify_agent_transition("tab:99", false, &t, "shell"));
-    assert!(!app.maybe_notify_agent_transition("mux-99", false, &t, "shell"));
+    assert!(!app.maybe_notify_agent_transition("mux:1:99", false, &t, "shell"));
     assert_eq!(sink.calls().len(), 2);
 }
 
@@ -429,7 +430,7 @@ fn close_tab_discards_agent_notification_rate_limit_state() {
     app.spawn_initial_tab();
     let stable_id = app.tabs[0].stable_id;
     let key = crate::agent_status_model::PaneKey::Tab(stable_id);
-    let rate_limit_key = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key);
+    let rate_limit_key = agent_notification_rate_limit_key(&key);
 
     let t = agent_transition(crate::notifications::AgentState::Blocked);
     assert!(app.maybe_notify_agent_transition(rate_limit_key.clone(), false, &t, "shell"));
@@ -451,7 +452,7 @@ fn pump_all_reap_exited_tab_discards_agent_notification_rate_limit_state() {
     app.spawn_new_tab(); // two tabs; active is tab 1, tab 0 will be reaped
     let stable_id = app.tabs[0].stable_id;
     let key = crate::agent_status_model::PaneKey::Tab(stable_id);
-    let rate_limit_key = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key);
+    let rate_limit_key = agent_notification_rate_limit_key(&key);
 
     let t = agent_transition(crate::notifications::AgentState::Done);
     assert!(app.maybe_notify_agent_transition(rate_limit_key.clone(), false, &t, "shell"));
@@ -470,13 +471,12 @@ fn pump_all_reap_exited_tab_discards_agent_notification_rate_limit_state() {
 /// discards its notification rate-limiter state, keyed by the shared
 /// derivation's output.
 ///
-/// Also public-pane-id-rate-limit-key AC-5 (TS-5): arm (the transition-
-/// drain loop) and discard (the closed-panes loop) agree through these
-/// real call sites for a mux pane with a LEARNED public id — the only
-/// scenario exercising both together for the namespaced branch, so it is
-/// what actually protects CD-2's derive-before-removal ordering. The
-/// rate-limit key itself is obtained from the shared derivation and never
-/// named as a literal string.
+/// Also mux-rate-limit-key-pane-identity task0001 (TS-7): arm (the
+/// transition-drain loop) and discard (the closed-panes loop) agree
+/// through these real call sites, even while the daemon has learned a
+/// public id for the pane — the learned-id map is populated but plays no
+/// part in the derivation. The rate-limit key itself is obtained from the
+/// shared derivation and never named as a literal string.
 #[test]
 fn pump_all_closed_mux_pane_discards_agent_notification_rate_limit_state() {
     use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
@@ -520,12 +520,12 @@ fn pump_all_closed_mux_pane_discards_agent_notification_rate_limit_state() {
     app.pump_all();
     assert_eq!(sink.calls().len(), 1);
 
-    // Resolve the SAME key the real arm/discard call sites derive, while
-    // the learned-id map entry is still present (mirrors CD-2's
-    // derive-before-removal ordering) — never a hand-written string.
+    // Resolve the SAME key the real arm/discard call sites derive — never
+    // a hand-written string. The learned-id map entry is still present
+    // here, but the derivation cannot read it (CD-2).
     let scope = crate::agent_status_model::ConnectionScope(app.tabs[0].stable_id);
     let key = crate::agent_status_model::PaneKey::MuxPane(scope, 7);
-    let rate_limit_key = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key);
+    let rate_limit_key = agent_notification_rate_limit_key(&key);
 
     // Rate limiter is armed: an immediate second attempt does not fire.
     let t = agent_transition(crate::notifications::AgentState::Blocked);
@@ -646,100 +646,119 @@ fn agent_status_pane_tab_title_resolves_plain_tab_and_mux_pane() {
     );
 }
 
-// public-pane-id-rate-limit-key AC-1 (TS-1): a mux pane whose public id
-// has been learned derives the namespaced learned-id form — the
-// `"muxpub:"` prefix, the connection scope's numeric value, a colon, then
-// the learned string verbatim — and never the learned string on its own.
-// The unlearned mux pane and the plain tab keep today's forms unchanged
-// (regression guard for FR2/FR3).
+// mux-rate-limit-key-pane-identity task0001 AC-1/AC-2/AC-3 (TS-1): the
+// derivation is a pure function of the pane identity value alone — it
+// takes no map parameter at all (a value the function cannot accept
+// cannot reach the key, AC-3). A mux pane always derives `"mux:<scope's
+// numeric value>:<wire pane id>"`, identical whether the daemon has never
+// learned an id for that pane, has learned one, or has re-minted it to a
+// different value — proven here through `App` state where
+// `mux_public_pane_ids` genuinely holds (and later changes) a learned
+// value for the SAME pane identity, to show the map's contents have no
+// bearing. Two connections holding the same wire pane id derive
+// different keys. A tab pane still derives `"tab:<tab id>"`, unchanged
+// (AC-2). There is no preference step left to name — renamed from
+// `..._prefers_public_pane_id_falls_back_to_prefixed_id`.
 #[test]
-fn agent_notification_rate_limit_key_prefers_public_pane_id_falls_back_to_prefixed_id() {
-    use crate::agent_status_model::ConnectionScope;
-    use std::collections::HashMap;
+fn agent_notification_rate_limit_key_derives_mux_and_tab_forms_independent_of_learned_state() {
+    use crate::agent_status_model::{ConnectionScope, PaneKey};
+
     let scope_a = ConnectionScope(1);
     let scope_b = ConnectionScope(2);
-    let mut ids: HashMap<(ConnectionScope, u32), String> = HashMap::new();
-    ids.insert((scope_a, 7), "xyz-7".to_string());
 
-    let learned_key = agent_notification_rate_limit_key(
-        &ids,
-        &crate::agent_status_model::PaneKey::MuxPane(scope_a, 7),
-    );
-    assert_eq!(learned_key, "muxpub:1:xyz-7");
-    assert_ne!(learned_key, "xyz-7");
-    // No learned public id: falls back to a prefixed, scope-qualified
-    // pane-id string.
+    // Never learned.
+    let never_learned = agent_notification_rate_limit_key(&PaneKey::MuxPane(scope_a, 7));
+    assert_eq!(never_learned, "mux:1:7");
+
+    let mut app = App::new();
+    // Learned: the derivation takes no map, so a learned identifier for
+    // the SAME pane identity cannot change what it derives.
+    app.mux_public_pane_ids
+        .insert((scope_a, 7), "xyz-7".to_string());
     assert_eq!(
-        agent_notification_rate_limit_key(
-            &ids,
-            &crate::agent_status_model::PaneKey::MuxPane(scope_a, 8)
-        ),
-        "mux:1:8"
-    );
-    assert_eq!(
-        agent_notification_rate_limit_key(&ids, &crate::agent_status_model::PaneKey::Tab(3)),
-        "tab:3"
+        agent_notification_rate_limit_key(&PaneKey::MuxPane(scope_a, 7)),
+        never_learned
     );
 
-    // mux-agent-status-pane-key-collision TS-5 (AC-4): scope B's pane 7
-    // never learned a public id — it derives its OWN fallback key,
-    // distinct both from scope A's learned "muxpub:1:xyz-7" and from what
-    // scope A's OWN unlearned fallback would be for the same wire
-    // pane_id.
-    let scope_b_key = agent_notification_rate_limit_key(
-        &ids,
-        &crate::agent_status_model::PaneKey::MuxPane(scope_b, 7),
+    // Re-minted to a different value: still identical.
+    app.mux_public_pane_ids
+        .insert((scope_a, 7), "abc-7".to_string());
+    assert_eq!(
+        agent_notification_rate_limit_key(&PaneKey::MuxPane(scope_a, 7)),
+        never_learned
     );
+
+    // The historical aliasing case: an empty learned value still has no
+    // effect.
+    app.mux_public_pane_ids.insert((scope_a, 7), String::new());
+    assert_eq!(
+        agent_notification_rate_limit_key(&PaneKey::MuxPane(scope_a, 7)),
+        never_learned
+    );
+
+    // A second connection holding the same wire pane id derives a
+    // different key.
+    let scope_b_key = agent_notification_rate_limit_key(&PaneKey::MuxPane(scope_b, 7));
     assert_eq!(scope_b_key, "mux:2:7");
-    assert_ne!(scope_b_key, learned_key);
+    assert_ne!(scope_b_key, never_learned);
+
+    // AC-2: a tab pane still derives the prefix `tab:` followed by its
+    // tab id, unchanged.
+    assert_eq!(agent_notification_rate_limit_key(&PaneKey::Tab(3)), "tab:3");
 }
 
-// public-pane-id-rate-limit-key AC-2 (TS-2): a daemon that supplies a
-// learned id EQUAL to a plain tab's own key cannot reach that tab — the
-// derived key still carries the learned-id namespace prefix and differs
-// from the key the tab itself derives. Compared against a key obtained
-// from the derivation itself, never a hand-written string.
+// mux-rate-limit-key-pane-identity task0001 AC-6 (TS-2): a
+// premise-removed restatement of the retired
+// `..._learned_id_matching_a_tab_key_cannot_reach_that_tab` guard —
+// seeding the learned-id map with a value byte-identical to a tab's own
+// rate-limit key leaves the mux pane's derived key unchanged, with the
+// stronger reason that the derivation cannot read the map at all.
 #[test]
-fn agent_notification_rate_limit_key_learned_id_matching_a_tab_key_cannot_reach_that_tab() {
-    use crate::agent_status_model::{ConnectionScope, PaneKey};
-    use std::collections::HashMap;
-
-    let tab_key = agent_notification_rate_limit_key(&HashMap::new(), &PaneKey::Tab(5));
-
-    let scope = ConnectionScope(1);
-    let mut ids: HashMap<(ConnectionScope, u32), String> = HashMap::new();
-    // The daemon "learns" a public id that is byte-identical to tab 5's
-    // own rate-limit key.
-    ids.insert((scope, 9), tab_key.clone());
-
-    let mux_key = agent_notification_rate_limit_key(&ids, &PaneKey::MuxPane(scope, 9));
-
-    assert_ne!(mux_key, tab_key);
-    assert!(mux_key.starts_with("muxpub:"));
-}
-
-// public-pane-id-rate-limit-key AC-3 (TS-3): a daemon that supplies a
-// learned id EQUAL to an unlearned pane's fallback key cannot reach that
-// pane — the reserved fallback form stays unreachable from a
-// daemon-controlled string.
-#[test]
-fn agent_notification_rate_limit_key_learned_id_matching_an_unlearned_fallback_cannot_reach_that_pane()
+fn agent_notification_rate_limit_key_learned_value_matching_a_tab_key_leaves_the_mux_key_unchanged()
  {
     use crate::agent_status_model::{ConnectionScope, PaneKey};
-    use std::collections::HashMap;
+
+    let tab_key = agent_notification_rate_limit_key(&PaneKey::Tab(5));
+    let scope = ConnectionScope(1);
+    let unaffected = agent_notification_rate_limit_key(&PaneKey::MuxPane(scope, 9));
+
+    let mut app = App::new();
+    // The daemon "learns" a public id that is byte-identical to tab 5's
+    // own rate-limit key. The derivation cannot read this map.
+    app.mux_public_pane_ids.insert((scope, 9), tab_key.clone());
+
+    let mux_key = agent_notification_rate_limit_key(&PaneKey::MuxPane(scope, 9));
+
+    assert_eq!(mux_key, unaffected);
+    assert_ne!(mux_key, tab_key);
+}
+
+// mux-rate-limit-key-pane-identity task0001 AC-6 (TS-3): a
+// premise-removed restatement of the retired
+// `..._learned_id_matching_an_unlearned_fallback_cannot_reach_that_pane`
+// guard — seeding the learned-id map with a value byte-identical to
+// another pane's own key leaves the seeded pane's derived key unchanged,
+// with the stronger reason that the derivation cannot read the map at
+// all.
+#[test]
+fn agent_notification_rate_limit_key_learned_value_matching_another_panes_key_leaves_the_key_unchanged()
+ {
+    use crate::agent_status_model::{ConnectionScope, PaneKey};
 
     let scope = ConnectionScope(1);
-    let unlearned_key =
-        agent_notification_rate_limit_key(&HashMap::new(), &PaneKey::MuxPane(scope, 8));
+    let other_pane_key = agent_notification_rate_limit_key(&PaneKey::MuxPane(scope, 8));
+    let unaffected = agent_notification_rate_limit_key(&PaneKey::MuxPane(scope, 9));
 
-    let mut ids: HashMap<(ConnectionScope, u32), String> = HashMap::new();
+    let mut app = App::new();
     // The daemon "learns" a public id for a DIFFERENT pane (9), equal to
-    // pane 8's unlearned fallback key.
-    ids.insert((scope, 9), unlearned_key.clone());
+    // pane 8's own key. The derivation cannot read this map.
+    app.mux_public_pane_ids
+        .insert((scope, 9), other_pane_key.clone());
 
-    let learned_key = agent_notification_rate_limit_key(&ids, &PaneKey::MuxPane(scope, 9));
+    let learned_key = agent_notification_rate_limit_key(&PaneKey::MuxPane(scope, 9));
 
-    assert_ne!(learned_key, unlearned_key);
+    assert_eq!(learned_key, unaffected);
+    assert_ne!(learned_key, other_pane_key);
 }
 
 // TS-5: arm(now) sets the dismissal instant to now + linger window.
@@ -1161,11 +1180,12 @@ fn ts4_agent_status_keys_for_tab_and_badge_are_disjoint_across_tabs_sharing_a_pa
 /// entry for the SAME wire `pane_id`, each scope resolves to its own
 /// daemon's public id, and the derived rate-limit keys differ.
 ///
-/// Also public-pane-id-rate-limit-key AC-4/AC-6 (TS-4): the two connections'
-/// derived keys carry the namespaced learned-id form (built from the
-/// scope ids observed at runtime, never hard-coded) and stay disjoint;
-/// and `mux_public_pane_id` keeps returning both daemons' raw learned
-/// strings unchanged (both are unparseable by the mux protocol's own
+/// Also mux-rate-limit-key-pane-identity task0001 (TS-4): the two
+/// connections' derived keys carry the code-owned mux form (built from
+/// the scope ids observed at runtime, never hard-coded) and stay disjoint
+/// — unaffected by the learned-id map populated above; and
+/// `mux_public_pane_id` keeps returning both daemons' raw learned strings
+/// unchanged (both are unparseable by the mux protocol's own
 /// `PublicPaneId::parse` — no rejection path exists on the ingest path).
 #[test]
 fn ts5_public_pane_id_map_and_rate_limit_key_are_scoped() {
@@ -1211,24 +1231,22 @@ fn ts5_public_pane_id_map_and_rate_limit_key_are_scoped() {
 
     let key0 = crate::agent_status_model::PaneKey::MuxPane(scope0, 1);
     let key1 = crate::agent_status_model::PaneKey::MuxPane(scope1, 1);
-    let rate_key0 = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key0);
-    let rate_key1 = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key1);
-    // public-pane-id-rate-limit-key AC-4 (TS-4): expected strings are
-    // built from the scope ids the scenario itself observed (allocation-
-    // order dependent), not hard-coded — the namespace prefix and scope
-    // number are what makes two connections that learn the SAME public id
-    // for their own pane derive different keys.
-    assert_eq!(rate_key0, format!("muxpub:{}:daemon-a-1", scope0.0));
-    assert_eq!(rate_key1, format!("muxpub:{}:daemon-b-1", scope1.0));
+    let rate_key0 = agent_notification_rate_limit_key(&key0);
+    let rate_key1 = agent_notification_rate_limit_key(&key1);
+    // mux-rate-limit-key-pane-identity task0001 (TS-4): expected strings
+    // are built from the scope ids the scenario itself observed
+    // (allocation-order dependent), not hard-coded — the numeric scope
+    // and the wire pane id are what makes two connections that learn the
+    // SAME public id for their own pane derive different keys, even
+    // though the learned public id itself never reaches either key.
+    assert_eq!(rate_key0, format!("mux:{}:1", scope0.0));
+    assert_eq!(rate_key1, format!("mux:{}:1", scope1.0));
     assert_ne!(rate_key0, rate_key1);
 
     // Repeated derivation for the same scope/pane is stable, so the
     // per-pane rate limit still suppresses a second notification inside
     // the window.
-    assert_eq!(
-        rate_key0,
-        agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key0)
-    );
+    assert_eq!(rate_key0, agent_notification_rate_limit_key(&key0));
 }
 
 /// TS-6 (AC-5): notification tab-title resolution and pane visibility
@@ -1534,8 +1552,15 @@ fn detached_frame() -> MuxMessage {
 /// releases the model entry (the pane's aggregated badge reports
 /// nothing), the scoped public-pane-id mapping (the lookup for (this
 /// tab's scope, this wire pane id) returns nothing), and the pane's
-/// notification rate-limit identity — a later report under the SAME
-/// public id is not suppressed by the previous connection's record.
+/// notification rate-limit identity — a later report for the same pane
+/// identity is not suppressed by the previous connection's record.
+/// mux-rate-limit-key-pane-identity task0001 (TS-5): the rate-limit key
+/// probed here is now obtained from `agent_notification_rate_limit_key`
+/// itself rather than the daemon-learned string, so the arm/probe
+/// assertions genuinely exercise what the real call sites do — a
+/// hand-written literal here would arm/probe a DIFFERENT key from the one
+/// `pump_all`'s own transition-drain and closed-panes loop use, letting
+/// the assertions below pass vacuously.
 #[test]
 fn ac3_detach_releases_model_entry_public_id_and_rate_limit_identity() {
     use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
@@ -1561,14 +1586,16 @@ fn ac3_detach_releases_model_entry_public_id_and_rate_limit_identity() {
 
     assert_eq!(app.mux_public_pane_id(scope, 7), Some("xyz-7"));
     assert!(app.agent_status_pane_badge(scope, 7).is_some());
+    let rate_limit_key = agent_notification_rate_limit_key(
+        &crate::agent_status_model::PaneKey::MuxPane(scope, 7),
+    );
     // The pump's own transition-drain already fired once for this real
-    // Set (None -> Blocked) and armed "xyz-7"'s rate-limit window under
-    // the daemon-learned public id — the same key
-    // `agent_notification_rate_limit_key` derives.
+    // Set (None -> Blocked) and armed the pane's rate-limit window under
+    // the derived key.
     assert_eq!(sink.calls().len(), 1);
     let t = agent_transition(crate::notifications::AgentState::Blocked);
     assert!(
-        !app.maybe_notify_agent_transition("xyz-7", false, &t, "shell"),
+        !app.maybe_notify_agent_transition(rate_limit_key.clone(), false, &t, "shell"),
         "the rate-limit window armed by pump_all's own drain is still open"
     );
 
@@ -1586,10 +1613,9 @@ fn ac3_detach_releases_model_entry_public_id_and_rate_limit_identity() {
         "the scoped public-pane-id mapping is released"
     );
     assert!(
-        app.maybe_notify_agent_transition("xyz-7", false, &t, "shell"),
+        app.maybe_notify_agent_transition(rate_limit_key, false, &t, "shell"),
         "the previous connection's rate-limit record for the released \
-         public id must be gone, so a later report under the same id is \
-         not suppressed"
+         pane identity must be gone, so a later report is not suppressed"
     );
 }
 
@@ -1715,7 +1741,10 @@ fn ac5_detach_leaves_the_tabs_own_plain_tab_entry_and_latch_intact() {
 /// 1, detaching the first tab releases only its own scope's entries —
 /// the second tab's model entry, its public-pane-id mapping and its
 /// derived notification rate-limit key for the SAME wire pane id are
-/// unchanged.
+/// unchanged. mux-rate-limit-key-pane-identity task0001 (TS-6): the
+/// before/after key equality now holds trivially, since the derivation
+/// never reads the public-pane-id map at all — the assertion is kept as
+/// a regression guard rather than deleted.
 #[test]
 fn ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouched() {
     use mux_ipc::protocol::{AgentState as WireState, AgentStatusUpdateMsg};
@@ -1757,7 +1786,7 @@ fn ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouche
 
     let key0 = crate::agent_status_model::PaneKey::MuxPane(scope0, 1);
     let key1 = crate::agent_status_model::PaneKey::MuxPane(scope1, 1);
-    let rate_key1_before = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key1);
+    let rate_key1_before = agent_notification_rate_limit_key(&key1);
 
     // Detach tab 0 only.
     app.on_mux_message(0, detached_frame());
@@ -1778,7 +1807,7 @@ fn ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouche
         Some("daemon-b-1"),
         "tab 1's public-pane-id mapping is untouched"
     );
-    let rate_key1_after = agent_notification_rate_limit_key(&app.mux_public_pane_ids, &key1);
+    let rate_key1_after = agent_notification_rate_limit_key(&key1);
     assert_eq!(
         rate_key1_before, rate_key1_after,
         "tab 1's derived rate-limit key is unchanged"

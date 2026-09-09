@@ -81,45 +81,27 @@ pub(super) fn agent_status_pane_tab_title<'a>(
 }
 
 /// Resolve the per-pane notification rate-limit key for `pane` (task0009
-/// Design: "Resolve rate_limit_key"; public-pane-id-rate-limit-key
-/// AC-1/AC-2/AC-3/AC-7). Produces exactly one of three mutually disjoint
-/// forms, each starting with its OWN code-owned literal prefix before any
-/// daemon-controlled byte can appear — disjointness comes from the prefix,
-/// never from inspecting the daemon-supplied string:
-///
-/// - Plain tab: `"tab:<stable_id>"`, entirely code-owned.
-/// - Mux pane, no learned id: `"mux:<scope>:<pane_id>"` — embeds BOTH the
-///   scope and the wire `pane_id` so two connections' unlearned panes
-///   still derive distinct keys (mux-agent-status-pane-key-collision
-///   FR3/FR4/D4).
-/// - Mux pane, learned id: `"muxpub:<scope>:<learned>"` — the
-///   daemon-learned `public_pane_id`, looked up by the pane's scoped key
-///   ((`ConnectionScope`, wire `pane_id`)), is embedded verbatim ONLY
-///   after the namespace prefix and the scope. The learned string is
-///   NEVER returned unwrapped: doing so would let a daemon-controlled
-///   string collide with a plain-tab key or with another pane's fallback
-///   key (public-pane-id-rate-limit-key AC-2/AC-3). An empty learned
-///   string still takes this branch — there is no failure path.
+/// Design: "Resolve rate_limit_key"; mux-rate-limit-key-pane-identity
+/// task0001 AC-1/AC-2/AC-3). A pure, total function of `pane`'s own
+/// identity alone — it accepts no map and no daemon-supplied value, so
+/// "no daemon-supplied byte reaches the key" is enforced by the parameter
+/// list rather than by a runtime check (CD-2). The full pre/postcondition
+/// (the exact `tab:`/`mux:` forms produced) is pinned in
+/// IMPLEMENTATION.md Shared Components — this comment does not restate it
+/// as a second, drifting copy.
 ///
 /// Shared by every discard site (`close_tab`, the reaped-tab loop,
 /// `pump_all`'s closed-mux-pane loop) and the transition-drain loop so all
-/// four derive the same key for the same pane. Takes `mux_public_pane_ids`
-/// explicitly (rather than `&App`) so it is testable without constructing
-/// a full `App`.
+/// four derive the same key for the same pane. Takes `pane` directly
+/// (rather than `&App`) so it is testable without constructing a full
+/// `App`.
 pub(super) fn agent_notification_rate_limit_key(
-    mux_public_pane_ids: &std::collections::HashMap<
-        (crate::agent_status_model::ConnectionScope, u32),
-        String,
-    >,
     pane: &crate::agent_status_model::PaneKey,
 ) -> String {
     use crate::agent_status_model::PaneKey;
     match pane {
         PaneKey::Tab(id) => format!("tab:{id}"),
-        PaneKey::MuxPane(scope, pane_id) => match mux_public_pane_ids.get(&(*scope, *pane_id)) {
-            Some(learned) => format!("muxpub:{}:{learned}", scope.0),
-            None => format!("mux:{}:{pane_id}", scope.0),
-        },
+        PaneKey::MuxPane(scope, pane_id) => format!("mux:{}:{pane_id}", scope.0),
     }
 }
 
@@ -332,11 +314,10 @@ impl App {
         for (tab_stable_id, pane_id) in closed_panes {
             // task0009 AC-4 / mux-agent-status-pane-key-collision FR6: the
             // closing tab's OWN scope only — never another tab's
-            // same-numbered pane. Resolve the rate-limit key from the
-            // still-present public-id mapping BEFORE removing it below.
+            // same-numbered pane.
             let scope = crate::agent_status_model::ConnectionScope(tab_stable_id);
             let key = crate::agent_status_model::PaneKey::MuxPane(scope, pane_id);
-            let rate_limit_key = agent_notification_rate_limit_key(&self.mux_public_pane_ids, &key);
+            let rate_limit_key = agent_notification_rate_limit_key(&key);
             self.mux_public_pane_ids.remove(&(scope, pane_id));
             self.discard_agent_notification_state(&rate_limit_key);
             self.agent_status.discard(&key);
@@ -366,8 +347,7 @@ impl App {
             };
             let pane_visible =
                 agent_status_pane_visible(self.window_focused, self.tabs.get(self.active), &pane);
-            let rate_limit_key =
-                agent_notification_rate_limit_key(&self.mux_public_pane_ids, &pane);
+            let rate_limit_key = agent_notification_rate_limit_key(&pane);
             let tab_title = agent_status_pane_tab_title(&self.tabs, &pane)
                 .unwrap_or_default()
                 .to_string();

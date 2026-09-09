@@ -1,0 +1,100 @@
+task_id: task0001
+baseline_failures:
+  - app::tests::agent_status::ac3_detach_releases_model_entry_public_id_and_rate_limit_identity
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - app::tests::agent_status::agent_notification_rate_limit_key_derives_mux_and_tab_forms_independent_of_learned_state
+    red_confirmed: true
+    red_reason: >-
+      Rewriting the test file to the target (single-parameter) call shape
+      before touching the derivation made the whole test binary fail to
+      compile: "this function takes 2 arguments but 1 argument was
+      supplied" at every call site that dropped the map argument,
+      including this one. That is the understood, expected red for a
+      signature the derivation had not yet adopted. After the derivation
+      was reduced to `fn(&PaneKey) -> String` with only the two live
+      forms, the test passed.
+  AC-2:
+    tests:
+      - app::tests::agent_status::agent_notification_rate_limit_key_derives_mux_and_tab_forms_independent_of_learned_state
+    red_confirmed: true
+    red_reason: >-
+      Same compile-time red as AC-1 (same test asserts both the mux and
+      tab forms) — the "tab:<id>" assertion could not even be reached
+      until the signature change compiled.
+  AC-3:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Compile-time property (Test Notes: "AC-3 ... its 'test' is that the
+      crate builds with no call site passing a map"). Before the
+      derivation's signature was narrowed, `cargo test --lib` failed with
+      21 compile errors (one per call site — production and test — still
+      passing `&self.mux_public_pane_ids` / `&app.mux_public_pane_ids`).
+      After every production and test call site was updated to pass only
+      `&pane` and the derivation's own parameter list was narrowed to
+      match, `cargo test --lib --no-run` and `cargo check
+      --no-default-features` both built clean — the evidence AC-3 asks
+      for.
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Inspection check (retired prefix / retired ordering comment), not a
+      test assertion. Before this task, `grep -rn "muxpub"
+      src-tauri/src/app/{agent_status,tab_lifecycle,mod}.rs
+      src-tauri/src/app/tests/agent_status.rs` matched the doc comment,
+      the format string, and multiple test assertions/literals. The same
+      grep (extended to also match "derive-before-removal", "BEFORE
+      removing", "BEFORE the map entry") now returns zero matches across
+      all four files this task owns.
+  AC-5:
+    tests:
+      - app::tests::agent_status::pump_all_learns_public_pane_id_from_daemon_agent_status_update
+      - app::tests::agent_status::closing_a_mux_pane_forgets_its_public_pane_id
+      - app::tests::agent_status::ts5_public_pane_id_map_and_rate_limit_key_are_scoped
+      - app::tests::agent_status::ac4_reattach_on_same_tab_reusing_wire_pane_id_starts_with_a_clean_slate
+      - app::tests::agent_status::ac6_detach_on_one_tab_leaves_a_second_tabs_identically_numbered_pane_untouched
+    red_confirmed: false
+    red_reason: >-
+      AC-5 asserts the learned-id map, its learning site, its removal
+      sites, its public accessor and every close-time discard call site
+      are UNCHANGED in behaviour. These tests already exercised that
+      behaviour before this task and were already green at the 4a
+      baseline (only the rate-limit portion of
+      ac3_detach_releases_model_entry_public_id_and_rate_limit_identity
+      was red in the baseline, and that is filed under AC-6, not here).
+      There is no red to observe for a criterion whose point is that
+      nothing changes.
+  AC-6:
+    tests:
+      - app::tests::agent_status::agent_notification_rate_limit_key_learned_value_matching_a_tab_key_leaves_the_mux_key_unchanged
+      - app::tests::agent_status::agent_notification_rate_limit_key_learned_value_matching_another_panes_key_leaves_the_key_unchanged
+      - app::tests::agent_status::ac3_detach_releases_model_entry_public_id_and_rate_limit_identity
+    red_confirmed: true
+    red_reason: >-
+      The two premise-removed guard tests hit the same compile-time red as
+      AC-1/AC-3 (old 2-argument signature) and pass now that the
+      derivation cannot read the map at all. The detach test
+      (public-pane-id-rate-limit-key's previously-vacuous test) was
+      independently observed red at the 4a baseline run — BEFORE any edit
+      in this task — with a genuine runtime panic: "the rate-limit window
+      armed by pump_all's own drain is still open", because it armed and
+      probed the literal "xyz-7" while the real call sites armed
+      "muxpub:1:xyz-7". Rewriting it to derive its key from
+      `agent_notification_rate_limit_key` itself (rather than a
+      hand-written literal) made it pass, now genuinely proving the arm/
+      probe pair.
+  AC-7:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Build/test-command criterion, no dedicated test id. The 4a baseline
+      run of `CARGO_TARGET_DIR=src-tauri/target cargo test
+      --manifest-path src-tauri/Cargo.toml --lib` was red (1 failed, see
+      baseline_failures). After implementation, the same command reports
+      "3267 passed; 0 failed; 3 ignored" and `CARGO_TARGET_DIR=src-tauri/target
+      cargo check --manifest-path src-tauri/Cargo.toml --no-default-features`
+      finishes clean — both from this task's worktree.
