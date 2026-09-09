@@ -114,3 +114,56 @@ records:
       完了ゲートにも影響しない。コードに対する結果は (a)(b) いずれでも同一で、差が出るのは
       コミットされる監査記録の形だけ。内容は reviews/round1.yaml の findings_dropped に
       全文保全し、retrospect の lessons_candidates にも回す。
+  - question_id: verify.mv1-manual-item-unexecutable-in-batch
+    packet_id: null
+    answered_at: "2026-09-09T22:20:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [pass_with_note]
+    freeform: null
+    normalized_answer: >-
+      verify の結果を pass とし、MV-1 が無人実行のため未実施であること・その対象
+      サーフェスが本 diff で不変であることを注記として残す。fail（差し戻し）は不採用。
+    resolution_note: >-
+      これは gate_id を持つゲートではなく、VERIFICATION.md の手動項目を無人実行で
+      どう扱うかという解釈上の曖昧点。ユーザー指示「不明点は Codex に相談し、比較的
+      良いと判断した方を採用する」に従い、read-only の Codex セカンドオピニオンを
+      2 パス取った。
+
+      争点: VERIFICATION.md の Manual Testing には MV-1（必須扱い・サイドバーの
+      copy-to-clipboard 行が learned pane に対して daemon 由来の識別子を提示し、
+      未学習/解放済みでは何も提示しないことの目視確認）と、MV-2 / MV-3（optional
+      明記・改造 mux daemon が必要）がある。無人バッチでは人間の目視も改造 daemon も
+      用意できない。
+
+      パス 1（提示情報のみで判断）: fail を推奨。「MV-1 は必須と明記されており、
+      TS-4 が担保するのはアクセサのロジックのみでサイドバーへの結線・実表示までは
+      証明していない」が理由。ただし Codex 自身が「MV-1 の必須指定が本当に妥当か
+      （TS-4 のカバレッジで代替可能と判断できる根拠があるか）は確認するとよい」と
+      caveat を付した。
+
+      パス 2（その caveat に沿って diff 範囲の実地調査結果を提示して再照会）:
+      pass に判定を変更。決め手は「MV-1 の対象コードが今回の diff の変更範囲に
+      含まれていない」という事実確認。提示した証拠:
+      - MV-1 のデータ源 `App::mux_public_pane_id`
+        (src-tauri/src/app/agent_status.rs:148-156) は c14be116..HEAD で 1 バイトも
+        変更されていない
+      - 変更ファイルは agent_status.rs / mod.rs / tab_lifecycle.rs /
+        app/tests/agent_status.rs / notifications.rs の 5 つのみ。src-tauri/src/ui/
+        配下は一切変更なし
+      - `mux_public_pane_ids` マップの学習サイト (agent_status.rs:303) と削除サイト
+        (close_tab / reap ループ / closed-pane ループ) はいずれも挙動不変。変わったのは
+        「レート制限キーの導出がこのマップを読まなくなった」ことだけで、その結果
+        「削除より前にキーを解決する」順序制約が不要になった。マップの中身・寿命・
+        アクセサ戻り値には影響しない
+      - FR4「learned-id マップ自体は保持する」は TS-4 が自動テストで固定済み（合格）
+      - VERIFICATION.md の Verification Summary 自身が MV-1 を "MV-1 supplements AC-9"
+        と位置づけており、AC-9 の主たる検証手段は TS-4
+
+      採用した判定に伴う注記（verify step の manual_items_note に記録）:
+      MV-1 / MV-2 / MV-3 はいずれも無人実行のため未実施。MV-1 の対象 UI サーフェスと
+      データ取得経路は本 diff で不変であり、AC-9 の主たる自動検証 TS-4 は合格。
+      MV-2 / MV-3 は VERIFICATION.md 上 optional 明記で、改造 mux daemon が必要。
+
+      Codex は 2 パスとも read-only、gpt-5.6-sol。パス 2 の判定はこちらが提示した
+      diff 範囲の事実確認に依拠している旨を Codex 自身が明示している。
