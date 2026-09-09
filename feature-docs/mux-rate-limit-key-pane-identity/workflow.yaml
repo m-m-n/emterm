@@ -120,7 +120,34 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Code-owned rate-limit key derivation for mux panes"
+    plan: tasks/task0001.md
+    status: pending
+    branch: null
+    files:
+      - src-tauri/src/app/agent_status.rs
+      - src-tauri/src/app/tab_lifecycle.rs
+      - src-tauri/src/app/mod.rs
+      - src-tauri/src/app/tests/agent_status.rs
+    skills: [backend-impl]
+    domains: [input-handling, api-contract]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR7, FR8, FR9, FR10, NFR2, NFR4]
+    notes: null
+  task0002:
+    title: "Expiry eviction in the agent-notification rate limiter"
+    plan: tasks/task0002.md
+    status: pending
+    branch: null
+    files:
+      - src-tauri/src/notifications.rs
+    skills: [backend-impl]
+    domains: [api-contract]
+    complexity: medium
+    requirements: [FR6, FR7, NFR1, NFR3, NFR4]
+    notes: null
 
 review:
   status: pending
@@ -135,98 +162,98 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3]
   FR2:
     title: "The derivation stops consulting the learned-id map"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-6, TS-7]
   FR3:
     title: "Rotation-evasion remediation"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-6]
   FR4:
     title: "The learned-id map itself is retained"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-4]
   FR5:
     title: "The derive-before-removal ordering constraint is retired"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-7]
   FR6:
     title: "Expiry eviction in the rate limiter"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS-9, TS-10]
   FR7:
     title: "Discard-on-close is kept alongside expiry"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002]
     tests: [TS-7, TS-11]
   FR8:
     title: "Doc comments describing the three-form derivation are corrected"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-8]
   FR9:
     title: "Existing tests are updated to the option (a) shape"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-1, TS-2, TS-3, TS-4, TS-6]
   FR10:
     title: "The already-weak detach test is corrected"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS-5]
   NFR1:
     title: "Pruning is decision-neutral"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: [TS-10]
   NFR2:
     title: "No migration surface"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR3:
     title: "Accepted limits of the chosen pruning shape"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0002]
     tests: []
   NFR4:
     title: "Build and test surface unchanged"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001, task0002]
     tests: []
 
 batch:
