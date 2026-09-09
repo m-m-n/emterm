@@ -1,13 +1,67 @@
 schema_version: 1
 feature: ac7-red-reason-scope
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: 6e03b8061008807b72c90389896712bad53ad3a0
 last_input_digest: sha256:2a62d23e5950257cc0f9857b150d586e7d78bcb33e3845f6b5ec99d6aed8b092
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-09T22:59:35+09:00"
+    questions:
+      - question_id: requirement.scope.planning-doc-reconciliation
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.scope.planning-doc-reconciliation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-09T22:59:35+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [record_only]
+    freeform: null
+    normalized_answer: >-
+      Repair scope is limited to the live machine-readable record
+      test-docs/ac2-red-reason-accuracy/task0001.tests.yaml (the AC-7
+      red_reason folded scalar). The already-merged planning documents of
+      feature ac2-red-reason-accuracy (SPEC.md Success Criteria,
+      tasks/task0001.md AC-7) are NOT rewritten; their contradiction with
+      that SPEC's own Declared Change Set is recorded as a fact in this
+      feature's SPEC Out of Scope section instead.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; policy action
+      codex_consultation (references/batch-policies.yaml); codex_consulted:
+      true (1 turn, answered by fallback provider litellm/vertex-glm-5.2);
+      Codex chose record_only, which maps onto a declared option_id, so the
+      orchestrator adopted it. Reasoning considered: test-docs/ is a live
+      input future automation reads for failure attribution, while
+      feature-docs/ of a merged, completed feature is a historical audit
+      record; retroactively rewriting the latter would make the planning
+      phase look correct when it was not. record_and_spec_success_criteria
+      was rejected as the weakest option (it would fix SPEC.md while leaving
+      tasks/task0001.md carrying the identical defect, creating a new
+      internal inconsistency). record_and_all_planning_docs was rejected as
+      an after-the-fact rewrite of a merged record. The choice also matches
+      the reporter's own definition of done ("edits confined to that one
+      folded scalar"). record_as_assumption: true -> carried as assumption
+      A-7.
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-09T22:59:35+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: >-
+      Accept requirements-analyst's design_step_recommendation (skip)
+      without asking the user.
+    resolution_note: >-
+      gate: create-spec.design-step; references/batch-policies.yaml entry
+      action select, option_id decide_autonomously; the option is present in
+      the question's declared options[].option_id.
 worker_runs:
   - request_id: create-spec-run-0001
     status: dispatched
