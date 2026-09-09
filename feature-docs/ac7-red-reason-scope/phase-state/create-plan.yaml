@@ -1,0 +1,21 @@
+schema_version: 1
+feature: ac7-red-reason-scope
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 2991df4dfa2f087dbdf6cfdcbb3c26cc7ed0a216
+last_input_digest: sha256:acc05ae015374e69b8aefc21b7502e114a0eb7b562e7ad325cc1618c4e28be80
+active_request_id: 36e02bcb-9498-4f16-ad3f-e19eabc6462a
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: 36e02bcb-9498-4f16-ad3f-e19eabc6462a
+    status: dispatched
+    input_digest: sha256:acc05ae015374e69b8aefc21b7502e114a0eb7b562e7ad325cc1618c4e28be80
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
