@@ -1,0 +1,199 @@
+schema_version: 1
+feature: ac7-red-reason-scope
+created: 2026-09-09
+base_branch: main
+goal: |
+  AC-7 red_reason が変更セット全体について実態と食い違う主張をしている
+
+  ## 現象（必須）
+  `test-docs/ac2-red-reason-accuracy/task0001.tests.yaml:96` の AC-7 エントリの `red_reason` が、`git status --porcelain` の結果として「変更セットには `test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml` の 1 ファイルしか無い」と全変更セットに対する主張として記述されている。
+  しかし実際のタスクコミットの stat には 2 パスが含まれる。対象レコードに加えて、implement フェーズが必ず生成する `test-docs/ac2-red-reason-accuracy/task0001.tests.yaml` があるため。記録された観測は AC-7 を記述どおりには成立させていない。
+  この記述は実行した瞬間（レコードファイル書き込み前）には真だったと推測されるが、全変更セットに対する主張としてスコープされている。
+
+  ## 再現手順（必須）
+  1. ブランチ `em-workflow/ac2-red-reason-accuracy/integration`（PR https://github.com/m-m-n/emterm/pull/57 ）を checkout する
+  2. `test-docs/ac2-red-reason-accuracy/task0001.tests.yaml` の AC-7 エントリ（96 行付近）の `red_reason` を読む
+  3. `git show 7aea1260 --stat` でタスクコミットの変更パスを確認する
+  4. `feature-docs/ac2-red-reason-accuracy/tasks/task0001.md:151-154` の AC-7 と、SPEC の Success Criteria、および Declared Change Set の `test-docs/{feature}/**` を読む
+
+  ## 期待する挙動（必須）
+  AC-7 の `red_reason` が実際に行った検査とそのスコープを記述している。すなわち「変更セットは対象 YAML と、このタスク自身のワークフロー生成テストレコード（`test-docs/ac2-red-reason-accuracy/task0001.tests.yaml`、SPEC の Declared Change Set 項目 `test-docs/{feature}/**` に含まれる）であり、その一覧に Rust ファイルも TypeScript ファイルも無い」という趣旨になっている。全変更セットに対して「1 ファイルのみ」と述べない。
+
+  ## 完了の定義（必須）
+  - [ ] AC-7 の `red_reason` が実際の変更セット（2 パス）を正しく記述している
+  - [ ] 「Rust / TypeScript ファイルが無い」という本来の検査意図は保持されている
+  - [ ] 編集は当該 folded scalar 1 箇所に限定されている
+  - [ ] ファイルが YAML として parse できる
+
+  ## 該当箇所（任意）
+  `test-docs/ac2-red-reason-accuracy/task0001.tests.yaml:96`（AC-7 エントリ、`red_reason`）
+  根本原因は計画側にもある。タスク計画の AC-7 と SPEC の Success Criteria の該当項目は、implement フェーズが常に `test-docs/{feature}/task0001.tests.yaml` を生成する以上、文字どおりには充足不能。SPEC 自身の Declared Change Set はこれを明示的に許容している。AC-7 の書き方を見直すか、SPEC 側の記述を合わせるかの判断が要る。
+
+  ## 実害・発生条件（任意）
+  これは feature `ac2-red-reason-accuracy` がまさに閉じようとしていた record/reality gap と同じクラスの問題（SPEC BO-1 / NFR4）。`taskNNNN.tests.yaml` は後続タスクが失敗の帰属先を判断するための機械可読レコードなので、根拠テキストが実態と乖離していると誤った前提を渡す。
+  由来: PR #57 の feature `ac2-red-reason-accuracy` review round 1。stable_id `38b373af929abc3d`（comprehensive 観点、confidence high）。severity medium のため auto-fix ゲート（critical/high のみ）の対象外で `unresolved` のまま残した。
+
+  ## Notion タスク
+  https://www.notion.so/3d23509ec8ee81efa9e0d50dc4bdb3af
+
+parent_branch: em-workflow/ac7-red-reason-scope/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli_only:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    typescript:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: "bunx biome format ."
+      e2e_test_command: ""
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: f09dd3b0394354355bbb4fa3c7d829bb19a4ba54
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      Gate create-spec.design-step resolved in batch mode with option
+      decide_autonomously, accepting requirements-analyst's recommendation to
+      skip. The feature is a single folded block-scalar text correction in one
+      YAML record: no UI, no visual surface, no new module boundary and no API
+      change, and the three detected design-system candidates
+      (doc/UI-DESIGN-GUIDELINES.yaml, src-tauri/src/ui/md3.rs,
+      src-tauri/web-shared/styles.css) are untouched by it.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Describe the actual change set"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "Attribute the second path to the declared change set"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "Preserve the inspection intent"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "Drop the whole-change-set 'only one file' scoping"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: "Preserve the rest of the AC-7 justification"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: "Confine the edit to the one folded scalar"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Parseability"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Formatting fidelity"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Language"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "No unobserved assertion"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: "No build impact"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: "Self-consistent scoping in this feature's own record"
+    status: resolved
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []

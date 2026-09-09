@@ -1,11 +1,11 @@
 schema_version: 1
 feature: ac7-red-reason-scope
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: 6e03b8061008807b72c90389896712bad53ad3a0
-last_input_digest: sha256:2a62d23e5950257cc0f9857b150d586e7d78bcb33e3845f6b5ec99d6aed8b092
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:757110abd1e9f69da5b6c0a847a1c0dfed5164ea90f2241d769192c3ac627b63
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -64,10 +64,24 @@ answers:
       the question's declared options[].option_id.
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:2a62d23e5950257cc0f9857b150d586e7d78bcb33e3845f6b5ec99d6aed8b092
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:b22e429be6188aa0cdaa4731c60fea12df6ff39be3273423ae9522346006384e
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:757110abd1e9f69da5b6c0a847a1c0dfed5164ea90f2241d769192c3ac627b63
+    output_digest: null
+artifacts:
+  - path: feature-docs/ac7-red-reason-scope/REQUIREMENTS.md
+    sha256: sha256:e42c2c92cc51dc18fd3df41fa6684deca3db50e8cca19f9d9482584d76e0b101
+    produced_by: create-spec-run-0003
+  - path: feature-docs/ac7-red-reason-scope/SPEC.md
+    sha256: sha256:25cdf9a65b59c7153efbdcf0e024c8f5df37e767af7dc19731e83929ed8abfc2
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
