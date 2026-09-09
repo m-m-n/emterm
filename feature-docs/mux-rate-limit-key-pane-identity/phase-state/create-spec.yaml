@@ -1,13 +1,90 @@
 schema_version: 1
 feature: mux-rate-limit-key-pane-identity
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
 base_revision: 1fe8444b550d5e16cd0f7ef5b3610a4001981eb9
 last_input_digest: sha256:3174663493b8dcb190d58a9768d7e187804f54e9f224dde4961e6081d35b510a
 active_request_id: create-spec-run-0001
-packets: {}
-answers: {}
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-09T21:08:58+09:00"
+    questions:
+      - question_id: rate-limit-key.derivation-shape
+        status: answered
+      - question_id: rate-limit-key.entry-pruning-scope
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  rate-limit-key.derivation-shape:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-09T21:08:58+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [always_code_owned_key]
+    freeform: null
+    normalized_answer: >-
+      Adopt option (a): a mux pane's rate-limit key is always
+      `mux:<scope>:<pane_id>`, derived only from code-owned values. The
+      `muxpub:` form is removed and the derivation stops consulting
+      `mux_public_pane_ids`.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (batch-policies.yaml action
+      codex_consultation); codex_consulted: true; consultation turns: 1
+      (converged, no Opus escalation). Codex chose always_code_owned_key,
+      agreeing with the worker's tentative position. Its reasoning: the
+      (ConnectionScope, pane_id) pair already identifies the pane -- it is
+      literally the key of `mux_public_pane_ids` -- so the learned string adds
+      no identity; option (a) removes same-scope aliasing, keeps the cooldown
+      intact across learned-id changes, eliminates rotation-orphaned entries,
+      and keeps mux keys disjoint from `tab:<stable_id>`. Codex additionally
+      argued option (b) does NOT close rotation-driven evasion: evicting the old
+      entry still leaves the NEW key with no cooldown history, so a rotating
+      daemon still gets a fresh bucket. That argument is decisive and was
+      adopted.
+  rate-limit-key.entry-pruning-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-09T21:08:58+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [add_expiry_eviction]
+    freeform: null
+    normalized_answer: >-
+      Adopt `add_expiry_eviction`: `AgentNotificationRateLimiter` additionally
+      drops entries whose `last_fired` is older than
+      `AGENT_NOTIFICATION_RATE_LIMIT`, while the existing discard-on-close path
+      is kept.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (batch-policies.yaml action
+      codex_consultation); codex_consulted: true; same single consultation as
+      the question above. Codex chose add_expiry_eviction, agreeing with the
+      worker. Its reasoning: `is_within_limit` already admits a notification at
+      elapsed >= AGENT_NOTIFICATION_RATE_LIMIT, so evicting an entry at or past
+      that boundary is behaviour-preserving; limiter-owned pruning also covers
+      historical residue that a missed close-discard would leave behind. Codex
+      recommended pruning inside `record` so the read-only `is_within_limit`
+      signature is preserved and suppressed attempts never refresh a timestamp,
+      and recommended keeping the close-time discard so a reused pane key never
+      inherits an unexpired cooldown. Codex's stated caveats, both accepted:
+      pruning on `record` is lazy (idle entries survive until the next
+      `record`), and removing entries does not shrink `HashMap` capacity, so
+      expiry bounds live entries, not the allocation's high-water mark.
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-09T21:08:58+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: >-
+      Accept requirements-analyst's recommendation: the design step is skipped.
+    resolution_note: >-
+      gate: create-spec.design-step; batch-policies.yaml selects
+      decide_autonomously. The recommendation is `skip` -- the change surface is
+      one pure key-derivation function plus its call sites, with no UI surface
+      and no design-token involvement.
 worker_runs:
   - request_id: create-spec-run-0001
     status: dispatched
