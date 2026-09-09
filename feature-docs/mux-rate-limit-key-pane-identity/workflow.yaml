@@ -117,9 +117,55 @@ workflow:
     status: completed
     completed_at_commit: e879a1660599341e28632a5000e32c50a42cd33a
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 6a87ca0d813926df8ea21d57fe16758c12c4d242
+    result: pass
     failed_items: []
+    checks:
+      - name: "build: main"
+        command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+        result: pass
+        detail: "exit 0, no warnings from the emterm crate"
+      - name: "build: cli_only"
+        command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+        result: pass
+        detail: "exit 0, 0 warnings (NFR4: feature split unchanged)"
+      - name: "test: main --lib"
+        command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+        result: pass
+        detail: "3269 passed, 0 failed, 3 ignored; re-run with --test-threads=1 also 3269 passed"
+      - name: "test scenarios TS-1..TS-11"
+        result: pass
+        detail: >-
+          All eleven present and passing. TS-1/TS-2/TS-3 and TS-4 in
+          src-tauri/src/app/tests/agent_status.rs; TS-5/TS-6/TS-7 in the same
+          file's detach and pump_all suites; TS-8 the key-format-independence
+          test; TS-9/TS-10 in src-tauri/src/notifications.rs; TS-11 the
+          unmodified close-time discard test.
+      - name: "retired-prefix sweep"
+        result: pass
+        detail: "grep for the literal muxpub across src-tauri/src and the whole tree (excluding feature-docs) returns no occurrence"
+      - name: "AC-3 compile-time property"
+        result: pass
+        detail: >-
+          agent_notification_rate_limit_key takes only &PaneKey — no map and
+          no daemon-supplied value in the parameter list, so a stale call site
+          cannot compile.
+      - name: "NFR1 decision neutrality"
+        result: pass
+        detail: >-
+          record's retain predicate and is_within_limit both compare
+          now.duration_since(prev) against AGENT_NOTIFICATION_RATE_LIMIT with
+          the same threshold (src-tauri/src/notifications.rs:318-340).
+    manual_items_note: >-
+      MV-1 / MV-2 / MV-3 were not executed: this is an unattended batch run
+      with no human observer and no instrumented mux daemon. MV-2 and MV-3 are
+      marked optional in VERIFICATION.md. MV-1's target UI surface and its data
+      source (App::mux_public_pane_id, src-tauri/src/app/agent_status.rs:148)
+      are unchanged by this diff — no file under src-tauri/src/ui/ was touched
+      — and AC-9's primary automated verification (TS-4) passes. Resolved by
+      Codex consultation; see phase-state/batch-audit.yaml
+      verify.mv1-manual-item-unexecutable-in-batch.
   - id: retrospect
     status: pending
 
