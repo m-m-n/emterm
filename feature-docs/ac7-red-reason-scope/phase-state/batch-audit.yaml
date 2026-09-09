@@ -1,0 +1,34 @@
+schema_version: 1
+feature: ac7-red-reason-scope
+records:
+  - question_id: create-plan.ac8-verification-anchor
+    packet_id: null
+    answered_at: "2026-09-09T23:25:25+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: >-
+      Option A (prospective two-path statement in the record) combined with
+      option D's git-anchored verification: VERIFICATION.md TS-5 enumerates
+      this feature's own change set from git rather than parsing the record's
+      prose.
+    normalized_answer: >-
+      Option A statement shape + git-anchored TS-5 verification.
+    resolution_note: >-
+      gate: user-instructed consultation on how AC-8 (this feature's own
+      change-set self-consistency) can be both satisfiable by the implementer
+      and mechanically verifiable, given that the implementer's own record file
+      does not yet exist when it inspects git. codex_consulted: true, but the
+      default Codex provider returned a usage-limit error and produced no
+      answer; fallback_provider: LiteLLM proxy, model vertex-glm-5.2, answered.
+      Fallback recommended a new option D (structured expected_change_set with
+      an external_paths / self_record sentinel), ranking C > B > A among the
+      offered options. Option D was not adopted verbatim because it requires a
+      schema change to the taskNNNN.tests.yaml record format, which lies
+      outside this feature's Declared Change Set, and because SPEC AC-8 already
+      requires the record to state the two expected paths (option C removes
+      that statement entirely). Adopted instead: option A's statement shape
+      plus option D's verification mechanism — the plan's TS-5 checks the
+      change set against git, not against the record's prose, which answers the
+      fallback's main objection to A (prose parsing) while staying inside the
+      SPEC and the declared change set. opus_escalation: not run.
