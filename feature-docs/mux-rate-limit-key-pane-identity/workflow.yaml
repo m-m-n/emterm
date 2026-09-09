@@ -107,7 +107,8 @@ workflow:
       decide_autonomously.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 0b188c6ef11398827a99d95859ad9461de48a1f4
   - id: implement
     status: pending
     base_commit: null
