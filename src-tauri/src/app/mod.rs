@@ -433,11 +433,11 @@ pub struct App {
     pub restart_toast: RestartToast,
     /// Per-pane rate limiter for agent-status (blocked/done) desktop
     /// notifications (task0007 AC-4). Keyed by the string
-    /// [`agent_status::agent_notification_rate_limit_key`] produces — never
-    /// a daemon-supplied `public_pane_id` on its own: the derivation always
-    /// wraps a learned id behind a code-owned namespace prefix and the
-    /// connection scope before any daemon-controlled byte appears
-    /// (public-pane-id-rate-limit-key AC-1/AC-7), so this rate limiter can
+    /// [`agent_status::agent_notification_rate_limit_key`] produces — a
+    /// pure function of the pane's own identity (connection scope + wire
+    /// pane id, or tab id). No daemon-supplied byte ever reaches a key
+    /// (mux-rate-limit-key-pane-identity CD-2: the derivation accepts no
+    /// map and no daemon-supplied value at all), so this rate limiter can
     /// never be armed or discarded by a daemon-chosen string that collides
     /// with another pane's or tab's key.
     agent_notification_rate_limiter: crate::notifications::AgentNotificationRateLimiter<String>,
@@ -1482,10 +1482,8 @@ impl App {
             .collect();
         for key in reaped_agent_status_keys {
             // mux-agent-status-pane-key-collision FR1/FR3/FR6: every key
-            // derived here is the reaped tab's OWN scope only — resolve
-            // the rate-limit key from the still-present public-id mapping
-            // BEFORE removing that scoped map entry below.
-            let rate_limit_key = agent_notification_rate_limit_key(&self.mux_public_pane_ids, &key);
+            // derived here is the reaped tab's OWN scope only.
+            let rate_limit_key = agent_notification_rate_limit_key(&key);
             if let crate::agent_status_model::PaneKey::MuxPane(scope, pane_id) = key {
                 self.mux_public_pane_ids.remove(&(scope, pane_id));
             }
