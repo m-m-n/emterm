@@ -114,7 +114,7 @@ workflow:
     completed_at_commit: 55fa5ca47d42817cce5e6dc312bbfa9940f33552
     base_commit: c14be11623ac8e9b4fcbc9894acc167fbd15380e
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -152,11 +152,20 @@ tasks:
     notes: null
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
+  plan:
+    floor: [comprehensive, security, architecture, spec]
+    discretionary:
+      - perspective: performance
+        reason: >-
+          差分が通知レート制限の HashMap に有効期限プルーニングを追加し、
+          通知経路ごとに走る削除ループを導入しているため、
+          計算量とメモリ挙動の観点を追加した
+    cross_validation: true
 
 requirements:
   FR1:
