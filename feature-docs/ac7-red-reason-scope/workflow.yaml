@@ -103,7 +103,20 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Rewrite the AC-7 red_reason to the observed change set"
+    plan: tasks/task0001.md
+    files:
+      - test-docs/ac2-red-reason-accuracy/task0001.tests.yaml
+      - test-docs/ac7-red-reason-scope/task0001.tests.yaml
+    skills: []
+    domains: [config-infra]
+    complexity: low
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -118,82 +131,82 @@ requirements:
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
   FR2:
     title: "Attribute the second path to the declared change set"
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
   FR3:
     title: "Preserve the inspection intent"
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2]
   FR4:
     title: "Drop the whole-change-set 'only one file' scoping"
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1]
   FR5:
     title: "Preserve the rest of the AC-7 justification"
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-2]
   FR6:
     title: "Confine the edit to the one folded scalar"
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4]
   NFR1:
     title: "Parseability"
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3]
   NFR2:
     title: "Formatting fidelity"
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3]
   NFR3:
     title: "Language"
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-3]
   NFR4:
     title: "No unobserved assertion"
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-6, TS-1]
   NFR5:
     title: "No build impact"
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
   NFR6:
     title: "Self-consistent scoping in this feature's own record"
     status: resolved
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5]
