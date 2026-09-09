@@ -167,7 +167,8 @@ workflow:
       Codex consultation; see phase-state/batch-audit.yaml
       verify.mv1-manual-item-unexecutable-in-batch.
   - id: retrospect
-    status: in_progress
+    status: completed
+    completed_at_commit: a97e165dee5348d390d27a8a2f463fda096ed619
 
 tasks:
   task0001:

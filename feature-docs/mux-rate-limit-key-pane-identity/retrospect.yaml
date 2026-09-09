@@ -1,0 +1,64 @@
+feature: mux-rate-limit-key-pane-identity
+collected_at: "2026-09-09T22:17:00+09:00"
+session_ids:
+  - 01a0864f-98fa-7586-a3e7-fd2e34ce65d6
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: >-
+        差分が通知レート制限の HashMap に有効期限プルーニングを追加し、
+        通知経路ごとに走る削除ループを導入しているため、
+        計算量とメモリ挙動の観点を追加した
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - kind: protocol-inconsistency
+    where: "em-workflow references/review-phase.md Phase R2 / R3a と Phase R3b step 1"
+    note: >-
+      R2/R3a はオーケストレーターに「changed_files と spec_path を project_root 基準の
+      絶対パスへ正規化して reviewer/evaluator に渡す」ことを義務づけているのに、R3b step 1 は
+      戻ってきた evaluator 出力の絶対パスを機械的に reject する。今回、evaluator が
+      「渡された形そのままの絶対パス」で medium finding を 1 件返し、ゲートに掛かって
+      drop された（reviews/round1.yaml findings_dropped に全文保全済み）。Codex 相談の
+      結論は「入力側の信頼境界と出力側の信頼境界は別物なので、ゲートは literal に適用する」
+      で、それ自体は妥当。ただし恒常的に発生する構造なので、将来的には
+      「evaluator に相対パスを出させる」か「Clause B に provenance 証明済みの正規化を
+      明示的に許す」形でプロトコル側を直すべき。
+  - kind: spec-rationale-stale
+    where: "SPEC.md FR4 / AC-9（本 feature）と src-tauri/src/app/agent_status.rs:148"
+    note: >-
+      本 diff で App::mux_public_pane_ids を読む production 経路（レート制限キー導出の
+      muxpub: 分岐）が消え、書き込み 1 箇所と削除 3 箇所だけが残った。読む側は production に
+      存在せずテストのみ 16 箇所。SPEC FR4/AC-9 が保持理由として挙げている
+      「ui::mux_sidebar のコピー行（task0006 AC-5）が使う」は既に成立していない
+      （ui/mux_sidebar/tests.rs:1162-1194 が paint_copy_icon の不在を assert）。
+      FR4 が保持を明示要求しているため本 feature 内での削除は仕様違反になる。
+      「保持根拠の記述を直し、map ごと引退させるかを別途決める」のが実効的な対応で、
+      コード欠陥ではない。別タスクとして起票する。
+  - kind: follow-up-candidate
+    where: "src-tauri/src/notifications.rs AgentNotificationRateLimiter"
+    note: >-
+      create-spec の Codex 相談パス 2 が挙げたがゲートの選択肢を超えるためスコープ外にした
+      2 件。(1) レート制限器を整形済み String ではなく PaneKey で直接キーし、tab/mux の
+      名前空間分離を prefix ベースから構造的なものにする。(2) 敵対的バーストに対する
+      エントリ数の上限とグローバルなトークンバケットを追加する。
+  - kind: verification-gap
+    where: "VERIFICATION.md Manual Testing MV-1 / MV-2 / MV-3"
+    note: >-
+      無人バッチ実行では人間の目視も改造 mux daemon も用意できず、手動検証 3 件は実行
+      できなかった。MV-1 は「必須」扱いだが対象サーフェスが本 diff で不変であることを
+      根拠に pass 判定した（batch-audit.yaml verify.mv1-manual-item-unexecutable-in-batch）。
+      VERIFICATION.md を書く時点で「無人実行で到達できる検証手段か」を意識すると、
+      この種の判断が毎回必要にならずに済む。
+  - kind: test-doc-drift
+    where: "test-docs/mux-rate-limit-key-pane-identity/task0002.tests.yaml と SPEC FR10"
+    note: >-
+      (1) task0002.tests.yaml が ac3_detach_... を baseline_failures と final_failures の
+      両方に載せていたのは、同一 base から並列 worktree で走った副作用。当該テストを
+      所有・修正した task0001 側の final_failures は空で、統合後は green（verify で確認済み）。
+      (2) SPEC FR10 が同テストを "passed vacuously" と書いていたが、実際は baseline で
+      panic して RED だった。修正は入っており記述の齟齬のみ。
