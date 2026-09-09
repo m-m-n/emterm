@@ -69,3 +69,48 @@ records:
       learned id "xyz-7" while production actually arms
       "muxpub:<scope>:xyz-7", so that test does not currently prove what its
       name claims. Both paths are handed to the planner.
+  - question_id: review.r3b-absolute-path-interpretation
+    packet_id: null
+    answered_at: "2026-09-09T22:05:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [apply_clause_b_literally_and_drop]
+    freeform: null
+    normalized_answer: >-
+      (a) R3b step 1 を literal に適用して当該 finding を drop し、drop 自体を round
+      記録に開示する。(b) 「オーケストレーター自身が絶対パスを渡したのだから
+      containment の意図は満たされている」として相対パスに正規化して残す案は不採用。
+    resolution_note: >-
+      これは gate_id を持つゲートではなく、プロトコル解釈の曖昧点。ユーザー指示
+      「不明点は Codex に相談し、比較的良いと判断した方を採用する」に従って read-only の
+      Codex セカンドオピニオンを 1 回取り、その結論を採用した。
+
+      争点: review-phase.md の Phase R2/R3a は「changed_files と spec_path を
+      project_root 基準の絶対パスに正規化して渡す」ことを義務づけている。一方 Phase R3b
+      step 1 は、信頼できない evaluator 出力に対する機械ゲートとして「絶対パスを reject」
+      と定めている。今回 evaluator が返した唯一の finding（medium / architecture）の file が
+      絶対パスで、これは私が渡した形そのままだった。パスは project_root 配下の実在する
+      通常ファイルで、.. も NUL も symlink も無い。
+
+      Codex の結論と根拠（(a) を選択）:
+      - Clause A は「オーケストレーター → エージェント」の入力整形（信頼される向き）、
+        Clause B は「信頼できない出力 → オーケストレーター」の境界ゲートで、別の信頼境界に
+        効く規則。入力側の形を自分が作ったことは、戻り側のゲートを緩める根拠にならない。
+      - (b) は「evaluator が渡された値をそのまま返したのか、自分で作ったのか」という
+        provenance の推論に依存する。それは一般には機械的に検証できないため、lexical な
+        機械ゲートを判断ゲートに変質させ、ゲートを機械的に置いた意味を壊す。
+      - 開示（disclose）と準拠（compliance）は別問題。正規化を開示しても、その変換が
+        プロトコル準拠になるわけではない。
+      - finding の真偽・severity・完了ゲートへの影響の有無は、順序付き機械ゲートの
+        適用可否とは無関係。ゲートはフィールドの「形」に対して適用される。
+      - プロトコルは同じ step 1 による drop について既に「黙って落とさず開示する」機構を
+        持っており、実質的な情報損失はその開示でカバーできる。
+      - 根本の不整合（入力は絶対、出力は相対を要求）は、この run の場当たりの例外ではなく
+        「evaluator に相対パスを出させる」または「Clause B に provenance 証明済みの
+        正規化を明示的に許す」という形で将来的に直すべき、との付言があった。
+
+      採用による実害の確認: 当該 finding は severity medium のため R4 auto-fix の候補外
+      （auto-fix は critical/high のみ）、かつ residual_critical_high に算入されないため
+      完了ゲートにも影響しない。コードに対する結果は (a)(b) いずれでも同一で、差が出るのは
+      コミットされる監査記録の形だけ。内容は reviews/round1.yaml の findings_dropped に
+      全文保全し、retrospect の lessons_candidates にも回す。

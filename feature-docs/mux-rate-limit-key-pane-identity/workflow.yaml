@@ -114,7 +114,8 @@ workflow:
     completed_at_commit: 55fa5ca47d42817cce5e6dc312bbfa9940f33552
     base_commit: c14be11623ac8e9b4fcbc9894acc167fbd15380e
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: e879a1660599341e28632a5000e32c50a42cd33a
   - id: verify
     status: pending
     result: null
@@ -152,9 +153,14 @@ tasks:
     notes: null
 
 review:
-  status: in_progress
-  rounds_completed: 0
-  perspectives: {}
+  status: completed
+  rounds_completed: 1
+  perspectives:
+    comprehensive: {run_id: "comprehensive#0", source: codex, status: completed, findings: 0}
+    security: {run_id: "security#0", source: codex, status: completed, findings: 0}
+    architecture: {run_id: "architecture#0", source: litellm, model: vertex-glm-5.2, status: completed, findings: 0}
+    spec: {run_id: "spec#0", source: litellm, model: muse-spark, status: completed, findings: 0}
+    performance: {run_id: "performance#0", source: litellm, model: muse-spark, status: completed, findings: 0}
   residual_critical_high: 0
   needs_rework: false
   plan:
