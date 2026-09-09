@@ -1,0 +1,239 @@
+schema_version: 1
+feature: mux-rate-limit-key-pane-identity
+created: 2026-09-09
+base_branch: main
+goal: |
+  通知レート制限キーが daemon 由来の可変文字列に依存しており、同一 scope 内の衝突とバケット回避が残る
+
+  ## 現象（必須）
+  通知レート制限キーは学習済みの `public_pane_id` を含む `muxpub:<scope>:<learned>` になっている。
+  `learned` は mux daemon（信頼境界の向こう側）が完全に制御する可変文字列なので、名前空間で包んでも
+  以下が残る。
+  1. **同一 scope 内の衝突** — 同じ mux 接続の 2 つの pane に対して daemon が同一の `public_pane_id`
+  を返すと、両 pane が同一のレート制限バケットを共有する。最も現実的なのは空文字列のケースで、
+  doc 自身が "An empty learned string still takes this branch" と認めているとおり、空 id を送る
+  daemon では当該接続の全 pane が `muxpub:<scope>:` という単一キーに潰れる。片方の Blocked / Done
+  通知が他方の直近通知で抑止され、片方の pane クローズ時の discard が他方の限流状態まで消す。
+  2. **ローテーションによる限流回避** — 取り込み経路は更新のたびに学習済み ID を上書きするため、
+  悪意ある mux peer が 1 つの pane の `public_pane_id` を回すたびに新しいバケットを得られ、
+  pane ごとの通知上限を回避できる。
+  3. **`HashMap` 残留** — 発火済みキーは剪定されない `HashMap` に残り続ける。pane クローズ時に
+  discard されるのは「現在マップされているキー」だけなので、旧キーはどの discard サイトからも
+  参照されない。daemon 再起動＋再接続で incarnation が変わると、生存中の pane でも同じことが起きる。
+
+  PR https://github.com/m-m-n/emterm/pull/55 の review round 1 で検出された medium finding 2 件
+  （`0810c3130449c0dc` comprehensive / `0247047963c1c329` security）。
+
+  ## 再現手順（必須）
+  1. 改変した（あるいは侵害された）mux daemon を用意し、`AgentStatusUpdate` の `public_pane_id` に
+  空文字列を入れて返すようにする
+  2. その daemon に attach し、同一接続内に 2 つの pane を開く
+  3. pane A でエージェント通知を発火させる
+  4. 直後に pane B で Blocked / Done 遷移を起こし、通知が抑止されることを確認する
+  5. pane A を閉じ、pane B の限流状態まで消えることを確認する
+  6. 別途、daemon が pane A の `public_pane_id` を更新のたびに変える構成にすると、
+  pane ごとの通知上限を無制限に回避できることを確認する
+
+  ## 期待する挙動（必須）
+  レート制限キーの同一性を daemon 由来の可変文字列に依存させない。
+  導出元マップ `mux_public_pane_ids` は既に `(scope, pane_id)` でキーされているため、
+  学習済み文字列は `(scope, pane_id)` 以上の同一性の情報量を足していない。
+  想定される修正方針は 2 つ。
+  - **(a)** mux pane のキーを learned id に依存させず常に `mux:<scope>:<pane_id>` にする。
+  キーは完全にコード所有・単射になり、上記 3 つの問題が同時に消える
+  - **(b)** learned id を残すなら wire pane_id を learned の前に入れて
+  `muxpub:<scope>:<pane_id>:<learned>` とし、1 接続内の 2 pane が決してエイリアスしないようにする。
+  併せて、受理した ID が変わったときに旧限流エントリを削除する
+
+  ## 完了の定義（必須）
+  - [ ] 再現手順で現象が起きない
+  - [ ] 「同一 scope・異なる pane_id で daemon が同じ learned id（および空文字列）を返しても
+  導出キーが異なる」ケースのテストがある
+  - [ ] 「daemon が `public_pane_id` をローテーションしても新しいバケットを得られない」
+  ケースのテストがある
+
+  ## 該当箇所（任意）
+  - `src-tauri/src/app/agent_status.rs:119-122` — learned-id ブランチのキー導出
+  - `src-tauri/src/app/agent_status.rs:321-322` — 更新のたびに学習済み ID を上書きする取り込み経路
+  - `src-tauri/src/app/mod.rs` — `App::agent_notification_rate_limiter`（剪定されない `HashMap`）
+
+  ## 実害・発生条件（任意）
+  発生条件: 改変された、あるいは侵害された mux daemon に attach すること。
+  信頼できる自分のサーバーだけに接続している限りは発生しない。
+  PR #55 で予約形（`tab:` / `mux:`）との衝突は塞がれているため、残っているのは
+  同一 scope 内に限定された影響とメモリ増加。
+
+  ## Notion タスク
+  https://www.notion.so/3d23509ec8ee8146a981dc9f00d11f89
+
+parent_branch: em-workflow/mux-rate-limit-key-pane-identity/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli_only:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 648a804f2b4e767c3d6d3595fd3c00e3c31ea7d4
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      No user-visible surface changes: this feature alters an internal
+      key-derivation function, a rate limiter's eviction policy, and the tests
+      pinning them. No UI, no layout, no design token and no visual asset is
+      touched, and notification body / badge rendering are unaffected.
+      Recommendation accepted via gate create-spec.design-step, option
+      decide_autonomously.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Mux pane keys are always the code-owned form"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2, TS-3]
+  FR2:
+    title: "The derivation stops consulting the learned-id map"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-6, TS-7]
+  FR3:
+    title: "Rotation-evasion remediation"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "The learned-id map itself is retained"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-4]
+  FR5:
+    title: "The derive-before-removal ordering constraint is retired"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-7]
+  FR6:
+    title: "Expiry eviction in the rate limiter"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-9, TS-10]
+  FR7:
+    title: "Discard-on-close is kept alongside expiry"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-7, TS-11]
+  FR8:
+    title: "Doc comments describing the three-form derivation are corrected"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-8]
+  FR9:
+    title: "Existing tests are updated to the option (a) shape"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-6]
+  FR10:
+    title: "The already-weak detach test is corrected"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-5]
+  NFR1:
+    title: "Pruning is decision-neutral"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS-10]
+  NFR2:
+    title: "No migration surface"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Accepted limits of the chosen pruning shape"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Build and test surface unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
