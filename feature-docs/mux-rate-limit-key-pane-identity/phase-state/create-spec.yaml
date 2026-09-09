@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-rate-limit-key-pane-identity
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: 1fe8444b550d5e16cd0f7ef5b3610a4001981eb9
-last_input_digest: sha256:3174663493b8dcb190d58a9768d7e187804f54e9f224dde4961e6081d35b510a
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:75ee1eea0dfdcbdcf39a02fa73ef3de04cf715b7c56ff443da489713097cbfa8
+active_request_id: create-spec-run-0003
 packets:
   create-spec-q0001:
     status: answered
@@ -87,10 +87,24 @@ answers:
       and no design-token involvement.
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:3174663493b8dcb190d58a9768d7e187804f54e9f224dde4961e6081d35b510a
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:75ee1eea0dfdcbdcf39a02fa73ef3de04cf715b7c56ff443da489713097cbfa8
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:75ee1eea0dfdcbdcf39a02fa73ef3de04cf715b7c56ff443da489713097cbfa8
+    output_digest: null
+artifacts:
+  - path: feature-docs/mux-rate-limit-key-pane-identity/REQUIREMENTS.md
+    sha256: sha256:c918d8d9780dad97a8ea25d4cfa38fbc117173f59d62b3390d16428cd6604182
+    produced_by: create-spec-run-0003
+  - path: feature-docs/mux-rate-limit-key-pane-identity/SPEC.md
+    sha256: sha256:0765927356044c2de0c8e37ea9b48009ba7f323db690df7d83f2e64a3b0bdf48
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
@@ -114,5 +128,7 @@ resolved_input_cache:
       - src-tauri/src/app/agent_status.rs
       - src-tauri/src/app/mod.rs
       - src-tauri/src/notifications.rs
+      - src-tauri/src/app/tab_lifecycle.rs
+      - src-tauri/src/app/tests/agent_status.rs
     truncated: false
 last_error: null
