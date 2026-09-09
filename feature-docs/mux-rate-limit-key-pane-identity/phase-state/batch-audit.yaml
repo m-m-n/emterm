@@ -1,3 +1,71 @@
 schema_version: 1
 feature: mux-rate-limit-key-pane-identity
-records: []
+records:
+  - question_id: create-spec.codex-consultation-supplement
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-09T21:09:34+09:00"
+    source: batch-codex-consultation
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: >-
+      Supplementary Codex consultation record for packet create-spec-q0001.
+      Not itself a gate resolution -- the two gate answers live in
+      phase-state/create-spec.yaml. Recorded here so the run report and the
+      Notion write-back carry the full discussion.
+    normalized_answer: >-
+      Option (a) (always_code_owned_key) and add_expiry_eviction confirmed by a
+      second, deeper Codex pass over the code and the feature-docs history.
+    resolution_note: >-
+      Two independent Codex passes were run, both read-only.
+
+      Pass 1 (the protocol consultation, one turn, converged): chose
+      always_code_owned_key and add_expiry_eviction. Decisive argument against
+      option (b): evicting the superseded entry does not transfer the cooldown
+      timestamp, so a rotating daemon still lands on a key with no history and
+      is immediately allowed -- option (b) therefore does not close the
+      rotation-evasion problem at all, only the aliasing one.
+
+      Pass 2 (deeper background pass over code + feature-docs history):
+      independently reached the same conclusion and established that the
+      learned id was never load-bearing for throttling identity. Evidence it
+      cited: task0009's spec required only lifetime-stable, concurrently-unique
+      keys, never continuity across renumbering or reconnect;
+      PaneKey::MuxPane(scope, pane_id) is already the canonical pane identity
+      everywhere else in the model; daemon pane ids are monotonically allocated
+      with no renumbering path; hot-upgrade restore preserves the pane counter
+      and incarnation verbatim; detach/reattach deliberately does NOT preserve
+      limiter state (detach queues cleanup, attach starts clean); and
+      public_pane_id's documented purpose is an API-facing identifier stable
+      across daemon restarts, which is an external-API concern rather than a
+      throttling one.
+
+      Caveat pass 2 raised and this run accepts: a hypothetical future
+      transparent-reconnect feature that reused the same scope + wire pane_id
+      without today's cleanup path would need to revisit this -- but the right
+      answer there is to mint a new scope, not to resurrect dependence on an
+      untrusted string.
+
+      Migration: none. Rate-limit keys are process-local -- never serialized,
+      never sent over the wire, never persisted -- so removing the "muxpub:"
+      form strands nothing. "muxpub:" simply becomes a retired prefix.
+
+      Two suggestions from pass 2 recorded but NOT adopted into this feature's
+      scope, because they exceed the options the gate offered:
+      (1) key AgentNotificationRateLimiter by PaneKey directly instead of by a
+      formatted String, which would make tab/mux namespace separation
+      structural rather than prefix-based;
+      (2) add a hard entry cap plus a global token bucket against adversarial
+      bursts (an illustrative ~4096 was floated, derived from nothing in the
+      codebase). Both are follow-up candidates.
+
+      Reference-scan gap closed by the consultation: the analyst warned that
+      close_tab's definition and the app-layer test module were outside the
+      supplied scan set. Codex located both -- close_tab's discard site is
+      src-tauri/src/app/tab_lifecycle.rs:148, and the app-layer tests are
+      src-tauri/src/app/tests/agent_status.rs. Pass 2 additionally flagged that
+      the existing test
+      ac3_detach_releases_model_entry_public_id_and_rate_limit_identity
+      (src-tauri/src/app/tests/agent_status.rs:1540) asserts against the raw
+      learned id "xyz-7" while production actually arms
+      "muxpub:<scope>:xyz-7", so that test does not currently prove what its
+      name claims. Both paths are handed to the planner.
