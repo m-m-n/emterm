@@ -167,3 +167,56 @@ records:
 
       Codex は 2 パスとも read-only、gpt-5.6-sol。パス 2 の判定はこちらが提示した
       diff 範囲の事実確認に依拠している旨を Codex 自身が明示している。
+  - question_id: develop.once-boundary-vs-user-pr-instruction
+    packet_id: null
+    answered_at: "2026-09-09T22:20:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [stop_at_once_boundary]
+    freeform: null
+    normalized_answer: >-
+      (a) `--once` の retrospect 境界でターンを終え、Step C（完了処理）は次回起動に
+      持ち越す。ユーザーの push + PR 指示は「Step C が走るときの完了方式の指定」として
+      保持する（batch 既定の keep branch / no push / no PR を上書きする）。
+      (b) 今このターンで Step C を実行して PR まで作る案は不採用。
+    resolution_note: >-
+      これは gate_id を持つゲートではなく、同一起動内で `--once` フラグとユーザーの
+      自由記述指示（「実装が終わったら integration ブランチを push して gh pr create で
+      PR を作る」）が競合したときにどちらを優先するかという解釈上の曖昧点。
+      ユーザー指示「不明点は Codex に相談し、比較的良いと判断した方を採用する」に従って
+      read-only のセカンドオピニオンを取った。
+
+      Codex CLI 本体は利用上限（2026-09-10 01:52 リセット）で応答できなかったため、
+      LiteLLM proxy 経由のフォールバック（model: muse-spark）で 1 回照会した。
+
+      争点: develop skill の `--once` フェーズ境界表は
+      「retrospect が completed になりコミットされた時点でターンを終える。Step C は
+      ここでは実行せず、独立した 1 フェーズとして次回起動に持ち越す」と明記している。
+      一方でユーザーは同じ起動の自由記述で PR 作成という成果物を要求している。
+      無人実行なので、止めた場合に外部サービスが再発火するかはこちら側で保証できない。
+
+      Codex の結論と根拠（(a) を選択）:
+      - このターンに対する具体性は `--once` の境界表の方が高い。表は
+        「retrospect が完了・コミット済み」というまさに今の状態を名指しし、
+        Step C を持ち越すと明示している。自由記述の指示は Step C が「何を選ぶか」を
+        指定しているだけで、「いつ Step C が走るか」には触れておらず、
+        「このターンで」「`--once` を無視して」といったターン限定の語も含まない。
+      - `--once` は「1 ターンあたりの作業量の上限」であって「要求された成果物の
+        差し止め」ではない。次回起動で Step C が走れば push + PR は指定どおり
+        実行される。スロットル（延期）とキャンセル（不実行）を同一視するのは誤読。
+      - 誤りのコストと可逆性: 今 Step C を先走ると、文書化されたステートマシンを
+        破り、次回起動が再開地点として前提する worktree を削除し、さらに
+        「外部ディスパッチャーが再発火するか」というオーケストレーターの管轄外の
+        事柄を推測して動くことになる。得られるのは 1 ターン分の前倒しだけ。
+        止める側は文書化された可逆な結果で、報告もできる。「まだ PR が無い」コストは
+        ディスパッチャーの再発火判断に属する。
+      - フラグと自由記述はレイヤーが違う。フラグは制御フロー（どのフェーズをいつ
+        実行するか）、自由記述はフェーズ内の選択のパラメータ化（Step C の完了方式）。
+        自由記述は batch 既定の完了方式（keep branch / no push / no PR）を
+        正当に上書きするが、明示的に文書化されたフラグの境界を黙って上書きはしない。
+        上書きするなら明示的な打ち消し文言が要るが、今回それは無い。
+
+      採用に伴う持ち越し: 次回 `/em-workflow:develop mux-rate-limit-key-pane-identity`
+      （`--batch` の有無を問わず）で Step C に入ったとき、完了方式は
+      「PR を作成」— integration ブランチを push し、`gh pr create` で main への PR を
+      作る。ローカルマージはしない。ブランチはローカル・リモートとも残す。
