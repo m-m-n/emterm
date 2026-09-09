@@ -1,7 +1,7 @@
 schema_version: 1
 feature: ac7-red-reason-scope
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 2991df4dfa2f087dbdf6cfdcbb3c26cc7ed0a216
 last_input_digest: sha256:acc05ae015374e69b8aefc21b7502e114a0eb7b562e7ad325cc1618c4e28be80
