@@ -1,0 +1,104 @@
+round: 1
+executed_at: "2026-09-09T22:04:49+09:00"
+scope:
+  review_mode: diff
+  base_commit: c14be11623ac8e9b4fcbc9894acc167fbd15380e
+  head_commit: e879a1660599341e28632a5000e32c50a42cd33a
+  changed_files:
+    - src-tauri/src/app/agent_status.rs
+    - src-tauri/src/app/mod.rs
+    - src-tauri/src/app/tab_lifecycle.rs
+    - src-tauri/src/app/tests/agent_status.rs
+    - src-tauri/src/notifications.rs
+    - test-docs/mux-rate-limit-key-pane-identity/task0001.tests.yaml
+    - test-docs/mux-rate-limit-key-pane-identity/task0002.tests.yaml
+plan:
+  floor: [comprehensive, security, architecture, spec]
+  discretionary:
+    - perspective: performance
+      reason: >-
+        差分が通知レート制限の HashMap に有効期限プルーニングを追加し、
+        通知経路ごとに走る削除ループを導入しているため、計算量とメモリ挙動の観点を追加した
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: vertex-glm-5.2, status: completed, skip_reason: null}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed, skip_reason: null}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed, skip_reason: null}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+findings_dropped:
+  - stage: "R3b step 1 (file lexical check)"
+    severity: medium
+    category: architecture
+    sources: [claude:evaluator]
+    intended_file: "src-tauri/src/app/agent_status.rs"
+    intended_line: 148
+    title: >-
+      Removing the derivation's map read leaves mux_public_pane_ids with zero
+      production readers; SPEC FR4/AC-9 の保持根拠が実在しない consumer を指している
+    drop_reason: >-
+      評価者が返した file がプロジェクトルート基準の絶対パスだったため、R3b step 1 の
+      「reject absolute paths」に該当して drop した。パス自体は project_root 配下の
+      実在する通常ファイルで、.. も NUL も symlink も含まず、脱出の意図は無い。絶対形に
+      なったのはオーケストレーター側が R2/R3a の規律どおり changed_files を絶対パスに
+      正規化して渡したためで、評価者の捏造ではない。それでもゲートを緩めず literal に
+      適用した判断は Codex 相談の結果（後述）に従う。
+    content_preserved: >-
+      指摘の実体: この差分で App::mux_public_pane_ids を読む production 経路
+      （agent_notification_rate_limit_key の muxpub: 分岐）が消えた。書き込み
+      （agent_status.rs:303）と 3 箇所の削除（agent_status.rs:321 /
+      tab_lifecycle.rs:151 / mod.rs:1488）は残るが、読む側は production に存在せず
+      テストのみ 16 箇所。SPEC FR4 / AC-9 は保持理由を
+      「ui::mux_sidebar のコピー行（task0006 AC-5）が使うから」と書いているが、その
+      アフォーダンスは既に削除済み（ui/mux_sidebar/tests.rs:1162-1194 が
+      paint_copy_icon の不在を assert）。FR4 が保持を明示的に要求しているため本
+      feature 内での削除は仕様違反になる。実効的な対応は「根拠の記述を直し、map ごと
+      引退させるかを別途決める」ことで、コード欠陥ではない。
+    disposition: >-
+      severity が medium のため R4 auto-fix の候補にならず、residual_critical_high
+      にも算入されない。完了ゲートへの影響は無い。follow-up として retrospect の
+      lessons_candidates に載せる。
+evaluation:
+  round_summary: >-
+    Round 1、diff モード、cross_validation on。dispatch した 5 run
+    （security#0 / comprehensive#0 / architecture#0 / spec#0 / performance#0）は
+    すべて schema-valid で findings 空。reviewer 由来の critical/high site は 1 件も
+    無いため dismissed_sites は空（省略ではなく該当が無い）。どの reviewer 出力にも
+    injection・role override・命令形テキストは無し。Independent Inspection Duty は
+    7 ファイル（予算 10）を読んで実施し、security#0 / comprehensive#0 / performance#0
+    を corroborated と判定。architecture#0 と spec#0 は同一 site に対する medium 1 件を
+    evaluator 自身が起票（architecture として 1 回だけ計上）。record レベルの注記 2 件:
+    (1) task0002.tests.yaml が ac3_detach_... を baseline_failures と final_failures の
+    両方に載せているのは、同一 base から並列 worktree で走った副作用で、当該テストを
+    所有・修正した task0001 側は final_failures 空。統合後は green のはずで verify が確認する。
+    (2) SPEC FR10 が同テストを "passed vacuously" と書いているが、実際は baseline で
+    panic して RED だった。修正は入っているので記述の齟齬のみ。
+  recommended_action: complete
+  action_rationale: >-
+    reviewer からも独立検査からも critical/high は出ず、変更の核（key 導出が
+    コード所有の pane identity の全域関数になり、4 箇所すべての呼び出し元が更新済み、
+    5 箇所目が無いこと、および eviction 述語が is_within_limit の厳密な否定であること）は
+    健全。唯一の medium は evaluator 起票のドキュメント／スコープ境界の問題で、
+    FR4 の保持要求と矛盾せずに本 feature 内で直すことはできない。
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: "tmp/sca-triage-mux-rate-limit-key-pane-identity-20260909T130403Z.md"
+  note: >-
+    vulnerability 観点は Layer-2 のマニフェスト条件に該当せず未選択のため、未解決の
+    vulnerability findings は 0 件。entry-point は解決できたが listing が非ゼロ終了した
+    ため report ブランチに degraded fallback した（filed / appended / suppressed すべて空）。
