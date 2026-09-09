@@ -140,7 +140,7 @@ tasks:
   task0002:
     title: "Expiry eviction in the agent-notification rate limiter"
     plan: tasks/task0002.md
-    status: in_progress
+    status: merged
     branch: em-workflow/mux-rate-limit-key-pane-identity/task0002
     files:
       - src-tauri/src/notifications.rs
