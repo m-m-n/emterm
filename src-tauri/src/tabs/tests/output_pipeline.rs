@@ -1244,3 +1244,33 @@ fn c_device_query_frame_breaks_coalesce_run() {
     assert_eq!(split.test_row_text(0), "aaa");
     assert_eq!(split.test_row_text(1), "ccc");
 }
+
+// ── osc-color-query-response task0002 AC-7 ────────────────────────────
+//
+// The one test that crosses layers: with the production wiring in place
+// (`Tab::build` registers `ThemeColorResponder` into
+// `TerminalCore::register_color_responder`), a query arriving on the live
+// output path (`process_combined` -> `process_outer_via_core` for a
+// plain, non-mux tab) results in exactly one device-response delivery
+// carrying the expected bytes — no placeholder, no second registration,
+// and no new PTY write path (it rides the SAME `take_response` /
+// `write_device_response` route the DA1/DA2/DSR/CPR tests above already
+// exercise).
+
+#[test]
+fn osc_color_query_delivered_exactly_once_on_live_output_path() {
+    let mut tab = test_tab();
+    let expected_fg = tab.theme.lock().fg;
+    tab.process_combined(b"\x1b]10;?\x07".to_vec());
+    let writes = tab.test_outbound_writes();
+    let expected = format!(
+        "\x1b]10;{}\x07",
+        term_core::color_spec::format_color_response(expected_fg.0, expected_fg.1, expected_fg.2)
+    )
+    .into_bytes();
+    let matches = writes.iter().filter(|w| **w == expected).count();
+    assert_eq!(
+        matches, 1,
+        "expected exactly one delivery of {expected:?}, got {matches} within {writes:?}"
+    );
+}
