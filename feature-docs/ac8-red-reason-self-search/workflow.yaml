@@ -107,7 +107,8 @@ workflow:
   failed_kind: null
   completed_at_commit: 87865f40e0889b5f27a6fd63d34a1ab56bb42a39
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 230f06f357fa702f95d41d7061ab0a9a8ba33246
 - id: verify
   status: pending
   result: null
@@ -140,8 +141,8 @@ tasks:
     status: merged
     branch: em-workflow/ac8-red-reason-self-search/task0001
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor:
     - comprehensive
@@ -149,7 +150,10 @@ review:
     - spec
     discretionary: []
     cross_validation: false
-  perspectives: {}
+  perspectives:
+    comprehensive: completed
+    architecture: completed
+    spec: completed
   residual_critical_high: 0
   needs_rework: false
 requirements:
