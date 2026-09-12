@@ -1,5 +1,36 @@
 /// OSC internal dispatch: routes ParsedAction::OscDispatch to callbacks.
+use crate::parser_types::OscTerminator;
 use crate::terminal_core::TerminalCore;
+
+/// SC-2 (osc-color-query-response IMPLEMENTATION.md): the registration
+/// point through which the GUI layer supplies a color-aware OSC responder.
+/// `term_core` consults this on every OSC dispatch but never inspects which
+/// codes the responder owns — that policy lives entirely on the GUI side
+/// (D1: the query is answered in the GUI layer, never in `term_core`).
+///
+/// Registration is optional (see [`TerminalCore::register_color_responder`]);
+/// an unregistered core behaves exactly as it did before this feature (no
+/// response, no panic, no behavior change).
+///
+/// Deliberately separate from [`crate::callbacks::TerminalCallbacks`]: that
+/// trait's methods take `&self` and return nothing (fire-and-forget), which
+/// is exactly the shape that made a duplicate device-response channel
+/// possible historically (see `TerminalCallbacks`'s doc on why
+/// `on_device_response` was removed). A responder here returns bytes by
+/// value (D2) and `term_core` alone decides where they go — appended to the
+/// SAME ordered pending-response store [`TerminalCore::take_response`]
+/// drains — so there is exactly one delivery route, never two.
+pub trait OscColorResponder: Send {
+    /// Called for every OSC dispatch, before any other handling of it.
+    /// `code` is the raw OSC numeric parameter, `payload` is the raw OSC
+    /// data, and `terminator` is the SC-1 string terminator that ended this
+    /// dispatch. Returns zero or more complete response byte sequences, in
+    /// the order they must be delivered; `term_core` appends them to the
+    /// pending response store verbatim (D2) and never inspects or rewrites
+    /// them. A code the responder does not own returns an empty `Vec`
+    /// (inertness — no bytes, no state change).
+    fn respond(&self, code: u16, payload: &str, terminator: OscTerminator) -> Vec<Vec<u8>>;
+}
 
 impl TerminalCore {
     /// Allocate a hyperlink ID and store the entry in the hyperlink table.
@@ -47,7 +78,23 @@ impl TerminalCore {
         }
     }
 
-    pub(crate) fn handle_osc_internal(&mut self, param: u16, data: &str) {
+    pub(crate) fn handle_osc_internal(&mut self, param: u16, data: &str, terminator: OscTerminator) {
+        // SC-2: consult the optional GUI-layer color responder on every OSC
+        // dispatch, before any other handling below. `term_core` never
+        // inspects which codes the responder owns (D1) — an unregistered
+        // core, or a code the responder doesn't own, yields an empty `Vec`
+        // and this is a no-op, matching SC-2's "behaves exactly as today"
+        // pre-condition. Responses are appended directly to the SAME
+        // ordered pending-response store `write_response` appends to
+        // (D2/D6): several responses within one dispatch (a chained
+        // default-color query, a multi-pair palette query) all survive
+        // until the next `take_response` drain.
+        if let Some(responder) = self.color_responder.as_deref() {
+            for response in responder.respond(param, data, terminator) {
+                self.response_queue.extend_from_slice(&response);
+            }
+        }
+
         // Special handling for OSC 8: process hyperlink inline
         if param == 8 {
             if let Some(sep) = data.find(';') {

@@ -121,7 +121,7 @@ impl MuxApcExtractor {
         self.parser
             .parse_with_offsets(input, |action, end| match action {
                 ParsedAction::ApcDispatch(payload) => out.push((payload, end)),
-                ParsedAction::OscDispatch { param, data }
+                ParsedAction::OscDispatch { param, data, .. }
                     if param == osc_param && data.starts_with(prefix) =>
                 {
                     out.push((data.into_bytes(), end));
