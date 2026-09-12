@@ -63,3 +63,22 @@ records:
     integration worktree during an unattended verify would replace the user''s running binary with unreviewed
     feature code. The non-destructive ''cargo check'' forms above are used for build verification instead.
     The release build and the manual Codex TUI acceptance check (SPEC TS14) remain the user''s own step.'
+- question_id: implement.deviation-decline.task0001
+  packet_id: implement-wake-0001
+  answered_at: '2026-09-13T05:00:00+09:00'
+  source: batch-orchestrator-rule
+  answer_mode: rule_application
+  selected_option_ids:
+  - decline
+  freeform: null
+  normalized_answer: task0001 の報告した 5 件の deviation はいずれも declared change set へ自動追加しない
+  resolution_note: 'rule: implement-phase.md Deviation auto-addition rule; task_id: task0001; declined
+    paths: crates/term_core/src/parser_types.rs, crates/term_core/src/terminal_dispatch.rs, crates/term_core/src/mux_apc_extractor.rs,
+    crates/term_core/src/snapshot.rs, crates/term_core/src/parser/tests.rs + crates/term_core/src/parser/mod.rs;
+    missing evidence part: part 2 (the identifier of the acceptance criterion or requirement that would
+    otherwise be dropped) — no AC-n or requirement id is named in any of the five deviation entries, so
+    none is auto-added. Part 1 (the path) and part 3 (how it fails without the path) are present in each
+    entry. All five paths lie inside crates/term_core/src/, which IMPLEMENTATION.md D8 already scopes as
+    "the OSC parsing and core-terminal modules inside crates/term_core/src/" and instructs to report as
+    a plan deviation; the containment check in the review / verify phases handles them as ordinary deviations.
+    codex_consulted: false (a rule application, not a gate).'
