@@ -219,9 +219,9 @@ tasks:
     domains: [input-handling, concurrency]
     complexity: high
     requirements: [FR1, FR2, FR4, NFR3]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/osc-color-query-response/task0005
     provenance:
       source: review
       source_ids: [4d2f818d6a5b35f9, 3712df9238833233]
@@ -236,9 +236,9 @@ tasks:
     domains: [input-handling, api-contract]
     complexity: high
     requirements: [FR2, FR4, FR10]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/osc-color-query-response/task0006
     provenance:
       source: review
       source_ids: [ecb0d586e27282de]
