@@ -1,0 +1,90 @@
+feature: scroll-region-scrollback
+collected_at: "2026-09-13T03:12:12+09:00"
+session_ids:
+  - 01a096d0-f708-744c-a0a7-2033fc0d4236
+signals:
+  review_critical_high:
+    - stable_id: 4631f8a008fe45fb
+      category: architecture
+      file: crates/term_core/src/terminal_core.rs
+      title: >-
+        Duplicate field `scroll_region_scrollback_enabled` declared twice in
+        `TerminalCore` (E0124 / E0592 / E0062) — merge accident between task0001
+        and task0002 left term_core uncompilable
+      resolution: fixed
+    - stable_id: ac24ffbc21c2d1e6
+      category: architecture
+      file: crates/term_core/src/terminal_core.rs
+      title: >-
+        Same duplicate-member defect recorded at a second anchor (line 171);
+        48-line anchor distance defeated the same_site (+/-5 lines) dedupe
+      resolution: fixed
+    - stable_id: f192d3cf2bed9a7a
+      category: comprehensive
+      file: crates/term_core/src/snapshot.rs
+      title: >-
+        Duplicate initializers on both from_snapshot paths (V2 328 / V1 477),
+        E0062; found by the orchestrator's own cargo check, not by any reviewer
+      resolution: fixed
+    - stable_id: 1fd30439f3145bfe
+      category: comprehensive
+      file: crates/term_core/src/terminal_core.rs
+      title: >-
+        Claimed unclamped `top` decrement in `scroll_down_in_region` —
+        the named symbols do not exist anywhere in crates/term_core
+      resolution: declined
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - crates/term_core/src/snapshot.rs
+    - task: task0002
+      files:
+        - crates/term_core/src/snapshot.rs
+    - task: task0003
+      files:
+        - src-tauri/web-shared/settings/sections/mux-section.test.ts
+        - src-tauri/web-shared/settings/sections/agent-section.test.ts
+        - src-tauri/web-shared/settings/settings-panel.test.ts
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings:
+    - stable_id: 1fd30439f3145bfe
+      category: comprehensive
+      resolution_reason: >-
+        根拠なし。指摘が名指しした `scroll_down_in_region` と `origin_row` は
+        crates/term_core 配下に存在しない (grep で確認)。割り当てた editor も
+        対象ファイル全 1004 行を独立に読み、無編集で skipped を返した。loop 2 の
+        comprehensive 再レビューも再報告していない。
+    - stable_id: c1132527415d2cc7
+      category: architecture
+      resolution_reason: >-
+        SPEC.md が既知の制限として記録済み。EC-7 (SPEC.md:277) が off-thread
+        スナップショット replay 経路のシード欠落を記述し、前提 a6 (SPEC.md:351) が
+        この経路を本機能のスコープ外と定めている。仕様違反ではない。
+follow_up_drafts: []
+lessons_candidates:
+  - >-
+    並列 implementer が同一ファイル (terminal_core.rs / snapshot.rs) の同じ
+    メンバーを別タスクで追加し、merge-task.sh の自動マージは通ったのに
+    コンパイル不能な木が残った。3 件の critical はすべてこの 1 つのマージ事故に
+    由来する。タスク分割時に「同一構造体へのフィールド追加」を 2 タスクに
+    分けない、あるいはマージ後に必ず build を回す価値がある。
+  - >-
+    loop 1 後の in-loop 再レビュー 5 観点は snapshot.rs の E0062 を 1 件も
+    報告せず、architecture#loop1 は逆に「全 5 構築サイトが更新済み」と事実に
+    反する主張をした。レビュアー出力だけを根拠にすると偽の成功で通る。
+    review 完了前に承認済みビルドコマンドを 1 回回す規律が効いた。
+  - >-
+    same_site dedupe が +/-5 行のため、同一欠陥が 48 行離れたアンカーで
+    2 つの finding として残った (4631f8a0 / ac24ffbc)。ファイル+シンボル単位の
+    dedupe 補助があると重複が減る。
+  - >-
+    実機 GUI が要る検証シナリオ (TS-8/9/10) は無人実行では原理的に実施不能で、
+    verify の failed_items にも入れられない。計画段階で「無人実行で緑にできる
+    シナリオ」と「人間に残すシナリオ」を VERIFICATION.md 上で分けておくと、
+    verify フェーズでの判断が不要になる。
+  - >-
+    Codex CLI が usage limit で応答せず、2 つのゲート解決が fallback provider
+    (LiteLLM 経由 muse-spark) の回答で確定した。Codex 相談を前提にした
+    ゲートは fallback の可用性に依存している。

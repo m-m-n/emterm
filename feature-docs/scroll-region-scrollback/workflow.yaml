@@ -85,7 +85,10 @@ workflow:
     リリースビルドでの実機確認をユーザーに残す
     (phase-state/batch-audit.yaml: verify.manual-scenarios-unattended)。
 - id: retrospect
-  status: pending
+  artifacts:
+  - retrospect.yaml
+  status: completed
+  completed_at_commit: a9084eafc6fddcc2af06420d4ceab0553d49229b
 tasks:
   task0001:
     title: Region-scroll transcription in the terminal core
