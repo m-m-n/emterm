@@ -114,6 +114,7 @@ tasks:
     - crates/app_settings/src/settings/tests.rs
     - src-tauri/src/settings/mod.rs
     - src-tauri/src/settings/raw.rs
+    - src-tauri/src/settings/tests.rs
     - src-tauri/src/tabs/mod.rs
     - src-tauri/src/app/font_settings.rs
     - src-tauri/src/app/tests/font_settings.rs
@@ -134,7 +135,7 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/scroll-region-scrollback/task0002
   task0003:
