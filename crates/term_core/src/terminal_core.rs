@@ -108,6 +108,19 @@ pub struct TerminalCore {
     /// Settings-derived default cursor blink. Mirrors `cursor_style_default`
     /// for blink: terminal-level, updated only by `set_cursor_blink`.
     pub(crate) cursor_blink_default: bool,
+    /// Ghostty-compatible region-scroll transcription gate
+    /// (scroll-region-scrollback D2/D3): when `true`, lines scrolled out of
+    /// a scroll region whose top margin is the topmost screen row are
+    /// written to scrollback instead of being discarded. Enabled at
+    /// construction so an unseeded core (e.g. one built by the off-thread
+    /// snapshot worker, which carries no settings context) still behaves
+    /// Ghostty-compatibly. Pushed in from the application layer via
+    /// [`Self::set_scroll_region_scrollback_enabled`] — the core itself
+    /// knows nothing of settings.json. Consumed by the scroll-up routine
+    /// (task0001); this field and its setter exist independently of that
+    /// consumption so task0002's call sites compile against the pinned
+    /// contract (IMPLEMENTATION.md Shared Components).
+    pub(crate) scroll_region_scrollback_enabled: bool,
     /// Active DECSCUSR / OSC 22 shape override, if any. `None` means
     /// `get_cursor_style()` falls back to `cursor_style_default`. Cleared by
     /// RIS and by DECSCUSR Ps=0/absent; set by DECSCUSR (shape+blink
@@ -281,6 +294,7 @@ impl TerminalCore {
             saved_cursor: None,
             cursor_style_default: 0,
             cursor_blink_default: true,
+            scroll_region_scrollback_enabled: true,
             cursor_style_override: None,
             cursor_blink_override: None,
             modes: default_modes,
@@ -335,6 +349,27 @@ impl TerminalCore {
     /// `term_core`'s native OSC action types.
     pub fn register_osc_app_param(&mut self, param: u16, action_type: u8) {
         self.osc_app_params.push((param, action_type));
+    }
+
+    // ── Scroll-region scrollback transcription gate ───────
+
+    /// Set the region-scroll transcription gate (scroll-region-scrollback
+    /// D3). Callable at any point in the core's life, including while a
+    /// scroll region is active; only scroll operations processed AFTER
+    /// this call observe the new value. Never touches scrollback, never
+    /// marks rows dirty, never emits a scroll event, and never triggers a
+    /// redraw — the setter itself has no side effects beyond the stored
+    /// value.
+    pub fn set_scroll_region_scrollback_enabled(&mut self, enabled: bool) {
+        self.scroll_region_scrollback_enabled = enabled;
+    }
+
+    /// Current value of the region-scroll transcription gate. Side-effect
+    /// free and allocation free (NFR2) so it can be read on the region
+    /// branch, and `pub` so callers outside this crate can observe the
+    /// effect of [`Self::set_scroll_region_scrollback_enabled`].
+    pub fn get_scroll_region_scrollback_enabled(&self) -> bool {
+        self.scroll_region_scrollback_enabled
     }
 
     // ── Grid dimensions ──────────────────────────────────

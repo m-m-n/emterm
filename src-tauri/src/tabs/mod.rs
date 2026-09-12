@@ -674,6 +674,11 @@ impl Tab {
         // inside `TerminalCore` is `true`, so this only matters when
         // `settings.json` opts out (`"cursor_blink": false`).
         core.set_cursor_blink(settings.cursor_blink);
+        // Seed the region-scroll transcription gate from settings before
+        // any bytes are processed. The core's own default is `true`
+        // (task0002 D3), so this only matters when `settings.json` opts
+        // out (`"scroll_region_scrollback_enabled": false`).
+        core.set_scroll_region_scrollback_enabled(settings.scroll_region_scrollback_enabled);
         // Seed the cursor shape default from `settings.cursor_style`
         // using the canonical numeric mapping (0 = block, 1 =
         // underline, 2 = bar) so newly spawned tabs match the
