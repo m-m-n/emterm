@@ -1,0 +1,279 @@
+schema_version: 1
+feature: osc-color-query-response
+created: 2026-09-13
+base_branch: main
+goal: |
+  # OSC カラー照会 (4/10/11/12) に応答しないため Codex TUI の入力欄背景が塗られない
+
+  種別: バグ
+  Notion: https://www.notion.so/3d93509ec8ee81dc8fa3c31cc698e212
+
+  ## 現象 (必須)
+  eMterm は OSC 4 / 10 / 11 / 12 のカラー照会 (`?`) に応答を返さない。照会を読み捨てるだけで、応答生成の経路が存在しない。
+  このため、端末の配色を照会して自分の配色を決めるアプリが機能縮退する。実例として Codex TUI (codex-cli 0.154.0) は起動時に `ESC]10;?ESC\` と `ESC]11;?ESC\` を 1 回ずつ送り、その応答からテキスト入力欄の背景色を派生させている。eMterm では応答が返らないため入力欄が塗られず、地の背景色 (既定は純黒) がそのまま出る。Ghostty では応答が返るので入力欄とチャットログの背景色が別になる。
+
+  生 PTY で Codex を起動し、照会への応答だけを変えた対照実験の結果:
+
+  | 応答で返した背景色 | Codex が入力欄に使う背景色 |
+  | --- | --- |
+  | `#1e1e1e` (30,30,30) | (57,57,57) |
+  | `#000000` (0,0,0) | (30,30,30) |
+  | `#f0f0f0` (240,240,240) | (230,230,230) |
+  | 応答を返さない (現在の eMterm) | 塗らない |
+
+  暗い背景なら白へ約 12%、明るい背景なら黒へ寄せる派生をしている。応答が無いと背景色を判断できず、塗る処理そのものを行わない。
+
+  ## 再現手順 (必須)
+  1. eMterm で `codex` を起動する (codex-cli 0.154.0 で確認)。
+  2. ホーム画面のテキスト入力欄 (`❯ Ask Codex to do anything` の周辺) の背景色を見る。
+  3. 入力欄がチャットログ部分と同じ背景色 (既定では黒) になっている。Ghostty で同じ操作をすると入力欄だけ明るい背景になる。
+
+  プロトコルレベルの再現は `tmp/codex-osc-probe.py` で行える。
+
+  ```
+  python3 tmp/codex-osc-probe.py tmp/out-full.bin full 14      # 照会に全応答
+  python3 tmp/codex-osc-probe.py tmp/out-nocolor.bin nocolor 14 # カラー照会だけ無応答
+  ```
+
+  取得したバイト列から `48;2;r;g;b` を数えると、full では 8 件、nocolor では 0 件になる。
+
+  ## 期待する挙動 (必須)
+  OSC 4 / 10 / 11 / 12 の照会 (`?`) に xterm 互換の応答を返す。
+
+  - `ESC]10;?ESC\` → `ESC]10;rgb:RRRR/GGGG/BBBBESC\` (デフォルト前景色)
+  - `ESC]11;?ESC\` → `ESC]11;rgb:RRRR/GGGG/BBBBESC\` (デフォルト背景色)
+  - `ESC]12;?ESC\` → `ESC]12;rgb:RRRR/GGGG/BBBBESC\` (カーソル色)
+  - `ESC]4;N;?ESC\` → `ESC]4;N;rgb:RRRR/GGGG/BBBBESC\` (パレット N 番)
+
+  応答する値は、OSC で上書きされていればその値、されていなければ現在のカラースキームの値。終端は照会側が使った終端 (BEL / ST) に合わせる。
+
+  ## 完了の定義 (必須)
+  - [ ] OSC 10 / 11 / 12 の照会に現在のテーマ値で応答する
+  - [ ] OSC 4 の単一インデックス照会に応答する
+  - [ ] OSC 4 の複数インデックス連結照会 (`4;1;?;2;?`) に応答する
+  - [ ] OSC 10 の連結照会 (`10;?;?;?` で 10/11/12 を順に返す形式) に応答する
+  - [ ] 照会の終端が BEL でも ST でも、応答の終端をそれに合わせる
+  - [ ] OSC で色を上書きした後の照会が、上書き後の値を返す
+  - [ ] OSC 110 / 111 / 112 / 104 でリセットした後の照会が、スキームの値に戻る
+  - [ ] 応答が PTY へ実際に書き戻される (`take_response` 相当の drain 経路に載る)
+  - [ ] mux 経由 (daemon 越し) でも応答が PTY に届く
+  - [ ] 上記を覆うユニットテストがある
+  - [ ] eMterm 実機で Codex TUI を起動し、入力欄の背景色がチャットログと別になることを確認する
+
+  ## 該当箇所 (任意)
+  - `src-tauri/src/render/theme.rs:339` — `apply_default_color_set` が `?` を「Query responses are handled elsewhere」というコメント付きで読み捨てている。この "elsewhere" が存在しない。
+  - `src-tauri/src/render/theme.rs:325` — `apply_palette_set` も同様に `?` を読み捨てている。
+  - `crates/term_core/src/color_spec.rs:89` — `format_color_response` は 16bit 形式の応答フォーマッタだが、**呼び出し元がゼロ**のデッドコード。テストからのみ参照されている。
+  - `crates/term_core/src/osc_handler.rs:74-86` — OSC 番号のディスパッチ表。照会かどうかの判別をここで行っていない。
+  - 応答の書き戻し経路は DSR 応答と同じ仕組みを使えるはず。`project_native_poc_dsr_response_drain` で `tabs.rs` の `take_response` → PTY write を入れた実績がある。
+
+  ## 実害・発生条件 (任意)
+  - Codex TUI で入力欄とチャットログの区別が付かない。eMterm は Claude Code / Codex との親和性を掲げているので直接影響する。
+  - 端末の配色を照会して自分の配色を決めるアプリ全般が対象。Codex 以外にも同じ手法を使う TUI がある。
+  - 背景色が明るいスキームを使っている場合、アプリ側が「暗い背景」と誤判定して読めない配色になる可能性がある。
+  - 発生条件に特別なものは無い。照会を投げるアプリを起動すれば常に再現する。
+
+  ## 参考
+  - 調査スクリプト: `tmp/codex-osc-probe.py`
+  - キャプチャ: `tmp/codex-full-mode.bin`, `tmp/codex-nocolor-mode.bin`, `tmp/codex-bg-black.bin`, `tmp/codex-bg-light.bin`
+  - 関連する別タスク: Codex TUI の会話履歴を端末スクロールバックで遡れるようにする (Ghostty 互換のリージョン転写)。原因も修正箇所も独立している。
+parent_branch: em-workflow/osc-color-query-response/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    rust_app:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: ""
+      e2e_test_command: ""
+    rust_term_core:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    rust_cli_only:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+    typescript:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 35e1116656a0e0415f16ecf42beeaa96fa20982b
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      端末制御シーケンスの挙動変更であり UI 面を持たない。新しい画面・
+      ダイアログ・レイアウト・コンポーネント・デザイントークンを一切
+      導入せず、デザインシステムのミラー
+      (doc/UI-DESIGN-GUIDELINES.yaml / src-tauri/src/ui/md3.rs /
+      src-tauri/web-shared/styles.css) のいずれにも触れない。FR8 / FR9 の
+      描画に見える結果は、ユーザーが既に設定済みのカラースキームを
+      画面に正しく反映させる修正であって新規のビジュアルデザインではない。
+      create-spec.design-step ゲート (option: decide_autonomously) で確定。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "OSC 10 / 11 / 12 color query response"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: "OSC 4 palette query response"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: "Queried palette value resolution"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: "Mixed set-and-query payloads"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: "Response string terminator"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: "Single PTY delivery route for responses"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: "Value reported by a query issued after a reset"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: "OSC 110 / 111 reset to the active scheme's foreground / background"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR9:
+    title: "OSC 104 restores palette16 from the active scheme"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR10:
+    title: "Invalid, unsupported and non-query input is inert"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Reuse the existing response formatter"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Coalescing must not lose or overwrite a response"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Replay isolation is preserved"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Layering: term_core stays independent of the GUI theme"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: "CLI-only build unaffected"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: "Cross-platform parity"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
