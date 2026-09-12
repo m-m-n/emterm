@@ -90,9 +90,15 @@ workflow:
     status: completed
     completed_at_commit: 2e6f43f928d482e26e2346eb56a4315518a59eb3
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    result: pass
     failed_items: []
+    completed_at_commit: f0d3cf677f6e24a9c56bb0c311b070cc678a38ae
+    notes: >-
+      Build (default features) ok, CLI-only no-default-features check ok (TS11),
+      cargo test --lib 3278 passed / 0 failed (TS1-TS8, TS10). TS9 is the
+      manual release-build checklist and is deferred to the user's explicit
+      instruction per VERIFICATION.md; no automated scenario was skipped.
   - id: retrospect
     status: pending
 
