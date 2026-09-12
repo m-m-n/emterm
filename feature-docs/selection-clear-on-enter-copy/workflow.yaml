@@ -114,10 +114,18 @@ tasks:
     branch: em-workflow/selection-clear-on-enter-copy/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
   residual_critical_high: 0
   needs_rework: false
+  plan:
+    floor: [comprehensive, security, spec]
+    discretionary:
+      - perspective: performance
+        reason: >-
+          差分が dirty_rows_this_frame の再描画経路と毎キー入力の hot path に触れるため、
+          選択クリアがフル再描画や余計な再描画要求を誘発しないかを確認する。
+    cross_validation: true
 
 requirements:
   FR1:
