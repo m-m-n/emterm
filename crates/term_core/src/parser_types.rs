@@ -8,6 +8,35 @@ pub(crate) const MAX_CSI_PARAMS: usize = 16;
 /// Maximum number of CSI intermediate bytes stored inline.
 pub(crate) const MAX_CSI_INTERMEDIATES: usize = 2;
 
+/// SC-1 (osc-color-query-response task0001): which string terminator ended
+/// an OSC string, carried from the parser (`crate::parser::osc`) to the OSC
+/// dispatch boundary (`crate::osc_handler::TerminalCore::handle_osc_internal`)
+/// and on to any registered [`crate::osc_handler::OscResponder`].
+///
+/// SPEC assumption A6 resolution: the parser did NOT previously retain this
+/// value — every `dispatch_osc` call site discarded which byte(s) ended the
+/// string. This type and its carriage through [`ParsedAction::OscDispatch`]
+/// is the retention this task adds.
+///
+/// `Unterminated` is the deterministic classification for every
+/// [`ParsedAction::OscDispatch`] emitted WITHOUT a real terminator byte —
+/// currently the sole such case: an ESC inside an OSC string is followed by
+/// a byte other than `\` (cancelling ST formation), which dispatches the
+/// accumulated string early and reprocesses that byte as a new escape
+/// sequence (`Parser::osc_escape`'s fallback arm). A responder consulted for
+/// an `Unterminated` dispatch is never told it was one of the two real
+/// forms — `term_core` never manufactures a terminator match for a request
+/// that was actually cut short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OscTerminator {
+    /// String terminated by BEL (0x07).
+    Bel,
+    /// String terminated by ST (`ESC \`).
+    St,
+    /// String ended by anything other than a real terminator.
+    Unterminated,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ParsedAction {
     Print(char),
@@ -26,6 +55,7 @@ pub(crate) enum ParsedAction {
     OscDispatch {
         param: u16,
         data: String,
+        terminator: OscTerminator,
     },
     ApcDispatch(Vec<u8>),
     DcsDispatch(Vec<u8>),
