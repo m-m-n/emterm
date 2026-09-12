@@ -70,9 +70,20 @@ workflow:
   status: completed
   completed_at_commit: 2034aab71ac93526dc491a09870d9d3bf4a64df6
 - id: verify
-  status: pending
-  result: null
+  status: completed
+  completed_at_commit: ba9ecf4333edcf3aecc552c31ac817a2d6a2247b
+  result: pass
   failed_items: []
+  notes: >-
+    build 5/5 exit 0, test 5/5 pass (term_core 842 / app_settings 41 / main 3284 /
+    cli-only 1058 / bun typecheck + 349)。format は term_core と biome が exit 0。
+    main クレートの cargo fmt --check は exit 1 だが、ドリフトした 8 ファイルはいずれも
+    feature diff (e061b541..HEAD) に含まれない既存ドリフトで、唯一の修正手段である
+    クレート全体 fmt は NFR5 が禁じているため failed_items に入れない
+    (phase-state/batch-audit.yaml: verify.format-drift-scope)。
+    手動シナリオ TS-8 / TS-9 / TS-10 は無人実行では実施できないため未実施のまま残し、
+    リリースビルドでの実機確認をユーザーに残す
+    (phase-state/batch-audit.yaml: verify.manual-scenarios-unattended)。
 - id: retrospect
   status: pending
 tasks:
