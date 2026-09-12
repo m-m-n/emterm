@@ -1,0 +1,99 @@
+task_id: task0002
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - render::theme::tests::apply_osc_10_query_answers_with_live_fg_and_causes_no_change
+      - render::theme::tests::apply_osc_11_query_answers_with_live_bg_and_causes_no_change
+      - render::theme::tests::apply_osc_12_query_answers_with_live_cursor_fg_and_causes_no_change
+      - render::theme::tests::apply_osc_10_color_spec_produces_no_response_and_keeps_set_behavior
+    red_confirmed: true
+    red_reason: >-
+      Reverted the OSC 10/11/12 query-token branch in apply_default_color_set
+      back to a bare `continue;` (the pre-task discard) and reran
+      render::theme::tests: the three live-value query tests failed with
+      `left: [] right: [<expected response bytes>]` (assert_eq on
+      outcome.responses). The accompanying color-spec test in this group
+      already passed before and after, since it exercises the pre-existing
+      set path, not the new query path.
+  AC-2:
+    tests:
+      - render::theme::tests::apply_osc_10_chained_three_queries_answers_10_11_12_in_order
+      - render::theme::tests::apply_osc_10_chained_four_queries_produces_no_fourth_response
+      - render::theme::tests::apply_osc_10_query_element_does_not_consume_or_shift_progression
+    red_confirmed: true
+    red_reason: >-
+      Same reversion as AC-1: with the query branch discarding silently, the
+      chained-query tests failed with empty `outcome.responses` where 2-3
+      response byte sequences were expected (see
+      apply_osc_10_query_element_does_not_consume_or_shift_progression:
+      `left: [] right: [<osc10 response>, <osc12 response>]`).
+  AC-3:
+    tests:
+      - render::theme::tests::apply_osc_4_query_overlay_set_answers_overlay_value
+      - render::theme::tests::apply_osc_4_query_overlay_unset_below_16_answers_palette16_value
+      - render::theme::tests::apply_osc_4_query_overlay_unset_in_16_to_255_answers_xterm_cube_value
+      - render::theme::tests::resolve_palette_color_prefers_overlay_when_set
+      - render::theme::tests::resolve_palette_color_falls_back_to_palette16_below_16
+      - render::theme::tests::resolve_palette_color_falls_back_to_xterm_cube_above_16
+      - render::theme::tests::resolve_palette_color_falls_back_to_grayscale_ramp
+    red_confirmed: true
+    red_reason: >-
+      Reverted the OSC 4 query-token branch in apply_palette_set back to a
+      bare `continue;`: all three apply_osc_4_query_overlay_* tests failed
+      with empty `outcome.responses` where one response was expected (e.g.
+      overlay-set case: `left: [] right:
+      [[27,93,52,59,53,...]]`). `resolve_palette_color` itself is a brand
+      new method added by this task (SC-6); its four direct unit tests
+      failed to compile before the method existed and passed once it was
+      implemented, confirming the same red/green cycle by construction.
+  AC-4:
+    tests:
+      - render::theme::tests::apply_osc_4_mixed_set_query_set_applies_sets_and_answers_query_in_order
+    red_confirmed: true
+    red_reason: >-
+      Under the same reversion, the mixed set/query payload test failed with
+      empty `outcome.responses` where one response was expected, while the
+      set half of the payload still applied (state mutation unaffected by
+      the reverted branch).
+  AC-5:
+    tests:
+      - render::theme::tests::apply_osc_10_query_response_terminator_matches_st_request
+      - render::theme::tests::apply_osc_4_query_response_terminator_matches_st_request
+    red_confirmed: true
+    red_reason: >-
+      Under the same reversion, both terminator-matching tests failed with
+      empty `outcome.responses` (no response bytes at all to check a
+      terminator against) where an ST-terminated response was expected.
+  AC-6:
+    tests:
+      - render::theme::tests::apply_osc_4_query_index_256_produces_nothing
+      - render::theme::tests::apply_osc_4_query_index_above_256_produces_nothing
+      - render::theme::tests::apply_osc_4_query_non_decimal_index_produces_nothing
+      - render::theme::tests::apply_osc_query_under_unowned_code_produces_nothing
+      - render::theme::tests::apply_osc_4_unparseable_value_produces_nothing
+      - render::theme::tests::apply_osc_10_empty_payload_produces_nothing
+      - render::theme::tests::apply_osc_10_payload_of_only_separators_produces_nothing
+      - render::theme::tests::apply_osc_10_query_past_code_12_in_chain_produces_no_response
+    red_confirmed: false
+    red_reason: >-
+      These assert pure inertness (no response, no state change, no visible
+      change) for inputs the pre-existing discard/skip paths already dropped
+      silently before this task touched anything (out-of-range/unparseable
+      indices, an OSC code the theme never owned, a chain position past 12).
+      Re-running this exact test group under the same temporary reversion
+      used for AC-1..AC-5 left all eight of these tests passing — they never
+      went red, because the behavior they assert is genuinely pre-existing,
+      not something this task's implementation changed. Left honest per the
+      tdd-testing skill rather than fabricating a red observation.
+  AC-7:
+    tests:
+      - tabs::tests::output_pipeline::osc_color_query_delivered_exactly_once_on_live_output_path
+    red_confirmed: true
+    red_reason: >-
+      Temporarily removed the `core.register_color_responder(...)` call in
+      `Tab::build` (src-tauri/src/tabs/mod.rs) and reran the test: it failed
+      with `assertion left == right failed: expected exactly one delivery of
+      [...], got 0 within []` (left: 0, right: 1). Restored the registration
+      and reconfirmed the test passes with exactly one delivery.
