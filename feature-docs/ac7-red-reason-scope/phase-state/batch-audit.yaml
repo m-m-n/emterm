@@ -109,6 +109,10 @@ records:
       The finding is persisted in full in reviews/round1.yaml and travels with
       the PR, so the human evaluator sees it. fallback_provider: not needed.
       opus_escalation: not run.
+      Follow-up filed (2026-09-12, verify turn): the finding was raised as a
+      separate Notion task via the notion-task-dispatch CLI -
+      https://app.notion.com/p/AC-8-red_reason-3d93509ec8ee819fa42ed9668536eada
+      (type bug, status not started). Do not file it again on a later turn.
   - question_id: verify.preexisting-format-drift-disposition
     packet_id: null
     answered_at: "2026-09-12T20:22:40+09:00"
