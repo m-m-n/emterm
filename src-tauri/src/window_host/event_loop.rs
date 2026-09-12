@@ -21,8 +21,8 @@ use super::frame_pacing::{
 };
 use super::input_translate::{
     ShiftEnterRewrite, is_skk_swallowed_chord, shift_enter_rewrite,
-    should_drop_synthetic_key_event, winit_key_to_bytes, winit_key_to_egui,
-    winit_physical_key_code,
+    should_clear_selection_on_forward, should_drop_synthetic_key_event, winit_key_to_bytes,
+    winit_key_to_egui, winit_physical_key_code,
 };
 use super::key_routing::{
     egui_to_mux_input, handle_mux_dialog_key, handle_profile_selector_key, handle_search_key,
@@ -503,6 +503,16 @@ impl ApplicationHandler for PocApp {
                             // settings keybinds all early-return before
                             // reaching here, so they never snap.
                             self.app.scroll_to_live();
+                            // selection-clear-on-enter-copy FR1: a forwarded
+                            // Enter drops the mouse selection (and its
+                            // pending press anchor) together, so a highlight
+                            // left behind by a TUI line rewrite disappears
+                            // on the next frame. `is_enter` was captured
+                            // above, before the Shift+Enter rewrite ran, so
+                            // it holds in every shift_enter_behavior mode.
+                            if should_clear_selection_on_forward(forwarded, is_enter) {
+                                self.app.clear_selection();
+                            }
                         }
                     }
                 }

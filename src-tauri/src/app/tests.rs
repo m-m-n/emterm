@@ -108,3 +108,109 @@ fn app_with_seeded_trackers() -> App {
         .register_osc133_region(5, 8, "cmd".to_string(), None);
     app
 }
+
+// ── selection-clear-on-enter-copy task0001: clear_selection helper ────
+
+#[test]
+fn clear_selection_unsets_both_when_both_are_set() {
+    // AC-3: called with both fields set, `clear_selection` leaves both
+    // unset.
+    let mut app = app_with_seeded_trackers();
+    assert!(app.selection.is_some(), "test setup: selection must start set");
+    assert!(
+        app.pending_selection_anchor.is_some(),
+        "test setup: pending anchor must start set"
+    );
+    app.clear_selection();
+    assert!(
+        app.selection.is_none(),
+        "clear_selection must unset selection (AC-3)"
+    );
+    assert!(
+        app.pending_selection_anchor.is_none(),
+        "clear_selection must unset pending_selection_anchor (AC-3)"
+    );
+}
+
+#[test]
+fn clear_selection_is_a_noop_when_nothing_is_selected() {
+    // AC-3: called with no selection present, state is left unchanged —
+    // and since `clear_selection` takes no host/clipboard handle, it
+    // structurally cannot write to the clipboard or PRIMARY.
+    let mut app = App::new();
+    assert!(app.selection.is_none(), "test setup: no selection");
+    assert!(
+        app.pending_selection_anchor.is_none(),
+        "test setup: no pending anchor"
+    );
+    let needs_full_redraw_before = app.needs_full_redraw;
+    app.clear_selection();
+    assert!(app.selection.is_none(), "still unset (AC-3)");
+    assert!(
+        app.pending_selection_anchor.is_none(),
+        "still unset (AC-3)"
+    );
+    assert_eq!(
+        app.needs_full_redraw, needs_full_redraw_before,
+        "clear_selection must not request a redraw of its own (NFR5): the \
+         existing dirty-row union already repaints any affected rows"
+    );
+}
+
+#[test]
+fn clear_selection_dirties_the_rows_the_old_highlight_occupied() {
+    // AC-6: the frame after clear_selection flips the selection from set
+    // to unset must report exactly the screen rows the old highlight
+    // occupied as dirty (dirty_rows_this_frame's previous ∪ current
+    // selection union), with no full-redraw flag introduced by this
+    // change (FR6, NFR5).
+    let mut app = app_with_prompts(50, &[]);
+    let core_arc = app.tabs[0].core.clone();
+    // Clear the initial full-redraw latch before seeding the selection,
+    // so the union path runs rather than the 0..rows bypass.
+    {
+        let mut core = core_arc.lock();
+        app.record_render_state(&mut core);
+    }
+    let visible_start = core_arc.lock().get_scrollback_length();
+    app.selection = Some(Selection {
+        anchor: Pos {
+            row: visible_start + 3,
+            col: 0,
+        },
+        extent: Pos {
+            row: visible_start + 4,
+            col: 5,
+        },
+        mode: SelectionMode::Character,
+        origin: Pos {
+            row: visible_start + 3,
+            col: 0,
+        },
+    });
+    // Render this frame so the highlight becomes `previous_selection`.
+    {
+        let mut core = core_arc.lock();
+        app.record_render_state(&mut core);
+    }
+    app.clear_selection();
+    let set = {
+        let core = core_arc.lock();
+        app.dirty_rows_this_frame(&core)
+    };
+    assert!(
+        set.contains(&3) && set.contains(&4),
+        "the old selection's screen rows (3, 4) must be dirty the frame \
+         after clear_selection (AC-6): got {set:?}"
+    );
+    assert!(
+        !set.contains(&0),
+        "an unrelated screen row must stay clean — a dirty set covering row \
+         0 too would indicate a full-redraw fallback rather than the \
+         targeted selection-row union (AC-6, NFR5): got {set:?}"
+    );
+    assert!(
+        !app.needs_full_redraw,
+        "clear_selection must not set needs_full_redraw itself (NFR5)"
+    );
+}
