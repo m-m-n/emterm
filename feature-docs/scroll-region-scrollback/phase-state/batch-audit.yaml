@@ -23,3 +23,47 @@ records:
       "our top margin is at the top (row 0) without left/right margins" を条件として明記。
       Ghostty に設定項目は無く無条件有効。Codex は 4 問すべてで上記を支持し、
       orchestrator が option へのマッピングを判定して採用した。
+  - question_id: implement.wake-decline
+    packet_id: null
+    answered_at: "2026-09-13T01:52:00+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "decline"
+    normalized_answer: "decline"
+    resolution_note: >-
+      task_id: task0003; declined path:
+      src-tauri/web-shared/settings/sections/mux-section.test.ts.
+      missing evidence part: the acceptance-criterion / requirement identifier that
+      would otherwise be dropped, and the observable failure without the path.
+      The report states the code under test does not read the new field, so the
+      suite stays green without the change; the rationale given is fixture
+      accuracy, which is a preference, not an observable outcome.
+  - question_id: implement.wake-decline
+    packet_id: null
+    answered_at: "2026-09-13T01:52:00+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "decline"
+    normalized_answer: "decline"
+    resolution_note: >-
+      task_id: task0003; declined path:
+      src-tauri/web-shared/settings/sections/agent-section.test.ts.
+      missing evidence part: same as the mux-section.test.ts record above — no
+      acceptance-criterion / requirement identifier would be dropped without the
+      path, and no observable failure is stated.
+  - question_id: implement.wake-decline
+    packet_id: null
+    answered_at: "2026-09-13T01:52:00+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "decline"
+    normalized_answer: "decline"
+    resolution_note: >-
+      task_id: task0003; declined path:
+      src-tauri/web-shared/settings/settings-panel.test.ts.
+      missing evidence part: same as the two records above — no acceptance-criterion
+      / requirement identifier would be dropped without the path, and no observable
+      failure is stated.
