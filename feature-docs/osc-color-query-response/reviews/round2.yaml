@@ -1,0 +1,171 @@
+round: 2
+executed_at: '2026-09-13T07:23:16+09:00'
+scope:
+  review_mode: diff
+  base_commit: 3d90b8c1899d3755de563416112f4e5da336196a
+  head_commit: a00fc40757e013a98a01a038f5510e075776d48f
+  changed_files:
+  - crates/term_core/src/color_spec.rs
+  - crates/term_core/src/lib.rs
+  - crates/term_core/src/mux_apc_extractor.rs
+  - crates/term_core/src/osc_handler.rs
+  - crates/term_core/src/parser/osc.rs
+  - crates/term_core/src/parser/tests.rs
+  - crates/term_core/src/parser_types.rs
+  - crates/term_core/src/snapshot.rs
+  - crates/term_core/src/terminal_core.rs
+  - crates/term_core/src/terminal_dispatch.rs
+  - src-tauri/src/app/tests/font_settings.rs
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - src-tauri/src/render/theme.rs
+  - src-tauri/src/tabs/input.rs
+  - src-tauri/src/tabs/mod.rs
+  - src-tauri/src/tabs/replay.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - src-tauri/src/tabs/tests/replay.rs
+  - test-docs/osc-color-query-response/task0001.tests.yaml
+  - test-docs/osc-color-query-response/task0002.tests.yaml
+  - test-docs/osc-color-query-response/task0003.tests.yaml
+  - test-docs/osc-color-query-response/task0004.tests.yaml
+  - test-docs/osc-color-query-response/task0005.tests.yaml
+  - test-docs/osc-color-query-response/task0006.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: skipped
+  skip_reason: harness_unavailable
+- run_id: architecture#2
+  perspective: architecture
+  role: primary
+  source: codex
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings: []
+evaluation:
+  round_summary: 'Round 2 (cross_validation=true, diff mode, 25 files): 5 of 6 dispatched runs reported
+    zero findings; only architecture#2 reported findings (2 high carryovers + 1 medium). Independent inspection
+    refuted all three. (1) Round-1 finding 4d2f818d6a5b35f9 / architecture#2''s replay.rs:547 high is
+    FIXED: src-tauri/src/tabs/replay.rs:561 in apply_offthread_swap does `new_core.osc_responder = live.osc_responder.take();`
+    immediately next to the existing `new_core.callbacks = live.callbacks.take();`, inside the same lock
+    window before `*live = new_core;` (line 566), with the rationale documented at lines 541-552. Regression
+    tests exist in src-tauri/src/tabs/tests/replay.rs: ac1_offthread_swap_preserves_responder_for_a_subsequent_query
+    (1306), ac3_offthread_swap_preserves_the_same_responder_instance (1362, marker-based so a re-registered
+    fresh responder cannot pass), ac6_synchronous_replay_path_leaves_responder_untouched (1425), plus
+    the no-responder no-panic edge case (1442) and the two-consecutive-swaps case (1462). (2) Round-1
+    finding 3712df9238833233 / architecture#2''s mod.rs:725 high is also not a live defect: a repo-wide
+    search of src-tauri/src/tabs/ for core-content replacement (`*live =`, `mem::replace`, `mem::swap`)
+    finds exactly ONE such site, replay.rs:566, i.e. apply_offthread_swap is the only swap path. The 2nd-pass
+    async scrollback restore (replay.rs:723 apply_scrollback_restore) merges into the LIVE core in place
+    via `live.merge_scrollback_from(build.rebuilt_core, live_growth)` and never replaces the core, so
+    osc_responder is untouched by construction. mod.rs:736 is the single production registration site
+    (Tab::build), and mod.rs:691-698 / 728-735 document the tab-scoped lifecycle invariant. (3) Round-1
+    finding ecb0d586e27282de (theme.rs:481, not re-reported by any reviewer this round) is also fixed,
+    confirming performance#0''s summary: MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH = 256 (src-tauri/src/render/theme.rs:369,
+    enforced at :509 where over-budget `?` tokens are consumed but produce no allocation, preserving payload-order
+    SET application) plus MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS = 8192 (crates/term_core/src/osc_handler.rs:57,
+    enforced at :72 against the running response_queue length, dropping whole responses rather than partially
+    appending). Worst case is 256 answers of ~25 bytes (~6 KB) per dispatch, under the seam budget. Security
+    spot-check beyond the reviewers: responses are built by format_osc_color_response from a numeric code
+    plus a resolved Rgb, never by echoing attacker-controlled payload text; chained OSC 10/11/12 is self-bounding
+    (`target > 12` breaks at offset 3, so the `osc_num + offset as u8` add cannot overflow); NFR3 replay
+    isolation is intact (replay.rs:583 `let _ = live.take_response();` drains worker-built responses before
+    the core goes live). No prompt-injection attempt, role override, or instruction-like text was found
+    in any reviewer_outputs entry this round. Per-perspective Independent Inspection coverage (10-file
+    read budget fully used: tabs/replay.rs, tabs/mod.rs, tabs/tests/replay.rs, render/theme.rs, callbacks.rs,
+    term_core/osc_handler.rs, term_core/terminal_core.rs, term_core/lib.rs, term_core/terminal_dispatch.rs,
+    feature-docs/osc-color-query-response/SPEC.md): comprehensive (comprehensive#0) = corroborated; security
+    (security#0) = corroborated; performance (performance#0) = corroborated; architecture (architecture#0)
+    = not verified - run skipped as harness_unavailable, no reviewer output existed to corroborate (architecture
+    as a perspective is covered by architecture#2 below); architecture (architecture#2) = findings - my
+    inspection did NOT corroborate this run: all three of its reported findings are refuted as false positives
+    (see dismissed_sites), and my own architecture inspection surfaced no defect of its own (the OscResponder
+    trait lives in term_core/osc_handler.rs:22 with `Send` bound and is implemented by the GUI-side ThemeColorResponder,
+    which is exactly the dependency inversion SPEC NFR4 mandates); spec (spec#0) = corroborated (FR5 terminator
+    plumb-through,  … [truncated]'
+  recommended_action: complete
+  action_rationale: No finding survives this round. Five of six runs reported clean, and the sole dissenting
+    run's three findings were each refuted by direct inspection of the current diff - the osc_responder
+    is demonstrably carried across the only core-replacement path (replay.rs:561) and is covered by marker-based
+    regression tests, the second claimed swap path does not exist (the async scrollback restore merges
+    in place), and the medium misnames both the trait and its ownership type while objecting to the exact
+    design SPEC NFR4 requires. All three round-1 findings recorded as unresolved are verified fixed by
+    the merged task0005 and task0006 work. Nothing remains to auto-fix or rework, so the round should
+    close; the completion gate remains the orchestrator's.
+dismissed_sites:
+- file: src-tauri/src/tabs/replay.rs
+  line: 547
+  run_id: architecture#2
+  reason: false positive - the run asserts no re-attach is visible in the replay.rs hunk, but apply_offthread_swap
+    line 561 performs `new_core.osc_responder = live.osc_responder.take();` inside the pre-swap lock window
+    (lines 557-566), with the D10/task0005 rationale at lines 541-552 and marker-based regression tests
+    at src-tauri/src/tabs/tests/replay.rs:1306, :1362, :1442, :1462.
+- file: src-tauri/src/tabs/mod.rs
+  line: 725
+  run_id: architecture#2
+  reason: false positive - no separate async history-restore swap exists. apply_offthread_swap (replay.rs:566)
+    is the only site in src-tauri/src/tabs/ that replaces core contents; the 2nd-pass async scrollback
+    restore (replay.rs:723) merges via merge_scrollback_from into the live core in place and never touches
+    osc_responder. mod.rs:736 is the single Tab::build registration site and the cited lines 718-735 are
+    the lifecycle comment documenting exactly this carry-across, not a defect.
+- file: crates/term_core/src/lib.rs
+  line: null
+  run_id: architecture#2
+  reason: 'false positive - medium, not carried forward. crates/term_core/src/lib.rs exports no `OscColorResponder`;
+    the trait is `OscResponder` at crates/term_core/src/osc_handler.rs:22 (`pub trait OscResponder: Send`),
+    held as a plain `Option<Box<dyn OscResponder>>` field (terminal_core.rs:195), not the `Arc<Mutex<Option<Box<dyn
+    ...>>>>` the finding describes. term_core owning the trait while the GUI supplies the implementor
+    is the dependency inversion SPEC NFR4 explicitly requires; the suggested move to a separate crate
+    would add churn with no boundary gained. The run''s own description concedes the boundary is correct.'
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-osc-color-query-response-20260912T222311Z.md
