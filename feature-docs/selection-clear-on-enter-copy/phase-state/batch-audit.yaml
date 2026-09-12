@@ -1,0 +1,30 @@
+schema_version: 1
+feature: selection-clear-on-enter-copy
+records:
+  - question_id: implement.codex-consultation
+    packet_id: null
+    answered_at: "2026-09-12T23:25:00+09:00"
+    source: codex
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "keep the planned design: clear both `selection` and `pending_selection_anchor`"
+    normalized_answer: "keep the planned design: clear both `selection` and `pending_selection_anchor`"
+    resolution_note: >-
+      gate: user-instructed Codex consultation on the accepted side effect ASM5
+      (pressing Enter while the left button is held also drops
+      `pending_selection_anchor`, so the fold-click decision on release does not
+      hold). codex_consulted: true (OpenAI provider was over its usage limit and
+      the first litellm attempt timed out at 600s; a second litellm attempt with
+      `-p litellm -m vertex-glm-5.2` answered). Options weighed - A: clear both
+      (the plan); B: keep the anchor, clear only the selection; C: skip the clear
+      while the left button is held. Codex judged A comparatively best: dropping
+      the anchor makes the release-side fold guard `pending.is_some()` false, so
+      the fold toggle does NOT fire (a skipped toggle, not a spurious one); B
+      violates the user's explicit acceptance criterion and leaves the anchor at
+      the press position, which produces a genuinely spurious fold toggle on
+      release; C violates the same criterion while dragging and adds a second
+      side effect (selection surviving Enter mid-drag) plus extra complexity.
+      Adopted A - no plan change. Doc-accuracy note raised by Codex: the task
+      plan and IMPLEMENTATION.md word the side effect as the fold toggle
+      "misfiring" (誤爆), while the code path shows it is skipped instead. Wording
+      only; no behavioural difference.
