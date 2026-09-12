@@ -1,0 +1,24 @@
+feature: ac8-red-reason-self-search
+collected_at: "2026-09-12T22:25:32+09:00"
+session_ids:
+- 01a095cb-0617-763a-b776-bea601a42a3f
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+- |
+  Round 1 returned zero findings from all three floor perspectives
+  (comprehensive/codex, architecture/litellm vertex-glm-5.2, spec/litellm
+  muse-spark), and the evaluator independently re-executed every spec check
+  (one-hunk containment, PyYAML load, needle absence, "lists only" retention
+  at lines 43/47, predecessor change-set re-enumeration). Documentation-only
+  YAML evidence records under test-docs/ appear to be a change class where the
+  floor review plan is already sufficient.
+- |
+  task0001 merged with no conflict retries and no file-prediction deviations;
+  the planner's two-path files prediction matched the actual change set exactly.
