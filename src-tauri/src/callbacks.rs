@@ -798,8 +798,9 @@ impl TerminalCallbacks for NativeCallbacks {
 // ── SC-2 responder: the theme-backed OSC color responder ─────────────────
 
 /// SC-2 responder (osc-color-query-response IMPLEMENTATION.md D1/D7):
-/// registered once, at tab construction (`Tab::build`), into
-/// `TerminalCore::register_color_responder`. `term_core` consults this on
+/// registered once, at tab construction (`Tab::build`), by assigning
+/// `core.osc_responder = Some(Box::new(...))` (task0001's SC-2 seam is a
+/// plain public field, not a dedicated setter). `term_core` consults this on
 /// EVERY OSC dispatch, before `NativeCallbacks::on_osc` ever fires for the
 /// same dispatch — so this is now the SOLE caller of `Theme::apply_osc` for
 /// the codes it owns (OSC 4/10/11/12): the set-side mutation and the
@@ -824,7 +825,7 @@ impl ThemeColorResponder {
     }
 }
 
-impl term_core::OscColorResponder for ThemeColorResponder {
+impl term_core::OscResponder for ThemeColorResponder {
     fn respond(&self, code: u16, payload: &str, terminator: term_core::OscTerminator) -> Vec<Vec<u8>> {
         if !matches!(code, 4 | 10 | 11 | 12) {
             return Vec::new();

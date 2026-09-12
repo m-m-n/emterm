@@ -1,6 +1,41 @@
 task_id: task0002
 baseline_failures: []
 final_failures: []
+notes: >-
+  Merging the parent integration branch (which already carried task0001's
+  SC-1/SC-2 landing plus task0003/task0004) conflicted in 9 files, as
+  expected per the task plan's D7 note. Resolved via parent-side adoption
+  (git checkout --theirs) followed by re-implementing this task's query-
+  answering code on top of task0001's actual SC-1/SC-2 shape, which differed
+  from what this task built in isolation: the trait is `OscResponder` (not
+  `OscColorResponder`), the terminator enum has a third `Unterminated`
+  variant (a request cut short by anything other than BEL/ST), and the
+  registration seam is a plain public field (`core.osc_responder = Some(..)`)
+  rather than a setter method. `format_osc_color_response` returns `None`
+  (no response at all) for `Unterminated` rather than inventing an
+  unspecified terminator for a request that was never validly delimited —
+  REQUIREMENTS.md's FR5 only defines the BEL/ST forms, so this is task0002's
+  own decision on SC-4's query-side ownership. The adopted-but-not-yet-
+  reimplemented commit does not compile (callbacks.rs/tabs/mod.rs still
+  referenced the pre-adoption trait/method names), so a literal test run at
+  that exact checkpoint was not possible; baseline_failures reflects the
+  full-suite result immediately before the merge (0 failures) and
+  final_failures reflects the full-suite result after re-implementation
+  (also 0, run three times; one PTY line-discipline test unrelated to this
+  feature failed once under full-suite load and passed in isolation and on
+  two subsequent full reruns — flaky, not attributable to this change).
+  One task0004 test
+  (tabs::tests::output_pipeline::plain_tab_osc_color_query_alongside_csi_query_delivers_csi_response_once)
+  asserted the OSC color query it sent alongside a CSI CPR query produced NO
+  response (true only because task0002 was absent from task0004's own
+  worktree); now that this task answers OSC 10, both responses land in the
+  same take_response drain and are written as one concatenated PTY write
+  instead of two separate ones. Updated the assertion to count the CPR
+  bytes as a subsequence of the outbound stream instead of requiring an
+  exact-match standalone write, preserving the invariant the test document
+  states it protects (CPR still delivered exactly once) without weakening
+  it — recorded here rather than as a fabricated AC since it is not one of
+  this task's own acceptance criteria.
 acceptance_tests:
   AC-1:
     tests:

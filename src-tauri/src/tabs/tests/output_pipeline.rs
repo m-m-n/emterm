@@ -1338,10 +1338,15 @@ fn osc_color_query_frame_breaks_coalesce_run() {
 /// reply still reaches the outbound side exactly once, through the same
 /// `take_response`/`write_device_response` route the pre-existing suite
 /// (`device_response_cases`) already exercises for every other query type.
-/// The OSC query itself produces no reply — `term_core` does not yet answer
-/// OSC 4/10/11/12 (that responder is task0002's, out of this task's scope,
-/// SPEC out-of-scope: "which colors a query answers with") — but its
-/// presence must not disturb the CPR delivery this task owns proving.
+///
+/// osc-color-query-response task0002 now answers the OSC query too (SC-2's
+/// responder is consulted before this test's CSI query is ever parsed), so
+/// both responses land in the SAME `take_response` drain and are written
+/// out as one concatenated PTY write (SC-3: a single ordered response
+/// buffer) rather than as two separate write calls. The assertion below
+/// checks for the CPR bytes as a subsequence of the outbound stream —
+/// exactly once, wherever they land — since chunk boundaries between two
+/// queued responses are not a guarantee this route ever made.
 #[test]
 fn plain_tab_osc_color_query_alongside_csi_query_delivers_csi_response_once() {
     let mut tab = test_tab();
@@ -1349,14 +1354,15 @@ fn plain_tab_osc_color_query_alongside_csi_query_delivers_csi_response_once() {
     let combined: Vec<u8> = [&b"\x1b]10;?\x07"[..], &b"\x1b[6n"[..]].concat();
     tab.process_combined(combined);
     let writes = tab.test_outbound_writes();
+    let needle = b"\x1b[1;1R";
     let matches = writes
         .iter()
-        .filter(|w| w.as_slice() == b"\x1b[1;1R")
-        .count();
+        .map(|w| w.windows(needle.len()).filter(|win| *win == needle).count())
+        .sum::<usize>();
     assert_eq!(
         matches, 1,
         "the CPR reply must still reach the outbound side exactly once \
-         alongside an (as yet unanswered) OSC color query, got {matches} \
+         alongside the (now answered) OSC color query, got {matches} \
          within {writes:?}"
     );
 }
