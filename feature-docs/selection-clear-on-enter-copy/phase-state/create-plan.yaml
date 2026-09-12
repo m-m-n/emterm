@@ -1,7 +1,7 @@
 schema_version: 1
 feature: selection-clear-on-enter-copy
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: b2ecb24e2e22edc11d7bc3b411909c6482556f38
 last_input_digest: sha256:97e72bc89ea53afd77fdbf893d639b698d87bd29ddc16a68da554158c8ea3b09
@@ -25,7 +25,7 @@ artifacts:
     produced_by: create-plan-selection-clear-on-enter-copy-001
 patches:
   - patch_id: selection-clear-on-enter-copy-p0001
-    status: validated
+    status: applied
     base_input_digest: sha256:97e72bc89ea53afd77fdbf893d639b698d87bd29ddc16a68da554158c8ea3b09
     base_workflow_blob: c668d8cf635fbf99c1a710c7806aed0ded7eadb4
 progress_fingerprint: null
