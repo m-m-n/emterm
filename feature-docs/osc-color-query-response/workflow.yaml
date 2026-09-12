@@ -139,7 +139,7 @@ workflow:
     completed_at_commit: 3915ec649178a43e5386e54827fb8a7371b5734a
     base_commit: 3d90b8c1899d3755de563416112f4e5da336196a
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -210,9 +210,12 @@ tasks:
     branch: em-workflow/osc-color-query-response/task0004
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
-  plan: null
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    cross_validation: true
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
