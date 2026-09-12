@@ -135,7 +135,7 @@ workflow:
     status: completed
     completed_at_commit: 16dc76d15423d94baab76a37b0ec6d9d3ba9bf8e
   - id: implement
-    status: completed
+    status: pending
     completed_at_commit: 3915ec649178a43e5386e54827fb8a7371b5734a
     base_commit: 3d90b8c1899d3755de563416112f4e5da336196a
   - id: review
@@ -208,6 +208,41 @@ tasks:
     status: merged
     notes: null
     branch: em-workflow/osc-color-query-response/task0004
+  task0005:
+    title: "Color responder survives the off-thread history swap"
+    plan: tasks/task0005.md
+    files:
+      - src-tauri/src/tabs/replay.rs
+      - src-tauri/src/tabs/mod.rs
+      - src-tauri/src/tabs/tests/replay.rs
+    skills: [backend-impl]
+    domains: [input-handling, concurrency]
+    complexity: high
+    requirements: [FR1, FR2, FR4, NFR3]
+    status: pending
+    notes: null
+    branch: null
+    provenance:
+      source: review
+      source_ids: [4d2f818d6a5b35f9, 3712df9238833233]
+      review_round: 1
+  task0006:
+    title: "Bounded response fan-out for chained color queries"
+    plan: tasks/task0006.md
+    files:
+      - src-tauri/src/render/theme.rs
+      - crates/term_core/src/osc_handler.rs
+    skills: [backend-impl]
+    domains: [input-handling, api-contract]
+    complexity: high
+    requirements: [FR2, FR4, FR10]
+    status: pending
+    notes: null
+    branch: null
+    provenance:
+      source: review
+      source_ids: [ecb0d586e27282de]
+      review_round: 1
 
 review:
   status: pending
@@ -231,15 +266,15 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0002]
-    tests: [TS-2, TS-3, TS-14]
+    tasks: [task0002, task0005]
+    tests: [TS-2, TS-3, TS-14, TS-20]
   FR2:
     title: "OSC 4 palette query response"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0002]
-    tests: [TS-4, TS-14]
+    tasks: [task0002, task0005, task0006]
+    tests: [TS-4, TS-14, TS-20, TS-21]
   FR3:
     title: "Queried palette value resolution"
     status: ok
@@ -252,8 +287,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0002]
-    tests: [TS-5]
+    tasks: [task0002, task0005, task0006]
+    tests: [TS-5, TS-21]
   FR5:
     title: "Response string terminator"
     status: ok
@@ -294,7 +329,7 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0002]
+    tasks: [task0002, task0006]
     tests: [TS-9, TS-16]
   NFR1:
     title: "Reuse the existing response formatter"
@@ -315,8 +350,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: [task0004]
-    tests: [TS-12]
+    tasks: [task0004, task0005]
+    tests: [TS-12, TS-20]
   NFR4:
     title: "Layering: term_core stays independent of the GUI theme"
     status: ok
@@ -340,7 +375,7 @@ requirements:
     tests: [TS-19]
 
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework:
     rounds: 0
     failed_id_counts: {}
