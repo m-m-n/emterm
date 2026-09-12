@@ -88,16 +88,20 @@ acceptance_tests:
     red_confirmed: false
     red_reason: >-
       Invariant guard, not a red->green criterion: before this task's edit
-      the change set was empty and a repository-wide fixed-string search
-      for the old identifier (assembled from the described record's own
+      the change set was empty and a repository-wide fixed-string search for
+      the old identifier (assembled from the described record's own
       header-comment fragments, `test_relocate_widened_base_via_wrap_` +
       `no_panic_when_column_one_does_not_exist`) already returned zero
-      contiguous occurrences, so there was no observable pre-state to
-      fail. Re-verified after the edit: `git status --porcelain` for the
-      whole change set lists only
-      test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml, no Rust
-      and no TypeScript file; the same fixed-string search across this
-      task's diff, its own record (this file), and its commit messages
+      contiguous occurrences, so there was no observable pre-state to fail.
+      Re-verified after the edit: this task's change set is YAML
+      documentation only, naming both
+      test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml (the record
+      this task edited) and
+      test-docs/ac2-red-reason-accuracy/task0001.tests.yaml (this task's own
+      workflow-generated per-task test record, covered by the SPEC's
+      Declared Change Set entry `test-docs/{feature}/**`), containing no
+      Rust file and no TypeScript file; the same fixed-string search across
+      this task's diff, its own record (this file), and its commit messages
       still returns zero contiguous occurrences.
 notes: >-
   Documentation-record task (task0001.md; IMPLEMENTATION.md decisions

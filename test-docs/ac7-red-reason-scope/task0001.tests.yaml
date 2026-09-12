@@ -1,0 +1,121 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, a PyYAML load of
+      test-docs/ac2-red-reason-accuracy/task0001.tests.yaml showed
+      acceptance_tests['AC-7']['red_reason'] naming only
+      test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml, with no
+      mention of test-docs/ac2-red-reason-accuracy/task0001.tests.yaml, so a
+      scripted check for both paths being present failed. After the edit,
+      the same check on the reloaded string passes: both paths are named,
+      matching the two-path list observed from the described task's commit
+      (7aea12601cdf1be96af16cace879a0b5d9ad4d7f, `git show --stat`).
+  AC-2:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, the parsed AC-7 red_reason contained neither the
+      phrase "workflow-generated per-task test record" nor the string
+      "test-docs/{feature}/**", so a scripted check for both failed. After
+      the edit, the same check on the reloaded string passes: it identifies
+      the second path as the task's own workflow-generated per-task test
+      record and ties it to the SPEC Declared Change Set entry
+      `test-docs/{feature}/**`.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the "no Rust file and no
+      TypeScript file" finding was already present in the AC-7 red_reason
+      before this task's edit, so there was no observable pre-state to fail.
+      Re-verified after the edit: the loaded string still states the listed
+      change set contains no Rust file and no TypeScript file.
+  AC-4:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, the parsed AC-7 red_reason asserted, of the whole
+      change set, that `git status --porcelain` lists only
+      test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml, so a
+      scripted check for the absence of that claim failed. After the edit,
+      the same check passes: the reloaded string contains neither "git
+      status --porcelain" nor "lists only", and makes no equivalent
+      single-member assertion about the whole change set.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the invariant-guard
+      classification, the empty-pre-state statement and the
+      zero-contiguous-occurrence fixed-string search result were already
+      present in the AC-7 red_reason before this task's edit, and
+      red_confirmed was already the boolean false with tests already [], so
+      there was no observable pre-state to fail. Re-verified after the edit:
+      all three phrasings are still present, red_confirmed is still False,
+      and tests is still [].
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: before this task's edit
+      the working tree for the target record was clean (`git status
+      --porcelain` and `git diff --stat` both empty for the file), so
+      containment held vacuously with no observable pre-state to fail. After
+      the edit, `git diff` for the file shows exactly one hunk, confined to
+      the AC-7 entry's red_reason scalar; task_id, baseline_failures,
+      final_failures, the AC-1 through AC-6 entries, the AC-7 entry's tests
+      and red_confirmed values, and the trailing notes block are
+      byte-identical to the base revision (confirmed by diffing only those
+      regions).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: before this task's edit
+      the target record already loaded under PyYAML with task_id,
+      baseline_failures, final_failures, an acceptance_tests mapping of
+      exactly seven entries (AC-1..AC-7) and notes, in that raw top-level
+      key order, and its AC-7 red_reason was already introduced by
+      `red_reason: >-` at the same indentation as the file's other folded
+      scalars and already in English, so there was no observable pre-state
+      to fail. Re-verified after the edit: all of the above still holds for
+      the rewritten scalar.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No observable pre-state: this task's own commit does not exist before
+      the task runs, so its change set cannot be enumerated beforehand.
+      Verified after committing, against this branch's merge base with the
+      parent branch (`git diff --stat <merge-base>..HEAD`): the change set
+      contains exactly two paths,
+      test-docs/ac2-red-reason-accuracy/task0001.tests.yaml (the edited
+      record) and test-docs/ac7-red-reason-scope/task0001.tests.yaml (this
+      feature's own generated record), no Rust file and no TypeScript file;
+      and a fixed-string search of this record's own text for a single-file
+      phrasing of that change set (e.g. "only one file", "lists only ...
+      test-docs/ac7-red-reason-scope") returns no match.
+notes: >-
+  Documentation-record task (task0001.md; IMPLEMENTATION.md decisions
+  D1-D6). The described task's commit
+  (7aea12601cdf1be96af16cace879a0b5d9ad4d7f) was read via `git show
+  --stat` before any edit and confirmed to contain exactly the two paths
+  named in FR1, matching plan assumption A-3 with no divergence to
+  report. Acceptance was verified via PyYAML parse/assertion checks on
+  the target record's AC-7 red_reason (AC-1 through AC-5), a raw-text
+  format/shape inspection (AC-7), git diff/status inspection of the
+  single changed file (AC-6), and enumeration of this task's own change
+  set against the merge base with the parent branch (AC-8). This task's
+  own change set contains
+  test-docs/ac2-red-reason-accuracy/task0001.tests.yaml (the edited
+  record) and test-docs/ac7-red-reason-scope/task0001.tests.yaml (this
+  feature's own generated record), never described as a single file.
+  project_commands were run despite the change being YAML-only: `bun
+  test` (345 pass, 0 fail, matching baseline) and `bun run typecheck`
+  (clean) both confirm no regression, though neither exercises the
+  edited YAML content directly.
