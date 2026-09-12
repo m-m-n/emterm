@@ -67,7 +67,8 @@ workflow:
   base_commit: e061b5411c999e2b6542dc5ff8071207eb1cff07
   completed_at_commit: 6ad47f7e65029a30e695d0c20761fc8b15c2148b
 - id: review
-  status: in_progress
+  status: completed
+  completed_at_commit: 2034aab71ac93526dc491a09870d9d3bf4a64df6
 - id: verify
   status: pending
   result: null
@@ -163,8 +164,8 @@ tasks:
     notes: null
     branch: em-workflow/scroll-region-scrollback/task0003
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
   plan:
     floor:
     - comprehensive
@@ -174,6 +175,12 @@ review:
     - spec
     discretionary: []
     cross_validation: true
+  perspectives:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
   residual_critical_high: 0
   needs_rework: false
 requirements:

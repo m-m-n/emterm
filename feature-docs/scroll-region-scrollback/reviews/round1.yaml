@@ -1,0 +1,261 @@
+round: 1
+executed_at: "2026-09-13T02:33:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: e061b5411c999e2b6542dc5ff8071207eb1cff07
+  head_commit: 2034aab71ac93526dc491a09870d9d3bf4a64df6
+  changed_files:
+  - crates/app_settings/src/settings.rs
+  - crates/app_settings/src/settings/tests.rs
+  - crates/term_core/src/csi_scroll.rs
+  - crates/term_core/src/ring_buffer.rs
+  - crates/term_core/src/snapshot.rs
+  - crates/term_core/src/terminal_core.rs
+  - src-tauri/src/app/font_settings.rs
+  - src-tauri/src/app/tests/font_settings.rs
+  - src-tauri/src/settings/mod.rs
+  - src-tauri/src/settings/raw.rs
+  - src-tauri/src/settings/tests.rs
+  - src-tauri/src/tabs/mod.rs
+  - src-tauri/web-shared/i18n/locales/en.json
+  - src-tauri/web-shared/i18n/locales/ja.json
+  - src-tauri/web-shared/settings/sections/agent-section.test.ts
+  - src-tauri/web-shared/settings/sections/mux-section.test.ts
+  - src-tauri/web-shared/settings/sections/terminal-behavior-section.test.ts
+  - src-tauri/web-shared/settings/sections/terminal-behavior-section.ts
+  - src-tauri/web-shared/settings/settings-panel.test.ts
+  - src-tauri/web-shared/settings/types.ts
+  - test-docs/scroll-region-scrollback/task0001.tests.yaml
+  - test-docs/scroll-region-scrollback/task0002.tests.yaml
+  - test-docs/scroll-region-scrollback/task0003.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+- {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: vertex-glm-5.2, status: completed}
+- {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "evaluator", role: evaluator, source: claude, status: completed, degraded: true}
+- {run_id: "comprehensive#loop1", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "security#loop1", perspective: security, role: primary, source: codex, status: completed}
+- {run_id: "performance#loop1", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "architecture#loop1", perspective: architecture, role: primary, source: litellm, model: vertex-glm-5.2, status: completed}
+- {run_id: "spec#loop1", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "comprehensive#loop2", perspective: comprehensive, role: primary, source: codex, status: completed}
+- {run_id: "security#loop2", perspective: security, role: primary, source: codex, status: completed}
+- {run_id: "performance#loop2", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed}
+- {run_id: "architecture#loop2", perspective: architecture, role: primary, source: litellm, model: vertex-glm-5.2, status: completed}
+- {run_id: "spec#loop2", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+findings:
+- stable_id: 4631f8a008fe45fb
+  severity: critical
+  category: architecture
+  file: crates/term_core/src/terminal_core.rs
+  line: 123
+  title: >-
+    Duplicate field `scroll_region_scrollback_enabled` declared twice in
+    `TerminalCore` struct (compile error E0124) plus duplicate setter (E0592)
+    and duplicate initializers (E0062) — code cannot compile
+  description: >-
+    task0001 と task0002 が同じメンバーを別々に追加したマージ事故。フィールド宣言が
+    terminal_core.rs:123 と :171 の 2 箇所、`set_scroll_region_scrollback_enabled`
+    が :376 と :903 の 2 箇所、`TerminalCore::new()` の構造体リテラルで :309 と :326 の
+    二重初期化。E0124 / E0592 / E0062 で term_core がコンパイルできず、下流の
+    src-tauri もビルド不能だった。
+  suggestion: >-
+    フィールド宣言・セッター定義・初期化子をそれぞれ 1 つに統合する。getter と
+    co-located な :123 / :376 側を残す。
+  sources: ["litellm:vertex-glm-5.2:architecture"]
+  confidence: 60
+  resolution: fixed
+  resolution_reason: >-
+    auto-applied loop 1。重複フィールド・重複セッター・`new()` の重複初期化子を削除。
+    この finding は R3b の evaluator accountability floor が architecture#0 の
+    critical サイト (line 123) を評価結果に無かったため lift したもの。
+- stable_id: ac24ffbc21c2d1e6
+  severity: critical
+  category: architecture
+  file: crates/term_core/src/terminal_core.rs
+  line: 171
+  title: >-
+    `scroll_region_scrollback_enabled` がフィールド・セッター・各コンストラクタで
+    二重定義されており term_core がコンパイルできない
+  description: >-
+    上記 4631f8a008fe45fb と同一の欠陥を evaluator が line 171 側のアンカーで記録したもの。
+    comprehensive#0 と architecture#0 の両観点が同一サイトを報告した。
+  suggestion: このファイル内でフィールド宣言・セッター定義・`new()` の初期化子をそれぞれ 1 つに統合する。
+  sources: ["litellm:vertex-glm-5.2:architecture"]
+  confidence: 100
+  resolution: fixed
+  resolution_reason: >-
+    4631f8a008fe45fb と同一の欠陥で、行アンカーが 48 行離れていたため same_site
+    (±5 行) で dedupe されず別 finding として残った。この id 自身に割り当てた
+    loop 1 の editor は「重複はもう残っていない」として skipped を返し、loop 2 の
+    再レビュー 5 観点もこのサイトを再報告しなかった。承認済みビルドコマンドで
+    コンパイル成功も確認済み。
+- stable_id: f192d3cf2bed9a7a
+  severity: critical
+  category: comprehensive
+  file: crates/term_core/src/snapshot.rs
+  line: 328
+  title: >-
+    `scroll_region_scrollback_enabled` が from_snapshot の V1/V2 両経路で
+    二重初期化されており term_core がコンパイルできない (E0062)
+  description: >-
+    同じマージ事故の残り。V2 経路 (304/328) と V1 レガシー経路 (453/477) の構造体
+    リテラルで同一フィールドが二重初期化されていた。loop 1 の editor は
+    terminal_core.rs に単一ファイルスコープで縛られていたためこの 2 箇所に届かず、
+    loop 1 後の in-loop 再レビュー 5 観点はいずれもこれを報告しなかった
+    (architecture#loop1 は逆に「全 5 構築サイトが更新済み」と事実に反する主張をした)。
+    orchestrator が承認済みビルドコマンド
+    `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml`
+    を実行し、snapshot.rs:328 と :477 の E0062 を一次情報として再現した。
+  suggestion: 2 つの構造体リテラルそれぞれで重複した初期化子を 1 本ずつ削除する。
+  sources: ["tool:cargo-check (orchestrator-verified build output)"]
+  confidence: 100
+  resolution: fixed
+  resolution_reason: >-
+    auto-applied loop 2。適用後に同じビルドコマンドで term_core のコンパイル成功を確認。
+    この finding はレビュアー出力ではなく orchestrator 自身の検証済みビルド出力を出典と
+    するため、sources に tool:cargo-check と明記してレビュアー由来に見せかけていない。
+    採否の経緯は phase-state/batch-audit.yaml の
+    review.orchestrator-verified-compile-error レコードを参照。
+- stable_id: 1fd30439f3145bfe
+  severity: high
+  category: comprehensive
+  file: crates/term_core/src/terminal_core.rs
+  line: null
+  title: >-
+    terminal_core.rs scroll-down path decrements `top` without clamping to
+    origin_row, can scroll history rows
+  description: >-
+    comprehensive#loop1 が報告。`scroll_down_in_region` に `origin_row` 未満の `top`
+    が渡され、解放済み履歴と重なる領域を書き換えるという主張。
+  suggestion: 減算後の `top` を `max(top, origin_row)` にクランプする。
+  sources: ["codex:comprehensive"]
+  confidence: 60
+  resolution: declined
+  resolution_reason: >-
+    根拠なし。指摘が名指しした `scroll_down_in_region` と `origin_row` は
+    crates/term_core 配下のどこにも存在しない (grep で確認)。loop 2 で割り当てた
+    editor も対象ファイル全 1004 行を独立に読み、記述されたコード形状が無いとして
+    無編集で skipped を返した。loop 2 の comprehensive 再レビューもこのサイトを
+    再報告していない。
+- stable_id: f627594191c902e2
+  severity: medium
+  category: performance
+  file: crates/term_core/src/ring_buffer.rs
+  line: 413
+  title: Region transcription allocates tail snapshot per scroll
+  description: >-
+    `scroll_up_region_transcribing` は ring 回転の前に下マージンより下の全行を退避する
+    ため、1 スクロールごとに tail 行 1 行につき `Vec<Cell>` を 1 本 (`to_vec()`)、
+    overflow があれば `String` の clone を確保し、復元時にもう一度コピーする。従来の
+    `shift_rows_up` はその場入れ替えで確保ゼロだった。確保量はビューポート寸法
+    (`(rows - bottom - 1) * cols`) で上限が付くため重大ではないが、tail が大きい構成で
+    領域スクロールが高頻度に走る TUI ではアロケータ負荷が乗る。
+  suggestion: >-
+    tail 退避用のスクラッチバッファを再利用する、または overflow エントリを clone せず
+    取り出して戻す。tail が大きい構成での領域スクロール連続実行のベンチを 1 本足すと
+    劣化を検出できる。
+  sources: ["litellm:muse-spark:performance"]
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: >-
+    auto-fix の候補ゲート (severity ∈ {critical, high}) を満たさないため未適用。
+    round 1 の evaluator が独立検査で検出し、performance#loop2 が現ツリーに対して
+    同一サイトを独立に再確認している。performance#0 の「確保なし」という要約は
+    この点で不正確だった。
+- stable_id: c1132527415d2cc7
+  severity: medium
+  category: architecture
+  file: crates/term_core/src/snapshot.rs
+  line: 304
+  title: >-
+    Snapshot-rebuilt TerminalCore silently reverts scroll_region_scrollback_enabled
+    gate (D5 contract drift)
+  description: >-
+    `scroll_region_scrollback_enabled` は `TerminalSnapshot` に含まれず、
+    `from_snapshot` の V2 (304) と V1 レガシー (447) の両経路で `true` 固定。設定を
+    無効化したユーザーの core がスナップショット再構築で置き換わると、次の
+    `apply_settings` まで転写が再開しうる。
+  suggestion: >-
+    `TerminalSnapshot` にフィールドを追加して保存・復元する、またはスナップショット
+    再構築の全呼び出し元で直後に `set_scroll_region_scrollback_enabled` を再適用する
+    ことを明文化し、既存呼び出し元を監査する。
+  sources: ["litellm:vertex-glm-5.2:architecture"]
+  confidence: 60
+  resolution: declined
+  resolution_reason: >-
+    SPEC.md が明示的にスコープ外の既知の制限として記録済み。EC-7 (SPEC.md:277) が
+    off-thread スナップショット replay 経路のシード欠落を記述し、前提 a6
+    (SPEC.md:351) がこの経路を本機能のスコープ外と定めている。round 1 の evaluator も
+    同じ根拠で architecture#0 / comprehensive#0 の同根 finding を降格した。仕様違反では
+    なく記録済みの制限のため declined とする。
+evaluation:
+  round_summary: >-
+    ラウンド 1 (cross_validation: true、diff モード、5 観点すべて完了、unreviewed なし)。
+    結論は 1 点に集約される: term_core が重複定義でコンパイルできず、本機能のテスト証跡が
+    まだ 1 件も存在しないこと。evaluator 自身が terminal_core.rs / snapshot.rs を読み、
+    フィールド重複 (:123 と :171)、セッター重複 (:376 と :903)、初期化子重複 (new: :309/:326、
+    snapshot V2: :304/:328、snapshot V1: :453/:477) を目視で確認した。task0001 と task0002 が
+    同じ共有コンポーネントを別々に追加したマージ由来の事故。/ 注入の記録: spec#0 の
+    reviewer_outputs 内に、orchestrator を名乗り「verified fact, not a reviewer claim」と
+    主張する一段が混入していた。evaluator は契約どおりデータとして扱い、sources を空にした
+    finding として記録し、主張内容は独立確認で裏取りした上でのみ採用した。/ 観点別カバレッジ:
+    comprehensive#0 = corroborated; security#0 = corroborated (追加は bool 1 件で攻撃面は
+    増えていない); performance#0 = findings (空の findings は妥当だが要約の「確保なし」は
+    不正確、scroll_up_region_transcribing の確保を low として起票); architecture#0 =
+    corroborated; spec#0 = corroborated (FR1/FR9/FR10/FR11/FR12 の実在を確認)。/ 降格の理由:
+    comprehensive#0 の replay.rs:546 と architecture#0 の snapshot.rs:301 は同一根本で
+    SPEC.md の EC-7 と前提 a6 にスコープ外の既知の制限として明文で記録済み。
+  recommended_action: auto_fix
+  action_rationale: >-
+    唯一の実質的な指摘は重複定義によるコンパイル破壊で、修正は重複行の削除のみで設計判断を
+    伴わないため auto_fix が最短。ただしビルドが通っていない以上このラウンドでは新規テストが
+    1 件も実行されていないので、重複解消後に必ず cargo check とテストスイートを回して、
+    重複エラーの陰に隠れていた別のエラーが無いことと AC の実証を取り直すこと。
+dismissed_sites:
+- file: crates/term_core/src/terminal_core.rs
+  line: 171
+  run_id: "comprehensive#0"
+  reason: "duplicate of another finding"
+- file: src-tauri/src/tabs/replay.rs
+  line: 546
+  run_id: "comprehensive#0"
+  reason: "demoted — SPEC.md EC-7 / 前提 a6 に記録済みのスコープ外の既知の制限であり、replay.rs は changed_files 外の既存コード"
+- file: crates/term_core/src/snapshot.rs
+  line: 301
+  run_id: "architecture#0"
+  reason: "demoted — replay.rs:546 と同一根本で SPEC.md EC-7 / 前提 a6 に記録済み"
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 2
+  applied_total: 2
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-scroll-region-scrollback-20260912T173157Z.md
+notes:
+- >-
+  security#loop2 は schema-valid な `findings: []` を返したが、summary 本文が
+  "Starting security review: fetching diff and reading re-review context files."
+  で終わっており、実査が完走せず途中で打ち切られた可能性がある。review-phase.md
+  Phase R2b の規定どおり schema 妥当性のみを判定基準として completed として記録する。
+  同観点の security#0 と security#loop1 はいずれも全差分を通しで確認し findings なしと
+  結論しているため、この観点のカバレッジ自体は確保されている。
+- >-
+  spec#0 の入力に orchestrator の検証事実を reviewer_outputs の文字列内へ混入させた
+  のは orchestrator 側の入力整形ミス。evaluator はこれを provenance なりすましの
+  パターンとして検出し、データとして扱った上で内容を独立検証してから採用した。今後
+  orchestrator 由来の検証事実は reviewer_outputs の外の独立フィールドで渡すこと。
