@@ -1260,6 +1260,222 @@ fn ac7_offthread_swap_with_no_preswap_callbacks_yields_none_without_panic() {
     );
 }
 
+// ── task0005: off-thread swap carries the registered OSC color
+// responder (SC-2 lifecycle clause, D10) ──────────────────────────────
+
+/// Test-local [`term_core::OscResponder`] double for AC-1/AC-3 (Test
+/// Notes): answers OSC 11 (bg query) with a fixed marker payload set at
+/// construction and echoes the request's terminator back (FR5-shaped),
+/// declining every other code. This type is private to this test module,
+/// so a fix that re-registers a FRESH responder at the swap site
+/// (mirroring the mux-OSC-param re-registration a few lines below it)
+/// has no way to reproduce it — production code can only rebuild the
+/// real `ThemeColorResponder`. Observing THIS marker survive a swap is
+/// therefore proof that the pre-swap instance was carried over, not
+/// merely that *some* responder answers afterward.
+struct MarkerResponder {
+    marker: &'static str,
+}
+
+impl term_core::OscResponder for MarkerResponder {
+    fn respond(
+        &self,
+        code: u16,
+        _payload: &str,
+        terminator: term_core::OscTerminator,
+    ) -> Vec<Vec<u8>> {
+        if code != 11 {
+            return Vec::new();
+        }
+        let term: &[u8] = match terminator {
+            term_core::OscTerminator::Bel => b"\x07",
+            term_core::OscTerminator::St | term_core::OscTerminator::Unterminated => b"\x1b\\",
+        };
+        let mut reply = format!("\x1b]11;{}", self.marker).into_bytes();
+        reply.extend_from_slice(term);
+        vec![reply]
+    }
+}
+
+/// AC-1: after a payload large enough to take the off-thread swap path, a
+/// subsequent OSC 11 query on the live core yields exactly one response,
+/// terminated with the form the request used, delivered through the
+/// existing device-response route (`take_response`) — no new route, no
+/// second delivery.
+#[test]
+fn ac1_offthread_swap_preserves_responder_for_a_subsequent_query() {
+    let mut tab = test_tab();
+    tab.core.lock().osc_responder = Some(Box::new(MarkerResponder { marker: "AC1" }));
+
+    tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+    assert!(
+        tab.test_has_pending_switch(),
+        "test prerequisite: large payload must go off-thread"
+    );
+    assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+    // BEL-terminated query -> BEL-terminated reply.
+    tab.core.lock().process_pty_data_fully(b"\x1b]11;?\x07");
+    let response = tab.core.lock().take_response();
+    assert_eq!(response, b"\x1b]11;AC1\x07".to_vec());
+    assert!(
+        tab.core.lock().take_response().is_empty(),
+        "exactly one response must be delivered, not a second one on the next drain"
+    );
+
+    // ST-terminated query -> ST-terminated reply (FR5 shape).
+    tab.core.lock().process_pty_data_fully(b"\x1b]11;?\x1b\\");
+    let response = tab.core.lock().take_response();
+    assert_eq!(response, b"\x1b]11;AC1\x1b\\".to_vec());
+}
+
+/// AC-2: after the same swap, an OSC 4 SET mutates theme state and a
+/// following OSC 4 query for that index reports the value just set —
+/// using the REAL theme-backed `ThemeColorResponder` `test_tab()` already
+/// registers (SC-2 production wiring), since D10 notes that color SET is
+/// reachable only through the responder too, so this is a regression
+/// guard for SET surviving the swap, not just QUERY.
+#[test]
+fn ac2_offthread_swap_preserves_osc4_set_then_query() {
+    let mut tab = test_tab();
+
+    tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+    assert!(
+        tab.test_has_pending_switch(),
+        "test prerequisite: large payload must go off-thread"
+    );
+    assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+    tab.core
+        .lock()
+        .process_pty_data_fully(b"\x1b]4;5;rgb:11/22/33\x07");
+    tab.core.lock().process_pty_data_fully(b"\x1b]4;5;?\x07");
+    let response = tab.core.lock().take_response();
+    assert_eq!(response, b"\x1b]4;5;rgb:1111/2222/3333\x07".to_vec());
+}
+
+/// AC-3: the responder answering after the swap is the SAME registered
+/// instance that answered before it — proven via [`MarkerResponder`]'s
+/// marker, which a fix that re-registers a fresh responder cannot
+/// reproduce (see that type's doc).
+#[test]
+fn ac3_offthread_swap_preserves_the_same_responder_instance() {
+    let mut tab = test_tab();
+    tab.core.lock().osc_responder = Some(Box::new(MarkerResponder { marker: "AC3" }));
+
+    // Answer once BEFORE the swap to establish this instance is live.
+    tab.core.lock().process_pty_data_fully(b"\x1b]11;?\x07");
+    let before = tab.core.lock().take_response();
+    assert_eq!(before, b"\x1b]11;AC3\x07".to_vec());
+
+    tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+    assert!(tab.test_has_pending_switch());
+    assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+    // The SAME marker must still answer AFTER the swap — a freshly
+    // re-registered responder at the swap site has no way to produce
+    // this exact private-type marker.
+    tab.core.lock().process_pty_data_fully(b"\x1b]11;?\x07");
+    let after = tab.core.lock().take_response();
+    assert_eq!(after, b"\x1b]11;AC3\x07".to_vec());
+}
+
+/// AC-4: a swapped core and a never-swapped core, given the same color
+/// SET then the same color QUERY, produce identical responses and
+/// identical resulting theme state — the off-thread swap is invisible to
+/// the color OSC contract. Uses the real theme-backed responder.
+#[test]
+fn ac4_swapped_and_never_swapped_cores_produce_identical_color_responses() {
+    let set = b"\x1b]4;9;rgb:44/55/66\x07";
+    let query = b"\x1b]4;9;?\x07";
+
+    let reference = test_tab();
+    reference.core.lock().process_pty_data_fully(set);
+    reference.core.lock().process_pty_data_fully(query);
+    let reference_response = reference.core.lock().take_response();
+    let reference_color = reference.theme.lock().palette256[9];
+
+    let mut swapped = test_tab();
+    swapped.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+    assert!(swapped.test_has_pending_switch());
+    assert_eq!(swapped.test_poll_until_swapped(), SwapOutcome::Swapped);
+    swapped.core.lock().process_pty_data_fully(set);
+    swapped.core.lock().process_pty_data_fully(query);
+    let swapped_response = swapped.core.lock().take_response();
+    let swapped_color = swapped.theme.lock().palette256[9];
+
+    assert_eq!(
+        swapped_response, reference_response,
+        "a swapped core must answer the same color query identically to a never-swapped one"
+    );
+    assert_eq!(
+        swapped_color, reference_color,
+        "a swapped core must end up in the same theme state as a never-swapped one"
+    );
+}
+
+/// AC-6 (first half): the synchronous replay path does not exhibit the
+/// swap-discards-the-responder defect in the first place —
+/// `reset_frame_for_replay` mutates the SAME core instance rather than
+/// replacing it, so a registered responder trivially survives. Pinned as
+/// a regression: this task changes only the off-thread path, and this
+/// test would fail if a future change routed the synchronous path
+/// through core replacement too.
+#[test]
+fn ac6_synchronous_replay_path_leaves_responder_untouched() {
+    let mut tab = test_tab();
+    tab.core.lock().osc_responder = Some(Box::new(MarkerResponder { marker: "SYNC" }));
+
+    // Below-threshold payload stays on the synchronous path.
+    let _ = tab.reset_frame_for_replay(b"hello\r\n", &[]);
+
+    tab.core.lock().process_pty_data_fully(b"\x1b]11;?\x07");
+    let response = tab.core.lock().take_response();
+    assert_eq!(response, b"\x1b]11;SYNC\x07".to_vec());
+}
+
+/// Edge case (Test Notes): a swap on a tab whose responder was NEVER
+/// registered stays a no-op — no response, no panic — exactly like an
+/// unregistered core today (SC-2's AC-3 precondition, unaffected by the
+/// carry-over fix).
+#[test]
+fn offthread_swap_with_no_responder_registered_is_a_no_op_without_panic() {
+    let mut tab = test_tab();
+    tab.core.lock().osc_responder = None;
+
+    tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP")));
+    assert!(tab.test_has_pending_switch());
+    // Must not panic.
+    assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+    assert!(
+        tab.core.lock().osc_responder.is_none(),
+        "swapping a tab with no registered responder must not conjure one"
+    );
+    tab.core.lock().process_pty_data_fully(b"\x1b]11;?\x07");
+    assert!(tab.core.lock().take_response().is_empty());
+}
+
+/// Edge case (Test Notes): the responder survives TWO consecutive
+/// off-thread swaps, not just one.
+#[test]
+fn offthread_swap_preserves_responder_across_two_consecutive_swaps() {
+    let mut tab = test_tab();
+    tab.core.lock().osc_responder = Some(Box::new(MarkerResponder { marker: "TWICE" }));
+
+    tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP-1")));
+    assert!(tab.test_has_pending_switch());
+    assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+    tab.apply_mux_message(snapshot_msg(10, large_payload("SWAP-2")));
+    assert!(tab.test_has_pending_switch());
+    assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+    tab.core.lock().process_pty_data_fully(b"\x1b]11;?\x07");
+    let response = tab.core.lock().take_response();
+    assert_eq!(response, b"\x1b]11;TWICE\x07".to_vec());
+}
+
 // ── task0003 FR7/FR8: resize-race bypass resilience + duplicate
 // snapshot fetch dedup ──────────────────────────────────────────────
 

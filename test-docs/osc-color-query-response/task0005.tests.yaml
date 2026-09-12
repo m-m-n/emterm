@@ -1,0 +1,80 @@
+task_id: task0005
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - tabs::tests::replay::ac1_offthread_swap_preserves_responder_for_a_subsequent_query
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, feeding an OSC 11 query to the live core after an
+      off-thread swap drained an empty response (`left: []`) instead of the
+      test-local responder's marker bytes (`right: [27, 93, 49, 49, ...]`,
+      i.e. "\x1b]11;AC1\x07") — the swap discarded the registered responder,
+      so `consult_osc_responder` short-circuited on `osc_responder: None`.
+  AC-2:
+    tests:
+      - tabs::tests::replay::ac2_offthread_swap_preserves_osc4_set_then_query
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, an OSC 4 set + query pair fed to the live core after
+      an off-thread swap drained an empty response instead of
+      "\x1b]4;5;rgb:1111/2222/3333\x07" — with the responder dropped, the
+      set half is also inert (D10: color SET is reachable only through the
+      responder), so the query saw the theme's untouched default.
+  AC-3:
+    tests:
+      - tabs::tests::replay::ac3_offthread_swap_preserves_the_same_responder_instance
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, the marker responder answered once before the swap
+      (`\x1b]11;AC3\x07`) but drained empty after it — the swap did not
+      carry the instance over at all (not even a freshly re-registered
+      look-alike), so this AC's stronger "same instance" claim was
+      trivially unproven by the broken code too.
+  AC-4:
+    tests:
+      - tabs::tests::replay::ac4_swapped_and_never_swapped_cores_produce_identical_color_responses
+    red_confirmed: true
+    red_reason: >-
+      Before the fix, the swapped core's response to the OSC 4 set+query
+      pair was empty while the never-swapped reference core answered
+      "\x1b]4;9;rgb:4444/5555/6666\x07" — divergent behavior between a
+      swapped and a never-swapped core, which this AC forbids.
+  AC-5:
+    tests:
+      - tabs::tests::replay::reset_frame_for_replay_discards_historic_device_responses_including_osc_color_query
+      - tabs::tests::replay::apply_offthread_swap_discards_historic_device_responses_including_osc_color_query
+    red_confirmed: false
+    red_reason: >-
+      "Do not touch" criterion (Test Notes): these are pre-existing
+      regression tests from task0004 that must stay byte-identical in the
+      diff and keep passing, not go red first. `git diff` confirms zero
+      lines removed from tests/replay.rs (pure addition) — both tests are
+      untouched and still pass after the fix.
+  AC-6:
+    tests:
+      - tabs::tests::replay::ac6_synchronous_replay_path_leaves_responder_untouched
+      - tabs::tests::replay::ac1_offthread_swap_preserves_responder_for_a_subsequent_query
+      - tabs::tests::replay::ac2_offthread_swap_preserves_osc4_set_then_query
+      - tabs::tests::replay::ac3_offthread_swap_preserves_the_same_responder_instance
+      - tabs::tests::replay::ac4_swapped_and_never_swapped_cores_produce_identical_color_responses
+    red_confirmed: false
+    red_reason: >-
+      The synchronous-path half of this criterion
+      (ac6_synchronous_replay_path_leaves_responder_untouched) was already
+      green before any implementation change, by design: `reset_frame_for_
+      replay` mutates the same core instance rather than replacing it, so
+      the defect this task fixes never applied to that path (Design section:
+      "the synchronous replay path does not exhibit the defect and is not
+      modified; it is covered only as a regression"). The criterion's
+      second half ("a test fails if the carry-over is later removed from
+      the off-thread path") is satisfied by the off-thread AC-1..AC-4 tests
+      listed alongside it, which DID go red first (see their own entries).
+notes: >-
+  Two Test-Notes edge cases beyond the numbered ACs, also red-confirmed
+  before the fix: offthread_swap_with_no_responder_registered_is_a_no_op_
+  without_panic (passed both before and after — genuinely a no-op either
+  way, not a red/green case) and
+  offthread_swap_preserves_responder_across_two_consecutive_swaps (red
+  before, green after, same failure shape as AC-1/AC-3).
