@@ -10,7 +10,7 @@ use super::frame_pacing::{
 use super::input_translate::{
     MAX_ALT_SCROLL_NOTCHES, ShiftEnterRewrite, accumulate_alt_scroll_lines,
     alternate_scroll_wheel_bytes, is_skk_swallowed_chord, shift_enter_rewrite,
-    should_drop_synthetic_key_event, winit_key_to_egui,
+    should_clear_selection_on_forward, should_drop_synthetic_key_event, winit_key_to_egui,
 };
 use super::link_hover::{detect_osc8_link_at, hover_link_cells_changed};
 use super::resize_layout::resolve_grid_bot_inset;
@@ -1899,6 +1899,168 @@ fn shift_enter_rewrite_unchanged_when_not_enter_key() {
     assert_eq!(
         shift_enter_rewrite(false, mods, ShiftEnterBehavior::Lf),
         ShiftEnterRewrite::Unchanged
+    );
+}
+
+// ── selection-clear-on-enter-copy task0001: clear-decision predicate ──
+
+#[test]
+fn should_clear_selection_on_forward_truth_table() {
+    // AC-1: true only when both the event was forwarded to the PTY and
+    // the key is the named Enter key; false in every other combination.
+    // This also covers the "printable/cursor key forwarded" and
+    // "non-forwarded Enter" edge cases from the task plan's Test Notes.
+    assert!(should_clear_selection_on_forward(true, true));
+    assert!(!should_clear_selection_on_forward(true, false));
+    assert!(!should_clear_selection_on_forward(false, true));
+    assert!(!should_clear_selection_on_forward(false, false));
+}
+
+#[test]
+fn should_clear_selection_on_forward_true_across_all_shift_enter_modes_when_forwarded() {
+    // AC-2: `is_enter` is captured once at event_loop.rs:448, BEFORE the
+    // `shift_enter_rewrite` decision runs, so its value does not depend
+    // on which of the four `shift_enter_behavior` forms the rewrite
+    // produces. Exercising `shift_enter_rewrite` for all four modes (and
+    // observing it takes different shapes) while holding `is_enter` at
+    // the single upstream-computed `true` shows the predicate answers
+    // true in every mode whenever the key was forwarded.
+    let mods = Modifiers {
+        shift: true,
+        ctrl: false,
+        alt: false,
+    };
+    let is_enter = true;
+    for behavior in [
+        ShiftEnterBehavior::None,
+        ShiftEnterBehavior::AltEnter,
+        ShiftEnterBehavior::KittyCsiU,
+        ShiftEnterBehavior::Lf,
+    ] {
+        let _ = shift_enter_rewrite(is_enter, mods, behavior);
+        assert!(
+            should_clear_selection_on_forward(true, is_enter),
+            "predicate must answer true for shift_enter_behavior {behavior:?} \
+             when the key was forwarded"
+        );
+    }
+}
+
+// ── selection-clear-on-enter-copy task0001: call-site source scans ────
+
+/// AC-4a: the forwarded branch in `event_loop.rs` must consult the
+/// Enter-conditioned clear predicate and call the clear helper when it
+/// answers true. Scoped between `if forwarded {` and the next
+/// `request_redraw` call (the smallest stable landmark that closes the
+/// branch), the same shape as the pointer-routing scans above.
+#[test]
+fn forwarded_branch_clears_selection_when_enter_predicate_holds() {
+    let src = include_str!("event_loop.rs");
+    let start = src
+        .find("if forwarded {")
+        .expect("`if forwarded {` branch not found in event_loop.rs");
+    let end = start
+        + src[start..]
+            .find("host.window().request_redraw();")
+            .expect("request_redraw marker not found after the forwarded branch");
+    let body = &src[start..end];
+    assert!(
+        body.contains("should_clear_selection_on_forward(forwarded, is_enter)"),
+        "the forwarded branch must consult should_clear_selection_on_forward \
+         with the forwarded flag and the pre-rewrite Enter flag (AC-4a)"
+    );
+    assert!(
+        body.contains("self.app.clear_selection()"),
+        "the forwarded branch must call the clear helper when the predicate \
+         holds (AC-4a, FR1)"
+    );
+}
+
+/// AC-4b: the copy branch in `key_routing.rs` must call the clear helper
+/// immediately after the clipboard write, and only inside the
+/// selection-present branch.
+#[test]
+fn copy_chord_clears_selection_immediately_after_clipboard_write() {
+    let src = include_str!("key_routing.rs");
+    let fn_start = src
+        .find("pub(super) fn handle_special_chord(")
+        .expect("handle_special_chord not found in key_routing.rs");
+    let body = &src[fn_start..];
+    let sel_branch_start = body
+        .find("if let Some(sel) = app.selection {")
+        .expect("selection-present branch not found in the copy chord handler");
+    let clipboard_marker = "host.set_clipboard(&text);";
+    let clipboard_rel = body[sel_branch_start..]
+        .find(clipboard_marker)
+        .expect("clipboard write not found inside the selection-present branch");
+    let after_clipboard = &body[sel_branch_start + clipboard_rel + clipboard_marker.len()..];
+    let clear_rel = after_clipboard
+        .find("app.clear_selection();")
+        .expect("clear call not found after the clipboard write (AC-4b, FR5)");
+    let between = &after_clipboard[..clear_rel];
+    // Allow whitespace and `//` line comments (explanatory notes on the
+    // call site) but nothing else — no other statement may sit between
+    // the clipboard write and the clear call.
+    let only_whitespace_and_comments = between.lines().all(|line| {
+        let trimmed = line.trim();
+        trimmed.is_empty() || trimmed.starts_with("//")
+    });
+    assert!(
+        only_whitespace_and_comments,
+        "expected only whitespace/comments between the clipboard write and the \
+         clear call so the clear runs immediately after it (AC-4b); found: {between:?}"
+    );
+}
+
+/// AC-5: the IME-consume path returns before the clear predicate call
+/// site is ever reached, so a composed key can never trigger the clear.
+#[test]
+fn ime_consume_path_returns_before_the_selection_clear_site() {
+    let src = include_str!("event_loop.rs");
+    let ime_pos = src
+        .find("KeyDispatchResult::Consumed")
+        .expect("IME consume dispatch result not found in event_loop.rs");
+    let clear_pos = src
+        .find("should_clear_selection_on_forward(")
+        .expect("clear predicate call site not found in event_loop.rs");
+    assert!(
+        ime_pos < clear_pos,
+        "the IME-consume check must appear (and return) before the clear \
+         predicate call site, so a composed key never reaches it (AC-5)"
+    );
+    let between = &src[ime_pos..clear_pos];
+    assert!(
+        between.contains("return;"),
+        "the IME-consume arm must `return` so it cannot fall through to the \
+         clear site (AC-5)"
+    );
+}
+
+/// AC-5: a modifier key held alone is neither a named key nor
+/// `WinitKey::Character`, nor does it carry printable `event.text` — it
+/// must still fall through to the final `_ => return None` arm in
+/// `winit_key_to_bytes`, producing no bytes and therefore never setting
+/// `forwarded = true` at the Enter-clear call site.
+#[test]
+fn winit_key_to_bytes_bare_modifier_still_falls_through_to_none() {
+    let src = include_str!("input_translate.rs");
+    let start = src
+        .find("pub(super) fn winit_key_to_bytes(")
+        .expect("winit_key_to_bytes not found in input_translate.rs");
+    let end = start
+        + src[start..]
+            .find("/// Upper bound for a single wheel event's arrow-key emission")
+            .expect("winit_key_to_bytes should be followed by the alt-scroll section");
+    let body = &src[start..end];
+    assert!(
+        body.contains("WinitKey::Character(s) =>"),
+        "expected the printable-character arm to still gate the final match"
+    );
+    assert!(
+        body.contains("_ => return None,"),
+        "expected a bare modifier (matching neither a named key, printable \
+         text, nor Character) to still fall through to `return None` \
+         (AC-5: no bytes means `forwarded` stays false)"
     );
 }
 

@@ -104,6 +104,11 @@ pub(super) fn handle_special_chord(
                     let text = sel.resolve(&core, app.fold_layout());
                     drop(core);
                     host.set_clipboard(&text);
+                    // selection-clear-on-enter-copy FR3/FR5: a completed
+                    // copy drops the mouse selection (and its pending press
+                    // anchor) together, even when the resolved text is
+                    // empty (EC6).
+                    app.clear_selection();
                 }
             }
             return true;
