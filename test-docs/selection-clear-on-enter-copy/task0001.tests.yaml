@@ -1,0 +1,41 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::should_clear_selection_on_forward_truth_table
+    red_confirmed: true
+    red_reason: "unresolved import `super::input_translate::should_clear_selection_on_forward` — function did not exist yet"
+  AC-2:
+    tests:
+      - window_host::tests::should_clear_selection_on_forward_true_across_all_shift_enter_modes_when_forwarded
+    red_confirmed: true
+    red_reason: "unresolved import `super::input_translate::should_clear_selection_on_forward` — function did not exist yet (same missing symbol as AC-1)"
+  AC-3:
+    tests:
+      - app::tests::clear_selection_unsets_both_when_both_are_set
+      - app::tests::clear_selection_is_a_noop_when_nothing_is_selected
+    red_confirmed: true
+    red_reason: "clear_selection_unsets_both_when_both_are_set: observed failing with a deliberately-broken clear_selection that only unset `selection` — assertion 'clear_selection must unset pending_selection_anchor (AC-3)' failed at app/tests.rs:129. Reverted to the correct implementation immediately after confirming the failure."
+  AC-4:
+    tests:
+      - window_host::tests::forwarded_branch_clears_selection_when_enter_predicate_holds
+      - window_host::tests::copy_chord_clears_selection_immediately_after_clipboard_write
+    red_confirmed: true
+    red_reason: "forwarded_branch_clears_selection_when_enter_predicate_holds: panicked with 'the forwarded branch must consult should_clear_selection_on_forward...' before the event_loop.rs call site was wired. copy_chord_clears_selection_immediately_after_clipboard_write: panicked with 'clear call not found after the clipboard write' before the key_routing.rs call site was wired."
+  AC-5:
+    tests:
+      - window_host::tests::ime_consume_path_returns_before_the_selection_clear_site
+      - window_host::tests::winit_key_to_bytes_bare_modifier_still_falls_through_to_none
+    red_confirmed: false
+    red_reason: "Mixed: ime_consume_path_returns_before_the_selection_clear_site WAS observed red — panicked with 'clear predicate call site not found in event_loop.rs' before should_clear_selection_on_forward existed at any call site, then went green once the event_loop.rs call site was wired. winit_key_to_bytes_bare_modifier_still_falls_through_to_none passed from its very first write: it pins a pre-existing, unmodified code shape in winit_key_to_bytes (this task adds no code there), so it never had a red state to observe — the behavior genuinely pre-existed. Marking the whole AC false rather than claiming a red I did not see for this second test."
+  AC-6:
+    tests:
+      - app::tests::clear_selection_dirties_the_rows_the_old_highlight_occupied
+    red_confirmed: true
+    red_reason: "Observed failing with a deliberately-introduced regression (clear_selection also setting needs_full_redraw = true): assertion 'an unrelated screen row must stay clean ... got [0, 1, ..., 23]' failed at app/tests.rs:206, proving the dirty set had fallen back to a full redraw. Reverted to the correct implementation immediately after confirming the failure."
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: "Build/test-suite exit-code criterion, not a single test; verified directly by running both commands named in the AC (cargo test --lib and cargo check --no-default-features), both exiting 0 after implementation. No 'red' state applicable — the criterion is the final green run itself."
