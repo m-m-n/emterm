@@ -533,18 +533,32 @@ impl Tab {
         // 1. Swap the built core in (renderer's Arc stays valid), transplanting
         //    the pre-swap wiring onto it FIRST so the live core is never
         //    observable (even momentarily, under this same lock) without its
-        //    callbacks / app-layer OSC registration:
+        //    callbacks / responder / app-layer OSC registration:
         //      - the old core's `callbacks` moves onto the worker-built core.
         //        An old core with no callbacks (edge case) yields
         //        `new_core.callbacks = None` — already `TerminalCore::new`'s
         //        default, so no panic.
+        //      - the old core's `osc_responder` (SC-2, D10, task0005) moves
+        //        onto the worker-built core the same way, for the same
+        //        reason: a snapshot-rebuilt core is constructed with no
+        //        responder (the snapshot layer has no access to the GUI
+        //        theme, NFR4), and the registration is tab-scoped, not
+        //        core-instance-scoped — losing it here would silently
+        //        disable color SET as well as color QUERY for the tab,
+        //        since the theme's color-OSC handling is reachable only
+        //        through this seam once one is registered (D1). A tab
+        //        whose responder was never registered (edge case) yields
+        //        `new_core.osc_responder = None`, already the default, so
+        //        no panic.
         //      - the mux inband OSC param is re-registered on the new core
-        //        with the same call `Tab::new` makes, so the swapped-in core
-        //        ends up behaviorally identical to a never-swapped tab core.
+        //        with the same call `Tab::new` makes.
+        //    With all three carried, the swapped-in core ends up
+        //    behaviorally identical to a never-swapped tab core.
         {
             let mut live = self.core.lock();
             let mut new_core = replay.core;
             new_core.callbacks = live.callbacks.take();
+            new_core.osc_responder = live.osc_responder.take();
             new_core.register_osc_app_param(
                 mux_ipc::protocol::MUX_OSC_PARAM,
                 crate::callbacks::OSC_MUX_INBAND,
