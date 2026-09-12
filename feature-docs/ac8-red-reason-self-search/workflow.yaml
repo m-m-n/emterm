@@ -99,7 +99,8 @@ workflow:
   - IMPLEMENTATION.md
   - VERIFICATION.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: 2016b4948f3e00c543700bcdffa94a319228bddd
 - id: implement
   status: pending
   base_commit: null
@@ -112,7 +113,30 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Rewrite the AC-8 red_reason to state only the verified change-set property
+    plan: tasks/task0001.md
+    files:
+    - test-docs/ac7-red-reason-scope/task0001.tests.yaml
+    - test-docs/ac8-red-reason-self-search/task0001.tests.yaml
+    skills: []
+    domains:
+    - api-contract
+    complexity: medium
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    status: pending
 review:
   status: pending
   rounds_completed: 0
@@ -126,7 +150,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: 
+    - task0001
     tests:
     - TS1
   FR2:
@@ -134,7 +159,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: 
+    - task0001
     tests:
     - TS2
   FR3:
@@ -142,7 +168,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: 
+    - task0001
     tests:
     - TS1
   FR4:
@@ -150,7 +177,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: 
+    - task0001
     tests:
     - TS1
   FR5:
@@ -158,7 +186,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: 
+    - task0001
     tests:
     - TS1
   FR6:
@@ -166,7 +195,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: 
+    - task0001
     tests:
     - TS3
   FR7:
@@ -174,7 +204,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: 
+    - task0001
     tests:
     - TS1
   NFR1:
@@ -182,7 +213,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: 
+    - task0001
     tests:
     - TS4
   NFR2:
@@ -190,7 +222,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: 
+    - task0001
     tests:
     - TS1
   NFR3:
@@ -198,7 +231,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: 
+    - task0001
     tests:
     - TS2
   NFR4:
@@ -206,7 +240,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: 
+    - task0001
     tests:
     - TS1
 batch:

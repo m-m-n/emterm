@@ -1,7 +1,7 @@
 schema_version: 1
 feature: ac8-red-reason-self-search
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 7d6c6eb300b30b3748fb14adc11fda953c906f11
 last_input_digest: sha256:1dd553859cffcbddfc1bbd5079d50862234da3ae3583cbb93c5c246149af22bc
@@ -25,7 +25,7 @@ artifacts:
   produced_by: ac8-red-reason-self-search-create-plan-r0001
 patches:
 - patch_id: ac8-red-reason-self-search-p0001
-  status: validated
+  status: applied
   base_input_digest: sha256:1dd553859cffcbddfc1bbd5079d50862234da3ae3583cbb93c5c246149af22bc
   base_workflow_blob: f2070ec87ced20e73b9ffea313c59fe3fcb931a2
 stale_redispatch_count: 0
