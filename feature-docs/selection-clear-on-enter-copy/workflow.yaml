@@ -80,7 +80,8 @@ workflow:
       doc/UI-DESIGN-GUIDELINES.yaml のトークンには一切触れない。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: efa80970b07366693bf0cba7bb67a283f894d543
   - id: implement
     status: pending
     base_commit: null
@@ -93,7 +94,22 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Clear the mouse selection on Enter forwarding and on copy"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/window_host/input_translate.rs
+      - src-tauri/src/window_host/event_loop.rs
+      - src-tauri/src/window_host/key_routing.rs
+      - src-tauri/src/window_host/tests.rs
+      - src-tauri/src/app/mod.rs
+      - src-tauri/src/app/tests.rs
+    skills: [frontend-impl]
+    domains: [input-handling, ui]
+    complexity: medium
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6]
+    status: pending
 
 review:
   status: pending
@@ -107,84 +123,84 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS5, TS9]
   FR2:
     title: "Clear on Shift+Enter"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2, TS9]
   FR3:
     title: "Clear on copy"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5, TS9]
   FR4:
     title: "Preserve current behaviour of copy with no selection"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   FR5:
     title: "Clear as a pair"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS3, TS5]
   FR6:
     title: "Redraw"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS7]
   NFR1:
     title: "Six existing clear conditions unchanged"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS10]
   NFR2:
     title: "No clear on IME commit Enter or modifier-alone press"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS6]
   NFR3:
     title: "PRIMARY and middle-click paste unchanged"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS8]
   NFR4:
     title: "CLI-only build unaffected"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS11]
   NFR5:
     title: "No regression of render-skip optimizations"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS7]
   NFR6:
     title: "Clear decision factored out as a pure function"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1]
 
 batch:
