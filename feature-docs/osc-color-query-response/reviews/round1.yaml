@@ -1,0 +1,200 @@
+round: 1
+executed_at: '2026-09-13T06:19:30+09:00'
+scope:
+  review_mode: diff
+  base_commit: 3d90b8c1899d3755de563416112f4e5da336196a
+  head_commit: 776707adae13540025bca2774d02b8f4b73c57d1
+  changed_files:
+  - crates/term_core/src/color_spec.rs
+  - crates/term_core/src/lib.rs
+  - crates/term_core/src/mux_apc_extractor.rs
+  - crates/term_core/src/osc_handler.rs
+  - crates/term_core/src/parser/osc.rs
+  - crates/term_core/src/parser/tests.rs
+  - crates/term_core/src/parser_types.rs
+  - crates/term_core/src/snapshot.rs
+  - crates/term_core/src/terminal_core.rs
+  - crates/term_core/src/terminal_dispatch.rs
+  - src-tauri/src/app/tests/font_settings.rs
+  - src-tauri/src/callbacks.rs
+  - src-tauri/src/callbacks/tests.rs
+  - src-tauri/src/render/theme.rs
+  - src-tauri/src/tabs/input.rs
+  - src-tauri/src/tabs/mod.rs
+  - src-tauri/src/tabs/tests/output_pipeline.rs
+  - src-tauri/src/tabs/tests/replay.rs
+  - test-docs/osc-color-query-response/task0001.tests.yaml
+  - test-docs/osc-color-query-response/task0002.tests.yaml
+  - test-docs/osc-color-query-response/task0003.tests.yaml
+  - test-docs/osc-color-query-response/task0004.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: completed
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+  degraded: true
+findings:
+- stable_id: 4d2f818d6a5b35f9
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/tabs/replay.rs
+  line: 547
+  title: Off-thread history swap drops osc_responder, silently killing OSC 4/10/11/12 query AND set for
+    that tab
+  description: '`Tab::apply_offthread_swap` (src-tauri/src/tabs/replay.rs:544-552) replaces the live core
+    wholesale (`*live = new_core`) and transplants only `callbacks` plus the mux inband OSC param onto
+    the worker-built core. The worker-built core comes from `TerminalCore::build_from_snapshot`, whose
+    snapshot constructors set `osc_responder: None` (crates/term_core/src/snapshot.rs:339, :486). The
+    theme-backed responder has exactly one production registration site (src-tauri/src/tabs/mod.rs:725).
+    After any off-thread swap (large snapshot / many-segment mux window switch or reattach) the live core
+    has `osc_responder == None` and `consult_osc_responder` early-returns forever after. Impact exceeds
+    the new feature: this same diff removed OSC 4/10/11/12 from `NativeCallbacks::on_osc`''s `handle_theme`
+    routing and replaced it with a no-op arm (src-tauri/src/callbacks.rs:640-655) because the responder
+    is now the sole caller of `Theme::apply_osc` for those codes. `callbacks` IS transplanted, so after
+    the swap the no-op arm stays live while the responder is gone - color SET (pre-existing behavior)
+    as well as the new color QUERY silently stop working for that tab. The synchronous replay path is
+    unaffected (in-place `reset_frame_for_replay`, never a core replacement). The doc comment above the
+    transplant claims the swapped-in core is behaviorally identical to a never-swapped tab core; that
+    invariant is now false. Same failure class as the previously fixed off-thread callbacks/OSC-registration
+    loss. New tests do not cover it: src-tauri/src/tabs/tests/replay.rs:656 only asserts stale device
+    responses are discarded across the swap.'
+  suggestion: 'In `apply_offthread_swap`, transplant the responder alongside `callbacks`, under the same
+    lock and before `*live = new_core`: `new_core.osc_responder = live.osc_responder.take();` (a `None`
+    source is already the constructor default, so no panic path is added). Add a regression test in src-tauri/src/tabs/tests/replay.rs
+    next to `ac1_offthread_swap_transplants_the_preswap_callbacks_instance` that drives a large payload
+    through the off-thread swap, then feeds `ESC ] 11 ; ? BEL` plus an `ESC ] 4 ; 1 ; rgb:... BEL` set,
+    asserting exactly one correctly terminated response is drained and that the set mutates `Theme`.'
+  sources:
+  - codex:comprehensive
+  confidence: 50
+  resolution: unresolved
+  resolution_reason: outside changed_files - not an auto-fix candidate (Phase R4 candidate gate); routed
+    to rework
+- stable_id: 3712df9238833233
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/tabs/mod.rs
+  line: 725
+  title: Async history-restore swap drops osc_responder, breaking color query/set after replay
+  description: 'Accountability-floor lift of the comprehensive reviewer''s own reported site (src-tauri/src/tabs/mod.rs:725),
+    which the evaluation reported at a different file/line and therefore did not match by same_site. Reviewer
+    text: osc_responder is only registered at tab creation time. When history restore is done off-thread
+    for large scrollback (>64KiB), apply_offthread_swap (src-tauri/src/tabs/replay.rs:545-552) swaps in
+    a fresh terminal core carrying over `callbacks` but not `osc_responder`, leaving it None on the replacement
+    core. After that swap, OSC 4/10/11/12 queries silently get no response, and callbacks.rs:655''s related
+    handling is skipped too - regressing even pre-existing color-set behavior for any tab whose scrollback
+    triggers the off-thread swap path. The new replay tests only assert that stale OSC responses aren''t
+    replayed; they don''t check that color query/set functionality still works after the swap completes.'
+  suggestion: 'In apply_offthread_swap, before replacing the core, carry over the responder: `new_core.osc_responder
+    = live.osc_responder.take();` (or equivalent field transfer) under the same lock used for the swap.
+    Add a regression test that sends OSC 10/11/4 queries after an off-thread swap and asserts exactly
+    one correctly formatted response is emitted, and that a subsequent OSC color-set still applies.'
+  sources:
+  - codex:comprehensive
+  confidence: 60
+  resolution: unresolved
+  resolution_reason: 'auto-fix loop 1: editor skipped - the prescribed edit belongs in src-tauri/src/tabs/replay.rs,
+    outside the dispatched target file; stable_id aborted, routed to rework'
+- stable_id: ecb0d586e27282de
+  severity: medium
+  category: security
+  file: src-tauri/src/render/theme.rs
+  line: 481
+  title: Chained OSC 4 queries amplify untrusted PTY input into unbounded response allocation
+  description: '`MAX_OSC_LEN` is 16 MiB (crates/term_core/src/parser/mod.rs:15) and `Theme::apply_palette_set`
+    pushes one freshly allocated `Vec<u8>` response per `?` token with no per-dispatch cap (src-tauri/src/render/theme.rs:478-486).
+    Those vectors are returned through `ThemeColorResponder::respond` and appended to `response_queue`
+    by `consult_osc_responder` (crates/term_core/src/osc_handler.rs:42-50); nothing drains the queue until
+    the whole parse pass finishes. A crafted 16 MiB OSC 4 string of repeated `0;?;` pairs yields roughly
+    4.2M query tokens, each producing a ~26-byte response plus Vec header plus allocator overhead, then
+    copied again into `response_queue` - several hundred MB of transient allocation and a long UI-thread
+    stall from a single sequence any process writing to the PTY (including a remote host over SSH) can
+    emit. Newly reachable: before this diff `?` tokens for OSC 4 were skipped and only small fixed-size
+    device replies could accumulate. Medium rather than high because it is a transient resource spike
+    with no state corruption or privilege effect, and real terminals do answer each chained query.'
+  suggestion: 'Cap the fan-out where the responses are produced: stop emitting after N query tokens within
+    a single `apply_osc` dispatch (and/or a total response byte budget), dropping the remainder before
+    allocating rather than after. Bound `response_queue` growth in `consult_osc_responder` as a second
+    line of defence so a payload split across frames cannot bypass the per-dispatch cap, and add a test
+    that a pathological chained OSC 4 payload yields a bounded response.'
+  sources:
+  - codex:security
+  confidence: 65
+  resolution: unresolved
+  resolution_reason: severity medium - outside the Phase R4 auto-fix candidate gate; carried into rework
+evaluation:
+  round_summary: 'Round 1, cross_validation=true, diff mode over 22 changed files. Five perspectives dispatched,
+    all completed, none unreviewed. One high-severity defect confirmed by independent inspection (off-thread
+    core swap drops `osc_responder`, regressing pre-existing OSC color-set behavior as well as the new
+    query path) and one medium security amplification carried forward. No injection attempts, role overrides,
+    or embedded instructions were detected in any reviewer output; all reviewer text was treated as data.
+    Per-perspective independent inspection coverage: comprehensive - findings (corroborated and strengthened:
+    sole registration site src-tauri/src/tabs/mod.rs:725, transplant at src-tauri/src/tabs/replay.rs:544-552,
+    `osc_responder: None` snapshot constructors at crates/term_core/src/snapshot.rs:339/:486, newly-no-op
+    OSC 4/10/11/12 arm at src-tauri/src/callbacks.rs:640-655). security - corroborated (MAX_OSC_LEN =
+    16 MiB, uncapped per-token response push, parse-pass-deferred drain; kept at medium). performance
+    - corroborated (osc_scan_for_color_query resumes the outer scan at the OSC terminator so payload_has_device_query
+    stays single-pass O(n) with no allocation). architecture - corroborated (term_core-owned `OscResponder`
+    trait; GUI-side `ThemeColorResponder` in src-tauri; no term_core -> GUI dependency, no cycle). spec
+    - corroborated (terminator echo incl. Unterminated -> no response, chained OSC 10/11/12 target advance,
+    SC-6 palette resolution, 104/110/111 scheme-mirror resets, 8->16-bit rgb formatting); the high finding
+    is a runtime conformance hole for FR1/FR2 on the off-thread path that a pure diff-vs-SPEC reading
+    would not surface.'
+  recommended_action: auto_fix
+  action_rationale: The single high finding has a one-line, local, low-risk fix (transplant `osc_responder`
+    alongside `callbacks` in `apply_offthread_swap`) plus a regression test that slots beside the existing
+    `ac1_offthread_swap_transplants_the_preswap_callbacks_instance` test. The medium security finding
+    needs a cap policy decision rather than a mechanical edit, so it should not gate this round.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 1
+  applied_total: 0
+  termination: no-progress
+residual_critical_high: 2
+rework_required: true
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-osc-color-query-response-20260912T211909Z.md
