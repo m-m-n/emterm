@@ -1,0 +1,21 @@
+schema_version: 1
+feature: scroll-region-scrollback
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 580446298793a80a25281182ecdf330591132418
+last_input_digest: sha256:e96624a6df86aac215183b6e4d465565e12fea185b0df79a8e7e245db7ce0d26
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+- request_id: create-plan-run-0001
+  status: dispatched
+  input_digest: sha256:e96624a6df86aac215183b6e4d465565e12fea185b0df79a8e7e245db7ce0d26
+  output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
