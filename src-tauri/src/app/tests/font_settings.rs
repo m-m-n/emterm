@@ -247,3 +247,74 @@ fn apply_settings_updates_cursor_style_and_blink_on_every_tab() {
         assert!(!core.get_cursor_blink());
     }
 }
+
+// ── scroll_region_scrollback_enabled (scroll-region-scrollback
+// task0002 AC-3/AC-4/AC-5) ────────────────────────────────────────
+
+#[test]
+fn spawn_initial_tab_seeds_scroll_region_scrollback_gate_from_settings() {
+    // AC-3: a tab built from a settings value of disabled yields a
+    // terminal core whose transcription gate is disabled, and one built
+    // from enabled yields an enabled core.
+    let mut disabled = Settings::default();
+    disabled.scroll_region_scrollback_enabled = false;
+    let mut app_disabled = App::with_settings(disabled);
+    app_disabled.spawn_initial_tab();
+    assert!(
+        !app_disabled.tabs[0]
+            .core
+            .lock()
+            .get_scroll_region_scrollback_enabled()
+    );
+
+    let mut app_enabled = App::new(); // default settings: enabled
+    app_enabled.spawn_initial_tab();
+    assert!(
+        app_enabled.tabs[0]
+            .core
+            .lock()
+            .get_scroll_region_scrollback_enabled()
+    );
+}
+
+#[test]
+fn apply_settings_updates_scroll_region_scrollback_gate_on_every_tab() {
+    // AC-4: applying settings updates the transcription gate on the core
+    // of every already-open tab, not only on tabs created afterwards.
+    let mut app = App::new();
+    app.spawn_initial_tab();
+    app.spawn_initial_tab();
+    let mut new = Settings::default();
+    new.scroll_region_scrollback_enabled = false;
+
+    app.apply_settings(new);
+
+    for tab in &app.tabs {
+        assert!(!tab.core.lock().get_scroll_region_scrollback_enabled());
+    }
+}
+
+#[test]
+fn apply_settings_scroll_region_scrollback_toggle_preserves_scrollback() {
+    // AC-5: applying settings performs no tab restart, no PTY re-spawn
+    // and no scrollback discard — an open tab's scrollback length is
+    // unchanged across the application of the new value.
+    let mut app = App::new();
+    app.spawn_initial_tab();
+    {
+        let mut bytes = Vec::new();
+        for _ in 0..40 {
+            bytes.extend_from_slice(b"line\r\n");
+        }
+        app.tabs[0].core.lock().process_pty_data_fully(&bytes);
+    }
+    let before = app.tabs[0].core.lock().get_scrollback_length();
+    assert!(before > 0, "expected some scrollback to have accumulated");
+
+    let mut new = Settings::default();
+    new.scroll_region_scrollback_enabled = false;
+    app.apply_settings(new);
+
+    let after = app.tabs[0].core.lock().get_scrollback_length();
+    assert_eq!(after, before, "settings apply must not discard scrollback");
+}

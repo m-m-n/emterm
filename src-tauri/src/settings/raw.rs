@@ -87,6 +87,7 @@ pub(in crate::settings) struct RawSettings {
     shell_args: Option<Vec<String>>,
     scroll_speed: Option<u32>,
     alternate_scroll_enabled: Option<bool>,
+    scroll_region_scrollback_enabled: Option<bool>,
     copy_on_select: Option<bool>,
     middle_click_paste: Option<bool>,
     /// New wire key (task0001/task0003). Wins over the legacy
@@ -497,6 +498,9 @@ impl RawSettings {
         }
         if let Some(v) = self.alternate_scroll_enabled {
             dst.alternate_scroll_enabled = v;
+        }
+        if let Some(v) = self.scroll_region_scrollback_enabled {
+            dst.scroll_region_scrollback_enabled = v;
         }
         if let Some(v) = self.copy_on_select {
             dst.copy_on_select = v;

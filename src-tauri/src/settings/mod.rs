@@ -138,6 +138,14 @@ pub struct Settings {
     /// less) scroll their own log; when `false`, the wheel falls
     /// through to the eMterm scrollback view as before.
     pub alternate_scroll_enabled: bool,
+    /// Ghostty-compatible region-scroll transcription (scroll-region-
+    /// scrollback task0002): when `true` (default), lines scrolled out of
+    /// a scroll region whose top margin is the topmost screen row are
+    /// written to scrollback instead of being discarded. Seeded into every
+    /// tab's `TerminalCore` at construction (`Tab::build`) and pushed into
+    /// every open tab's core on settings apply (`App::apply_settings`);
+    /// `term_core` itself consumes the value inside the scroll-up routine.
+    pub scroll_region_scrollback_enabled: bool,
     /// When `true`, releasing a left-click selection also copies the
     /// resolved text to the system CLIPBOARD selection (the PRIMARY
     /// selection is always updated regardless).
@@ -292,6 +300,7 @@ impl Default for Settings {
             shell_args: Vec::new(),
             scroll_speed: 3,
             alternate_scroll_enabled: true,
+            scroll_region_scrollback_enabled: true,
             copy_on_select: false,
             middle_click_paste: true,
             shift_enter_behavior: ShiftEnterBehavior::AltEnter,

@@ -296,6 +296,12 @@ impl TerminalCore {
             saved_cursor: snapshot.saved_cursor,
             cursor_style_default: snapshot.cursor_style_default,
             cursor_blink_default: snapshot.cursor_blink_default,
+            // scroll-region-scrollback D5 (known limitation, out of scope
+            // to fix): the gate is not part of `TerminalSnapshot`, so a
+            // snapshot-rebuilt core always starts enabled, matching
+            // `TerminalCore::new()`'s factory default, regardless of what
+            // the live core it replaces was set to.
+            scroll_region_scrollback_enabled: true,
             cursor_style_override: snapshot.cursor_style_override,
             cursor_blink_override: snapshot.cursor_blink_override,
             modes: snapshot.modes,
@@ -435,6 +441,10 @@ impl TerminalCore {
             // matching `TerminalCore::new()`, with no active override.
             cursor_style_default: 0,
             cursor_blink_default: true,
+            // scroll-region-scrollback D5 (known limitation, out of scope
+            // to fix): not part of the V1 payload either; fresh factory
+            // default, matching `TerminalCore::new()`.
+            scroll_region_scrollback_enabled: true,
             cursor_style_override: None,
             cursor_blink_override: None,
             modes: snapshot.modes,
