@@ -1,12 +1,20 @@
 schema_version: 1
 feature: ac8-red-reason-self-search
 phase: create-spec
-status: dispatching
+status: awaiting_answers
 generation: 1
-base_revision: 1a34b3817bf216d68ad037d693f17f84b3f1aaeb
+base_revision: 0002b7dcee5181426470782769d462934efd1fde
 last_input_digest: sha256:c95d8fc67943c08deadc3fe526d76e42473c0b5b337ec5db9ba1fdcd20f44090
-active_request_id: create-spec-run-0001
-packets: {}
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: issued
+    issued_at: "2026-09-12T21:42:53+09:00"
+    questions:
+      - question_id: requirement.ac8-red-reason.correction-form
+        status: issued
+      - question_id: design-step.ac8-red-reason-self-search
+        status: answered
 answers:
   create-spec.feature-identity:
     packet_id: null
@@ -16,9 +24,20 @@ answers:
     selected_option_ids: [derive_from_task_description]
     freeform: null
     normalized_answer: ac8-red-reason-self-search
+  design-step.ac8-red-reason-self-search:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-12T21:42:53+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: >-
+      Accept requirements-analyst's design_step_recommendation (skip): the
+      change is one folded YAML scalar in a generated evidence record under
+      test-docs/, with no UI surface and no runtime code path.
 worker_runs:
   - request_id: create-spec-run-0001
-    status: dispatched
+    status: needs_user_input
     input_digest: sha256:c95d8fc67943c08deadc3fe526d76e42473c0b5b337ec5db9ba1fdcd20f44090
     output_digest: null
 artifacts: []
