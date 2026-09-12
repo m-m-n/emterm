@@ -1,0 +1,97 @@
+feature: osc-color-query-response
+collected_at: "2026-09-13T07:53:00+09:00"
+session_ids:
+  - 01a097d2-c49f-7727-a80a-f3faf4a741d4
+signals:
+  review_critical_high:
+    - stable_id: 4d2f818d6a5b35f9
+      category: comprehensive
+      file: src-tauri/src/tabs/replay.rs
+      title: >-
+        Off-thread history swap drops osc_responder, silently killing OSC
+        4/10/11/12 query responses after a window switch
+      resolution: >-
+        unresolved at round 1 (outside changed_files, so outside the Phase R4
+        auto-fix candidate gate) -> routed to rework as task0005; refuted as a
+        live defect in round 2 after apply_offthread_swap re-attached the
+        responder inside the pre-swap lock window
+    - stable_id: 3712df9238833233
+      category: comprehensive
+      file: src-tauri/src/tabs/replay.rs
+      title: >-
+        Async history-restore swap drops osc_responder, breaking color
+        query/set after restore
+      resolution: >-
+        unresolved at round 1 (auto-fix editor skipped: the prescribed edit lay
+        in src-tauri/src/tabs/replay.rs, outside the dispatched task's file
+        set) -> routed to rework as task0005; round 2 found no separate async
+        history-restore swap site exists
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - crates/term_core/src/parser_types.rs
+        - crates/term_core/src/terminal_dispatch.rs
+        - crates/term_core/src/mux_apc_extractor.rs
+        - crates/term_core/src/snapshot.rs
+        - crates/term_core/src/parser/tests.rs
+        - crates/term_core/src/parser/mod.rs
+    - task: task0002
+      files:
+        - crates/term_core/src/parser_types.rs
+        - crates/term_core/src/parser/osc.rs
+        - crates/term_core/src/parser/tests.rs
+        - crates/term_core/src/terminal_dispatch.rs
+        - crates/term_core/src/mux_apc_extractor.rs
+        - crates/term_core/src/snapshot.rs
+        - crates/term_core/src/terminal_core.rs
+        - src-tauri/src/app/tests/font_settings.rs
+        - src-tauri/src/tabs/tests/replay.rs
+        - src-tauri/src/tabs/tests/output_pipeline.rs
+    - task: task0004
+      files:
+        - src-tauri/src/tabs/tests/output_pipeline.rs
+        - src-tauri/src/tabs/tests/replay.rs
+    - task: task0006
+      files:
+        - src-tauri/assets/fonts/
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - >-
+    IMPLEMENTATION.md D8 が「crates/term_core/src/ 配下の OSC パース/コア
+    ターミナルモジュール」を丸ごと deviation 報告対象として切っていたため、
+    task0001 / task0002 の files 予測外れがそのまま大量の deviation に化けた。
+    signature 変更が波及する既存呼び出し元 (parser_types.rs /
+    terminal_dispatch.rs / mux_apc_extractor.rs / snapshot.rs) は、計画段階で
+    files に含めておける類のもの。
+  - >-
+    テストファイル (src-tauri/src/tabs/tests/*.rs、crates/term_core/src/parser/tests.rs)
+    がどのタスクの files にも入っていなかった。プロジェクトのテスト規約が
+    「本体ファイルと対になる #[cfg(test)] サブモジュールファイル」である以上、
+    本体ファイルを files に入れたら対のテストファイルも自動で入る規則があれば
+    deviation にならなかった。
+  - >-
+    VERIFICATION.md の見出しドリフト (`### Test Scenarios` vs テンプレートが
+    規定する `### Test Scenarios from SPEC.md`) で rework-planner の
+    validate-worker-output.py check 3 が偽陰性を出し、review ラウンドを 1 回
+    余計に消費した。create-plan フェーズ側で見出しをテンプレートに対して
+    検証すれば防げる。
+  - >-
+    round 2 の architecture 観点が 3 件すべて偽陽性 (replay.rs:547 /
+    mod.rs:725 / term_core/lib.rs) を出した。いずれも「diff のハンクに見えない
+    = 存在しない」という推論で、ハンク外の apply_offthread_swap 行や実際の
+    trait 名 (OscResponder) を確認していない。diff モードのレビュアーに
+    「主張の否定形はハンク外も確認してから出す」制約を与える余地がある。
+  - >-
+    task0005 / task0006 の worktree で src-tauri/assets/fonts/ の配置や
+    scripts/fetch-fonts.sh の実行が必要だった。フレッシュな worktree で
+    build.rs が要求するビルド前提物は、implementer 個々の裁量ではなく
+    worktree 作成時のセットアップ手順に載せた方がぶれない。
+  - >-
+    TS-14 (実機 eMterm で Codex TUI を起動し入力欄背景を目視確認、10 項目) は
+    無人実行では実行不能。verify.manual-only-scenarios ゲートで
+    pass_with_manual_noted に倒して人間の評価者へ引き継いだ。手動専用シナリオを
+    VERIFICATION.md 側で明示的にマークできれば、毎回ゲートを開かずに済む。
