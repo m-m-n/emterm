@@ -362,8 +362,139 @@ impl TerminalCore {
                 self.scroll_event = None;
                 self.mark_all_dirty();
             }
+        } else if self.should_transcribe_region_scroll(top) {
+            self.scroll_up_region_transcribing(bottom, count);
         } else {
             self.shift_rows_up(top, bottom, count);
+        }
+    }
+
+    /// Whether the region (non-full-screen) branch of [`Self::scroll_up_internal`]
+    /// should transcribe its outgoing lines to scrollback instead of
+    /// discarding them (scroll-region-scrollback task0001, IMPLEMENTATION.md
+    /// Shared Components / D1). All clauses below must hold; any one failing
+    /// selects today's in-place region shift instead:
+    ///
+    /// 1. `top == 0` — the region's top margin is the topmost screen row.
+    /// 2. No left/right margin is set. The terminal implements no
+    ///    horizontal margins today, so this clause is trivially true; there
+    ///    is no field to check yet. Written here as a forward constraint for
+    ///    any future horizontal-margin support (FR6) — a reviewer adding
+    ///    that feature must extend this condition.
+    /// 3. The alternate screen is not active — it shares one ring and one
+    ///    scrollback with the main screen, so nothing else would exclude it.
+    /// 4. `scrollback_capacity > 0`.
+    /// 5. The transcription gate (`scroll_region_scrollback_enabled`) is on.
+    #[inline]
+    fn should_transcribe_region_scroll(&self, top: u16) -> bool {
+        top == 0
+            && !self.get_mode(crate::terminal_core::MODE_ALT_SCREEN)
+            && self.scrollback_capacity > 0
+            && self.scroll_region_scrollback_enabled
+    }
+
+    /// Region-scroll transcription path (task0001). Called only when
+    /// [`Self::should_transcribe_region_scroll`] holds for `top == 0`, so
+    /// the rows scrolling out of the region are exactly the rows
+    /// [`Self::ring_push_blank`] evicts for a full-screen scroll — reused
+    /// here unchanged, `count` times, oldest-first (NFR1). That routine
+    /// rotates the ring uniformly across ALL viewport rows and blanks only
+    /// the single physical row it evicts each call, so when the region's
+    /// bottom margin is above the last screen row, two corrections are
+    /// needed once the loop completes:
+    ///
+    /// - The rows below `bottom` must be restored to their original screen
+    ///   positions (the ring rotation shifted their viewport mapping along
+    ///   with the region's, even though their cell data never moved).
+    /// - The region's own trailing `count` rows must end up blank — the
+    ///   loop's blanking landed on the wrong physical rows for anything
+    ///   short of a full-screen scroll.
+    ///
+    /// Panics via debug assertions if called outside its `top == 0`,
+    /// non-full-screen precondition; `scroll_up_internal` never does so.
+    fn scroll_up_region_transcribing(&mut self, bottom: u16, count: u16) {
+        let rows = self.rows;
+        let cols = self.cols as usize;
+        debug_assert!(bottom < rows.saturating_sub(1));
+        debug_assert!(count >= 1 && count <= bottom + 1);
+        if rows as usize * cols > self.ring_cells.len() {
+            return;
+        }
+
+        // Snapshot the rows below the bottom margin BEFORE the ring
+        // rotates: ring_push_blank shifts every viewport row uniformly, so
+        // without this these rows would show the wrong content afterward.
+        let tail_start = bottom + 1;
+        let mut tail: Vec<(Vec<Cell>, bool, Vec<(u32, String)>)> =
+            Vec::with_capacity((rows - tail_start) as usize);
+        for row in tail_start..rows {
+            let abs = self.viewport_abs(row);
+            let base = abs * cols;
+            let cells = self.ring_cells[base..base + cols].to_vec();
+            let wrapped = self.ring_wrapped[abs];
+            let abs32 = abs as u32;
+            let cols_with_overflow: Vec<u32> =
+                self.overflow_ridx.get(&abs32).cloned().unwrap_or_default();
+            let mut overflow_entries = Vec::with_capacity(cols_with_overflow.len());
+            for c in cols_with_overflow {
+                if let Some(s) = self.overflow.get(&(c, abs32)) {
+                    overflow_entries.push((c, s.clone()));
+                }
+            }
+            tail.push((cells, wrapped, overflow_entries));
+        }
+
+        // Transcribe exactly `count` lines, oldest first, via the existing
+        // blank-push eviction routine — byte-identical to the full-screen
+        // path (NFR1).
+        let bg = self.cursor.bg;
+        for _ in 0..count {
+            self.ring_push_blank(bg);
+        }
+
+        // Restore the tail rows to their original screen positions.
+        for (tail_idx, row) in (tail_start..rows).enumerate() {
+            let (cells, wrapped, overflow_entries) = &tail[tail_idx];
+            let abs = self.viewport_abs(row);
+            let base = abs * cols;
+            for i in 0..cols {
+                self.ring_cells[base + i] = cells[i];
+            }
+            self.ring_wrapped[abs] = *wrapped;
+            let abs32 = abs as u32;
+            overflow_clear_row(&mut self.overflow, abs32);
+            overflow_ridx_clear_row(&mut self.overflow_ridx, abs32);
+            if !overflow_entries.is_empty() {
+                let mut cs = Vec::with_capacity(overflow_entries.len());
+                for (c, s) in overflow_entries {
+                    self.overflow.insert((*c, abs32), s.clone());
+                    cs.push(*c);
+                }
+                self.overflow_ridx.insert(abs32, cs);
+            }
+        }
+
+        // Blank the region's own trailing `count` rows — the bottom-margin
+        // row and, for count > 1, the rows above it the scroll also
+        // vacated — the same way `shift_rows_up` fills a vacated row.
+        let bce = self.bce_cell();
+        let blank_start = bottom + 1 - count;
+        for row in blank_start..=bottom {
+            let abs = self.viewport_abs(row);
+            let base = abs * cols;
+            for i in base..base + cols {
+                self.ring_cells[i] = bce;
+            }
+            self.ring_wrapped[abs] = false;
+            let abs32 = abs as u32;
+            overflow_clear_row(&mut self.overflow, abs32);
+            overflow_ridx_clear_row(&mut self.overflow_ridx, abs32);
+        }
+
+        // Render bookkeeping: only the region's rows changed (top == 0
+        // here); no full-screen scroll-event optimization applies (FR13).
+        for row in 0..=bottom {
+            self.mark_row_dirty(row);
         }
     }
 
