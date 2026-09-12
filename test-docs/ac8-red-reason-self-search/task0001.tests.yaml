@@ -1,0 +1,104 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: true
+    red_reason: >-
+      Before the edit, a scripted parse/assert check loaded
+      test-docs/ac7-red-reason-scope/task0001.tests.yaml and found the AC-8
+      red_reason contained the forbidden self-search phrasing ("fixed-string
+      search", "returns no match", "only one file", "lists only ...
+      test-docs/ac7-red-reason-scope"), so the check for their absence
+      failed. After the edit, the same check on the reloaded string passes:
+      none of those phrasings remain in the AC-8 red_reason.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the target record's AC-8
+      red_reason already named both
+      test-docs/ac2-red-reason-accuracy/task0001.tests.yaml and
+      test-docs/ac7-red-reason-scope/task0001.tests.yaml and already stated
+      the change set contains exactly two paths before this task's edit, and
+      that wording is untouched by the edit, so there was no observable
+      pre-state to fail. Re-verified after the edit: both paths and the
+      two-path statement are still present in the reloaded string.
+  AC-3:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the "no Rust file and no
+      TypeScript file" finding was already present in the AC-8 red_reason
+      before this task's edit and is untouched by the edit, so there was no
+      observable pre-state to fail. Re-verified after the edit: the loaded
+      string still states the change set contains no Rust file and no
+      TypeScript file.
+  AC-4:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: the no-observable-pre-state
+      framing, and AC-8's red_confirmed being the boolean false with tests
+      being the empty list, were already present before this task's edit and
+      are untouched by the edit, so there was no observable pre-state to
+      fail. Re-verified after the edit: the framing is still present, and
+      red_confirmed and tests are unchanged.
+  AC-5:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: before this task's edit
+      the target record already loaded under a plain YAML parser with
+      task_id, baseline_failures, final_failures, an acceptance_tests
+      mapping of exactly eight entries (AC-1..AC-8) and notes, in that raw
+      top-level key order, and the AC-8 red_reason was already introduced by
+      `red_reason: >-` at the same indentation as the file's other folded
+      scalars, already in English prose, and already free of trailing
+      whitespace, so there was no observable pre-state to fail. Re-verified
+      after the edit: all of the above still holds for the rewritten scalar.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Invariant guard, not a red->green criterion: before this task's edit
+      the working tree for the target record was clean (`git status
+      --porcelain` and `git diff --stat` both empty for the file), so
+      containment held vacuously with no observable pre-state to fail. After
+      the edit, `git diff` for the file shows exactly one hunk, confined to
+      the AC-8 entry's red_reason scalar; task_id, baseline_failures,
+      final_failures, the AC-1 through AC-7 entries, the AC-8 entry's tests
+      and red_confirmed values, and the trailing notes block are
+      byte-identical to the base revision (confirmed by diffing only those
+      regions, including the "lists only" occurrences at lines 43 and 47
+      inside the AC-4 red_reason).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No observable pre-state: this task's own commit does not exist before
+      the task runs, so its change set cannot be enumerated beforehand, and
+      the project's own commands cannot regress before any change exists.
+      Verified after committing, against this branch's merge base with the
+      parent branch: `bun run typecheck` is clean and `bun test` reports 345
+      pass / 0 fail (matching the predecessor task's recorded baseline);
+      `cargo check` compiles cleanly; `cargo test --lib -- --test-threads=1`
+      reports 3269 passed / 0 failed / 3 ignored, identical to the run taken
+      immediately before this task's edit. Re-running the change-set
+      enumeration for the target record's edit against the same merge base
+      reproduces the recorded wording: exactly the two named paths, no Rust
+      file, no TypeScript file.
+notes: >-
+  Documentation-record task (task0001.md; IMPLEMENTATION.md decisions
+  D1-D4). Acceptance was verified via a parse/assertion check (not
+  committed; run from the session scratchpad per D2) on the target
+  record's AC-8 red_reason (AC-1 through AC-5), git diff/status
+  inspection of the single changed file (AC-6), and re-execution of the
+  project's build and test commands plus the change-set enumeration
+  (AC-7). This task's own change set, verified after committing against
+  the merge base with the parent branch, contains exactly two paths:
+  test-docs/ac7-red-reason-scope/task0001.tests.yaml (the corrected
+  record) and test-docs/ac8-red-reason-self-search/task0001.tests.yaml
+  (this feature's own generated record) — the same two-path shape as the
+  predecessor task, and neither a Rust file nor a TypeScript file.
