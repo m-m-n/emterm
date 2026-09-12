@@ -171,3 +171,25 @@ records:
     (build.rs がフレッシュな worktree で必要とするビルド前提物の配置であって、ソース変更ではない)。
     同種の事象は task0005 でも scripts/fetch-fonts.sh 実行として報告されており、そちらは deviations
     配列が空だったため記録対象外。codex_consulted: false (a rule application, not a gate).'
+- question_id: verify.manual-only-scenarios
+  packet_id: verify-q0001
+  answered_at: '2026-09-13T07:45:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - pass_with_manual_noted
+  freeform: null
+  normalized_answer: Record verify as pass and carry the unexecuted manual scenario TS-14 to the human evaluator
+  resolution_note: 'gate: verify.manual-only-scenarios (no entry in batch-policies.yaml -> unlisted-gate
+    fallback); options: pass_with_manual_noted / fail_unexecuted_manual / pass_but_block_completion;
+    choice: pass_with_manual_noted; options not chosen: fail_unexecuted_manual (a fail would trigger the
+    auto-rework loop, and implementation agents cannot perform GUI screen observation either, so the loop
+    could never converge), pass_but_block_completion (self-contradictory: a pass that also aborts the run
+    suppresses the very report the human evaluator needs); codex_consulted: true; fallback provider answered:
+    yes (CODEX_FALLBACK: entry 2 litellm/vertex-glm-5.2); opus escalation: not run; consultation turns:
+    1 (mapped on the first turn). Key points of the discussion: all 19 Unit/Integration scenario IDs map
+    to concrete named tests confirmed present in the source and all passed; VERIFICATION.md SC-B itself
+    designates TS-14 and TS-19 as manual, so the unattended run executed everything mechanically executable;
+    TS-19 was in fact fully satisfied during this verify (the approved Windows cross-check exited 0 and
+    a static review found no Unix-only API on the response path), leaving TS-14''s ten on-screen checks
+    as the only unexecuted item. The orchestrator''s own tentative position was the same option.'

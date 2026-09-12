@@ -142,9 +142,28 @@ workflow:
     status: completed
     completed_at_commit: a00fc40757e013a98a01a038f5510e075776d48f
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 703be1a92c3edb4021dd25878eee36fb37058ebc
+    result: pass
     failed_items: []
+    notes: >-
+      Automated verification complete. Build: rust_app / rust_term_core /
+      rust_cli_only cargo check all exit 0 with no new warnings; TypeScript
+      bundle build exit 0. Test: rust_app 3341 passed / 0 failed
+      (--test-threads=1), term_core 854 passed / 0 failed, bun test 349
+      passed / 0 failed. Scenario coverage: TS-1..TS-13, TS-15..TS-18,
+      TS-20, TS-21 each map to named passing tests. TS-19 satisfied in
+      full — the approved Windows cross-check
+      (CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --target
+      x86_64-pc-windows-msvc) exited 0 and no Unix-only API appears on the
+      response path. TS-14 (10 on-screen checks in a real eMterm session,
+      including the Codex TUI input-area background) is the only
+      unexecuted item: it needs a human at the screen and no unattended
+      agent can run it. Recorded as pass per the
+      verify.manual-only-scenarios gate resolution in
+      phase-state/batch-audit.yaml; TS-14 is handed to the human
+      evaluator. No requirement is marked excluded, so no scenario was
+      skipped for that reason.
   - id: retrospect
     status: pending
 
