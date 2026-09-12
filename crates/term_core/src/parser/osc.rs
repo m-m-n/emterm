@@ -1,6 +1,6 @@
 use super::state::State;
 use super::{MAX_OSC_LEN, Parser};
-use crate::parser_types::ParsedAction;
+use crate::parser_types::{OscTerminator, ParsedAction};
 
 impl Parser {
     pub(super) fn osc_string<F>(&mut self, byte: u8, emit: &mut F)
@@ -10,7 +10,7 @@ impl Parser {
         match byte {
             // BEL terminates OSC
             0x07 => {
-                self.dispatch_osc(emit);
+                self.dispatch_osc(emit, OscTerminator::Bel);
                 self.state = State::Ground;
             }
             // ESC might be start of ST (ESC \)
@@ -41,19 +41,22 @@ impl Parser {
         match byte {
             // Backslash completes ST
             b'\\' => {
-                self.dispatch_osc(emit);
+                self.dispatch_osc(emit, OscTerminator::St);
                 self.state = State::Ground;
             }
-            // Any other byte after ESC in OSC
+            // Any other byte after ESC in OSC: not a real terminator (SC-1:
+            // classified deterministically as `Unterminated`, never guessed
+            // as BEL/ST) — the string is cut short and the byte is
+            // reprocessed as a fresh escape sequence.
             _ => {
-                self.dispatch_osc(emit);
+                self.dispatch_osc(emit, OscTerminator::Unterminated);
                 self.state = State::Escape;
                 self.escape(byte, emit);
             }
         }
     }
 
-    pub(super) fn dispatch_osc<F>(&mut self, emit: &mut F)
+    pub(super) fn dispatch_osc<F>(&mut self, emit: &mut F, terminator: OscTerminator)
     where
         F: FnMut(ParsedAction),
     {
@@ -66,6 +69,7 @@ impl Parser {
         emit(ParsedAction::OscDispatch {
             param: self.osc_param,
             data,
+            terminator,
         });
         self.osc_param = 0;
         self.osc_param_done = false;
