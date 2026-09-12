@@ -1648,6 +1648,20 @@ impl App {
         self.needs_full_redraw = true;
     }
 
+    /// Drop the mouse selection and its pending press anchor together
+    /// (feature selection-clear-on-enter-copy, IMPLEMENTATION.md Shared
+    /// Components). Callable whether or not a selection is present —
+    /// unlike [`Self::set_alt_screen`] this touches no other field and
+    /// requests no redraw of its own: the existing dirty-row union of the
+    /// current and previous selection (see [`Self::dirty_rows_this_frame`])
+    /// already repaints the rows the old highlight occupied on the next
+    /// frame. Never writes to the clipboard or PRIMARY. Idempotent: calling
+    /// it when both fields are already `None` changes nothing.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+        self.pending_selection_anchor = None;
+    }
+
     /// Compute the rows that must be repainted on the next frame. Union of:
     /// 1. `term_core::get_dirty_rows()` for cell-level edits
     /// 2. previous + current cursor row, but only when the cursor cell

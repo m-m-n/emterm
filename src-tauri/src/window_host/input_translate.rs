@@ -243,6 +243,17 @@ pub(super) fn shift_enter_rewrite(
     }
 }
 
+/// Pure decision for whether a key event that has just been handled
+/// should clear the mouse selection (feature selection-clear-on-enter-
+/// copy, IMPLEMENTATION.md Shared Components). `forwarded` is whether the
+/// event produced bytes written to the PTY; `is_enter` is whether the
+/// logical key is the named Enter key, captured before any Shift+Enter
+/// rewrite is applied. True only when both are true; reads no state,
+/// mutates nothing, and is safe to call any number of times.
+pub(super) fn should_clear_selection_on_forward(forwarded: bool, is_enter: bool) -> bool {
+    forwarded && is_enter
+}
+
 pub(super) fn winit_key_to_bytes(
     event: &KeyEvent,
     mods: Modifiers,
