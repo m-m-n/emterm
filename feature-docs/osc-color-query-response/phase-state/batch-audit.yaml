@@ -100,3 +100,23 @@ records:
     that output_pipeline.rs / replay.rs / mod.rs needed no functional change), so there is nothing to
     add for it. The containment check in the review / verify phases handles both as ordinary deviations.
     codex_consulted: false (a rule application, not a gate).'
+- question_id: implement.deviation-decline.task0002
+  packet_id: implement-wake-0002
+  answered_at: '2026-09-13T06:02:00+09:00'
+  source: batch-orchestrator-rule
+  answer_mode: rule_application
+  selected_option_ids:
+  - decline
+  freeform: null
+  normalized_answer: task0002 の報告した deviation を declared change set へ自動追加しない
+  resolution_note: 'rule: implement-phase.md Deviation auto-addition rule; task_id: task0002; declined
+    paths: crates/term_core/src/{parser_types.rs, parser/osc.rs, parser/tests.rs, terminal_dispatch.rs,
+    mux_apc_extractor.rs, snapshot.rs, terminal_core.rs}, src-tauri/src/app/tests/font_settings.rs, src-tauri/src/tabs/tests/replay.rs,
+    src-tauri/src/tabs/tests/output_pipeline.rs; missing evidence part: part 2 (the identifier of the
+    acceptance criterion or requirement that would otherwise be dropped) — the entries cite IMPLEMENTATION.md
+    D7 (a cross-task design decision, not an AC-n or a requirement id registered in workflow.yaml) and
+    pre-existing call sites broken by a signature change, but name no AC-n or requirement id. The fourth
+    reported deviation adds no path: it records a behavioral decision (format_osc_color_response returns
+    nothing for OscTerminator::Unterminated, a form REQUIREMENTS.md FR5 does not define), flagged here
+    for the review / verify phases rather than auto-added. The containment check handles all of these
+    as ordinary deviations. codex_consulted: false (a rule application, not a gate).'

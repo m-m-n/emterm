@@ -177,7 +177,7 @@ tasks:
     domains: [input-handling, api-contract]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR10, NFR1, NFR4]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/osc-color-query-response/task0002
   task0003:
