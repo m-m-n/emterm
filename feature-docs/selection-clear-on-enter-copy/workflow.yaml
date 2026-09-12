@@ -1,0 +1,197 @@
+schema_version: 1
+feature: selection-clear-on-enter-copy
+created: 2026-09-12
+base_branch: main
+goal: |
+  # Enter 送出時と Ctrl+Shift+C でのコピー時にマウス選択をクリアする
+
+  種別: 改善
+  Notion: https://www.notion.so/3d93509ec8ee81eb8398d267e03883df
+
+  ## やりたいこと (必須)
+  マウスドラッグで作った選択範囲を、Enter の PTY 送出時と Ctrl+Shift+C でのコピー時にクリアする。
+
+  ## 背景・なぜ (必須)
+  Claude Code のログ行を選択したままチャットを進めると、ログが更新されても選択ハイライトが残り、選択位置と内容がズレたままになる。
+  原因は調査済み。Claude Code のような TUI は「行の書き換え」で画面を更新するため、ターミナル的にはスクロールしていない。eMterm の選択は絶対行モデル（`src-tauri/src/selection.rs`）なので正しく同じ行を指し続けており、行の中身だけが書き換わるのでハイライトが取り残される。追従モデルのバグではない。
+  2026-07-03 の調査（`tmp/discussion-selection-behavior-fixes.md`）では「選択範囲内の行の書き換え検知で解除」を将来案として残したまま優先度を下げてクローズした。今回はそれより単純な、キー入力起点のトリガーで解除する。
+  現状の選択解除条件（調査結果）は次の 6 つで、キー入力は含まれていない。
+  1. 次の左ボタン押下 — `src-tauri/src/window_host/pointer_routing.rs:319`
+  2. アクティブタブの切り替え — `src-tauri/src/app/tab_lifecycle.rs:225`
+  3. 列数が変わるリサイズ — `src-tauri/src/app/tab_lifecycle.rs:306`
+  4. alt-screen の出入り — `src-tauri/src/app/mod.rs:1646`
+  5. フレームリセット（RIS / スクロールバッククリア / mux スナップショットリプレイ / detach / PaneCreated） — `src-tauri/src/app/mod.rs:1358`
+  6. スクロールバック追い出しで選択の両端が流れ去ったとき — `src-tauri/src/selection.rs:182`
+
+  ## 受け入れ条件 / 完了の定義 (必須)
+  - [ ] Enter を PTY に送ったときに選択がクリアされる
+  - [ ] Shift+Enter でもクリアされる（入力欄が 1 行増えるとログ欄が上にずれ、選択位置が無意味になるため）
+  - [ ] Ctrl+Shift+C（`keybinds.copy`）でコピーしたときにクリアされる
+  - [ ] Ctrl+Shift+C で選択が無いときは、既存どおりコードを消費するだけで何も起きない
+  - [ ] IME の変換確定 Enter では選択がクリアされない
+  - [ ] 修飾キー単独の押下では選択がクリアされない
+  - [ ] クリア時に `selection` と `pending_selection_anchor` の両方が落ちる
+  - [ ] クリア後にハイライトが実際に消える（再描画が走る）
+  - [ ] 選択を離した時点で設定済みの PRIMARY は影響を受けず、中クリック貼り付けが従来どおり動く
+  - [ ] 上記を検証するユニットテストがある
+
+  ## スコープ外 (任意)
+  入力欄の折り返しによる行増加でのクリアは行わない。そこまで拾うと「文字入力全般でクリア」に戻り、選択して読みながら打つ用途が壊れるため。Enter で実用上足りるかを実機で見てから再検討する。
+  「選択範囲内の行の書き換えを検知して解除する」方式も今回は採らない。
+
+  ## 制約・前提 (任意)
+  実装位置は次の 2 箇所。
+  Enter 側は `src-tauri/src/window_host/event_loop.rs:497` の `forwarded` 分岐。この分岐は「実際に PTY へバイトを送ったキー」だけが通り、同じ場所で FR2 の `scroll_to_live()`（キー入力でライブ末尾へスナップ）が既に動いている。除外リストが不要になるのはこの構造のため。
+  - Ctrl+Shift+C は設定キーバインドとして早期 return するのでここに到達しない
+  - IME の変換確定 Enter は IME consume で早期 return するのでここに到達しない
+  - 修飾キー単独は `winit_key_to_bytes` が `None` を返し `forwarded == false` になる
+  コピー側は `src-tauri/src/window_host/key_routing.rs:101` のコピー分岐、`set_clipboard` の直後。この経路は選択が無くてもコードを消費する既存仕様なので、クリアは `if let Some(sel)` の内側（実際にコピーしたときだけ）に置く。
+  既存のクリア箇所はすべて `selection` と `pending_selection_anchor` を対で落とし、`needs_full_redraw` を立てるか `request_redraw()` を呼んでいる。それに合わせる。
+  議論レポートは `tmp/discussion-selection-clear-conditions.md`、過去の調査は `tmp/discussion-selection-behavior-fixes.md`。
+parent_branch: em-workflow/selection-clear-on-enter-copy/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: in_progress
+    completed_at_commit: null
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      新規 UI 面・レイアウト・デザイントークンの追加や変更が無く、変更はキー入力処理の
+      分岐 2 箇所とアプリ内選択状態のみ。既存の選択ハイライトが消えるという挙動変更だけで、
+      doc/UI-DESIGN-GUIDELINES.yaml のトークンには一切触れない。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: null
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Clear the selection when Enter is forwarded"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS5, TS9]
+  FR2:
+    title: "Clear on Shift+Enter"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS2, TS9]
+  FR3:
+    title: "Clear on copy"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5, TS9]
+  FR4:
+    title: "Preserve current behaviour of copy with no selection"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS4]
+  FR5:
+    title: "Clear as a pair"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3, TS5]
+  FR6:
+    title: "Redraw"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS7]
+  NFR1:
+    title: "Six existing clear conditions unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: "No clear on IME commit Enter or modifier-alone press"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS6]
+  NFR3:
+    title: "PRIMARY and middle-click paste unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS8]
+  NFR4:
+    title: "CLI-only build unaffected"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: "No regression of render-skip optimizations"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: "Clear decision factored out as a pure function"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
