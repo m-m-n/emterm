@@ -103,7 +103,111 @@ workflow:
     status: completed
     completed_at_commit: 90f48fb2bb56f318a6e05e9adcd328eee4c3c834
   - id: verify
-    status: in_progress
+    status: completed
+    completed_at_commit: dee85dbda1f8d179422ff07e6e9b3e1d3c894e0f
+    result: pass
+    failed_items: []
+    build_verification:
+      - command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+        result: pass
+        note: >-
+          First attempt aborted in build.rs with build_rs.font_missing (bundled
+          fonts absent in a fresh worktree). Resolved by running the approved
+          composite string `bash scripts/fetch-fonts.sh && bun install && bun run
+          build:viewer && bun run build:settings && <the same cargo check>`, which
+          finished clean. Environment prerequisite, not a code defect.
+      - command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+        result: pass
+      - command: "bun run typecheck"
+        result: pass
+    test_verification:
+      - command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+        result: pass
+        note: "3269 passed, 0 failed, 3 ignored"
+      - command: "bun test"
+        result: pass
+        note: "345 pass, 0 fail, 1022 expect() calls - matches the baseline recorded in the task record"
+    code_quality:
+      - command: "bunx biome format ."
+        result: pre_existing_condition
+        note: >-
+          Exits non-zero with exactly one error, on
+          src-tauri/web-shared/settings/types.ts. That file is byte-identical to
+          base branch `main` (verified with `diff <(git show
+          main:src-tauri/web-shared/settings/types.ts)
+          src-tauri/web-shared/settings/types.ts`, empty output), so the drift is
+          pre-existing on main and lies entirely outside this feature's change
+          set, which contains no TypeScript path. Recorded as a non-blocking
+          pre-existing condition rather than a failed_item; see
+          phase-state/batch-audit.yaml record
+          verify.preexisting-format-drift-disposition (Codex consulted,
+          gpt-5.6-sol, option A).
+    scenarios:
+      TS-1: pass
+      TS-2: pass
+      TS-3: pass
+      TS-4: pass
+      TS-5: pass
+      TS-6: pass
+    scenario_evidence: >-
+      TS-1: PyYAML load of the file at `main` and at HEAD. Before, the AC-7
+      red_reason asserted "`git status --porcelain` for the whole change set
+      lists only test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml";
+      after, it names both that path and
+      test-docs/ac2-red-reason-accuracy/task0001.tests.yaml, identifies the
+      second as this task's own workflow-generated per-task test record covered
+      by the SPEC's Declared Change Set entry `test-docs/{feature}/**`, and
+      carries no single-member assertion about the whole change set.
+      TS-2: the parsed scalar still carries the invariant-guard classification,
+      the empty-pre-state statement, the zero-contiguous-occurrence search
+      result and the no-Rust / no-TypeScript finding; AC-7 `red_confirmed`
+      parses as boolean false before and after; AC-7 `tests` is [] before and
+      after.
+      TS-3: raw introducer is still `red_reason: >-` at four-space indentation
+      on the same relative line; top-level key order unchanged
+      (task_id, baseline_failures, final_failures, acceptance_tests, notes);
+      acceptance_tests has exactly seven entries AC-1..AC-7; the rewritten
+      scalar is ASCII throughout.
+      TS-4: `git diff main...HEAD` for the file shows one hunk (@@ -88,16 +88,20
+      @@), wholly inside the AC-7 red_reason scalar; task_id,
+      baseline_failures, final_failures, AC-1..AC-6 and the trailing notes block
+      compare equal to the base revision.
+      TS-5: this feature's task commit 672a0341 touches exactly
+      test-docs/ac2-red-reason-accuracy/task0001.tests.yaml and
+      test-docs/ac7-red-reason-scope/task0001.tests.yaml - no Rust path, no
+      TypeScript path. Every "only one file" / "lists only" occurrence in this
+      feature's own artifacts is a prohibitive or quoted-needle mention, never
+      an assertion scoping this change set to one file.
+      TS-6: the path list named in the rewritten scalar equals the path list
+      observed from the described task's commit - `git show --stat 7aea1260`
+      lists exactly test-docs/ac2-red-reason-accuracy/task0001.tests.yaml and
+      test-docs/ac7-red-confirmed-unobserved/task0001.tests.yaml, matching
+      assumption A-3 with no divergence to report. The scoped fixed-string
+      search claim was re-run and returns zero contiguous occurrences in that
+      commit's diff, in the record file and in the commit message.
+    manual_judgement:
+      - item: "Reads as a text correction, not a re-judgement (BO-2, BO-3)"
+        result: pass
+        note: >-
+          The verdict, its invariant-guard classification and `red_confirmed:
+          false` are unchanged; only the change-set description was restated.
+      - item: "Tone, terminology and wrap style match the file's other entries (NFR2, NFR3)"
+        result: pass
+        note: "Folded `>-` preserved, same wrap width and indentation, English throughout."
+      - item: "Implementer observed the two expected paths or reported a divergence (A-3, NFR4)"
+        result: pass
+        note: >-
+          The task record's notes state the described commit was read via `git
+          show --stat` before any edit and matched A-3. Independently re-checked
+          during verify against 7aea1260 - the same two paths.
+      - item: "Whether the implementer raised the notes block's single-file wording as a plan deviation (A-5)"
+        result: recorded
+        note: >-
+          Not raised as a deviation. The `notes` block is byte-identical to the
+          base revision either way, and its phrase "git diff/status inspection
+          of the single changed file" describes the file the described task
+          edited, not the whole change set - the reading A-5 already records.
+    excluded_requirements: []
   - id: retrospect
     status: pending
 

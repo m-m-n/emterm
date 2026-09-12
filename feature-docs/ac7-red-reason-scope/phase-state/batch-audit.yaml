@@ -109,3 +109,41 @@ records:
       The finding is persisted in full in reviews/round1.yaml and travels with
       the PR, so the human evaluator sees it. fallback_provider: not needed.
       opus_escalation: not run.
+  - question_id: verify.preexisting-format-drift-disposition
+    packet_id: null
+    answered_at: "2026-09-12T20:22:40+09:00"
+    source: codex-consultation
+    answer_mode: single_select
+    selected_option_ids: ["A"]
+    freeform: >-
+      Option A: record the biome format error as a non-blocking pre-existing
+      condition in the verify result and set verify.status = completed.
+    normalized_answer: >-
+      Non-blocking pre-existing condition; verify completes; no failed_item.
+    resolution_note: >-
+      gate: user-instructed consultation. VERIFICATION.md's Code Quality
+      section expects `bunx biome format .` to report no changes, but the
+      command exits non-zero with exactly one error on
+      src-tauri/web-shared/settings/types.ts. That file is byte-identical to
+      base branch `main`
+      (`diff <(git show main:src-tauri/web-shared/settings/types.ts)
+      src-tauri/web-shared/settings/types.ts` is empty), so the drift is
+      pre-existing and lies entirely outside this feature's change set, which
+      contains only test-docs/ac2-red-reason-accuracy/task0001.tests.yaml and
+      test-docs/ac7-red-reason-scope/task0001.tests.yaml. Options put to
+      Codex: (A) record it as a non-blocking pre-existing condition and
+      complete verify; (B) record it as a verify failed_item, which in batch
+      mode would trigger an automatic rework round that must edit a
+      TypeScript file outside the Declared Change Set — something SPEC FR6
+      forbids (the edit is confined to one folded scalar).
+      codex_consulted: true, answered (model gpt-5.6-sol). Codex chose A on
+      four grounds: the verify gate exists to detect regressions and the
+      byte-identical diff against main proves this is not one; option B would
+      force scope creep into a file the SPEC forbids touching, with no safety
+      benefit; the failure must still be visible in the record rather than
+      silently dropped, so the command, its exit status, the target file and
+      the main-identical evidence are written into the verify result; and a
+      careful reviewer expects change-set verification and whole-repo
+      formatting to stay separated rather than conflated into one status.
+      Adopted A. Option B was not chosen for those reasons.
+      fallback_provider: not needed. opus_escalation: not run.
