@@ -160,9 +160,9 @@ tasks:
     domains: [input-handling, api-contract]
     complexity: high
     requirements: [FR5, NFR1, NFR4, NFR5, NFR6]
-    status: pending
+    status: merged
     notes: null
-    branch: null
+    branch: em-workflow/osc-color-query-response/task0001
   task0002:
     title: "Theme: answer OSC 4 / 10 / 11 / 12 color queries"
     plan: tasks/task0002.md
@@ -177,9 +177,9 @@ tasks:
     domains: [input-handling, api-contract]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR10, NFR1, NFR4]
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/osc-color-query-response/task0002
   task0003:
     title: "Theme: scheme mirrors and correct OSC 110 / 111 / 104 resets"
     plan: tasks/task0003.md
@@ -189,9 +189,9 @@ tasks:
     domains: [input-handling, ui]
     complexity: medium
     requirements: [FR7, FR8, FR9]
-    status: pending
+    status: merged
     notes: null
-    branch: null
+    branch: em-workflow/osc-color-query-response/task0003
   task0004:
     title: "Response delivery: drain, coalescing gate, replay isolation"
     plan: tasks/task0004.md
@@ -204,9 +204,9 @@ tasks:
     domains: [input-handling, concurrency, external-io]
     complexity: high
     requirements: [FR6, NFR2, NFR3, NFR6]
-    status: pending
+    status: merged
     notes: null
-    branch: null
+    branch: em-workflow/osc-color-query-response/task0004
 
 review:
   status: pending

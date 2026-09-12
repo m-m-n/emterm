@@ -10,7 +10,7 @@ impl Parser {
         match byte {
             // BEL terminates OSC
             0x07 => {
-                self.dispatch_osc(OscTerminator::Bel, emit);
+                self.dispatch_osc(emit, OscTerminator::Bel);
                 self.state = State::Ground;
             }
             // ESC might be start of ST (ESC \)
@@ -41,21 +41,22 @@ impl Parser {
         match byte {
             // Backslash completes ST
             b'\\' => {
-                self.dispatch_osc(OscTerminator::St, emit);
+                self.dispatch_osc(emit, OscTerminator::St);
                 self.state = State::Ground;
             }
-            // Any other byte after ESC in OSC: an abnormal termination
-            // (SC-1) — classified as `St` at this definition site (see
-            // `OscTerminator::St`'s doc for the rationale).
+            // Any other byte after ESC in OSC: not a real terminator (SC-1:
+            // classified deterministically as `Unterminated`, never guessed
+            // as BEL/ST) — the string is cut short and the byte is
+            // reprocessed as a fresh escape sequence.
             _ => {
-                self.dispatch_osc(OscTerminator::St, emit);
+                self.dispatch_osc(emit, OscTerminator::Unterminated);
                 self.state = State::Escape;
                 self.escape(byte, emit);
             }
         }
     }
 
-    pub(super) fn dispatch_osc<F>(&mut self, terminator: OscTerminator, emit: &mut F)
+    pub(super) fn dispatch_osc<F>(&mut self, emit: &mut F, terminator: OscTerminator)
     where
         F: FnMut(ParsedAction),
     {

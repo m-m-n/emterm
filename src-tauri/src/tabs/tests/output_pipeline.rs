@@ -1198,6 +1198,230 @@ fn payload_has_device_query_detects_response_producing_finals() {
     );
 }
 
+/// task0004 AC-3 / SPEC A7: `payload_has_device_query` did not recognize any
+/// OSC sequence at all before this task (it only scanned for `ESC [`) — this
+/// pins the extension that makes it recognize OSC 4 / 10 / 11 / 12 color
+/// queries (a payload element equal to the query token `?`, per FR1/FR2),
+/// in both terminator forms (BEL and ST), as chained multi-element payloads
+/// (FR1's `?;?;?`, FR2's `1;?;200;rgb:00/aa/00;5;?`), and rejects OSC 4 / 10
+/// / 11 / 12 SET payloads (no `?`) and the color-reset codes (104/110/111/
+/// 112, which never carry a query token) alongside unrelated OSC codes whose
+/// data happens to contain a literal `?` (OSC 8 hyperlink URIs).
+#[test]
+fn payload_has_device_query_detects_osc_color_query_tokens() {
+    assert!(
+        payload_has_device_query(b"\x1b]10;?\x07"),
+        "OSC 10 (fg) query, BEL-terminated"
+    );
+    assert!(
+        payload_has_device_query(b"\x1b]11;?\x1b\\"),
+        "OSC 11 (bg) query, ST-terminated"
+    );
+    assert!(
+        payload_has_device_query(b"\x1b]12;?\x07"),
+        "OSC 12 (cursor) query, BEL-terminated"
+    );
+    assert!(
+        payload_has_device_query(b"\x1b]4;5;?\x07"),
+        "OSC 4 palette query for a single index"
+    );
+    assert!(
+        payload_has_device_query(b"\x1b]10;?;?;?\x07"),
+        "FR1 chained OSC 10 query (10 -> 11 -> 12)"
+    );
+    assert!(
+        payload_has_device_query(b"\x1b]4;1;?;200;rgb:00/aa/00;5;?\x07"),
+        "FR2 chained OSC 4 payload: a query pair mixed with a set pair"
+    );
+    assert!(
+        payload_has_device_query(b"hello\x1b]11;?\x07world"),
+        "OSC color query embedded in surrounding text"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]10;rgb:ff/00/00\x07"),
+        "OSC 10 SET (no query token) is not a query"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]4;5;rgb:11/22/33\x07"),
+        "OSC 4 SET (no query token) is not a query"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]104\x07"),
+        "OSC 104 (palette reset) never carries a query token"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]110\x07"),
+        "OSC 110 (fg reset) never carries a query token"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]111\x07"),
+        "OSC 111 (bg reset) never carries a query token"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]112\x07"),
+        "OSC 112 (cursor reset) never carries a query token"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]8;;http://example.com?foo=bar\x07"),
+        "an unrelated OSC code's data containing a literal '?' is not a color query"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]0;my title\x07"),
+        "OSC 0 (title) is not a color query code at all"
+    );
+    assert!(
+        !payload_has_device_query(b"\x1b]10;?"),
+        "an OSC color query with no terminator is incomplete, not a complete query"
+    );
+    assert!(
+        !payload_has_device_query(b"plain text\r\n"),
+        "no OSC or CSI at all"
+    );
+}
+
+/// task0004 AC-3 edge case: an OSC color query split across two frame
+/// boundaries must not be lost. Classification is necessarily "not a query"
+/// for EACH half in isolation (the first half's OSC has no terminator yet;
+/// the second half has no `ESC ]` prefix at all), exactly mirroring the
+/// existing incomplete-CSI behavior — but because both frames stay
+/// batch-eligible, `process_combined`'s coalesce accumulator concatenates
+/// them and parses the combined bytes in one `process_pty_data_fully` call,
+/// so the query is still answered once real bytes flow through the query
+/// (task0004 D6 relies on this: the ordered response store accumulates
+/// within one parse pass regardless of how the bytes arrived in chunks).
+/// This test documents the classifier-level half of that behavior: neither
+/// half, scanned alone, is detected as a complete query.
+#[test]
+fn payload_has_device_query_osc_split_across_frames_is_incomplete_in_each_half() {
+    let query = b"\x1b]10;?\x07";
+    let (first, second) = query.split_at(4); // splits mid `ESC ] 1 0` / `; ? BEL`
+    assert!(
+        !payload_has_device_query(first),
+        "the first half has no terminator yet: incomplete, not a complete query"
+    );
+    assert!(
+        !payload_has_device_query(second),
+        "the second half has no `ESC ]` prefix of its own: not detected in isolation"
+    );
+    // Recombined, the whole sequence is a complete query — confirming the
+    // split lost no information, only classifier-time detectability.
+    assert!(payload_has_device_query(query));
+}
+
+/// task0004 AC-3 (NFR2/SC-7): mirrors `c_device_query_frame_breaks_coalesce_run`
+/// for an OSC color query instead of a CSI DSR query — an OSC 4/10/11/12
+/// query-bearing `PtyOutput` frame must ALSO break the coalesce run and be
+/// parsed on its own, exactly like the pre-existing CSI case.
+#[test]
+fn osc_color_query_frame_breaks_coalesce_run() {
+    let pane = 10;
+    let mut split = mux_tab_active_pane(pane);
+    let mut split_buf = Vec::new();
+    split_buf.extend_from_slice(&pty_output_apc(pane, b"aaa\r\n"));
+    split_buf.extend_from_slice(&pty_output_apc(pane, b"\x1b]10;?\x07"));
+    split_buf.extend_from_slice(&pty_output_apc(pane, b"ccc\r\n"));
+    let before = split.test_coalesce_parse_passes();
+    split.test_process_combined(split_buf);
+    assert_eq!(
+        split.test_coalesce_parse_passes() - before,
+        2,
+        "an OSC color-query frame breaks the run: leading-run flush + loop-end flush"
+    );
+    assert_eq!(split.test_row_text(0), "aaa");
+    assert_eq!(split.test_row_text(1), "ccc");
+}
+
+/// task0004 AC-1/AC-2: an OSC color-query frame (now correctly isolated by
+/// the AC-3 classifier extension) sits alongside an ordinary CSI device
+/// query (CPR) in the same combined buffer. This proves the classifier
+/// change does not disturb the existing device-response drain: the CPR
+/// reply still reaches the outbound side exactly once, through the same
+/// `take_response`/`write_device_response` route the pre-existing suite
+/// (`device_response_cases`) already exercises for every other query type.
+/// The OSC query itself produces no reply — `term_core` does not yet answer
+/// OSC 4/10/11/12 (that responder is task0002's, out of this task's scope,
+/// SPEC out-of-scope: "which colors a query answers with") — but its
+/// presence must not disturb the CPR delivery this task owns proving.
+#[test]
+fn plain_tab_osc_color_query_alongside_csi_query_delivers_csi_response_once() {
+    let mut tab = test_tab();
+    tab.core.lock().set_cursor(0, 0);
+    let combined: Vec<u8> = [&b"\x1b]10;?\x07"[..], &b"\x1b[6n"[..]].concat();
+    tab.process_combined(combined);
+    let writes = tab.test_outbound_writes();
+    let matches = writes
+        .iter()
+        .filter(|w| w.as_slice() == b"\x1b[1;1R")
+        .count();
+    assert_eq!(
+        matches, 1,
+        "the CPR reply must still reach the outbound side exactly once \
+         alongside an (as yet unanswered) OSC color query, got {matches} \
+         within {writes:?}"
+    );
+}
+
+/// task0004 AC-5 / D9 ("exactly one core answers a query for a given
+/// pane"): within a single `Tab`'s mux window group, only the ACTIVE pane's
+/// `PtyOutput` ever reaches `self.core` — `handle_pty_output`'s pane filter
+/// drops a background pane's bytes before they reach the parser at all (see
+/// `src-tauri/src/tabs/mux_link.rs`). Since `term_core`'s OSC/CSI dispatch
+/// is the only place that can answer a device query — the mux daemon
+/// (`src-tauri/src/mux/daemon`, `session`) and the `emterm mux` bridge
+/// forward PTY bytes as an opaque byte stream and never construct a
+/// `term_core::TerminalCore`, confirmed by inspection for this task — and
+/// the daemon streams live output only to a pane's single owning
+/// connection (evicting a prior owner on `Attach`, see `send_attach`'s
+/// doc), at most one attached `Tab` ever has a given pane as its live
+/// dispatch target. This test pins the in-scope half of that invariant: a
+/// query addressed to a pane this `Tab` does not currently have active
+/// produces no reply from it, while the identical query addressed to the
+/// pane it DOES have active is still answered exactly once through the
+/// existing device-response route — so a second core answering the same
+/// query (this pane filter regressing to "always accept") is detectable:
+/// the background-pane assertion below would fail.
+#[test]
+fn inactive_pane_query_produces_no_response_while_active_pane_query_still_answered() {
+    let active_pane = 10;
+    let background_pane = 20;
+    let mut tab = test_tab();
+    tab.apply_mux_message(welcome_msg(&[(1, "a", active_pane), (2, "b", background_pane)], 0));
+    tab.core.lock().set_cursor(0, 0);
+
+    // A CPR query addressed to the BACKGROUND pane (not currently active
+    // in this Tab's window group) must produce no reply from this Tab. The
+    // Welcome handshake above already wrote Resize control frames for both
+    // seeded panes into the same outbound log, so assert on the ABSENCE of
+    // the CPR reply specifically rather than log emptiness.
+    tab.process_combined(pty_output_apc(background_pane, b"\x1b[6n"));
+    tab.process_combined(Vec::new());
+    let background_matches = tab
+        .test_outbound_writes()
+        .iter()
+        .filter(|w| w.as_slice() == b"\x1b[1;1R")
+        .count();
+    assert_eq!(
+        background_matches, 0,
+        "a query addressed to a pane this Tab does not have active must \
+         not be answered by this Tab's core"
+    );
+
+    // The SAME query, addressed to the ACTIVE pane, is still answered
+    // exactly once through the existing device-response route.
+    tab.process_combined(pty_output_apc(active_pane, b"\x1b[6n"));
+    tab.process_combined(Vec::new());
+    let writes = tab.test_outbound_writes();
+    let matches = writes
+        .iter()
+        .filter(|w| w.as_slice() == b"\x1b[1;1R")
+        .count();
+    assert_eq!(
+        matches, 1,
+        "the active pane's query must still be answered exactly once, got \
+         {matches} within {writes:?}"
+    );
+}
+
 /// Device-response parity (TS): a `PtyOutput` frame carrying a device query
 /// (`\x1b[6n` CPR) must NOT be coalesced — it is parsed on its own via the
 /// per-frame path so its reply is captured before a later query overwrites

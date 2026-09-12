@@ -121,9 +121,14 @@ impl MuxApcExtractor {
         self.parser
             .parse_with_offsets(input, |action, end| match action {
                 ParsedAction::ApcDispatch(payload) => out.push((payload, end)),
-                ParsedAction::OscDispatch { param, data, .. }
-                    if param == osc_param && data.starts_with(prefix) =>
-                {
+                // The SC-1 terminator kind is irrelevant to transport framing
+                // here (the mux protocol always emits ST-terminated frames);
+                // this extractor discards it.
+                ParsedAction::OscDispatch {
+                    param,
+                    data,
+                    terminator: _,
+                } if param == osc_param && data.starts_with(prefix) => {
                     out.push((data.into_bytes(), end));
                 }
                 _ => {}

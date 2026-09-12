@@ -333,7 +333,10 @@ impl TerminalCore {
             parser: crate::parser::Parser::new(),
             mode_actions: Vec::new(),
             callbacks: None,
-            color_responder: None,
+            // SC-2 (osc-color-query-response task0001): a snapshot-rebuilt
+            // core starts unregistered, matching `callbacks: None` above —
+            // the host re-registers on the rebuilt core if it needs to.
+            osc_responder: None,
             hyperlink_table: snapshot.hyperlink_table,
             hyperlink_next_id: snapshot.hyperlink_next_id,
             active_hyperlink_id: snapshot.active_hyperlink_id,
@@ -477,7 +480,10 @@ impl TerminalCore {
             parser: crate::parser::Parser::new(),
             mode_actions: Vec::new(),
             callbacks: None,
-            color_responder: None,
+            // SC-2 (osc-color-query-response task0001): a snapshot-rebuilt
+            // core starts unregistered, matching `callbacks: None` above —
+            // the host re-registers on the rebuilt core if it needs to.
+            osc_responder: None,
             hyperlink_table: snapshot.hyperlink_table,
             hyperlink_next_id: snapshot.hyperlink_next_id,
             active_hyperlink_id: snapshot.active_hyperlink_id,
