@@ -1,11 +1,11 @@
 schema_version: 1
 feature: osc-color-query-response
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
-base_revision: bf71e948c708f5371d6bdfce1667e50f01b11db6
+base_revision: 16dc76d15423d94baab76a37b0ec6d9d3ba9bf8e
 last_input_digest: sha256:7c62326b09a87b05cf816fa9a93a22645e1fb9043b18caf769a84aaae3ed68fe
-active_request_id: 4bb239cb-5ad7-4d20-8a95-3ed89ee6ed6e
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
@@ -34,7 +34,7 @@ artifacts:
   produced_by: 4bb239cb-5ad7-4d20-8a95-3ed89ee6ed6e
 patches:
 - patch_id: osc-color-query-response-p0001
-  status: validated
+  status: applied
   base_input_digest: sha256:7c62326b09a87b05cf816fa9a93a22645e1fb9043b18caf769a84aaae3ed68fe
   base_workflow_blob: 2d417dcb190b1d6c9242033d0d14c400c9519d55
 progress_fingerprint: sha256:7e91ead17a1a3aa0141f82894400d8abae4311c4fca471dd2d3267b1e42860f7

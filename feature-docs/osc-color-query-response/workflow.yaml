@@ -132,7 +132,8 @@ workflow:
       create-spec.design-step ゲート (option: decide_autonomously) で確定。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 16dc76d15423d94baab76a37b0ec6d9d3ba9bf8e
   - id: implement
     status: pending
     base_commit: null
@@ -145,7 +146,67 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "term_core: terminator carriage and the color-response seam"
+    plan: tasks/task0001.md
+    files:
+      - crates/term_core/src/osc_handler.rs
+      - crates/term_core/src/color_spec.rs
+      - crates/term_core/src/lib.rs
+      - crates/term_core/src/parser.rs
+      - crates/term_core/src/terminal.rs
+    skills: [backend-impl]
+    domains: [input-handling, api-contract]
+    complexity: high
+    requirements: [FR5, NFR1, NFR4, NFR5, NFR6]
+    status: pending
+    notes: null
+    branch: null
+  task0002:
+    title: "Theme: answer OSC 4 / 10 / 11 / 12 color queries"
+    plan: tasks/task0002.md
+    files:
+      - src-tauri/src/render/theme.rs
+      - src-tauri/src/tabs/output_pipeline.rs
+      - src-tauri/src/tabs/mod.rs
+      - src-tauri/src/callbacks.rs
+      - crates/term_core/src/osc_handler.rs
+      - crates/term_core/src/lib.rs
+    skills: [backend-impl]
+    domains: [input-handling, api-contract]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR10, NFR1, NFR4]
+    status: pending
+    notes: null
+    branch: null
+  task0003:
+    title: "Theme: scheme mirrors and correct OSC 110 / 111 / 104 resets"
+    plan: tasks/task0003.md
+    files:
+      - src-tauri/src/render/theme.rs
+    skills: [backend-impl]
+    domains: [input-handling, ui]
+    complexity: medium
+    requirements: [FR7, FR8, FR9]
+    status: pending
+    notes: null
+    branch: null
+  task0004:
+    title: "Response delivery: drain, coalescing gate, replay isolation"
+    plan: tasks/task0004.md
+    files:
+      - src-tauri/src/tabs/input.rs
+      - src-tauri/src/tabs/output_pipeline.rs
+      - src-tauri/src/tabs/replay.rs
+      - src-tauri/src/tabs/mod.rs
+    skills: [backend-impl]
+    domains: [input-handling, concurrency, external-io]
+    complexity: high
+    requirements: [FR6, NFR2, NFR3, NFR6]
+    status: pending
+    notes: null
+    branch: null
 
 review:
   status: pending
@@ -161,113 +222,113 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-2, TS-3, TS-14]
   FR2:
     title: "OSC 4 palette query response"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-4, TS-14]
   FR3:
     title: "Queried palette value resolution"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-4]
   FR4:
     title: "Mixed set-and-query payloads"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-5]
   FR5:
     title: "Response string terminator"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002]
+    tests: [TS-15]
   FR6:
     title: "Single PTY delivery route for responses"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0004]
+    tests: [TS-11]
   FR7:
     title: "Value reported by a query issued after a reset"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-6, TS-7, TS-8]
   FR8:
     title: "OSC 110 / 111 reset to the active scheme's foreground / background"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-6, TS-7, TS-10, TS-14]
   FR9:
     title: "OSC 104 restores palette16 from the active scheme"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0003]
+    tests: [TS-8, TS-9, TS-10, TS-14]
   FR10:
     title: "Invalid, unsupported and non-query input is inert"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0002]
+    tests: [TS-9, TS-16]
   NFR1:
     title: "Reuse the existing response formatter"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002]
+    tests: [TS-1]
   NFR2:
     title: "Coalescing must not lose or overwrite a response"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0004]
+    tests: [TS-13]
   NFR3:
     title: "Replay isolation is preserved"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0004]
+    tests: [TS-12]
   NFR4:
     title: "Layering: term_core stays independent of the GUI theme"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0002]
+    tests: [TS-17]
   NFR5:
     title: "CLI-only build unaffected"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-18]
   NFR6:
     title: "Cross-platform parity"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001, task0004]
+    tests: [TS-19]
 
 batch:
   review_rework_count: 0
