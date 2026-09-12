@@ -11,7 +11,7 @@ fn ris_bytes_restore_theme_cursor_color_to_scheme() {
     let tab = test_tab();
     {
         let mut theme = tab.theme.lock();
-        assert!(theme.apply_osc(12, "rgb:aa/bb/cc"));
+        assert!(theme.apply_osc(12, "rgb:aa/bb/cc", term_core::OscTerminator::Bel).changed);
         assert!(theme.cursor_fg_override_active);
     }
 
