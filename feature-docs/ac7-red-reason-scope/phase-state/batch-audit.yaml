@@ -32,3 +32,39 @@ records:
       change set against git, not against the record's prose, which answers the
       fallback's main objection to A (prose parsing) while staying inside the
       SPEC and the declared change set. opus_escalation: not run.
+  - question_id: implement.orphan-retry-shape
+    packet_id: null
+    answered_at: "2026-09-12T20:03:30+09:00"
+    source: codex-consultation
+    answer_mode: single_select
+    selected_option_ids: ["B"]
+    freeform: >-
+      Option B (clean re-attempt): fast-forward the stale task branch to the
+      current integration tip and recreate its worktree there, rather than
+      re-launching on the orphaned worktree as-is.
+    normalized_answer: >-
+      Clean re-attempt from the current integration tip.
+    resolution_note: >-
+      gate: user-instructed consultation. The previous launch of task0001 was
+      orphaned (its launching session 01a08690-823a-750e-a15a-bd0abce5b0d3 died
+      before the implementer reported); orphan recovery appended a failed event
+      and the batch auto-retry (implement.failed-task, 1 of 1) had to choose
+      between (A) reusing the orphaned worktree as-is at branch point f52c13ec,
+      two commits behind integration, and (B) a clean re-attempt from the
+      current tip. codex_consulted: true, answered (codex-cli 0.154.0,
+      read-only sandbox). Codex chose B, reasoning that the task branch carried
+      zero commits beyond its branch point so nothing was lost; that B starts
+      from the integrated state; that AC-8's change-set enumeration is correct
+      under either option only if it is anchored on the merge base rather than
+      a stale branch point, and that under B the anchor must be updated to the
+      new tip; and that B removes the risk of inheriting uncommitted or
+      untracked state left by the dead session. Codex's stated residual risk —
+      unsaved work could exist even with zero commits — was checked and
+      excluded before removal: `git status --porcelain` in the orphaned
+      worktree was empty. Adopted B. The AC-8 anchoring caveat was passed to
+      the implementer in its launch prompt. Option A was not chosen because it
+      offered no advantage once the worktree was confirmed to hold no work.
+      fallback_provider: not needed. opus_escalation: not run.
+      Note on execution: the branch was retired by fast-forwarding it to the
+      integration tip (provably an ancestor) rather than by a force delete, so
+      no unreachable commit was created.
