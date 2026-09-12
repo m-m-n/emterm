@@ -1,0 +1,105 @@
+round: 1
+executed_at: "2026-09-12T23:48:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 14d0ca7dd78b2f94d6e5dbafc27c9efeac343b19
+  head_commit: 2e6f43f928d482e26e2346eb56a4315518a59eb3
+  changed_files:
+    - src-tauri/src/app/mod.rs
+    - src-tauri/src/app/tests.rs
+    - src-tauri/src/window_host/event_loop.rs
+    - src-tauri/src/window_host/input_translate.rs
+    - src-tauri/src/window_host/key_routing.rs
+    - src-tauri/src/window_host/tests.rs
+    - test-docs/selection-clear-on-enter-copy/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, spec]
+  discretionary:
+    - perspective: performance
+      reason: >-
+        差分が dirty_rows_this_frame の再描画経路と毎キー入力の hot path に触れるため、
+        選択クリアがフル再描画や余計な再描画要求を誘発しないかを確認する。
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    Round 1, cross_validation=true, diff mode over 7 files against 14d0ca7d. All four
+    dispatched runs returned empty findings sets, so there were no reviewer-reported
+    critical/high sites to carry forward or dismiss (dismissed_sites is empty for that
+    reason, not by omission). No injection attempt, role override, or embedded-instruction
+    pattern was found in any reviewer output or in the diff text. comprehensive#0's own
+    summary reads "no review performed", so the evaluator treated its coverage as
+    unestablished and did not let its empty result stand as evidence; every conclusion
+    attributed to the comprehensive perspective comes from the evaluator's own inspection.
+    PER-PERSPECTIVE COVERAGE - security#0 corroborated - two App fields set to None, no
+    clipboard/PRIMARY write added; pointer_routing.rs is not in the change set, so SC1/NFR3/AC9
+    hold structurally. spec#0 corroborated - FR1 lands inside the forwarded branch using the
+    is_enter captured before shift_enter_rewrite, so FR2 holds in all four modes; FR3 sits right
+    after host.set_clipboard inside the Some(sel) arm; FR5 routes both sites through the single
+    App::clear_selection pair-clear helper; NFR6's pure predicate reads and mutates no state;
+    NFR4 holds since window_host/ and app/ are GUI-only. Two SPEC-fidelity notes that are
+    satisfied but recorded - (a) the copy-side clear is nested inside the Some(tab) arm, so a
+    copy with no active tab clears nothing, but no copy happens then either; (b) SPEC TS8 has no
+    corresponding assertion in task0001.tests.yaml, yet its expectation is met because
+    pointer_routing.rs is absent from the diff - a traceability gap, not a behavioural one.
+    performance#0 corroborated, verified end-to-end rather than from comments - the Enter path
+    already reaches scroll_to_live (which sets needs_full_redraw) and the copy path falls
+    through to the unconditional request_redraw at event_loop.rs:519, after which
+    dirty_rows_this_frame unions previous_selection against previous_visible_start and repaints
+    exactly the old highlight rows, so should_skip_frame cannot skip the clearing frame. NFR5
+    holds. comprehensive (evaluator's own inspection) - two low-severity advisory items, both
+    dropped by the R3b severity gate. The evaluator additionally confirmed the NLL borrow
+    sequence in key_routing.rs compiles as written, the added tests are non-vacuous, and
+    task0001.tests.yaml records an honest red state per AC.
+  recommended_action: "complete"
+  action_rationale: >-
+    No critical, high, or medium finding exists after independent inspection of all four
+    dispatched perspectives. The implementation matches FR1-FR6 and NFR1-NFR6 at the sites the
+    SPEC names, the redraw and frame-skip claims were verified against the actual dirty-row and
+    should_skip_frame code, and the accompanying tests are non-vacuous with an honest red-state
+    record. The two findings are low-severity advisory notes (one documentation completeness,
+    one latent signature ergonomics) that do not justify another round or rework.
+dropped_low_severity_notes:
+  # Dropped by R3b step 2 (severity gate keeps critical/high/medium only).
+  # Kept here as disclosure for the human evaluator; they gate nothing.
+  - file: src-tauri/src/window_host/event_loop.rs
+    line: 513
+    severity: low
+    title: "Enter pressed mid-press also drops the not-yet-upgraded drag anchor, a consequence SPEC EC1 does not enumerate"
+    note: >-
+      EC1 names only the fold-click consumer of pending_selection_anchor
+      (pointer_routing.rs:355). A second consumer exists at pointer_routing.rs:131, which
+      upgrades a held press into a Selection on first motion. Press, then Enter, then drag
+      produces no selection until the button is re-pressed. This sits inside the FR5/AC7
+      anchor-drop trade-off, so it is not a spec violation. Documentation-only suggestion.
+  - file: src-tauri/src/window_host/input_translate.rs
+    line: 253
+    severity: low
+    title: "should_clear_selection_on_forward's two bool params are positionally interchangeable; neither SPEC nor the truth-table test pins the order"
+    note: >-
+      SPEC prose declares (is_enter, forwarded); the implementation takes (forwarded, is_enter).
+      Harmless today because the body is a commutative AND and the truth table is symmetric.
+      Latent risk only if the body ever becomes non-commutative. Lowest-cost fix - correct the
+      SPEC's declared parameter order.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: tmp/sca-triage-selection-clear-on-enter-copy-20260912T144304Z.md

@@ -87,7 +87,8 @@ workflow:
     base_commit: 14d0ca7dd78b2f94d6e5dbafc27c9efeac343b19
     completed_at_commit: 93f7d1807426a19fdf0579f0c65d7dd1fc1525ee
   - id: review
-    status: in_progress
+    status: completed
+    completed_at_commit: 2e6f43f928d482e26e2346eb56a4315518a59eb3
   - id: verify
     status: pending
     result: null
@@ -114,8 +115,9 @@ tasks:
     branch: em-workflow/selection-clear-on-enter-copy/task0001
 
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: completed
+  rounds_completed: 1
+  perspectives: [comprehensive, security, spec, performance]
   residual_critical_high: 0
   needs_rework: false
   plan:

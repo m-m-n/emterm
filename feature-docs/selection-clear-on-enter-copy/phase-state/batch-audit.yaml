@@ -28,3 +28,35 @@ records:
       plan and IMPLEMENTATION.md word the side effect as the fold toggle
       "misfiring" (誤爆), while the code path shows it is skipped instead. Wording
       only; no behavioural difference.
+  - question_id: review.comprehensive-coverage-consultation
+    packet_id: null
+    answered_at: "2026-09-12T23:47:00+09:00"
+    source: codex
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "A: accept comprehensive#0 as a substantive completed result and complete the round"
+    normalized_answer: "A: accept comprehensive#0 as a substantive completed result and complete the round"
+    resolution_note: >-
+      gate: user-instructed Codex consultation, raised by the orchestrator outside any
+      worker packet. Question - comprehensive#0 returned a schema-valid empty result whose
+      own summary text reads "no review performed"; should the round complete on the
+      evaluator's independent inspection (A), or should a Claude fallback / extra
+      comprehensive round be dispatched (B)? codex_consulted - true, but the OpenAI
+      provider was over its usage limit ("try again at Sep 13th, 2026 1:02 AM", exit 1),
+      so the fallback provider answered - codex exec -p litellm -m vertex-glm-5.2,
+      readonly. Verdict A, comparatively better on five grounds - (1) the protocol rule
+      that a schema-valid result is substantive and that no further judgment may be made
+      about whether the reviewer "really" inspected the diff is exactly the rule this
+      question would override; (2) the fallback-dispatch conditions are a closed set
+      (chain exhausted / malformed result / harness-level failure) and none fired - the
+      result is schema-valid, the chain returned a value, and there was no infrastructure
+      failure; (3) the evaluator re-read the whole diff and checked the redraw path, the
+      NLL borrow order and test non-vacuity individually, which is adequate depth at this
+      size; (4) the change is 40 production lines across four local sites with no parsing,
+      auth, crypto or resource-management surface, and security/spec/performance already
+      passed; (5) in an unattended batch run, letting a summary's wording overturn a
+      completion gate injects non-determinism into every later round. Condition under
+      which B would win - only if "malformed" were defined to include a semantic
+      contradiction between the summary text and the structural fields, which the current
+      protocol wording does not support. Adopted A - review step completed, no extra
+      dispatch.
