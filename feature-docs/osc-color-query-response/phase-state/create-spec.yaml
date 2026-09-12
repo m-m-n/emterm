@@ -1,0 +1,17 @@
+schema_version: 1
+feature: osc-color-query-response
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: db7c27a17c2c628c4e5522a1f907fbc0114bd0e8
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
