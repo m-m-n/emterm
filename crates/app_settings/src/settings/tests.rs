@@ -95,6 +95,7 @@ fn test_round_trip_preserves_all_fields() {
         cursor_blink: false,
         scroll_speed: 5,
         alternate_scroll_enabled: false,
+        scroll_region_scrollback_enabled: false,
         bell_action: BellAction::None,
         url_detection: false,
         copy_on_select: true,
@@ -176,6 +177,7 @@ fn test_round_trip_preserves_all_fields() {
     assert!(!restored.cursor_blink);
     assert_eq!(restored.scroll_speed, 5);
     assert!(!restored.alternate_scroll_enabled);
+    assert!(!restored.scroll_region_scrollback_enabled);
     assert_eq!(restored.bell_action, BellAction::None);
     assert!(!restored.url_detection);
     assert!(restored.copy_on_select);
@@ -376,6 +378,43 @@ fn agent_notify_visible_pane_explicit_false_round_trips() {
     let json = serde_json::to_string(&s).unwrap();
     let restored: AppSettings = serde_json::from_str(&json).unwrap();
     assert!(!restored.agent_notify_visible_pane);
+}
+
+// ── scroll_region_scrollback_enabled (scroll-region-scrollback task0002
+// AC-1) ──────────────────────────────────────────────────────────────
+
+#[test]
+fn scroll_region_scrollback_enabled_defaults_to_true() {
+    assert!(AppSettings::default().scroll_region_scrollback_enabled);
+}
+
+#[test]
+fn scroll_region_scrollback_enabled_missing_key_resolves_to_default_true() {
+    let s: AppSettings = serde_json::from_str("{}").unwrap();
+    assert!(s.scroll_region_scrollback_enabled);
+}
+
+#[test]
+fn scroll_region_scrollback_enabled_null_resolves_to_default_true() {
+    let s: AppSettings =
+        serde_json::from_str(r#"{"scroll_region_scrollback_enabled": null}"#).unwrap();
+    assert!(s.scroll_region_scrollback_enabled);
+}
+
+#[test]
+fn scroll_region_scrollback_enabled_explicit_false_deserializes() {
+    let s: AppSettings =
+        serde_json::from_str(r#"{"scroll_region_scrollback_enabled": false}"#).unwrap();
+    assert!(!s.scroll_region_scrollback_enabled);
+}
+
+#[test]
+fn scroll_region_scrollback_enabled_explicit_false_round_trips() {
+    let mut s = AppSettings::default();
+    s.scroll_region_scrollback_enabled = false;
+    let json = serde_json::to_string(&s).unwrap();
+    let restored: AppSettings = serde_json::from_str(&json).unwrap();
+    assert!(!restored.scroll_region_scrollback_enabled);
 }
 
 #[test]

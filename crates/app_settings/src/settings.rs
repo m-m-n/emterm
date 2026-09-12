@@ -36,6 +36,11 @@ deserialize_null_with!(
     bool,
     default_alternate_scroll_enabled
 );
+deserialize_null_with!(
+    deserialize_null_scroll_region_scrollback_enabled,
+    bool,
+    default_scroll_region_scrollback_enabled
+);
 deserialize_null_with!(deserialize_null_true, bool, default_true);
 
 // For fields where T::default() is correct (String, Vec, enums with #[default])
@@ -102,6 +107,9 @@ fn default_scroll_speed() -> u32 {
     3
 }
 fn default_alternate_scroll_enabled() -> bool {
+    true
+}
+fn default_scroll_region_scrollback_enabled() -> bool {
     true
 }
 fn default_true() -> bool {
@@ -395,6 +403,15 @@ pub struct AppSettings {
         deserialize_with = "deserialize_null_alternate_scroll_enabled"
     )]
     pub alternate_scroll_enabled: bool,
+    /// Ghostty-compatible region-scroll transcription (scroll-region-
+    /// scrollback task0002): when true, lines scrolled out of a scroll
+    /// region whose top margin is the topmost screen row are written to
+    /// scrollback instead of being discarded. Default `true`.
+    #[serde(
+        default = "default_scroll_region_scrollback_enabled",
+        deserialize_with = "deserialize_null_scroll_region_scrollback_enabled"
+    )]
+    pub scroll_region_scrollback_enabled: bool,
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub bell_action: BellAction,
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
@@ -744,6 +761,7 @@ impl Default for AppSettings {
             cursor_blink: default_true(),
             scroll_speed: default_scroll_speed(),
             alternate_scroll_enabled: default_alternate_scroll_enabled(),
+            scroll_region_scrollback_enabled: default_scroll_region_scrollback_enabled(),
             bell_action: BellAction::default(),
             url_detection: default_true(),
             copy_on_select: false,
