@@ -51,6 +51,7 @@ export interface AppSettings {
   cursor_blink: boolean;
   scroll_speed: number;
   alternate_scroll_enabled: boolean;
+  scroll_region_scrollback_enabled: boolean;
   bell_action: BellAction;
   url_detection: boolean;
   copy_on_select: boolean;
@@ -181,7 +182,11 @@ export interface FontListResponse {
 }
 
 export type FontCategory =
-  "primary" | "secondary" | "ui" | "markdown-body" | "markdown-code";
+  | "primary"
+  | "secondary"
+  | "ui"
+  | "markdown-body"
+  | "markdown-code";
 
 // ============================================================
 // Profile

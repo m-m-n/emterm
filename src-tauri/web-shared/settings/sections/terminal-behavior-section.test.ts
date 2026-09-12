@@ -1,5 +1,6 @@
 /**
- * Tests for the Terminal Behavior section's Shift+Enter behavior select.
+ * Tests for the Terminal Behavior section's Shift+Enter behavior select,
+ * and (task0003) the Scroll Region Scrollback toggle.
  *
  * Covers:
  * - AC-2: with current value != kitty_csi_u, renders exactly the three
@@ -8,13 +9,28 @@
  * - AC-3: with current value == kitty_csi_u, renders four options
  *   including kitty_csi_u, grandfathered in and selected.
  * - AC-4: selecting the LF option saves `shift_enter_behavior` as "lf".
+ *
+ * task0003 (scroll-region-scrollback settings mirror):
+ * - AC-2: the new "scroll region scrollback" toggle renders immediately
+ *   adjacent to the alternate-scroll toggle.
+ * - AC-3: toggling it saves `scroll_region_scrollback_enabled` under the
+ *   exact pinned key string.
+ * - AC-4: both locale files define the label and description keys at the
+ *   same key path.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import { renderTerminalBehaviorSection } from "./terminal-behavior-section.ts";
 import type { SectionContext } from "./types";
 import type { AppSettings, KeybindSettings, MuxSettings } from "../types";
+import { setLocale, t } from "../../i18n/index.ts";
+import enLocale from "../../i18n/locales/en.json";
+import jaLocale from "../../i18n/locales/ja.json";
+
+afterEach(() => {
+  setLocale("en");
+});
 
 function makeKeybinds(): KeybindSettings {
   return {
@@ -72,6 +88,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     cursor_blink: true,
     scroll_speed: 3,
     alternate_scroll_enabled: true,
+    scroll_region_scrollback_enabled: true,
     bell_action: "visual",
     url_detection: true,
     copy_on_select: false,
@@ -129,7 +146,8 @@ function makeCtx(
   return {
     currentSettings: settings,
     muxActionDefaults: [],
-    addContentListener: () => {},
+    addContentListener: (el, ev, handler, capture) =>
+      el.addEventListener(ev, handler, capture),
     saveSetting,
     showFontPicker: () => {},
     keybindCtx: {} as unknown as SectionContext["keybindCtx"],
@@ -251,5 +269,77 @@ describe("renderTerminalBehaviorSection() — Shift+Enter behavior select", () =
     expect(
       panel.querySelector("#settings-shift-enter-as-alt-enter"),
     ).toBeNull();
+  });
+});
+
+describe("renderTerminalBehaviorSection() — Scroll Region Scrollback toggle (task0003)", () => {
+  test("AC-2: renders immediately adjacent to the alternate-scroll toggle", () => {
+    const panel = document.createElement("div");
+    const settings = makeSettings();
+    const ctx = makeCtx(settings, () => {});
+
+    renderTerminalBehaviorSection(panel, ctx);
+
+    const rows = Array.from(
+      panel.querySelectorAll(".settings-row-toggle"),
+    ) as HTMLElement[];
+    const alternateScrollIndex = rows.findIndex((row) =>
+      row.querySelector("#settings-alternate-scroll-enabled"),
+    );
+    const scrollRegionIndex = rows.findIndex((row) =>
+      row.querySelector("#settings-scroll-region-scrollback-enabled"),
+    );
+
+    expect(alternateScrollIndex).toBeGreaterThanOrEqual(0);
+    expect(scrollRegionIndex).toBeGreaterThanOrEqual(0);
+    expect(Math.abs(scrollRegionIndex - alternateScrollIndex)).toBe(1);
+  });
+
+  test("AC-3: toggling it saves scroll_region_scrollback_enabled with the new boolean value", () => {
+    const panel = document.createElement("div");
+    const settings = makeSettings({ scroll_region_scrollback_enabled: true });
+    const saved: Array<[string, unknown]> = [];
+    const ctx = makeCtx(settings, (key, value) => {
+      saved.push([key, value]);
+    });
+
+    renderTerminalBehaviorSection(panel, ctx);
+
+    const button = panel.querySelector(
+      "#settings-scroll-region-scrollback-enabled",
+    ) as HTMLButtonElement;
+    expect(button).toBeTruthy();
+    button.click();
+
+    expect(saved).toEqual([["scroll_region_scrollback_enabled", false]]);
+  });
+});
+
+describe("Scroll Region Scrollback toggle — i18n (AC-4)", () => {
+  test("both locale files define the label and description keys, non-empty", () => {
+    const enTerminal = enLocale.settings.terminal as Record<string, unknown>;
+    const jaTerminal = jaLocale.settings.terminal as Record<string, unknown>;
+
+    for (const key of [
+      "scrollRegionScrollbackEnabled",
+      "scrollRegionScrollbackEnabledDesc",
+    ]) {
+      expect(typeof enTerminal[key]).toBe("string");
+      expect((enTerminal[key] as string).length).toBeGreaterThan(0);
+      expect(typeof jaTerminal[key]).toBe("string");
+      expect((jaTerminal[key] as string).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("both locales resolve the new keys via t(), not as the raw key", () => {
+    for (const locale of ["en", "ja"] as const) {
+      setLocale(locale);
+      expect(t("settings.terminal.scrollRegionScrollbackEnabled")).not.toBe(
+        "settings.terminal.scrollRegionScrollbackEnabled",
+      );
+      expect(t("settings.terminal.scrollRegionScrollbackEnabledDesc")).not.toBe(
+        "settings.terminal.scrollRegionScrollbackEnabledDesc",
+      );
+    }
   });
 });

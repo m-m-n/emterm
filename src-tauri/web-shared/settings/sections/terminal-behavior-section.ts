@@ -146,6 +146,19 @@ export function renderTerminalBehaviorSection(
     ctx.addContentListener,
   );
 
+  // Scroll Region Scrollback toggle
+  renderToggle(
+    panel,
+    {
+      key: "scroll-region-scrollback-enabled",
+      label: t("settings.terminal.scrollRegionScrollbackEnabled"),
+      value: settings.scroll_region_scrollback_enabled,
+      description: t("settings.terminal.scrollRegionScrollbackEnabledDesc"),
+      onSave: (v) => ctx.saveSetting("scroll_region_scrollback_enabled", v),
+    },
+    ctx.addContentListener,
+  );
+
   // Bell Action (select)
   renderSelect(
     panel,
