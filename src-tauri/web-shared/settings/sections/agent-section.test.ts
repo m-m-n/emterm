@@ -80,6 +80,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     cursor_blink: true,
     scroll_speed: 3,
     alternate_scroll_enabled: true,
+    scroll_region_scrollback_enabled: true,
     bell_action: "visual",
     url_detection: true,
     copy_on_select: false,
