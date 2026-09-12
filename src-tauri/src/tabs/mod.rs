@@ -689,11 +689,13 @@ impl Tab {
         // fallback transport, parsed by `self.core` before mux is established)
         // reaches `on_osc(OSC_MUX_INBAND, …)` → the mux APC path (NFR5).
         // Off-thread snapshot replay cores are worker-built without this
-        // registration (and without callbacks — the worker contract requires
-        // `Send`), but they become the live core at swap time:
-        // `apply_offthread_swap` transplants the callbacks and re-registers
-        // this same mapping onto the swapped-in core, so it ends up
-        // behaviorally identical to a never-swapped tab core.
+        // registration (and without callbacks or a registered OSC responder
+        // — the worker contract requires `Send`), but they become the live
+        // core at swap time: `apply_offthread_swap` transplants the
+        // callbacks, transplants the registered OSC responder (SC-2, D10 —
+        // see this fn's own comment below), and re-registers this same
+        // mapping onto the swapped-in core, so it ends up behaviorally
+        // identical to a never-swapped tab core.
         core.register_osc_app_param(
             mux_ipc::protocol::MUX_OSC_PARAM,
             crate::callbacks::OSC_MUX_INBAND,
@@ -722,6 +724,15 @@ impl Tab {
         // See `ThemeColorResponder`'s doc for why OSC 4/10/11/12 are
         // excluded from `NativeCallbacks::on_osc`'s routing once this is
         // registered.
+        //
+        // Lifecycle (SC-2's lifecycle clause, D10, task0005): a
+        // registration made here is tab-scoped, not core-instance-scoped —
+        // it must outlive any later replacement of `self.core`'s contents.
+        // `apply_offthread_swap` is today's only such replacement path and
+        // carries this field across (`replay.rs`); a future replacement
+        // path must do the same or it silently disables both color QUERY
+        // and color SET for the tab, since the theme's color-OSC handling
+        // is reachable only through this seam once one is registered (D1).
         core.osc_responder = Some(Box::new(crate::callbacks::ThemeColorResponder::new(
             theme.clone(),
             cb_state.clone(),
