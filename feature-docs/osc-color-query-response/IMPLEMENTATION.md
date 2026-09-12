@@ -40,12 +40,13 @@ and the answer is handed **down** to `term_core`, which owns the buffer.
 | Component | Responsibility | Contract (pre / post) | Used by tasks |
 |---|---|---|---|
 | **SC-1 Terminator kind** | Carry which string terminator ended an OSC string (BEL form vs ST form) from the parser to the OSC dispatch boundary and on to any response producer | **Pre**: every OSC dispatch carries exactly one terminator-kind value, derived from the bytes actually received; a string ended by anything other than a terminator (buffer flush, truncation) is classified deterministically and that choice is documented at the definition site. **Post**: a response produced for that dispatch ends with the byte form the value names; no producer hardcodes a terminator | task0001 (defines/produces), task0002 (consumes), task0004 (asserts end to end) |
-| **SC-2 Host color-responder seam** | The registration point through which the GUI layer supplies a responder that `term_core` consults on OSC dispatch | **Pre**: registration is optional; an unregistered core behaves exactly as today (no response, no panic, no behavior change). The responder receives the OSC numeric code, the raw payload, and the SC-1 terminator kind. **Post**: the responder returns zero or more complete response byte sequences; `term_core` appends them in returned order to its pending response content, never inspecting or rewriting them; they leave the core only through the existing `take_response` drain and through no other route | task0001 (defines), task0002 (registers + implements), task0004 (integration-tests the route) |
-| **SC-3 Pending-response accumulation** | The single-slot response buffer must keep every response produced before the next drain | **Pre**: the buffer is empty or holds undrained bytes. **Post**: every response produced within a parse pass survives until the next drain, in production order (a chained payload produces several); a drain returns all pending bytes and empties the slot. Existing DA1 / DSR / CPR response behavior is unchanged | task0001 (owns), task0002, task0004 |
+| **SC-2 Host color-responder seam** | The registration point through which the GUI layer supplies a responder that `term_core` consults on OSC dispatch | **Pre**: registration is optional; an unregistered core behaves exactly as today (no response, no panic, no behavior change). The responder receives the OSC numeric code, the raw payload, and the SC-1 terminator kind. **Post**: the responder returns zero or more complete response byte sequences; `term_core` appends them in returned order to its pending response content, never inspecting or rewriting them; they leave the core only through the existing `take_response` drain and through no other route. **Lifecycle (added, review round 1)**: a registration is tab-scoped, not core-instance-scoped — every path that replaces a tab's live core carries the registered responder onto the replacement, in the same critical section as the replacement and before it becomes observable, so a replaced core is behaviorally identical to a never-replaced one for every code the responder owns | task0001 (defines), task0002 (registers + implements), task0004 (integration-tests the route), task0005 (owns the lifecycle clause) |
+| **SC-3 Pending-response accumulation** | The single-slot response buffer must keep every response produced before the next drain | **Pre**: the buffer is empty or holds undrained bytes. **Post**: every response produced within a parse pass survives until the next drain, in production order (a chained payload produces several) **up to SC-8's accumulation budget**, past which further responses are dropped rather than appended; a drain returns all pending bytes and empties the slot. Existing DA1 / DSR / CPR response behavior is unchanged | task0001 (owns), task0002, task0004, task0006 (narrows the postcondition per SC-8) |
 | **SC-4 Theme OSC entry contract** | The single entry point the GUI theme exposes for OSC codes it owns | **Inputs**: OSC code, raw payload, SC-1 terminator kind. **Outputs**: a visible-change flag, plus ordered response byte sequences. **Invariants**: answering a query never sets the visible-change flag and never mutates theme state; existing set semantics are unchanged; the existing "no visible change → false" contract is preserved, so answering a query never causes a full-grid dirty mark | task0002 (owns the shape change and the query side), task0003 (reset side, same entry) |
 | **SC-5 Scheme mirror fields** | Hold the active color scheme's values so a reset can restore them in place | **Pre**: seeded at theme construction from the same constants that seed the corresponding live fields. **Post**: updated only where a color scheme is applied — unconditionally in the preset branch, and in the user-scheme branch only under the same parse guard that gates the live field's update; never written by any OSC set sequence; read only by the reset paths. New fields mirror the existing cursor-color mirror exactly | task0003 (owns), task0002 (its post-reset query values follow from them; never writes them) |
 | **SC-6 Palette value resolution rule** | The one rule for "what color is palette index `i` right now" | For index `i`: the sparse overlay's entry when it holds a value; otherwise the 16-color array when `i < 16`; otherwise the xterm 256-color cube / grayscale formula for `16..=255`. An unset overlay slot is never reported as a missing value | task0002 (implements), task0003 (asserts post-reset values against it) |
 | **SC-7 Device-query frame classification** | The predicate that keeps a PTY output frame from being coalesced | **Pre**: the predicate sees a frame's raw payload bytes. **Post**: a frame carrying any OSC 4 / 10 / 11 / 12 query token is classified as a device query and parsed alone; frames without one keep current behavior; classification never consumes or rewrites bytes | task0004 (owns), task0002 (its answered query forms define the set that must be recognized) |
+| **SC-8 Query fan-out budget** (added, review round 1) | The two declared caps that keep one untrusted payload from converting into unbounded response work | **Pre**: a dispatch may carry an arbitrary number of query tokens up to the OSC payload length limit. **Post**: two budgets, each a named constant at its definition site. (a) *Per-dispatch answer budget* — a producer emits at most N answers for one dispatch and drops the remainder BEFORE allocating them; set elements of the same payload are still applied in payload order, and a query-only payload still reports no visible change. (b) *Accumulation byte budget* — the seam that appends responder output stops appending once pending content reaches the budget, so a payload split across dispatches cannot exceed the total by staying under (a) each time. Dropping is silent: not an error value, not logged. Payloads within both budgets are unchanged in answers, order, terminator and visible-change reporting | task0006 (owns both caps), task0002 (its producer is the one capped by (a)), task0001 (its seam is the one capped by (b)) |
 
 ## Conventions
 
@@ -153,6 +154,33 @@ answers, which is indistinguishable to the program from corrupted input.
 with a test; task0002's wiring registers the responder on exactly the side
 that owns the live theme.
 
+### D10 — A responder registration belongs to the tab, not to a core instance
+
+Rebuilding a core from a snapshot cannot restore a responder: the snapshot
+layer has no access to the GUI theme (NFR4), so a rebuilt core always starts
+unregistered. Any path that swaps a rebuilt core in therefore has to carry the
+live registration across, exactly as it already carries the other live-side
+state. Stated as SC-2's lifecycle clause so that a future replacement path is
+measured against the contract rather than against the one call site that
+exists today. Because the theme's color-OSC handling is reachable only through
+the responder, losing the registration disables color SET as well as color
+query for that tab — the blast radius is wider than this feature's own surface.
+Affected: task0002 (registers), task0004 (owns the swap path), task0005 (owns
+the carry-over and its regression).
+
+### D11 — Fan-out is capped at production, with a second cap at accumulation
+
+Dropping an answer after allocating it does not remove the amplification,
+because the allocation is the cost; the cap therefore lives at the producer
+(SC-8 (a)). A per-dispatch cap alone is bypassable by splitting one payload
+across dispatches inside a single parse pass, so the seam that owns the
+pending content — the only place that sees the total — carries a second,
+byte-denominated cap (SC-8 (b)). This deliberately narrows SC-3's
+accumulation postcondition; SC-3 is amended in place rather than left to
+contradict SC-8. The caps govern answers only: set semantics, payload
+ordering and the inert-invalid-input convention are unchanged.
+Affected: task0001 (seam), task0002 (producer), task0006 (owns both caps).
+
 ## Risk Assessment
 
 | Risk | Likelihood | Impact | Mitigation |
@@ -164,6 +192,8 @@ that owns the live theme.
 | Two tasks edit the theme module in parallel | High | Low | The regions are disjoint (query resolution vs reset paths); SC-4 pins the shared entry shape; conflicts resolve by parent-side adoption |
 | FR8 / FR9 change what is on screen after a reset | Medium | Medium | Updated unit tests (TS-10) plus manual visual verification (TS-14); the new appearance is the scheme the user already configured |
 | A response leaks into a running shell's stdin (the historical failure mode) | Low | High | FR6's single route plus NFR3's unchanged replay discard, both asserted by task0004 |
+| A core-replacement path silently drops the responder registration again | Medium | High | D10 / SC-2 lifecycle clause; task0005 pins carry-over with an identity-checking regression |
+| A capped fan-out changes behavior for ordinary payloads | Low | Medium | SC-8's "within budget = unchanged" postcondition, asserted by task0006 around the budget boundary |
 
 ## Open Questions
 

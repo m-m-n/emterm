@@ -120,3 +120,37 @@ records:
     nothing for OscTerminator::Unterminated, a form REQUIREMENTS.md FR5 does not define), flagged here
     for the review / verify phases rather than auto-added. The containment check handles all of these
     as ordinary deviations. codex_consulted: false (a rule application, not a gate).'
+- question_id: review.rework-verification-heading-drift
+  packet_id: null
+  answered_at: '2026-09-13T06:34:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - rename_heading
+  freeform: null
+  normalized_answer: VERIFICATION.md の見出しを `### Test Scenarios` から `### Test Scenarios from SPEC.md`
+    へ戻し、バリデータを再実行して通ってから workflow patch を適用する
+  resolution_note: 'unlisted gate (no gate_id at its originating site): rework-planner の
+    payload.rework_index check 3 (validate-worker-output.py) が "TS-20 / TS-21 is not a new
+    VERIFICATION.md scenario" を返した。原因は create-plan フェーズ由来の見出しドリフト — この feature の
+    VERIFICATION.md は `### Test Scenarios` を使っており、extract_verification_scenario_ids() が要求する
+    `### Test Scenarios from SPEC.md` (plan-writing/SKILL.md のテンプレートが規定) と一致しないため、
+    現行版とベースラインの双方でシナリオ ID 集合が空になっていた。TS-20 / TS-21 が実際に新規追加されている
+    ことは手作業で確認済み (ベースラインに不在、現行のシナリオ表と要件↔テスト対応表の双方に存在)。
+    options: [A] 見出しをテンプレート準拠にリネームして再検証 / [B] 既知の偽陰性として記録し
+    VERIFICATION.md を変更せずに patch を適用; choice: A; codex_consulted: true
+    (codex-harness second-opinion, model gpt-5.6-sol, readonly sandbox, LiteLLM 未使用);
+    fallback provider answered: no (一次プロバイダが応答); opus escalation: not run.
+    Key points of the discussion: (1) fail-closed — A なら「バリデータが通ったときだけ進む」規律を
+    そのまま保てるが、B はこのラウンドだけバリデータを非権威にし、将来の作業者に例外の再現を強いる。
+    (2) リネームが本物の欠陥を隠す可能性 — 一般にはあるが、今回はシナリオ本文・ID・対応表の中身を
+    手作業でベースラインと突合済みで、リネームはシナリオも ID も対応表も変えない。
+    (3) 可逆性 — A は見出しのみの docs コミット 1 本を revert すれば戻せて監査可能。B はドキュメント変更が
+    無いぶん、生んだ前例を正確には取り消せない。(4) 波及範囲 — この見出しを読む既知の利用者は
+    バリデータのみで、テンプレートが規定する形に戻す影響は小さい。ドリフトしたままの兄弟ドキュメントは
+    もともとテンプレート契約と食い違っており、このファイルを直しても挙動は変わらない。
+    (5) 次ラウンド — B のままだと抽出器は空集合を返し続け、以後の rework ラウンドで同じ偽陰性が恒久的に
+    再発し、そのたび手作業の上書きが要る。加えて「原因が分かっていればバリデータの失敗を迂回してよい」
+    という運用パターンを生む。orchestrator action: 見出しを worktree の VERIFICATION.md と検証用
+    ベースライン複製の双方で置換 (両側に同じ修正を当てることで、差分が測るものが見出し形式ではなく
+    シナリオ追加そのものになる)。再検証結果: worker-result rc=0 / workflow-patch --dry-run-apply rc=0。'
