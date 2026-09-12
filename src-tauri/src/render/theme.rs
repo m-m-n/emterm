@@ -40,7 +40,16 @@ pub enum CursorStyle {
 #[derive(Debug, Clone)]
 pub struct Theme {
     pub fg: Rgb,
+    /// The active color scheme's foreground color, remembered separately
+    /// from `fg` so OSC 110 (reset default foreground) can restore it
+    /// even when the active scheme is not the built-in `emterm` preset.
+    /// Updated whenever a color scheme is applied (`Theme::from_settings`
+    /// / `apply_color_scheme`); untouched by OSC 10 itself.
+    pub scheme_fg: Rgb,
     pub bg: Rgb,
+    /// The active color scheme's background color, mirroring `scheme_fg`
+    /// exactly but for OSC 111 (reset default background).
+    pub scheme_bg: Rgb,
     pub cursor_fg: Rgb,
     /// The active color scheme's cursor color, remembered separately from
     /// `cursor_fg` so OSC 112 (reset cursor color) can restore it even
@@ -60,6 +69,11 @@ pub struct Theme {
     /// fresh `scheme_cursor_fg` seed silently replace it (FR5).
     pub cursor_fg_override_active: bool,
     pub palette16: [Rgb; 16],
+    /// The active color scheme's 16-color palette, mirroring `scheme_fg`
+    /// / `scheme_bg` / `scheme_cursor_fg` so OSC 104 (reset palette) can
+    /// restore indices 0-15 in place instead of leaving stale OSC 4
+    /// values in the live array.
+    pub scheme_palette16: [Rgb; 16],
     /// 256-entry sparse overlay onto the indexed palette. `None` means
     /// "use the default" (which for slots < 16 is `palette16[i]` and for
     /// 16..255 is the xterm 256-color cube/grayscale formula).
@@ -164,11 +178,14 @@ impl Default for Theme {
     fn default() -> Self {
         Self {
             fg: DEFAULT_TERMINAL_FG,
+            scheme_fg: DEFAULT_TERMINAL_FG,
             bg: DEFAULT_TERMINAL_BG,
+            scheme_bg: DEFAULT_TERMINAL_BG,
             cursor_fg: DEFAULT_TERMINAL_CURSOR_FG,
             scheme_cursor_fg: DEFAULT_TERMINAL_CURSOR_FG,
             cursor_fg_override_active: false,
             palette16: DEFAULT_PALETTE16,
+            scheme_palette16: DEFAULT_PALETTE16,
             palette256: Box::new([None; 256]),
             cursor_style: CursorStyle::default(),
             font_family: "monospace".into(),
@@ -303,11 +320,16 @@ impl Theme {
             22 => self.apply_cursor_style(data),
             104 => self.apply_palette_reset(data),
             110 => {
-                self.fg = DEFAULT_TERMINAL_FG;
+                // Reset to the ACTIVE SCHEME's foreground (FR8), not a
+                // hard-coded preset — `scheme_fg` is seeded by
+                // `apply_color_scheme` at theme construction and survives
+                // OSC 10 overrides untouched.
+                self.fg = self.scheme_fg;
                 true
             }
             111 => {
-                self.bg = DEFAULT_TERMINAL_BG;
+                // Reset to the ACTIVE SCHEME's background (FR9); see 110.
+                self.bg = self.scheme_bg;
                 true
             }
             112 => {
@@ -404,20 +426,31 @@ impl Theme {
     fn apply_palette_reset(&mut self, data: &str) -> bool {
         let trimmed = data.trim();
         if trimmed.is_empty() {
-            let any_set = self.palette256.iter().any(|e| e.is_some());
+            // Empty payload (FR7): clear the whole sparse overlay AND
+            // restore the 16-color array from the scheme mirror, so an
+            // index below 16 set by a prior OSC 4 does not keep rendering
+            // in the OSC-set color forever.
+            let overlay_changed = self.palette256.iter().any(|e| e.is_some());
             *self.palette256 = [None; 256];
-            // palette16 stays at xterm defaults — caller should reset those
-            // by re-constructing `Theme::default()` if they were mutated by
-            // OSC 4 prior. For now we reset the overlay only.
-            any_set
+            let array_changed = self.palette16 != self.scheme_palette16;
+            self.palette16 = self.scheme_palette16;
+            overlay_changed || array_changed
         } else {
             let mut changed = false;
             for part in trimmed.split(';') {
-                if let Ok(index) = part.trim().parse::<usize>() {
-                    if index < 256 && self.palette256[index].is_some() {
-                        self.palette256[index] = None;
-                        changed = true;
-                    }
+                let Ok(index) = part.trim().parse::<usize>() else {
+                    continue;
+                };
+                if index >= 256 {
+                    continue;
+                }
+                if self.palette256[index].is_some() {
+                    self.palette256[index] = None;
+                    changed = true;
+                }
+                if index < 16 && self.palette16[index] != self.scheme_palette16[index] {
+                    self.palette16[index] = self.scheme_palette16[index];
+                    changed = true;
                 }
             }
             changed
@@ -599,10 +632,13 @@ fn apply_color_scheme(theme: &mut Theme, settings: &crate::settings::Settings) {
 
     if let Some(preset) = COLOR_SCHEME_PRESETS.iter().find(|p| p.name == name) {
         theme.fg = preset.fg;
+        theme.scheme_fg = preset.fg;
         theme.bg = preset.bg;
+        theme.scheme_bg = preset.bg;
         theme.cursor_fg = preset.cursor;
         theme.scheme_cursor_fg = preset.cursor;
         theme.palette16 = preset.palette16;
+        theme.scheme_palette16 = preset.palette16;
         return;
     }
 
@@ -612,9 +648,11 @@ fn apply_color_scheme(theme: &mut Theme, settings: &crate::settings::Settings) {
 fn apply_user_scheme(theme: &mut Theme, user: &crate::settings::UserColorScheme) {
     if let Some(rgb) = parse_color_spec(&user.foreground) {
         theme.fg = rgb;
+        theme.scheme_fg = rgb;
     }
     if let Some(rgb) = parse_color_spec(&user.background) {
         theme.bg = rgb;
+        theme.scheme_bg = rgb;
     }
     if let Some(rgb) = parse_color_spec(&user.cursor) {
         theme.cursor_fg = rgb;
@@ -623,6 +661,7 @@ fn apply_user_scheme(theme: &mut Theme, user: &crate::settings::UserColorScheme)
     for (i, spec) in user.ansi_colors.iter().take(16).enumerate() {
         if let Some(rgb) = parse_color_spec(spec) {
             theme.palette16[i] = rgb;
+            theme.scheme_palette16[i] = rgb;
         }
     }
 }
@@ -789,33 +828,283 @@ mod tests {
         assert_eq!(t.cursor_style, CursorStyle::Block);
     }
 
+    // ── task0003 AC-5/AC-6/AC-7: palette reset restores palette16 too ──
+
     #[test]
-    fn apply_osc_104_empty_resets_all() {
+    fn apply_osc_104_empty_resets_overlay_and_restores_palette16_from_scheme() {
+        // AC-5 (TS-8): an empty-payload palette reset clears the whole
+        // overlay AND restores the 16-color array from the scheme
+        // mirror, undoing an OSC 4 set of an index below 16.
         let mut t = Theme::default();
-        t.palette256[5] = Some(Rgb(1, 2, 3));
-        t.palette256[200] = Some(Rgb(4, 5, 6));
+        assert!(t.apply_osc(4, "5;rgb:11/22/33"));
+        assert!(t.apply_osc(4, "200;rgb:44/55/66"));
+        let scheme_5 = t.scheme_palette16[5];
+
         assert!(t.apply_osc(104, ""));
+
         assert!(t.palette256.iter().all(|e| e.is_none()));
+        assert_eq!(t.palette16[5], scheme_5);
+        assert_ne!(t.palette16[5], Rgb(0x11, 0x22, 0x33));
     }
 
     #[test]
-    fn apply_osc_104_indexed_resets_only_listed() {
+    fn apply_osc_104_indexed_resets_only_listed_overlay_and_palette16() {
+        // AC-5 (TS-8): an explicit-index palette reset restores only the
+        // listed indices — both the overlay slot and, for an index below
+        // 16, the palette16 entry — leaving other set indices intact.
         let mut t = Theme::default();
-        t.palette256[5] = Some(Rgb(1, 2, 3));
-        t.palette256[6] = Some(Rgb(4, 5, 6));
+        assert!(t.apply_osc(4, "5;rgb:11/22/33"));
+        assert!(t.apply_osc(4, "6;rgb:44/55/66"));
+        let scheme_5 = t.scheme_palette16[5];
+
         assert!(t.apply_osc(104, "5"));
+
         assert!(t.palette256[5].is_none());
-        assert_eq!(t.palette256[6], Some(Rgb(4, 5, 6)));
+        assert_eq!(t.palette16[5], scheme_5);
+        assert_eq!(t.palette256[6], Some(Rgb(0x44, 0x55, 0x66)));
+        assert_eq!(t.palette16[6], Rgb(0x44, 0x55, 0x66));
     }
 
     #[test]
-    fn apply_osc_104_no_change_returns_false() {
+    fn apply_osc_104_indexed_reset_at_or_above_16_clears_overlay_only() {
+        // Edge case: an index of 16 or above has no palette16 slot, so
+        // only its overlay entry is cleared.
+        let mut t = Theme::default();
+        assert!(t.apply_osc(4, "200;rgb:44/55/66"));
+        assert!(t.apply_osc(104, "200"));
+        assert!(t.palette256[200].is_none());
+    }
+
+    #[test]
+    fn apply_osc_104_no_change_when_neither_overlay_nor_array_differs() {
+        // AC-6 (TS-9): a palette reset with nothing to clear and nothing
+        // to restore reports no change.
         let mut t = Theme::default();
         assert!(!t.apply_osc(104, "5"));
+        assert!(!t.apply_osc(104, ""));
+    }
+
+    #[test]
+    fn apply_osc_104_empty_reports_change_when_only_the_array_diverges_from_scheme() {
+        // AC-6 (TS-9): change reporting must not key off the overlay
+        // alone — a 16-color array that differs from the scheme mirror
+        // is itself a visible change, even with nothing in the overlay
+        // to clear.
+        let mut t = Theme::default();
+        t.palette16[3] = Rgb(9, 9, 9);
+        assert_ne!(t.palette16[3], t.scheme_palette16[3]);
+        assert!(t.palette256.iter().all(|e| e.is_none()));
+
+        assert!(t.apply_osc(104, ""));
+
+        assert_eq!(t.palette16[3], t.scheme_palette16[3]);
+    }
+
+    #[test]
+    fn apply_osc_104_indexed_reports_change_when_only_that_indexs_array_entry_diverges() {
+        // AC-6 (TS-9): same as above, for the explicit-index branch.
+        let mut t = Theme::default();
+        t.palette16[3] = Rgb(9, 9, 9);
+        assert!(t.apply_osc(104, "3"));
+        assert_eq!(t.palette16[3], t.scheme_palette16[3]);
+    }
+
+    /// SC-6's palette resolution rule, mirrored here for assertion only
+    /// (the production formula lives in `render::cell_inputs`, out of
+    /// this task's scope): the overlay wins when set; otherwise
+    /// palette16 for index < 16; otherwise the xterm 6x6x6 cube /
+    /// grayscale ramp for 16..=255.
+    fn sc6_resolve(theme: &Theme, index: usize) -> Rgb {
+        if let Some(rgb) = theme.palette256[index] {
+            return rgb;
+        }
+        if index < 16 {
+            return theme.palette16[index];
+        }
+        let idx = index as u8;
+        if idx < 232 {
+            let i = idx - 16;
+            let r = i / 36;
+            let g = (i % 36) / 6;
+            let b = i % 6;
+            let to_byte = |n: u8| -> u8 {
+                if n == 0 { 0 } else { 55 + n * 40 }
+            };
+            Rgb(to_byte(r), to_byte(g), to_byte(b))
+        } else {
+            let n = idx - 232;
+            let v = 8 + n * 10;
+            Rgb(v, v, v)
+        }
+    }
+
+    #[test]
+    fn apply_osc_104_post_reset_resolution_matches_scheme_for_0_15_and_cube_for_16_255() {
+        // AC-7 (TS-10, FR7): per SC-6, indices 0-15 resolve to the active
+        // scheme's palette value after a reset, and 16-255 still resolve
+        // by the xterm cube/grayscale rule.
+        let settings = crate::settings::Settings {
+            terminal_color_scheme: "monokai".to_string(),
+            ..Default::default()
+        };
+        let mut theme = Theme::from_settings(&settings);
+        assert!(theme.apply_osc(4, "3;rgb:11/22/33"));
+        assert!(theme.apply_osc(4, "100;rgb:44/55/66"));
+
+        assert!(theme.apply_osc(104, ""));
+
+        for i in 0..16 {
+            assert_eq!(sc6_resolve(&theme, i), theme.scheme_palette16[i]);
+        }
+        assert!(theme.palette256[100].is_none());
+        assert_eq!(sc6_resolve(&theme, 100), Rgb(0x87, 0x87, 0x00));
+    }
+
+    // ── task0003 AC-1/AC-2: scheme mirror seeding and update rules ──
+
+    #[test]
+    fn default_theme_scheme_mirrors_equal_construction_seed_constants() {
+        // AC-1: a freshly constructed theme's three new mirrors equal the
+        // same constants that seed the corresponding live fields.
+        let t = Theme::default();
+        assert_eq!(t.scheme_fg, DEFAULT_TERMINAL_FG);
+        assert_eq!(t.scheme_bg, DEFAULT_TERMINAL_BG);
+        assert_eq!(t.scheme_palette16, DEFAULT_PALETTE16);
+        assert_eq!(t.fg, t.scheme_fg);
+        assert_eq!(t.bg, t.scheme_bg);
+        assert_eq!(t.palette16, t.scheme_palette16);
+    }
+
+    #[test]
+    fn from_settings_preset_scheme_updates_all_three_mirrors_alongside_live_fields() {
+        // AC-2: applying a preset scheme updates scheme_fg / scheme_bg /
+        // scheme_palette16 alongside fg / bg / palette16.
+        let settings = crate::settings::Settings {
+            terminal_color_scheme: "monokai".to_string(),
+            ..Default::default()
+        };
+        let theme = Theme::from_settings(&settings);
+        assert_eq!(theme.scheme_fg, theme.fg);
+        assert_eq!(theme.scheme_bg, theme.bg);
+        assert_eq!(theme.scheme_palette16, theme.palette16);
+        assert_ne!(theme.scheme_fg, DEFAULT_TERMINAL_FG);
+    }
+
+    #[test]
+    fn from_settings_user_scheme_mirrors_update_per_field_and_per_index_guard() {
+        // AC-2: a user scheme updates a mirror only when the
+        // corresponding spec parses; the 16-color mirror is updated per
+        // index.
+        let settings = crate::settings::Settings {
+            terminal_color_scheme: "custom".to_string(),
+            custom_color_schemes: vec![crate::settings::UserColorScheme {
+                name: "custom".to_string(),
+                foreground: "#101010".to_string(),
+                background: "not-a-color".to_string(),
+                cursor: "#202020".to_string(),
+                selection: String::new(),
+                ansi_colors: vec!["#303030".to_string(), "not-a-color".to_string()],
+            }],
+            ..Default::default()
+        };
+        let theme = Theme::from_settings(&settings);
+
+        assert_eq!(theme.fg, Rgb(0x10, 0x10, 0x10));
+        assert_eq!(theme.scheme_fg, Rgb(0x10, 0x10, 0x10));
+
+        assert_eq!(theme.bg, DEFAULT_TERMINAL_BG);
+        assert_eq!(theme.scheme_bg, DEFAULT_TERMINAL_BG);
+
+        assert_eq!(theme.cursor_fg, Rgb(0x20, 0x20, 0x20));
+        assert_eq!(theme.scheme_cursor_fg, Rgb(0x20, 0x20, 0x20));
+
+        assert_eq!(theme.palette16[0], Rgb(0x30, 0x30, 0x30));
+        assert_eq!(theme.scheme_palette16[0], Rgb(0x30, 0x30, 0x30));
+
+        assert_eq!(theme.palette16[1], DEFAULT_PALETTE16[1]);
+        assert_eq!(theme.scheme_palette16[1], DEFAULT_PALETTE16[1]);
+    }
+
+    #[test]
+    fn apply_osc_set_sequences_never_change_scheme_mirrors() {
+        // AC-2: OSC 4 / 10 / 11 / 12 (set sequences) never write to any
+        // scheme mirror.
+        let mut t = Theme::default();
+        let seed = (t.scheme_fg, t.scheme_bg, t.scheme_cursor_fg, t.scheme_palette16);
+
+        assert!(t.apply_osc(4, "3;rgb:11/22/33"));
+        assert!(t.apply_osc(10, "rgb:44/55/66"));
+        assert!(t.apply_osc(11, "rgb:77/88/99"));
+        assert!(t.apply_osc(12, "rgb:aa/bb/cc"));
+
+        assert_eq!(
+            (t.scheme_fg, t.scheme_bg, t.scheme_cursor_fg, t.scheme_palette16),
+            seed
+        );
+    }
+
+    // ── task0003 AC-3/AC-4: fg/bg reset follows the active scheme ──
+
+    #[test]
+    fn from_settings_osc110_osc111_reset_to_active_scheme_not_hardcoded_default() {
+        // AC-3 (TS-6): under an active preset scheme, OSC 110 / 111
+        // restore the live fg/bg from the scheme mirrors, not the
+        // built-in `DEFAULT_TERMINAL_FG` / `DEFAULT_TERMINAL_BG`
+        // constants.
+        let settings = crate::settings::Settings {
+            terminal_color_scheme: "monokai".to_string(),
+            ..Default::default()
+        };
+        let mut theme = Theme::from_settings(&settings);
+        assert!(theme.apply_osc(10, "rgb:01/02/03"));
+        assert!(theme.apply_osc(11, "rgb:04/05/06"));
+
+        assert!(theme.apply_osc(110, ""));
+        assert!(theme.apply_osc(111, ""));
+
+        assert_eq!(theme.fg, Rgb(0xf8, 0xf8, 0xf2)); // monokai fg
+        assert_eq!(theme.bg, Rgb(0x27, 0x28, 0x22)); // monokai bg
+        assert_ne!(theme.fg, DEFAULT_TERMINAL_FG);
+        assert_ne!(theme.bg, DEFAULT_TERMINAL_BG);
+    }
+
+    #[test]
+    fn from_settings_user_scheme_unparseable_fg_bg_leaves_construction_seed_and_reset_restores_it()
+     {
+        // AC-4 (TS-7): a user scheme whose fg/bg spec fails to parse
+        // updates neither the live field nor its mirror — both keep the
+        // construction seed — so OSC 110 / 111 still restore that seed.
+        let settings = crate::settings::Settings {
+            terminal_color_scheme: "custom".to_string(),
+            custom_color_schemes: vec![crate::settings::UserColorScheme {
+                name: "custom".to_string(),
+                foreground: "not-a-color".to_string(),
+                background: "not-a-color".to_string(),
+                cursor: "not-a-color".to_string(),
+                selection: String::new(),
+                ansi_colors: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        let mut theme = Theme::from_settings(&settings);
+        assert_eq!(theme.fg, DEFAULT_TERMINAL_FG);
+        assert_eq!(theme.bg, DEFAULT_TERMINAL_BG);
+        assert_eq!(theme.scheme_fg, DEFAULT_TERMINAL_FG);
+        assert_eq!(theme.scheme_bg, DEFAULT_TERMINAL_BG);
+
+        theme.fg = Rgb(1, 2, 3);
+        theme.bg = Rgb(4, 5, 6);
+        assert!(theme.apply_osc(110, ""));
+        assert!(theme.apply_osc(111, ""));
+
+        assert_eq!(theme.fg, DEFAULT_TERMINAL_FG);
+        assert_eq!(theme.bg, DEFAULT_TERMINAL_BG);
     }
 
     #[test]
     fn apply_osc_110_resets_fg() {
+        // The no-active-scheme case: the mirror still holds the
+        // construction seed, so the reset restores that seed.
         let mut t = Theme::default();
         t.fg = Rgb(1, 2, 3);
         assert!(t.apply_osc(110, ""));
@@ -824,6 +1113,8 @@ mod tests {
 
     #[test]
     fn apply_osc_111_resets_bg() {
+        // The no-active-scheme case: the mirror still holds the
+        // construction seed, so the reset restores that seed.
         let mut t = Theme::default();
         t.bg = Rgb(1, 2, 3);
         assert!(t.apply_osc(111, ""));
