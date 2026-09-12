@@ -68,3 +68,44 @@ records:
       Note on execution: the branch was retired by fast-forwarding it to the
       integration tip (provably an ancestor) rather than by a force delete, so
       no unreachable commit was created.
+  - question_id: review.medium-finding-disposition
+    packet_id: null
+    answered_at: "2026-09-12T20:16:10+09:00"
+    source: codex-consultation
+    answer_mode: single_select
+    selected_option_ids: ["A"]
+    freeform: >-
+      Option A (follow the protocol): do not auto-fix the medium finding,
+      record it as `unresolved` in round1.yaml, and complete the review step
+      because residual_critical_high == 0.
+    normalized_answer: >-
+      Keep the mechanical auto-fix gate; record unresolved; complete the step.
+    resolution_note: >-
+      gate: user-instructed consultation. Review round 1 produced exactly one
+      finding (stable_id 13ce1dd741623d9b, severity medium): the AC-8
+      red_reason of this feature's own generated record
+      test-docs/ac7-red-reason-scope/task0001.tests.yaml claims a fixed-string
+      search of its own text for single-file phrasings "returns no match",
+      while `grep -Fn "only one file"` on that file returns line 101 and
+      `grep -Fn "lists only"` returns lines 43, 47 and 101 — the record quotes
+      the searched needles inline. The tension: the evaluator returned
+      `recommended_action: auto_fix`, but Phase R4's auto-fix candidate gate
+      admits only severity critical/high, and Phase R3b states
+      `recommended_action` is advice and never a decision. Options put to
+      Codex: (A) follow the protocol — no auto-fix, record `unresolved`,
+      complete the step; (B) adopt the evaluator's advice and bypass the gate,
+      on the grounds that the finding reproduces inside this feature's own
+      artifact the very defect class (SPEC NFR4) the feature exists to remove,
+      so leaving it repeats the history that created this task.
+      codex_consulted: true, answered (model gpt-5.6-sol). Codex chose A on
+      three grounds: an unattended orchestrator bypassing a written mechanical
+      gate at its own discretion destroys the determinism and auditability of
+      the decision; the impact stays inside documentation and touches neither
+      code behavior nor the completion gate, so `medium` is the correct
+      severity and no escalation to `high` is warranted; and recording the
+      finding as `unresolved` is not a repair but is this protocol's formal
+      hand-off to human review, which is preferable to auto-applying an edit no
+      reviewer approved. Adopted A. Option B was not chosen for those reasons.
+      The finding is persisted in full in reviews/round1.yaml and travels with
+      the PR, so the human evaluator sees it. fallback_provider: not needed.
+      opus_escalation: not run.
