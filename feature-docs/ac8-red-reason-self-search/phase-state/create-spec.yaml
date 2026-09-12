@@ -3,16 +3,16 @@ feature: ac8-red-reason-self-search
 phase: create-spec
 status: awaiting_answers
 generation: 1
-base_revision: 0002b7dcee5181426470782769d462934efd1fde
+base_revision: 7b384640ab063f482650f701292058151d949115
 last_input_digest: sha256:c95d8fc67943c08deadc3fe526d76e42473c0b5b337ec5db9ba1fdcd20f44090
 active_request_id: null
 packets:
   create-spec-q0001:
-    status: issued
+    status: answered
     issued_at: "2026-09-12T21:42:53+09:00"
     questions:
       - question_id: requirement.ac8-red-reason.correction-form
-        status: issued
+        status: answered
       - question_id: design-step.ac8-red-reason-self-search
         status: answered
 answers:
@@ -35,6 +35,19 @@ answers:
       Accept requirements-analyst's design_step_recommendation (skip): the
       change is one folded YAML scalar in a generated evidence record under
       test-docs/, with no UI surface and no runtime code path.
+  requirement.ac8-red-reason.correction-form:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-12T21:43:49+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [drop_needle_describe_property]
+    freeform: null
+    normalized_answer: >-
+      Drop the quoted needles from the AC-8 red_reason and state only the
+      directly verified property (exactly two paths, no Rust file, no
+      TypeScript file). Make no self-referential fixed-string-search claim
+      about the record's own text. Record this choice as an assumption
+      (batch-policies.yaml record_as_assumption: true).
 worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
