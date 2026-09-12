@@ -1,14 +1,28 @@
 schema_version: 1
 feature: osc-color-query-response
 phase: create-spec
-status: initialized
+status: awaiting_answers
 generation: 1
-base_revision: db7c27a17c2c628c4e5522a1f907fbc0114bd0e8
-last_input_digest: null
-active_request_id: null
-packets: {}
+base_revision: fae40a79cb1aceb8d4bba3808c8dcce423f69dfa
+last_input_digest: "sha256:46f4d2aab0009e98ebff798d8cc07917e3522ca5dae73e558f2b401611332385"
+active_request_id: create-spec-run-0001
+packets:
+  create-spec-q0001:
+    status: issued
+    issued_at: "2026-09-13T03:44:47+09:00"
+    questions:
+      - question_id: requirement.osc110-111-reset-target
+        status: issued
+      - question_id: requirement.osc104-palette16-residue
+        status: issued
+      - question_id: design-step.osc-color-query-response
+        status: issued
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: "sha256:46f4d2aab0009e98ebff798d8cc07917e3522ca5dae73e558f2b401611332385"
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
