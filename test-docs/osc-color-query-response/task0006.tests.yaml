@@ -1,0 +1,153 @@
+task_id: task0006
+baseline_failures: []
+final_failures: []
+notes: >-
+  Two separate test commands cover this task's two files: `crates/term_core`
+  runs standalone (`cargo test --manifest-path crates/term_core/Cargo.toml
+  --lib`, 854 passed / 0 failed after this task, baseline 850/0) and
+  `src-tauri` (`cargo test --manifest-path src-tauri/Cargo.toml --lib --
+  --test-threads=1`, 3334 passed / 0 failed after this task, baseline
+  3327/0). Both baselines and finals are fully green; the counts above are
+  the only difference (7 new src-tauri tests, 4 new term_core tests). The
+  worktree's `src-tauri/assets/fonts/` was empty (gitignored, never fetched
+  in this fresh worktree) which failed the src-tauri crate's build script
+  before any test could run; copied the font files from the main tree's
+  `src-tauri/assets/fonts/` (same gitignored, untracked location, no git
+  operation) to unblock `cargo test`/`cargo check` — a local build-
+  environment fix, not a source change.
+
+  Chose the two SC-8 budget values as this task's own judgement call (the
+  plan intentionally leaves the numbers to task0006, D11): 256 for the
+  per-dispatch answer budget (theme.rs) — covers querying every
+  representable palette index 0..=255 exactly once in one dispatch, the
+  largest legitimate single-dispatch use, with margin — and 8192 bytes for
+  the seam accumulation budget (osc_handler.rs) — comfortably fits a full
+  256-entry palette dump (up to ~29 bytes/response, ~7.4 KiB) while firmly
+  bounding payloads split across many dispatches in one parse pass.
+
+  Verified red/green honestly rather than trusting code review: after
+  writing both budget constants and both enforcement sites, temporarily
+  neutralized just the two enforcement checks (`if false && ...`, constants
+  and tests left intact) and reran the new tests to confirm each failed for
+  the right reason before restoring the checks and reconfirming green. One
+  test (`apply_osc_4_query_fanout_exhausted_budget_still_applies_later_set_elements_in_order`)
+  and the seam's drain-reset test were initially written with a query count
+  that did not actually exceed the budget, so they could not have failed
+  either way — rewritten to use a query count/response set that genuinely
+  exceeds the budget, then reconfirmed both red and green.
+acceptance_tests:
+  AC-1:
+    tests:
+      - render::theme::tests::apply_osc_4_query_fanout_exactly_at_budget_all_answered
+      - render::theme::tests::apply_osc_4_query_fanout_one_past_budget_drops_exactly_the_excess
+      - render::theme::tests::apply_osc_4_query_fanout_far_past_budget_still_caps_at_the_budget
+    red_confirmed: true
+    red_reason: >-
+      With the per-dispatch budget check in apply_palette_set neutralized
+      (`if false && outcome.responses.len() >= MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH`),
+      apply_osc_4_query_fanout_one_past_budget_drops_exactly_the_excess
+      failed with `assertion left == right failed: left: 257 right: 256`
+      and apply_osc_4_query_fanout_far_past_budget_still_caps_at_the_budget
+      failed with `left: 261 right: 256`. Restoring the check made both
+      pass; apply_osc_4_query_fanout_exactly_at_budget_all_answered passes
+      identically before and after since nothing exceeds the budget at that
+      exact boundary (documented boundary coverage, not a differentiator).
+  AC-2:
+    tests:
+      - osc_handler::tests::test_seam_byte_budget_boundary_second_full_budget_response_is_dropped
+      - osc_handler::tests::test_seam_byte_budget_caps_accumulation_split_across_several_dispatches
+      - osc_handler::tests::test_seam_byte_budget_resets_after_drain_so_a_later_query_is_answered
+    red_confirmed: true
+    red_reason: >-
+      With the seam's byte-budget check in consult_osc_responder neutralized
+      (`if false && self.response_queue.len() + response.len() > MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS`),
+      test_seam_byte_budget_boundary_second_full_budget_response_is_dropped
+      failed with `left: 16384 right: 8192`,
+      test_seam_byte_budget_caps_accumulation_split_across_several_dispatches
+      failed with "pending content never exceeds the seam's byte budget:
+      20000 bytes", and test_seam_byte_budget_resets_after_drain_so_a_later_query_is_answered
+      failed with `left: 24576 right: 8192` (rewritten from an initial
+      version using exactly one budget-sized response, which could not
+      distinguish capped from uncapped behavior and stayed green either
+      way — replaced with three oversized responses per dispatch so the
+      pre-drain assertion is a genuine differentiator). Restoring the check
+      made all three pass.
+  AC-3:
+    tests:
+      - render::theme::tests::apply_osc_4_query_fanout_within_budget_is_unchanged_in_every_response
+    red_confirmed: false
+    red_reason: >-
+      AC-3 characterizes UNCHANGED behavior for payloads within budget, so
+      this test cannot be made to fail first by construction — it passed
+      identically with the enforcement checks neutralized and restored.
+      Primary evidence for AC-3 is the full pre-existing OSC 4/10/11/12 test
+      suite (apply_osc_4_single_palette_entry,
+      apply_osc_4_chained_entries, apply_osc_4_mixed_set_query_set_applies_sets_and_answers_query_in_order,
+      the terminator-matching tests, etc. — see task0002's tests.yaml)
+      continuing to pass unmodified after this task's change.
+  AC-4:
+    tests:
+      - render::theme::tests::apply_osc_4_query_only_payload_beyond_budget_reports_no_visible_change
+      - render::theme::tests::apply_osc_4_query_fanout_exhausted_budget_still_applies_later_set_elements_in_order
+    red_confirmed: true
+    red_reason: >-
+      apply_osc_4_query_fanout_exhausted_budget_still_applies_later_set_elements_in_order
+      (query count rewritten to MAX+5, exceeding the budget, after an
+      initial exactly-at-budget version that could not have failed either
+      way) failed with `left: 261 right: 256` under the neutralized check,
+      confirming the answer-count half of AC-4; the SET-still-applies and
+      no-visible-change halves were true before and after (set application
+      and the visible-change flag are never gated by the budget in either
+      version), so apply_osc_4_query_only_payload_beyond_budget_reports_no_visible_change
+      passed both times by construction.
+  AC-5:
+    tests:
+      - render::theme::tests::apply_osc_4_query_fanout_at_osc_payload_length_limit_stays_bounded_by_the_budget
+      - osc_handler::tests::test_seam_byte_budget_holds_under_pathological_multi_dispatch_fanout
+    red_confirmed: true
+    red_reason: >-
+      apply_osc_4_query_fanout_at_osc_payload_length_limit_stays_bounded_by_the_budget
+      (a programmatically built ~16 MiB payload, mirroring term_core's
+      private MAX_OSC_LEN) failed under the neutralized theme-side check
+      with `left: 4194304 right: 256`.
+      test_seam_byte_budget_holds_under_pathological_multi_dispatch_fanout
+      (10,000 dispatches of a 128-byte fixed response) failed under the
+      neutralized seam-side check with "pending content stays bounded
+      regardless of dispatch count: 1280000 bytes". Restoring both checks
+      made both pass, together covering AC-5's two bounds (answer count at
+      the producer, pending bytes at the seam).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not independently behavior-testable — verified by inspection: every
+      AC-1/AC-2/AC-5 test above asserts against
+      MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH (theme.rs) or
+      MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS (osc_handler.rs), never a
+      literal 256 or 8192, so changing either constant's value updates the
+      test assertions automatically instead of silently voiding them.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build-outcome criterion, not a unit-test criterion. Verified by
+      running `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path
+      src-tauri/Cargo.toml --no-default-features` (passed, "Finished `dev`
+      profile") and by inspection: the osc_handler.rs change adds a `usize`
+      constant and a length comparison, no new dependency and no
+      GUI-feature-gated code, so `term_core` acquires no new GUI-layer
+      dependency (NFR4/NFR5 unaffected).
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Not independently testable as a behavioral assertion (asserting the
+      absence of a log line requires a log-capture harness this project
+      does not have for this path) — verified by inspection: neither the
+      apply_palette_set budget check (a `continue` in a `while let` loop)
+      nor the consult_osc_responder budget check (a `continue` in a `for`
+      loop) calls any logging macro, and neither function's return type
+      carries a Result/error variant (OscOutcome has no error field; the
+      responder-consulting function returns `()`), so dropping past either
+      budget is structurally incapable of producing a log line or an error
+      value.
