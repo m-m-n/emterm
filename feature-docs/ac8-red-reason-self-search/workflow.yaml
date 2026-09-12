@@ -1,0 +1,219 @@
+schema_version: 1
+feature: ac8-red-reason-self-search
+created: '2026-09-12'
+base_branch: main
+goal: |
+  # AC-8 red_reason が自身のテキストで反証される固定文字列検索の結果を記録している
+
+  種別: バグ
+
+  ## 現象 (必須)
+  `test-docs/ac7-red-reason-scope/task0001.tests.yaml:100` の AC-8 エントリの `red_reason` が、自身のテキストに対する固定文字列検索の結果として次を記録している。
+  > a fixed-string search of this record's own text for a single-file phrasing of that change set (e.g. "only one file", "lists only ... test-docs/ac7-red-reason-scope") returns no match.
+
+  しかしコミット済みのファイルに対して同じ検索を再実行すると矛盾する。
+  - `grep -Fn "only one file" test-docs/ac7-red-reason-scope/task0001.tests.yaml` → 101 行目がヒット
+  - `grep -Fn "lists only" test-docs/ac7-red-reason-scope/task0001.tests.yaml` → 43・47・101 行目がヒット
+
+  レコード自身が検索対象の文字列（needle）をインラインで引用しているため、記録された「no match」は書かれたとおりには成立していない。
+
+  AC-8 の他の実質的な主張はいずれも独立に確認済みで正確だった。タスクコミットは `test-docs/ac2-red-reason-accuracy/task0001.tests.yaml` と `test-docs/ac7-red-reason-scope/task0001.tests.yaml` のちょうど 2 パスのみを変更しており、Rust ファイルも TypeScript ファイルも含まない。欠陥は記録された検索結果の一点に限定されており、変更セットの記述そのものは正しい。
+
+  ## 再現手順 (必須)
+  1. ブランチ `em-workflow/ac7-red-reason-scope/integration` を checkout する
+  2. `test-docs/ac7-red-reason-scope/task0001.tests.yaml` の AC-8 エントリ（100 行目付近）の `red_reason` を読む
+  3. `grep -Fn "only one file" test-docs/ac7-red-reason-scope/task0001.tests.yaml` を実行する
+  4. `grep -Fn "lists only" test-docs/ac7-red-reason-scope/task0001.tests.yaml` を実行する
+  5. 手順 2 が記録している「returns no match」と、手順 3・4 の実結果を突き合わせる
+
+  ## 期待する挙動 (必須)
+  AC-8 の `red_reason` が記録する検査が、実際に成立する検査になっている。具体的には次のいずれか。
+  - このレコードは自身の変更セットについて single-file の主張を行っておらず、single-file 表現の出現箇所は否定例としての引用のみである、と述べる
+  - 引用していた needle を落とし、検証した性質を直接記述する
+
+  2 パスの列挙と「Rust ファイルも TypeScript ファイルも無い」という認定はそのまま保持する。
+
+  ## 完了の定義 (必須)
+  - [ ] 再現手順 3・4 の grep 結果と AC-8 の `red_reason` の記述が矛盾しない
+  - [ ] 2 パスの列挙と no-Rust / no-TypeScript の認定が保持されている
+  - [ ] ファイルが YAML として parse できる
+  - [ ] 編集が AC-8 の `red_reason` スカラー内に限定されている
+
+  ## 該当箇所 (任意)
+  `test-docs/ac7-red-reason-scope/task0001.tests.yaml:100`（AC-8 エントリ、`red_reason` の末尾節）
+
+  ## 実害・発生条件 (任意)
+  このレコードは後続タスクが失敗の帰属先を判断するために読む機械可読な証跡であり、裏付けの無い観測が記録されていると誤った前提を渡す。これは feature `ac7-red-reason-scope` がまさに取り除こうとしていた欠陥クラス（SPEC NFR4）が、この feature 自身のレコードの中で再生産された形になっている。
+
+  深刻度は medium。ファイルは parse でき、2 パスの記述は正しく、SPEC NFR6 / AC-8（自身の変更セットを single file として表現しない）に違反しておらず、コードの挙動には影響しない。
+
+  由来: feature `ac7-red-reason-scope` の review round 1。stable_id `13ce1dd741623d9b`（comprehensive 観点、confidence 85）。severity medium のため Phase R4 の auto-fix ゲート（critical / high のみ）の対象外で `unresolved` のまま残した。
+
+  ---
+
+  ## 実行時の追加指示（ユーザー）
+  実装が終わったら、統合ブランチをリモートに push して gh pr create で base_branch 宛の Pull Request を作成すること。統合ブランチはローカル・リモートともに残す（base_branch への自動マージはしない）。
+  不明点は Codex に相談し、比較的良いと判断した選択肢を採用すること。
+  その議論の内容を Notion に記録すること。
+parent_branch: em-workflow/ac8-red-reason-self-search/integration
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/md3.rs
+  components:
+    rust:
+      language: Rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib -- --test-threads=1
+      format_command: ''
+      e2e_test_command: ''
+    webview-ts:
+      language: TypeScript
+      build_command: bun run build:viewer && bun run build:settings
+      test_command: bun run typecheck && bun test
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 4fda2b448a3f7d5c9b13be1de6d9f55be6dd31d7
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: Resolved by the create-spec.design-step gate (decide_autonomously) in packet create-spec-q0001.
+    The change is a single folded YAML scalar in a generated evidence record under test-docs/; there is
+    no UI surface, no visual artifact, and no runtime code path, so the project's MD3 design system is
+    not engaged.
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: null
+  failed_kind: null
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Remove the self-falsifying search clause
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  FR2:
+    title: State only the directly verified property
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS2
+  FR3:
+    title: Preserve the two-path enumeration
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  FR4:
+    title: Preserve the no-Rust / no-TypeScript determination
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  FR5:
+    title: Preserve the no-observable-pre-state framing
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  FR6:
+    title: Confine the edit to the AC-8 red_reason scalar
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS3
+  FR7:
+    title: Preserve the file's parse shape and scalar form
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  NFR1:
+    title: Compatibility — no runtime behavior change
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS4
+  NFR2:
+    title: Style consistency with the file's other red_reason scalars
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+  NFR3:
+    title: Every remaining assertion is re-runnable
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS2
+  NFR4:
+    title: Record remains machine-readable for failure attribution
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS1
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
