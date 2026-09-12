@@ -1,9 +1,9 @@
 schema_version: 1
 feature: scroll-region-scrollback
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
-base_revision: 284fd959413de6d15440122f7e5e4fa175602574
+base_revision: b4191719040d74588c320ab794baa8d5a7e68076
 last_input_digest: sha256:e96624a6df86aac215183b6e4d465565e12fea185b0df79a8e7e245db7ce0d26
 active_request_id: null
 packets: {}
