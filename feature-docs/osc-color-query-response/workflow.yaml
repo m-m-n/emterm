@@ -204,7 +204,7 @@ tasks:
     domains: [input-handling, concurrency, external-io]
     complexity: high
     requirements: [FR6, NFR2, NFR3, NFR6]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/osc-color-query-response/task0004
 

@@ -82,3 +82,21 @@ records:
     "the OSC parsing and core-terminal modules inside crates/term_core/src/" and instructs to report as
     a plan deviation; the containment check in the review / verify phases handles them as ordinary deviations.
     codex_consulted: false (a rule application, not a gate).'
+- question_id: implement.deviation-decline.task0004
+  packet_id: implement-wake-0004
+  answered_at: '2026-09-13T05:18:00+09:00'
+  source: batch-orchestrator-rule
+  answer_mode: rule_application
+  selected_option_ids:
+  - decline
+  freeform: null
+  normalized_answer: task0004 の報告した deviation を declared change set へ自動追加しない
+  resolution_note: 'rule: implement-phase.md Deviation auto-addition rule; task_id: task0004; declined
+    paths: src-tauri/src/tabs/tests/output_pipeline.rs, src-tauri/src/tabs/tests/replay.rs; missing evidence
+    part: part 2 (the identifier of the acceptance criterion or requirement that would otherwise be dropped)
+    — the deviation entry cites the project test convention (#[cfg(test)] submodule files under src-tauri/src/tabs/tests/
+    for the production files in scope) but names no AC-n or requirement id, and part 3 names no specific
+    test that cannot be written or cannot pass. The second reported deviation adds no path (it records
+    that output_pipeline.rs / replay.rs / mod.rs needed no functional change), so there is nothing to
+    add for it. The containment check in the review / verify phases handles both as ordinary deviations.
+    codex_consulted: false (a rule application, not a gate).'
