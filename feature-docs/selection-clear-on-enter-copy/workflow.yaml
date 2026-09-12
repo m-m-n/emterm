@@ -100,7 +100,8 @@ workflow:
       manual release-build checklist and is deferred to the user's explicit
       instruction per VERIFICATION.md; no automated scenario was skipped.
   - id: retrospect
-    status: pending
+    status: completed
+    completed_at_commit: 89956bf414ecde57a4ffff525be305c3bf304cd4
 
 tasks:
   task0001:

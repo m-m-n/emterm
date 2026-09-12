@@ -1,0 +1,30 @@
+feature: selection-clear-on-enter-copy
+collected_at: "2026-09-12T23:55:00+09:00"
+session_ids: [01a09619-5f43-763c-9996-3eaeb70f5dd5]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: >-
+        差分が dirty_rows_this_frame の再描画経路と毎キー入力の hot path に触れるため、
+        選択クリアがフル再描画や余計な再描画要求を誘発しないかを確認する。
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - note: >-
+      comprehensive#0 が schema-valid な空 findings を返しつつ、summary 本文には
+      "no review performed" と書いた。構造フィールドと要約文の意味的な矛盾を
+      protocol は malformed として扱わないため、評価者自身の再検査で round を
+      完了させた（batch-audit.yaml の review.comprehensive-coverage-consultation）。
+      矛盾検知の扱いを protocol 側で定義するかは検討余地がある。
+  - note: >-
+      SPEC の散文が宣言する引数順 (is_enter, forwarded) と実装
+      should_clear_selection_on_forward(forwarded, is_enter) が逆。本体が
+      可換 AND のため無害だが、SPEC 側の記述を実装に合わせる価値はある。
+  - note: >-
+      Codex 相談で OpenAI provider が usage limit 超過、litellm の 1 回目も
+      600s タイムアウト。2 回目の -p litellm -m vertex-glm-5.2 で応答を得た。
+      無人 batch では provider フォールバックに時間予算を見込む必要がある。
