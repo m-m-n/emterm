@@ -1,11 +1,11 @@
 schema_version: 1
 feature: ac8-red-reason-self-search
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: fb6a2f723d24990e5f9d71229e60f804005feb85
-last_input_digest: null
-active_request_id: null
+base_revision: 1a34b3817bf216d68ad037d693f17f84b3f1aaeb
+last_input_digest: sha256:c95d8fc67943c08deadc3fe526d76e42473c0b5b337ec5db9ba1fdcd20f44090
+active_request_id: create-spec-run-0001
 packets: {}
 answers:
   create-spec.feature-identity:
@@ -16,7 +16,11 @@ answers:
     selected_option_ids: [derive_from_task_description]
     freeform: null
     normalized_answer: ac8-red-reason-self-search
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: dispatched
+    input_digest: sha256:c95d8fc67943c08deadc3fe526d76e42473c0b5b337ec5db9ba1fdcd20f44090
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
