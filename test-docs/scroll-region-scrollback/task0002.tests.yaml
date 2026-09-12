@@ -1,0 +1,110 @@
+task_id: task0002
+baseline_failures: []          # 3278 passed, 0 failed, 3 ignored (cargo test --manifest-path src-tauri/Cargo.toml --lib)
+final_failures: []             # 3284 passed, 0 failed, 3 ignored (same command, after implementation)
+acceptance_tests:
+  AC-1:
+    tests:
+      - settings::tests::scroll_region_scrollback_enabled_defaults_to_true
+      - settings::tests::scroll_region_scrollback_enabled_missing_key_resolves_to_default_true
+      - settings::tests::scroll_region_scrollback_enabled_null_resolves_to_default_true
+      - settings::tests::scroll_region_scrollback_enabled_explicit_false_deserializes
+      - settings::tests::scroll_region_scrollback_enabled_explicit_false_round_trips
+    red_confirmed: true
+    red_reason: >-
+      Temporarily flipped default_scroll_region_scrollback_enabled() to
+      `false`: scroll_region_scrollback_enabled_defaults_to_true,
+      _missing_key_resolves_to_default_true, and
+      _null_resolves_to_default_true failed with "assertion failed:
+      ...scroll_region_scrollback_enabled" (crates/app_settings, cargo test
+      --manifest-path crates/app_settings/Cargo.toml --lib).
+  AC-2:
+    tests:
+      - settings::tests::default_scroll_region_scrollback_enabled_is_true
+      - settings::tests::loader_scroll_region_scrollback_enabled_absent_leaves_default
+      - settings::tests::loader_scroll_region_scrollback_enabled_present_applies_value
+    red_confirmed: true
+    red_reason: >-
+      Temporarily disabled the RawSettings::merge_into arm for this field
+      (wrapped in `if false`): loader_scroll_region_scrollback_enabled_present_applies_value
+      failed with "assertion failed: !s.scroll_region_scrollback_enabled".
+  AC-3:
+    tests:
+      - app::tests::font_settings::spawn_initial_tab_seeds_scroll_region_scrollback_gate_from_settings
+    red_confirmed: true
+    red_reason: >-
+      Temporarily removed the core.set_scroll_region_scrollback_enabled(...)
+      seeding call in Tab::build: test failed with "assertion failed:
+      !app_disabled.tabs[0].core.lock().get_scroll_region_scrollback_enabled()".
+  AC-4:
+    tests:
+      - app::tests::font_settings::apply_settings_updates_scroll_region_scrollback_gate_on_every_tab
+    red_confirmed: true
+    red_reason: >-
+      Temporarily removed the core.set_scroll_region_scrollback_enabled(...)
+      call from App::apply_settings' per-tab block: test failed with
+      "assertion failed: !tab.core.lock().get_scroll_region_scrollback_enabled()".
+  AC-5:
+    tests:
+      - app::tests::font_settings::apply_settings_scroll_region_scrollback_toggle_preserves_scrollback
+    red_confirmed: true
+    red_reason: >-
+      Temporarily added a core.reset() call right after the new live-apply
+      setter call (to prove the test actually detects a scrollback
+      discard): test failed with "assertion `left == right` failed:
+      settings apply must not discard scrollback / left: 0 / right: 17".
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Verifiable outcome is a build check (CARGO_TARGET_DIR=src-tauri/target
+      cargo check --manifest-path src-tauri/Cargo.toml --no-default-features),
+      run and confirmed green after implementation. Not run before the
+      schema change because a plain `bool` field addition to the
+      always-built app_settings/settings/tabs/app modules has no
+      GUI-feature-gated failure mode to observe red against; the check's
+      real purpose (catching an accidental GUI-only dependency) does not
+      apply to this change.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Aggregate final-state criterion: full app_settings crate suite (`cargo
+      test --manifest-path crates/app_settings/Cargo.toml --lib`, 41
+      passed), full src-tauri lib suite (project_commands.test, 3284
+      passed / 0 failed / 3 ignored vs. a clean 3278/0/3 baseline), and
+      `cargo fmt --all --check` showing no diff for any of the 10 files
+      this task touched. Not independently red-green'd as a unit; it is
+      the sum of AC-1..AC-6's already-confirmed reds plus a clean-suite
+      regression check.
+deviations:
+  - file: crates/term_core/src/snapshot.rs
+    reason: >-
+      Adding the pub(crate) scroll_region_scrollback_enabled field to
+      TerminalCore's exhaustive struct literal broke two other exhaustive
+      constructors outside the declared file scope (TerminalCore::from_snapshot
+      V2 and the V1 legacy restore path). Both seed the field to `true`
+      (fresh factory default), consistent with IMPLEMENTATION.md D5's
+      documented known limitation that the off-thread snapshot-replay path
+      does not carry this member across.
+  - file: src-tauri/src/settings/tests.rs
+    reason: >-
+      AC-2's unit test ("assert both directions: key present, key absent")
+      naturally belongs beside the existing window_sidebar_overlay loader
+      tests in this file, which is wired via `#[cfg(test)] mod tests;` in
+      src-tauri/src/settings/mod.rs. The task plan's Files to Modify listed
+      only mod.rs and raw.rs for this module; this test file was not listed
+      but is the only place `RawSettings::merge_into`'s behavior is unit
+      tested in this codebase.
+notes: >-
+  Ran `bash scripts/fetch-fonts.sh` once at the start (network fetch of
+  pinned, SHA256-verified bundled font assets into
+  src-tauri/assets/fonts/, gitignored) because the worktree's build.rs
+  otherwise panics before any cargo test/check can run — this is
+  worktree-local build-infra setup, not a task file change, and is not
+  part of the git diff. Also ran the app_settings crate's own test suite
+  directly (`cargo test --manifest-path crates/app_settings/Cargo.toml
+  --lib`) and the term_core crate's own test suite
+  (`cargo test --manifest-path crates/term_core/Cargo.toml --lib`) as
+  supplementary checks, since project_commands.test's
+  `--manifest-path src-tauri/Cargo.toml --lib` only exercises the
+  `emterm` binary crate's own tests, not its path-dependency crates.

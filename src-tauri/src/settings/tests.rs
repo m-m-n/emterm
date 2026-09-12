@@ -872,6 +872,29 @@ fn loader_cursor_blink_can_be_disabled() {
     assert!(!s.cursor_blink);
 }
 
+// ── scroll_region_scrollback_enabled (scroll-region-scrollback task0002
+// AC-2) ──────────────────────────────────────────────────────────────
+
+#[test]
+fn default_scroll_region_scrollback_enabled_is_true() {
+    let s = Settings::new();
+    assert!(s.scroll_region_scrollback_enabled);
+}
+
+#[test]
+fn loader_scroll_region_scrollback_enabled_absent_leaves_default() {
+    // An overlay without the key leaves the default (`true`) untouched.
+    let s = load_json(r#"{"cursor_blink": false}"#);
+    assert!(s.scroll_region_scrollback_enabled);
+}
+
+#[test]
+fn loader_scroll_region_scrollback_enabled_present_applies_value() {
+    // An overlay carrying the key applies that value.
+    let s = load_json(r#"{"scroll_region_scrollback_enabled": false}"#);
+    assert!(!s.scroll_region_scrollback_enabled);
+}
+
 // ── shift_enter_behavior loader (task0001 AC-1 / AC-2) ─────────────
 
 #[test]

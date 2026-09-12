@@ -621,6 +621,9 @@ impl App {
                 let mut core = tab.core.lock();
                 core.set_cursor_blink(self.settings.cursor_blink);
                 core.set_cursor_style(self.settings.cursor_style.as_cursor_shape_u8());
+                core.set_scroll_region_scrollback_enabled(
+                    self.settings.scroll_region_scrollback_enabled,
+                );
                 core.mark_all_dirty();
             }
             tab.set_fold_enabled(self.settings.fold_enabled);
