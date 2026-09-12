@@ -3,9 +3,9 @@ feature: ac8-red-reason-self-search
 phase: create-spec
 status: dispatching
 generation: 1
-base_revision: 345138be167f0650f418d625c8d6797111aac705
+base_revision: d836b78132481f83c1a7c7b681ba26453fb0b987
 last_input_digest: sha256:369ac051884d5fa30622707862314a7514b71377594f1e9ea37f2f025c22a0da
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -58,10 +58,16 @@ worker_runs:
     input_digest: sha256:3954e078ee1defded58af2fd73d5b8571df8b4ebd25ca073e244cf792fae80fb
     output_digest: null
   - request_id: create-spec-run-0003
-    status: dispatched
+    status: completed
     input_digest: sha256:369ac051884d5fa30622707862314a7514b71377594f1e9ea37f2f025c22a0da
     output_digest: null
-artifacts: []
+artifacts:
+  - path: feature-docs/ac8-red-reason-self-search/REQUIREMENTS.md
+    sha256: sha256:3d1e3fd6619e48af9c10dcc0984074210301081452cfc826f82ddb89ef8c1df6
+    produced_by: create-spec-run-0003
+  - path: feature-docs/ac8-red-reason-self-search/SPEC.md
+    sha256: sha256:2b606b7feb0612314ac8a3894b41df9f07914ab11aa2dd8ee41a7deeec6fc98d
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
