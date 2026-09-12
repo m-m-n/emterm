@@ -99,3 +99,36 @@ records:
       decision D5, but names no AC-n of task0002's own plan and no requirement id
       registered in workflow.yaml, so the path is not auto-added to
       tasks.task0002.files.
+  - question_id: review.orchestrator-verified-compile-error
+    packet_id: null
+    answered_at: "2026-09-13T02:29:11+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [inject_verified_defect_into_loop2]
+    freeform: null
+    normalized_answer: >-
+      オーケストレーター自身が承認済みビルドコマンドで再現したコンパイルエラーを、
+      出典を tool:cargo-check と明記した critical finding として auto-fix loop 2 に投入し、
+      cargo check が通るまで review を completed にしない。
+    resolution_note: >-
+      gate: なし (batch-mode.md の unlisted-gate fallback に該当する非パケットゲート)。
+      状況: round 1 の auto-fix loop 1 が terminal_core.rs の重複メンバーを除去した後も
+      crates/term_core/src/snapshot.rs に E0062 の重複初期化子が 2 箇所残っていたが、
+      loop 1 後の in-loop 再レビュー 5 観点はいずれもこれを報告せず、architecture#loop1 は
+      逆に「All five TerminalCore construction sites (new() + four snapshot.rs paths)
+      are updated」と事実に反する主張をした。オーケストレーターが
+      CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml
+      を実行し、snapshot.rs:328 と snapshot.rs:477 の E0062 を一次情報として再現した。
+      選択肢 A: 検証済み欠陥を loop 2 に critical として投入して修正し、通るまで完了させない。
+      選択肢 B: finding を作らず、レビュアーの見落としを記録した上で機械的ゲートどおり
+      review を completed にし、後段の verify フェーズでビルド失敗させて rework に回す。
+      codex_consulted: true (ただし Codex CLI は usage limit で応答せず、
+      fallback provider が回答)。fallback_provider: litellm / muse-spark。
+      opus_escalation: false。fallback の判断: A。理由は「自分で掴んだ不具合を黙って
+      通すのは不誠実」「出どころを自分の実行結果と明記すれば捏造にならない」
+      「1 回の修正と確認で済み、次工程を転ばせるより安い」「見落としたまま成功扱いを
+      残さない」。選ばなかった B の利点は手順遵守のみで、偽の成功記録を残す点が
+      本末転倒と判定された。orchestrator は A を採用し、finding f192d3cf2bed9a7a の
+      sources を "tool:cargo-check (orchestrator-verified build output)" と明記して
+      レビュアー由来に見せかけないようにした。loop 2 適用後に同じビルドコマンドで
+      term_core のコンパイル成功を確認済み。
