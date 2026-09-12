@@ -100,7 +100,7 @@ workflow:
     base_commit: 8cc28f6aea0d4688fa1f3f4d7a6e490f63ee387e
     completed_at_commit: 18f6ca5c1df6c48f2caf139773452cf60f869ebe
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
   - id: retrospect
@@ -128,11 +128,15 @@ tasks:
     branch: em-workflow/ac7-red-reason-scope/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
   perspectives: {}
   residual_critical_high: 0
   needs_rework: false
+  plan:
+    floor: [comprehensive, spec]
+    discretionary: []
+    cross_validation: false
 
 requirements:
   FR1:
