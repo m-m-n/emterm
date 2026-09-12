@@ -314,6 +314,12 @@ impl TerminalCore {
             kitty_placeholder_active: false,
             scroll_region_top: snapshot.scroll_region_top,
             scroll_region_bottom: snapshot.scroll_region_bottom,
+            // Not part of the snapshot format (D2: a plain boolean pushed in
+            // from the application layer, never persisted terminal state).
+            // Restored cores default enabled, matching `TerminalCore::new()`
+            // (D3); the application layer re-applies the live setting after
+            // the swap, same as any other snapshot-rebuilt core.
+            scroll_region_scrollback_enabled: true,
             // task0002 D5: a snapshot-rebuilt core always starts with an
             // empty pending device-response store, regardless of what the
             // serialized snapshot's originating core had queued (the field
@@ -453,6 +459,12 @@ impl TerminalCore {
             kitty_placeholder_active: false,
             scroll_region_top: snapshot.scroll_region_top,
             scroll_region_bottom: snapshot.scroll_region_bottom,
+            // Not part of the snapshot format (D2: a plain boolean pushed in
+            // from the application layer, never persisted terminal state).
+            // Restored cores default enabled, matching `TerminalCore::new()`
+            // (D3); the application layer re-applies the live setting after
+            // the swap, same as any other snapshot-rebuilt core.
+            scroll_region_scrollback_enabled: true,
             // task0002 D5: a snapshot-rebuilt core always starts with an
             // empty pending device-response store, regardless of what the
             // serialized snapshot's originating core had queued (the field
