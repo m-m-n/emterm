@@ -1,14 +1,79 @@
 schema_version: 1
 feature: selection-clear-on-enter-copy
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: null
-last_input_digest: null
-active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+base_revision: 251550e1e51131aa6ddc3a4e11cb6aaa340f62fd
+last_input_digest: "sha256:8e20ed90e4d36b2be270c77df48d871bb55f94cddfc0afebd7617a403c6ba1a0"
+active_request_id: create-spec-run-0001
+packets:
+  create-spec-q0001:
+    status: issued
+    issued_at: "2026-09-12T22:40:00+09:00"
+    questions:
+      - question_id: requirement.enter-clear-trigger-scope
+        status: answered
+      - question_id: testing.clear-site-unit-test-shape
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.enter-clear-trigger-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-12T22:50:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [enter_only]
+    freeform: null
+    normalized_answer: "Enter (logical_key == Named(Enter)) のときだけクリアする。forwarded 分岐の内側で is_enter を条件にする。"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (policy action: codex_consultation).
+      options considered: enter_only / all_forwarded_keys. chosen: enter_only.
+      codex_consulted: true (turn 1 timed out at 600s after repository exploration;
+      turn 2 with inlined code answered). fallback provider answered:
+      litellm/vertex-glm-5.2 (CODEX_FALLBACK entry 2). opus_escalation: not run
+      (suggestion mapped onto an existing option_id). key points: `forwarded` is true
+      for any key producing PTY bytes including printable characters, so
+      all_forwarded_keys contradicts the ticket's explicit out-of-scope statement
+      ("clearing on general character input breaks select-to-read-while-typing");
+      `is_enter` already exists in the same scope; bare modifiers never reach the
+      branch (winit_key_to_bytes returns None) and IME-commit Enter early-returns.
+      recorded as assumption per batch policy record_as_assumption: true.
+  testing.clear-site-unit-test-shape:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-12T22:50:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [both]
+    freeform: null
+    normalized_answer: "純粋関数への切り出し + App 状態遷移テストに加えて、Enter 側クリア呼び出しの配置を include_str! のソース走査アサーションで固定する。"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (policy action: codex_consultation).
+      options considered: pure_helper / source_scan / both. chosen: both (the worker's
+      tentative position was pure_helper; Codex argued for both and the orchestrator
+      judged it the better option). codex_consulted: true. fallback provider answered:
+      litellm/vertex-glm-5.2. opus_escalation: not run. key points: the copy site is
+      directly callable from a test (key_routing takes &mut App plus a host trait
+      object, so a fake host works), but the Enter-side clear sits inside the winit
+      event-handler body which no test can drive; a source-scan placement assertion is
+      the only guard for it, and both styles already exist in
+      src-tauri/src/window_host/tests.rs.
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-12T22:50:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "analyst の design_step_recommendation (skip) をそのまま採用する。"
+    resolution_note: >-
+      gate: create-spec.design-step; references/batch-policies.yaml entry
+      action: select, option_id: decide_autonomously.
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: "sha256:8e20ed90e4d36b2be270c77df48d871bb55f94cddfc0afebd7617a403c6ba1a0"
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
