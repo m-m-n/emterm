@@ -1,0 +1,115 @@
+task_id: task0004
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - tabs::tests::output_pipeline::process_combined_delivers_da2_response_exactly_once
+      - tabs::tests::output_pipeline::plain_tab_every_response_type_delivered_exactly_once_and_absent_from_grid
+      - tabs::tests::output_pipeline::mux_pane_every_response_type_delivered_exactly_once_and_absent_from_grid
+      - tabs::tests::output_pipeline::apply_queued_live_output_delivers_device_response_exactly_once
+      - tabs::tests::output_pipeline::plain_tab_osc_color_query_alongside_csi_query_delivers_csi_response_once
+    red_confirmed: false
+    red_reason: >
+      The three drain sites' generic take_response()/write_device_response()
+      route pre-exists (from the already-merged tmux-startup-query-response-leak
+      feature) and is exhaustively pinned by the pre-existing suite
+      (device_response_cases exercised across all three sites); no code in
+      output_pipeline.rs/replay.rs changed for this task (see the diff), so
+      an OSC color-query response will travel through the identical,
+      unmodified route once task0002 registers the SC-2 responder (out of
+      this task's scope — term_core has no such responder yet in this
+      worktree, confirmed by inspection). The one new test added for this AC
+      (an OSC query alongside a CSI query in one chunk) was already green
+      before any change; it demonstrates the drain is unaffected by AC-3's
+      classifier extension rather than proving new behavior this task
+      introduced.
+  AC-2:
+    tests:
+      - tabs::tests::output_pipeline::plain_tab_multi_query_chunk_delivers_all_responses_in_order_exactly_once
+      - tabs::tests::output_pipeline::mux_pane_multi_query_chunk_delivers_all_responses_in_order_exactly_once
+    red_confirmed: false
+    red_reason: >
+      The ordered multi-response accumulation (SC-3-equivalent) pre-exists
+      (term_core's response_queue / take_response, from the already-merged
+      tmux-startup-query-response-leak feature) and is already exhaustively
+      tested for five concurrent CSI queries in one chunk across both the
+      plain-tab and mux-pane paths. No code change was needed or made for
+      this criterion; these pre-existing tests are cited as the pinning
+      evidence per this task's Design section ("adds no fourth site... locks
+      that in with tests").
+  AC-3:
+    tests:
+      - tabs::tests::output_pipeline::payload_has_device_query_detects_osc_color_query_tokens
+      - tabs::tests::output_pipeline::payload_has_device_query_osc_split_across_frames_is_incomplete_in_each_half
+      - tabs::tests::output_pipeline::osc_color_query_frame_breaks_coalesce_run
+    red_confirmed: true
+    red_reason: >
+      payload_has_device_query only scanned for CSI (`ESC [`) sequences
+      before this task; it recognized no OSC sequence at all (verified by
+      reading the pre-change source). Confirmed red by temporarily disabling
+      the new OSC branch (`if false && ...`) and re-running:
+      payload_has_device_query_detects_osc_color_query_tokens failed at the
+      first assertion ("OSC 10 (fg) query, BEL-terminated" not detected) and
+      osc_color_query_frame_breaks_coalesce_run failed (left: 1, right: 2 —
+      the OSC query frame no longer broke the coalesce run). This resolves
+      SPEC assumption A7 / IMPLEMENTATION.md D5: the classifier did NOT
+      already recognize OSC 4/10/11/12 color queries; this task extends it
+      in src-tauri/src/tabs/input.rs.
+  AC-4:
+    tests:
+      - tabs::tests::replay::reset_frame_for_replay_discards_historic_device_responses_including_osc_color_query
+      - tabs::tests::replay::apply_offthread_swap_discards_historic_device_responses_including_osc_color_query
+    red_confirmed: false
+    red_reason: >
+      Both discard call sites (reset_frame_for_replay's and
+      apply_offthread_swap's unconditional take_response()) are pre-existing
+      and content-agnostic; neither was modified by this task. term_core does
+      not yet answer OSC 4/10/11/12 (task0002's responder, out of scope), so
+      these tests exercise the discard against DA1/CPR queries (which DO
+      produce responses today) mixed with an inert OSC color query, and pass
+      without any code change — they pin the invariant against a future
+      regression once the responder lands. The pre-existing
+      reset_frame_for_replay_discards_historic_device_responses regression is
+      left completely unmodified per this task's "extend, don't rewrite"
+      instruction; a sibling test adds the OSC coverage.
+      apply_offthread_swap's discard site had NO prior regression test at
+      all before this task — added fresh, covering both the historic
+      DA1/CPR case and the new OSC case together.
+  AC-5:
+    tests:
+      - tabs::tests::output_pipeline::inactive_pane_query_produces_no_response_while_active_pane_query_still_answered
+    red_confirmed: false
+    red_reason: >
+      The pane-scoped routing this test pins (handle_pty_output's
+      active-pane filter in src-tauri/src/tabs/mux_link.rs) is pre-existing
+      code outside this task's file scope (input.rs / output_pipeline.rs /
+      replay.rs / mod.rs); this task did not modify it, so there is nothing
+      to red-confirm by code change. D9 was instead confirmed by code
+      inspection: src-tauri/src/mux/daemon, src-tauri/src/mux/session, and
+      src-tauri/src/mux/bridge never construct a term_core::TerminalCore —
+      grepped for term_core/TerminalCore usage in all three and found none
+      beyond doc-comment cross-references — so term_core's OSC/CSI dispatch
+      is the ONLY place a query can be answered, and only the GUI Tab
+      currently holding a pane as "active" in its window group ever routes
+      that pane's live bytes to its own core (the test above pins this: a
+      query addressed to a background pane in the same Tab's window group
+      gets no reply, while the same query addressed to the active pane still
+      gets exactly one). Combined with the daemon's pre-existing
+      single-live-output-owner-per-session eviction on Attach
+      (src-tauri/src/mux/session/pane/output_target.rs, out of this task's
+      scope), this establishes "exactly one core answers a query for a given
+      pane" for a remote pane. The within-scope test would fail (a second
+      pane's query would also be answered) if this pane filter regressed.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      VERIFICATION.md lists TS-19 (cross-platform parity) as a Manual check.
+      Verified by diff inspection: `git diff` for this task (input.rs's
+      classifier extension plus the two test files) introduces no
+      #[cfg(unix)], #[cfg(windows)], or libc:: usage, and no new module or
+      feature-gate boundary; grepping the diff for those patterns returned
+      zero matches. output_pipeline.rs, replay.rs, and mod.rs required no
+      functional change at all, so the tabs module's existing
+      #[cfg(feature = "gui")] gating is untouched.
