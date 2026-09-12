@@ -189,7 +189,7 @@ tasks:
     domains: [input-handling, ui]
     complexity: medium
     requirements: [FR7, FR8, FR9]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/osc-color-query-response/task0003
   task0004:
