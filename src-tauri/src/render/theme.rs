@@ -350,6 +350,24 @@ pub struct OscOutcome {
     pub responses: Vec<Vec<u8>>,
 }
 
+/// SC-8(a) (osc-color-query-response task0006, D11): the per-dispatch
+/// answer budget for `Theme::apply_palette_set` (OSC 4). A palette payload
+/// may repeat the `?` query token indefinitely — bounded only by
+/// `term_core`'s OSC payload length limit — and every token would otherwise
+/// allocate its own response before this dispatch ever returns. Once a
+/// dispatch has produced this many answers, `apply_palette_set` stops
+/// allocating further ones for the remainder of the SAME dispatch: the
+/// remaining tokens are still walked and every `index;spec` SET pair is
+/// still applied, in payload order, exactly as if the budget did not exist
+/// (AC-4) — only the ANSWER is withheld, and withheld before allocation,
+/// never after (AC-1). Dropping past this budget is silent: not an error,
+/// not logged (AC-8).
+///
+/// 256 covers querying every representable palette index (0..=255) exactly
+/// once within a single dispatch — the largest legitimate use — with no
+/// observable change to any payload that stays within it (AC-3).
+const MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH: usize = 256;
+
 impl Theme {
     /// Default cursor foreground color: the built-in `emterm` preset's
     /// cursor color, used to seed `Theme::default()` /
@@ -479,6 +497,18 @@ impl Theme {
             // A query token answers with SC-6's resolved value for this
             // index and never mutates state (SC-4 invariant).
             if trimmed_spec == "?" {
+                // SC-8(a) (task0006, D11): a payload may repeat the `?`
+                // token indefinitely (bounded only by the OSC payload
+                // length limit), and each one would otherwise allocate its
+                // own response. Once this dispatch has produced the
+                // budget's worth of answers, the remaining query tokens are
+                // still consumed by this walk exactly as before — so every
+                // `index;spec` SET pair later in the payload is still
+                // applied in payload order (AC-4) — they simply produce no
+                // answer, and no answer is allocated for them (AC-1).
+                if outcome.responses.len() >= MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH {
+                    continue;
+                }
                 let rgb = self.resolve_palette_color(index);
                 if let Some(resp) = format_osc_color_response(4, Some(index), rgb, terminator) {
                     outcome.responses.push(resp);
@@ -1631,6 +1661,154 @@ mod tests {
         assert!(
             outcome.responses.is_empty(),
             "the trailing query element is past code 12 and never reached"
+        );
+    }
+
+    // ── SC-8(a): per-dispatch answer budget (task0006) ──────────────────
+    //
+    // Boundary cases: exactly at the budget (all answered), one past it
+    // (the excess dropped, none allocated), a query-only payload beyond
+    // budget still reporting no visible change (AC-4), a SET element after
+    // the budget is exhausted still applying in payload order (AC-4), a
+    // payload comfortably within budget behaving exactly as before this
+    // task (AC-3), and a pathological payload built at the OSC payload
+    // length limit (AC-5).
+
+    #[test]
+    fn apply_osc_4_query_fanout_exactly_at_budget_all_answered() {
+        // Boundary: exactly MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH query
+        // tokens all produce an answer.
+        let mut t = Theme::default();
+        let payload = (0..MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH)
+            .map(|_| "0;?")
+            .collect::<Vec<_>>()
+            .join(";");
+        let outcome = t.apply_osc(4, &payload, OscTerminator::Bel);
+        assert_eq!(
+            outcome.responses.len(),
+            MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH,
+            "AC-1: every token within the budget is answered"
+        );
+    }
+
+    #[test]
+    fn apply_osc_4_query_fanout_one_past_budget_drops_exactly_the_excess() {
+        // Boundary: one token past the budget produces no additional
+        // answer (AC-1).
+        let mut t = Theme::default();
+        let n = MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH + 1;
+        let payload = (0..n).map(|_| "0;?").collect::<Vec<_>>().join(";");
+        let outcome = t.apply_osc(4, &payload, OscTerminator::Bel);
+        assert_eq!(
+            outcome.responses.len(),
+            MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH,
+            "AC-1: the token past the budget produces no answer"
+        );
+    }
+
+    #[test]
+    fn apply_osc_4_query_fanout_far_past_budget_still_caps_at_the_budget() {
+        // AC-1: several tokens past the budget still cap at exactly the
+        // budget's answer count, never more.
+        let mut t = Theme::default();
+        let n = MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH + 5;
+        let payload = (0..n).map(|_| "0;?").collect::<Vec<_>>().join(";");
+        let outcome = t.apply_osc(4, &payload, OscTerminator::Bel);
+        assert_eq!(outcome.responses.len(), MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH);
+    }
+
+    #[test]
+    fn apply_osc_4_query_only_payload_beyond_budget_reports_no_visible_change() {
+        // AC-4: a query-only payload never sets the visible-change flag,
+        // whether or not the answer budget is exhausted.
+        let mut t = Theme::default();
+        let n = MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH + 3;
+        let payload = (0..n).map(|_| "0;?").collect::<Vec<_>>().join(";");
+        let outcome = t.apply_osc(4, &payload, OscTerminator::Bel);
+        assert!(!outcome.changed);
+    }
+
+    #[test]
+    fn apply_osc_4_query_fanout_exhausted_budget_still_applies_later_set_elements_in_order() {
+        // AC-4: every SET element of the payload is still applied in
+        // payload order regardless of whether the answer budget is
+        // exhausted — the budget governs answers only, never set
+        // semantics (D11). Query count exceeds the budget (not merely
+        // equals it) so the answer-count assertion actually distinguishes
+        // capped from uncapped behavior.
+        let mut t = Theme::default();
+        let mut payload = (0..MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH + 5)
+            .map(|_| "0;?".to_string())
+            .collect::<Vec<_>>()
+            .join(";");
+        payload.push_str(";200;rgb:01/02/03");
+        let outcome = t.apply_osc(4, &payload, OscTerminator::Bel);
+        assert_eq!(
+            outcome.responses.len(),
+            MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH,
+            "no more answers than the budget"
+        );
+        assert!(
+            outcome.changed,
+            "the SET element after the exhausted budget still applies"
+        );
+        assert_eq!(
+            t.palette256[200],
+            Some(Rgb(1, 2, 3)),
+            "SET element applied in payload order despite the exhausted answer budget"
+        );
+    }
+
+    #[test]
+    fn apply_osc_4_query_fanout_within_budget_is_unchanged_in_every_response() {
+        // AC-3: a payload comfortably within the budget is unchanged in
+        // every observable respect — same answers, in payload order, with
+        // the request's terminator, and no visible-change flag.
+        let mut t = Theme::default();
+        let payload = (0..10usize)
+            .map(|i| format!("{i};?"))
+            .collect::<Vec<_>>()
+            .join(";");
+        let outcome = t.apply_osc(4, &payload, OscTerminator::St);
+        assert!(
+            !outcome.changed,
+            "answering queries is never a visible change"
+        );
+        assert_eq!(outcome.responses.len(), 10);
+        for (i, resp) in outcome.responses.iter().enumerate() {
+            let text = String::from_utf8(resp.clone()).expect("response is valid UTF-8");
+            assert!(
+                text.starts_with(&format!("\u{1b}]4;{i};rgb:")),
+                "response order and index unchanged: {text}"
+            );
+            assert!(
+                text.ends_with("\u{1b}\\"),
+                "ST terminator echoed back verbatim: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_osc_4_query_fanout_at_osc_payload_length_limit_stays_bounded_by_the_budget() {
+        // AC-5: a pathological chained payload built at the OSC payload
+        // length limit completes with the answer count bounded by the
+        // SC-8(a) budget. 16 MiB mirrors `term_core`'s private
+        // `MAX_OSC_LEN` (crates/term_core/src/parser/mod.rs) — duplicated
+        // here because that constant is not `pub` across the crate
+        // boundary. Built programmatically (never compared as a whole byte
+        // string) since the payload is multiple megabytes.
+        const OSC_PAYLOAD_LENGTH_LIMIT: usize = 16 * 1024 * 1024;
+        let mut t = Theme::default();
+        let token = "0;?;";
+        let mut payload = token.repeat(OSC_PAYLOAD_LENGTH_LIMIT / token.len());
+        payload.pop(); // drop the trailing separator so it parses as pairs
+        assert!(payload.len() >= OSC_PAYLOAD_LENGTH_LIMIT - token.len());
+        let outcome = t.apply_osc(4, &payload, OscTerminator::Bel);
+        assert_eq!(
+            outcome.responses.len(),
+            MAX_PALETTE_QUERY_RESPONSES_PER_DISPATCH,
+            "AC-5: the answer count stays bounded by the per-dispatch budget \
+             even at the OSC payload length limit"
         );
     }
 

@@ -27,23 +27,52 @@ pub trait OscResponder: Send {
     /// terminator kind that ended the string.
     ///
     /// Returns zero or more complete response byte sequences to append, in
-    /// order, to `term_core`'s pending response content (SC-3). An empty
+    /// order, to `term_core`'s pending response content (SC-3, narrowed by
+    /// SC-8(b) — see [`MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS`]). An empty
     /// `Vec` means "no response for this code" — not an error, not a state
     /// change — and leaves any already-pending content untouched.
     fn respond(&self, code: u16, payload: &str, terminator: OscTerminator) -> Vec<Vec<u8>>;
 }
 
+/// SC-8(b) (osc-color-query-response task0006, D11): the accumulation byte
+/// budget for responder-produced content appended at the seam below. A
+/// per-dispatch answer budget on the producer side (the GUI theme, which
+/// `term_core` never sees — NFR4) caps a single dispatch, but that cap alone
+/// is bypassable by splitting one payload across many dispatches within a
+/// single parse pass, each individually within the per-dispatch budget.
+/// This seam is the only place that sees the running total (it checks
+/// directly against [`TerminalCore::response_queue`]'s current length, so
+/// the budget "resets" the instant [`TerminalCore::take_response`] drains
+/// the queue — no separate counter is kept). Once appending a response
+/// would push the pending total past this budget, that response is dropped
+/// silently instead: not an error, not logged (AC-8) — the bytes originate
+/// in an untrusted PTY stream and logging them is itself an amplification
+/// channel.
+///
+/// This budget governs ONLY responder-produced content (the newly reachable
+/// amplification this task closes); it does not apply to the small,
+/// fixed-size device replies (DA1/DA2/DSR/DECRPM/CPR) that
+/// [`crate::csi_device`] appends to the same queue via `write_response` —
+/// those were never unbounded and predate this feature.
+pub const MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS: usize = 8192;
+
 impl TerminalCore {
     /// Consult the registered [`OscResponder`], if any, and append every
-    /// byte sequence it returns to the pending response store (SC-2, SC-3).
-    /// A no-op when nothing is registered (AC-3): no response is produced,
-    /// no panic, and `term_core`'s existing behavior for every OSC code is
-    /// unchanged.
+    /// byte sequence it returns to the pending response store (SC-2, SC-3),
+    /// up to [`MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS`] (SC-8(b)) — a
+    /// response whose addition would push the pending total past the budget
+    /// is dropped rather than appended, silently (AC-8). A no-op when
+    /// nothing is registered (AC-3): no response is produced, no panic, and
+    /// `term_core`'s existing behavior for every OSC code is unchanged.
     fn consult_osc_responder(&mut self, code: u16, payload: &str, terminator: OscTerminator) {
         let Some(responder) = self.osc_responder.as_deref() else {
             return;
         };
         for response in responder.respond(code, payload, terminator) {
+            if self.response_queue.len() + response.len() > MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS
+            {
+                continue;
+            }
             self.response_queue.extend_from_slice(&response);
         }
     }
@@ -305,7 +334,7 @@ fn parse_emterm_fold_mark(data: &str) -> Option<(crate::terminal_core::FoldMarkK
 
 #[cfg(test)]
 mod tests {
-    use super::{OscResponder, OscTerminator};
+    use super::{MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS, OscResponder, OscTerminator};
     use crate::terminal_core::TerminalCore;
 
     // ── SC-1 / SC-2 / SC-3: terminator carriage + host-responder seam
@@ -452,6 +481,124 @@ mod tests {
         expected.extend_from_slice(b"COLOR-REPLY");
         assert_eq!(drained, expected);
         assert!(core.take_response().is_empty(), "second drain is empty");
+    }
+
+    // ── SC-8(b): seam accumulation byte budget (task0006) ───────────────
+    //
+    // Boundary cases: exactly at the budget (fully appended), one past it
+    // (dropped entirely, no partial append), the budget resetting with the
+    // pending content after a drain, several dispatches within one parse
+    // pass each individually under budget still bounding the running
+    // total (AC-2 — the scenario the per-dispatch cap alone cannot close),
+    // and a pathological multi-dispatch fan-out (AC-5).
+
+    #[test]
+    fn test_seam_byte_budget_boundary_second_full_budget_response_is_dropped() {
+        // AC-2: a response that exactly fills the budget is appended in
+        // full; a second one after it — which would push the pending total
+        // past the budget — is dropped entirely rather than partially
+        // appended.
+        let full_budget_response = vec![b'Y'; MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS];
+        let (mut core, _recorder) = core_with_fixed_responder(4, vec![full_budget_response]);
+
+        core.process_pty_data_fully(b"\x1b]4;1;?\x07");
+        assert_eq!(
+            core.get_response_len() as usize,
+            MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS,
+            "AC-2: a response that exactly fills the budget is appended in full"
+        );
+
+        core.process_pty_data_fully(b"\x1b]4;1;?\x07");
+        assert_eq!(
+            core.get_response_len() as usize,
+            MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS,
+            "AC-2: pending content never exceeds the budget — the second \
+             response is dropped entirely, not partially appended"
+        );
+    }
+
+    #[test]
+    fn test_seam_byte_budget_resets_after_drain_so_a_later_query_is_answered() {
+        // Test Notes boundary case: a budget-exhausting payload followed by
+        // a drain and a fresh query — the budget "resets" with the pending
+        // content (it is measured directly against the current queue
+        // length, never a separate persistent counter), so a later
+        // dispatch after the drain is answered up to the full budget
+        // again, not permanently exhausted. Three budget-sized responses
+        // per dispatch (rather than exactly one) makes this a real
+        // red/green test: without the cap the first dispatch alone would
+        // already accumulate 3x the budget.
+        let oversized_responses = vec![vec![b'Z'; MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS]; 3];
+        let (mut core, _recorder) = core_with_fixed_responder(4, oversized_responses);
+
+        core.process_pty_data_fully(b"\x1b]4;1;?\x07");
+        assert_eq!(
+            core.get_response_len() as usize,
+            MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS,
+            "the exhausting payload is capped at the budget before the drain"
+        );
+        let drained = core.take_response();
+        assert_eq!(drained.len(), MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS);
+        assert!(core.get_response_bytes().is_empty(), "drain empties the pending store");
+
+        core.process_pty_data_fully(b"\x1b]4;1;?\x07");
+        assert_eq!(
+            core.get_response_len() as usize,
+            MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS,
+            "the budget resets with the pending content after a drain, not \
+             a separate persistent counter that would keep it exhausted"
+        );
+    }
+
+    #[test]
+    fn test_seam_byte_budget_caps_accumulation_split_across_several_dispatches() {
+        // AC-2: the per-dispatch answer budget alone (theme.rs SC-8(a)) is
+        // bypassable by splitting one payload across many dispatches
+        // within a single parse pass, each individually within that
+        // budget — this is exactly that scenario, driven by a test-local
+        // responder returning fixed-size byte sequences, needing no theme.
+        let fixed_response = vec![b'X'; 100];
+        let (mut core, _recorder) = core_with_fixed_responder(4, vec![fixed_response.clone()]);
+        // 200 separate OSC 4 dispatches in ONE parse pass: 200 * 100 =
+        // 20000 bytes if unbounded, comfortably over the seam's budget.
+        let mut input = Vec::new();
+        for _ in 0..200 {
+            input.extend_from_slice(b"\x1b]4;1;?\x07");
+        }
+        core.process_pty_data_fully(&input);
+        let pending_len = core.get_response_bytes().len();
+        assert!(
+            pending_len <= MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS,
+            "AC-2: pending content never exceeds the seam's byte budget: {pending_len} bytes"
+        );
+        assert!(
+            pending_len < 200 * fixed_response.len(),
+            "sanity: some responses were actually dropped, not merely small"
+        );
+    }
+
+    #[test]
+    fn test_seam_byte_budget_holds_under_pathological_multi_dispatch_fanout() {
+        // AC-5 (seam side): even when a very large number of dispatches,
+        // each already small the way theme.rs's SC-8(a) keeps them, arrive
+        // within a single parse pass, the seam's pending total never
+        // exceeds the byte budget (SC-8(b)). Built programmatically and
+        // asserted on length only, never by comparing whole byte strings.
+        let per_dispatch_response = vec![b'Q'; 128];
+        let (mut core, _recorder) =
+            core_with_fixed_responder(4, vec![per_dispatch_response]);
+        let mut input = Vec::new();
+        for _ in 0..10_000 {
+            input.extend_from_slice(b"\x1b]4;1;?\x07");
+        }
+        core.process_pty_data_fully(&input);
+        let pending_len = core.get_response_bytes().len();
+        assert!(
+            pending_len <= MAX_OSC_RESPONDER_BYTES_PER_PARSE_PASS,
+            "AC-5: pending content stays bounded regardless of dispatch count: \
+             {pending_len} bytes"
+        );
+        assert!(pending_len > 0, "sanity: at least the first responses were appended");
     }
 
     #[test]
