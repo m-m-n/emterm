@@ -1,49 +1,65 @@
 schema_version: 1
 feature: osc-color-query-response
 records:
-  - question_id: requirement.osc110-111-reset-target
-    packet_id: create-spec-q0001
-    answered_at: "2026-09-13T04:06:48+09:00"
-    source: batch-codex-consultation
-    answer_mode: single_select
-    selected_option_ids: [reset_to_scheme]
-    freeform: null
-    normalized_answer: "OSC 110/111 reset to the active color scheme via new scheme_fg / scheme_bg fields"
-    resolution_note: >-
-      gate: create-spec.requirement-clarification (listed in
-      batch-policies.yaml with action: codex_consultation);
-      options: reset_to_scheme / report_as_is; choice: reset_to_scheme;
-      codex_consulted: true; fallback provider answered: yes (stderr
-      CODEX_FALLBACK: entry 2 litellm/vertex-glm-5.2); opus escalation: not
-      run; consultation turns: 3 (turns 1 and 2 returned CODEX_TIMEOUT after
-      600 s with repeated provider model-refresh errors, turn 3 answered).
-      Key points of the discussion: xterm / VTE / Ghostty / WezTerm define
-      OSC 110/111 "reset to default" as restoring the user-configured color,
-      not a hard-coded constant; the current bright-green DEFAULT_TERMINAL_FG
-      (0x40ff40) fallback is a latent on-screen rendering bug independent of
-      the query feature; OSC 112 already restores scheme_cursor_fg, making
-      the 110/111 constants an internal inconsistency rather than an
-      intentional semantic. The analyst's own tentative position was the
-      same option.
-  - question_id: requirement.osc104-palette16-residue
-    packet_id: create-spec-q0001
-    answered_at: "2026-09-13T04:06:48+09:00"
-    source: batch-codex-consultation
-    answer_mode: single_select
-    selected_option_ids: [restore_scheme_palette]
-    freeform: null
-    normalized_answer: "OSC 104 also restores palette16 from the active color scheme"
-    resolution_note: >-
-      gate: create-spec.requirement-clarification (listed in
-      batch-policies.yaml with action: codex_consultation);
-      options: restore_scheme_palette / clear_overlay_only; choice:
-      restore_scheme_palette; codex_consulted: true (same single batched
-      consultation as requirement.osc110-111-reset-target); fallback
-      provider answered: yes (litellm/vertex-glm-5.2); opus escalation: not
-      run. Key points of the discussion: xterm defines OSC 104 as resetting
-      the palette to its default resource values; since OSC 4 writes into
-      palette16[i] as well as palette256[i] for i < 16, clearing only the
-      palette256 overlay leaves palette16 permanently polluted, so after
-      "set index 5, then OSC 104" index 5 renders wrong forever — a latent
-      on-screen bug, not merely a query-answer discrepancy. The analyst's
-      own tentative position was the same option.
+- question_id: requirement.osc110-111-reset-target
+  packet_id: create-spec-q0001
+  answered_at: '2026-09-13T04:06:48+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - reset_to_scheme
+  freeform: null
+  normalized_answer: OSC 110/111 reset to the active color scheme via new scheme_fg / scheme_bg fields
+  resolution_note: 'gate: create-spec.requirement-clarification (listed in batch-policies.yaml with action:
+    codex_consultation); options: reset_to_scheme / report_as_is; choice: reset_to_scheme; codex_consulted:
+    true; fallback provider answered: yes (stderr CODEX_FALLBACK: entry 2 litellm/vertex-glm-5.2); opus
+    escalation: not run; consultation turns: 3 (turns 1 and 2 returned CODEX_TIMEOUT after 600 s with
+    repeated provider model-refresh errors, turn 3 answered). Key points of the discussion: xterm / VTE
+    / Ghostty / WezTerm define OSC 110/111 "reset to default" as restoring the user-configured color,
+    not a hard-coded constant; the current bright-green DEFAULT_TERMINAL_FG (0x40ff40) fallback is a latent
+    on-screen rendering bug independent of the query feature; OSC 112 already restores scheme_cursor_fg,
+    making the 110/111 constants an internal inconsistency rather than an intentional semantic. The analyst''s
+    own tentative position was the same option.'
+- question_id: requirement.osc104-palette16-residue
+  packet_id: create-spec-q0001
+  answered_at: '2026-09-13T04:06:48+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - restore_scheme_palette
+  freeform: null
+  normalized_answer: OSC 104 also restores palette16 from the active color scheme
+  resolution_note: 'gate: create-spec.requirement-clarification (listed in batch-policies.yaml with action:
+    codex_consultation); options: restore_scheme_palette / clear_overlay_only; choice: restore_scheme_palette;
+    codex_consulted: true (same single batched consultation as requirement.osc110-111-reset-target); fallback
+    provider answered: yes (litellm/vertex-glm-5.2); opus escalation: not run. Key points of the discussion:
+    xterm defines OSC 104 as resetting the palette to its default resource values; since OSC 4 writes
+    into palette16[i] as well as palette256[i] for i < 16, clearing only the palette256 overlay leaves
+    palette16 permanently polluted, so after "set index 5, then OSC 104" index 5 renders wrong forever
+    — a latent on-screen bug, not merely a query-answer discrepancy. The analyst''s own tentative position
+    was the same option.'
+- question_id: create-spec.command-approval
+  packet_id: null
+  answered_at: '2026-09-13T04:13:38+09:00'
+  source: batch-decision-table
+  answer_mode: multi_select
+  selected_option_ids: []
+  freeform: null
+  normalized_answer: All workflow.yaml command strings were already on the approval list; nothing was
+    newly auto-recorded.
+  resolution_note: 'gate: create-spec.command-approval; policy action: auto_record; refusal_patterns:
+    none matched. Commands carried in workflow.yaml project.components, each verified already present
+    in bash_guard.py --list, so zero commands were newly recorded: [1] CARGO_TARGET_DIR=src-tauri/target
+    cargo check --manifest-path src-tauri/Cargo.toml; [2] CARGO_TARGET_DIR=src-tauri/target cargo test
+    --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1; [3] CARGO_TARGET_DIR=src-tauri/target
+    cargo check --manifest-path crates/term_core/Cargo.toml; [4] CARGO_TARGET_DIR=src-tauri/target cargo
+    test --manifest-path crates/term_core/Cargo.toml --lib; [5] CARGO_TARGET_DIR=src-tauri/target cargo
+    check --manifest-path src-tauri/Cargo.toml --no-default-features; [6] bun run build:viewer && bun
+    run build:settings; [7] bun test. ORCHESTRATOR DECISION recorded here for the human evaluator: requirements-analyst
+    detected ''make build'' as the rust build command from .claude/rules/core-commands.md, and it is NOT
+    on the approval list. It was deliberately NOT auto-recorded and NOT used as a build_command. Reason:
+    ''make build'' writes the release binary to src-tauri/target-host/release/emterm, which .claude/rules/core-build-location.md
+    designates as the single source of truth for the binary the user launches; running it from this feature''s
+    integration worktree during an unattended verify would replace the user''s running binary with unreviewed
+    feature code. The non-destructive ''cargo check'' forms above are used for build verification instead.
+    The release build and the manual Codex TUI acceptance check (SPEC TS14) remain the user''s own step.'
