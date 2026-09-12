@@ -165,7 +165,8 @@ workflow:
       evaluator. No requirement is marked excluded, so no scenario was
       skipped for that reason.
   - id: retrospect
-    status: in_progress
+    status: completed
+    completed_at_commit: f3e79d67cc9d5e94e643303ee5bca8e1e88471a5
 
 tasks:
   task0001:
