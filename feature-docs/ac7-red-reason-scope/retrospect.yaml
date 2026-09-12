@@ -1,0 +1,49 @@
+feature: ac7-red-reason-scope
+collected_at: "2026-09-12T20:23:00+09:00"
+session_ids:
+  - 01a0955a-4cb3-77b1-b10b-4cf975b54885.jsonl
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - note: >-
+      An acceptance criterion that asks a task to describe its own change set is
+      not satisfiable at the moment the implementer inspects git: the record file
+      the criterion lives in does not exist yet. Resolved in create-plan by
+      pairing a prospective two-path statement (option A) with a git-anchored
+      verification scenario (TS-5) rather than by parsing the record's prose.
+      Gate: create-plan.ac8-verification-anchor.
+  - note: >-
+      The same self-reference trap then bit the generated record itself: AC-8's
+      red_reason claimed a fixed-string search of its own text "returns no
+      match", but the record quotes the searched needles inline, so the search
+      matches. Review round 1 caught it (stable_id 13ce1dd741623d9b, medium).
+      A recorded search result whose needles appear in the recording is
+      self-falsifying by construction.
+  - note: >-
+      The evaluator returned recommended_action auto_fix on a medium finding,
+      while Phase R4's auto-fix gate admits critical/high only. Codex consultation
+      (gpt-5.6-sol) backed keeping the mechanical gate: an unattended orchestrator
+      that bypasses a written gate at its own discretion loses determinism and
+      auditability. Recorded unresolved and filed as a separate Notion task.
+      Gate: review.medium-finding-disposition.
+  - note: >-
+      task0001's first launch was orphaned - the launching session died before
+      the implementer reported. Orphan recovery + batch auto-retry (1 of 1) had
+      to decide between reusing the stale worktree and a clean re-attempt from
+      the integration tip. Chose the clean re-attempt after confirming the
+      orphaned worktree held zero commits and an empty git status.
+      Gate: implement.orphan-retry-shape.
+  - note: >-
+      Two environment frictions surfaced in verify, neither a code defect:
+      build.rs aborts with build_rs.font_missing in a fresh worktree until
+      scripts/fetch-fonts.sh + bun install + the two bundle builds have run; and
+      `bunx biome format .` exits non-zero on
+      src-tauri/web-shared/settings/types.ts, which is byte-identical to main.
+      Whole-repo formatting and change-set verification are worth keeping
+      separate. Gate: verify.preexisting-format-drift-disposition.
