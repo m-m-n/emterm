@@ -132,3 +132,44 @@ records:
       sources を "tool:cargo-check (orchestrator-verified build output)" と明記して
       レビュアー由来に見せかけないようにした。loop 2 適用後に同じビルドコマンドで
       term_core のコンパイル成功を確認済み。
+  - question_id: verify.format-drift-scope
+    packet_id: null
+    answered_at: "2026-09-13T03:05:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [treat_as_pass]
+    freeform: null
+    normalized_answer: >-
+      main クレートの `cargo fmt --check` exit 1 は failed_items に入れず pass 扱いとし、
+      NFR5 / SC-6 は touched-files 基準で満たされたと記録する。
+    resolution_note: >-
+      gate: なし (orchestrator が verify 中に解決した、非 gate_id の判断)。
+      codex_consulted: true。既定 OpenAI provider は usage limit で失敗したため
+      fallback provider (LiteLLM 経由 muse-spark) が回答。Opus エスカレーションは未実行。
+      選ばなかった選択肢: failed_items に入れて verify を failed にする案。
+      判断の要点は 3 点 — (1) ドリフトした 8 ファイルは feature diff
+      (e061b541..HEAD) に 1 件も含まれない既存ファイル、(2) failed_items[].category
+      の閉じた語彙に「既存ドリフト」に当たる値が無く、起票すると誤解を招く sentinel に
+      倒れる、(3) 唯一の修正手段がクレート全体 fmt の書き込みで NFR5 と
+      プロジェクト運用ルールの双方が禁じているため、rework を回しても直せず
+      cap を消費して failed に戻るだけ。
+  - question_id: verify.manual-scenarios-unattended
+    packet_id: null
+    answered_at: "2026-09-13T03:05:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [pass_with_open_manual_items]
+    freeform: null
+    normalized_answer: >-
+      TS-8 / TS-9 / TS-10 は「未実施・要ユーザー実機確認」と VERIFICATION.md に明記した
+      うえで failed_items には入れず、verify を pass とする。
+    resolution_note: >-
+      gate: なし (orchestrator が verify 中に解決した、非 gate_id の判断)。
+      codex_consulted: true。既定 OpenAI provider は usage limit で失敗したため
+      fallback provider (LiteLLM 経由 muse-spark) が回答。Opus エスカレーションは未実行。
+      選ばなかった選択肢: 未実施を failed_items に入れて verify を failed にする案。
+      判断の要点は 3 点 — (1) TS-8/9/10 はリリースビルドの GUI 端末を人間が操作する
+      必要があり無人実行では原理的に実施不能、(2) 同じ転写・除外・クランプ挙動は
+      バイト列ユニットテスト TS-1..TS-3 が緑で担保済み、(3) failed にしても rework は
+      GUI 確認を代行できず、系譜 cap / hard cap を消費して failed に戻るだけで
+      新しい情報が得られない。残った実機確認は PR 上でユーザーが実施する。

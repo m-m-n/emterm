@@ -63,6 +63,16 @@ Run every component's build command; all must exit 0 with no errors.
 - Static analysis: no separate linter beyond the above; the type check
   (`bun run typecheck`) and the compiler warnings from the build commands are
   the static-analysis surface.
+- Run result (2026-09-13, integration branch): `cargo fmt --manifest-path
+  crates/term_core/Cargo.toml --check` exits 0 and `bunx biome check .` exits
+  0. `cargo fmt --manifest-path src-tauri/Cargo.toml --check` exits 1 on
+  **pre-existing** drift in 8 files, none of which this feature touched
+  (`agent_status_exit_latch.rs`, `app/tests/agent_status.rs`, `app/tests.rs`,
+  `arg_dispatch.rs`, `mux/inherited_pty.rs`, `mux/session/session.rs`,
+  `tests/cli_subcommands.rs`, `tests/mux_hot_upgrade.rs` — all absent from
+  `git diff e061b541..HEAD`). Clearing it would require a crate-wide format
+  write, which NFR5 forbids, so NFR5 and SC-6 are judged on the touched-files
+  basis and this exit code is not a feature defect.
 
 ## SPEC.md Compliance
 
@@ -107,6 +117,12 @@ Run every component's build command; all must exit 0 with no errors.
 This project has no E2E framework, and none is introduced by this feature.
 Regression evidence is the byte-stream unit tests above plus the three
 on-device checks below, each run against a release build.
+
+Run status (2026-09-13, unattended batch): TS-8, TS-9 and TS-10 were **not
+performed** — each needs a human driving a release-build GUI terminal, which an
+unattended run cannot do. They remain open and require on-device confirmation
+by the user before the branch is merged. The byte-level equivalents (TS-1, TS-2,
+TS-3) are green, so the automated surface is complete.
 
 - [ ] TS-8: Codex TUI v0.153.4 — hold a multi-turn conversation, then reach
       earlier turns with Shift+PageUp, with the mouse wheel and with the
