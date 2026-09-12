@@ -1,9 +1,9 @@
 schema_version: 1
 feature: ac8-red-reason-self-search
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
-base_revision: d836b78132481f83c1a7c7b681ba26453fb0b987
+base_revision: 4fda2b448a3f7d5c9b13be1de6d9f55be6dd31d7
 last_input_digest: sha256:369ac051884d5fa30622707862314a7514b71377594f1e9ea37f2f025c22a0da
 active_request_id: null
 packets:
