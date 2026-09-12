@@ -1,0 +1,25 @@
+schema_version: 1
+feature: scroll-region-scrollback
+records:
+  - question_id: create-spec.ghostty-semantics-resolution
+    packet_id: null
+    answered_at: "2026-09-13T01:13:59+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [ghostty_parity, default_on, specify_now, stay_fixed]
+    freeform: null
+    normalized_answer: >-
+      転写条件は Ghostty と同一 (top == 0 かつ左右マージン無し かつ主画面、bottom は無制約)。
+      設定の既定値は有効。左右マージン条項は現状 vacuous でも SPEC に規範として明記する。
+      bottom < rows-1 のとき、bottom より下の行は画面上で動かさない。
+    resolution_note: >-
+      gate: なし (orchestrator が create-spec 中に解決した Ghostty 由来の意味論。
+      タスクの受け入れ条件「Ghostty の実装方針を先に調査し eMterm が取る仕様を確定させる」に対応)。
+      codex_consulted: true。一次資料: ghostty-org/ghostty src/terminal/Terminal.zig の
+      index() / scrollUp() (いずれも scrolling_region.top == 0 && left == 0 &&
+      right == cols-1 && 主画面 のときのみ cursorScrollAbove で scrollback を作る)、
+      reverseIndex() は scrollDown へ降りて scrollback を作らない、deleteLines/insertLines も
+      作らない。PR ghostty-org/ghostty#9907 / issue #9905 (1.3.0) が SU 側を導入し、
+      "our top margin is at the top (row 0) without left/right margins" を条件として明記。
+      Ghostty に設定項目は無く無条件有効。Codex は 4 問すべてで上記を支持し、
+      orchestrator が option へのマッピングを判定して採用した。

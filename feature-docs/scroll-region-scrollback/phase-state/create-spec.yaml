@@ -1,17 +1,110 @@
 schema_version: 1
 feature: scroll-region-scrollback
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: e061b5411c999e2b6542dc5ff8071207eb1cff07
-last_input_digest: null
+base_revision: acf66bbcdc481e52330e6c19f9c2db26f7353281
+last_input_digest: "sha256:02a96592576352e7558c7474970c11b4a54d884fd290a4beaed00a63a31a781d"
 active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-13T01:13:59+09:00"
+    questions:
+      - question_id: requirement.mux-scope
+        status: answered
+      - question_id: requirement.setting-surface
+        status: answered
+      - question_id: requirement.apply-timing
+        status: answered
+      - question_id: testing.tui-regression-evidence
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.mux-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-13T01:13:59+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [local_tabs_only]
+    freeform: null
+    normalized_answer: "GUI ローカルタブのみを対象とし、mux ペインは SPEC でスコープ外と明記する"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (policy action: codex_consultation,
+      record_as_assumption: true); codex_consulted: true; Codex は local_tabs_only を選択。
+      理由: 本番の TerminalCore 生成点が 1 か所で追いやすい、mux は複数 core への伝搬と
+      off-thread swap での設定喪失実績があり確認範囲が広がる、xterm 非準拠の挙動を既定 on に
+      する変更では対象を絞るべき。orchestrator が option_id へのマッピングを判定して採用。
+  requirement.setting-surface:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-13T01:13:59+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [json_and_panel_toggle]
+    freeform: null
+    normalized_answer: "settings.json のキーに加えて設定パネル (ターミナル動作セクション) のトグルも用意する"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; codex_consulted: true;
+      Codex は json_and_panel_toggle を選択。理由: alternate_scroll_enabled に完全な配線前例が
+      あり構成を踏襲できる、xterm 非準拠の挙動が既定 on になるため GUI から無効化できることを
+      優先すべき、既存セクションへのトグル 1 件追加で独自の設定手段を増やさずに済む。
+  requirement.apply-timing:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-13T01:13:59+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [live_apply_all_tabs]
+    freeform: null
+    normalized_answer: "設定保存時に既存タブの TerminalCore にも即時反映する (cursor_blink / fold_enabled と同じ扱い)"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; codex_consulted: true;
+      Codex は live_apply_all_tabs を選択し、analyst の推奨 (new_tabs_only) と割れた。
+      orchestrator は Codex の理由 — xterm 非準拠の転写で問題が出たときにタブを再起動せず
+      止められることを優先すべき、cursor_blink / fold_enabled に即時反映の前例がある —
+      の方が、scrollback_lines を新規タブのみにしている理由 (既存 scrollback の破棄を伴う)
+      より本件に合致すると判定し、live_apply_all_tabs を採用した。
+  testing.tui-regression-evidence:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-13T01:13:59+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [manual_plus_unit_byte_stream]
+    freeform: null
+    normalized_answer: "代表シーケンスを process_pty_data に流す --lib テストで内容と順序を固定し、実機確認で補う"
+    resolution_note: >-
+      gate: create-spec.requirement-clarification; codex_consulted: true;
+      Codex は manual_plus_unit_byte_stream を選択。理由: E2E 基盤を新設せず既存の
+      バイト列ユニットテスト方式で入力処理から転写まで固定できる、DECSTBM+LF /
+      代替画面切替 / IL/DL / SU の内容と順序を固定すれば対象外操作への波及も検出できる。
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-13T01:13:59+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [skip_design]
+    freeform: null
+    normalized_answer: "design ステップをスキップする"
+    resolution_note: >-
+      gate: create-spec.design-step; batch policy option_id: decide_autonomously
+      (references/batch-policies.yaml) により analyst の design_step_recommendation
+      (value: skip) をそのまま採用。新規の視覚要素・レイアウト・トークンが発生せず、
+      設定トグルは既存 renderToggle の複製で足りるため。
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: "sha256:02a96592576352e7558c7474970c11b4a54d884fd290a4beaed00a63a31a781d"
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+    truncated: false
 last_error: null
