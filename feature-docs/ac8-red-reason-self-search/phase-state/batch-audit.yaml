@@ -33,3 +33,78 @@ records:
       suggestion to map onto the existing option_id
       drop_needle_describe_property and concurred; Codex's text was not
       adopted verbatim. Opus escalation: not run (the consultation mapped).
+  - question_id: verify.manual-check-disposition
+    packet_id: null
+    answered_at: "2026-09-12T22:34:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [evaluate_with_cross_validation]
+    freeform: null
+    normalized_answer: >-
+      Evaluate MT-1 through MT-4 with two independent recorded read-throughs
+      (the orchestrator's own and a second-opinion model's), record both
+      reasonings and the limitation that both evaluators are LLMs rather than
+      the human reader VERIFICATION.md assumes, and pass verify. Do not record
+      the items as un-evaluated.
+    resolution_note: >-
+      gate: verify.manual-check-disposition (no gate_id at its originating
+      site; resolved via the unlisted-gate fallback in batch-mode.md, which
+      prescribes Codex consultation first). Raised because VERIFICATION.md
+      lists four manual checks MT-1..MT-4 written for a human reader, and this
+      run is unattended. options offered: (a) orchestrator performs the
+      read-through alone and passes / (b) declare the items un-evaluated,
+      leave verify failed, file a human follow-up / (c) declare them
+      not-applicable because TS1..TS4 cover them / (d) other.
+      codex_consulted: true. The Codex CLI itself was unavailable (usage limit
+      reached, resets 2026-09-13 01:02), so the consultation ran through the
+      fallback provider (litellm, model muse-spark) - fallback_provider_used:
+      true. Round 1 recommended option (b), ranking b > a > d > c, on the
+      ground that MT-1..MT-4 are semantic judgments a fixed-needle check cannot
+      cover and that an unattended LLM self-certifying risks becoming a rubber
+      stamp; it judged (b)'s false-alarm cost cheaper than (a)'s missed-defect
+      cost. In the same reply it nevertheless performed the read-through itself
+      and returned MT-1 pass, MT-2 pass, MT-3 sound, MT-4 no-fail. The
+      orchestrator judged that this made the premise (b) had been ranked
+      against - a SINGLE unattended LLM self-certifying - no longer the
+      situation on the ground, and put the corrected premise back to the same
+      model as a two-way choice between (b) and (d'): pass on the strength of
+      two independent agreeing recorded read-throughs, recording both the
+      reasoning and the fact that the original procedural recommendation was
+      (b). Round 2 reversed to (d'), arguing that (b) would require recording
+      "un-evaluated" for four checks that demonstrably were evaluated twice,
+      which is itself an inaccurate evidence record - the exact defect class
+      this feature exists to remove - and that two-provider cross-validation
+      substitutes for the single-LLM self-certification it had ranked below
+      (b). It restated its substantive verdict unchanged. The orchestrator
+      adopted (d'). Opus escalation: not run (the two consultation rounds
+      converged on a named option).
+      Recorded per the second opinion's own conditions for an honest pass:
+      (1) Orchestrator read-through. MT-1: the rewritten AC-8 red_reason
+      speaks only of the change set and the no-observable-pre-state framing;
+      its sole self-directed phrase, "this feature's own generated record",
+      identifies a FILE as a change-set member and asserts nothing about that
+      file's text, so no claim about the record's own wording survives in any
+      phrasing, direct or indirect. MT-2: sentence 1 is the
+      no-observable-pre-state framing; sentence 2 is exactly the property TS2
+      re-derived from git show --name-only of commit 672a0341; no third claim
+      exists. MT-3: the new record
+      test-docs/ac8-red-reason-self-search/task0001.tests.yaml was scanned for
+      self-reference and contains none; the needles its AC-1 quotes are
+      searched in a different file, and a re-check confirms all four are now
+      absent from the ac7 record's AC-8 red_reason, so the AC-1 claim holds as
+      written. MT-4: scalar form >-, six-space body indent, English prose, max
+      line width 80, no trailing whitespace, matching every other red_reason
+      scalar in the file (asserted by TS1).
+      (2) Second-opinion read-through, independent provider, same inline
+      material, adversarial framing: MT-1 pass, MT-2 pass, MT-3 sound, MT-4
+      no-fail, with one non-fail-grade note about line-number brittleness in
+      the surrounding records.
+      (3) Limitation: both evaluators are LLMs, not the human reader
+      VERIFICATION.md's manual-check section assumes, and no human was
+      available mid-run. MT-1..MT-4 are recorded as evaluated by two
+      independent models with no defect found, not as human-confirmed.
+      (4) Evidence anchors: TS1..TS4 all pass; Rust cargo check clean and
+      cargo test --lib 3269 passed / 0 failed / 3 ignored, identical to the
+      baseline the predecessor task recorded; bun run typecheck clean and bun
+      test 345 pass / 0 fail; exactly one modified file and one hunk confined
+      to the AC-8 red_reason.
