@@ -1,6 +1,6 @@
 use super::*;
 use crate::render::theme::{CursorStyle, Rgb};
-use term_core::{OscColorResponder, OscTerminator};
+use term_core::{OscResponder, OscTerminator};
 
 // ── Test infrastructure ─────────────────────────────────────────────
 
