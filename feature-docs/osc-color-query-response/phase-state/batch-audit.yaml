@@ -193,3 +193,47 @@ records:
     TS-19 was in fact fully satisfied during this verify (the approved Windows cross-check exited 0 and
     a static review found no Unix-only API on the response path), leaving TS-14''s ten on-screen checks
     as the only unexecuted item. The orchestrator''s own tentative position was the same option.'
+- question_id: develop.completion
+  packet_id: null
+  answered_at: '2026-09-13T11:20:00+09:00'
+  source: batch-operator-instruction
+  answer_mode: single_select
+  selected_option_ids:
+  - open_pr
+  freeform: null
+  normalized_answer: integration ブランチをリモートへ push し、main への Pull Request を作成する。ローカル・リモートの双方にブランチを残し、main へのマージは行わない
+  resolution_note: 'gate: develop.completion (non-packet gate; batch-mode.md Non-packet gates 表の既定は
+    keep branch = push も PR 作成もしない)。この run では起動引数に運用者の明示指示が含まれており、既定より
+    優先される: "push the integration branch to the remote and create a Pull Request against base_branch
+    with gh pr create. Keep the integration branch both locally and on the remote (do not auto-merge it
+    into base_branch)." したがって Step C の三択のうち「PR を作成」を選択した。ローカルマージは行わず、
+    ブランチ削除も行わない。codex_consulted: false (運用者の明示指示であってゲート判断ではない)。'
+- question_id: develop.completion.manual-scenario-unexecuted
+  packet_id: null
+  answered_at: '2026-09-13T11:22:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: single_select
+  selected_option_ids:
+  - normal_pr
+  freeform: null
+  normalized_answer: draft ではなく通常の PR として作成し、未実行の手動シナリオ TS-14 を PR 本文にマージ前の必須確認手順として明記する
+  resolution_note: 'unlisted gate (no gate_id at its originating site): verify は pass だが、唯一の
+    エンドツーエンド目視確認シナリオ TS-14 (実機 eMterm で Codex TUI を起動し入力欄背景を確認する 10 項目)
+    が無人実行では実行不能のまま残っている。この状態で PR をどう出すかを判断する必要があった。
+    options: [normal_pr] 通常 PR として作成し TS-14 を本文に必須手順として明記 /
+    [draft_pr] draft PR として作成し、人間が目視確認後に ready にするまで機械的にマージ不能にする /
+    [push_only] PR は作らず push のみ行い、PR 作成は人間に委ねる;
+    choice: normal_pr; options not chosen: draft_pr (機械的ゲートとしての実効が無い)、
+    push_only (運用者が gh pr create を明示指示しているため選択肢にならない);
+    codex_consulted: true (run_codex_exec.sh readonly 直接呼び出し、1 ターンで決着);
+    fallback provider answered: yes (CODEX_FALLBACK: entry 2 litellm/vertex-glm-5.2。
+    一次プロバイダは usage limit で応答不能); opus escalation: not run.
+    Key points of the discussion: (1) draft 状態がリスクを減らすのは「人間の明確な意思なしにマージされ得る」
+    経路がある場合に限る — auto-merge、required status check のバイパス、事情を知らない別の担当者による
+    マージなど。このリポジトリには auto-merge 自動化も required-status-check ゲートも無く、
+    マージするのは TS-14 の存在を知っている当の運用者自身なので、どれも当てはまらない。
+    (2) したがって draft が追加するのは "mark ready" のクリック 1 回だけで、その機械的ゲートは
+    運用者自身の裁量と重複する。(3) TS-14 を PR 本文にマージ前必須手順として書いたチェックリストは
+    draft と等価な情報を与えつつ、gh pr create の明示指示にそのまま沿う。
+    (4) push_only は運用者が PR 作成を明示指示しているため除外。
+    orchestrator の暫定見解も同一オプションだった (Codex の出力は参考として読み、判断は orchestrator が行った)。'
