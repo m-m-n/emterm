@@ -1,0 +1,288 @@
+schema_version: 1
+feature: scroll-region-scrollback
+created: '2026-09-13'
+base_branch: main
+parent_branch: em-workflow/scroll-region-scrollback/integration
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/md3.rs
+  components:
+    main:
+      language: Rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
+      format_command: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      e2e_test_command: ''
+    term-core:
+      language: Rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      format_command: cargo fmt --manifest-path crates/term_core/Cargo.toml --check
+      e2e_test_command: ''
+    app-settings:
+      language: Rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/app_settings/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/app_settings/Cargo.toml --lib
+      format_command: cargo fmt --all --check
+      e2e_test_command: ''
+    cli-only:
+      language: Rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib --no-default-features
+      format_command: cargo fmt --all --check
+      e2e_test_command: ''
+    webview-ts:
+      language: TypeScript
+      build_command: bun run build:viewer && bun run build:settings
+      test_command: bun run typecheck && bun test
+      format_command: bunx biome check .
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 79fadc61b0120e816d6eeb627a031b0aa6638cec
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 新しい視覚要素・レイアウト・デザイントークンを一切導入しない。UI サーフェスは既存の設定サブセクションへ真偽値トグルを 1 つ追加するだけで、隣接する Alternate Scroll トグルを描画している既存の renderToggle 呼び出し (src-tauri/web-shared/settings/sections/terminal-behavior-section.ts:136-147) の複製で足りる。create-spec.design-step ゲートの回答 skip_design により確定。
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: e061b5411c999e2b6542dc5ff8071207eb1cff07
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Ghostty transcription condition on the region-scroll branch
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+    - TS-2
+    - TS-8
+    - TS-10
+  FR2:
+    title: Fallback to the current in-place region shift
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+    - TS-10
+  FR3:
+    title: Every scroll_up_internal entry point is covered
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+    - TS-3
+    - TS-8
+  FR4:
+    title: Count clamping
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+    - TS-3
+  FR5:
+    title: Rows below the bottom margin do not move on screen
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+    - TS-10
+  FR6:
+    title: Left/right margin clause stated even though DECSLRM is unimplemented
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: 'Exclusions: downward scroll and line insert/delete never transcribe'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+  FR8:
+    title: Alternate screen is excluded by an explicit mode gate
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+    - TS-9
+  FR9:
+    title: 'Setting: settings.json key'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-4
+    - TS-7
+  FR10:
+    title: 'Setting: settings-panel toggle and its four mirrors'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-6
+    - TS-7
+  FR11:
+    title: Seeding at tab spawn
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-5
+  FR12:
+    title: Live apply to every existing tab on settings save
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-5
+  FR13:
+    title: Render bookkeeping stays correct on the transcribing region path
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-3
+    - TS-10
+  FR14:
+    title: Scrollback-length accounting stays consistent for the parked view
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-8
+  NFR1:
+    title: No change to existing scrollback machinery
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: No regression on the output hot path
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Platform parity
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-7
+  NFR4:
+    title: Default-on, user-reversible
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-2
+  NFR5:
+    title: Formatting and style conventions
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+goal: |
+  Codex TUI の会話履歴を端末スクロールバックで遡れるようにする (Ghostty 互換のリージョン転写)
+
+  ## やりたいこと (必須)
+  Codex TUI の会話履歴を eMterm の端末スクロールバックで遡れるようにする。Ghostty と同じく、DECSTBM スクロールリージョン内で上に転落した行を scrollback へ転写する。
+
+  ## 背景・なぜ (必須)
+  Codex TUI (v0.153.4) は代替画面を使わず、主画面 + DECSTBM スクロールリージョン + 絶対カーソル配置での再描画で会話 UI を描く。eMterm は xterm 準拠で、リージョン内スクロールでは scrollback に行を退避しない (`crates/term_core/src/ring_buffer.rs` の `scroll_up_internal` の region パスは `shift_rows_up` のみ)。このため Codex の会話履歴が scrollback に残らず、Shift+PageUp・ホイール・スクロールバーのどれでも遡れない。
+  同じ Codex のバイト列 (TERM を `xterm-256color` / `xterm-ghostty` で比較して同一と確認済み) を Ghostty に流すと、リージョン転落行も scrollback に入り時系列の会話として読める (実機確認済み)。つまり差は Codex 側ではなく端末側の scrollback 格納意味論にある。
+  Codex はマウス追跡 (`1000`/`1002`/`1006`) を要求しないため、ホイールは常に端末側処理になる。メイン transcript には `PgUp`/`PgDn` も未割当て (openai/codex #34716) で、Codex 側の操作でも遡れない。
+  調査レポート全文: `tmp/codex-tui-scrollback-investigation-2026-09-10.md`
+
+  ## 受け入れ条件 / 完了の定義 (必須)
+  - [ ] Ghostty の実装方針を先に調査し、eMterm が取る仕様を確定させる (ベンチマーク参照方針に従い、コード転用はせず公式ドキュメント・設定・issue/changelog を参照)
+  	- [ ] Ghostty がリージョン転写を行う条件 (スクロールリージョンが最上行から始まるときのみか、任意リージョンでもか)
+  	- [ ] 左右マージン (DECLRMM) がある場合の扱い
+  	- [ ] `SU` (CSI S) / `RI` (ESC M) / 行末 `LF` のどの経路が対象か
+  	- [ ] 設定項目の有無と既定値
+  - [ ] 上記で確定した仕様を SPEC として書き起こす
+  - [ ] `scroll_up_internal` の region 分岐で、転落する先頭 `count` 行を `ring_push_blank` 相当の圧縮で scrollback へ退避する
+  - [ ] 代替画面 (`MODE_ALT_SCREEN`) では転写しない
+  - [ ] `shift_rows_up` を直接呼ぶ IL/DL 経路には適用しない
+  - [ ] 転写の有効・無効を設定で切り替えられる
+  - [ ] Codex TUI を実機で起動し、Shift+PageUp・ホイール・スクロールバーで会話履歴が時系列に遡れることを確認する
+  - [ ] Claude Code (代替画面 + alternate scroll) の既存挙動が変わっていないことを確認する
+  - [ ] vim・less などリージョンを使う既存 TUI で二重表示・順序崩れが起きないことを確認する
+
+  ## スコープ外 (任意)
+  - `SD` (下方向の転落) の scrollback 転写。順序が崩れるため対象外。
+  - インライン TUI 向けの wheel → キー変換 (Codex 検出時にホイールを Up/Down 化する案)。アプリ判定の誤爆リスクが高く、ホイール本来の scrollback 操作を奪うため採らない。
+  - FR2 key-resume の挙動変更。scrollback 位置でキーを押すと Live に引き戻される仕様はそのまま。
+  - `Ctrl+T` ページャーの出力整形。別件。
+
+  ## 制約・前提 (任意)
+  - リージョン転写は xterm 非準拠。既定で有効にするかどうかは Ghostty 調査の結果を見て決める。
+  - 既存の scrollback 機構 (`ring_push_blank` の圧縮形式、`OffsetFromLive` の auto-follow) は変えない。
+  - 対象ファイル: `crates/term_core/src/ring_buffer.rs` (`scroll_up_internal`)、`crates/term_core/src/csi_scroll.rs` (`handle_scroll_up`/`handle_decstbm`)。
+  - 調査時点: Codex CLI 0.153.4、eMterm HEAD `6e03b806`。
+
