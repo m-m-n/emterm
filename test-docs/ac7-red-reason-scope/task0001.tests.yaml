@@ -96,10 +96,7 @@ acceptance_tests:
       contains exactly two paths,
       test-docs/ac2-red-reason-accuracy/task0001.tests.yaml (the edited
       record) and test-docs/ac7-red-reason-scope/task0001.tests.yaml (this
-      feature's own generated record), no Rust file and no TypeScript file;
-      and a fixed-string search of this record's own text for a single-file
-      phrasing of that change set (e.g. "only one file", "lists only ...
-      test-docs/ac7-red-reason-scope") returns no match.
+      feature's own generated record), no Rust file and no TypeScript file.
 notes: >-
   Documentation-record task (task0001.md; IMPLEMENTATION.md decisions
   D1-D6). The described task's commit
