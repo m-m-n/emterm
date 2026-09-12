@@ -219,7 +219,7 @@ tasks:
     domains: [input-handling, concurrency]
     complexity: high
     requirements: [FR1, FR2, FR4, NFR3]
-    status: in_progress
+    status: merged
     notes: null
     branch: em-workflow/osc-color-query-response/task0005
     provenance:
