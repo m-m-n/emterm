@@ -1,0 +1,63 @@
+task_id: task0003
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/type-check criterion, not a behavioral test. Adding the
+      `scroll_region_scrollback_enabled: boolean` member to the AppSettings
+      interface is purely additive: no file within tsc's checked scope
+      (src-tauri/{viewer,settings}/web/**) constructs a full AppSettings
+      object literal, so `tsc --noEmit` could not be made to fail by the
+      member's absence and therefore never went red. Verified instead by
+      direct inspection (src-tauri/web-shared/settings/types.ts declares
+      `scroll_region_scrollback_enabled: boolean` immediately beside
+      `alternate_scroll_enabled`) and by `bun run typecheck` passing with
+      zero errors after the change.
+  AC-2:
+    tests:
+      - "renderTerminalBehaviorSection() — Scroll Region Scrollback toggle (task0003) > AC-2: renders immediately adjacent to the alternate-scroll toggle"
+    red_confirmed: true
+    red_reason: >-
+      Before the toggle was added, `scrollRegionIndex` (the index of a
+      `.settings-row-toggle` containing
+      `#settings-scroll-region-scrollback-enabled`) was -1:
+      `expect(scrollRegionIndex).toBeGreaterThanOrEqual(0)` failed with
+      "Received: -1".
+  AC-3:
+    tests:
+      - "renderTerminalBehaviorSection() — Scroll Region Scrollback toggle (task0003) > AC-3: toggling it saves scroll_region_scrollback_enabled with the new boolean value"
+    red_confirmed: true
+    red_reason: >-
+      Before the toggle was added, the button lookup
+      `panel.querySelector("#settings-scroll-region-scrollback-enabled")`
+      returned null: `expect(button).toBeTruthy()` failed with
+      "Received: null".
+  AC-4:
+    tests:
+      - "Scroll Region Scrollback toggle — i18n (AC-4) > both locale files define the label and description keys, non-empty"
+      - "Scroll Region Scrollback toggle — i18n (AC-4) > both locales resolve the new keys via t(), not as the raw key"
+    red_confirmed: true
+    red_reason: >-
+      Confirmed by temporarily removing the two new keys from en.json and
+      re-running: `expect(typeof enTerminal[key]).toBe("string")` failed
+      with "Received: \"undefined\"", and
+      `expect(t("settings.terminal.scrollRegionScrollbackEnabled")).not.toBe(...)`
+      failed because t() returned the raw key unchanged (no translation
+      found). Keys were restored immediately after confirming the failure,
+      and the full suite was re-run green before proceeding.
+  AC-5:
+    tests: []
+    red_reason: >-
+      Whole-suite and lint-cleanliness criterion, not a single test.
+      Verified by `bun run typecheck && bun test` (349 pass, 0 fail — up
+      from the 345-pass baseline, +4 new tests, 0 regressions) and by
+      `bunx biome check .` reporting 0 errors across the repo after fixing
+      one pre-existing, unrelated Biome formatting violation in
+      types.ts (a multi-line `FontCategory` union it flagged as
+      needing wrapping) that was blocking a clean check on a file this
+      task touched; git diff confirms that formatting fix did not touch
+      the lines this task added.
+    red_confirmed: true
