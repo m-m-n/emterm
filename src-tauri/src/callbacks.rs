@@ -534,9 +534,19 @@ impl NativeCallbacks {
         }
     }
 
+    /// Handles the reset / cursor-style OSC codes (22/104/110/111/112)
+    /// that still flow through `on_osc` exactly as before this feature.
+    /// OSC 4/10/11/12 (set + query) are excluded from this call site — see
+    /// `ThemeColorResponder`'s doc for why — so `terminator` here is never
+    /// consulted by `Theme::apply_osc`'s reset/cursor-style branches; any
+    /// fixed value is correct. `OscTerminator::Bel` is used for
+    /// definiteness only.
     fn handle_theme(&self, action_type: u8, data: &str) {
-        let changed = self.theme.lock().apply_osc(action_type, data);
-        if changed {
+        let outcome = self
+            .theme
+            .lock()
+            .apply_osc(action_type, data, term_core::OscTerminator::Bel);
+        if outcome.changed {
             self.mark_theme_dirty();
         }
     }
@@ -627,15 +637,22 @@ impl TerminalCallbacks for NativeCallbacks {
             OSC_SET_TITLE_AND_ICON => self.handle_title_and_icon(data),
             OSC_SET_ICON_NAME => self.handle_icon_name(data),
             OSC_SET_TITLE => self.handle_title(data),
-            OSC_SET_COLOR_PALETTE
-            | OSC_SET_FG
-            | OSC_SET_BG
-            | OSC_SET_CURSOR_FG
-            | OSC_CURSOR_STYLE
+            OSC_CURSOR_STYLE
             | OSC_RESET_COLOR_PALETTE
             | OSC_RESET_FG
             | OSC_RESET_BG
             | OSC_RESET_CURSOR_FG => self.handle_theme(action_type, data),
+            // OSC 4 / 10 / 11 / 12 (set + query): handled exclusively by
+            // the SC-2 `ThemeColorResponder`, consulted directly inside
+            // `term_core::osc_handler` BEFORE this callback ever fires
+            // (osc-color-query-response D1/D7). Routing them through
+            // `handle_theme` here too would apply the same payload to
+            // `Theme` a second time — SC-4's set-side mutation and
+            // query-side response are two outputs of the SAME call, never
+            // two independent ones. An explicit no-op arm (rather than
+            // falling to the `_` catch-all below) so this isn't logged as
+            // "unhandled" — it IS handled, just not here.
+            OSC_SET_COLOR_PALETTE | OSC_SET_FG | OSC_SET_BG | OSC_SET_CURSOR_FG => {}
             OSC_SET_WORKING_DIRECTORY => self.handle_cwd(data),
             OSC_HYPERLINK => {
                 // term_core already registered the URI; native-poc only
@@ -775,6 +792,48 @@ impl TerminalCallbacks for NativeCallbacks {
 
     fn on_reset(&self) {
         self.handle_reset();
+    }
+}
+
+// ── SC-2 responder: the theme-backed OSC color responder ─────────────────
+
+/// SC-2 responder (osc-color-query-response IMPLEMENTATION.md D1/D7):
+/// registered once, at tab construction (`Tab::build`), into
+/// `TerminalCore::register_color_responder`. `term_core` consults this on
+/// EVERY OSC dispatch, before `NativeCallbacks::on_osc` ever fires for the
+/// same dispatch — so this is now the SOLE caller of `Theme::apply_osc` for
+/// the codes it owns (OSC 4/10/11/12): the set-side mutation and the
+/// query-side response are two outputs of the SAME call (SC-4), never two
+/// independent ones. `NativeCallbacks::on_osc` therefore no-ops for these
+/// four codes (see its `on_osc` match) instead of also routing them to
+/// `handle_theme`, which would apply the same payload twice.
+///
+/// The reset / cursor-style codes (22/104/110/111/112) are untouched: they
+/// still flow through `NativeCallbacks::on_osc` -> `handle_theme` exactly
+/// as before this feature (task0003's territory) — this responder is
+/// inert for every code but 4/10/11/12 (SC-2's "a code the responder does
+/// not own returns an empty `Vec`" contract).
+pub struct ThemeColorResponder {
+    theme: Arc<Mutex<Theme>>,
+    state: Arc<Mutex<NativeCallbackState>>,
+}
+
+impl ThemeColorResponder {
+    pub fn new(theme: Arc<Mutex<Theme>>, state: Arc<Mutex<NativeCallbackState>>) -> Self {
+        Self { theme, state }
+    }
+}
+
+impl term_core::OscColorResponder for ThemeColorResponder {
+    fn respond(&self, code: u16, payload: &str, terminator: term_core::OscTerminator) -> Vec<Vec<u8>> {
+        if !matches!(code, 4 | 10 | 11 | 12) {
+            return Vec::new();
+        }
+        let outcome = self.theme.lock().apply_osc(code as u8, payload, terminator);
+        if outcome.changed {
+            self.state.lock().theme_dirty = true;
+        }
+        outcome.responses
     }
 }
 

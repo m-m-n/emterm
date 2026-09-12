@@ -1,5 +1,6 @@
 use super::*;
 use crate::render::theme::{CursorStyle, Rgb};
+use term_core::{OscColorResponder, OscTerminator};
 
 // ── Test infrastructure ─────────────────────────────────────────────
 
@@ -68,6 +69,17 @@ fn default_harness() -> Harness {
     harness(Settings::default())
 }
 
+impl Harness {
+    /// SC-2 responder wired to this harness's shared `theme` / `state`
+    /// Arcs, exactly as `Tab::build` wires it in production
+    /// (osc-color-query-response D7). OSC 4/10/11/12 are handled
+    /// EXCLUSIVELY through this responder now, not through
+    /// `self.cb.on_osc` (see `ThemeColorResponder`'s doc).
+    fn responder(&self) -> ThemeColorResponder {
+        ThemeColorResponder::new(self.theme.clone(), self.state.clone())
+    }
+}
+
 // ── Per-action_type dispatch tests ──────────────────────────────────
 
 #[test]
@@ -99,8 +111,12 @@ fn osc_2_sets_title_only() {
 
 #[test]
 fn osc_4_sets_palette_and_marks_theme_dirty() {
+    // OSC 4/10/11/12 are handled through the SC-2 `ThemeColorResponder`,
+    // not through `NativeCallbacks::on_osc` (osc-color-query-response D7) —
+    // see `Harness::responder`'s doc.
     let h = default_harness();
-    h.cb.on_osc(OSC_SET_COLOR_PALETTE, "5;rgb:11/22/33");
+    h.responder()
+        .respond(OSC_SET_COLOR_PALETTE as u16, "5;rgb:11/22/33", OscTerminator::Bel);
     assert_eq!(h.theme.lock().palette256[5], Some(Rgb(0x11, 0x22, 0x33)));
     assert!(h.cb.take_theme_dirty());
     // Second drain returns false (latch behavior).
@@ -148,7 +164,8 @@ fn osc_9_no_separator_uses_fallback_title() {
 #[test]
 fn osc_10_sets_fg_and_marks_theme_dirty() {
     let h = default_harness();
-    h.cb.on_osc(OSC_SET_FG, "rgb:11/22/33");
+    h.responder()
+        .respond(OSC_SET_FG as u16, "rgb:11/22/33", OscTerminator::Bel);
     assert_eq!(h.theme.lock().fg, Rgb(0x11, 0x22, 0x33));
     assert!(h.cb.take_theme_dirty());
 }
@@ -156,7 +173,8 @@ fn osc_10_sets_fg_and_marks_theme_dirty() {
 #[test]
 fn osc_11_sets_bg_and_marks_theme_dirty() {
     let h = default_harness();
-    h.cb.on_osc(OSC_SET_BG, "#445566");
+    h.responder()
+        .respond(OSC_SET_BG as u16, "#445566", OscTerminator::Bel);
     assert_eq!(h.theme.lock().bg, Rgb(0x44, 0x55, 0x66));
     assert!(h.cb.take_theme_dirty());
 }
@@ -164,7 +182,8 @@ fn osc_11_sets_bg_and_marks_theme_dirty() {
 #[test]
 fn osc_12_sets_cursor_fg_and_marks_theme_dirty() {
     let h = default_harness();
-    h.cb.on_osc(OSC_SET_CURSOR_FG, "rgb:aa/bb/cc");
+    h.responder()
+        .respond(OSC_SET_CURSOR_FG as u16, "rgb:aa/bb/cc", OscTerminator::Bel);
     assert_eq!(h.theme.lock().cursor_fg, Rgb(0xaa, 0xbb, 0xcc));
     assert!(h.cb.take_theme_dirty());
 }
@@ -276,7 +295,8 @@ fn osc_112_resets_cursor_fg_to_active_scheme_color() {
 fn on_reset_restores_active_cursor_override_to_active_scheme_color() {
     let h = default_harness();
     h.theme.lock().scheme_cursor_fg = Rgb(9, 8, 7);
-    h.cb.on_osc(OSC_SET_CURSOR_FG, "rgb:01/02/03");
+    h.responder()
+        .respond(OSC_SET_CURSOR_FG as u16, "rgb:01/02/03", OscTerminator::Bel);
     assert!(h.cb.take_theme_dirty(), "OSC 12 itself marked dirty");
     assert!(h.theme.lock().cursor_fg_override_active);
 

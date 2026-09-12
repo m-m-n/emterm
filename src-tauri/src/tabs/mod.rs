@@ -713,6 +713,16 @@ impl Tab {
             callbacks.set_cwd_provider(provider);
         }
         core.callbacks = Some(Box::new(callbacks));
+        // SC-2 wiring (osc-color-query-response IMPLEMENTATION.md D7): the
+        // core that owns THIS tab's live theme is the one constructed
+        // right here, so this is the single production site that registers
+        // the theme-backed OSC color responder — a query arriving on the
+        // live output path is answered with no further call site. See
+        // `ThemeColorResponder`'s doc for why OSC 4/10/11/12 are excluded
+        // from `NativeCallbacks::on_osc`'s routing once this is registered.
+        core.register_color_responder(Box::new(
+            crate::callbacks::ThemeColorResponder::new(theme.clone(), cb_state.clone()),
+        ));
 
         Self {
             stable_id: NEXT_TAB_STABLE_ID.fetch_add(1, Ordering::Relaxed),
