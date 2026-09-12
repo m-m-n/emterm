@@ -103,9 +103,9 @@ tasks:
     - NFR2
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/scroll-region-scrollback/task0001
   task0002:
     title: Settings key, native mirrors, tab seeding and live apply
     plan: tasks/task0002.md
@@ -134,9 +134,9 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/scroll-region-scrollback/task0002
   task0003:
     title: Settings panel toggle and its TypeScript mirrors
     plan: tasks/task0003.md
@@ -157,9 +157,9 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/scroll-region-scrollback/task0003
 review:
   status: pending
   rounds_completed: 0
