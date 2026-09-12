@@ -182,6 +182,14 @@ pub struct TerminalCore {
     /// Side-effect sink for OSC / APC / DCS / BEL / device-response.
     /// `None` = silently drop (matches the previous wasm-no-callback behaviour).
     pub callbacks: Option<Box<dyn TerminalCallbacks>>,
+    /// SC-2 (osc-color-query-response IMPLEMENTATION.md): the optional
+    /// GUI-layer OSC color responder, consulted on every OSC dispatch (see
+    /// [`crate::osc_handler::handle_osc_internal`]). `None` = no responder
+    /// registered — behaves exactly as before this feature. Registered via
+    /// [`Self::register_color_responder`]; not touched by [`Self::reset`],
+    /// matching how `callbacks` and `osc_app_params` (host wiring, not
+    /// session state) already survive a reset.
+    pub(crate) color_responder: Option<Box<dyn crate::osc_handler::OscColorResponder>>,
     // Hyperlink table: maps hyperlink_id -> (params, uri)
     pub(crate) hyperlink_table: Vec<Option<(String, String)>>,
     pub(crate) hyperlink_next_id: u16,
@@ -322,6 +330,7 @@ impl TerminalCore {
             mode_actions: Vec::new(),
             // Sprint 6: Callbacks
             callbacks: None,
+            color_responder: None,
             // Hyperlink
             hyperlink_table: vec![None], // index 0 = no hyperlink
             hyperlink_next_id: 1,
@@ -349,6 +358,17 @@ impl TerminalCore {
     /// `term_core`'s native OSC action types.
     pub fn register_osc_app_param(&mut self, param: u16, action_type: u8) {
         self.osc_app_params.push((param, action_type));
+    }
+
+    /// Register the GUI-layer OSC color responder (SC-2,
+    /// osc-color-query-response IMPLEMENTATION.md). Optional; an
+    /// unregistered core behaves exactly as it did before this feature —
+    /// see [`crate::osc_handler::OscColorResponder`] for the contract.
+    pub fn register_color_responder(
+        &mut self,
+        responder: Box<dyn crate::osc_handler::OscColorResponder>,
+    ) {
+        self.color_responder = Some(responder);
     }
 
     // ── Scroll-region scrollback transcription gate ───────
