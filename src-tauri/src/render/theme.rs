@@ -8,6 +8,14 @@
 //! theme. Color spec parsing accepts `rgb:RR/GG/BB`, `rgb:RRRR/GGGG/BBBB`,
 //! and `#RRGGBB`, matching the legacy TS handler in
 //! `src/terminal/osc-colors.ts`.
+//!
+//! osc-color-query-response task0002 extends `apply_osc` (SC-4) to also
+//! answer OSC 4/10/11/12 queries (a `?` payload element) out of the theme's
+//! CURRENT state, using SC-6's palette resolution rule and the single
+//! `term_core::color_spec::format_color_response` formatter (NFR1) — see
+//! `apply_osc`'s doc for the shape.
+
+use term_core::OscTerminator;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
@@ -250,6 +258,73 @@ fn parse_hash(s: &str) -> Option<Rgb> {
     }
 }
 
+/// SC-6's fallback for palette indices 16..=255 that carry no overlay
+/// value: the standard xterm 256-color cube (16..=231, a 6x6x6 RGB cube)
+/// and grayscale ramp (232..=255). `index` must be in `16..256`.
+fn xterm_256_color(index: usize) -> Rgb {
+    debug_assert!((16..256).contains(&index));
+    if index >= 232 {
+        let level = (8 + (index - 232) * 10) as u8;
+        Rgb(level, level, level)
+    } else {
+        let n = index - 16;
+        let r = n / 36;
+        let g = (n / 6) % 6;
+        let b = n % 6;
+        let component = |level: usize| -> u8 {
+            if level == 0 { 0 } else { (55 + level * 40) as u8 }
+        };
+        Rgb(component(r), component(g), component(b))
+    }
+}
+
+/// SC-4 "Response shape": an OSC introducer, `code`, the payload part
+/// (`index` too, for OSC 4), the color text from the ONE existing
+/// formatter (`term_core::color_spec::format_color_response`, NFR1), and
+/// the terminator form `terminator` names — never a hardcoded terminator
+/// (FR5).
+fn format_osc_color_response(
+    code: u8,
+    index: Option<usize>,
+    rgb: Rgb,
+    terminator: OscTerminator,
+) -> Vec<u8> {
+    let mut s = String::new();
+    s.push_str("\u{1b}]");
+    s.push_str(&code.to_string());
+    if let Some(i) = index {
+        s.push(';');
+        s.push_str(&i.to_string());
+    }
+    s.push(';');
+    s.push_str(&term_core::color_spec::format_color_response(
+        rgb.0, rgb.1, rgb.2,
+    ));
+    let mut buf = s.into_bytes();
+    match terminator {
+        OscTerminator::Bel => buf.push(0x07),
+        OscTerminator::St => {
+            buf.push(0x1b);
+            buf.push(b'\\');
+        }
+    }
+    buf
+}
+
+/// Outcome of [`Theme::apply_osc`] (SC-4, osc-color-query-response
+/// IMPLEMENTATION.md): the single entry point's two outputs bundled
+/// together, since a chained payload can both mutate state AND answer a
+/// query within the SAME dispatch (AC-4). `changed` is the existing
+/// "visible change" flag (drives `mark_all_dirty`); `responses` is the
+/// ordered list of complete OSC response byte sequences produced, empty
+/// for anything that answered no query. Answering a query never sets
+/// `changed` (SC-4 invariant): a query is never a visible change.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OscOutcome {
+    pub changed: bool,
+    pub responses: Vec<Vec<u8>>,
+}
+
 impl Theme {
     /// Default cursor foreground color: the built-in `emterm` preset's
     /// cursor color, used to seed `Theme::default()` /
@@ -292,23 +367,40 @@ impl Theme {
     /// | 111  | reset default background                |
     /// | 112  | reset cursor foreground                 |
     ///
-    /// Returns `true` if any visible state changed (caller uses this to
-    /// decide whether to `mark_all_dirty` on the terminal core).
-    pub fn apply_osc(&mut self, action_type: u8, data: &str) -> bool {
+    /// Returns the visible-change flag (caller uses this to decide whether
+    /// to `mark_all_dirty` on the terminal core) plus any ordered OSC
+    /// response byte sequences the dispatch answered (SC-4). `terminator`
+    /// is the SC-1 string terminator the request ended with; a response
+    /// echoes it back verbatim (FR5) instead of hardcoding one. Codes that
+    /// never produce a response (22/104/110/111/112 — task0003's reset
+    /// side) ignore `terminator`.
+    pub fn apply_osc(&mut self, action_type: u8, data: &str, terminator: OscTerminator) -> OscOutcome {
         match action_type {
-            4 => self.apply_palette_set(data),
-            10 => self.apply_default_color_set(10, data),
-            11 => self.apply_default_color_set(11, data),
-            12 => self.apply_default_color_set(12, data),
-            22 => self.apply_cursor_style(data),
-            104 => self.apply_palette_reset(data),
+            4 => self.apply_palette_set(data, terminator),
+            10 => self.apply_default_color_set(10, data, terminator),
+            11 => self.apply_default_color_set(11, data, terminator),
+            12 => self.apply_default_color_set(12, data, terminator),
+            22 => OscOutcome {
+                changed: self.apply_cursor_style(data),
+                responses: Vec::new(),
+            },
+            104 => OscOutcome {
+                changed: self.apply_palette_reset(data),
+                responses: Vec::new(),
+            },
             110 => {
                 self.fg = DEFAULT_TERMINAL_FG;
-                true
+                OscOutcome {
+                    changed: true,
+                    responses: Vec::new(),
+                }
             }
             111 => {
                 self.bg = DEFAULT_TERMINAL_BG;
-                true
+                OscOutcome {
+                    changed: true,
+                    responses: Vec::new(),
+                }
             }
             112 => {
                 // Reset to the ACTIVE SCHEME's cursor color (FR4), not a
@@ -317,16 +409,34 @@ impl Theme {
                 // OSC 12 overrides untouched.
                 self.cursor_fg = self.scheme_cursor_fg;
                 self.cursor_fg_override_active = false;
-                true
+                OscOutcome {
+                    changed: true,
+                    responses: Vec::new(),
+                }
             }
-            _ => false,
+            _ => OscOutcome::default(),
         }
     }
 
-    fn apply_palette_set(&mut self, data: &str) -> bool {
+    /// SC-6: resolve the color of palette index `i` (0..=255) as it is
+    /// right now — the sparse overlay entry when set; otherwise
+    /// `palette16` for `i < 16`; otherwise the xterm 256-color
+    /// cube/grayscale formula. Never reports an unset overlay slot as
+    /// "missing" — it always resolves to a concrete color.
+    pub fn resolve_palette_color(&self, index: usize) -> Rgb {
+        if let Some(rgb) = self.palette256[index] {
+            return rgb;
+        }
+        if index < 16 {
+            return self.palette16[index];
+        }
+        xterm_256_color(index)
+    }
+
+    fn apply_palette_set(&mut self, data: &str, terminator: OscTerminator) -> OscOutcome {
         // Pairs of "index;spec[;index;spec...]"
         let mut tokens = data.split(';');
-        let mut changed = false;
+        let mut outcome = OscOutcome::default();
         while let Some(index_str) = tokens.next() {
             let Some(spec_str) = tokens.next() else { break };
             let Ok(index) = index_str.trim().parse::<usize>() else {
@@ -335,8 +445,14 @@ impl Theme {
             if index >= 256 {
                 continue;
             }
-            // Query (`?`) responses are handled elsewhere; ignore here.
-            if spec_str.trim() == "?" {
+            let trimmed_spec = spec_str.trim();
+            // A query token answers with SC-6's resolved value for this
+            // index and never mutates state (SC-4 invariant).
+            if trimmed_spec == "?" {
+                let rgb = self.resolve_palette_color(index);
+                outcome
+                    .responses
+                    .push(format_osc_color_response(4, Some(index), rgb, terminator));
                 continue;
             }
             if let Some(rgb) = parse_color_spec(spec_str) {
@@ -344,45 +460,57 @@ impl Theme {
                 if index < 16 {
                     self.palette16[index] = rgb;
                 }
-                changed = true;
+                outcome.changed = true;
             }
         }
-        changed
+        outcome
     }
 
-    fn apply_default_color_set(&mut self, osc_num: u8, data: &str) -> bool {
+    fn apply_default_color_set(&mut self, osc_num: u8, data: &str, terminator: OscTerminator) -> OscOutcome {
         // Chained: data may contain N specs, each advances osc_num by 1.
         // (Matches `handleOscDefaultColor` in the TS reference.)
-        let mut changed = false;
+        let mut outcome = OscOutcome::default();
         for (offset, spec) in data.split(';').enumerate() {
             let target = osc_num + offset as u8;
             if target > 12 {
                 break;
             }
             let trimmed = spec.trim();
-            if trimmed == "?" || trimmed.is_empty() {
+            if trimmed == "?" {
+                let rgb = match target {
+                    10 => self.fg,
+                    11 => self.bg,
+                    12 => self.cursor_fg,
+                    _ => continue,
+                };
+                outcome
+                    .responses
+                    .push(format_osc_color_response(target, None, rgb, terminator));
+                continue;
+            }
+            if trimmed.is_empty() {
                 continue;
             }
             if let Some(rgb) = parse_color_spec(spec) {
                 match target {
                     10 => {
                         self.fg = rgb;
-                        changed = true;
+                        outcome.changed = true;
                     }
                     11 => {
                         self.bg = rgb;
-                        changed = true;
+                        outcome.changed = true;
                     }
                     12 => {
                         self.cursor_fg = rgb;
                         self.cursor_fg_override_active = true;
-                        changed = true;
+                        outcome.changed = true;
                     }
                     _ => {}
                 }
             }
         }
-        changed
+        outcome
     }
 
     fn apply_cursor_style(&mut self, data: &str) -> bool {
@@ -700,21 +828,21 @@ mod tests {
     #[test]
     fn apply_osc_10_sets_fg() {
         let mut t = Theme::default();
-        assert!(t.apply_osc(10, "rgb:11/22/33"));
+        assert!(t.apply_osc(10, "rgb:11/22/33", OscTerminator::Bel).changed);
         assert_eq!(t.fg, Rgb(0x11, 0x22, 0x33));
     }
 
     #[test]
     fn apply_osc_11_sets_bg() {
         let mut t = Theme::default();
-        assert!(t.apply_osc(11, "#445566"));
+        assert!(t.apply_osc(11, "#445566", OscTerminator::Bel).changed);
         assert_eq!(t.bg, Rgb(0x44, 0x55, 0x66));
     }
 
     #[test]
     fn apply_osc_12_sets_cursor_fg() {
         let mut t = Theme::default();
-        assert!(t.apply_osc(12, "rgb:aa/bb/cc"));
+        assert!(t.apply_osc(12, "rgb:aa/bb/cc", OscTerminator::Bel).changed);
         assert_eq!(t.cursor_fg, Rgb(0xaa, 0xbb, 0xcc));
     }
 
@@ -722,7 +850,7 @@ mod tests {
     fn apply_osc_10_chained_advances_osc_num() {
         // "spec1;spec2;spec3" sets 10, 11, 12 respectively.
         let mut t = Theme::default();
-        assert!(t.apply_osc(10, "rgb:01/02/03;rgb:04/05/06;rgb:07/08/09"));
+        assert!(t.apply_osc(10, "rgb:01/02/03;rgb:04/05/06;rgb:07/08/09", OscTerminator::Bel).changed);
         assert_eq!(t.fg, Rgb(1, 2, 3));
         assert_eq!(t.bg, Rgb(4, 5, 6));
         assert_eq!(t.cursor_fg, Rgb(7, 8, 9));
@@ -731,7 +859,7 @@ mod tests {
     #[test]
     fn apply_osc_4_single_palette_entry() {
         let mut t = Theme::default();
-        assert!(t.apply_osc(4, "5;rgb:11/22/33"));
+        assert!(t.apply_osc(4, "5;rgb:11/22/33", OscTerminator::Bel).changed);
         assert_eq!(t.palette256[5], Some(Rgb(0x11, 0x22, 0x33)));
         assert_eq!(t.palette16[5], Rgb(0x11, 0x22, 0x33));
     }
@@ -739,7 +867,7 @@ mod tests {
     #[test]
     fn apply_osc_4_chained_entries() {
         let mut t = Theme::default();
-        assert!(t.apply_osc(4, "1;rgb:10/00/00;200;rgb:00/aa/00"));
+        assert!(t.apply_osc(4, "1;rgb:10/00/00;200;rgb:00/aa/00", OscTerminator::Bel).changed);
         assert_eq!(t.palette256[1], Some(Rgb(0x10, 0, 0)));
         assert_eq!(t.palette256[200], Some(Rgb(0, 0xaa, 0)));
     }
@@ -748,7 +876,7 @@ mod tests {
     fn apply_osc_4_invalid_pair_skipped() {
         let mut t = Theme::default();
         // Index 999 is out-of-range, second pair valid.
-        assert!(t.apply_osc(4, "999;rgb:00/00/00;7;rgb:ff/ff/ff"));
+        assert!(t.apply_osc(4, "999;rgb:00/00/00;7;rgb:ff/ff/ff", OscTerminator::Bel).changed);
         assert_eq!(t.palette256[7], Some(Rgb(0xff, 0xff, 0xff)));
     }
 
@@ -756,21 +884,21 @@ mod tests {
     fn apply_osc_22_block() {
         let mut t = Theme::default();
         t.cursor_style = CursorStyle::Bar;
-        assert!(t.apply_osc(22, "block"));
+        assert!(t.apply_osc(22, "block", OscTerminator::Bel).changed);
         assert_eq!(t.cursor_style, CursorStyle::Block);
     }
 
     #[test]
     fn apply_osc_22_underline() {
         let mut t = Theme::default();
-        assert!(t.apply_osc(22, "underline"));
+        assert!(t.apply_osc(22, "underline", OscTerminator::Bel).changed);
         assert_eq!(t.cursor_style, CursorStyle::Underline);
     }
 
     #[test]
     fn apply_osc_22_bar() {
         let mut t = Theme::default();
-        assert!(t.apply_osc(22, "bar"));
+        assert!(t.apply_osc(22, "bar", OscTerminator::Bel).changed);
         assert_eq!(t.cursor_style, CursorStyle::Bar);
     }
 
@@ -778,14 +906,14 @@ mod tests {
     fn apply_osc_22_empty_resets_to_block() {
         let mut t = Theme::default();
         t.cursor_style = CursorStyle::Underline;
-        assert!(t.apply_osc(22, ""));
+        assert!(t.apply_osc(22, "", OscTerminator::Bel).changed);
         assert_eq!(t.cursor_style, CursorStyle::Block);
     }
 
     #[test]
     fn apply_osc_22_invalid_keeps_state() {
         let mut t = Theme::default();
-        assert!(!t.apply_osc(22, "totally-bogus"));
+        assert!(!t.apply_osc(22, "totally-bogus", OscTerminator::Bel).changed);
         assert_eq!(t.cursor_style, CursorStyle::Block);
     }
 
@@ -794,7 +922,7 @@ mod tests {
         let mut t = Theme::default();
         t.palette256[5] = Some(Rgb(1, 2, 3));
         t.palette256[200] = Some(Rgb(4, 5, 6));
-        assert!(t.apply_osc(104, ""));
+        assert!(t.apply_osc(104, "", OscTerminator::Bel).changed);
         assert!(t.palette256.iter().all(|e| e.is_none()));
     }
 
@@ -803,7 +931,7 @@ mod tests {
         let mut t = Theme::default();
         t.palette256[5] = Some(Rgb(1, 2, 3));
         t.palette256[6] = Some(Rgb(4, 5, 6));
-        assert!(t.apply_osc(104, "5"));
+        assert!(t.apply_osc(104, "5", OscTerminator::Bel).changed);
         assert!(t.palette256[5].is_none());
         assert_eq!(t.palette256[6], Some(Rgb(4, 5, 6)));
     }
@@ -811,14 +939,14 @@ mod tests {
     #[test]
     fn apply_osc_104_no_change_returns_false() {
         let mut t = Theme::default();
-        assert!(!t.apply_osc(104, "5"));
+        assert!(!t.apply_osc(104, "5", OscTerminator::Bel).changed);
     }
 
     #[test]
     fn apply_osc_110_resets_fg() {
         let mut t = Theme::default();
         t.fg = Rgb(1, 2, 3);
-        assert!(t.apply_osc(110, ""));
+        assert!(t.apply_osc(110, "", OscTerminator::Bel).changed);
         assert_eq!(t.fg, DEFAULT_TERMINAL_FG);
     }
 
@@ -826,7 +954,7 @@ mod tests {
     fn apply_osc_111_resets_bg() {
         let mut t = Theme::default();
         t.bg = Rgb(1, 2, 3);
-        assert!(t.apply_osc(111, ""));
+        assert!(t.apply_osc(111, "", OscTerminator::Bel).changed);
         assert_eq!(t.bg, DEFAULT_TERMINAL_BG);
     }
 
@@ -834,7 +962,7 @@ mod tests {
     fn apply_osc_112_resets_cursor_fg_to_default_scheme_baseline() {
         let mut t = Theme::default();
         t.cursor_fg = Rgb(1, 2, 3);
-        assert!(t.apply_osc(112, ""));
+        assert!(t.apply_osc(112, "", OscTerminator::Bel).changed);
         assert_eq!(t.cursor_fg, Theme::DEFAULT_CURSOR_FG);
     }
 
@@ -846,7 +974,7 @@ mod tests {
         // active override state.
         let mut t = Theme::default();
         assert!(!t.cursor_fg_override_active);
-        assert!(t.apply_osc(12, "rgb:aa/bb/cc"));
+        assert!(t.apply_osc(12, "rgb:aa/bb/cc", OscTerminator::Bel).changed);
         assert_eq!(t.cursor_fg, Rgb(0xaa, 0xbb, 0xcc));
         assert!(t.cursor_fg_override_active);
     }
@@ -856,10 +984,10 @@ mod tests {
         // AC-1: OSC 112 clears the override state and restores the scheme
         // cursor color (existing behavior preserved).
         let mut t = Theme::default();
-        assert!(t.apply_osc(12, "rgb:aa/bb/cc"));
+        assert!(t.apply_osc(12, "rgb:aa/bb/cc", OscTerminator::Bel).changed);
         assert!(t.cursor_fg_override_active);
 
-        assert!(t.apply_osc(112, ""));
+        assert!(t.apply_osc(112, "", OscTerminator::Bel).changed);
         assert!(!t.cursor_fg_override_active);
         assert_eq!(t.cursor_fg, t.scheme_cursor_fg);
     }
@@ -869,7 +997,7 @@ mod tests {
         // AC-5 (Theme-level half): the RIS restore path mirrors OSC 112.
         let mut t = Theme::default();
         t.scheme_cursor_fg = Rgb(9, 8, 7);
-        assert!(t.apply_osc(12, "rgb:aa/bb/cc"));
+        assert!(t.apply_osc(12, "rgb:aa/bb/cc", OscTerminator::Bel).changed);
 
         assert!(t.restore_cursor_fg_on_full_reset());
 
@@ -897,7 +1025,7 @@ mod tests {
         let mut t = Theme::default();
         t.scheme_cursor_fg = Rgb(9, 8, 7);
         t.cursor_fg = Rgb(1, 2, 3); // e.g. an OSC 12 override
-        assert!(t.apply_osc(112, ""));
+        assert!(t.apply_osc(112, "", OscTerminator::Bel).changed);
         assert_eq!(t.cursor_fg, Rgb(9, 8, 7));
         assert_ne!(t.cursor_fg, Theme::DEFAULT_CURSOR_FG);
     }
@@ -930,9 +1058,9 @@ mod tests {
             ..Default::default()
         };
         let mut theme = Theme::from_settings(&settings);
-        assert!(theme.apply_osc(12, "rgb:aa/bb/cc"));
+        assert!(theme.apply_osc(12, "rgb:aa/bb/cc", OscTerminator::Bel).changed);
         assert_eq!(theme.cursor_fg, Rgb(0xaa, 0xbb, 0xcc));
-        assert!(theme.apply_osc(112, ""));
+        assert!(theme.apply_osc(112, "", OscTerminator::Bel).changed);
         assert_eq!(theme.cursor_fg, Rgb(0xf8, 0xf8, 0xf0));
         assert_ne!(theme.cursor_fg, Theme::DEFAULT_CURSOR_FG);
     }
@@ -940,6 +1068,302 @@ mod tests {
     #[test]
     fn apply_osc_unknown_returns_false() {
         let mut t = Theme::default();
-        assert!(!t.apply_osc(99, "anything"));
+        assert!(!t.apply_osc(99, "anything", OscTerminator::Bel).changed);
+    }
+
+    // ── osc-color-query-response task0002: query side (SC-4/SC-6) ────
+
+    // AC-1 (TS-2): a single OSC 10/11/12 query answers with the live
+    // foreground/background/cursor color; a color-spec payload produces no
+    // response and keeps the existing set behavior.
+
+    #[test]
+    fn apply_osc_10_query_answers_with_live_fg_and_causes_no_change() {
+        let mut t = Theme::default();
+        t.fg = Rgb(0x11, 0x22, 0x33);
+        let outcome = t.apply_osc(10, "?", OscTerminator::Bel);
+        assert!(!outcome.changed, "AC-6: answering a query is never a visible change");
+        assert_eq!(outcome.responses, vec![b"\x1b]10;rgb:1111/2222/3333\x07".to_vec()]);
+        assert_eq!(t.fg, Rgb(0x11, 0x22, 0x33), "query never mutates state");
+    }
+
+    #[test]
+    fn apply_osc_11_query_answers_with_live_bg_and_causes_no_change() {
+        let mut t = Theme::default();
+        t.bg = Rgb(0x44, 0x55, 0x66);
+        let outcome = t.apply_osc(11, "?", OscTerminator::Bel);
+        assert!(!outcome.changed);
+        assert_eq!(outcome.responses, vec![b"\x1b]11;rgb:4444/5555/6666\x07".to_vec()]);
+        assert_eq!(t.bg, Rgb(0x44, 0x55, 0x66));
+    }
+
+    #[test]
+    fn apply_osc_12_query_answers_with_live_cursor_fg_and_causes_no_change() {
+        let mut t = Theme::default();
+        t.cursor_fg = Rgb(0xaa, 0xbb, 0xcc);
+        let outcome = t.apply_osc(12, "?", OscTerminator::Bel);
+        assert!(!outcome.changed);
+        assert_eq!(outcome.responses, vec![b"\x1b]12;rgb:aaaa/bbbb/cccc\x07".to_vec()]);
+        assert_eq!(t.cursor_fg, Rgb(0xaa, 0xbb, 0xcc));
+    }
+
+    #[test]
+    fn apply_osc_10_color_spec_produces_no_response_and_keeps_set_behavior() {
+        let mut t = Theme::default();
+        let outcome = t.apply_osc(10, "rgb:01/02/03", OscTerminator::Bel);
+        assert!(outcome.changed);
+        assert!(outcome.responses.is_empty());
+        assert_eq!(t.fg, Rgb(1, 2, 3));
+    }
+
+    // AC-2 (TS-3): a chained default-color payload of three query tokens
+    // produces three responses carrying codes 10/11/12 in order; a
+    // four-element chain produces no fourth response; a query element
+    // neither consumes the following element nor shifts the code
+    // progression.
+
+    #[test]
+    fn apply_osc_10_chained_three_queries_answers_10_11_12_in_order() {
+        let mut t = Theme::default();
+        t.fg = Rgb(1, 1, 1);
+        t.bg = Rgb(2, 2, 2);
+        t.cursor_fg = Rgb(3, 3, 3);
+        let outcome = t.apply_osc(10, "?;?;?", OscTerminator::Bel);
+        assert!(!outcome.changed);
+        assert_eq!(
+            outcome.responses,
+            vec![
+                b"\x1b]10;rgb:0101/0101/0101\x07".to_vec(),
+                b"\x1b]11;rgb:0202/0202/0202\x07".to_vec(),
+                b"\x1b]12;rgb:0303/0303/0303\x07".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_osc_10_chained_four_queries_produces_no_fourth_response() {
+        let mut t = Theme::default();
+        let outcome = t.apply_osc(10, "?;?;?;?", OscTerminator::Bel);
+        assert_eq!(outcome.responses.len(), 3, "the 4th query element (target 13) is dropped, matching the existing set-path break at >12");
+    }
+
+    #[test]
+    fn apply_osc_10_query_element_does_not_consume_or_shift_progression() {
+        // A query at offset 0 (code 10) followed by a SET at offset 1 (code
+        // 11) followed by a query at offset 2 (code 12): the query never
+        // consumes the following element, and the code progression is
+        // exactly 10, 11, 12 regardless of which elements are queries.
+        let mut t = Theme::default();
+        t.fg = Rgb(9, 9, 9);
+        t.cursor_fg = Rgb(7, 7, 7);
+        let outcome = t.apply_osc(10, "?;rgb:01/02/03;?", OscTerminator::Bel);
+        assert!(outcome.changed, "the middle element (bg set) still applies");
+        assert_eq!(t.bg, Rgb(1, 2, 3));
+        assert_eq!(
+            outcome.responses,
+            vec![
+                b"\x1b]10;rgb:0909/0909/0909\x07".to_vec(),
+                b"\x1b]12;rgb:0707/0707/0707\x07".to_vec(),
+            ]
+        );
+    }
+
+    // AC-3 (TS-4): an OSC 4 query answers with the value SC-6 resolves for
+    // that index, covering all three cases: overlay set, overlay unset
+    // with index below 16, and overlay unset with index in 16..=255.
+
+    #[test]
+    fn apply_osc_4_query_overlay_set_answers_overlay_value() {
+        let mut t = Theme::default();
+        t.palette256[5] = Some(Rgb(0x11, 0x22, 0x33));
+        let outcome = t.apply_osc(4, "5;?", OscTerminator::Bel);
+        assert!(!outcome.changed);
+        assert_eq!(
+            outcome.responses,
+            vec![b"\x1b]4;5;rgb:1111/2222/3333\x07".to_vec()]
+        );
+    }
+
+    #[test]
+    fn apply_osc_4_query_overlay_unset_below_16_answers_palette16_value() {
+        // Index 3 (yellow, DEFAULT_PALETTE16) has no overlay entry —
+        // SC-6 falls back to `palette16`, never reporting it as missing.
+        let mut t = Theme::default();
+        assert!(t.palette256[3].is_none(), "overlay slot genuinely unset");
+        assert_eq!(t.palette16[3], Rgb(0xee, 0xee, 0x00), "sanity: DEFAULT_PALETTE16[3]");
+        let outcome = t.apply_osc(4, "3;?", OscTerminator::Bel);
+        assert_eq!(
+            outcome.responses,
+            vec![b"\x1b]4;3;rgb:eeee/eeee/0000\x07".to_vec()]
+        );
+    }
+
+    #[test]
+    fn apply_osc_4_query_overlay_unset_in_16_to_255_answers_xterm_cube_value() {
+        // Index 100, no overlay set: SC-6 falls back to the xterm 256-color
+        // cube. n=100-16=84 -> r=84/36=2, g=(84/6)%6=2, b=84%6=0 ->
+        // component(2)=55+80=135=0x87, component(0)=0.
+        let mut t = Theme::default();
+        assert!(t.palette256[100].is_none());
+        let outcome = t.apply_osc(4, "100;?", OscTerminator::Bel);
+        assert_eq!(
+            outcome.responses,
+            vec![b"\x1b]4;100;rgb:8787/8787/0000\x07".to_vec()]
+        );
+    }
+
+    // AC-4 (TS-5): a payload mixing sets and queries applies each set and
+    // answers each query in payload order.
+
+    #[test]
+    fn apply_osc_4_mixed_set_query_set_applies_sets_and_answers_query_in_order() {
+        let mut t = Theme::default();
+        let outcome = t.apply_osc(
+            4,
+            "5;rgb:01/02/03;7;?;9;rgb:04/05/06",
+            OscTerminator::Bel,
+        );
+        assert!(outcome.changed);
+        assert_eq!(t.palette256[5], Some(Rgb(1, 2, 3)));
+        assert_eq!(t.palette256[9], Some(Rgb(4, 5, 6)));
+        // Index 7 has no overlay set -> SC-6 resolves to palette16[7]
+        // (white, 0xde/0xda/0xcf).
+        assert_eq!(
+            outcome.responses,
+            vec![b"\x1b]4;7;rgb:dede/dada/cfcf\x07".to_vec()]
+        );
+    }
+
+    // AC-5 (TS-15): the response terminator equals the request terminator
+    // for both forms, for OSC 4 and for OSC 10/11/12.
+
+    #[test]
+    fn apply_osc_10_query_response_terminator_matches_st_request() {
+        let mut t = Theme::default();
+        t.fg = Rgb(1, 2, 3);
+        let outcome = t.apply_osc(10, "?", OscTerminator::St);
+        assert_eq!(
+            outcome.responses,
+            vec![b"\x1b]10;rgb:0101/0202/0303\x1b\\".to_vec()]
+        );
+    }
+
+    #[test]
+    fn apply_osc_4_query_response_terminator_matches_st_request() {
+        let mut t = Theme::default();
+        t.palette256[5] = Some(Rgb(1, 2, 3));
+        let outcome = t.apply_osc(4, "5;?", OscTerminator::St);
+        assert_eq!(
+            outcome.responses,
+            vec![b"\x1b]4;5;rgb:0101/0202/0303\x1b\\".to_vec()]
+        );
+    }
+
+    // AC-6 (TS-16): index 256 or greater, a non-decimal index, a query
+    // token under an OSC code the theme does not own, and an unparseable
+    // spec element each produce no response bytes and no theme state
+    // change, and answering any query reports no visible change.
+
+    #[test]
+    fn apply_osc_4_query_index_256_produces_nothing() {
+        let mut t = Theme::default();
+        let outcome = t.apply_osc(4, "256;?", OscTerminator::Bel);
+        assert!(outcome.responses.is_empty());
+        assert!(!outcome.changed);
+    }
+
+    #[test]
+    fn apply_osc_4_query_index_above_256_produces_nothing() {
+        let mut t = Theme::default();
+        let outcome = t.apply_osc(4, "300;?", OscTerminator::Bel);
+        assert!(outcome.responses.is_empty());
+        assert!(!outcome.changed);
+    }
+
+    #[test]
+    fn apply_osc_4_query_non_decimal_index_produces_nothing() {
+        let mut t = Theme::default();
+        let outcome = t.apply_osc(4, "abc;?", OscTerminator::Bel);
+        assert!(outcome.responses.is_empty());
+        assert!(!outcome.changed);
+    }
+
+    #[test]
+    fn apply_osc_query_under_unowned_code_produces_nothing() {
+        // A code the theme does not own at all (not 4/10/11/12/22/104/
+        // 110/111/112) — `apply_osc`'s own catch-all is inert.
+        let mut t = Theme::default();
+        let outcome = t.apply_osc(5, "?", OscTerminator::Bel);
+        assert_eq!(outcome, OscOutcome::default());
+    }
+
+    #[test]
+    fn apply_osc_4_unparseable_value_produces_nothing() {
+        // Index parses fine (5), but the value is neither a query token
+        // nor a parseable color spec.
+        let mut t = Theme::default();
+        let outcome = t.apply_osc(4, "5;bogus", OscTerminator::Bel);
+        assert!(outcome.responses.is_empty());
+        assert!(!outcome.changed);
+        assert!(t.palette256[5].is_none());
+    }
+
+    #[test]
+    fn apply_osc_10_empty_payload_produces_nothing() {
+        let mut t = Theme::default();
+        let outcome = t.apply_osc(10, "", OscTerminator::Bel);
+        assert_eq!(outcome, OscOutcome::default());
+    }
+
+    #[test]
+    fn apply_osc_10_payload_of_only_separators_produces_nothing() {
+        let mut t = Theme::default();
+        let outcome = t.apply_osc(10, ";;;", OscTerminator::Bel);
+        assert_eq!(outcome, OscOutcome::default());
+    }
+
+    #[test]
+    fn apply_osc_10_query_past_code_12_in_chain_produces_no_response() {
+        let mut t = Theme::default();
+        let outcome = t.apply_osc(
+            10,
+            "rgb:01/02/03;rgb:04/05/06;rgb:07/08/09;?",
+            OscTerminator::Bel,
+        );
+        assert!(outcome.changed);
+        assert!(
+            outcome.responses.is_empty(),
+            "the trailing query element is past code 12 and never reached"
+        );
+    }
+
+    // ── SC-6 resolve_palette_color ─────────────────────────────────────
+
+    #[test]
+    fn resolve_palette_color_prefers_overlay_when_set() {
+        let mut t = Theme::default();
+        t.palette256[5] = Some(Rgb(9, 8, 7));
+        t.palette16[5] = Rgb(1, 1, 1); // overlay must win over palette16
+        assert_eq!(t.resolve_palette_color(5), Rgb(9, 8, 7));
+    }
+
+    #[test]
+    fn resolve_palette_color_falls_back_to_palette16_below_16() {
+        let t = Theme::default();
+        assert_eq!(t.resolve_palette_color(3), t.palette16[3]);
+    }
+
+    #[test]
+    fn resolve_palette_color_falls_back_to_xterm_cube_above_16() {
+        let t = Theme::default();
+        assert_eq!(t.resolve_palette_color(16), Rgb(0, 0, 0));
+        assert_eq!(t.resolve_palette_color(231), Rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn resolve_palette_color_falls_back_to_grayscale_ramp() {
+        let t = Theme::default();
+        assert_eq!(t.resolve_palette_color(232), Rgb(8, 8, 8));
+        assert_eq!(t.resolve_palette_color(255), Rgb(238, 238, 238));
     }
 }
