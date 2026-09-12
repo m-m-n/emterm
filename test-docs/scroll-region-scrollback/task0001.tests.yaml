@@ -1,0 +1,89 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - csi_scroll::tests::test_ac1_ac2_region_topmost_transcribes_and_preserves_tail
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: 0, right: 3 (get_scrollback_length() before the transcribing path existed)"
+  AC-2:
+    tests:
+      - csi_scroll::tests::test_ac1_ac2_region_topmost_transcribes_and_preserves_tail
+    red_confirmed: true
+    red_reason: "Same test as AC-1 (combined fixture): before the fix, get_scrollback_length() assertion failed first (left: 0, right: 3), so the tail-preservation and bottom-row-blank assertions in the same test were never reached under the old code path either."
+  AC-3:
+    tests:
+      - csi_scroll::tests::test_ac3_scroll_up_control_sequence_clamped_to_region_height
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: 0, right: 3 (get_scrollback_length() after CSI 10S in a 3-row region)"
+  AC-4:
+    tests:
+      - csi_scroll::tests::test_ac4_region_top_not_topmost_no_transcription
+      - csi_scroll::tests::test_ac4_alternate_screen_active_no_transcription
+      - csi_scroll::tests::test_ac4_line_insert_delete_no_transcription
+      - csi_scroll::tests::test_ac4_scroll_down_and_reverse_index_no_transcription
+      - csi_scroll::tests::test_ac4_gate_disabled_no_transcription
+      - csi_scroll::tests::test_ac4_zero_scrollback_capacity_no_transcription
+      - csi_scroll::tests::test_ac4_after_leaving_alt_screen_transcription_resumes
+    red_confirmed: false
+    red_reason: |
+      AC-4 is a negative/regression-pin criterion by design (task plan Test
+      Notes: "Write the negative cases first: they pin today's behaviour
+      before the transcribing path exists"). Six of the seven tests above
+      (region top not topmost, alt screen active, line insert/delete,
+      scroll-down + reverse index, gate disabled, zero scrollback capacity)
+      assert that NO scrollback growth occurs — since the pre-implementation
+      code never transcribes anything, these six passed unmodified before
+      any implementation existed (verified: all green pre-implementation).
+      They are pins against the new condition being too wide, not red/green
+      criteria. The seventh test in this group,
+      test_ac4_after_leaving_alt_screen_transcription_resumes, DOES carry a
+      genuine positive assertion (transcription resumes after leaving the
+      alternate screen) and was independently confirmed red before the fix:
+      "assertion `left == right` failed: left: 0, right: 1".
+  AC-5:
+    tests:
+      - csi_scroll::tests::test_ac5_full_screen_scroll_unchanged_scroll_event
+      - csi_scroll::tests::test_ac5_region_transcribing_marks_only_region_dirty_no_scroll_event
+    red_confirmed: true
+    red_reason: |
+      test_ac5_full_screen_scroll_unchanged_scroll_event is a pin on
+      unmodified full-screen behaviour and was green before and after (the
+      full-screen branch is untouched by this task) — carried here as
+      regression coverage, not a red/green criterion.
+      test_ac5_region_transcribing_marks_only_region_dirty_no_scroll_event
+      was confirmed red before the fix once strengthened with an explicit
+      `assert_eq!(core.get_scrollback_length(), 1)` guard: without that
+      guard the dirty/no-scroll-event assertions held trivially on the
+      pre-existing non-transcribing region path too (same dirty rows, same
+      absent scroll event), so the guard is what makes this test evidence
+      for the NEW path specifically. Observed failure before the fix:
+      "assertion `left == right` failed: left: 0, right: 1".
+  AC-6:
+    tests:
+      - csi_scroll::tests::test_ac6_transcription_counts_as_ordinary_scrollback_and_evicts
+    red_confirmed: true
+    red_reason: "assertion `left == right` failed: left: 0, right: 2 (get_scrollback_length() after 2 scrolls at capacity 2, before eviction bookkeeping was reachable at all)"
+  AC-7:
+    tests:
+      - csi_scroll::tests::test_ac7_new_core_gate_enabled_by_default
+      - csi_scroll::tests::test_ac7_setter_has_no_immediate_side_effects
+      - csi_scroll::tests::test_ac7_setter_affects_only_subsequent_scrolls
+    red_confirmed: false
+    red_reason: |
+      test_ac7_new_core_gate_enabled_by_default and
+      test_ac7_setter_has_no_immediate_side_effects assert properties of the
+      trivial gate field/setter (default value, no side effects) added as
+      scaffolding alongside the tests; there is no prior "wrong" behavior to
+      go red against once the field exists — the setter is a plain
+      assignment with no branch to get wrong. test_ac7_setter_affects_only_subsequent_scrolls
+      DOES carry a genuine positive assertion (re-enabling the gate makes
+      the very next scroll transcribe) and was independently confirmed red
+      before the fix: "assertion `left == right` failed: left: 0, right: 1".
+      The AC's second clause ("the terminal-core library tests pass and
+      every file this task touched is rustfmt-clean") is verified by the
+      project's test/format commands directly, not by a unit test: `cargo
+      test --manifest-path crates/term_core/Cargo.toml --lib` (842 passed,
+      0 failed, 13 ignored) and `cargo fmt --manifest-path
+      crates/term_core/Cargo.toml --check` (exit 0) after the implementation.

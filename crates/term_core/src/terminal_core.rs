@@ -144,6 +144,18 @@ pub struct TerminalCore {
     pub(crate) kitty_placeholder_active: bool,
     pub(crate) scroll_region_top: u16,
     pub(crate) scroll_region_bottom: u16,
+    /// Transcription gate for the region-scroll branch of
+    /// [`crate::ring_buffer::TerminalCore::scroll_up_internal`]
+    /// (scroll-region-scrollback task0001 / IMPLEMENTATION.md Shared
+    /// Components). `true` = a region whose top margin is the topmost
+    /// screen row transcribes its outgoing lines to scrollback instead of
+    /// discarding them, subject to the other four conditions (no
+    /// left/right margin, alternate screen inactive, scrollback capacity >
+    /// 0). Enabled at construction so a core that is never seeded still
+    /// behaves Ghostty-compatibly (D3). A plain boolean pushed in from the
+    /// application layer via [`Self::set_scroll_region_scrollback_enabled`]
+    /// — the core has no knowledge of the settings layer (D2).
+    pub(crate) scroll_region_scrollback_enabled: bool,
     // Sprint 4: Device response buffer
     /// Ordered pending device-response store (tmux-startup-query-response-leak
     /// task0002, review-round-1 rework, D5). [`Self::write_response`]
@@ -297,6 +309,7 @@ impl TerminalCore {
             kitty_placeholder_active: false,
             scroll_region_top: 0,
             scroll_region_bottom: rows.saturating_sub(1),
+            scroll_region_scrollback_enabled: true,
             // Sprint 4 (task0002 D5: ordered append-only store, see field doc)
             response_queue: Vec::new(),
             cell_width_px: 8,
@@ -842,6 +855,18 @@ impl TerminalCore {
             self.scroll_region_top = 0;
             self.scroll_region_bottom = self.rows.saturating_sub(1);
         }
+    }
+
+    /// Enable/disable the region-scroll transcription gate
+    /// (scroll-region-scrollback task0001 / IMPLEMENTATION.md Shared
+    /// Components). Named after the `scroll_region_scrollback_enabled`
+    /// settings key so the five mirrors read alike. Callable at any point
+    /// in a core's life, including while a scroll region is active:
+    /// scroll operations processed AFTER this call observe the new value,
+    /// but the call itself never mutates scrollback, never marks rows
+    /// dirty, never emits a scroll event, and never triggers a redraw.
+    pub fn set_scroll_region_scrollback_enabled(&mut self, enabled: bool) {
+        self.scroll_region_scrollback_enabled = enabled;
     }
 
     // ── Sprint 2: Wrap pending ──────────────────────────
