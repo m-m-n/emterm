@@ -209,7 +209,7 @@ workflow:
           edited, not the whole change set - the reading A-5 already records.
     excluded_requirements: []
   - id: retrospect
-    status: pending
+    status: in_progress
 
 tasks:
   task0001:
