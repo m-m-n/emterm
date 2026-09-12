@@ -1,0 +1,25 @@
+schema_version: 1
+feature: ac8-red-reason-self-search
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: fb6a2f723d24990e5f9d71229e60f804005feb85
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers:
+  create-spec.feature-identity:
+    packet_id: null
+    answered_at: "2026-09-12T21:30:50+09:00"
+    source: batch-policy
+    answer_mode: select
+    selected_option_ids: [derive_from_task_description]
+    freeform: null
+    normalized_answer: ac8-red-reason-self-search
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
