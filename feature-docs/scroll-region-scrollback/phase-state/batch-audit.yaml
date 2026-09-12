@@ -83,3 +83,19 @@ records:
       names no AC-n of task0001's own plan and no requirement id registered in
       workflow.yaml, so the identifier part is unresolved and the path is not
       auto-added to tasks.task0001.files.
+  - question_id: implement.wake-decline
+    packet_id: null
+    answered_at: "2026-09-13T02:30:00+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "decline"
+    normalized_answer: "decline"
+    resolution_note: >-
+      task_id: task0002; declined path: crates/term_core/src/snapshot.rs.
+      missing evidence part: the acceptance-criterion / requirement identifier that
+      would otherwise be dropped. The report states an observable outcome (two
+      exhaustive struct-literal constructors stop compiling) and cites design
+      decision D5, but names no AC-n of task0002's own plan and no requirement id
+      registered in workflow.yaml, so the path is not auto-added to
+      tasks.task0002.files.
