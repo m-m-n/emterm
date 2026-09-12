@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use crate::callbacks::TerminalCallbacks;
 use crate::cell::*;
 use crate::char_table::CharTable;
+use crate::osc_handler::OscResponder;
 use crate::slim_cell::SlimCell;
 use crate::style_table::StyleTable;
 
@@ -182,6 +183,16 @@ pub struct TerminalCore {
     /// Side-effect sink for OSC / APC / DCS / BEL / device-response.
     /// `None` = silently drop (matches the previous wasm-no-callback behaviour).
     pub callbacks: Option<Box<dyn TerminalCallbacks>>,
+    /// SC-2 (osc-color-query-response task0001): optional host-supplied OSC
+    /// responder consulted on every OSC dispatch
+    /// (`osc_handler::TerminalCore::handle_osc_internal` ->
+    /// `consult_osc_responder`). `None` = today's exact behavior: no
+    /// response is ever produced by this seam, no panic (AC-3). Kept as a
+    /// channel separate from `callbacks` deliberately — see
+    /// [`crate::osc_handler::OscResponder`]'s doc comment. A
+    /// snapshot-rebuilt core always starts with `None` (see `snapshot.rs`),
+    /// matching `callbacks`.
+    pub osc_responder: Option<Box<dyn OscResponder>>,
     // Hyperlink table: maps hyperlink_id -> (params, uri)
     pub(crate) hyperlink_table: Vec<Option<(String, String)>>,
     pub(crate) hyperlink_next_id: u16,
@@ -322,6 +333,8 @@ impl TerminalCore {
             mode_actions: Vec::new(),
             // Sprint 6: Callbacks
             callbacks: None,
+            // SC-2 (osc-color-query-response task0001): unregistered by default.
+            osc_responder: None,
             // Hyperlink
             hyperlink_table: vec![None], // index 0 = no hyperlink
             hyperlink_next_id: 1,

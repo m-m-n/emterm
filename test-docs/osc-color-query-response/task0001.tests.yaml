@@ -1,0 +1,88 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - parser::tests::test_parse_osc_st_terminator
+      - parser::tests::test_parse_osc_esc_without_backslash
+      - osc_handler::tests::test_osc_dispatch_reports_bel_terminator
+      - osc_handler::tests::test_osc_dispatch_reports_st_terminator
+      - osc_handler::tests::test_osc_dispatch_reports_unterminated_deterministically
+    red_confirmed: true
+    red_reason: >-
+      OscDispatch had no `terminator` field and OscTerminator did not exist
+      before this task; both the extended pre-existing parser tests
+      (test_parse_osc_st_terminator, test_parse_osc_esc_without_backslash)
+      and the new osc_handler tests fail to COMPILE without the SC-1
+      retention this task adds (E0063 missing field / E0433 unresolved type).
+  AC-2:
+    tests:
+      - osc_handler::tests::test_registered_responder_bytes_appear_verbatim_in_drain
+      - osc_handler::tests::test_multiple_responses_within_one_parse_pass_survive_to_next_drain_in_order
+    red_confirmed: true
+    red_reason: >-
+      The OscResponder trait and TerminalCore::osc_responder field did not
+      exist before this task; these tests fail to compile without them
+      (no `core.osc_responder` to set, no `respond` bytes to observe).
+  AC-3:
+    tests:
+      - osc_handler::tests::test_unregistered_core_produces_no_response_and_does_not_panic
+    red_confirmed: false
+    red_reason: >-
+      This criterion asserts the ABSENCE of new behavior in the default
+      (unregistered) state. Before this task there was also no responder
+      mechanism at all, so an unregistered core already produced no response
+      for an arbitrary OSC and never panicked -- the test passes with or
+      without the implementation, so it cannot be made to fail first. The
+      criterion's other half ("every pre-existing term_core test passes
+      unchanged") is evidenced by the baseline/final suite comparison
+      (842 passed before this task's changes, 850 passed after -- the 8 new
+      tests added by this task, zero regressions, zero removed/weakened
+      tests) rather than by a single red-first unit test.
+  AC-4:
+    tests:
+      - osc_handler::tests::test_multiple_responses_within_one_parse_pass_survive_to_next_drain_in_order
+    red_confirmed: true
+    red_reason: >-
+      Interleaving a responder-produced reply ("COLOR-REPLY") with the
+      existing native DA1 device response in one drain requires the
+      consult_osc_responder mechanism this task adds; the responder-produced
+      bytes could not appear at all before this task (fails to compile: no
+      OscResponder / osc_responder field). The pre-existing
+      csi_device::tests::take_response_after_multi_query_chunk_returns_all_in_order
+      test already covered the native-device-response half of this
+      accumulation guarantee before this task (SC-3 was implemented by an
+      earlier task, tmux-startup-query-response-leak task0002) and continues
+      to pass unchanged; it is not counted as new evidence for this task.
+  AC-5:
+    tests:
+      - color_spec::tests::test_format_response_boundary_components
+    red_confirmed: false
+    red_reason: >-
+      format_color_response's per-8-bit-component expansion already handled
+      0x00, 0x7f and 0xff correctly and independently before this task --
+      no formatter code changed. This test extends the existing formatter's
+      inline test coverage per AC-5's explicit instruction ("extend the
+      formatter's existing inline tests rather than adding a new test
+      module"); it is a coverage addition, not evidence of new behavior.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/test-command verification, not a code-level test. Both commands
+      already passed at the pre-task baseline (cargo test: 842/842; cargo
+      check --no-default-features: clean) and continue to pass after this
+      task's changes (cargo test: 850/850, 0 new warnings; cargo check
+      --no-default-features: clean, 0 warnings). crates/term_core/Cargo.toml
+      was not touched -- no new dependency of any kind was added.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Reporting-only criterion; answered directly in the implementer report,
+      not by a test. SPEC assumption A6 resolution: the parser did NOT
+      previously retain the OSC string terminator -- every dispatch_osc call
+      site discarded which byte(s) ended the string. This task ADDED the
+      retention (OscTerminator, threaded through ParsedAction::OscDispatch
+      and into TerminalCore::handle_osc_internal).

@@ -1,4 +1,5 @@
 use super::*;
+use crate::parser_types::OscTerminator;
 
 fn parse_all(input: &[u8]) -> Vec<ParsedAction> {
     let mut parser = Parser::new();
@@ -404,6 +405,7 @@ fn test_parse_osc_set_title() {
         vec![ParsedAction::OscDispatch {
             param: 2,
             data: "My Title".to_string(),
+            terminator: OscTerminator::Bel,
         }]
     );
 }
@@ -416,6 +418,7 @@ fn test_parse_osc_set_title_and_icon() {
         vec![ParsedAction::OscDispatch {
             param: 0,
             data: "Terminal".to_string(),
+            terminator: OscTerminator::Bel,
         }]
     );
 }
@@ -428,6 +431,7 @@ fn test_parse_osc_working_directory() {
         vec![ParsedAction::OscDispatch {
             param: 7,
             data: "file:///home/user".to_string(),
+            terminator: OscTerminator::Bel,
         }]
     );
 }
@@ -440,6 +444,7 @@ fn test_parse_osc_hyperlink() {
         vec![ParsedAction::OscDispatch {
             param: 8,
             data: "id=1;https://example.com".to_string(),
+            terminator: OscTerminator::Bel,
         }]
     );
 }
@@ -452,6 +457,7 @@ fn test_parse_osc_unknown() {
         vec![ParsedAction::OscDispatch {
             param: 99,
             data: "data".to_string(),
+            terminator: OscTerminator::Bel,
         }]
     );
 }
@@ -464,6 +470,7 @@ fn test_parse_osc_semantic_prompt_a() {
         vec![ParsedAction::OscDispatch {
             param: 133,
             data: "A".to_string(),
+            terminator: OscTerminator::St,
         }]
     );
 }
@@ -476,6 +483,7 @@ fn test_parse_osc_semantic_prompt_d_with_exit_code() {
         vec![ParsedAction::OscDispatch {
             param: 133,
             data: "D;0".to_string(),
+            terminator: OscTerminator::St,
         }]
     );
 }
@@ -488,12 +496,14 @@ fn test_parse_osc_emterm_extension() {
         vec![ParsedAction::OscDispatch {
             param: 777,
             data: "markdown;title;body".to_string(),
+            terminator: OscTerminator::Bel,
         }]
     );
 }
 
 #[test]
 fn test_parse_osc_st_terminator() {
+    // AC-1 (ST form).
     let actions = parse_all(b"\x1B]2;My Title\x1B\\");
     assert_eq!(actions.len(), 1);
     assert_eq!(
@@ -501,12 +511,16 @@ fn test_parse_osc_st_terminator() {
         ParsedAction::OscDispatch {
             param: 2,
             data: "My Title".to_string(),
+            terminator: OscTerminator::St,
         }
     );
 }
 
 #[test]
 fn test_parse_osc_esc_without_backslash() {
+    // AC-1: a string cut short by an interrupting escape (not BEL/ST) is
+    // classified deterministically as `Unterminated`, never guessed as one
+    // of the two real terminator forms.
     let actions = parse_all(b"\x1B]2;Title\x1B7");
     assert_eq!(actions.len(), 2);
     assert_eq!(
@@ -514,6 +528,7 @@ fn test_parse_osc_esc_without_backslash() {
         ParsedAction::OscDispatch {
             param: 2,
             data: "Title".to_string(),
+            terminator: OscTerminator::Unterminated,
         }
     );
     assert_eq!(
@@ -573,6 +588,7 @@ fn test_parse_split_osc_sequence() {
         vec![ParsedAction::OscDispatch {
             param: 2,
             data: "My Title".to_string(),
+            terminator: OscTerminator::Bel,
         }]
     );
 }
@@ -604,6 +620,7 @@ fn test_parse_split_osc_st_across_buffers() {
         ParsedAction::OscDispatch {
             param: 2,
             data: "Title".to_string(),
+            terminator: OscTerminator::St,
         }
     );
 }
@@ -628,6 +645,7 @@ fn test_parse_osc_larger_than_4096_bytes() {
         ParsedAction::OscDispatch {
             param: 777,
             data: data.clone(),
+            terminator: OscTerminator::Bel,
         }
     );
 }
@@ -648,6 +666,7 @@ fn test_parse_osc_at_128kb_chunk_size() {
         ParsedAction::OscDispatch {
             param: 777,
             data: data.clone(),
+            terminator: OscTerminator::Bel,
         }
     );
 }
@@ -657,7 +676,7 @@ fn test_parse_osc_download_begin_sequence() {
     let seq = b"\x1B]777;emterm;download;begin;id=550e8400-e29b-41d4-a716-446655440000;name=test.txt;size=1024;version=1.0\x1B\\";
     let actions = parse_all(seq);
     assert_eq!(actions.len(), 1);
-    if let ParsedAction::OscDispatch { param, data } = &actions[0] {
+    if let ParsedAction::OscDispatch { param, data, .. } = &actions[0] {
         assert_eq!(*param, 777);
         assert!(data.contains("download"));
         assert!(data.contains("begin"));
@@ -673,7 +692,7 @@ fn test_parse_osc_download_chunk_sequence() {
     let seq = b"\x1B]777;emterm;download;chunk;id=550e8400-e29b-41d4-a716-446655440000;seq=0;data=SGVsbG8=\x1B\\";
     let actions = parse_all(seq);
     assert_eq!(actions.len(), 1);
-    if let ParsedAction::OscDispatch { param, data } = &actions[0] {
+    if let ParsedAction::OscDispatch { param, data, .. } = &actions[0] {
         assert_eq!(*param, 777);
         assert!(data.contains("download"));
         assert!(data.contains("chunk"));
@@ -689,7 +708,7 @@ fn test_parse_osc_download_end_sequence() {
     let seq = b"\x1B]777;emterm;download;end;id=550e8400-e29b-41d4-a716-446655440000\x1B\\";
     let actions = parse_all(seq);
     assert_eq!(actions.len(), 1);
-    if let ParsedAction::OscDispatch { param, data } = &actions[0] {
+    if let ParsedAction::OscDispatch { param, data, .. } = &actions[0] {
         assert_eq!(*param, 777);
         assert!(data.contains("download"));
         assert!(data.contains("end"));
@@ -710,7 +729,7 @@ fn test_parse_osc_discards_bytes_beyond_16mb() {
 
     let actions = parse_all(&input);
     assert_eq!(actions.len(), 1);
-    if let ParsedAction::OscDispatch { param, data } = &actions[0] {
+    if let ParsedAction::OscDispatch { param, data, .. } = &actions[0] {
         assert_eq!(*param, 777);
         // Data should be capped at MAX_OSC_LEN (16MB)
         assert_eq!(data.len(), size);
