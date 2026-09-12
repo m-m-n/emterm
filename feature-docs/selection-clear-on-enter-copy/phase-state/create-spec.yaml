@@ -1,11 +1,11 @@
 schema_version: 1
 feature: selection-clear-on-enter-copy
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 251550e1e51131aa6ddc3a4e11cb6aaa340f62fd
 last_input_digest: "sha256:8e20ed90e4d36b2be270c77df48d871bb55f94cddfc0afebd7617a403c6ba1a0"
-active_request_id: create-spec-run-0003
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -78,7 +78,17 @@ worker_runs:
     status: completed
     input_digest: "sha256:53d28f470dfb5f4b2e19e7bb85ae76df4754ef0b9de898db633463c9359d3553"
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: "sha256:9c1a4f0d2b7e5a63c8d1f4e70b9a2c5d83f61e0a4b7c9d2e5f8a1b4c7d0e3f62"
+    output_digest: null
+artifacts:
+  - path: feature-docs/selection-clear-on-enter-copy/REQUIREMENTS.md
+    sha256: "sha256:22e7953ef1817d96072ba4319346be27809bc6b74eed5523b72a1ad06b7c0450"
+    produced_by: create-spec-run-0003
+  - path: feature-docs/selection-clear-on-enter-copy/SPEC.md
+    sha256: "sha256:d59ab757fe939347502cff216dc1e4199101c44f7647053d7283dbcda2eee2cc"
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
