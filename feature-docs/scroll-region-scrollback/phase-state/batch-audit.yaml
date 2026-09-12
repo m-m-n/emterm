@@ -67,3 +67,19 @@ records:
       missing evidence part: same as the two records above — no acceptance-criterion
       / requirement identifier would be dropped without the path, and no observable
       failure is stated.
+  - question_id: implement.wake-decline
+    packet_id: null
+    answered_at: "2026-09-13T02:09:00+09:00"
+    source: batch-safe-default
+    answer_mode: freeform
+    selected_option_ids: []
+    freeform: "decline"
+    normalized_answer: "decline"
+    resolution_note: >-
+      task_id: task0001; declined path: crates/term_core/src/snapshot.rs.
+      missing evidence part: the acceptance-criterion / requirement identifier that
+      would otherwise be dropped. The report states an observable outcome (the crate
+      does not compile without the change) and names design decisions D2 / D3, but
+      names no AC-n of task0001's own plan and no requirement id registered in
+      workflow.yaml, so the identifier part is unresolved and the path is not
+      auto-added to tasks.task0001.files.
