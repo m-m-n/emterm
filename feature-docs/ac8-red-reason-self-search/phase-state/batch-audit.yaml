@@ -1,0 +1,35 @@
+schema_version: 1
+feature: ac8-red-reason-self-search
+records:
+  - question_id: requirement.ac8-red-reason.correction-form
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-12T21:43:49+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [drop_needle_describe_property]
+    freeform: null
+    normalized_answer: >-
+      Drop the quoted needles from the AC-8 red_reason and state only the
+      directly verified property (exactly two paths, no Rust file, no
+      TypeScript file). Make no self-referential fixed-string-search claim
+      about the record's own text.
+    resolution_note: >-
+      gate: create-spec.requirement-clarification (listed in
+      batch-policies.yaml, action codex_consultation, record_as_assumption
+      true). options offered: quote_as_counterexample (keep the quoted
+      phrasings but reframe them as counter-example quotations) /
+      drop_needle_describe_property (drop the needles and describe the
+      verified property directly). codex_consulted: true. Turn 1 returned no
+      reply (CODEX_TIMEOUT at 600s, no suggestion). Turn 2 answered via
+      fallback entry 2 (litellm/vertex-glm-5.2). Codex chose
+      drop_needle_describe_property, arguing that option A is technically
+      makeable-true but keeps the needles inline and introduces a new
+      self-referential claim that a later editor could collapse back into a
+      search claim, reproducing the same defect class; and that option B
+      loses no true verification value because the meta-check it removes was
+      itself false (the quoted needles guaranteed a grep hit). Codex named as
+      the residual risk that dropping the self-referential search removes the
+      record's only internal-consistency guard. The orchestrator judged the
+      suggestion to map onto the existing option_id
+      drop_needle_describe_property and concurred; Codex's text was not
+      adopted verbatim. Opus escalation: not run (the consultation mapped).
