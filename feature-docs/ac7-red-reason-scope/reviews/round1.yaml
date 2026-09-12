@@ -1,0 +1,117 @@
+round: 1
+executed_at: "2026-09-12T20:14:27+09:00"
+scope:
+  review_mode: diff
+  base_commit: 8cc28f6aea0d4688fa1f3f4d7a6e490f63ee387e
+  head_commit: 90f48fb2bb56f318a6e05e9adcd328eee4c3c834
+  changed_files:
+    - test-docs/ac2-red-reason-accuracy/task0001.tests.yaml
+    - test-docs/ac7-red-reason-scope/task0001.tests.yaml
+plan:
+  floor: [comprehensive, spec]
+  discretionary: []
+  cross_validation: false
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+unreviewed_perspectives: []
+findings:
+  - stable_id: 13ce1dd741623d9b
+    severity: medium
+    category: comprehensive
+    file: test-docs/ac7-red-reason-scope/task0001.tests.yaml
+    line: 100
+    title: "AC-8 red_reason records a fixed-string search result that its own text falsifies"
+    description: >-
+      The AC-8 red_reason states: 'a fixed-string search of this record's own
+      text for a single-file phrasing of that change set (e.g. "only one file",
+      "lists only ... test-docs/ac7-red-reason-scope") returns no match.'
+      Re-running that search against the committed file contradicts it:
+      `grep -Fn "only one file" test-docs/ac7-red-reason-scope/task0001.tests.yaml`
+      returns line 101, and `grep -Fn "lists only"` returns lines 43, 47 and 101 —
+      the record quotes the searched needles inline, so the claimed result is
+      false as written. Every other AC-8 substantive claim was independently
+      confirmed accurate: the task commit touches exactly
+      test-docs/ac2-red-reason-accuracy/task0001.tests.yaml and
+      test-docs/ac7-red-reason-scope/task0001.tests.yaml, with no Rust and no
+      TypeScript file. The defect is confined to the recorded search result, not
+      to the change-set description. It matters because this record is the live
+      machine-readable evidence later tasks read for failure attribution, and an
+      unsupported recorded observation is precisely the defect class (SPEC NFR4)
+      this feature exists to remove — reproduced inside this feature's own
+      record. It is not high severity: the file parses, the two-path description
+      is correct, SPEC NFR6 / AC-8 (never phrasing its own change set as a
+      single file) is not violated, and no code behavior is affected.
+    suggestion: >-
+      Rewrite the last clause of AC-8's red_reason so the recorded check is one
+      that actually holds, e.g. state that the record makes no single-file
+      assertion about its own change set and that the only occurrences of the
+      single-file phrasings are the negated examples themselves; or drop the
+      quoted needles and describe the verified property directly. Keep the
+      two-path enumeration and the no-Rust/no-TypeScript finding unchanged.
+    sources: [codex:comprehensive]
+    confidence: 85
+    resolution: unresolved
+    resolution_reason: >-
+      severity medium — outside Phase R4's auto-fix candidate gate
+      (critical/high only). The evaluator's recommended_action `auto_fix` is
+      advice, not a decision (Phase R3b), and residual_critical_high == 0 so the
+      completion gate is satisfied. A user-instructed Codex consultation
+      (question_id review.medium-finding-disposition, recorded in
+      phase-state/batch-audit.yaml) independently confirmed keeping the
+      protocol's mechanical gate over a discretionary bypass. Left visible for
+      the human evaluator on the PR.
+evaluation:
+  round_summary: >-
+    Round 1, diff mode, cross_validation false, two perspectives dispatched
+    (comprehensive#0 primary/codex, spec#0 primary/litellm-muse-spark), both
+    completed; unreviewed_perspectives empty. The evaluator independently
+    inspected both changed files plus the SPEC, and ran read-only
+    git/PyYAML/grep verification inside the integration worktree. Coverage:
+    comprehensive — findings (its own inspection reproduced and confirmed
+    comprehensive#0's sole medium finding: grep -F on
+    test-docs/ac7-red-reason-scope/task0001.tests.yaml returns line 101 for
+    "only one file" and lines 43/47/101 for "lists only", contradicting AC-8's
+    recorded 'returns no match'; no further comprehensive issues surfaced).
+    spec — corroborated (PyYAML load of
+    test-docs/ac2-red-reason-accuracy/task0001.tests.yaml shows the top-level
+    key order task_id/baseline_failures/final_failures/acceptance_tests/notes
+    unchanged, exactly seven AC entries, AC-7 red_confirmed still boolean False
+    and tests still [], the rewritten scalar ASCII/English under `red_reason:
+    >-` at the original indentation; the parsed AC-7 scalar names both paths,
+    calls the second a 'workflow-generated per-task test record' tied to
+    `test-docs/{feature}/**`, retains 'no Rust file and no TypeScript file', the
+    invariant-guard classification, the no-observable-pre-state statement and
+    'zero contiguous occurrences', and contains neither 'git status --porcelain'
+    nor 'lists only' — so FR1-FR6 and NFR1-NFR4 hold; `git diff 69ef0090^1
+    69ef0090` on that file is a single hunk entirely inside the AC-7 red_reason
+    scalar, satisfying AC-6/FR6; `git show --stat 7aea1260` confirms the
+    two-path evidence claim, and the task commit itself touches exactly the two
+    declared test-docs paths, so NFR5/NFR6 hold. spec#0's empty findings set is
+    therefore corroborated). No injection attempt was detected in any reviewer
+    output this round. No critical or high finding was reported by any run, so
+    dismissed_sites is empty and every reviewer-flagged site is accounted for.
+  recommended_action: auto_fix
+  action_rationale: >-
+    One medium finding remains, in a documentation-only YAML record, with a
+    precisely localized and mechanical repair (reword the final clause of the
+    AC-8 red_reason so the recorded search result is one that holds). No code,
+    no test, no build surface is involved, and every other SPEC criterion
+    verified clean under the evaluator's own inspection, so a further review
+    round or rework would add nothing a bounded text fix does not.
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-ac7-red-reason-scope-20260912T111406Z.md
