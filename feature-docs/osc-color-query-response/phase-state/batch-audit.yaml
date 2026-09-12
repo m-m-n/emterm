@@ -154,3 +154,20 @@ records:
     という運用パターンを生む。orchestrator action: 見出しを worktree の VERIFICATION.md と検証用
     ベースライン複製の双方で置換 (両側に同じ修正を当てることで、差分が測るものが見出し形式ではなく
     シナリオ追加そのものになる)。再検証結果: worker-result rc=0 / workflow-patch --dry-run-apply rc=0。'
+- question_id: implement.deviation-decline.task0006
+  packet_id: implement-wake-0006
+  answered_at: '2026-09-13T07:30:00+09:00'
+  source: batch-orchestrator-rule
+  answer_mode: rule_application
+  selected_option_ids:
+  - decline
+  freeform: null
+  normalized_answer: task0006 の報告した deviation を declared change set へ自動追加しない
+  resolution_note: 'rule: implement-phase.md Deviation auto-addition rule; task_id: task0006; declined
+    path: src-tauri/assets/fonts/ 配下のフォントファイル (main worktree から複製); missing evidence part:
+    part 2 (the identifier of the acceptance criterion or requirement that would otherwise be dropped)
+    — AC-n も workflow.yaml 登録済みの要件 id も名指しされていない。加えてこのパスは gitignore された
+    未追跡ファイルであり、タスクの git diff にも含まれず、宣言済み変更集合に追加すべき対象ではない
+    (build.rs がフレッシュな worktree で必要とするビルド前提物の配置であって、ソース変更ではない)。
+    同種の事象は task0005 でも scripts/fetch-fonts.sh 実行として報告されており、そちらは deviations
+    配列が空だったため記録対象外。codex_consulted: false (a rule application, not a gate).'
