@@ -127,15 +127,17 @@ impl Tab {
 }
 
 /// True when `payload` contains a complete CSI device query that `term_core`
-/// answers by appending to its ordered pending-response store (task0002 D5).
-/// The set is kept in lockstep with the response-synthesizing arms of
-/// `crates/term_core/src/csi_dispatch.rs`: final byte `n` (DSR), `c` (Device
-/// Attributes), `t` (XTWINOPS size reports), or `p` (DECRPM `CSI ? Ps $ p`).
-/// Detection is intentionally conservative — it matches on the final byte
-/// alone, so a few non-response sequences sharing those finals (e.g. DA3
-/// `CSI = c`, non-size XTWINOPS ops, a non-DECRPM `p`) are also treated as
-/// queries. The only cost of a false positive is parsing that one frame on
-/// its own instead of coalescing it; correctness is unaffected.
+/// answers by appending to its ordered pending-response store (task0002 D5),
+/// OR a complete OSC 4 / 10 / 11 / 12 color query (task0004 AC-3 / SPEC A7 —
+/// see [`osc_scan_for_color_query`]). The CSI set is kept in lockstep with the
+/// response-synthesizing arms of `crates/term_core/src/csi_dispatch.rs`: final
+/// byte `n` (DSR), `c` (Device Attributes), `t` (XTWINOPS size reports), or
+/// `p` (DECRPM `CSI ? Ps $ p`). Detection is intentionally conservative — it
+/// matches on the final byte alone, so a few non-response sequences sharing
+/// those finals (e.g. DA3 `CSI = c`, non-size XTWINOPS ops, a non-DECRPM `p`)
+/// are also treated as queries. The only cost of a false positive is parsing
+/// that one frame on its own instead of coalescing it; correctness is
+/// unaffected.
 ///
 /// Used by [`Tab::pty_output_batch_eligible`] to keep query-bearing
 /// `PtyOutput` frames OUT of the coalesce accumulator. This is now a
@@ -148,7 +150,10 @@ impl Tab {
 /// unrelated coalesce run and matches the pre-coalesce per-frame timing
 /// byte-for-byte; task0002 leaves this gate's behavior unchanged (out of
 /// scope — see that task's plan), only its rationale no longer includes
-/// "or a reply is lost".
+/// "or a reply is lost". The same latency/isolation rationale is why an OSC
+/// color query is classified here too, even though the ordered store would
+/// already keep its (future) answer from being lost or overwritten by a
+/// later query in the same coalesced parse.
 ///
 /// A CSI starts at `ESC [` (`0x1b 0x5b`); parameter bytes are `0x30..=0x3f`,
 /// intermediate bytes `0x20..=0x2f`, and the final byte is `0x40..=0x7e`. A C0
@@ -157,6 +162,12 @@ impl Tab {
 /// keeps accumulating). A CSI left incomplete at the end of the payload is NOT a
 /// complete query (it would complete in a later frame, where it still yields a
 /// single reply — no loss), so it does not force a split.
+///
+/// An OSC starts at `ESC ]` (`0x1b 0x5d`); see [`osc_scan_for_color_query`]
+/// for the terminator / incomplete-tail handling, which mirrors the CSI scan
+/// above (an incomplete OSC at payload end is not a complete query — it would
+/// complete, and still answer, once combined with a later frame by the
+/// coalesce accumulator).
 pub(super) fn payload_has_device_query(payload: &[u8]) -> bool {
     let n = payload.len();
     let mut i = 0;
@@ -204,7 +215,103 @@ pub(super) fn payload_has_device_query(payload: &[u8]) -> bool {
             }
             continue;
         }
+        if payload[i] == 0x1b && payload[i + 1] == b']' {
+            match osc_scan_for_color_query(payload, i) {
+                OscScan::Query => return true,
+                OscScan::Incomplete => return false,
+                OscScan::Resume(next) => {
+                    i = next;
+                    continue;
+                }
+            }
+        }
         i += 1;
     }
     false
+}
+
+/// Outcome of scanning one OSC string (starting at `ESC ]`) for a color-query
+/// token. See [`osc_scan_for_color_query`].
+enum OscScan {
+    /// The OSC string is a complete OSC 4 / 10 / 11 / 12 color query.
+    Query,
+    /// The OSC string runs to the end of the payload with no terminator.
+    Incomplete,
+    /// The OSC string terminated (BEL, ST, or a premature ESC) without being
+    /// a color query; resume the outer scan at this byte offset.
+    Resume(usize),
+}
+
+/// Scan one OSC string starting at `payload[start]` (the `ESC` of `ESC ]`)
+/// for an OSC 4 / 10 / 11 / 12 color-query token (task0004 AC-3 / SPEC A7,
+/// FR1/FR2): a payload whose data contains a `?` component. FR1 (OSC 10 / 11
+/// / 12) and FR2 (OSC 4) both allow a chained payload of several `;`
+/// separated elements within ONE OSC string (`?;?;?`, `1;?;200;rgb:00/aa/00;
+/// 5;?`), so this scans the whole data string for ANY `?` byte rather than
+/// requiring the data to be exactly `?` — intentionally conservative, like
+/// the CSI scan above: a `?` can only appear in a genuine query element for
+/// these four codes (a color spec is either `rgb:rrrr/gggg/bbbb`, a named
+/// color, or absent), so there is no realistic false-positive source.
+///
+/// Terminator handling mirrors `crates/term_core/src/parser/osc.rs`: BEL
+/// (`0x07`) or ST (`ESC \`) ends the string normally. An `ESC` NOT followed
+/// by `\` also ends it — the real parser dispatches whatever was
+/// accumulated and re-processes that byte as the start of a new sequence
+/// (`osc_escape`'s fallback arm) — so this resumes the outer scan AT that
+/// `ESC` byte (mirroring the CSI scan's own malformed-sequence resync)
+/// rather than skipping past it.
+///
+/// An OSC that runs to the end of the payload with no terminator is
+/// `Incomplete`, not a complete query — like an incomplete CSI, it would
+/// complete (and still answer) once joined with a later frame by the
+/// coalesce accumulator, so no reply is lost by not forcing a split here.
+fn osc_scan_for_color_query(payload: &[u8], start: usize) -> OscScan {
+    let n = payload.len();
+    let mut j = start + 2; // past `ESC ]`
+    let mut param: u32 = 0;
+    let mut param_done = false;
+    let mut has_query = false;
+    loop {
+        if j >= n {
+            return OscScan::Incomplete;
+        }
+        let is_color_query = || matches!(param, 4 | 10 | 11 | 12) && has_query;
+        match payload[j] {
+            0x07 => {
+                // BEL terminator.
+                return if is_color_query() {
+                    OscScan::Query
+                } else {
+                    OscScan::Resume(j + 1)
+                };
+            }
+            0x1b => {
+                // ST (`ESC \`) or a premature ESC — either way the real
+                // parser dispatches the OSC here.
+                if is_color_query() {
+                    return OscScan::Query;
+                }
+                return if j + 1 < n && payload[j + 1] == b'\\' {
+                    OscScan::Resume(j + 2) // ST: consume both bytes
+                } else {
+                    OscScan::Resume(j) // premature ESC: re-examine it
+                };
+            }
+            b @ b'0'..=b'9' if !param_done => {
+                param = param.saturating_mul(10).saturating_add((b - b'0') as u32);
+                j += 1;
+            }
+            b';' if !param_done => {
+                param_done = true;
+                j += 1;
+            }
+            b'?' => {
+                has_query = true;
+                j += 1;
+            }
+            _ => {
+                j += 1;
+            }
+        }
+    }
 }

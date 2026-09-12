@@ -1,0 +1,107 @@
+task_id: task0003
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - render::theme::tests::default_theme_scheme_mirrors_equal_construction_seed_constants
+    red_confirmed: true
+    red_reason: >-
+      Before the mirror fields existed, this test failed to compile:
+      "error[E0609]: no field `scheme_fg` on type `theme::Theme`" (and
+      likewise for `scheme_bg` / `scheme_palette16`).
+  AC-2:
+    tests:
+      - render::theme::tests::from_settings_preset_scheme_updates_all_three_mirrors_alongside_live_fields
+      - render::theme::tests::from_settings_user_scheme_mirrors_update_per_field_and_per_index_guard
+      - render::theme::tests::apply_osc_set_sequences_never_change_scheme_mirrors
+    red_confirmed: true
+    red_reason: >-
+      With the mirror fields seeded but the preset/user-scheme branches not
+      yet writing them, the preset test failed with
+      "assertion `left == right` failed / left: Rgb(64, 255, 64) / right:
+      Rgb(248, 248, 242)" (scheme_fg stayed at the construction seed instead
+      of tracking monokai's fg), and the user-scheme test failed the same
+      way for scheme_fg/scheme_bg/scheme_palette16[0]. The third test in
+      this set (OSC 4/10/11/12 never touching a mirror) only failed to
+      compile before the fields existed — no code path writes those fields
+      from either the pre- or post-implementation apply_osc branches, so
+      once the fields exist this specific sub-check was never at risk of
+      going red on its own; it is included as a regression guard, not as
+      the AC's primary red evidence.
+  AC-3:
+    tests:
+      - render::theme::tests::from_settings_osc110_osc111_reset_to_active_scheme_not_hardcoded_default
+    red_confirmed: true
+    red_reason: >-
+      With OSC 110/111 still hardcoded to DEFAULT_TERMINAL_FG/BG, resetting
+      under an active monokai scheme failed:
+      "assertion `left == right` failed / left: Rgb(64, 255, 64) / right:
+      Rgb(248, 248, 242)" (expected monokai's fg, got the built-in default).
+  AC-4:
+    tests:
+      - render::theme::tests::from_settings_user_scheme_unparseable_fg_bg_leaves_construction_seed_and_reset_restores_it
+    red_confirmed: false
+    red_reason: >-
+      Could not be made to fail against the old hardcoded OSC 110/111
+      implementation: when a user scheme's fg/bg spec fails to parse, the
+      theme's construction seed for fg/bg is DEFAULT_TERMINAL_FG /
+      DEFAULT_TERMINAL_BG by definition (the same constants the old
+      hardcoded reset wrote), so both the old (hardcoded) and new
+      (mirror-based) implementations produce an identical observable
+      result for this exact scenario — there is no parseable input that
+      distinguishes them here. The discriminating scenario (an active
+      scheme whose value actually differs from the built-in default) is
+      covered by AC-3, which is genuinely red-confirmed. The guard-parity
+      half of AC-4 (an unparsed spec updates neither live field nor mirror)
+      is exercised directly by the field assertions in this same test.
+  AC-5:
+    tests:
+      - render::theme::tests::apply_osc_104_empty_resets_overlay_and_restores_palette16_from_scheme
+      - render::theme::tests::apply_osc_104_indexed_resets_only_listed_overlay_and_palette16
+      - render::theme::tests::apply_osc_104_indexed_reset_at_or_above_16_clears_overlay_only
+    red_confirmed: true
+    red_reason: >-
+      Before palette16 restoration was added, the empty-payload test failed
+      with "assertion `left == right` failed / left: Rgb(17, 34, 51) /
+      right: Rgb(255, 0, 255)" (palette16[5] kept the OSC-4-set color
+      instead of the scheme's), and the indexed-reset test failed the same
+      way for index 5. The above-16 edge case already passed under the old
+      implementation (out-of-range indices never touched palette16 in
+      either version) — included for edge-case coverage per the task plan's
+      Test Notes, not as red-confirming evidence.
+  AC-6:
+    tests:
+      - render::theme::tests::apply_osc_104_empty_reports_change_when_only_the_array_diverges_from_scheme
+      - render::theme::tests::apply_osc_104_indexed_reports_change_when_only_that_indexs_array_entry_diverges
+      - render::theme::tests::apply_osc_104_no_change_when_neither_overlay_nor_array_differs
+    red_confirmed: true
+    red_reason: >-
+      Before change reporting considered the array, both "only array
+      changed" tests failed with "assertion failed: t.apply_osc(104, ...)"
+      (expected `true`, got `false`) because the old implementation's
+      change flag only tracked the overlay. The "no change" test already
+      passed under the old implementation for this exact scenario (nothing
+      set, nothing to clear) — included as the AC's negative case, not as
+      red-confirming evidence.
+  AC-7:
+    tests:
+      - render::theme::tests::apply_osc_104_post_reset_resolution_matches_scheme_for_0_15_and_cube_for_16_255
+      - render::theme::tests::apply_osc_104_empty_resets_overlay_and_restores_palette16_from_scheme
+      - render::theme::tests::apply_osc_104_indexed_resets_only_listed_overlay_and_palette16
+      - render::theme::tests::apply_osc_110_resets_fg
+      - render::theme::tests::apply_osc_111_resets_bg
+    red_confirmed: true
+    red_reason: >-
+      The SC-6 resolution test failed pre-implementation with
+      "assertion `left == right` failed / left: Rgb(39, 40, 34) / right:
+      Rgb(0, 0, 0)" (index 3 resolved to the built-in default's palette16
+      entry instead of monokai's, since palette16 was never restored from
+      the scheme mirror). The pre-existing OSC 104 tests were rewritten to
+      the new semantics (renamed, and now exercised through apply_osc(4,
+      ...) rather than direct field writes) rather than deleted, and the
+      stale "palette16 stays at xterm defaults" comment was removed from
+      apply_palette_reset. apply_osc_110_resets_fg / apply_osc_111_resets_bg
+      are the no-active-scheme case (kept, with an added comment) and were
+      not expected to go red since the construction seed equals
+      DEFAULT_TERMINAL_FG/BG regardless of implementation (see AC-4).

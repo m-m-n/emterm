@@ -201,6 +201,18 @@ mod tests {
         );
     }
 
+    /// AC-5 / TS-1: boundary components 0x00, 0x7f and 0xff, each on a
+    /// distinct channel (not all three sharing one value, as the black/white
+    /// tests above do), assert both the 8-bit-to-16-bit expansion and the
+    /// `rgb:rrrr/gggg/bbbb` text shape.
+    #[test]
+    fn test_format_response_boundary_components() {
+        assert_eq!(
+            format_color_response(0x00, 0x7f, 0xff),
+            "rgb:0000/7f7f/ffff"
+        );
+    }
+
     // ── roundtrip tests ─────────────────────────────────
 
     #[test]

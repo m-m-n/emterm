@@ -605,6 +605,105 @@ fn reset_frame_for_replay_discards_historic_device_responses() {
     );
 }
 
+/// task0004 AC-4: extends the regression above (added as a sibling test,
+/// leaving the original untouched per this task's plan) to a snapshot that
+/// ALSO embeds an OSC 4 / 10 / 11 / 12 color query alongside the historic
+/// DA1 / CPR queries. `term_core` does not yet answer OSC color queries
+/// (that responder is task0002's, out of this task's scope), so this
+/// payload cannot itself prove a color-query reply was discarded — what it
+/// proves is that the discard call (`reset_frame_for_replay`'s unconditional
+/// `take_response()`) is content-agnostic and unaffected by an OSC query
+/// sharing the snapshot with the queries it already discards, and pins the
+/// invariant so a future responder wiring cannot silently reopen this leak
+/// for the new query type without this test catching it.
+#[test]
+fn reset_frame_for_replay_discards_historic_device_responses_including_osc_color_query() {
+    let mut tab = test_tab();
+    let mut snapshot = Vec::new();
+    snapshot.extend_from_slice(b"row one\r\n");
+    snapshot.extend_from_slice(b"\x1b[c"); // DA1 query
+    snapshot.extend_from_slice(b"row two\r\n");
+    snapshot.extend_from_slice(b"\x1b]11;?\x07"); // OSC 11 (bg) color query
+    snapshot.extend_from_slice(b"row three\r\n");
+    snapshot.extend_from_slice(b"\x1b[6n"); // CPR query
+
+    let _ = tab.reset_frame_for_replay(&snapshot, &[]);
+
+    let core = tab.core.lock();
+    assert_eq!(
+        core.get_response_len(),
+        0,
+        "reset_frame_for_replay must drop every pending device response \
+         regardless of source, including an OSC color query mixed into the \
+         same snapshot as the historic DA1/CPR queries"
+    );
+    drop(core);
+    assert!(
+        tab.test_outbound_writes().is_empty(),
+        "no historic query baked into snapshot bytes may produce an \
+         outbound write, OSC color query included"
+    );
+}
+
+/// task0004 AC-4: the SECOND discard point named by this task's plan —
+/// `apply_offthread_swap`'s own `take_response()` discard on the
+/// worker-built core, which had no regression test at all before this task.
+/// Drives a payload large enough to take the off-thread replay path
+/// (`OFFTHREAD_REPLAY_THRESHOLD_BYTES`) with DA1 / CPR queries AND an OSC
+/// color query embedded in it, polls the swap to completion, and asserts no
+/// device response survives onto the freshly-swapped-in live core.
+#[test]
+fn apply_offthread_swap_discards_historic_device_responses_including_osc_color_query() {
+    let mut tab = test_tab();
+    tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+    let mut payload = Vec::with_capacity(OFFTHREAD_REPLAY_THRESHOLD_BYTES + 1024);
+    payload.extend_from_slice(b"FIRST\r\n");
+    payload.extend_from_slice(b"\x1b[c"); // DA1 query
+    payload.extend_from_slice(b"\x1b]11;?\x07"); // OSC 11 (bg) color query
+    let mut i: u32 = 0;
+    while payload.len() < OFFTHREAD_REPLAY_THRESHOLD_BYTES + 8 * 1024 {
+        payload.extend_from_slice(format!("line {i:06}\r\n").as_bytes());
+        i += 1;
+    }
+    payload.extend_from_slice(b"\x1b[6n"); // CPR query near the tail
+    payload.extend_from_slice(b"LAST\r\n");
+
+    tab.apply_mux_message(snapshot_msg(10, payload));
+    assert!(
+        tab.test_has_pending_switch(),
+        "test prerequisite: large payload must go off-thread"
+    );
+    let outcome = tab.test_poll_until_swapped();
+    assert_eq!(outcome, SwapOutcome::Swapped);
+
+    let core = tab.core.lock();
+    assert_eq!(
+        core.get_response_len(),
+        0,
+        "apply_offthread_swap must drop every device response left pending \
+         on the worker-built core (DA1/CPR and an OSC color query alike) \
+         before it goes live; residual bytes would leak as PtyInput on the \
+         next live take_response poll and corrupt the shell's stdin after \
+         a mux window switch"
+    );
+    drop(core);
+    // The Welcome handshake above already wrote Resize control frames for
+    // both seeded panes into the same outbound log, so assert on the
+    // ABSENCE of the specific historic-query replies rather than log
+    // emptiness.
+    let writes = tab.test_outbound_writes();
+    for (name, reply) in [
+        ("DA1", &b"\x1b[?65;1;4;22c"[..]),
+        ("CPR", &b"\x1b[1;1R"[..]),
+    ] {
+        assert!(
+            !writes.iter().any(|w| w.as_slice() == reply),
+            "{name} reply must not leak onto the outbound side from an \
+             off-thread-replayed snapshot, got {writes:?}"
+        );
+    }
+}
+
 // ── 2nd-pass scrollback restore (snapshot-replay-scrollback-restore) ──
 
 /// Build a payload at or above the off-thread threshold that scrolls

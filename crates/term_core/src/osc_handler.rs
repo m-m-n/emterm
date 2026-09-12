@@ -2,37 +2,52 @@
 use crate::parser_types::OscTerminator;
 use crate::terminal_core::TerminalCore;
 
-/// SC-2 (osc-color-query-response IMPLEMENTATION.md): the registration
-/// point through which the GUI layer supplies a color-aware OSC responder.
-/// `term_core` consults this on every OSC dispatch but never inspects which
-/// codes the responder owns — that policy lives entirely on the GUI side
-/// (D1: the query is answered in the GUI layer, never in `term_core`).
+/// SC-2 (osc-color-query-response task0001): the registration seam through
+/// which the embedding (GUI) layer supplies a responder that `term_core`
+/// consults on every OSC dispatch. `term_core` names no GUI concept here —
+/// only the OSC numeric code, the raw payload, and the SC-1 terminator kind
+/// it already owns (see [`TerminalCore::osc_responder`] for registration).
 ///
-/// Registration is optional (see [`TerminalCore::register_color_responder`]);
-/// an unregistered core behaves exactly as it did before this feature (no
-/// response, no panic, no behavior change).
+/// Distinct from [`crate::TerminalCallbacks`]: a `TerminalCallbacks` method
+/// is a fire-and-forget notification (`&self`, no return value); a
+/// responder RETURNS response bytes that `term_core` owns delivering
+/// through the single response-buffer drain (SC-2, SC-3) — kept as a
+/// separate channel so a query's reply is never also observed as (or
+/// confused with) a `TerminalCallbacks::on_osc` notification.
 ///
-/// Deliberately separate from [`crate::callbacks::TerminalCallbacks`]: that
-/// trait's methods take `&self` and return nothing (fire-and-forget), which
-/// is exactly the shape that made a duplicate device-response channel
-/// possible historically (see `TerminalCallbacks`'s doc on why
-/// `on_device_response` was removed). A responder here returns bytes by
-/// value (D2) and `term_core` alone decides where they go — appended to the
-/// SAME ordered pending-response store [`TerminalCore::take_response`]
-/// drains — so there is exactly one delivery route, never two.
-pub trait OscColorResponder: Send {
-    /// Called for every OSC dispatch, before any other handling of it.
-    /// `code` is the raw OSC numeric parameter, `payload` is the raw OSC
-    /// data, and `terminator` is the SC-1 string terminator that ended this
-    /// dispatch. Returns zero or more complete response byte sequences, in
-    /// the order they must be delivered; `term_core` appends them to the
-    /// pending response store verbatim (D2) and never inspects or rewrites
-    /// them. A code the responder does not own returns an empty `Vec`
-    /// (inertness — no bytes, no state change).
+/// `&self`: answering a query never needs mutable access to `term_core`
+/// state, mirroring the "answering a query never mutates theme state"
+/// invariant the embedding layer's own entry point (SC-4) upholds on its
+/// side.
+pub trait OscResponder: Send {
+    /// Called for every dispatched OSC (an unregistered core never calls
+    /// this — see [`TerminalCore::osc_responder`], AC-3). `code` is the raw
+    /// OSC numeric parameter (not `term_core`'s internal `action_type`),
+    /// `payload` is the raw OSC data, and `terminator` is the SC-1
+    /// terminator kind that ended the string.
+    ///
+    /// Returns zero or more complete response byte sequences to append, in
+    /// order, to `term_core`'s pending response content (SC-3). An empty
+    /// `Vec` means "no response for this code" — not an error, not a state
+    /// change — and leaves any already-pending content untouched.
     fn respond(&self, code: u16, payload: &str, terminator: OscTerminator) -> Vec<Vec<u8>>;
 }
 
 impl TerminalCore {
+    /// Consult the registered [`OscResponder`], if any, and append every
+    /// byte sequence it returns to the pending response store (SC-2, SC-3).
+    /// A no-op when nothing is registered (AC-3): no response is produced,
+    /// no panic, and `term_core`'s existing behavior for every OSC code is
+    /// unchanged.
+    fn consult_osc_responder(&mut self, code: u16, payload: &str, terminator: OscTerminator) {
+        let Some(responder) = self.osc_responder.as_deref() else {
+            return;
+        };
+        for response in responder.respond(code, payload, terminator) {
+            self.response_queue.extend_from_slice(&response);
+        }
+    }
+
     /// Allocate a hyperlink ID and store the entry in the hyperlink table.
     fn allocate_hyperlink(&mut self, params: &str, uri: &str) -> u16 {
         // Run GC when table grows large to reclaim unused entries
@@ -78,22 +93,18 @@ impl TerminalCore {
         }
     }
 
-    pub(crate) fn handle_osc_internal(&mut self, param: u16, data: &str, terminator: OscTerminator) {
-        // SC-2: consult the optional GUI-layer color responder on every OSC
-        // dispatch, before any other handling below. `term_core` never
-        // inspects which codes the responder owns (D1) — an unregistered
-        // core, or a code the responder doesn't own, yields an empty `Vec`
-        // and this is a no-op, matching SC-2's "behaves exactly as today"
-        // pre-condition. Responses are appended directly to the SAME
-        // ordered pending-response store `write_response` appends to
-        // (D2/D6): several responses within one dispatch (a chained
-        // default-color query, a multi-pair palette query) all survive
-        // until the next `take_response` drain.
-        if let Some(responder) = self.color_responder.as_deref() {
-            for response in responder.respond(param, data, terminator) {
-                self.response_queue.extend_from_slice(&response);
-            }
-        }
+    pub(crate) fn handle_osc_internal(
+        &mut self,
+        param: u16,
+        data: &str,
+        terminator: OscTerminator,
+    ) {
+        // SC-2: consulted for EVERY dispatched OSC (AC-2) — including the
+        // OSC 8 early-return branch just below. The responder must see
+        // every code `term_core` dispatches, not only the ones it has no
+        // native handling for; existing behavior for every code below is
+        // otherwise unchanged (AC-3).
+        self.consult_osc_responder(param, data, terminator);
 
         // Special handling for OSC 8: process hyperlink inline
         if param == 8 {
@@ -294,7 +305,154 @@ fn parse_emterm_fold_mark(data: &str) -> Option<(crate::terminal_core::FoldMarkK
 
 #[cfg(test)]
 mod tests {
+    use super::{OscResponder, OscTerminator};
     use crate::terminal_core::TerminalCore;
+
+    // ── SC-1 / SC-2 / SC-3: terminator carriage + host-responder seam
+    // (osc-color-query-response task0001) ──────────────────────────────
+
+    /// Records every `respond` call `(code, payload, terminator)`.
+    #[derive(Default)]
+    struct Recorder {
+        calls: std::sync::Mutex<Vec<(u16, String, OscTerminator)>>,
+    }
+
+    impl Recorder {
+        fn record(&self, code: u16, payload: &str, terminator: OscTerminator) {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((code, payload.to_string(), terminator));
+        }
+    }
+
+    /// Test double for [`OscResponder`]: records every call via `Recorder`
+    /// and returns a fixed set of response byte sequences for `target_code`,
+    /// declining (empty `Vec`) for every other code.
+    struct FixedResponder {
+        recorder: std::sync::Arc<Recorder>,
+        target_code: u16,
+        fixed_responses: Vec<Vec<u8>>,
+    }
+
+    impl OscResponder for FixedResponder {
+        fn respond(&self, code: u16, payload: &str, terminator: OscTerminator) -> Vec<Vec<u8>> {
+            self.recorder.record(code, payload, terminator);
+            if code == self.target_code {
+                self.fixed_responses.clone()
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    /// Build a core with a registered `FixedResponder`, plus a handle to
+    /// the shared `Recorder` for asserting on recorded calls afterward.
+    fn core_with_fixed_responder(
+        target_code: u16,
+        fixed_responses: Vec<Vec<u8>>,
+    ) -> (TerminalCore, std::sync::Arc<Recorder>) {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let recorder = std::sync::Arc::new(Recorder::default());
+        core.osc_responder = Some(Box::new(FixedResponder {
+            recorder: recorder.clone(),
+            target_code,
+            fixed_responses,
+        }));
+        (core, recorder)
+    }
+
+    #[test]
+    fn test_osc_dispatch_reports_bel_terminator() {
+        // AC-1 (BEL form).
+        let (mut core, recorder) = core_with_fixed_responder(4, vec![]);
+        core.process_pty_data_fully(b"\x1b]4;1;?\x07");
+        let calls = recorder.calls.lock().unwrap();
+        assert_eq!(*calls, vec![(4, "1;?".to_string(), OscTerminator::Bel)]);
+    }
+
+    #[test]
+    fn test_osc_dispatch_reports_st_terminator() {
+        // AC-1 (ST form).
+        let (mut core, recorder) = core_with_fixed_responder(4, vec![]);
+        core.process_pty_data_fully(b"\x1b]4;1;?\x1b\\");
+        let calls = recorder.calls.lock().unwrap();
+        assert_eq!(*calls, vec![(4, "1;?".to_string(), OscTerminator::St)]);
+    }
+
+    #[test]
+    fn test_osc_dispatch_reports_unterminated_deterministically() {
+        // AC-1: a string cut short by an interrupting escape (not BEL/ST) is
+        // classified deterministically as `Unterminated`, never guessed as
+        // one of the two real terminator forms.
+        let (mut core, recorder) = core_with_fixed_responder(4, vec![]);
+        core.process_pty_data_fully(b"\x1b]4;1;?\x1b7");
+        let calls = recorder.calls.lock().unwrap();
+        assert_eq!(
+            *calls,
+            vec![(4, "1;?".to_string(), OscTerminator::Unterminated)]
+        );
+    }
+
+    #[test]
+    fn test_registered_responder_bytes_appear_verbatim_in_drain() {
+        // AC-2: the responder's returned byte sequences appear verbatim, in
+        // returned order, in the pending response content.
+        let (mut core, _recorder) = core_with_fixed_responder(
+            4,
+            vec![
+                b"\x1b]4;1;rgb:1111/2222/3333\x1b\\".to_vec(),
+                b"second".to_vec(),
+            ],
+        );
+        core.process_pty_data_fully(b"\x1b]4;1;?\x07");
+        let drained = core.take_response();
+        let mut expected = b"\x1b]4;1;rgb:1111/2222/3333\x1b\\".to_vec();
+        expected.extend_from_slice(b"second");
+        assert_eq!(drained, expected);
+    }
+
+    #[test]
+    fn test_unregistered_core_produces_no_response_and_does_not_panic() {
+        // AC-3: no responder registered -> no response, no panic.
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.process_pty_data_fully(b"\x1b]4;1;?\x07");
+        assert!(core.take_response().is_empty());
+    }
+
+    #[test]
+    fn test_responder_declining_leaves_pending_content_untouched() {
+        // Test Notes edge case: a payload the responder declines (empty
+        // `Vec`) must leave already-pending content untouched, including
+        // when earlier content is already pending.
+        let (mut core, _recorder) = core_with_fixed_responder(4, vec![]);
+        // Prime the pending store via an existing device query (DA1) so
+        // there is content already pending before the declined dispatch.
+        core.process_pty_data_fully(b"\x1b[c");
+        let before = core.get_response_bytes();
+        assert!(!before.is_empty(), "DA1 must have queued a response");
+        core.process_pty_data_fully(b"\x1b]999;whatever\x07");
+        assert_eq!(
+            core.get_response_bytes(),
+            before,
+            "a declined OSC must not alter already-pending content"
+        );
+    }
+
+    #[test]
+    fn test_multiple_responses_within_one_parse_pass_survive_to_next_drain_in_order() {
+        // AC-4: several responses produced within one parse pass all
+        // survive to the next drain, in production order; the existing
+        // device-response behavior (DA1) is unchanged and coexists with the
+        // new responder-produced bytes.
+        let (mut core, _recorder) = core_with_fixed_responder(4, vec![b"COLOR-REPLY".to_vec()]);
+        core.process_pty_data_fully(b"\x1b[c\x1b]4;1;?\x07");
+        let drained = core.take_response();
+        let mut expected = b"\x1b[?65;1;4;22c".to_vec(); // DA1
+        expected.extend_from_slice(b"COLOR-REPLY");
+        assert_eq!(drained, expected);
+        assert!(core.take_response().is_empty(), "second drain is empty");
+    }
 
     #[test]
     fn test_osc8_hyperlink_sets_cell_hyperlink_id() {

@@ -57,7 +57,7 @@ pub mod sgr;
 
 pub use callbacks::TerminalCallbacks;
 pub use mux_apc_extractor::MuxApcExtractor;
-pub use osc_handler::OscColorResponder;
+pub use osc_handler::OscResponder;
 pub use parser_types::OscTerminator;
 pub use terminal_core::TerminalCore;
 

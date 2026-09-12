@@ -503,6 +503,7 @@ fn test_parse_osc_emterm_extension() {
 
 #[test]
 fn test_parse_osc_st_terminator() {
+    // AC-1 (ST form).
     let actions = parse_all(b"\x1B]2;My Title\x1B\\");
     assert_eq!(actions.len(), 1);
     assert_eq!(
@@ -517,6 +518,9 @@ fn test_parse_osc_st_terminator() {
 
 #[test]
 fn test_parse_osc_esc_without_backslash() {
+    // AC-1: a string cut short by an interrupting escape (not BEL/ST) is
+    // classified deterministically as `Unterminated`, never guessed as one
+    // of the two real terminator forms.
     let actions = parse_all(b"\x1B]2;Title\x1B7");
     assert_eq!(actions.len(), 2);
     assert_eq!(
@@ -524,9 +528,7 @@ fn test_parse_osc_esc_without_backslash() {
         ParsedAction::OscDispatch {
             param: 2,
             data: "Title".to_string(),
-            // Abnormal termination (ESC not followed by `\`): classified
-            // as St — see `OscTerminator::St`'s doc.
-            terminator: OscTerminator::St,
+            terminator: OscTerminator::Unterminated,
         }
     );
     assert_eq!(
