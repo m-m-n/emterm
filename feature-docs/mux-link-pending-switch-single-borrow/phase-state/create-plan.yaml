@@ -1,0 +1,32 @@
+schema_version: 1
+feature: mux-link-pending-switch-single-borrow
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 06c13a21eb7cae09cbd0d3d946f6925f5997bfba
+last_input_digest: "sha256:8a0c427cc243c77c459ba498768f1f25f607b8b3742ed1eeaa553647c79bcd82"
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: "sha256:8a0c427cc243c77c459ba498768f1f25f607b8b3742ed1eeaa553647c79bcd82"
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache:
+  project_design_system:
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+    truncated: false
+  e2e:
+    resolved_at_generation: 1
+    paths: []
+    truncated: false
+last_error: null
