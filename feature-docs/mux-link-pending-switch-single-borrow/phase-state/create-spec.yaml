@@ -1,22 +1,22 @@
 schema_version: 1
 feature: mux-link-pending-switch-single-borrow
 phase: create-spec
-status: awaiting_answers
+status: dispatching
 generation: 1
 base_revision: a3710652128f59884a1a0d5b2a20833e811bbe2f
 last_input_digest: "sha256:735484cafdb98d97ef31059fe1af14af4c9c5387237b8d0eebf320d74beb2378"
-active_request_id: create-spec-run-0001
+active_request_id: create-spec-run-0002
 packets:
   create-spec-q0001:
-    status: issued
+    status: answered
     issued_at: "2026-09-13T13:12:00+09:00"
     questions:
       - question_id: design-step.recommendation
         status: answered
       - question_id: requirement.regression-test-expectation
-        status: issued
+        status: answered
       - question_id: requirement.windows-cross-check-command
-        status: issued
+        status: answered
 answers:
   create-spec.feature-identity:
     packet_id: null
@@ -35,10 +35,32 @@ answers:
     freeform: null
     normalized_answer: "Accept the analyst's recommendation: design step is skipped."
     resolution_note: "gate: create-spec.design-step; batch-policies.yaml action=select option_id=decide_autonomously"
+  requirement.regression-test-expectation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-13T13:35:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [no_new_test]
+    freeform: null
+    normalized_answer: "No new test. The existing --lib suite already covers both proposed scenarios; exhaustiveness is a compile-time property."
+    resolution_note: "gate: create-spec.requirement-clarification; batch-policies.yaml action=codex_consultation, record_as_assumption=true. Codex (litellm/vertex-glm-5.2, fallback entry 2) answered NO_NEW_TEST: the removed arm is unreachable so no runtime test distinguishes before/after, the LiveQueueOutcome exhaustiveness check is the real net, and the surrounding replay tests are documented as parallel-nondeterministic. The Opus escalation independently reached no_new_test and additionally verified that both proposed tests already exist verbatim in src-tauri/src/tabs/tests/replay.rs (ts3_live_output_queued_during_pending_switch:234, offthread_live_queue_cap_falls_back_to_sync:258). Options not chosen: add_overflow_path_test, add_queue_ordering_test - both would duplicate existing coverage."
+  requirement.windows-cross-check-command:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-13T13:35:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [project_documented_only]
+    freeform: null
+    normalized_answer: "Acceptance is limited to the two documented Rust gates (--lib test run, --no-default-features check). The Windows cross-check is not a blocking gate."
+    resolution_note: "gate: create-spec.requirement-clarification; batch-policies.yaml action=codex_consultation, record_as_assumption=true. NOTE: this narrows the task's written 4th acceptance criterion, which demanded three check configurations including `cargo xwin check --tests`. Codex (litellm/vertex-glm-5.2, fallback entry 2) answered PROJECT_DOCUMENTED_ONLY: the touched code is platform-agnostic control flow, so a Windows cross-check exercises nothing the Linux check does not, and the `xwin check --tests` form is undocumented in this project. The Opus escalation independently reached project_documented_only and confirmed by grep that src-tauri/src/tabs/*.rs carries no cfg(windows)/cfg(unix)/cfg(target_os) branch, adding that making an undocumented SDK-downloading command a required gate risks a toolchain false-negative blocking an unattended run. Option not chosen: require_xwin_check. Surfaced to the human evaluator in the run report."
 worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
     input_digest: "sha256:735484cafdb98d97ef31059fe1af14af4c9c5387237b8d0eebf320d74beb2378"
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: dispatched
+    input_digest: null
     output_digest: null
 artifacts: []
 patches: []
