@@ -1,12 +1,22 @@
 schema_version: 1
 feature: mux-link-pending-switch-single-borrow
 phase: create-spec
-status: initialized
+status: awaiting_answers
 generation: 1
-base_revision: 70506ef5
-last_input_digest: null
-active_request_id: null
-packets: {}
+base_revision: a3710652128f59884a1a0d5b2a20833e811bbe2f
+last_input_digest: "sha256:735484cafdb98d97ef31059fe1af14af4c9c5387237b8d0eebf320d74beb2378"
+active_request_id: create-spec-run-0001
+packets:
+  create-spec-q0001:
+    status: issued
+    issued_at: "2026-09-13T13:12:00+09:00"
+    questions:
+      - question_id: design-step.recommendation
+        status: answered
+      - question_id: requirement.regression-test-expectation
+        status: issued
+      - question_id: requirement.windows-cross-check-command
+        status: issued
 answers:
   create-spec.feature-identity:
     packet_id: null
@@ -16,10 +26,38 @@ answers:
     selected_option_ids: [derive_from_task_description]
     freeform: null
     normalized_answer: mux-link-pending-switch-single-borrow
-worker_runs: []
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-13T13:12:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "Accept the analyst's recommendation: design step is skipped."
+    resolution_note: "gate: create-spec.design-step; batch-policies.yaml action=select option_id=decide_autonomously"
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: "sha256:735484cafdb98d97ef31059fe1af14af4c9c5387237b8d0eebf320d74beb2378"
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+    truncated: false
+  e2e:
+    resolved_at_generation: 1
+    paths: []
+    truncated: false
+  reference_scan_targets:
+    resolved_at_generation: 1
+    paths: []
+    truncated: false
 last_error: null
