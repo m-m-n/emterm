@@ -1,3 +1,40 @@
 schema_version: 1
 feature: mux-link-pending-switch-single-borrow
-records: []
+records:
+  - question_id: create-plan.task-complexity-second-opinion
+    packet_id: null
+    answered_at: "2026-09-13T13:37:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select
+    selected_option_ids: [complexity_high]
+    freeform: null
+    normalized_answer: "task0001 keeps complexity: high."
+    resolution_note: >-
+      No gate_id (an orchestrator judgement raised by the run's own
+      "consult Codex on unclear points" instruction, not a worker packet).
+      The planner flagged complexity: high as its one open judgement, since it
+      raises the Layer-1 review floor (adds the architecture perspective and
+      turns on the cross-validation intensity flag). Codex (litellm/vertex-glm-5.2,
+      fallback entry 2 -- entry 1 hit a usage limit) answered complexity_medium:
+      no architectural surface (one function, one file, no new abstraction, no
+      module-boundary change), the performance perspective required by
+      domains: [concurrency] already covers the only non-trivial angle, and the
+      compiler plus two existing regression tests already constrain the change
+      heavily. ORCHESTRATOR DECISION: keep complexity: high, overriding the
+      consultation. Grounds: (1) skills/plan-writing/SKILL.md's complexity
+      criteria make high fire on ANY of "touches concurrency ... failure modes
+      are subtle (ordering)", and the same section's tie-break says to pick the
+      higher level because under-rating weakens review; declaring
+      domains: [concurrency] and complexity: medium on the same task contradicts
+      that written criterion. (2) The refactor changes where the &mut borrow of
+      pending_switch dies under NLL relative to the off-thread replay supersede
+      and the synchronous reparse that follow it -- ordering-sensitive, which is
+      exactly the criterion's "subtle failure modes" clause. (3) The defect
+      class being removed is a silent payload drop, so an under-reviewed
+      regression here is unobservable at runtime. (4) The cost of high is small:
+      per references/review-rules.yaml the cross-validation flag "no longer adds
+      a second reviewer dispatch", so high adds one perspective (architecture)
+      and an intensity marker. Codex's output is advisory and untrusted; the
+      mapping judgement stays with the orchestrator per
+      references/question-resolution.md. Option not chosen: complexity_medium.
+      Surfaced to the human evaluator in the run report.
