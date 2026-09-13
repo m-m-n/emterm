@@ -190,8 +190,9 @@ Cursor visibility toggles correctly in response to DECTCEM escape sequences from
 Terminal color query/set, desktop notification, and iTerm2-compatible OSC sequences are handled beyond OSC 0/1/2/7/8/52/133/777.
 
 **Key Functionality:**
-- OSC 4/10/11/12 — color palette / default foreground / background / cursor color set and query
-- OSC 104/110/111/112 — corresponding color resets
+- OSC 4/10/11/12 — color palette / default foreground / background / cursor color set and query; a query (`?` payload) receives a `rgb:rrrr/gggg/bbbb` response over the same device-response channel as DA1/DSR, terminated to match the query (BEL or ST); malformed queries produce no response and no theme change
+- Unset OSC 4 palette indices 16-255 report the standard xterm color-cube / grayscale-ramp value until explicitly set
+- OSC 104/110/111/112 — color resets restore the active color scheme's value rather than a stale fallback, so a query issued after a reset reports the same color the renderer is using
 - OSC 9 — desktop notification / progress bar
 - OSC 22 — mouse cursor shape
 - OSC 1337;File and OSC 1337;SetUserVar — iTerm2 inline image and user-variable protocol
@@ -206,6 +207,18 @@ Support for DEC Private Mode 2026, which lets terminal applications signal batch
 - Mode 2026 set/reset (`CSI ?2026h` / `CSI ?2026l`) tracked in `term_core`
 - `CSI ?2026$p` (DECRPM) reports whether the mode is set or reset, so applications can detect support
 - Mode is implicitly reset when switching to/from the alternate screen buffer (modes 47/1047/1049)
+
+---
+
+#### Scroll Region Scrollback
+
+Lines scrolled out of a DEC scrolling region (DECSTBM) are transcribed to scrollback instead of discarded, matching Ghostty 1.3.0's behavior, so TUIs that redraw within a scroll region (e.g. Codex TUI) leave a readable scrollback history.
+
+**Key Functionality:**
+- Transcription applies only when the region's top margin is the screen's first row, there is no left/right margin, the alternate screen is inactive, and scrollback capacity is non-zero
+- If any of those conditions does not hold, output is byte-for-byte identical to the pre-existing in-place scroll behavior
+- Full-screen scrolling, the alternate screen (e.g. Claude Code), vim, and less are unaffected
+- Configurable via `scroll_region_scrollback_enabled` in settings (default on); takes effect immediately on existing tabs when changed
 
 ---
 
@@ -651,6 +664,8 @@ Double-click selects a word and triple-click selects a line; continuing to hold 
 - Dragging back into the origin word/line collapses the selection to exactly that word/line
 - Selection updates in real time during drag; word/line boundaries are recomputed against the live buffer on each extend
 - Selection endpoints stay correct while scrolling, including when scrollback rows are evicted during the drag
+- The selection (and its pending drag anchor) clears when Enter is forwarded to the PTY (any `shift_enter_behavior` mode) or when copying via `keybinds.copy`, so highlights stranded by TUI line rewrites (e.g. Claude Code) don't linger
+- IME composition-commit Enter, modifier-only key presses, and other PTY-forwarded keys (printable keys, cursor keys, etc.) do not clear the selection, so a selection survives while the user keeps reading and typing
 
 ---
 
@@ -1199,6 +1214,7 @@ Panes report the state of an AI agent running in them via an OSC 777 sequence; e
 - Settings > Agent category holds independent per-event notification toggles (`agent_notify_on_done`, `agent_notify_on_blocked`) and the visible-pane toggle (`agent_notify_visible_pane`), all default on; existing `settings.json` files without these keys deserialize with the defaults
 - Agent-status state is scoped per mux connection, so one eMterm process attached to multiple mux daemons keeps each daemon's panes separate; state (including the rate-limit and public-pane-id bookkeeping) is released when a tab detaches from mux mode
 - Public opaque, non-reusable pane IDs; `EMTERM_PANE_ID` is injected into each mux pane's environment for `--pane current` resolution
+- The agent-notification rate-limit key for a mux pane is derived only from the connection scope and the wire pane id (`mux:<scope>:<pane_id>`), never from a daemon-supplied public pane id, so a daemon cannot alias two panes onto one throttle bucket or evade a cooldown by rotating the id; expired rate-limit entries are pruned so the table stays bounded over a long-running session
 
 **Agent-Facing CLI Commands:**
 ```bash
@@ -1586,6 +1602,7 @@ Configuration is stored in a JSON file at the platform-specific app data directo
   "ui_font_family": "",
   "shell": "",
   "scrollback_lines": 10000,
+  "scroll_region_scrollback_enabled": true,
   "scroll_speed": 3,
   "bell": true,
   "color_scheme": "emterm",
