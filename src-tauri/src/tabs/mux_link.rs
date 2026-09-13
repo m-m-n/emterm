@@ -288,7 +288,8 @@ impl Tab {
         // worker-built core after the swap. Output that races in for a
         // *different* target than the pending switch is dropped (it
         // belongs to a pane we are no longer switching to).
-        if let Some(pending_target) = self.pending_switch.as_ref().map(|p| p.target_pane) {
+        if let Some(pending) = self.pending_switch.as_mut() {
+            let pending_target = pending.target_pane;
             if pane_id == pending_target {
                 if osc_probe.is_some() {
                     log::warn!(
@@ -305,18 +306,13 @@ impl Tab {
                 // accumulated queue as ordinary output. This caps both the
                 // swap-time replay burst and the memory a fast pane can
                 // accumulate during a slow parse.
-                match self
-                    .pending_switch
-                    .as_mut()
-                    .map(|p| p.queue_live_output(payload))
-                {
-                    // Queued below the cap (`None` is unreachable — the
-                    // enclosing `if let` read `target_pane` from this same
-                    // `pending_switch`): not yet visible, no redraw needed;
-                    // the swap will repaint. Exhaustive match so a new
-                    // `LiveQueueOutcome` variant forces this site to decide.
-                    Some(LiveQueueOutcome::Queued) | None => return false,
-                    Some(LiveQueueOutcome::Overflowed) => {}
+                match pending.queue_live_output(payload) {
+                    // Queued below the cap: not yet visible, no redraw
+                    // needed; the swap will repaint. Exhaustive match so a
+                    // new `LiveQueueOutcome` variant forces this site to
+                    // decide.
+                    LiveQueueOutcome::Queued => return false,
+                    LiveQueueOutcome::Overflowed => {}
                 }
                 // Take the coalesced re-dispatch (if any) BEFORE
                 // superseding — `supersede_pending_replay` drops
@@ -324,7 +320,7 @@ impl Tab {
                 // needs it as the latest known content for the
                 // pane (see the payload selection below).
                 let redispatch = self.pending_redispatch.take();
-                let pending = self
+                let superseded_replay = self
                     .supersede_pending_replay("live-queue overflow sync reparse")
                     .expect("pending_switch is Some in this arm");
                 log::warn!(
@@ -359,10 +355,10 @@ impl Tab {
                 // already contain.
                 let (payload, segments) = match redispatch {
                     Some((_, payload, segments)) => (payload, segments),
-                    None => (pending.payload, pending.segments),
+                    None => (superseded_replay.payload, superseded_replay.segments),
                 };
                 self.reset_frame_for_replay(&payload, &segments);
-                self.apply_queued_live_output(pending.live_queue);
+                self.apply_queued_live_output(superseded_replay.live_queue);
                 // The swap-equivalent happened synchronously now;
                 // repaint the newly-visible pane.
                 return true;
