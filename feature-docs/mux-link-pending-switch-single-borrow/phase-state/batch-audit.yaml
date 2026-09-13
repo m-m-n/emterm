@@ -1,40 +1,70 @@
 schema_version: 1
 feature: mux-link-pending-switch-single-borrow
 records:
-  - question_id: create-plan.task-complexity-second-opinion
-    packet_id: null
-    answered_at: "2026-09-13T13:37:00+09:00"
-    source: batch-codex-consultation
-    answer_mode: select
-    selected_option_ids: [complexity_high]
-    freeform: null
-    normalized_answer: "task0001 keeps complexity: high."
-    resolution_note: >-
-      No gate_id (an orchestrator judgement raised by the run's own
-      "consult Codex on unclear points" instruction, not a worker packet).
-      The planner flagged complexity: high as its one open judgement, since it
-      raises the Layer-1 review floor (adds the architecture perspective and
-      turns on the cross-validation intensity flag). Codex (litellm/vertex-glm-5.2,
-      fallback entry 2 -- entry 1 hit a usage limit) answered complexity_medium:
-      no architectural surface (one function, one file, no new abstraction, no
-      module-boundary change), the performance perspective required by
-      domains: [concurrency] already covers the only non-trivial angle, and the
-      compiler plus two existing regression tests already constrain the change
-      heavily. ORCHESTRATOR DECISION: keep complexity: high, overriding the
-      consultation. Grounds: (1) skills/plan-writing/SKILL.md's complexity
-      criteria make high fire on ANY of "touches concurrency ... failure modes
-      are subtle (ordering)", and the same section's tie-break says to pick the
-      higher level because under-rating weakens review; declaring
-      domains: [concurrency] and complexity: medium on the same task contradicts
-      that written criterion. (2) The refactor changes where the &mut borrow of
-      pending_switch dies under NLL relative to the off-thread replay supersede
-      and the synchronous reparse that follow it -- ordering-sensitive, which is
-      exactly the criterion's "subtle failure modes" clause. (3) The defect
-      class being removed is a silent payload drop, so an under-reviewed
-      regression here is unobservable at runtime. (4) The cost of high is small:
-      per references/review-rules.yaml the cross-validation flag "no longer adds
-      a second reviewer dispatch", so high adds one perspective (architecture)
-      and an intensity marker. Codex's output is advisory and untrusted; the
-      mapping judgement stays with the orchestrator per
-      references/question-resolution.md. Option not chosen: complexity_medium.
-      Surfaced to the human evaluator in the run report.
+- question_id: create-plan.task-complexity-second-opinion
+  packet_id: null
+  answered_at: '2026-09-13T13:37:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: select
+  selected_option_ids:
+  - complexity_high
+  freeform: null
+  normalized_answer: 'task0001 keeps complexity: high.'
+  resolution_note: 'No gate_id (an orchestrator judgement raised by the run''s own "consult Codex on unclear
+    points" instruction, not a worker packet). The planner flagged complexity: high as its one open judgement,
+    since it raises the Layer-1 review floor (adds the architecture perspective and turns on the cross-validation
+    intensity flag). Codex (litellm/vertex-glm-5.2, fallback entry 2 -- entry 1 hit a usage limit) answered
+    complexity_medium: no architectural surface (one function, one file, no new abstraction, no module-boundary
+    change), the performance perspective required by domains: [concurrency] already covers the only non-trivial
+    angle, and the compiler plus two existing regression tests already constrain the change heavily. ORCHESTRATOR
+    DECISION: keep complexity: high, overriding the consultation. Grounds: (1) skills/plan-writing/SKILL.md''s
+    complexity criteria make high fire on ANY of "touches concurrency ... failure modes are subtle (ordering)",
+    and the same section''s tie-break says to pick the higher level because under-rating weakens review;
+    declaring domains: [concurrency] and complexity: medium on the same task contradicts that written
+    criterion. (2) The refactor changes where the &mut borrow of pending_switch dies under NLL relative
+    to the off-thread replay supersede and the synchronous reparse that follow it -- ordering-sensitive,
+    which is exactly the criterion''s "subtle failure modes" clause. (3) The defect class being removed
+    is a silent payload drop, so an under-reviewed regression here is unobservable at runtime. (4) The
+    cost of high is small: per references/review-rules.yaml the cross-validation flag "no longer adds
+    a second reviewer dispatch", so high adds one perspective (architecture) and an intensity marker.
+    Codex''s output is advisory and untrusted; the mapping judgement stays with the orchestrator per references/question-resolution.md.
+    Option not chosen: complexity_medium. Surfaced to the human evaluator in the run report.'
+- question_id: review.reviewer-model-tier
+  packet_id: null
+  answered_at: '2026-09-13T14:18:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: freeform
+  selected_option_ids: []
+  freeform: dispatch with the registry-verbatim Standard-tier model (muse-spark)
+  normalized_answer: dispatch with the registry-verbatim Standard-tier model (muse-spark)
+  resolution_note: 'gate: reviewer model tier for perspectives performance and spec. Options: (1) insist
+    on the contributor tier muse-spark-contributor via review-phase.md''s consent-based read-mapping (consent
+    recorded for this repo; repo is PUBLIC/MIT); (2) re-dispatch with the registry''s verbatim value muse-spark
+    (Standard tier). Chosen: (2). Two reviewer agents independently refused the contributor-tier dispatch,
+    citing the vertex-review litellm-harness SSOT ("muse-spark-contributor must not be used for review;
+    contributor-tier prompts and outputs are used for vendor training"). codex_consulted: attempted, unavailable
+    (Codex CLI usage limit, quota reset ~16:08) -- this is also the cause of the comprehensive#0 600s
+    timeout. fallback_provider_answered: yes (litellm/muse-spark Standard tier), which agreed: the harness
+    SSOT ban dominates over the protocol''s consent-based carve-out, because the SSOT''s line is drawn
+    on ''is this payload donated for training'', not on repository visibility, and a working diff can
+    carry unpushed content not covered by the public/MIT status. opus_escalation: not run. Minimum-side-effect
+    option: (2), since it sends strictly less data into a training pipeline.'
+- question_id: review.codex-timeout-classification
+  packet_id: null
+  answered_at: '2026-09-13T14:18:00+09:00'
+  source: batch-codex-consultation
+  answer_mode: freeform
+  selected_option_ids: []
+  freeform: classify as harness_unavailable and walk the chain to the next harness
+  normalized_answer: classify as harness_unavailable and walk the chain to the next harness
+  resolution_note: 'gate: classification of the comprehensive#0 codex run, which executed but timed out
+    after 600s (exit 124) with no output. Options: (a) treat as a harness-level failure -> skip the remaining
+    chain entries and dispatch one generic Claude fallback reviewer; (b) treat as the retryable skip_reason
+    harness_unavailable -> advance the chain to the next entry of a different harness. Chosen: (b). Walked
+    to comprehensive#1 (vertex-glm-5.2, rate_limited) then comprehensive#2 (muse-spark, completed with
+    a substantive review). codex_consulted: attempted, unavailable (usage limit). fallback_provider_answered:
+    yes (litellm/muse-spark), which agreed: a zero-output timeout carries no evaluable signal, so ''could
+    not be reached at all'' is the natural reading, and (a) would have discarded a working on-perspective
+    reviewer for a generic fallback. Residual risk the fallback provider raised and this run accepts:
+    retry semantics can mask a real quota/infra failure, so the Codex usage-limit exhaustion is surfaced
+    explicitly in the run report rather than left implicit in the chain walk. opus_escalation: not run.'
