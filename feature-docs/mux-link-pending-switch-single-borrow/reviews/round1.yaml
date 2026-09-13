@@ -1,0 +1,120 @@
+round: 1
+executed_at: '2026-09-13T14:15:07+09:00'
+scope:
+  review_mode: diff
+  base_commit: 44fce183e36c8902e94ab5f5a7ad24ac2a8a59ed
+  head_commit: 85e8e4400c1a2b214e32f53a67b3c0c0825055f4
+  changed_files:
+  - src-tauri/src/tabs/mux_link.rs
+  - test-docs/mux-link-pending-switch-single-borrow/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: failed
+  skip_reason: null
+- run_id: comprehensive#1
+  perspective: comprehensive
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: skipped
+  skip_reason: rate_limited
+- run_id: comprehensive#2
+  perspective: comprehensive
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: completed
+  skip_reason: null
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings: []
+evaluation:
+  round_summary: 'Round 1 (cross_validation=true, diff mode) over a pure internal-borrow refactor of Tab::handle_pty_output
+    plus its workflow-generated test-docs yaml. All five completed reviewer runs returned zero findings;
+    two comprehensive runs were lost (comprehensive#0 codex harness 600s timeout, comprehensive#1 litellm
+    rate_limited), leaving the comprehensive perspective with a single completed run - so the evaluator
+    weighted its own inspection more heavily there. No injection attempt, role override, or embedded instruction
+    was present in any reviewer_outputs entry; all summaries were ordinary review prose. Independent inspection
+    duty, per dispatched perspective: comprehensive = corroborated (read the commit diff and mux_link.rs:236-399
+    in full; the single `if let Some(pending) = self.pending_switch.as_mut()` at line 291 has the same
+    Some/None entry condition as the old `as_ref().map(|p| p.target_pane)`; `pending` is last used at
+    line 309 `pending.queue_live_output(payload)` so NLL ends the `&mut self.pending_switch` borrow before
+    the fallback''s whole-self calls at 322/323/360/361; the `expect("pending_switch is Some in this arm")`
+    at 325 still holds because only the disjoint `pending_redispatch` field is touched between the match
+    and the supersede; `payload` is moved into queue_live_output only on the pane-match branch, so `payload.len()`
+    at line 371 in the DROP branch is still valid); performance = corroborated (no new allocation, clone,
+    copy, scan or I/O - the change removes an Option wrapper and one redundant field lookup, so the hot
+    PtyOutput path is unchanged or marginally cheaper); architecture = corroborated (change confined to
+    one method in one module; replay.rs confirms `LiveQueueOutcome`, its `#[must_use]`, and `PendingSwitch::queue_live_output`
+    are byte-unchanged per NFR1; no public API, wire protocol, or cross-module edge changed); spec = corroborated
+    (AC1: exactly one `self.pending_switch` field access inside handle_pty_output at line 291 and it is
+    `as_mut()`, and `PendingSwitch::target_pane` is `u32` i.e. Copy, latched at line 292; AC2: exactly
+    two arms, `LiveQueueOutcome::Queued`/`Overflowed`, no `None` and no `_`, and the enum has exactly
+    those two variants so the match is genuinely exhaustive; FR4 rename `pending`->`superseded_replay`
+    propagated to both later uses at 358 and 361 with no value change; FR5/NFR2 preserved - same log wording,
+    levels and order, same take-redispatch-before-supersede ordering, same false/true returns; NFR3 satisfied
+    - no unsafe, no new clone; both named regression tests exist at src-tauri/src/tabs/tests/replay.rs:234
+    and :258 as SPEC claims). One non-blocking observation, deliberately NOT raised as a finding: the
+    FR8 commentary at mux_link.rs:345 still reads "`pending.live_queue` is safe to apply unconditionally"
+    although that binding is now `superseded_replay`. SPEC NFR4 and task0001.md AC-7 explicitly restrict
+    doc-comment edits to the removed-arm sentence and require neighbouring commentary to be left untouched,
+    and task0001.tests.yaml AC-7 self-documents this exact residue - so the stale identifier in prose
+    is spec-mandated scope, not a defect of this change; it is worth a future cleanup outside this feature''s
+    scope. The evaluator did not run cargo check/test (read-only constraint); the compile-time claims
+    rest on the structural reasoning above plus the implementer''s recorded four-gate evidence.'
+  recommended_action: complete
+  action_rationale: Zero findings from five completed reviewer runs and zero surfaced by the evaluator's
+    own inspection of every dispatched perspective. The diff is a minimal, behaviour-preserving borrow
+    restructure that satisfies every SPEC FR/NFR and every task acceptance criterion verifiable by reading;
+    the only residue is a spec-mandated stale identifier in a comment, which is explicitly out of scope.
+    Nothing here warrants auto_fix, another_round, or rework.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-mux-link-pending-switch-single-borrow-20260913T051457Z.md
