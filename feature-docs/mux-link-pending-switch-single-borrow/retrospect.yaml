@@ -1,0 +1,31 @@
+feature: mux-link-pending-switch-single-borrow
+collected_at: '2026-09-13T19:05:09+09:00'
+session_ids:
+- 01a09a39-c939-70a1-b394-8046288b3e4b
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+  - task: task0001
+    files:
+    - test-docs/mux-link-pending-switch-single-borrow/task0001.tests.yaml
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+- 'review round1: comprehensive#0 (codex) timed out at 600s with zero output because the
+  Codex CLI had hit its usage limit; the chain walk then lost comprehensive#1 to a
+  litellm rate_limit, leaving the comprehensive perspective with a single completed
+  run. Harness saturation silently narrows the review floor.'
+- 'review.reviewer-model-tier: two reviewer agents independently refused a
+  contributor-tier dispatch (muse-spark-contributor) citing the vertex-review
+  litellm-harness SSOT ban, even though review-phase.md has a consent-based
+  read-mapping for public/MIT repos. The two documents disagree; the SSOT ban won.'
+- 'create-plan.task-complexity-second-opinion: Codex advised complexity: medium, the
+  orchestrator kept high on the written plan-writing criteria (domains: [concurrency]
+  plus the higher-level tie-break). Advisory consultations and written criteria can
+  point in opposite directions.'
+- 'NFR4 (edit only the removed-arm sentence) left a spec-mandated stale identifier in
+  prose at src-tauri/src/tabs/mux_link.rs:345 ("pending.live_queue" where the binding is
+  now superseded_replay). Narrow doc-edit scopes can institutionalise stale comments.'
