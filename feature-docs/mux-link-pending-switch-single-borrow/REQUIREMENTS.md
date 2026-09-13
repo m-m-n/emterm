@@ -292,7 +292,7 @@ match は enum に対して網羅的なまま（`_` ワイルドカードを使�
 
 ### 14.1 確認済み事項
 
-- [x] A1 受け入れゲートの範囲: 受け入れはプロジェクトが文書化している Rust のゲートに限定する — `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib`、`CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml`、および同じ check に `--no-default-features` を付けたもの。Windows クロスチェックは明示的にブロッキングな受け入れゲートとしない。これはタスク記述に書かれた4番目の受け入れ基準を狭めるものである。
+- [x] A1 受け入れゲートの範囲: 受け入れゲートは4つとする — `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib`、`CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml`、同じ check に `--no-default-features` を付けたもの、および Windows クロスチェック `CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --lib --tests`。Codex 相談と Opus エスカレーションは Windows 分を外す判定だったが、その主要根拠であった「未文書・ツールチェーン起因の偽陰性リスク」は、当該コマンド文字列が承認ストアに既存であったことで崩れたため、orchestrator がタスク本文どおり受け入れゲートに戻した。
   - 根拠: 触れるコードはプラットフォーム非依存の制御フローであり、`src-tauri/src/tabs/` 配下のどこにも `cfg(windows)` / `cfg(unix)` / `cfg(target_os)` の分岐は無い。`cargo xwin check --tests` という形はこのプロジェクトでは文書化されていない。
   - 出典: answers[requirement.windows-cross-check-command]（batch-codex-consultation、option project_documented_only）／変更可能
 - [x] A2 新規テストの有無: この変更に対して新規テストは追加しない。

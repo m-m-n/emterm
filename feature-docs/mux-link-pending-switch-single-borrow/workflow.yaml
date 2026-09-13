@@ -1,0 +1,151 @@
+schema_version: 1
+feature: mux-link-pending-switch-single-borrow
+created: '2026-09-13'
+base_branch: main
+goal: "mux_link の pending_switch 二重ルックアップを単一借用に戻す\n\n## やりたいこと（必須）\n`src-tauri/src/tabs/mux_link.rs` の `handle_pty_output` にある `pending_switch` の二重ルックアップ（`as_ref()` で `target_pane` 読み → 別文で `as_mut().map(|p| p.queue_live_output(payload))`）を単一の `as_mut()` 借用に戻し、到達不能な `None` アームが payload の無言ドロップに落ちる経路を消す。\n\n## 背景・なぜ（必須）\nem-review（2026-08-11、`fix/em-review-phase7-batch3` の3回目レビュー）の指摘。リファクタ前は `if let Some(pending) = self.pending_switch.as_mut()` の単一借用で「switch が in-flight であること」が構造的に保証されていた。`PendingSwitch::queue_live_output` 抽出後の呼び出し側は `pending_switch` を2回引き直しており、両者が同じ `Option` を見ているという不変条件はコメントだけで支えられている。\nさらに網羅 match の `Some(LiveQueueOutcome::Queued) | None => return false` は、万一 `None` になると payload がクロージャに move されたまま実行されず暗黙ドロップされる（panic もログも無い = PtyOutput の無言欠落）。現時点では2つのルックアップの間にあるのはログ出力だけなので到達不能だが、将来この区間に処理が挿入された際の失敗モードが「無言のデータ欠落」になる。\n**修正案（レビュアー提案 a・推奨）**: 単一借用に戻す。\n```rust\nif let Some(pending) = self.pending_switch.as_mut() {\n    let pending_target = pending.target_pane;\n    if pane_id == pending_target {\n        // osc_probe ログ\n        match pending.queue_live_output(payload) {\n            LiveQueueOutcome::Queued => return false,\n            LiveQueueOutcome::Overflowed => {}\n        }\n        // overflow フォールバック（supersede + 同期 reparse）\n        // — 以降 `pending` を使わないので NLL で借用が死に、\n        //   self.supersede_pending_replay() 等の &mut self 利用と両立する\n        ...\n        return true;\n    }\n    // DROP パス（pending_target を使用）\n}\n```\n網羅 match（`LiveQueueOutcome` バリアント追加時にこのサイトが必ず更新対象になる性質）は維持する。\n**代替案（提案 b）**: 二重ルックアップを保つ場合は `None` を成功アームに畳まず明示し、`debug_assert!(false, ...)` + `log::error!` で不変条件破れを観測可能にする。\n## 受け入れ条件 / 完了の定義（必須）\n- [ ] `pending_switch` の参照が単一借用になる（または `None` が観測可能な明示アームになる）\n- [ ] `None` による payload の暗黙ドロップ経路が存在しない\n- [ ] `queue_live_output` の網羅 match（バリアント追加でコンパイルエラーになる性質）が維持されている\n- [ ] `cargo test --lib` 全通過、`cargo check` 3構成（Linux GUI / `--no-default-features` / `cargo xwin check --tests`）警告ゼロ\n## スコープ外（任意）\n- `PendingSwitch::queue_live_output` 自体の仕様・配置の変更（`#[must_use]` 付与済み・所有型への移設済み）\n- overflow フォールバック（supersede + 同期 reparse）のロジック変更\n## 制約・前提（任意）\n- 出典: em-review 記録 `/tmp/em-review/emterm-17e6a9ff/reviews-20260811-1443/round1.yaml`（finding `184365ab368b4acd`）\n- 関連ブランチ: `fix/em-review-phase7-batch3`（この形は同ブランチの2回目レビュー修正で導入されたもの。マージ後に本タスクで整理する）\n"
+parent_branch: em-workflow/mux-link-pending-switch-single-borrow/integration
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+    - src-tauri/src/ui/md3.rs
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    cli-only:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      test_command: ''
+      format_command: ''
+      e2e_test_command: ''
+    windows-cross:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --lib --tests
+      test_command: ''
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 478a5cd7ad4d53a490faec4a5c78d427f66212aa
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'Internal control-flow refactor of one Rust function with no user-visible surface: no UI, no CSS, no design token, no wire-protocol or public-API change. Behaviour is required to be unchanged.'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: null
+  failed_kind: null
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Single `as_mut()` borrow of `pending_switch`
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: No `None` arm; exhaustive over `LiveQueueOutcome`
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Copied `pending_target` latch serves the DROP path
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Resolve the `pending` name collision
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: Behaviour unchanged
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: 'Maintainability (scope): confined to `Tab::handle_pty_output`; `queue_live_output` out of scope'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: 'Maintainability: overflow fallback logic carried over verbatim apart from the FR4 rename'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: 'Safety: no new `unsafe`, no new clone of `payload`, no ownership restructuring'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: 'Documentation: doc comments updated only where they describe the removed `None` arm'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: 'Compatibility: no new compiler warnings under either feature configuration'
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2

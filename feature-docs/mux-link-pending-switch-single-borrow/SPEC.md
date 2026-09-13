@@ -29,6 +29,7 @@ eMterm の開発者として、`LiveQueueOutcome` に対する match を網羅�
 **Acceptance Criteria:**
 - [ ] AC2: `LiveQueueOutcome` の match は2アームで、`None` アームも `_` ワイルドカードも無い。
 - [ ] AC4: `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml` と、同じものに `--no-default-features` を付けたものの両方が、新たな警告なしで成功する。
+- [ ] AC5: `CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --lib --tests` が新たな警告なしで成功する。
 
 ### US3: ライブキューの挙動を現状のまま保つ
 
@@ -201,8 +202,9 @@ Overflowed -> pending_redispatch.take() -> supersede_pending_replay
 - [ ] AC2（FR2）: `LiveQueueOutcome` の match は2アームで、`None` アームも `_` ワイルドカードも無い。
 - [ ] AC3（FR5）: `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib` が通る。`src-tauri/src/tabs/tests/replay.rs::ts3_live_output_queued_during_pending_switch`（234 行）および `::offthread_live_queue_cap_falls_back_to_sync`（258 行）を含む。
 - [ ] AC4（FR4 / NFR）: `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml` と、同じものに `--no-default-features` を付けたものの両方が、新たな警告なしで成功する。
+- [ ] AC5（NFR5）: `CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --lib --tests` が新たな警告なしで成功する。
 
-Windows クロスチェックはブロッキングな受け入れゲートとしない（Assumption A1）。
+Windows クロスチェック（AC5）も受け入れゲートに含める（Assumption A1）。
 
 ## Open Questions
 
@@ -215,7 +217,7 @@ Windows クロスチェックはブロッキングな受け入れゲートとし
 
 requirements-analyst が確定した前提。いずれも本書が新たに起こしたものではない。
 
-- **A1**（出典: answers[requirement.windows-cross-check-command]、batch-codex-consultation、option project_documented_only／変更可能）: 受け入れはプロジェクトが文書化している Rust のゲートに限定する — `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib`、`CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml`、および同じ check に `--no-default-features` を付けたもの。Windows クロスチェックは明示的にブロッキングな受け入れゲートとしない。これはタスク記述に書かれた4番目の受け入れ基準を狭めるものである。根拠: 触れるコードはプラットフォーム非依存の制御フローで、`src-tauri/src/tabs/` 配下に `cfg(windows)` / `cfg(unix)` / `cfg(target_os)` の分岐は無く、`cargo xwin check --tests` という形はこのプロジェクトでは文書化されていない。
+- **A1**（出典: answers[requirement.windows-cross-check-command]、batch-codex-consultation → orchestrator による再判定／変更可能）: 受け入れゲートは4つとする — `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib`、`CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml`、同じ check に `--no-default-features` を付けたもの、および Windows クロスチェック `CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --lib --tests`。経緯: Codex 相談と Opus エスカレーションはいずれも Windows 分を外す (`project_documented_only`) と判定した。根拠は (i) 触れるコードがプラットフォーム非依存で `src-tauri/src/tabs/` 配下に `cfg(windows)` / `cfg(unix)` / `cfg(target_os)` の分岐が無いこと、(ii) `cargo xwin check --tests` という形がプロジェクトのルールファイルに文書化されておらず、未文書かつ Windows SDK をダウンロードするコマンドを必須ゲートにすると無人実行がツールチェーン起因の偽陰性で止まりうること、の2点。その後 orchestrator が承認ストア（`bash_guard.py --list`）を確認したところ、上記のクロスチェック文字列は**すでに承認済み**であり、根拠 (ii) は成り立たないと判明した。残る根拠 (i) は「追加のカバレッジが無い」という弱い主張に過ぎず、タスク本文が明記した4番目の受け入れ基準（`cargo check` 3構成）を狭める理由としては不十分と判断し、Windows クロスチェックを受け入れゲートに戻した（`require_xwin_check` 相当）。
 - **A2**（出典: answers[requirement.regression-test-expectation]、batch-codex-consultation、option no_new_test／変更可能）: この変更に対して新規テストは追加しない。根拠: 候補となる2シナリオはいずれも `--lib` スイートに既存のまま存在し（TS1、TS2）、FR2 の網羅性はランタイムで観測できる性質ではなくコンパイル時の性質である。
 - **A3**（出典: orchestrator が保持する確定済み設計判断／変更可能）: 実装形は提案 (a)、すなわち単一の `as_mut()` 借用の中で `let pending_target = pending.target_pane;` を控える形であり、提案 (b) ではない。根拠: Codex 相談と Opus エスカレーションの双方が選択した。
 - **A4**（出典: orchestrator が保持する確定済み設計判断／変更可能）: NLL は `queue_live_output` の呼び出し時点で `&mut self.pending_switch` の借用を終わらせるため、オーバーフロー時フォールバックの後続の `&mut self` 呼び出しはコンパイルが通る。ただし match より後で `pending` 束縛そのものを使わないこと（FR3）が条件である。根拠: 確定済み設計判断とともに提示された借用領域の推論であり、AC4 で機械的に証明される。

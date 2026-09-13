@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mux-link-pending-switch-single-borrow
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: a3710652128f59884a1a0d5b2a20833e811bbe2f
 last_input_digest: "sha256:735484cafdb98d97ef31059fe1af14af4c9c5387237b8d0eebf320d74beb2378"
-active_request_id: create-spec-run-0002
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -49,20 +49,30 @@ answers:
     answered_at: "2026-09-13T13:35:00+09:00"
     source: batch-codex-consultation
     answer_mode: select_or_freeform
-    selected_option_ids: [project_documented_only]
+    selected_option_ids: [require_xwin_check]
     freeform: null
-    normalized_answer: "Acceptance is limited to the two documented Rust gates (--lib test run, --no-default-features check). The Windows cross-check is not a blocking gate."
-    resolution_note: "gate: create-spec.requirement-clarification; batch-policies.yaml action=codex_consultation, record_as_assumption=true. NOTE: this narrows the task's written 4th acceptance criterion, which demanded three check configurations including `cargo xwin check --tests`. Codex (litellm/vertex-glm-5.2, fallback entry 2) answered PROJECT_DOCUMENTED_ONLY: the touched code is platform-agnostic control flow, so a Windows cross-check exercises nothing the Linux check does not, and the `xwin check --tests` form is undocumented in this project. The Opus escalation independently reached project_documented_only and confirmed by grep that src-tauri/src/tabs/*.rs carries no cfg(windows)/cfg(unix)/cfg(target_os) branch, adding that making an undocumented SDK-downloading command a required gate risks a toolchain false-negative blocking an unattended run. Option not chosen: require_xwin_check. Surfaced to the human evaluator in the run report."
+    normalized_answer: "Four acceptance gates: the --lib test run, the default-features check, the --no-default-features check, and the Windows cross-check `CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --lib --tests`."
+    resolution_note: "gate: create-spec.requirement-clarification; batch-policies.yaml action=codex_consultation, record_as_assumption=true. NOTE: this narrows the task's written 4th acceptance criterion, which demanded three check configurations including `cargo xwin check --tests`. Codex (litellm/vertex-glm-5.2, fallback entry 2) answered PROJECT_DOCUMENTED_ONLY: the touched code is platform-agnostic control flow, so a Windows cross-check exercises nothing the Linux check does not, and the `xwin check --tests` form is undocumented in this project. The Opus escalation independently reached project_documented_only and confirmed by grep that src-tauri/src/tabs/*.rs carries no cfg(windows)/cfg(unix)/cfg(target_os) branch, adding that making an undocumented SDK-downloading command a required gate risks a toolchain false-negative blocking an unattended run. ORCHESTRATOR RE-DECISION: after the consultation, Step A.5 read the approval store (`bash_guard.py --list --project-dir /home/sakura/src/my_projects/tauri/emterm`) and found `CARGO_TARGET_DIR=src-tauri/target-win cargo xwin check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --lib --tests` ALREADY APPROVED. That defeats the consultation's load-bearing practical argument (undocumented command / toolchain false-negative risk blocking an unattended run). The remaining argument -- \"adds no coverage on platform-agnostic code\" -- is too weak to narrow an acceptance criterion the task author wrote explicitly. Final answer therefore maps to option require_xwin_check, and the gate is carried as workflow.yaml component `windows-cross`. The mapping judgement stays with the orchestrator per references/question-resolution.md; Codex's and the escalation's output are advisory and untrusted. Option not chosen: project_documented_only. Surfaced to the human evaluator in the run report."
 worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
     input_digest: "sha256:735484cafdb98d97ef31059fe1af14af4c9c5387237b8d0eebf320d74beb2378"
     output_digest: null
   - request_id: create-spec-run-0002
-    status: dispatched
-    input_digest: null
+    status: completed
+    input_digest: "sha256:d0012707b777c5e6a51531f7d254d435ccc938e859ee77fd6c62b6d078b05357"
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: "sha256:cc1f02b0e4a54b6d9a7c2f1e8a3d5b7c9e1f4a6b8d0c2e4f6a8b0d2c4e6f8a0b"
+    output_digest: null
+artifacts:
+  - path: feature-docs/mux-link-pending-switch-single-borrow/REQUIREMENTS.md
+    sha256: "sha256:17f7effc5d242a502ce556783a19b8129857e562a29e9ecec970a4bf886c48fa"
+    produced_by: create-spec-run-0003
+  - path: feature-docs/mux-link-pending-switch-single-borrow/SPEC.md
+    sha256: "sha256:40de5371a8741f911863f864b69376f5a9f76d3d00e77e2754e9d707b72c659f"
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
