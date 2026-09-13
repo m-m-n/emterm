@@ -1,0 +1,89 @@
+task_id: task0001
+baseline_failures: []          # cargo test --lib, 3341 passed / 0 failed / 3 ignored
+final_failures: []             # unchanged after the change: 3341 passed / 0 failed / 3 ignored
+acceptance_tests:
+  AC-1:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Structural/diff-inspection property (IMPLEMENTATION.md D6: this is a
+      pure internal-borrow refactor with no observable behaviour change, so
+      no new test is written and none can be made red first). Verified by
+      reading the diff and grepping handle_pty_output for `pending_switch`
+      field references: exactly one, `self.pending_switch.as_mut()`, with
+      `pending_target` latched as the very first statement inside the
+      `if let`.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Compile-time exhaustiveness property (Test Notes: compile-time
+      criterion, not a runtime assertion). Verified via the throwaway
+      third-variant experiment the criterion itself prescribes: added
+      `LiveQueueOutcome::TempProbeVariant` to replay.rs after implementing
+      the match, ran the default-features check, observed
+      `error[E0004]: non-exhaustive patterns: LiveQueueOutcome::TempProbeVariant
+      not covered` at mux_link.rs:309 (the `match pending.queue_live_output(payload)`
+      site), then reverted the probe (git diff on replay.rs is empty; not
+      committed). D6 rules out a new persisted test for this refactor, so
+      this is not a pre-implementation red/green cycle.
+  AC-3:
+    tests: [tabs::tests::replay::ts3_live_output_queued_during_pending_switch]
+    red_confirmed: false
+    red_reason: >
+      D6: no new test is written for this task. This existing regression
+      test was green in the 4a baseline and green again after the change
+      (3341 passed / 0 failed both times, plus an isolated
+      --test-threads=1 re-run of this test specifically) — a pure
+      borrow-restructuring with zero observable behaviour change has
+      nothing to make red first. The green-before/green-after pair is the
+      behavioural evidence Test Notes calls for.
+  AC-4:
+    tests: [tabs::tests::replay::offthread_live_queue_cap_falls_back_to_sync]
+    red_confirmed: false
+    red_reason: >
+      Split criterion per Test Notes: the call-order half is exercised
+      end-to-end by this pre-existing regression test, green before and
+      after (D6: no new test possible for a no-observable-change refactor).
+      The borrow-region/rename half (D2, D3 — the outer `pending` borrow
+      dying before the whole-tab mutable calls in the overflow fallback,
+      and the `pending`->`superseded_replay` rename) is a compile-time
+      property proven by the four D4 gates all exiting 0 with no new
+      warning, not by this test.
+  AC-5:
+    tests:
+      - tabs::tests::replay::ts3_live_output_queued_during_pending_switch
+      - tabs::tests::replay::offthread_live_queue_cap_falls_back_to_sync
+    red_confirmed: false
+    red_reason: >
+      Behavioural regression gate (D6: no new test). 4a baseline captured
+      both named tests green plus the full --lib suite green (3341 passed /
+      0 failed / 3 ignored); re-run after the change is identical, and both
+      named tests were additionally re-run single-threaded per the
+      documented replay-test flake note with no failure.
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Build/lint gate (Test Notes: compile-time criterion). All three
+      configurations — `cargo check` (default features), `cargo check
+      --no-default-features`, and `cargo xwin check --target
+      x86_64-pc-windows-msvc --lib --tests` — exited 0 with no compiler
+      warning beyond the pre-existing build.rs asset warnings (viewer/dist
+      and settings/dist missing) that were already present before this
+      change and are unrelated to it.
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >
+      Diff-scope/diff-content property verified by inspection: `git status`
+      /`git diff` show only src-tauri/src/tabs/mux_link.rs modified (the
+      replay.rs AC-2 probe was reverted, confirmed by an empty `git diff`
+      on that file); no `unsafe`, no new `.clone()`, no Cargo.toml/manifest
+      change. Only the doc-comment sentence describing the removed
+      optional-None arm was rewritten (the "`None` is unreachable..."
+      parenthetical); all other commentary at the call site, including the
+      FR8/`ebc9de26bb15fcb1` paragraph, was left byte-for-byte untouched
+      even though it still refers to the renamed binding by its old name
+      in prose (D5 restricts doc-comment edits to only the removed-arm
+      sentence).
