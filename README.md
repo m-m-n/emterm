@@ -15,8 +15,9 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - SlimCell scrollback compression: 76% per-cell memory reduction (34B → 8B) via StyleTable/CharTable deduplication
   - wgpu render pipeline with dirty-row tracking and a winit event loop
   - Background Color Erase (BCE) support
-  - Extended OSC support: color palette set/query and resets (OSC 4/10/11/12, 104/110/111/112), desktop notification / progress (OSC 9), mouse cursor shape (OSC 22), iTerm2 OSC 1337 File / SetUserVar
+  - Extended OSC support: color palette set and query-with-response, plus resets (OSC 4/10/11/12, 104/110/111/112), desktop notification / progress (OSC 9), mouse cursor shape (OSC 22), iTerm2 OSC 1337 File / SetUserVar
   - Synchronized output (DEC private mode 2026) with DECRPM support detection
+  - Scroll-region scrollback: lines scrolled out of a non-full-screen scroll region (DECSTBM) are preserved to scrollback instead of discarded, matching Ghostty's behavior (configurable, default on)
   - COLRv1 vector emoji rendering (skrifa + tiny-skia): sharper color emoji at fractional DPI scales, ~5 MiB smaller bundled font than the previous CBDT bitmap font
 
 - **Rich Content Display**
@@ -85,6 +86,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
     are ignored).
   - Shift+Enter behavior setting: pass-through, Alt+Enter rewrite (default), or LF for multiline input in AI interfaces
   - Word and line selection drag: double-click (word) or triple-click (line) then drag keeps the originally clicked word/line anchored for the whole drag
+  - Mouse selection clears when Enter is sent to the shell or when copying, so TUI line rewrites (e.g. Claude Code) don't leave stale highlights on screen
   - Comprehensive special key mapping (Ctrl+symbols, modified arrow keys, F-keys, Shift+Tab)
   - Alternate scroll mode (DECSET 1007): mouse wheel sends arrow keys in alternate-screen apps (default ON, configurable)
 
