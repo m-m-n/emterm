@@ -60,9 +60,30 @@ workflow:
   status: completed
   completed_at_commit: 85e8e4400c1a2b214e32f53a67b3c0c0825055f4
 - id: verify
-  status: in_progress
-  result: null
+  status: completed
+  completed_at_commit: 5b04066433f1d53cd2c87e9e3d0840bc274c3874
+  result: pass
   failed_items: []
+  excluded_requirements: []
+  gates:
+    build_main_gui: pass
+    build_cli_only: pass
+    build_windows_cross: pass
+    test_lib: 'pass (3341 passed, 0 failed, 3 ignored)'
+  scenarios:
+    TS-1: 'pass (tabs::tests::replay::ts3_live_output_queued_during_pending_switch)'
+    TS-2: 'pass (tabs::tests::replay::offthread_live_queue_cap_falls_back_to_sync)'
+    TS-3: 'pass (two-arm exhaustive match; throwaway third variant produced E0004, reverted)'
+    TS-4: 'pass (source diff confined to src-tauri/src/tabs/mux_link.rs; no unsafe, no new payload clone)'
+    TS-5: 'pass (only the removed-None-arm sentences rewritten)'
+  success_criteria:
+    AC1: pass
+    AC2: pass
+    AC3: pass
+    AC4: pass
+    AC5: pass
+  manual_pending:
+  - 'MT-1 (optional real-device sanity check, not blocking)'
 - id: retrospect
   status: pending
 tasks:
