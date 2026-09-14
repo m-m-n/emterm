@@ -1,0 +1,40 @@
+schema_version: 1
+feature: notification-worker-thread
+records:
+  - question_id: create-plan.open-question.shutdown-join-deadline
+    packet_id: null
+    answered_at: "2026-09-14T23:02:10+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [deadline_200ms]
+    freeform: null
+    normalized_answer: "Keep the bounded shutdown join deadline at the planned named constant of at most 200 ms, detaching past the deadline."
+    resolution_note: >-
+      user-instructed Codex consultation (not a gate). Codex CLI native provider hit its
+      usage limit, so the consultation ran through the same Codex CLI harness routed via the
+      local LiteLLM proxy (muse-spark, Meta Standard tier, read-only sandbox). Options weighed:
+      200 ms (plan), 50 ms, 500 ms-1 s. Codex recommended 200 ms and the orchestrator adopted it,
+      so IMPLEMENTATION.md D2 is unchanged. Rationale: on a normal exit the worker is parked in
+      recv() and joins immediately once the sender drops, so the deadline is not actually paid;
+      the 327 #[test] functions in files calling App::new() drop the sink before ever sending,
+      and CI has no D-Bus peer to block on, so there is no serial accumulation across the suite.
+      50 ms only lowers the delivery rate of the last in-flight notification without shortening
+      test time; 500 ms-1 s adds perceptible exit latency without a matching delivery gain,
+      because a local D-Bus peer is either fast or wedged, with little in between.
+  - question_id: create-plan.task-decomposition
+    packet_id: null
+    answered_at: "2026-09-14T23:02:10+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [single_task]
+    freeform: null
+    normalized_answer: "Keep the plan at a single task (task0001) rather than splitting the enqueue side from the worker/shutdown side."
+    resolution_note: >-
+      user-instructed Codex consultation (not a gate). Same LiteLLM-routed Codex harness as above.
+      Options weighed: one task (plan) vs two tasks (enqueue/drop-observability, worker/shutdown).
+      Codex recommended one task and the orchestrator adopted it, so the workflow patch is unchanged.
+      Rationale: the queue, the worker and Drop are internal state of one struct and cannot be cut
+      apart - either half alone is a sender with no receiver or a worker with no producer. Both
+      halves would edit the same callbacks.rs, which collides under em-workflow's parallel worktrees,
+      and the real change is one replacement in callbacks.rs plus a single line in app/mod.rs plus
+      tests, which is reviewable as one unit.
