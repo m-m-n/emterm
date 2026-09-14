@@ -1,0 +1,100 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - callbacks::tests::worker_thread::sink_send_never_blocks_the_caller_even_past_queue_capacity
+    red_confirmed: true
+    red_reason: >-
+      Written before NotifyRustSink::new existed: compile failed with
+      E0599 "no associated function or constant named `new` found for
+      struct `callbacks::NotifyRustSink`" (NotifyRustSink was still the
+      old unit struct). The structural half of this AC ("send の本体に
+      capability 照会と通知送出の呼び出しが現れない") is not independently
+      test-observable and is verified by code review: NotifyRustSink::send
+      calls only NotifyQueue::try_submit; the capability query and
+      notify_rust::Notification calls appear exclusively inside
+      notify_worker.
+  AC-2:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/compile-level guarantee, not a red/green test: the trait
+      declaration at callbacks.rs:191-193 was left byte-for-byte
+      unmodified, and the three pre-existing test sinks
+      (callbacks/tests.rs TestSink, app/tests/agent_status.rs TestSink,
+      tabs/tests.rs TestSink) plus every producer call site compile and
+      pass unmodified. Evidenced by the full `cargo test` run (3347
+      passed / 0 failed) with no edits to those files.
+  AC-3:
+    tests:
+      - callbacks::tests::worker_thread::queue_drops_the_ninth_submission_without_blocking_when_receiver_is_idle
+    red_confirmed: true
+    red_reason: >-
+      Written before NotifyQueue existed: compile failed with E0433 "use
+      of undeclared type `NotifyQueue`" / "cannot find type
+      `SubmitOutcome`". After implementing NotifyQueue::try_submit and
+      SubmitOutcome, the test observes 8 successful Submitted outcomes
+      followed by DroppedEpisodeStart on the 9th, with the receiver held
+      but never drained.
+  AC-4:
+    tests:
+      - callbacks::tests::worker_thread::saturation_episode_warns_exactly_once_then_rearms_after_a_successful_submission
+      - callbacks::tests::worker_thread::concurrent_saturated_drops_produce_exactly_one_episode_start_warning
+    red_confirmed: true
+    red_reason: >-
+      Same undeclared-type compile failure as AC-3 (NotifyQueue /
+      SubmitOutcome did not exist). After implementing the AtomicBool
+      swap-based arming in NotifyQueue::try_submit, both tests pass:
+      the sequential test confirms exactly one DroppedEpisodeStart per
+      saturation episode with re-arming after a successful submission,
+      and the concurrent test (16 racing threads against a full queue)
+      confirms exactly one DroppedEpisodeStart total.
+  AC-5:
+    tests:
+      - callbacks::tests::body_markup_escape::body_markup_absence_confirmed_is_false_on_fetch_failure
+      - callbacks::tests::summary_markup_escape::failed_capability_fetch_escapes_both_title_and_body_in_the_same_call
+      - callbacks::tests::notification_redaction::redaction_carries_byte_lengths_and_id_in_fixed_order_and_shape
+      - callbacks::tests::notification_redaction::raw_and_escape_gate_output_render_differently
+    red_confirmed: false
+    red_reason: >-
+      Per task0001.md Test Notes, the worker's dispatch step touches real
+      D-Bus and is deliberately not covered by a new test double (the
+      trait boundary is not to be changed). AC-5 is evidenced by these
+      pre-existing tests (unchanged, per task scope) continuing to pass
+      against the private helpers (escape_for_send,
+      body_markup_absence_confirmed, redact_notification) that
+      notify_worker now calls in the same order (redact -> capability
+      query -> escape -> dispatch) the old synchronous send body used,
+      plus a code-review confirmation of that call order/frequency inside
+      notify_worker.
+  AC-6:
+    tests:
+      - callbacks::tests::worker_thread::dropping_the_sink_after_sending_returns_within_the_shutdown_deadline
+      - callbacks::tests::worker_thread::dropping_a_freshly_constructed_sink_with_no_notifications_returns_within_the_shutdown_deadline
+    red_confirmed: true
+    red_reason: >-
+      Same undeclared NotifyRustSink::new compile failure noted under
+      AC-1. After implementing the bounded-join Drop impl, both tests
+      pass: dropping a sink that sent a few notifications, and dropping a
+      freshly constructed sink that sent none, each return well within
+      the generous CI-safe bound (2s, versus the 200ms
+      NOTIFY_WORKER_JOIN_TIMEOUT constant).
+  AC-7:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build-verification AC, not a red/green test. Verified by running
+      both project_commands.test (CARGO_TARGET_DIR=src-tauri/target cargo
+      test --manifest-path src-tauri/Cargo.toml -> 3347 passed, 0 failed)
+      and project_commands.build with --no-default-features (CARGO_TARGET_DIR=src-tauri/target
+      cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      -> clean), plus a review pass confirming: (a) no cfg branching on
+      the try_submit / notify_worker dispatch calls themselves (the
+      pre-existing #[cfg(unix)] scope stays limited to the capability
+      query + escape_for_send call, matching its pre-task0001 scope), and
+      (b) no new process-global one-time state (OnceLock/static) was
+      introduced -- NotifyQueue and the worker JoinHandle live entirely on
+      the NotifyRustSink instance, started at construction (D5) and torn
+      down in Drop.
