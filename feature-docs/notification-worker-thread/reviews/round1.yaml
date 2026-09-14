@@ -1,0 +1,145 @@
+round: 1
+executed_at: "2026-09-14T23:37:52+09:00"
+scope:
+  review_mode: diff
+  base_commit: 87487f64ed76331f4b742287ac4ea2dbd0805d6b
+  head_commit: 112cb62b1f17770ed9c6561279b30ad41bc6f451
+  changed_files:
+    - src-tauri/src/app/mod.rs
+    - src-tauri/src/callbacks.rs
+    - src-tauri/src/callbacks/tests.rs
+    - test-docs/notification-worker-thread/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: skipped, skip_reason: "rate_limited"}
+  - {run_id: "comprehensive#1", perspective: comprehensive, role: primary, source: litellm, model: vertex-glm-5.2, status: skipped, skip_reason: "harness_unavailable"}
+  - {run_id: "comprehensive#fallback", perspective: comprehensive, role: fallback, source: claude, status: completed}
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: skipped, skip_reason: "rate_limited"}
+  - {run_id: "security#1", perspective: security, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: vertex-glm-5.2, status: completed}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings:
+  - stable_id: 83dd237ffa3f8306
+    coupling_id: e47961e366ade6ee
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/callbacks.rs
+    line: 273
+    title: "try_submit treats Disconnected as \"queue saturated\", so a dead worker silently drops every later notification under a misleading warning"
+    description: |
+      NotifyQueue::try_submit matches self.tx.try_send(...) with a single Err(_) arm, so
+      TrySendError::Full (transient) and TrySendError::Disconnected (the worker's Receiver was
+      dropped) are indistinguishable. The only way to reach Disconnected is a panic inside
+      notify_worker (callbacks.rs:299-340) - the error paths of get_capabilities() and
+      Notification::show() are both handled, so this requires a panic from inside notify-rust
+      itself; likelihood is low. The consequence is permanent: armed is only re-set to true on a
+      successful try_send (line 270), so after the single LOG_NOTIFY_QUEUE_SATURATED warn fires,
+      armed stays false for the rest of the process and every subsequent notification is dropped
+      with no record. D1's per-episode suppression is designed for a condition that drains; it is
+      applied unchanged to a condition that never does. The emitted warn also misdiagnoses the
+      failure - it names queue saturation when the worker is gone. SPEC has no requirement covering
+      worker death, so this is a robustness gap rather than a spec violation.
+    suggestion: |
+      Split the error arm on crossbeam_channel::TrySendError::{Full, Disconnected}. Keep the current
+      D1 episode arming for Full. For Disconnected, emit a distinct log::error! under its own
+      constant (e.g. LOG_NOTIFY_WORKER_DEAD) suppressed by a separate flag that the episode re-arm
+      never touches, so the permanent condition is diagnosable exactly once and is never mislabelled
+      as saturation. Adding a SubmitOutcome::WorkerGone variant makes it directly testable
+      (construct the queue, drop the receiver, call try_submit) with no D-Bus involvement, matching
+      NFR4.
+    sources: [claude:comprehensive]
+    confidence: 60
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix candidate gate (critical/high only)"
+  - stable_id: ed298275d659ab26
+    coupling_id: ffe4b0a15759144a
+    severity: medium
+    category: comprehensive
+    file: src-tauri/src/callbacks/tests.rs
+    line: 1227
+    title: "AC-1/AC-6 tests construct the real NotifyRustSink, so cargo test dispatches real desktop notifications - contrary to SPEC TS1/TS4/NFR4's headless requirement - while the worker body stays untested"
+    description: |
+      sink_send_never_blocks_the_caller_even_past_queue_capacity (tests.rs:1227) builds a real
+      NotifyRustSink::new() and sends NOTIFY_QUEUE_CAPACITY * 4 = 32 items;
+      dropping_the_sink_after_sending_returns_within_the_shutdown_deadline (tests.rs:1247) sends 3
+      more. The spawned notify_worker genuinely drains the queue and calls
+      notify_rust::get_capabilities() + Notification::show(), so on any developer box with a running
+      notification daemon cargo test now pops roughly a dozen real desktop notifications per run.
+      This is newly introduced: no test in the pre-task tree constructed the sink (it was a unit
+      struct), and the only production construction site is app/mod.rs:574. SPEC is explicit that
+      this layer is to be headless: TS1 requires the queue abstraction be verified decoupled from
+      the notify-rust transport, TS4 marks the shutdown scenario headless, and NFR4 requires queue
+      behavior be unit-testable without a D-Bus connection. The same rigidity - notify_worker calls
+      notify_rust directly with no injectable dispatch step - is why task0001.tests.yaml records
+      AC-5 with tests: [] and red_confirmed: false.
+    suggestion: |
+      Make the worker's dispatch step injectable without touching the NotificationSink trait
+      (FR2/AC2 constrain only the trait declaration, not the sink's internals): extract notify_worker
+      into a form taking a dispatch closure, pass the notify-rust closure in production and a
+      recording fake in tests. That turns AC-5 into real coverage of call order and frequency, and
+      lets AC-1/AC-6 exercise send/Drop without any D-Bus traffic, satisfying TS1/TS4/NFR4. If the
+      injection is judged out of task scope, the bounded stopgap is to mark the three real-sink
+      tests #[ignore] and rebuild AC-1/AC-6 on NotifyQueue plus an explicitly spawned test worker,
+      so no unit test constructs the production sink.
+    sources: [claude:comprehensive]
+    confidence: 80
+    resolution: unresolved
+    resolution_reason: "medium severity: outside the auto-fix candidate gate (critical/high only)"
+dropped_by_severity_gate:            # R3b step 2: severity low is not a persisted finding
+  - file: src-tauri/src/callbacks.rs
+    line: 366
+    severity: low
+    title: "Worker spawn failure panics via expect, taking down App startup (evaluator demoted from medium)"
+  - file: src-tauri/src/callbacks.rs
+    line: 358
+    severity: low
+    title: "Mutex around the JoinHandle is redundant and is never locked"
+evaluation:
+  round_summary: |
+    Round 1, diff mode, cross_validation=true. Five perspectives were dispatched and all five had a
+    completed run (unreviewed_perspectives empty); three primary runs were skipped
+    (comprehensive#0 rate_limited, comprehensive#1 harness_unavailable, security#0 rate_limited) and
+    comprehensive was covered by its fallback. No reviewer reported a critical or high finding this
+    round, so dismissed_sites is empty vacuously rather than by dismissal. No injection attempt,
+    role override, or embedded instruction was present in any reviewer output. Independent
+    inspection covered the entire changed set - callbacks.rs read in full, the callbacks/tests.rs
+    and app/mod.rs diffs, task0001.tests.yaml, and SPEC.md (5 files, within the 10-file budget).
+    Per-perspective coverage: comprehensive = corroborated; security = corroborated (redaction runs
+    on the raw values received off the queue before the escape gate shadows them, the saturation
+    warn interpolates only redact_notification output, the per-run RandomState key stays
+    process-global, payloads move as owned Strings with no shared mutable state); performance =
+    corroborated (try_send is non-blocking, the worker parks in a blocking recv with no busy-poll,
+    the 1 ms poll loop in Drop runs only on teardown and checks is_finished() before each sleep);
+    architecture = findings (the never-locked Mutex<Option<JoinHandle<()>>>); spec = findings
+    (folded into the tests.rs finding rather than filed separately).
+  recommended_action: "auto_fix"
+  action_rationale: |
+    No critical or high findings, and the production behavior the task set out to deliver
+    (non-blocking submission, capacity-8 bounded drop, atomic per-episode arming, bounded detaching
+    join) is implemented correctly and matches SPEC FR1/FR5/FR6/FR8. Another reviewer round would
+    add nothing. The remaining items are localized and have concrete bounded fixes. NOTE: advice
+    only - the orchestrator's candidate gate (critical/high only) admitted no finding into the
+    auto-fix loop this round.
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: "no candidate met the gate (severity critical/high); both findings are medium"
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: "/home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-notification-worker-thread-20260914T143738Z.md"
+  note: "no vulnerability perspective was selected (the diff touches no dependency manifest); the ntd listing probe exited non-zero so the report branch was taken"
