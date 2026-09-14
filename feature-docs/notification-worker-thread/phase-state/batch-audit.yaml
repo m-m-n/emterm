@@ -38,3 +38,41 @@ records:
       halves would edit the same callbacks.rs, which collides under em-workflow's parallel worktrees,
       and the real change is one replacement in callbacks.rs plus a single line in app/mod.rs plus
       tests, which is reviewable as one unit.
+  - question_id: verify.test-command-substitution
+    packet_id: null
+    answered_at: "2026-09-14T23:52:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [substitute_lib_and_integration_tests]
+    freeform: null
+    normalized_answer: >-
+      Substitute the pre-approved `--lib` and `--test cli_subcommands` commands for
+      VERIFICATION.md's prescribed bare `cargo test`, treat Test Verification as satisfied,
+      and record the examples-compilation breakage as a pre-existing environment defect
+      rather than a failure of this feature.
+    resolution_note: >-
+      Unlisted-gate fallback (references/batch-mode.md). VERIFICATION.md prescribes
+      `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml`,
+      which fails to COMPILE for a reason unrelated to this feature: `cargo test` also builds
+      `examples/`, and `src-tauri/examples/swash_emoji.rs:22` does
+      `include_bytes!("../assets/fonts/NotoColorEmoji.ttf")`, a file `scripts/fetch-fonts.sh`
+      never downloads (it fetches Noto-COLRv1.ttf, NotoEmoji-Regular.ttf and others). The
+      fonts directory is gitignored (`*.ttf`), and the identical `include_bytes!` line is
+      present on `main`, so the breakage is pre-existing and feature-independent.
+      Options weighed: (1) record verify as FAILED; (2) substitute the pre-approved
+      `--lib` + `--test cli_subcommands` commands and file the examples gap separately;
+      (3) fix the examples breakage inside this feature branch.
+      Codex was consulted twice. The native Codex CLI provider was unavailable (usage limit,
+      resets 2026-09-19), so the consultation ran through the same Codex CLI harness routed
+      via the local LiteLLM proxy (muse-spark, read-only sandbox) that this feature's earlier
+      create-plan consultations used. Codex recommended option 2 and the orchestrator adopted
+      it — this also coincides with the minimum-side-effect option. Rationale: option 1 would
+      misattribute an environment gap to the feature and destroy the signal fidelity of a
+      FAILED verdict; option 3 would let an unattended verify phase silently widen into
+      unrelated repository repairs, violating scope discipline. Option 2 keeps both, at the
+      cost of one follow-up item recorded in the run report.
+      Evidence gathered under the substitution: `cargo check` (gui) pass,
+      `cargo check --no-default-features` pass (TS7), `cargo test --lib -- --test-threads=1`
+      3347 passed / 0 failed / 3 ignored (including all six new
+      `callbacks::tests::worker_thread::*` tests, TS1-TS4/TS8, plus the TS5/TS6 regression
+      suites), `cargo test --test cli_subcommands` 26 passed / 0 failed.
