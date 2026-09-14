@@ -1,0 +1,42 @@
+feature: notification-worker-thread
+collected_at: "2026-09-14T23:46:00+09:00"
+session_ids: [01a0a061-9eac-76e7-8211-4da26badb610]
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses: []
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings: []
+lessons_candidates:
+  - |
+    round1 は critical/high がゼロで、残った 2 件はいずれも severity medium のため
+    auto-fix ゲート（critical/high のみ）に入らず unresolved のまま残った。
+    - 83dd237ffa3f8306: try_submit が TrySendError::Full と Disconnected を
+      単一の Err(_) で潰しているため、worker が panic で死んだ場合に
+      「キュー飽和」という誤った warn を 1 度だけ出したあと、以降の通知を
+      無言で捨て続ける（armed が二度と true に戻らない）。
+    - ed298275d659ab26: AC-1/AC-6 のテストが実物の NotifyRustSink を構築するため、
+      通知デーモンが動いている開発機では cargo test が実デスクトップ通知を
+      十数個発火する。SPEC TS1/TS4/NFR4 の headless 要件と矛盾し、同時に
+      worker 本体（AC-5）は tests: [] で未カバーのまま。
+  - |
+    review round1 でハーネスの可用性が大きく揺れた。codex ネイティブ provider は
+    usage limit（2026-09-19 リセット）で rate_limited、vertex-glm-5.2 は
+    comprehensive で harness_unavailable。comprehensive は claude fallback で
+    埋めたが、5 観点中 3 run が skip された。ハーネス可用性が review の
+    クロスバリデーション品質を直接左右する。
+  - |
+    VERIFICATION.md が指定した素の `cargo test` が、この feature とは無関係の
+    理由でコンパイルできなかった。`cargo test` は examples/ もビルドし、
+    `src-tauri/examples/swash_emoji.rs:22` が
+    `include_bytes!("../assets/fonts/NotoColorEmoji.ttf")` を参照するが、
+    `scripts/fetch-fonts.sh` はこのフォントを取得しない（fonts は gitignore 対象）。
+    同じ行は main にも存在するため既存の環境欠陥。verify は Codex 相談のうえ
+    `--lib` + `--test cli_subcommands` への置換で通した
+    （phase-state/batch-audit.yaml: verify.test-command-substitution）。
+    計画段階で test_command を検証可能な形に固定しておくと、この迂回は不要だった。
+  - |
+    MT-1..MT-6（実機の通知デーモンを要する手動検証）は無人実行では実行不能で
+    未消化のまま残っている。通知系 feature は自動検証だけでは閉じない。
+follow_up_drafts: []

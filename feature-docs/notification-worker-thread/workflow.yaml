@@ -101,7 +101,8 @@ workflow:
       MT-1..MT-6 remain manual and unexecuted (no display/notification daemon in an
       unattended run).
   - id: retrospect
-    status: in_progress
+    status: completed
+    completed_at_commit: bd28939dbcdffc61f673f6b021d1b64639ba2f8e
 
 tasks:
   task0001:
