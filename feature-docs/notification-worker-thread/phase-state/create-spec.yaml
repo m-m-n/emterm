@@ -1,14 +1,36 @@
 schema_version: 1
 feature: notification-worker-thread
 phase: create-spec
-status: initialized
+status: awaiting_answers
 generation: 1
 base_revision: 87487f64ed76331f4b742287ac4ea2dbd0805d6b
-last_input_digest: null
-active_request_id: null
-packets: {}
+last_input_digest: sha256:007990603bfd75cd1e197886154c7f4894e959f1934eeb893b01b04f90de956c
+active_request_id: create-spec-run-0001
+packets:
+  create-spec-q0001:
+    status: issued
+    issued_at: "2026-09-14T22:45:00+09:00"
+    questions:
+      - question_id: requirement.worker-lifecycle
+        status: issued
+      - question_id: requirement.channel-capacity
+        status: issued
+      - question_id: requirement.drop-observability
+        status: issued
+      - question_id: requirement.platform-scope
+        status: issued
+      - question_id: requirement.spawn-timing
+        status: issued
+      - question_id: requirement.drop-test-coverage
+        status: issued
+      - question_id: design-step.decision
+        status: issued
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: sha256:007990603bfd75cd1e197886154c7f4894e959f1934eeb893b01b04f90de956c
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
