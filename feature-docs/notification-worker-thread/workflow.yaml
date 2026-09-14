@@ -70,7 +70,7 @@ workflow:
     completed_at_commit: 52e3d24d2b0696cdb49866bac226be6a16b597ea
     base_commit: 87487f64ed76331f4b742287ac4ea2dbd0805d6b
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -95,10 +95,14 @@ tasks:
     notes: null
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
   residual_critical_high: 0
   needs_rework: false
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    cross_validation: true
 
 requirements:
   FR1:
