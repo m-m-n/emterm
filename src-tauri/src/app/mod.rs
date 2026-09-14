@@ -571,7 +571,7 @@ impl App {
         // Single production notification sink, shared with every tab's
         // callbacks (OSC 9) and used directly by link handling for
         // file-not-found / editor-launch failures.
-        let notification_sink: Arc<dyn NotificationSink> = Arc::new(NotifyRustSink);
+        let notification_sink: Arc<dyn NotificationSink> = Arc::new(NotifyRustSink::new());
 
         // task0002: seed the fade-bookkeeping instant already
         // `OVERLAY_DIM_FADE` in the past so a freshly constructed app
