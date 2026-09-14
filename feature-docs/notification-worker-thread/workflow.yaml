@@ -73,9 +73,33 @@ workflow:
     status: completed
     completed_at_commit: 112cb62b1f17770ed9c6561279b30ad41bc6f451
   - id: verify
-    status: in_progress
-    result: null
+    status: completed
+    completed_at_commit: 0fd24fb33cc827348d781676d47d4587e57990f5
+    result: pass
     failed_items: []
+    notes: >-
+      Build: `cargo check` (gui) pass / `cargo check --no-default-features` pass (TS7).
+      Tests: `cargo test --lib -- --test-threads=1` 3347 passed, 0 failed, 3 ignored
+      (TS1-TS4/TS8 = the six new `callbacks::tests::worker_thread::*` tests; TS5/TS6
+      regression suites unchanged and passing); `cargo test --test cli_subcommands`
+      26 passed, 0 failed. Format: the feature-touched files carry no rustfmt diff of
+      their own — the two diffs reported inside `callbacks.rs` / `callbacks/tests.rs`
+      sit in pre-existing osc-color-query-response code, and the rest of the drift is
+      project-wide and pre-existing (VERIFICATION.md's Code Quality note limits
+      formatting to feature-touched changes). Static TS9: (a) the `NotificationSink`
+      trait declaration is byte-identical to `main`, (b) `send` performs only
+      `queue.try_submit`, (c) the dispatch call carries no cfg branching, (d) no new
+      process-global once-only initialization, (e) no producer call site changed —
+      the only production edit outside `callbacks.rs` is the single `NotifyRustSink::new()`
+      construction line in `app/mod.rs`. No requirement is `excluded`, so no scenario was
+      skipped on that basis. VERIFICATION.md's prescribed bare `cargo test` could not be
+      run: it also compiles `examples/`, and `examples/swash_emoji.rs:22` embeds
+      `assets/fonts/NotoColorEmoji.ttf`, which `scripts/fetch-fonts.sh` never downloads.
+      That line is identical on `main`, so the breakage is pre-existing and unrelated to
+      this feature; see `phase-state/batch-audit.yaml`
+      (`verify.test-command-substitution`) for the Codex-consulted resolution.
+      MT-1..MT-6 remain manual and unexecuted (no display/notification daemon in an
+      unattended run).
   - id: retrospect
     status: pending
 
