@@ -1,0 +1,21 @@
+schema_version: 1
+feature: notification-worker-thread
+phase: create-plan
+status: dispatching
+generation: 1
+base_revision: 1b27d4c0d368e4166f4385a866fdd28b68d51e1d
+last_input_digest: sha256:a3718abc6c0b73ad278ece866b499002e0dc6fe7fba64e18f038a0bfb49baf43
+active_request_id: create-plan-run-0001
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: dispatched
+    input_digest: sha256:a3718abc6c0b73ad278ece866b499002e0dc6fe7fba64e18f038a0bfb49baf43
+    output_digest: null
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
