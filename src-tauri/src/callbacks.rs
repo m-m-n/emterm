@@ -22,9 +22,12 @@
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
 use term_core::callbacks::TerminalCallbacks;
 
@@ -93,6 +96,10 @@ pub const OSC_UNKNOWN: u8 = 255;
 pub const LOG_OSC52_DENIED: &str = "LOG_OSC52_DENIED";
 /// Emitted when an OSC 9 notification is suppressed by the rate limiter.
 pub const LOG_NOTIFY_RATE_LIMIT: &str = "LOG_NOTIFY_RATE_LIMIT";
+/// task0001 (notification-worker-thread, D1): emitted at most once per
+/// saturation episode when the outgoing notification queue is full and a
+/// submission is dropped. See [`NotifyQueue::try_submit`].
+pub const LOG_NOTIFY_QUEUE_SATURATED: &str = "LOG_NOTIFY_QUEUE_SATURATED";
 
 // ── task0001: notification log redaction ──────────────────────────────
 //
@@ -192,51 +199,132 @@ pub trait NotificationSink: Send + Sync {
     fn send(&self, title: &str, body: &str);
 }
 
-/// Production sink that uses `notify-rust` to deliver desktop
-/// notifications over D-Bus on Linux. On Windows the same crate uses the
-/// platform's toast API. Failures (e.g. no D-Bus in a container) are
-/// logged but never panic.
-pub struct NotifyRustSink;
+// ── task0001 (notification-worker-thread): submission queue + worker ────
+//
+// `NotifyRustSink::send` used to perform the D-Bus round-trip
+// (capability query + dispatch) synchronously on the calling thread — the
+// winit/egui event loop thread, for every OSC 9 / tab-activity /
+// agent-status / link-hover notification. This section moves that I/O
+// onto a dedicated worker thread the sink owns: `send` now only enqueues
+// onto a bounded, non-blocking queue and returns (FR1/NFR1). See
+// IMPLEMENTATION.md "Shared Components" and D1-D5 for the full contract.
 
-impl NotificationSink for NotifyRustSink {
-    fn send(&self, title: &str, body: &str) {
-        // osc9-notify-log-redaction task0001 (IMPLEMENTATION.md D2): this
-        // sink is the sole egress point for every notification producer
-        // (OSC 9, tab activity, agent status, link-hover), so it is also
-        // the single place both log records below can be redacted from.
-        // Render the redacted metadata from the values as RECEIVED on
-        // entry, before the `#[cfg(unix)]` escape gate below shadows
-        // `title`/`body` with their escaped forms — otherwise this
+/// Capacity of the bounded queue between callers and the worker
+/// (SPEC A3). A deliberately tunable value — kept as a named constant
+/// rather than a literal at the call site (IMPLEMENTATION.md "定数").
+const NOTIFY_QUEUE_CAPACITY: usize = 8;
+
+/// Upper bound [`NotifyRustSink`]'s `Drop` impl waits for the worker
+/// thread to finish before giving up and detaching it (D2). Kept ≤200 ms
+/// so process teardown never visibly hangs on a stuck D-Bus call.
+const NOTIFY_WORKER_JOIN_TIMEOUT: Duration = Duration::from_millis(200);
+
+/// Observable outcome of [`NotifyQueue::try_submit`] (Test Notes
+/// AC-3/AC-4): lets tests assert drop/warning behavior directly from the
+/// return value, without capturing log output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubmitOutcome {
+    /// Enqueued successfully; re-arms the saturation-episode warning.
+    Submitted,
+    /// The queue was full and this is the first drop of a new
+    /// saturation episode (D1) — a warning fired.
+    DroppedEpisodeStart,
+    /// The queue was full but a warning already fired earlier in the
+    /// same saturation episode (D1) — no warning fired.
+    DroppedAlreadyWarned,
+}
+
+/// Bounded, non-blocking submission side of the notification queue
+/// (IMPLEMENTATION.md "境界付き投入コンポーネント"). Depends only on
+/// `crossbeam_channel`, never on `notify_rust`, so it is unit-testable
+/// without a D-Bus connection (NFR4).
+struct NotifyQueue {
+    tx: Sender<(String, String)>,
+    /// D1 saturation-episode arming: `true` means the next drop should
+    /// warn. Checked-and-cleared atomically via `AtomicBool::swap` so
+    /// concurrent producers dropping at the same instant still produce
+    /// exactly one warning per episode — the check and the clear must be
+    /// indivisible (task0001.md Design).
+    armed: AtomicBool,
+}
+
+impl NotifyQueue {
+    fn new(capacity: usize) -> (Self, Receiver<(String, String)>) {
+        let (tx, rx) = crossbeam_channel::bounded(capacity);
+        (
+            Self {
+                tx,
+                armed: AtomicBool::new(true),
+            },
+            rx,
+        )
+    }
+
+    /// Submission path (投入経路): build the owned pair from the
+    /// borrowed inputs and try to enqueue it without blocking. Neither
+    /// branch performs anything that could block on the external
+    /// notification daemon (Design step 4).
+    fn try_submit(&self, title: &str, body: &str) -> SubmitOutcome {
+        match self.tx.try_send((title.to_string(), body.to_string())) {
+            Ok(()) => {
+                self.armed.store(true, Ordering::SeqCst);
+                SubmitOutcome::Submitted
+            }
+            Err(_) => {
+                // Atomic check-and-disarm: only the producer that
+                // observes `true` here fires the warning, however many
+                // producers race to drop at the same instant (D1).
+                if self.armed.swap(false, Ordering::SeqCst) {
+                    log::warn!(
+                        "{LOG_NOTIFY_QUEUE_SATURATED}: {}",
+                        redact_notification(title, body)
+                    );
+                    SubmitOutcome::DroppedEpisodeStart
+                } else {
+                    SubmitOutcome::DroppedAlreadyWarned
+                }
+            }
+        }
+    }
+}
+
+/// Worker body (ワーカー本体): the receive loop that performs every
+/// D-Bus round-trip previously run on the caller's thread — redaction,
+/// capability query, escape decision, dispatch, log, in that order, once
+/// per received notification. Runs until `rx` disconnects, i.e. until the
+/// owning [`NotifyRustSink`] (the sole holder of the matching `Sender`)
+/// drops it (D5/FR8): `Receiver::iter` blocks on each receive and stops
+/// automatically at that point, so there is no busy-poll and no explicit
+/// stop signal to manage.
+fn notify_worker(rx: Receiver<(String, String)>) {
+    for (title, body) in rx.iter() {
+        // osc9-notify-log-redaction task0001 (IMPLEMENTATION.md D2) /
+        // notification-worker-thread D4: redact the values exactly as
+        // received off the queue, before the escape gate below can
+        // shadow them with their escaped forms — otherwise this
         // dispatch-success record and a later rate-limit suppression
         // record for a repeat of the same notification would carry two
         // unrelated diagnostic IDs, breaking the within-run correlation
         // FR3 exists for.
-        let redacted = redact_notification(title, body);
+        let redacted = redact_notification(&title, &body);
 
-        // task0001 (IMPLEMENTATION.md D1 案(b)): this is the sole D-Bus
-        // egress point for every notification producer (OSC 9, tab
-        // activity, agent status, link-hover) — escape here, once, gated
-        // by a fresh per-send capability query (D2: not cached; the same
-        // decision drives BOTH title and body, see `escape_for_send`).
-        // notification-markup-fail-closed SPEC: the gate is fail-closed —
-        // a failed capability query escapes both fields, same as a
-        // confirmed `body-markup` capability; only an explicit,
-        // successful "body-markup absent" report passes text through
-        // unescaped.
-        // Windows notify-rust has no `get_capabilities()` export
-        // (XDG-only surface), so the whole gate is `#[cfg(unix)]`; the
-        // `.show()` call below is unchanged from before this task (FR5).
+        // notification-worker-thread D3: capability query happens here,
+        // once per notification, never cached — the same query this used
+        // to make from `send` before this task. notification-markup-
+        // fail-closed SPEC: the gate is fail-closed — a failed capability
+        // query escapes both fields, same as a confirmed `body-markup`
+        // capability; only an explicit, successful "body-markup absent"
+        // report passes text through unescaped. Windows notify-rust has
+        // no `get_capabilities()` export (XDG-only surface), so the whole
+        // gate stays `#[cfg(unix)]`, same as before this task — the
+        // dispatch call itself right below carries no cfg branching
+        // (FR9).
         #[cfg(unix)]
-        let (title_owned, body_owned) =
-            escape_for_send(title, body, &notify_rust::get_capabilities());
-        #[cfg(unix)]
-        let title = title_owned.as_str();
-        #[cfg(unix)]
-        let body = body_owned.as_str();
+        let (title, body) = escape_for_send(&title, &body, &notify_rust::get_capabilities());
 
         match notify_rust::Notification::new()
-            .summary(title)
-            .body(body)
+            .summary(&title)
+            .body(&body)
             .show()
         {
             // osc9-notify-log-redaction task0001 (FR5): the literal
@@ -247,6 +335,95 @@ impl NotificationSink for NotifyRustSink {
             // task0001 (FR7): the dispatch-error record is unchanged —
             // the notify-rust error value carries no notification text.
             Err(e) => log::warn!("notify-rust failed: {e}"),
+        }
+    }
+}
+
+/// Production sink that uses `notify-rust` to deliver desktop
+/// notifications over D-Bus on Linux. On Windows the same crate uses the
+/// platform's toast API. Failures (e.g. no D-Bus in a container) are
+/// logged but never panic.
+///
+/// notification-worker-thread task0001: `send` only enqueues onto a
+/// bounded queue (capacity [`NOTIFY_QUEUE_CAPACITY`]) and returns; every
+/// D-Bus round-trip — capability query, dispatch — runs on a dedicated
+/// worker thread started at construction time (never lazily, D5), so the
+/// caller (the winit/egui event loop thread) never blocks on the
+/// notification daemon (NFR1).
+pub struct NotifyRustSink {
+    /// `None` only after `Drop::drop` has explicitly closed the channel
+    /// (the first step of the bounded shutdown, D2); `Some` for the
+    /// sink's entire ordinary lifetime.
+    queue: Option<NotifyQueue>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl NotifyRustSink {
+    /// Construct the sink and start its worker thread immediately — the
+    /// worker is never started lazily (D5: every `App`-constructing test
+    /// relies on this so its own teardown of the production sink is
+    /// well-behaved under `cargo test`, SPEC A9).
+    pub fn new() -> Self {
+        let (queue, rx) = NotifyQueue::new(NOTIFY_QUEUE_CAPACITY);
+        let worker = thread::Builder::new()
+            .name("emterm-notify".to_string())
+            .spawn(move || notify_worker(rx))
+            .expect("failed to spawn the notification worker thread");
+        Self {
+            queue: Some(queue),
+            worker: Mutex::new(Some(worker)),
+        }
+    }
+}
+
+impl Default for NotifyRustSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NotificationSink for NotifyRustSink {
+    fn send(&self, title: &str, body: &str) {
+        if let Some(queue) = self.queue.as_ref() {
+            queue.try_submit(title, body);
+        }
+    }
+}
+
+impl Drop for NotifyRustSink {
+    /// D2: bounded shutdown. Dropping `queue` (and with it its `Sender`)
+    /// first disconnects the channel, waking the worker's blocking
+    /// `rx.iter()` loop so it returns on its own; we then wait for the
+    /// thread to finish, bounded by [`NOTIFY_WORKER_JOIN_TIMEOUT`]. If
+    /// the worker has not finished by the deadline we stop waiting and
+    /// simply drop the `JoinHandle` — `std::thread::JoinHandle::drop`
+    /// detaches rather than blocking, so process teardown is never held
+    /// up by a stuck D-Bus call (FR8).
+    fn drop(&mut self) {
+        // Close the channel FIRST: while `queue` (and its `Sender`) stays
+        // alive, the worker's `rx.iter()` stays blocked forever and every
+        // shutdown would hit the full timeout below instead of returning
+        // immediately in the (overwhelmingly common) case that the
+        // worker is simply idle, parked in `recv`.
+        self.queue = None;
+
+        let Some(handle) = self.worker.get_mut().take() else {
+            return;
+        };
+
+        let deadline = Instant::now() + NOTIFY_WORKER_JOIN_TIMEOUT;
+        loop {
+            if handle.is_finished() {
+                let _ = handle.join();
+                return;
+            }
+            if Instant::now() >= deadline {
+                // D2: give up waiting. Dropping `handle` here detaches
+                // the thread rather than blocking process teardown on a
+                // stuck D-Bus call.
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
         }
     }
 }
