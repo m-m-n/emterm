@@ -1,0 +1,201 @@
+schema_version: 1
+feature: notification-worker-thread
+created: 2026-09-14
+base_branch: main
+goal: |
+  デスクトップ通知の同期 D-Bus 呼び出しをワーカースレッドへ逃がす
+
+  ## やりたいこと（必須）
+  デスクトップ通知の送出を専用ワーカースレッドへ逃がし、同期 D-Bus 呼び出しが winit イベントループを塞がないようにする。
+
+  ## 背景・なぜ（必須）
+  `App::notify` → `NotifyRustSink::send` → `notify_rust::Notification::show()` は Linux で同期 D-Bus RPC を呼び出しスレッドで実行し、この経路は winit イベントループの `about_to_wait` から走る。active-window-agent-notification（PR: https://github.com/m-m-n/emterm/pull/29 ）で可視ペイン通知を既定 ON にしたことで、ユーザーが操作中のフレームでも同期ラウンドトリップが発生するようになった。
+  発火頻度はペインあたり 30 秒の rate limit で上限が付くため critical/high ではないが、hot path のブロッキング I/O として修正価値がある。
+  - 該当箇所: `src-tauri/src/app/agent_status.rs:191`
+  - レビュー finding: `4f3d5c66b7ca025e`（severity medium / category performance / confidence 60）
+  - 記録: `feature-docs/active-window-agent-notification/reviews/round1.yaml`
+
+  ## 受け入れ条件 / 完了の定義（必須）
+  - [ ] `NotifyRustSink::send` を専用ワーカースレッド + bounded channel で非同期化する
+  - [ ] チャネル満杯時は drop する（既存の「抑止された通知は捨てる」方針と一致）
+  - [ ] `NotificationSink` トレイト境界を変えない
+  - [ ] `TestSink` を使う既存テストがそのまま通る
+  - [ ] `cargo test --lib` が通る
+
+  ## スコープ外（任意）
+  - 通知本文のサニタイズ（別タスク）
+  - 通知の発火条件・rate limit の変更
+
+  ## 制約・前提（任意）
+  - 本 finding は `em-workflow/active-window-agent-notification/integration` ブランチ（PR #29、main 未マージ）に対するレビューで検出された。着手時点の main の状態を確認すること。
+  - ワーカースレッドのライフサイクル（アプリ終了時の join / detach）を明示的に決めること。
+parent_branch: em-workflow/notification-worker-thread/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+  components:
+    rust:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    rust-cli-only:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 8870fd971cd0f4c280aab5af8e74d9f44b1e092e
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: "UI 表層を持たない並行化リファクタ。NotificationSink のトレイト境界を保ったまま同期 D-Bus 往復をワーカースレッドへ移すだけで、UI・レイアウト・デザイントークン・新規のユーザー可視文言のいずれにも触れない。検出済みのデザインシステム候補（doc/UI-DESIGN-GUIDELINES.yaml、src-tauri/web-shared/styles.css）はこの経路に含まれない。"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: 87487f64ed76331f4b742287ac4ea2dbd0805d6b
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "ノンブロッキングな send"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  FR2:
+    title: "トレイト境界の不変性"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5, TS6]
+  FR3:
+    title: "送出ごとの capability 意味論の維持"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5]
+  FR4:
+    title: "ログ記録の維持"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5]
+  FR5:
+    title: "境界付きキューと満杯時ドロップ"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS2]
+  FR6:
+    title: "スロットル付きドロップ観測"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2, TS3]
+  FR7:
+    title: "即時起動・プロセス寿命のワーカー"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: "境界付き join によるシャットダウン"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS4]
+  FR9:
+    title: "プラットフォーム挙動の統一"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR10:
+    title: "シンクがワーカー状態を所有する"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: "イベントループのレイテンシ"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  NFR2:
+    title: "障害の封じ込め"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS4]
+  NFR3:
+    title: "メモリ境界"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS2]
+  NFR4:
+    title: "ヘッドレスなテスト容易性"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS2, TS3, TS4]
+  NFR5:
+    title: "フィーチャーゲート互換性"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS7]
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
