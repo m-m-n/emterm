@@ -8,24 +8,87 @@ last_input_digest: sha256:007990603bfd75cd1e197886154c7f4894e959f1934eeb893b01b0
 active_request_id: create-spec-run-0001
 packets:
   create-spec-q0001:
-    status: issued
+    status: answered
     issued_at: "2026-09-14T22:45:00+09:00"
     questions:
       - question_id: requirement.worker-lifecycle
-        status: issued
+        status: answered
       - question_id: requirement.channel-capacity
-        status: issued
+        status: answered
       - question_id: requirement.drop-observability
-        status: issued
+        status: answered
       - question_id: requirement.platform-scope
-        status: issued
+        status: answered
       - question_id: requirement.spawn-timing
-        status: issued
+        status: answered
       - question_id: requirement.drop-test-coverage
-        status: issued
+        status: answered
       - question_id: design-step.decision
-        status: issued
-answers: {}
+        status: answered
+answers:
+  requirement.worker-lifecycle:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-14T22:50:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [join_bounded]
+    freeform: null
+    normalized_answer: "On shutdown, drop the sender and join the worker with a short bounded wait; past the deadline, give up and detach so exit can never hang."
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; Codex CLI (native provider) hit its usage limit, consultation ran through the same Codex CLI harness routed via the local LiteLLM proxy (muse-spark, Standard tier, read-only sandbox); suggestion mapped to option_id join_bounded and was adopted after orchestrator judgement. Rationale: detach can lose the final in-flight notification while two D-Bus round trips are still running; join_unbounded lets a hung D-Bus peer hang application exit. Recorded as an assumption per batch-policies.yaml record_as_assumption: true."
+  requirement.channel-capacity:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-14T22:50:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [cap_8]
+    freeform: null
+    normalized_answer: "The bounded channel has capacity 8."
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; consultation as above. Codex suggested cap_8 against the analyst's cap_32 recommendation; orchestrator adopted cap_8. Rationale: the channel only fills when the notification daemon is slow or wedged, and a deeper queue merely dispatches staler notifications later; the per-pane 30 s rate limit plus the 5 s tab-activity throttle already bound the enqueue rate. Recorded as an assumption."
+  requirement.drop-observability:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-14T22:50:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [log_warn_throttled]
+    freeform: null
+    normalized_answer: "Emit log::warn on the first drop of a saturation episode and re-arm once the queue drains."
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; consultation as above. Codex agreed with the analyst recommendation. Rationale: release builds persist only warn and above and the log file is the sole investigation channel, so silent hides saturation; per-drop warn risks a flood while a daemon is wedged. Recorded as an assumption."
+  requirement.platform-scope:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-14T22:50:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [all_platforms]
+    freeform: null
+    normalized_answer: "The worker-thread path applies on every supported platform (Linux and Windows); no cfg branching on the dispatch path."
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; consultation as above. Codex agreed with the analyst recommendation. Rationale: one notify-rust dependency serves both platforms, Windows toast dispatch can block about_to_wait the same way, and a single path avoids cfg divergence in behaviour and tests. Recorded as an assumption."
+  requirement.spawn-timing:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-14T22:50:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [eager_on_construction]
+    freeform: null
+    normalized_answer: "The worker thread is spawned when the sink is constructed, and lives for the process lifetime."
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; consultation as above. Codex agreed with the analyst recommendation. Rationale: App::with_settings is the single construction site and clones one Arc everywhere, so one process-lifetime thread is cheap and deterministic; lazy spawn adds first-send race handling for no gain, and the CLI-only build never links notify-rust. Recorded as an assumption."
+  requirement.drop-test-coverage:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-14T22:50:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: single_select
+    selected_option_ids: [add_queue_tests]
+    freeform: null
+    normalized_answer: "Add unit tests covering non-blocking enqueue and drop-on-full, separated from the notify-rust transport so they run headless."
+    resolution_note: "gate: create-spec.requirement-clarification; policy action codex_consultation; consultation as above. Codex agreed with the analyst recommendation. Rationale: the existing suite substitutes TestSink and cannot observe the queue at all, and the project has no E2E layer that would catch a regression later. Recorded as an assumption."
+  design-step.decision:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-14T22:50:00+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "Accept requirements-analyst's recommendation to skip the design step."
+    resolution_note: "gate: create-spec.design-step; references/batch-policies.yaml action select, option_id decide_autonomously. Backend-only concurrency refactor with no UI surface and no design-token change."
 worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
