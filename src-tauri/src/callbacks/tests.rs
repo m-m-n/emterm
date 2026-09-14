@@ -1103,3 +1103,174 @@ mod notification_redaction {
         );
     }
 }
+
+// ── task0001 (notification-worker-thread): submission queue + worker
+// shutdown (IMPLEMENTATION.md D1/D2, task0001.md AC-1/AC-3/AC-4/AC-6). The
+// submission component is exercised directly (`NotifyQueue`), never
+// through notify-rust, per Test Notes / NFR4 — AC-3/AC-4 hold the
+// receiver open without draining it so a full queue stays full. AC-1/AC-6
+// exercise the real `NotifyRustSink` and assert on elapsed wall-clock
+// time, deliberately generous relative to `NOTIFY_WORKER_JOIN_TIMEOUT` so
+// CI variance never makes these flaky (Test Notes).
+mod worker_thread {
+    use super::*;
+
+    // AC-3 (SPEC AC4 / FR5 / NFR3): capacity NOTIFY_QUEUE_CAPACITY fills
+    // without a single drop; the very next submission is dropped, not
+    // blocked, and does not grow the queue. The receiver is held but
+    // never drained so the 9th item is genuinely the first to find the
+    // queue full (Test Notes: draining would shift the drop boundary by
+    // one and make the test flaky).
+    #[test]
+    fn queue_drops_the_ninth_submission_without_blocking_when_receiver_is_idle() {
+        let (queue, _rx) = NotifyQueue::new(NOTIFY_QUEUE_CAPACITY);
+        for i in 0..NOTIFY_QUEUE_CAPACITY {
+            assert_eq!(
+                queue.try_submit(&format!("t{i}"), "b"),
+                SubmitOutcome::Submitted,
+                "submission {i} should succeed while under capacity"
+            );
+        }
+        assert_eq!(
+            queue.try_submit("overflow-title", "overflow-body"),
+            SubmitOutcome::DroppedEpisodeStart
+        );
+    }
+
+    // AC-4 (SPEC AC5 / FR6, D1): the first drop of a saturation episode
+    // warns, later drops in the same episode are silent, and a
+    // successful submission ends the episode — the very next drop after
+    // that starts a NEW episode and warns again. Judged purely from
+    // `try_submit`'s return value (Test Notes), not log capture.
+    #[test]
+    fn saturation_episode_warns_exactly_once_then_rearms_after_a_successful_submission() {
+        let (queue, rx) = NotifyQueue::new(NOTIFY_QUEUE_CAPACITY);
+        for i in 0..NOTIFY_QUEUE_CAPACITY {
+            assert_eq!(
+                queue.try_submit(&format!("t{i}"), "b"),
+                SubmitOutcome::Submitted
+            );
+        }
+
+        // Saturation episode: first drop warns, later drops are silent.
+        assert_eq!(
+            queue.try_submit("drop-1", "b"),
+            SubmitOutcome::DroppedEpisodeStart
+        );
+        assert_eq!(
+            queue.try_submit("drop-2", "b"),
+            SubmitOutcome::DroppedAlreadyWarned
+        );
+        assert_eq!(
+            queue.try_submit("drop-3", "b"),
+            SubmitOutcome::DroppedAlreadyWarned
+        );
+
+        // Draining one slot and submitting again ends the episode and
+        // re-arms the warning (D1 step 4).
+        rx.recv().expect("a queued item should be waiting");
+        assert_eq!(
+            queue.try_submit("after-drain", "b"),
+            SubmitOutcome::Submitted
+        );
+
+        // The queue is full again (the drained slot was refilled) — the
+        // very next drop starts a NEW episode and warns once more.
+        assert_eq!(
+            queue.try_submit("drop-again", "b"),
+            SubmitOutcome::DroppedEpisodeStart
+        );
+    }
+
+    // AC-4 (D1): "複数プロデューサが同時にドロップしても、エピソード先頭の
+    // 警告はちょうど 1 件" — many threads racing to drop against the same
+    // saturated queue still produce exactly one `DroppedEpisodeStart`,
+    // because the armed-check-and-clear is a single atomic swap.
+    #[test]
+    fn concurrent_saturated_drops_produce_exactly_one_episode_start_warning() {
+        let (queue, _rx) = NotifyQueue::new(NOTIFY_QUEUE_CAPACITY);
+        for i in 0..NOTIFY_QUEUE_CAPACITY {
+            assert_eq!(
+                queue.try_submit(&format!("t{i}"), "b"),
+                SubmitOutcome::Submitted
+            );
+        }
+
+        let queue = Arc::new(queue);
+        let threads: Vec<_> = (0..16)
+            .map(|i| {
+                let queue = queue.clone();
+                std::thread::spawn(move || queue.try_submit(&format!("racer{i}"), "b"))
+            })
+            .collect();
+        let outcomes: Vec<SubmitOutcome> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+
+        let warn_count = outcomes
+            .iter()
+            .filter(|o| **o == SubmitOutcome::DroppedEpisodeStart)
+            .count();
+        assert_eq!(
+            warn_count, 1,
+            "expected exactly one episode-start warning, got {warn_count}: {outcomes:?}"
+        );
+    }
+
+    // AC-1 (SPEC AC1 / FR1 / NFR1): `NotificationSink::send` on the real
+    // production sink only enqueues — it never performs the capability
+    // query or the notify-rust dispatch itself, so a burst of sends well
+    // past queue capacity returns to the caller almost instantly
+    // regardless of how busy (or slow) the worker is. A synchronous
+    // implementation performing D-Bus round-trips inline would take
+    // orders of magnitude longer for the same burst.
+    #[test]
+    fn sink_send_never_blocks_the_caller_even_past_queue_capacity() {
+        let sink = NotifyRustSink::new();
+        let started = Instant::now();
+        for i in 0..(NOTIFY_QUEUE_CAPACITY * 4) {
+            sink.send(&format!("t{i}"), "b");
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "send() appears to block the caller thread: {elapsed:?}"
+        );
+    }
+
+    // AC-6 (SPEC AC8 / FR7 / FR8 / NFR2, D2): dropping the sink after
+    // sending a few notifications disconnects the queue, the worker's
+    // receive loop exits, and the bounded join returns well within a
+    // generous CI-safe bound (deliberately far above
+    // `NOTIFY_WORKER_JOIN_TIMEOUT` itself — Test Notes — so this never
+    // flakes on a loaded CI box).
+    #[test]
+    fn dropping_the_sink_after_sending_returns_within_the_shutdown_deadline() {
+        let sink = NotifyRustSink::new();
+        for i in 0..3 {
+            sink.send(&format!("t{i}"), "b");
+        }
+        let started = Instant::now();
+        drop(sink);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "drop() exceeded the generous CI-safe shutdown bound: {elapsed:?}"
+        );
+    }
+
+    // AC-6 (SPEC A9, D5): a sink dropped immediately after construction,
+    // with no notification ever sent, also returns within the deadline —
+    // this is exactly the path every `App`-constructing test exercises
+    // when it tears down the production sink it never used.
+    #[test]
+    fn dropping_a_freshly_constructed_sink_with_no_notifications_returns_within_the_shutdown_deadline()
+     {
+        let sink = NotifyRustSink::new();
+        let started = Instant::now();
+        drop(sink);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "drop() exceeded the generous CI-safe shutdown bound: {elapsed:?}"
+        );
+    }
+}
