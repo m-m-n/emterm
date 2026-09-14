@@ -1,20 +1,33 @@
 schema_version: 1
 feature: notification-worker-thread
 phase: create-plan
-status: dispatching
+status: completed
 generation: 1
-base_revision: 1b27d4c0d368e4166f4385a866fdd28b68d51e1d
+base_revision: b25b4ea0c5a1817e3891e222cac23a5cefe090f6
 last_input_digest: sha256:a3718abc6c0b73ad278ece866b499002e0dc6fe7fba64e18f038a0bfb49baf43
-active_request_id: create-plan-run-0001
+active_request_id: null
 packets: {}
 answers: {}
 worker_runs:
   - request_id: create-plan-run-0001
-    status: dispatched
+    status: completed
     input_digest: sha256:a3718abc6c0b73ad278ece866b499002e0dc6fe7fba64e18f038a0bfb49baf43
     output_digest: null
-artifacts: []
-patches: []
+artifacts:
+  - path: feature-docs/notification-worker-thread/IMPLEMENTATION.md
+    sha256: sha256:123928f0c2b24dd6c3c565f861abd339071f282284cf8984539cc18b9a18f016
+    produced_by: create-plan-run-0001
+  - path: feature-docs/notification-worker-thread/VERIFICATION.md
+    sha256: sha256:9f96a670f1fa9ce008d1bd556a4d429c2f1f3bf52249fd418df474f1fdea11c7
+    produced_by: create-plan-run-0001
+  - path: feature-docs/notification-worker-thread/tasks/task0001.md
+    sha256: sha256:44280876c1d9d5f5d9ab69c3e247d4e6154852b2f461ae9c001f35f2d945d9e8
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: notification-worker-thread-p0001
+    status: applied
+    base_input_digest: sha256:a3718abc6c0b73ad278ece866b499002e0dc6fe7fba64e18f038a0bfb49baf43
+    base_workflow_blob: 214bc93ff74bf7d0f6b4fa110ac7668435e0d7cd
 progress_fingerprint: null
 stale_redispatch_count: 0
 resolved_input_cache: {}
