@@ -63,7 +63,8 @@ workflow:
     skipped_reason: "UI 表層を持たない並行化リファクタ。NotificationSink のトレイト境界を保ったまま同期 D-Bus 往復をワーカースレッドへ移すだけで、UI・レイアウト・デザイントークン・新規のユーザー可視文言のいずれにも触れない。検出済みのデザインシステム候補（doc/UI-DESIGN-GUIDELINES.yaml、src-tauri/web-shared/styles.css）はこの経路に含まれない。"
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 1661aef400f318292f6f79525d6ff7f49a106967
   - id: implement
     status: pending
     base_commit: 87487f64ed76331f4b742287ac4ea2dbd0805d6b
@@ -76,7 +77,21 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "通知シンクのワーカースレッド化"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/callbacks.rs
+      - src-tauri/src/callbacks/tests.rs
+      - src-tauri/src/app/mod.rs
+    skills: [backend-impl]
+    domains: [concurrency, external-io, input-handling, api-contract]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, NFR1, NFR2, NFR3, NFR4, NFR5]
+    status: pending
+    branch: null
+    notes: null
 
 review:
   status: pending
@@ -90,105 +105,105 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS1]
+    tasks: [task0001]
+    tests: [TS1, TS9]
   FR2:
     title: "トレイト境界の不変性"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS5, TS6]
+    tasks: [task0001]
+    tests: [TS5, TS6, TS9]
   FR3:
     title: "送出ごとの capability 意味論の維持"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   FR4:
     title: "ログ記録の維持"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS5]
   FR5:
     title: "境界付きキューと満杯時ドロップ"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2]
   FR6:
     title: "スロットル付きドロップ観測"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS2, TS3]
   FR7:
     title: "即時起動・プロセス寿命のワーカー"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS4, TS8]
   FR8:
     title: "境界付き join によるシャットダウン"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS4]
+    tasks: [task0001]
+    tests: [TS4, TS8]
   FR9:
     title: "プラットフォーム挙動の統一"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS7, TS9]
   FR10:
     title: "シンクがワーカー状態を所有する"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS4, TS9]
   NFR1:
     title: "イベントループのレイテンシ"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: [TS1]
+    tasks: [task0001]
+    tests: [TS1, TS9]
   NFR2:
     title: "障害の封じ込め"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS4]
   NFR3:
     title: "メモリ境界"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS2]
   NFR4:
     title: "ヘッドレスなテスト容易性"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS1, TS2, TS3, TS4]
   NFR5:
     title: "フィーチャーゲート互換性"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: [TS7]
 
 batch:
