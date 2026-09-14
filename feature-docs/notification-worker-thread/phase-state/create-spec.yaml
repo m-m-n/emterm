@@ -1,11 +1,11 @@
 schema_version: 1
 feature: notification-worker-thread
 phase: create-spec
-status: awaiting_answers
+status: completed
 generation: 1
 base_revision: 87487f64ed76331f4b742287ac4ea2dbd0805d6b
-last_input_digest: sha256:007990603bfd75cd1e197886154c7f4894e959f1934eeb893b01b04f90de956c
-active_request_id: create-spec-run-0001
+last_input_digest: sha256:ba47a0984f85094e4e6bd9e9469478e71a9d6b2a211dce3fc726c66f17ed70cc
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -94,7 +94,21 @@ worker_runs:
     status: needs_user_input
     input_digest: sha256:007990603bfd75cd1e197886154c7f4894e959f1934eeb893b01b04f90de956c
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:2632a53e0a2657fee0827fbfec70a16a2e8de364dcbc76658cddf9928a2cbe6b
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:ba47a0984f85094e4e6bd9e9469478e71a9d6b2a211dce3fc726c66f17ed70cc
+    output_digest: null
+artifacts:
+  - path: feature-docs/notification-worker-thread/REQUIREMENTS.md
+    sha256: sha256:928778352b7f71aa722790a1995b7ba4c6089111f9af98f75427afb92a7b4e65
+    produced_by: create-spec-run-0003
+  - path: feature-docs/notification-worker-thread/SPEC.md
+    sha256: sha256:1eb5b79802a8f31a45296ba952b71707a7d822672e119ffcc74b8806acae5e12
+    produced_by: create-spec-run-0003
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
