@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mouse-reporting
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 1c9a7f24ccd5776077aeb5c31636a5fceab360f8
-last_input_digest: sha256:2442be9cbbe9415e744a48013a028a331f3924907c15f1432fd8639090e5ec4b
-active_request_id: create-spec-run-0002
+last_input_digest: sha256:58af04697ebfdc6890809c96baed7a9f592fc9c01edd9e791cd21a7378a8b4fd
+active_request_id: null
 packets:
   create-spec-q0001:
     status: answered
@@ -111,7 +111,25 @@ worker_runs:
     status: needs_user_input
     input_digest: sha256:2442be9cbbe9415e744a48013a028a331f3924907c15f1432fd8639090e5ec4b
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:6559c1b0ec533688c2fa9870c0920d41f25e3fcf3550aaf7ce5d17bbb8d1a122
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:6559c1b0ec533688c2fa9870c0920d41f25e3fcf3550aaf7ce5d17bbb8d1a122
+    output_digest: null
+  - request_id: create-spec-run-0004
+    status: completed
+    input_digest: sha256:58af04697ebfdc6890809c96baed7a9f592fc9c01edd9e791cd21a7378a8b4fd
+    output_digest: null
+artifacts:
+  - path: feature-docs/mouse-reporting/REQUIREMENTS.md
+    sha256: sha256:8a5028571457b9adf88c6c6b923b75dc8ae43d19d1eb94ca11d06f00d6e2e0f6
+    produced_by: create-spec-run-0004
+  - path: feature-docs/mouse-reporting/SPEC.md
+    sha256: sha256:690041979647af0c620d6bea78fa80d52010e23ec1a02ccbb666219d57733378
+    produced_by: create-spec-run-0004
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0

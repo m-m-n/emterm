@@ -1,0 +1,248 @@
+schema_version: 1
+feature: mouse-reporting
+created: '2026-09-19'
+base_branch: main
+parent_branch: em-workflow/mouse-reporting/integration
+goal: |
+  # マウスレポート（DECSET 1000/1002/1003/1006）の実装
+
+  Notion task: https://www.notion.so/3dc3509ec8ee813d97fcde5a03d4d99c
+  種別: 機能
+
+  ## やりたいこと (必須)
+  マウスレポート（DECSET 1000 / 1002 / 1003 / 1006）を実装し、マウス操作に対応した
+  TUI アプリを eMterm 上で操作できるようにする。
+
+  ## 背景・なぜ (必須)
+  マウス操作をサポートする TUI アプリを eMterm 上で動かしても、マウスが反応しない。
+  設定で無効化しているわけではなく、マウスレポート自体が未実装になっている。
+  調査時点の状況:
+  - `crates/term_core/src/csi_modes.rs:112` — DECSET 1000 / 1002 / 1003 / 1005 / 1006 は
+    `MODE_ACTION_TS_FALLBACK` を返すだけで、ホスト側に解釈する経路が無い（旧 WebView
+    実装で TS 側にフォールバックしていた頃の残骸）
+  - `src-tauri/src/window_host/pointer_routing.rs` — クリック / ホイールの処理はテキスト
+    選択・スクロール・DECSET 1007（alternate scroll）の矢印変換のみで、マウスイベントを
+    PTY に書く経路が無い
+  - `crates/app_settings` にマウス関連の設定項目が無い
+
+  ## 受け入れ条件 / 完了の定義 (必須)
+  - [ ] DECSET 1000 / 1002 / 1003 を core 側でモードビットとして保持し、ホストから参照できる
+  - [ ] DECSET 1006（SGR 拡張レポート）に対応し、有効時は `CSI < b ; x ; y M`（解放は `m`）形式で PTY に送る
+  - [ ] 1006 が無効なときは X10 互換形式（`CSI M` + 32 オフセットの 3 バイト）で送る
+  - [ ] ボタン押下・解放・移動・ホイールを、有効になっているモードに応じてレポートする
+  - [ ] 修飾キー（Alt / Ctrl）のビットをレポートに載せる
+  - [ ] マウスレポート有効中でも、Shift 押下中のマウス操作は PTY に送らず eMterm 側のテキスト選択に使う
+  - [ ] レポートのバイト列生成に単体テストがある
+
+  ## スコープ外 (任意)
+  - DECSET 1005（UTF-8 拡張レポート）、1015（urxvt 形式）への対応
+
+  ## 制約・前提 (任意)
+  - Linux / Windows の両対応
+  - 既存のテキスト選択と DECSET 1007（alternate scroll）の挙動を壊さない
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/src/ui/md3.rs
+    - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1
+      format_command: ''
+      e2e_test_command: ''
+    term_core:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib
+      format_command: ''
+      e2e_test_command: ''
+    cli_only:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      test_command: ''
+      format_command: ''
+      e2e_test_command: ''
+    web:
+      language: typescript
+      build_command: bun run build:viewer && bun run build:settings
+      test_command: bun test
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 70b31f71a94f9dc221b1fefb2d4d9d0a1d8d5dc6
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'The feature adds no user-visible UI surface: it changes how existing pointer events are routed and introduces a byte encoding on the PTY input path. It touches none of the three Material Design 3 mirror layers (doc/UI-DESIGN-GUIDELINES.yaml, src-tauri/src/ui/md3.rs, src-tauri/web-shared/styles.css), adds no widget, dialog or panel, and renders nothing new. With requirement.settings-gate resolved to no_setting, the one branch that could have introduced a settings-panel row is closed. The task description confirms this: its acceptance criteria are all protocol-level and its constraints section names no UI concern. Accepted at gate create-spec.design-step via option decide_autonomously.'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: null
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Core-side mouse-tracking mode state
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR2:
+    title: Button press and release reporting
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR3:
+    title: Motion reporting for 1002 and 1003
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR4:
+    title: Wheel reporting takes precedence over both local wheel consumers
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR5:
+    title: X10 and SGR (1006) report encodings
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR6:
+    title: Modifier bits in the button code
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR7:
+    title: Shift is the sole local override
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR8:
+    title: Ctrl+click and middle-click are reported while tracking is active
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR9:
+    title: X10 coordinate overflow suppresses the report
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR10:
+    title: Existing egui chrome guards run before reporting
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  FR11:
+    title: Reports are written to the active tab's PTY
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR1:
+    title: Motion reports are emitted only on cell change
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: No new user setting
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: CLI-only build keeps compiling
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR4:
+    title: Linux and Windows parity, no platform-specific branches
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR5:
+    title: Tests follow the existing inline convention with no new dependency
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR6:
+    title: Encoding logic is unit-testable without a window
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR7:
+    title: Report byte-sequence generation ships with unit tests
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
