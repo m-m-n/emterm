@@ -1,14 +1,116 @@
 schema_version: 1
 feature: mouse-reporting
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
 base_revision: 1c9a7f24ccd5776077aeb5c31636a5fceab360f8
-last_input_digest: null
-active_request_id: null
-packets: {}
-answers: {}
-worker_runs: []
+last_input_digest: sha256:2442be9cbbe9415e744a48013a028a331f3924907c15f1432fd8639090e5ec4b
+active_request_id: create-spec-run-0002
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-18T23:53:40+09:00"
+    questions:
+      - question_id: requirement.wheel-routing
+        status: answered
+      - question_id: requirement.settings-gate
+        status: answered
+      - question_id: requirement.modifier-click-override
+        status: answered
+      - question_id: edge.x10-coordinate-overflow
+        status: answered
+      - question_id: nfr.motion-granularity
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.wheel-routing:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-18T23:53:40+09:00"
+    source: batch-codex-consultation
+    answer_mode: select
+    selected_option_ids: [report_always]
+    freeform: null
+    normalized_answer: report_always
+    resolution_note: >-
+      gate: create-spec.requirement-clarification;
+      policy action: codex_consultation;
+      codex_consulted: true (via LiteLLM-routed codex harness after the default wrapper returned a usage-limit error);
+      Codex chose report_always and the orchestrator confirmed it maps onto a declared option_id. Rationale adopted: xterm convention reports the wheel as buttons 64/65 on BOTH main and alternate screen whenever a tracking mode is on;
+      the DECSET 1007 arrow translation and eMterm scrollback scroll apply only when tracking is off, which keeps the three wheel consumers mutually exclusive behind one check. recorded_as_assumption: true;
+  requirement.settings-gate:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-18T23:53:40+09:00"
+    source: batch-codex-consultation
+    answer_mode: select
+    selected_option_ids: [no_setting]
+    freeform: null
+    normalized_answer: no_setting
+    resolution_note: >-
+      gate: create-spec.requirement-clarification;
+      policy action: codex_consultation;
+      codex_consulted: true;
+      Codex chose no_setting. Rationale adopted: no acceptance criterion asks for a setting;
+      xterm default is to follow the application's DECSET request;
+      a default-off setting would leave mouse support inert out of the box and a default-on setting adds a Rust struct field, the TypeScript AppSettings mirror and a settings-panel row for no behavioural gain. The Shift override remains the user's escape hatch. crates/app_settings stays untouched. recorded_as_assumption: true;
+  requirement.modifier-click-override:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-18T23:53:40+09:00"
+    source: batch-codex-consultation
+    answer_mode: select
+    selected_option_ids: [shift_only_override]
+    freeform: null
+    normalized_answer: shift_only_override
+    resolution_note: >-
+      gate: create-spec.requirement-clarification;
+      policy action: codex_consultation;
+      codex_consulted: true;
+      Codex chose shift_only_override. Rationale adopted: this is the only option that satisfies the task's own acceptance criterion requiring the Ctrl modifier bit in reports - keep_local_ctrl_and_middle would make bit 16 unreachable for the left button. Existing behaviour is preserved behind Shift: Shift+Ctrl+click opens a link, Shift+middle-click pastes PRIMARY, Shift+drag selects text. recorded_as_assumption: true;
+  edge.x10-coordinate-overflow:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-18T23:53:40+09:00"
+    source: batch-codex-consultation
+    answer_mode: select
+    selected_option_ids: [suppress]
+    freeform: null
+    normalized_answer: suppress
+    resolution_note: >-
+      gate: create-spec.requirement-clarification;
+      policy action: codex_consultation;
+      codex_consulted: true;
+      Codex chose suppress. Rationale adopted: clamping collapses every column beyond 223 onto one cell, so a wide window would deliver confidently wrong click coordinates to the application;
+      suppressing an unencodable event fails safe and is directly testable without extra mapping logic. Applications needing wide coordinates are expected to enable SGR 1006. recorded_as_assumption: true;
+  nfr.motion-granularity:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-18T23:53:40+09:00"
+    source: batch-codex-consultation
+    answer_mode: select
+    selected_option_ids: [cell_change_only]
+    freeform: null
+    normalized_answer: cell_change_only
+    resolution_note: >-
+      gate: create-spec.requirement-clarification;
+      policy action: codex_consultation;
+      codex_consulted: true;
+      Codex chose cell_change_only. Rationale adopted: handle_pointer_moved runs per raw winit event on a path the project already had to optimise for CPU;
+      caching the last reported cell caps report volume at grid resolution with no compatibility loss, since applications only resolve to cell granularity anyway. recorded_as_assumption: true;
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-18T23:53:40+09:00"
+    source: batch-decision-table
+    answer_mode: select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: decide_autonomously
+    resolution_note: >-
+      gate: create-spec.design-step;
+      resolved from references/batch-policies.yaml (action: select, option_id: decide_autonomously);
+      codex_consulted: false. requirements-analyst's design_step_recommendation of 'skip' is accepted: the feature adds no user-visible UI surface and touches none of the three MD3 mirror layers. With requirement.settings-gate resolved to no_setting, the one branch that could have introduced a settings-panel row is closed.;
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: sha256:2442be9cbbe9415e744a48013a028a331f3924907c15f1432fd8639090e5ec4b
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
