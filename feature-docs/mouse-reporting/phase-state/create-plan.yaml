@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mouse-reporting
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: ca3c0e5d8428467eec0c1eeb25606d891ee5301f
 last_input_digest: sha256:a9679b811b00f3a5bb6eae46130bab6a8f95723dc031d3065a4c9756ce5b881c
@@ -53,7 +53,7 @@ patches:
   base_input_digest: sha256:cefc516823cf7ea04c5c8e56717256774b8f4f1df6fcb9c228648179dc1e1445
   base_workflow_blob: 15365d19f302bcff3e0783980892adbeeb9ab4d8
 - patch_id: mouse-reporting-p0002
-  status: validated
+  status: applied
   base_input_digest: sha256:a9679b811b00f3a5bb6eae46130bab6a8f95723dc031d3065a4c9756ce5b881c
   base_workflow_blob: 15365d19f302bcff3e0783980892adbeeb9ab4d8
 progress_fingerprint: sha256:586bf305c7c5483bc13a842311475ffdc7de1f04d7486c3bb6bd2e61f64060a5
