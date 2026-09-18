@@ -1,0 +1,13 @@
+schema_version: 1
+feature: mouse-reporting
+records:
+- question_id: create-plan.oq1.shift-wheel-alt-screen
+  packet_id: null
+  answered_at: '2026-09-19T00:23:04+09:00'
+  source: codex-consultation
+  answer_mode: select_or_freeform
+  selected_option_ids:
+  - shift_always_scrollback
+  freeform: Shift+wheel while a tracking mode is active emits nothing to the PTY (no mouse report, no DECSET 1007 arrow bytes) and drives eMterm's scrollback instead.
+  normalized_answer: OQ-1 = Option B; decision D5 flipped. OQ-3 = Option A (lowest-numbered held button), endorsed and unchanged.
+  resolution_note: 'gate: create-plan open questions OQ-1 / OQ-3 (planner-recorded reversible assumptions, no gate_id). Raised because the user''s launch instruction required consulting Codex on unclear points and adopting the comparatively better option. codex_consulted: true. First attempt via the default Codex provider failed with a usage-limit error (no opinion returned); re-run through the LiteLLM harness (codex exec -p litellm -m vertex-glm-5.2) succeeded on the first try, no fallback model needed. OQ-1 verdict: Option B over the plan''s D5/Option A -- Shift is the user''s escape from the application''s mouse grab, so emitting 1007 arrow bytes would make Shift+wheel the only one of AC9''s four Shift overrides that still feeds the application; AC9''s literal wording already states Option B and FR7''s vague ''existing local handling'' was the sole source of the apparent conflict; supporting convention (WezTerm bypass_mouse_reporting_modifiers defaulting to SHIFT, and the tmux/Ghostty/Alacritty Shift+wheel-to-scrollback idiom) reported at medium-high confidence as documented convention, not a primary ctlseqs.txt citation. Adopted: D5 flipped and SC-6 restructured to branch on tracking-active first, which removes the conflict structurally; VERIFICATION.md TS-8/TS-11, task0002 and task0003 updated to match. SPEC.md and REQUIREMENTS.md unchanged -- Option B satisfies AC9 literally and is a valid reading of FR7, so no spec-change transition was needed. OQ-3 verdict: keep Option A (lowest-numbered held button) -- matches xterm''s held-button-mask derivation, order-independent, keeps a left-drag reported as left; medium-strength evidence; no plan change. Options not chosen: OQ-1 Option A (fall through to today''s matrix, i.e. arrow translation on the alternate screen with 1007 + setting on); OQ-3 Option B (most recently pressed held button). Opus escalation: not run -- the consultation returned a decisive verdict on both questions. OQ-2 (window_host module root) was resolved by direct inspection, not by consultation: mod.rs exists and window_host.rs does not, so the phantom path was dropped from task0002 / task0003 files.'
