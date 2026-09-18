@@ -120,9 +120,9 @@ tasks:
     - FR1
     - NFR3
     - NFR5
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mouse-reporting/task0001
   task0002:
     title: Mouse report encoding and routing-decision helpers
     plan: tasks/task0002.md
@@ -149,9 +149,9 @@ tasks:
     - NFR5
     - NFR6
     - NFR7
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mouse-reporting/task0002
   task0003:
     title: Pointer routing integration and report emission
     plan: tasks/task0003.md
@@ -181,9 +181,9 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: pending
+    status: in_progress
     notes: null
-    branch: null
+    branch: em-workflow/mouse-reporting/task0003
 review:
   status: pending
   rounds_completed: 0
