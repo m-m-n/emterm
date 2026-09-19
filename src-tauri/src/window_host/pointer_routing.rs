@@ -343,52 +343,11 @@ pub(super) fn handle_pointer_button(
         }
     }
 
-    // ── Gesture-ownership release short-circuit (task0004 SC-9, D10) ──
-    // A release whose press was owned by the report side must reach
-    // emission regardless of where the pointer now sits — ownership
-    // decides, not the release position, so none of the chrome guards
-    // below get a vote on an already-owned gesture's release (Test
-    // Notes: a press inside the grid whose release arrives over a
-    // guarded region still reports). Only the ownership lookup runs
-    // ahead of the guards; the egui forward and the held-button
-    // bookkeeping below still see every event exactly as before.
-    if state == ElementState::Released {
-        if let Some(identity) = winit_button_to_report_identity(button) {
-            if let Some(owner) = host.mouse_report_gesture_owner.take(identity) {
-                if owner == mouse_report::GestureOwner::Report {
-                    if let Some(tab) = app.active_tab() {
-                        let tracking = TrackingState::read(&tab.core.lock());
-                        let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
-                        let col1 = col as u32 + 1;
-                        let row1 = screen_row as u32 + 1;
-                        let encoding = tracking.encoding();
-                        let code = mouse_report::compose_button_code(
-                            MouseEventKind::Release,
-                            identity,
-                            encoding,
-                            host.current_mods,
-                        );
-                        if let Some(bytes) =
-                            mouse_report::encode_report(code, col1, row1, encoding, true)
-                        {
-                            tab.write_input(bytes);
-                        }
-                    }
-                    return;
-                }
-                // owner == Local: the local match arm below completes
-                // the gesture (drag flag clear, pending-anchor consume,
-                // PRIMARY copy) exactly as it already does today.
-            }
-            // No owner recorded: the press was off-grid (SC-8 rejected
-            // it), or predates this gesture-ownership tracking — fall
-            // through unchanged, same as before this task.
-        }
-    }
-
     // Forward to egui first so the tab bar / status bar can
     // see the click before we decide whether to start a
-    // terminal selection.
+    // terminal selection. This runs ahead of the gesture-ownership
+    // release short-circuit below so a report-owned release still
+    // balances the press egui already saw.
     let logical = host
         .cursor_pos
         .to_logical::<f32>(host.pixels_per_point as f64);
@@ -433,6 +392,50 @@ pub(super) fn handle_pointer_button(
         }
     }
     host.window().request_redraw();
+
+    // ── Gesture-ownership release short-circuit (task0004 SC-9, D10) ──
+    // A release whose press was owned by the report side must reach
+    // emission regardless of where the pointer now sits — ownership
+    // decides, not the release position, so none of the chrome guards
+    // below get a vote on an already-owned gesture's release (Test
+    // Notes: a press inside the grid whose release arrives over a
+    // guarded region still reports). The egui forward and the
+    // held-button bookkeeping above have already run for this event;
+    // a report-owned release skips only the positional chrome guards
+    // and the local selection handling that follow.
+    if state == ElementState::Released {
+        if let Some(identity) = winit_button_to_report_identity(button) {
+            if let Some(owner) = host.mouse_report_gesture_owner.take(identity) {
+                if owner == mouse_report::GestureOwner::Report {
+                    if let Some(tab) = app.active_tab() {
+                        let tracking = TrackingState::read(&tab.core.lock());
+                        let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
+                        let col1 = col as u32 + 1;
+                        let row1 = screen_row as u32 + 1;
+                        let encoding = tracking.encoding();
+                        let code = mouse_report::compose_button_code(
+                            MouseEventKind::Release,
+                            identity,
+                            encoding,
+                            host.current_mods,
+                        );
+                        if let Some(bytes) =
+                            mouse_report::encode_report(code, col1, row1, encoding, true)
+                        {
+                            tab.write_input(bytes);
+                        }
+                    }
+                    return;
+                }
+                // owner == Local: the local match arm below completes
+                // the gesture (drag flag clear, pending-anchor consume,
+                // PRIMARY copy) exactly as it already does today.
+            }
+            // No owner recorded: the press was off-grid (SC-8 rejected
+            // it), or predates this gesture-ownership tracking — fall
+            // through unchanged, same as before this task.
+        }
+    }
 
     // Clicks that land on the egui-owned strip (CSD title
     // bar + tab bar at the top, status bar at the bottom
