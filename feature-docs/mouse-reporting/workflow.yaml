@@ -98,8 +98,8 @@ workflow:
   base_commit: 1d5af0d319021e901aa843398fd558e5a65893dc
   completed_at_commit: 3499dfc7e23f45dd31250175d9306940da614d6c
 - id: review
-  status: in_progress
-  completed_at_commit: e8ae8d68b1caf91cd200f26e434ff20906a3062d
+  status: completed
+  completed_at_commit: a7280f69be1a3dccced70c5b8f27c32acf30d075
 - id: verify
   status: pending
   result: fail
@@ -318,7 +318,7 @@ tasks:
       review_round: null
 review:
   status: completed
-  rounds_completed: 2
+  rounds_completed: 3
   plan:
     floor:
     - comprehensive
@@ -336,6 +336,8 @@ review:
     spec: completed
   residual_critical_high: 4
   needs_rework: false
+  residual_disposition: deferred
+  residual_disposition_reason: 'batch mode: rework cap reached (batch.review_rework_count == 1)'
 requirements:
   FR1:
     title: Core-side mouse-tracking mode state
