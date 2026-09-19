@@ -252,3 +252,29 @@ records:
       and this project has no deny-warnings lint step, so the wrapper may outlive its purpose.
       The durable fix is to decide whether the wrapper is still wanted at all — carried to
       retrospect as a follow-up, not as a verify failure.
+  - question_id: develop.once-boundary-vs-pr-instruction
+    packet_id: null
+    answered_at: "2026-09-20T05:22:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [stop_at_retrospect_boundary]
+    freeform: null
+    normalized_answer: "Stop at the retrospect --once phase boundary. Do not run Step C and do not create the PR in this invocation; the next --once --pr invocation resumes at Step C and opens the PR."
+    resolution_note: >-
+      unlisted-gate fallback (no gate_id at the originating site; raised by the orchestrator
+      when the launch arguments `--batch --once --pr` met a workflow.yaml whose only pending
+      step was retrospect). options: stop_at_retrospect_boundary /
+      run_through_step_c_and_open_pr_in_the_same_turn. choice: stop_at_retrospect_boundary.
+      codex_consulted: true (codex-harness second-opinion agent was dispatched with both
+      options and the relevant SSOT excerpts; the run returned a hard ChatGPT usage-limit
+      error — "You've hit your usage limit... try again at 6:23 AM" — and produced no content,
+      the same rate-limit condition that skipped every primary reviewer in review rounds 1 and
+      2). opus_escalation: not run. rationale: with no decision reached, batch-mode.md's
+      unlisted-gate fallback takes the option with the smallest and most reversible side
+      effect. Stopping at the boundary creates no remote branch and no PR, and is trivially
+      recoverable by re-invoking with `--pr`; running through Step C would push a branch and
+      open a PR against main, which is outward-facing and not reversible by re-running. The
+      same option is also what develop's SSOT mandates independently: the `--once` phase
+      boundary table ends the turn once retrospect is committed and carries Step C to the next
+      invocation, and the `--pr` relationship note states that `--pr` only takes effect on the
+      invocation that executes Step C.
