@@ -68,7 +68,7 @@ workflow:
   status: completed
   completed_at_commit: f2845c08a087374f0cfe3d8f6f2d1f20f0ab2546
 - id: implement
-  status: completed
+  status: pending
   base_commit: acfd39b73b7d8240e9eb550fbc7d9b08a9040bd1
   completed_at_commit: a64078f883dec14c6f4e9e5223401dcdf690d72f
 - id: review
@@ -111,6 +111,41 @@ tasks:
     branch: em-workflow/wheel-report-fraction-accum/task0001
     worktree: null
     notes: null
+  task0002:
+    title: Report-path gate, tracking-session discard, and notch-rule deduplication
+    plan: tasks/task0002.md
+    files:
+    - src-tauri/src/window_host/input_translate.rs
+    - src-tauri/src/window_host/mouse_report.rs
+    - src-tauri/src/window_host/pointer_routing.rs
+    - src-tauri/src/window_host/tests.rs
+    skills:
+    - frontend-impl
+    domains:
+    - input-handling
+    - api-contract
+    complexity: medium
+    requirements:
+    - FR1
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - NFR3
+    - NFR4
+    status: pending
+    branch: null
+    worktree: null
+    notes: null
+    provenance:
+      source: review
+      review_round: 1
+      source_ids:
+      - ae089e04bcb3fa0f
+      - 9d6f3c3e77ff8649
+      - 071c856f96b7b56d
+      - b28097f0714fe6f1
+      - 56dfd61c2174fc9e
 review:
   status: pending
   rounds_completed: 1
@@ -141,6 +176,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-1
     - TS-9
@@ -170,6 +206,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-4
     - TS-5
@@ -181,9 +218,12 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-6
     - TS-7
+    - TS-12
+    - TS-13
   FR6:
     title: A rejected notch neither advances nor resets the accumulator
     status: ok
@@ -191,8 +231,10 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-8
+    - TS-11
   FR7:
     title: Keep the alternate-scroll accumulator separate and untouched
     status: ok
@@ -200,8 +242,10 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-10
+    - TS-11
   NFR1:
     title: Decision units stay pure
     status: ok
@@ -230,6 +274,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-5
     - TS-4
@@ -240,12 +285,14 @@ requirements:
     excluded_reason: null
     tasks:
     - task0001
+    - task0002
     tests:
     - TS-1
     - TS-6
     - TS-8
+    - TS-11
 batch:
-  review_rework_count: 0
+  review_rework_count: 1
   verify_rework:
     rounds: 0
     failed_id_counts: {}
