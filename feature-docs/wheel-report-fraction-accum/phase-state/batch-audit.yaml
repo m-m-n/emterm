@@ -184,3 +184,71 @@ records:
       Independent Inspection Duty separately corroborated the empty spec result.
       codex_consulted: not possible (both harnesses rate-limited, see the preceding record).
       opus_escalation: not run.
+  - question_id: verify.build-command-prerequisite-substitution
+    packet_id: null
+    answered_at: "2026-09-20T05:25:00+09:00"
+    source: batch-unlisted-gate-fallback
+    answer_mode: select_or_freeform
+    selected_option_ids: [run_the_approved_prerequisite_prefixed_variant]
+    freeform: null
+    normalized_answer: "The verbatim build command's build.rs failure on a gitignored bundled font is an environment prerequisite, not a verification failure. The pre-approved allowlist string that fetches the fonts and then runs the identical cargo check was executed instead; it exited 0, so the build item passes."
+    resolution_note: >-
+      unlisted-gate fallback (no gate_id at the originating site; raised by the verify phase
+      itself). options: run_the_approved_prerequisite_prefixed_variant /
+      record_a_verify_failure_for_the_verbatim_command. choice:
+      run_the_approved_prerequisite_prefixed_variant. codex_consulted: attempted twice, no
+      decision obtained — run_codex_exec.sh against the default Codex provider returned an
+      account-level usage-limit error (exit 1, "try again at 6:23 AM"), and the same binary
+      re-run through the local LiteLLM proxy profile (model muse-spark, read-only sandbox)
+      returned "exceeded retry limit, last status: 429 Too Many Requests". Both harnesses were
+      already recorded as rate-limited in this file's review round 2 records. opus_escalation:
+      not run. fallback_rule: batch-mode.md's unlisted-gate procedure — no decision reached, so
+      the option with the smallest and most reversible side effect was taken.
+      rationale: VERIFICATION.md's declared string is
+      `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml`;
+      run verbatim in a fresh worktree it panics in src-tauri/build.rs:84 with
+      "bundled font missing at assets/fonts/Noto-COLRv1.ttf". The bundled fonts are gitignored
+      by project policy, so no code change in this feature's diff could make the verbatim string
+      pass, and the project's own core-commands.md treats scripts/fetch-fonts.sh plus the bun
+      bundles as build prerequisites. The literal string
+      `bash scripts/fetch-fonts.sh && bun install && bun run build:viewer && bun run build:settings && CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml`
+      is already on the project's approved command list and ends in the byte-identical cargo
+      check; it exited 0. Recording a verify failure instead would have consumed an auto-rework
+      round against a cause that lies outside the diff — a strictly larger and less reversible
+      side effect.
+      evidence: cargo check exit 0; supplementary
+      `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features`
+      exit 0; lib test suite 3457 passed / 0 failed / 3 ignored under --test-threads=1.
+      counter_argument_recorded: a verification document that cannot be replayed verbatim is a
+      real defect in the document; the prerequisite prefix belongs in VERIFICATION.md's build
+      item rather than being supplied ad hoc at run time. That is a documentation gap, not a
+      failure of the change under test, and is carried into retrospect rather than failing verify.
+  - question_id: verify.dead-code-warning-disposition
+    packet_id: null
+    answered_at: "2026-09-20T05:27:00+09:00"
+    source: batch-unlisted-gate-fallback
+    answer_mode: select_or_freeform
+    selected_option_ids: [pass_and_keep_the_existing_medium_finding]
+    freeform: null
+    normalized_answer: "The single `wheel_report_notches is never used` warning does not fail verify. It is already recorded as unresolved review finding bfb7c163abf1137d (medium) and is carried as such."
+    resolution_note: >-
+      unlisted-gate fallback (no gate_id at the originating site; raised by the verify phase
+      itself). options: pass_and_keep_the_existing_medium_finding /
+      fail_verify_on_the_warning. choice: pass_and_keep_the_existing_medium_finding.
+      codex_consulted: attempted, no decision obtained — same two rate-limited routes as the
+      preceding record. opus_escalation: not run. fallback_rule: batch-mode.md's unlisted-gate
+      procedure, minimum-side-effect option.
+      rationale: VERIFICATION.md's build expectation is "exit code 0, no errors"; a rustc
+      `warn(dead_code)` diagnostic is not an error and the command exits 0. The shape is
+      deliberate, not accidental: the production report path calls
+      `accumulate_wheel_report_lines` directly (mouse_report.rs:1160), `wheel_report_notches`
+      survives only as a zero-accumulator wrapper (input_translate.rs:492-493), and the test
+      `wheel_report_notches_delegates_to_the_accumulating_unit_and_carries_no_dead_code_allowance`
+      pins exactly that — no `#[allow(dead_code)]` — so silencing the warning would fail a test.
+      Review round 2 already carries it as unresolved medium bfb7c163abf1137d, and no
+      critical/high residual exists (residual_critical_high: 0). Failing verify would spend an
+      auto-rework round to relitigate a finding the review phase already triaged.
+      counter_argument_recorded: a warning that no build gate rejects tends to become permanent,
+      and this project has no deny-warnings lint step, so the wrapper may outlive its purpose.
+      The durable fix is to decide whether the wrapper is still wanted at all — carried to
+      retrospect as a follow-up, not as a verify failure.

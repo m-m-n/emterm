@@ -75,9 +75,27 @@ workflow:
   status: completed
   completed_at_commit: 621c0f85e7cc873bb361b35d4d4216c55a30007c
 - id: verify
-  status: pending
-  result: null
+  status: completed
+  completed_at_commit: 1a1d5d2ac3bc06e4827b9434be8d89c897207f5d
+  result: pass
   failed_items: []
+  evidence:
+    build: 'CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      — exit 0. Run through the approved prerequisite-prefixed allowlist string (fetch-fonts
+      + bun bundles) because the bundled fonts are gitignored; see phase-state/batch-audit.yaml
+      record verify.build-command-prerequisite-substitution. One dead_code warning
+      (wheel_report_notches), already carried as review finding bfb7c163abf1137d (medium);
+      see record verify.dead-code-warning-disposition.'
+    build_cli_only: 'CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      --no-default-features — exit 0.'
+    tests: 'CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+      --lib -- --test-threads=1 — 3457 passed, 0 failed, 3 ignored.'
+    scenarios: 'TS-1..TS-13 all map to passing tests in src-tauri/src/window_host/tests.rs.'
+    format: 'not configured (project.components.main.format_command is empty).'
+    e2e: 'not configured (project.components.main.e2e_test_command is empty).'
+    manual: 'The 6 manual trackpad scenarios in VERIFICATION.md require physical pointer-device
+      input and are not executable in this unattended run; they remain unchecked.'
+    excluded_requirements: 'none — no requirement carries status: excluded.'
 - id: retrospect
   status: pending
 tasks:
