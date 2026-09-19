@@ -72,7 +72,7 @@ tasks:
     domains: [input-handling, ui]
     complexity: high
     requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4, NFR5]
-    status: in_progress
+    status: merged
     branch: em-workflow/mouse-report-reset-active-gesture/task0001
     notes: null
 
