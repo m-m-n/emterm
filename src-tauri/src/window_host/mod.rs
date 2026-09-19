@@ -263,6 +263,12 @@ pub struct WindowHost {
     /// cache-reset check. `None` means no observation has happened yet,
     /// so the first check always counts as a change.
     mouse_report_last_active_tab: Option<usize>,
+    /// Mouse-reporting (task0004 SC-9, D10): which side owns each
+    /// in-flight button gesture, recorded at press and consulted at the
+    /// matching release regardless of the Shift state in between. Reset
+    /// on the same two observations that reset
+    /// [`mouse_report_cell_cache`](Self::mouse_report_cell_cache) (D7).
+    mouse_report_gesture_owner: mouse_report::GestureOwnership,
 }
 
 /// Terminal font family used to skin the egui `Monospace` chain
@@ -466,6 +472,7 @@ impl WindowHost {
             mouse_report_held_middle: false,
             mouse_report_held_right: false,
             mouse_report_last_active_tab: None,
+            mouse_report_gesture_owner: mouse_report::GestureOwnership::default(),
         }
     }
 

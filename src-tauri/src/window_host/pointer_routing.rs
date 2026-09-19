@@ -56,6 +56,74 @@ impl TrackingState {
     }
 }
 
+/// task0004 SC-8 (D11): collects the plain-value inputs to
+/// [`mouse_report::point_belongs_to_grid`] from the current pointer
+/// position — the SAME hit tests the existing chrome guards elsewhere in
+/// this file already run (top strip, bottom strip, scrollbar overlay, mux
+/// sidebar, CSD edge-resize hot zone), gathered once so all three pointer
+/// handlers consult the identical decision (IMPLEMENTATION.md cross-task
+/// decision 3.5's sharing principle, extended to SC-8). `position` is the
+/// pointer's egui logical, window-relative coordinate.
+fn grid_ownership_inputs(
+    position: egui::Pos2,
+    host: &WindowHost,
+    app: &App,
+) -> mouse_report::GridOwnershipInputs {
+    let top_strip_h = crate::ui::title_bar::TITLE_BAR_HEIGHT
+        + crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
+    let window_size_logical = host
+        .window
+        .surface_size()
+        .to_logical::<f32>(host.pixels_per_point as f64);
+    let bottom_strip_top = window_size_logical.height - host.status_bar_bot_inset_logical;
+    let in_bottom_strip =
+        host.status_bar_bot_inset_logical > 0.0 && position.y >= bottom_strip_top;
+    let scrollbar_visible = app
+        .active_tab()
+        .map(|tab| {
+            let core = tab.core.lock();
+            crate::ui::scrollbar::ScrollbarView {
+                mode: app.settings.show_scrollbar,
+                scrollback_len: core.get_scrollback_length(),
+                viewport_rows: core.rows() as u32,
+                scroll_offset: app.scroll_offset(),
+                alt_screen: app.alt_screen,
+            }
+            .visible()
+        })
+        .unwrap_or(false);
+    let central_right = window_size_logical.width - host.mux_sidebar_inset_logical;
+    let in_scrollbar_overlay = scrollbar_visible
+        && position.x >= central_right - crate::ui::scrollbar::TRACK_W
+        && position.x < central_right;
+    let visible_placement = match app.mux_sidebar_visibility() {
+        crate::app::MuxSidebarVisibility::Hidden => None,
+        crate::app::MuxSidebarVisibility::Persistent => {
+            Some(crate::ui::mux_sidebar::Placement::Persistent)
+        }
+        crate::app::MuxSidebarVisibility::Overlay => {
+            Some(crate::ui::mux_sidebar::Placement::Overlay)
+        }
+    };
+    let top_chrome = crate::ui::mux_sidebar::top_chrome_inset(app.show_tab_bar);
+    let in_mux_sidebar = crate::ui::mux_sidebar::point_in_sidebar(
+        position,
+        visible_placement,
+        egui::vec2(window_size_logical.width, window_size_logical.height),
+        top_chrome,
+        host.status_bar_bot_inset_logical,
+    );
+    let in_resize_hot_zone = host.resize_direction_at(position.x, position.y).is_some();
+    mouse_report::GridOwnershipInputs {
+        in_top_strip: position.y < top_strip_h,
+        in_bottom_strip,
+        in_scrollbar_overlay,
+        in_mux_sidebar,
+        in_resize_hot_zone,
+        profile_selector_visible: app.profile_selector.visible,
+    }
+}
+
 /// `WindowEvent::PointerLeft` arm body: clear the pointer-inside flag,
 /// the cached resize hint / cursor, the link hover, and the mux-sidebar
 /// hover feed.
@@ -179,46 +247,61 @@ pub(super) fn handle_pointer_moved(
         }
     }
 
-    // ── Mouse reporting (task0003 FR3/FR7/FR9/FR11, SC-4/SC-5) ────────
+    // ── Mouse reporting (task0003 FR3/FR7/FR9/FR11, SC-4/SC-5; task0004
+    // SC-8, D11) ────────────────────────────────────────────────────
     // Decided independently of the local selection-drag path above: with
-    // no tracking mode active, or with Shift held, this block is a
-    // no-op and today's drag-to-select behaviour is untouched.
+    // no tracking mode active, with Shift held, or off the terminal grid
+    // (SC-8), this block is a no-op and today's drag-to-select behaviour
+    // is untouched.
     if let Some(tab) = app.active_tab() {
         let tracking = TrackingState::read(&tab.core.lock());
-        // D7: the cell-change cache is reset on an active-tab change —
-        // checked regardless of tracking/Shift state, so a cell cached
-        // against one tab never suppresses a report for another.
+        // D7/SC-9: the cell-change cache AND the gesture-ownership record
+        // are reset on an active-tab change — checked regardless of
+        // tracking/Shift state, so a cell (or a gesture owner) cached
+        // against one tab never suppresses a report (or strands a
+        // release) for another.
         if host.mouse_report_last_active_tab != Some(app.active) {
             host.mouse_report_cell_cache.reset();
+            host.mouse_report_gesture_owner.clear_all();
             host.mouse_report_last_active_tab = Some(app.active);
         }
         if !tracking.any_active() {
-            // D7: also reset whenever no tracking mode is active, so the
-            // first motion of the next tracking session always reports.
+            // D7/SC-9: also reset whenever no tracking mode is active, so
+            // the first motion of the next tracking session always
+            // reports and no gesture owner survives the mode going away.
             host.mouse_report_cell_cache.reset();
-        } else if !host.current_mods.shift {
-            if let Some(identity) = mouse_report::motion_gate(
-                tracking.mode_1000,
-                tracking.mode_1002,
-                tracking.mode_1003,
-                host.mouse_report_held_left,
-                host.mouse_report_held_middle,
-                host.mouse_report_held_right,
-            ) {
-                let (screen_row, col) = host.pixel_to_cell(position, app);
-                let col1 = col as u32 + 1;
-                let row1 = screen_row as u32 + 1;
-                if host.mouse_report_cell_cache.should_report(col1, row1) {
-                    let encoding = tracking.encoding();
-                    let code = mouse_report::compose_button_code(
-                        MouseEventKind::Motion,
-                        identity,
-                        encoding,
-                        host.current_mods,
-                    );
-                    if let Some(bytes) = mouse_report::encode_report(code, col1, row1, encoding, false)
-                    {
-                        tab.write_input(bytes);
+            host.mouse_report_gesture_owner.clear_all();
+        } else {
+            // SC-8 (D11): evaluated before the motion gate (SC-5) and the
+            // cell-change filter (SC-4) below, so a motion SC-8 rejects
+            // can neither emit nor advance the cached cell (AC-3).
+            let belongs =
+                mouse_report::point_belongs_to_grid(grid_ownership_inputs(egui_pos, host, app));
+            if belongs && !host.current_mods.shift {
+                if let Some(identity) = mouse_report::motion_gate(
+                    tracking.mode_1000,
+                    tracking.mode_1002,
+                    tracking.mode_1003,
+                    host.mouse_report_held_left,
+                    host.mouse_report_held_middle,
+                    host.mouse_report_held_right,
+                ) {
+                    let (screen_row, col) = host.pixel_to_cell(position, app);
+                    let col1 = col as u32 + 1;
+                    let row1 = screen_row as u32 + 1;
+                    if host.mouse_report_cell_cache.should_report(col1, row1) {
+                        let encoding = tracking.encoding();
+                        let code = mouse_report::compose_button_code(
+                            MouseEventKind::Motion,
+                            identity,
+                            encoding,
+                            host.current_mods,
+                        );
+                        if let Some(bytes) =
+                            mouse_report::encode_report(code, col1, row1, encoding, false)
+                        {
+                            tab.write_input(bytes);
+                        }
                     }
                 }
             }
@@ -259,6 +342,50 @@ pub(super) fn handle_pointer_button(
             return;
         }
     }
+
+    // ── Gesture-ownership release short-circuit (task0004 SC-9, D10) ──
+    // A release whose press was owned by the report side must reach
+    // emission regardless of where the pointer now sits — ownership
+    // decides, not the release position, so none of the chrome guards
+    // below get a vote on an already-owned gesture's release (Test
+    // Notes: a press inside the grid whose release arrives over a
+    // guarded region still reports). Only the ownership lookup runs
+    // ahead of the guards; the egui forward and the held-button
+    // bookkeeping below still see every event exactly as before.
+    if state == ElementState::Released {
+        if let Some(identity) = winit_button_to_report_identity(button) {
+            if let Some(owner) = host.mouse_report_gesture_owner.take(identity) {
+                if owner == mouse_report::GestureOwner::Report {
+                    if let Some(tab) = app.active_tab() {
+                        let tracking = TrackingState::read(&tab.core.lock());
+                        let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
+                        let col1 = col as u32 + 1;
+                        let row1 = screen_row as u32 + 1;
+                        let encoding = tracking.encoding();
+                        let code = mouse_report::compose_button_code(
+                            MouseEventKind::Release,
+                            identity,
+                            encoding,
+                            host.current_mods,
+                        );
+                        if let Some(bytes) =
+                            mouse_report::encode_report(code, col1, row1, encoding, true)
+                        {
+                            tab.write_input(bytes);
+                        }
+                    }
+                    return;
+                }
+                // owner == Local: the local match arm below completes
+                // the gesture (drag flag clear, pending-anchor consume,
+                // PRIMARY copy) exactly as it already does today.
+            }
+            // No owner recorded: the press was off-grid (SC-8 rejected
+            // it), or predates this gesture-ownership tracking — fall
+            // through unchanged, same as before this task.
+        }
+    }
+
     // Forward to egui first so the tab bar / status bar can
     // see the click before we decide whether to start a
     // terminal selection.
@@ -390,43 +517,60 @@ pub(super) fn handle_pointer_button(
         return;
     }
 
-    // ── Mouse reporting (task0003 FR2/FR7/FR8/FR10, SC-2/SC-3) ────────
+    // ── Mouse reporting (task0003 FR2/FR7/FR8/FR10, SC-2/SC-3; task0004
+    // SC-8/SC-9, D10/D11) ────────────────────────────────────────────
     // Every existing chrome guard above has already had its chance to
-    // consume this event and return; this is precedence steps 2 and 3
-    // (IMPLEMENTATION.md "Precedence order"): the Shift override, then
-    // the tracking-active question. With a tracking mode active and
-    // Shift not held, a press/release reports instead of running the
-    // local selection / Ctrl+link-open / middle-paste handling below —
-    // AC-5's Ctrl+left and middle-press cases are covered here because
-    // this returns before the `match` arms that implement those paths.
-    if !host.current_mods.shift {
+    // consume a LEFT press and return; SC-8 is the identity-independent
+    // counterpart that also covers a middle/right press and the CSD
+    // edge-resize hot zone, neither of which any guard above tests. With
+    // a tracking mode active, Shift not held and the position over the
+    // grid, a press reports instead of running the local selection /
+    // Ctrl+link-open / middle-paste handling below — AC-5's Ctrl+left
+    // and middle-press cases are covered here because this returns
+    // before the `match` arms that implement those paths — and records
+    // which side owns the gesture (SC-9) so the release short-circuit
+    // above routes the matching release here too, whatever Shift does
+    // in between (D10). Release handling for an OWNED gesture already
+    // happened above this function's guards; a release that reaches
+    // this point had no owner recorded and falls through unchanged.
+    if state == ElementState::Pressed {
         if let Some(identity) = winit_button_to_report_identity(button) {
-            if let Some(tab) = app.active_tab() {
-                let tracking = TrackingState::read(&tab.core.lock());
-                if tracking.any_active() {
-                    let event_kind = match state {
-                        ElementState::Pressed => MouseEventKind::Press,
-                        ElementState::Released => MouseEventKind::Release,
-                    };
-                    let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
-                    let col1 = col as u32 + 1;
-                    let row1 = screen_row as u32 + 1;
-                    let encoding = tracking.encoding();
-                    let code = mouse_report::compose_button_code(
-                        event_kind,
-                        identity,
-                        encoding,
-                        host.current_mods,
-                    );
-                    let release = state == ElementState::Released;
-                    if let Some(bytes) =
-                        mouse_report::encode_report(code, col1, row1, encoding, release)
-                    {
-                        tab.write_input(bytes);
+            let belongs =
+                mouse_report::point_belongs_to_grid(grid_ownership_inputs(egui_pos, host, app));
+            if belongs {
+                if let Some(tab) = app.active_tab() {
+                    let tracking = TrackingState::read(&tab.core.lock());
+                    if tracking.any_active() && !host.current_mods.shift {
+                        let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
+                        let col1 = col as u32 + 1;
+                        let row1 = screen_row as u32 + 1;
+                        let encoding = tracking.encoding();
+                        let code = mouse_report::compose_button_code(
+                            MouseEventKind::Press,
+                            identity,
+                            encoding,
+                            host.current_mods,
+                        );
+                        if let Some(bytes) =
+                            mouse_report::encode_report(code, col1, row1, encoding, false)
+                        {
+                            tab.write_input(bytes);
+                        }
+                        host
+                            .mouse_report_gesture_owner
+                            .record_press(identity, mouse_report::GestureOwner::Report);
+                        return;
                     }
-                    return;
                 }
+                // Over the grid, but no tracking mode active or Shift
+                // held: the local match arm below takes this gesture.
+                host
+                    .mouse_report_gesture_owner
+                    .record_press(identity, mouse_report::GestureOwner::Local);
             }
+            // `!belongs`: SC-8 rejected the position — record no
+            // ownership (SC-9); the local match arm below runs
+            // unchanged, exactly as it did before this task.
         }
     }
 
@@ -668,6 +812,21 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
                 .get_mode(term_core::terminal_core::MODE_ALTERNATE_SCROLL)
         })
         .unwrap_or(false);
+    // task0004 SC-8 (D11): evaluated before the tracking-active read
+    // below. The chrome guards earlier in this function (profile
+    // selector, tab-bar band, mux sidebar) already forward-and-return
+    // for the regions they cover; this is the identity-independent
+    // counterpart that ALSO covers the bottom strip, the scrollbar
+    // overlay and the CSD edge-resize hot zone — none of which the
+    // wheel path tested at all before this task.
+    let wheel_logical = host
+        .cursor_pos
+        .to_logical::<f32>(host.pixels_per_point as f64);
+    let belongs = mouse_report::point_belongs_to_grid(grid_ownership_inputs(
+        egui::pos2(wheel_logical.x, wheel_logical.y),
+        host,
+        app,
+    ));
     // Mouse reporting (task0003 FR4/FR7/FR8, SC-6): the wheel decision is
     // taken once, ahead of both existing wheel consumers below, and its
     // result selects exactly one of the three (IMPLEMENTATION.md
@@ -679,6 +838,16 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
         .map(|t| TrackingState::read(&t.core.lock()))
         .unwrap_or_default();
     if tracking.any_active() {
+        if !belongs {
+            // AC-4/FR10: no report and no other side effect — the
+            // bottom strip, the scrollbar overlay and the CSD
+            // edge-resize hot zone have no dedicated local wheel
+            // behaviour to fall back to, so the notch is simply
+            // consumed here, the same way the chrome guards above
+            // consume theirs (SPEC.md FR10: "a ... wheel event that one
+            // of those guards consumes is never reported").
+            return;
+        }
         match wheel_consumer(
             true,
             host.current_mods.shift,
