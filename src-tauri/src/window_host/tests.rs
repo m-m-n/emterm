@@ -15,7 +15,7 @@ use super::input_translate::{
 };
 use super::link_hover::{detect_osc8_link_at, hover_link_cells_changed};
 use super::mouse_report::MouseButtonId;
-use super::pointer_routing::bounded_wheel_report_duplicate;
+use super::pointer_routing::{bounded_wheel_report_duplicate, drag_in_flight};
 use super::resize_layout::resolve_grid_bot_inset;
 use super::*;
 use crate::selection::SelectionMode;
@@ -1783,7 +1783,13 @@ fn pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam() {
         "mouse_report::decide_button_event(",
         "mouse_report::decide_motion_event(",
         "mouse_report::decide_wheel_event(",
-        "mouse_report::apply_outcome(",
+        // task0001: the three production call sites moved onto the
+        // held-button-aware companion entry point (D2) — this entry
+        // REPLACES the pre-task0001 `mouse_report::apply_outcome(` list
+        // item rather than sitting beside it (IMPLEMENTATION.md
+        // Conventions: adding a second entry would leave the old,
+        // now-unmatched needle a guaranteed-red assertion with no owner).
+        "mouse_report::apply_outcome_with_held(",
     ] {
         assert!(
             src.contains(delegate),
@@ -1855,6 +1861,12 @@ fn focus_loss_clear_all_empties_gesture_and_held_records_so_the_next_decision_st
         row: 5,
         hovered_link: false,
         middle_click_paste_enabled: false,
+        // task0001: no drag is in flight for this scenario — the release
+        // is decided from post-clear (empty) records with nothing else
+        // live, so the no-owner branch's new drag-in-flight check must
+        // still land on "nothing" here (AC-3/AC-4 do not apply to this
+        // case).
+        drag_in_flight: false,
         records: MouseReportRecords {
             gesture_owner: gesture,
             built_for_tab: Some(0),
@@ -1868,6 +1880,51 @@ fn focus_loss_clear_all_empties_gesture_and_held_records_so_the_next_decision_st
         "a release decided from post-clear (empty) records must report nothing and take no \
          local arm (AC-3) — the gesture the focus-loss path stranded is gone, not silently \
          resumed"
+    );
+}
+
+// ── task0001 (mouse-report-reset-active-gesture): AC-5's drag-in-flight
+// guard, and the focus-loss arm's fold-toggle exclusion ──────────────────
+
+/// AC-5: the local-drag-in-flight guard (Shared Components) is a pure,
+/// bare-testable function of two plain booleans — the host's drag flag and
+/// whether the app's pending selection anchor is present — with its full
+/// truth table covered here. `local_drag_in_flight`, the one-line host/app
+/// -reading wrapper both L1 and L2 actually call, cannot be driven without
+/// a winit window (Test Notes) — this is the guard's testable core.
+#[test]
+fn drag_in_flight_is_true_whenever_either_input_is_true() {
+    assert!(!drag_in_flight(false, false));
+    assert!(drag_in_flight(true, false));
+    assert!(drag_in_flight(false, true));
+    assert!(drag_in_flight(true, true));
+}
+
+/// AC-5: the focus-loss arm never reaches the fold-click toggle — folding
+/// is a click gesture, and making a focus change toggle a fold would be
+/// new behaviour, not a repair (D4). `handle_fold_click` stays exclusive
+/// to `pointer_routing.rs`'s release-path composition; `event_loop.rs`
+/// must never call it. This also pins that the focus-loss arm actually
+/// composes the drag-in-flight guard with the terminator's publish half,
+/// by name, since neither call site can be driven end-to-end without a
+/// winit window (Test Notes).
+#[test]
+fn focus_loss_arm_never_calls_the_fold_click_toggle() {
+    let event_loop_src = include_str!("event_loop.rs");
+    assert!(
+        !event_loop_src.contains("handle_fold_click"),
+        "the fold-click toggle must stay exclusive to the release path (D4); \
+         event_loop.rs must never call it"
+    );
+    assert!(
+        event_loop_src.contains("local_drag_in_flight(host, &self.app)"),
+        "the focus-loss arm must consult the drag-in-flight signal before terminating a live \
+         drag (AC-5)"
+    );
+    assert!(
+        event_loop_src.contains("publish_local_drag(host, &mut self.app)"),
+        "the focus-loss arm must run the terminator's publish half, guarded by the \
+         drag-in-flight signal (AC-5, D4)"
     );
 }
 
