@@ -5,6 +5,12 @@
 //! task0004 adds SC-8 (the grid-ownership decision) and SC-9 (the gesture-
 //! ownership record) to this same window-free layer — see D10/D11.
 //!
+//! task0005 adds SC-10 (the pointer decision sequence, one unit per
+//! pointer path: button, motion, wheel) and SC-11 (the outcome
+//! application) — see D12. Both consult SC-2 through SC-9 unaltered; this
+//! is the seam `task0006` reduces the three real pointer handlers in
+//! `pointer_routing.rs` onto (gather / decide / apply / perform-local-arm).
+//!
 //! Every function/type here takes and returns plain values: no window
 //! handle, no GPU surface, no PTY, no `term_core` mode type, no winit type
 //! in any signature. That is what makes every unit exercisable from a bare
@@ -21,6 +27,8 @@
 #![allow(dead_code)]
 
 use crate::pty::input::Modifiers;
+
+use super::input_translate::{WheelConsumer, wheel_consumer};
 
 /// Which mouse button (or none) an event/report concerns (SC-2, SC-5).
 /// Deliberately distinct from `winit::event::MouseButton` and
@@ -173,6 +181,28 @@ impl CellChangeFilter {
     pub(super) fn reset(&mut self) {
         self.last = None;
     }
+
+    /// task0005 (SC-10): read-only counterpart of [`should_report`] — same
+    /// answer, but never mutates the cache. SC-10's decision sequences must
+    /// not mutate a record themselves (the update travels in the returned
+    /// outcome instead, for [`commit`] to apply); this is what lets a
+    /// sequence unit consult "would this cell report" without side effects.
+    ///
+    /// [`should_report`]: CellChangeFilter::should_report
+    /// [`commit`]: CellChangeFilter::commit
+    pub(super) fn would_report(&self, column: u32, row: u32) -> bool {
+        self.last != Some((column, row))
+    }
+
+    /// task0005 (SC-11): the mutation [`would_report`] deliberately does
+    /// not perform — commits `(column, row)` as the new cached cell.
+    /// Applied exactly once, by [`apply_outcome`], when a decided outcome's
+    /// updates say to.
+    ///
+    /// [`would_report`]: CellChangeFilter::would_report
+    pub(super) fn commit(&mut self, column: u32, row: u32) {
+        self.last = Some((column, row));
+    }
 }
 
 /// SC-5: decide whether a pointer motion is reportable at all, and with
@@ -320,6 +350,21 @@ impl GestureOwnership {
         self.slot(button).and_then(|slot| slot.take())
     }
 
+    /// task0005 (SC-10, D10): read-only lookup of the owner recorded for
+    /// `button`'s press, WITHOUT clearing it. The motion sequence needs
+    /// this on every motion event of an in-progress gesture — ending the
+    /// gesture (as [`take`] does) belongs only to its matching release.
+    ///
+    /// [`take`]: GestureOwnership::take
+    pub(super) fn peek(&self, button: MouseButtonId) -> Option<GestureOwner> {
+        match button {
+            MouseButtonId::Left => self.left,
+            MouseButtonId::Middle => self.middle,
+            MouseButtonId::Right => self.right,
+            MouseButtonId::None => None,
+        }
+    }
+
     /// Clears every recorded owner. **Pre**: called on the same two
     /// observations that reset [`CellChangeFilter`] (D7) — the host
     /// observing that no tracking mode is active, and an active-tab change
@@ -331,95 +376,47 @@ impl GestureOwnership {
     }
 }
 
-// ── task0005/task0006: SC-10/SC-11 stub ───────────────────────────────
+// ── task0005: SC-10 pointer decision sequence, SC-11 outcome
+// application (D12) ─────────────────────────────────────────────────────
 //
-// SC-10 (pointer decision sequence) and SC-11 (outcome application) are
-// owned by task0005 (IMPLEMENTATION.md D12/D3). This worktree is task0006's
-// — the file is absent task0005's own contents here, so this section is
-// the minimum needed to satisfy the SC-10/SC-11 contracts for task0006's
-// three call sites in `pointer_routing.rs`. On merge into integration this
-// task adopts task0005's authoritative version of this file and
-// re-implements its own call sites against it.
+// Structure (D12): each pointer path's handler reduces to gather (plain
+// values out of the host/app/core — no decision) / decide (SC-10, here) /
+// apply (SC-11, here) / perform-local-arm (the handler, for whichever
+// `LocalArm` the outcome names). Everything below is window-free: no
+// winit type, no `term_core` type, no PTY, in any signature.
 
-impl GestureOwnership {
-    /// Non-mutating counterpart to [`take`](Self::take): reads the owner
-    /// recorded for `button`'s press without clearing it. `decide_*`
-    /// functions use this so deciding an outcome never mutates a record —
-    /// only `apply_*` performs the actual clear (SC-10 "gather... mutates
-    /// no record"; SC-11 "the outcome's record updates are applied
-    /// exactly once").
-    pub(super) fn peek(&self, button: MouseButtonId) -> Option<GestureOwner> {
-        match button {
-            MouseButtonId::Left => self.left,
-            MouseButtonId::Middle => self.middle,
-            MouseButtonId::Right => self.right,
-            MouseButtonId::None => None,
-        }
-    }
-}
+/// A plain identifier for a tab — deliberately not `&Tab` or any type that
+/// borrows from `App`, which is what keeps every signature below
+/// window-free (AC-1). Matches `App::active`'s representation (a tab
+/// index).
+pub(super) type TabId = usize;
 
-/// SC-10 (D12 correction): the tab identifier a Report-owned press was
-/// destined for, recorded alongside SC-9's gesture owner so a reported
-/// release targets the SAME tab as its press instead of whichever tab
-/// happens to be active at release time. Keyed the same way as
-/// [`GestureOwnership`] — per button identity; `MouseButtonId::None` never
-/// has a slot.
-#[derive(Debug, Clone, Copy, Default)]
-struct PressTabs {
-    left: Option<usize>,
-    middle: Option<usize>,
-    right: Option<usize>,
-}
-
-impl PressTabs {
-    fn slot(&mut self, button: MouseButtonId) -> Option<&mut Option<usize>> {
-        match button {
-            MouseButtonId::Left => Some(&mut self.left),
-            MouseButtonId::Middle => Some(&mut self.middle),
-            MouseButtonId::Right => Some(&mut self.right),
-            MouseButtonId::None => None,
-        }
-    }
-
-    fn record(&mut self, button: MouseButtonId, tab: usize) {
-        if let Some(slot) = self.slot(button) {
-            *slot = Some(tab);
-        }
-    }
-
-    fn peek(&self, button: MouseButtonId) -> Option<usize> {
-        match button {
-            MouseButtonId::Left => self.left,
-            MouseButtonId::Middle => self.middle,
-            MouseButtonId::Right => self.right,
-            MouseButtonId::None => None,
-        }
-    }
-
-    fn take(&mut self, button: MouseButtonId) -> Option<usize> {
-        self.slot(button).and_then(|slot| slot.take())
-    }
-}
-
-/// SC-11: "the pair of records" the decision/apply seam operates on —
-/// SC-4's cell-change cache, SC-9's gesture-ownership record, and the
-/// per-button press-tab record above — bundled into one plain value so a
-/// test constructs "the current records" directly (SC-11 contract: "the
-/// pair of records ... as a plain value a test constructs directly").
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct PointerRecords {
+/// task0005 (SC-10/SC-11, D12): the plain state value grouping the two
+/// existing mouse-report records — [`CellChangeFilter`] (SC-4) and
+/// [`GestureOwnership`] (SC-9) — together with the tab identifier they
+/// were last built against, so a decision sequence can read "has the
+/// active tab changed since these records were last valid" from the
+/// records themselves. A plain value: a test constructs and inspects it
+/// directly with no `WindowHost` (AC-2). `task0006` folds
+/// `WindowHost`'s existing two fields into this shape when it reduces the
+/// pointer handlers onto this seam (see `WindowHost::mouse_report_records`
+/// / `set_mouse_report_records` in `mod.rs`).
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) struct MouseReportRecords {
     pub(super) cell_cache: CellChangeFilter,
     pub(super) gesture_owner: GestureOwnership,
-    press_tab: PressTabs,
+    pub(super) built_for_tab: Option<TabId>,
 }
 
-/// The held-button record (task0006 Design: "the held-button record"),
-/// tracked separately from [`PointerRecords`] because SC-5's motion gate
-/// takes three separate bools, not a type, and because the SC-11
-/// focus-loss clear-all empties it TOGETHER WITH the gesture-ownership
-/// record even though the per-event decision/apply seam never reads or
-/// writes it directly.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// task0005 (SC-11, D12): the "held-button record" alongside the
+/// gesture-ownership record — which of left/middle/right is currently
+/// held. Newly introduced (unlike SC-4/SC-9 this is not an "existing"
+/// record) so [`clear_all`] can zero it together with the
+/// gesture-ownership record on focus loss, matching the existing pointer
+/// button-down counter's already-correct behaviour; `task0006` folds the
+/// host's held-button bools into this type when it reduces the pointer
+/// handlers onto this seam.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct HeldButtons {
     pub(super) left: bool,
     pub(super) middle: bool,
@@ -427,424 +424,523 @@ pub(super) struct HeldButtons {
 }
 
 impl HeldButtons {
-    /// The lowest-numbered held button (left, then middle, then right) —
-    /// mirrors [`motion_gate`]'s own D6 tie-break, used to look up whether
-    /// the CURRENTLY held gesture is owned by the local side.
-    pub(super) fn lowest_held(&self) -> Option<MouseButtonId> {
-        if self.left {
-            Some(MouseButtonId::Left)
-        } else if self.middle {
-            Some(MouseButtonId::Middle)
-        } else if self.right {
-            Some(MouseButtonId::Right)
-        } else {
-            None
+    /// Releases every held-button bit.
+    pub(super) fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// SC-10 (AC-1): which local arm a "take a local arm" disposition names.
+/// Disjoint from `Disposition::Report` and `Disposition::Nothing` — a test
+/// can tell "nothing happened" apart from "the local arm ran" without a
+/// window. The arm itself is performed by the caller (the handler,
+/// `task0006`), never by [`apply_outcome`] — that is what keeps SC-11
+/// window/GPU-surface/PTY-free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LocalArm {
+    /// A left press (not a Ctrl+link-open) over the grid, either with no
+    /// tracking mode active or with Shift held: begin a selection drag.
+    BeginSelectionDrag,
+    /// The release completing a locally-owned left-button drag: clear the
+    /// drag flag, consume the pending anchor, publish the selection to
+    /// PRIMARY.
+    CompleteSelectionAndPublishToPrimary,
+    /// Ctrl+left press over a hovered link: open it.
+    OpenHoveredLink,
+    /// Middle press with the paste-on-middle-click setting on: paste
+    /// PRIMARY.
+    PastePrimary,
+    /// A wheel notch decided locally with tracking inactive (today's
+    /// matrix) or with tracking active and Shift held (D5): scroll
+    /// eMterm's own scrollback view.
+    ScrollScrollback,
+    /// A wheel notch on the alternate screen with the alternate-scroll
+    /// mode bit and setting both on, tracking inactive (D5): translate to
+    /// arrow-key bytes.
+    TranslateToArrowBytes,
+}
+
+/// SC-10 (AC-1): one raw pointer event's disposition — named and disjoint.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Disposition {
+    /// Emit a report: the exact bytes to write, and the identifier of the
+    /// tab they are destined for (never necessarily whichever tab happens
+    /// to be active when [`apply_outcome`] runs — a release carries the
+    /// tab its press recorded).
+    Report { bytes: Vec<u8>, tab: TabId },
+    /// Take the named local arm. Performed by the caller, not here.
+    Local(LocalArm),
+    /// Nothing happened: no report, no local arm.
+    Nothing,
+}
+
+/// SC-10: a gesture-ownership change one outcome implies, applied by
+/// [`apply_outcome`] against the real owned record — never mutated at
+/// decision time (SC-10 property 3: nothing mutates a record during the
+/// decision).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GestureUpdate {
+    /// Record a fresh owner for `button`'s press.
+    Record(MouseButtonId, GestureOwner),
+    /// Read-and-clear `button`'s recorded owner (its matching release was
+    /// just delivered).
+    Clear(MouseButtonId),
+}
+
+/// SC-10: the record updates one decided outcome implies. Carried in the
+/// outcome rather than applied during decision (SC-10 property 3) so a
+/// sequence unit can be a pure function of its plain inputs.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(super) struct RecordUpdates {
+    /// D7/D12 correction #3: true when either reset observation fired (no
+    /// tracking mode active, or the active tab differs from
+    /// [`MouseReportRecords::built_for_tab`]) — [`apply_outcome`] applies
+    /// this by resetting the cell-change cache and clearing every
+    /// gesture-ownership slot, exactly as the two existing reset call
+    /// sites already do.
+    pub(super) reset: bool,
+    /// Set [`MouseReportRecords::built_for_tab`] to this tab — every
+    /// sequence that SC-8 accepts re-establishes which tab its records are
+    /// now valid against.
+    pub(super) built_for_tab: Option<TabId>,
+    /// A motion the cell-change filter accepted: the new cell to commit.
+    /// `None` when no motion cache update is implied.
+    pub(super) cache_cell: Option<(u32, u32)>,
+    /// A gesture-ownership change. `None` when this outcome implies no
+    /// change to [`MouseReportRecords::gesture_owner`].
+    pub(super) gesture: Option<GestureUpdate>,
+}
+
+/// SC-10: one raw pointer event's full decision — the disposition plus
+/// the record updates it implies.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct SequenceOutcome {
+    pub(super) disposition: Disposition,
+    pub(super) updates: RecordUpdates,
+}
+
+impl SequenceOutcome {
+    fn nothing() -> Self {
+        SequenceOutcome {
+            disposition: Disposition::Nothing,
+            updates: RecordUpdates::default(),
         }
     }
-
-    pub(super) fn set(&mut self, button: MouseButtonId, held: bool) {
-        match button {
-            MouseButtonId::Left => self.left = held,
-            MouseButtonId::Middle => self.middle = held,
-            MouseButtonId::Right => self.right = held,
-            MouseButtonId::None => {}
-        }
-    }
 }
 
-/// SC-11: empties the gesture-ownership record and the held-button record
-/// together. **Pre**: invoked by the host on focus loss (AC-3), alongside
-/// the existing pointer button-down (`pointer_buttons_down`) zeroing.
-pub(super) fn clear_gesture_and_held_state(records: &mut PointerRecords, held: &mut HeldButtons) {
-    records.gesture_owner.clear_all();
-    records.press_tab = PressTabs::default();
-    *held = HeldButtons::default();
-}
-
-/// SC-10 "resets" (D7, extended by D12 to the button and wheel paths too):
-/// true when the caller must reset the cell-change cache and clear the
-/// gesture-ownership record before deciding THIS event — no tracking mode
-/// active, or the active tab differs from the one the records were last
-/// built against.
-fn pointer_records_need_reset(
-    tracking_any_active: bool,
-    active_tab: usize,
-    last_active_tab: Option<usize>,
-) -> bool {
-    !tracking_any_active || last_active_tab != Some(active_tab)
-}
-
-fn apply_pointer_reset(records: &mut PointerRecords, reset: bool) {
-    if reset {
-        records.cell_cache.reset();
-        records.gesture_owner.clear_all();
-        records.press_tab = PressTabs::default();
-    }
-}
-
-/// SC-10: a report ready to emit, naming its destination tab so a release
-/// can target the tab its press was recorded against instead of whichever
-/// tab is active when the release arrives (D12).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PointerReport {
-    pub(super) tab: usize,
-    pub(super) bytes: Vec<u8>,
-}
-
-// ── SC-10/SC-11: button path (press + release) ────────────────────────
-
-/// SC-10 gather-step inputs for one button (press or release) event —
-/// task0006 Design step 1's plain values, none of which requires a
-/// window, a GPU surface or a live PTY to assemble in a test.
+/// SC-10 input bundle for the button pointer path (press AND release —
+/// one sequence unit covers both halves of a gesture).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ButtonEventInputs {
-    pub(super) kind: MouseEventKind, // Press | Release only
-    pub(super) identity: Option<MouseButtonId>,
-    pub(super) grid_ownership: GridOwnershipInputs,
+    pub(super) kind: MouseEventKind, // Press | Release
+    pub(super) button: MouseButtonId,
+    pub(super) grid: GridOwnershipInputs,
     pub(super) mods: Modifiers,
-    pub(super) tracking_any_active: bool,
+    pub(super) mode_1000: bool,
+    pub(super) mode_1002: bool,
+    pub(super) mode_1003: bool,
     pub(super) encoding: MouseReportEncoding,
-    pub(super) active_tab: usize,
-    pub(super) last_active_tab: Option<usize>,
-    pub(super) col1: u32,
-    pub(super) row1: u32,
+    pub(super) active_tab: TabId,
+    /// 1-based column/row of the event's cell.
+    pub(super) column: u32,
+    pub(super) row: u32,
+    /// Press-only: is a link hovered at this position (for Ctrl+left).
+    pub(super) hovered_link: bool,
+    /// Press-only: the middle-click-paste setting.
+    pub(super) middle_click_paste_enabled: bool,
+    pub(super) records: MouseReportRecords,
 }
 
-/// SC-10 outcome for the button path: either the event reports (in which
-/// case the caller performs NO local arm), or it does not — in which case
-/// the caller runs the existing local match arm for this button/state,
-/// unchanged (task0006 Design "Perform").
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ButtonDecision {
-    /// Decided as a report. `Some` carries the bytes to write; `None`
-    /// means [`encode_report`] suppressed them (X10 overflow, FR9) — the
-    /// event is still consumed (no local arm runs), it simply emits
-    /// nothing.
-    Report(Option<PointerReport>),
-    /// Not a report: run the existing local match arm.
-    Local,
+/// SC-10 input bundle for the motion pointer path.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct MotionEventInputs {
+    pub(super) grid: GridOwnershipInputs,
+    pub(super) mods: Modifiers,
+    pub(super) mode_1000: bool,
+    pub(super) mode_1002: bool,
+    pub(super) mode_1003: bool,
+    pub(super) encoding: MouseReportEncoding,
+    pub(super) active_tab: TabId,
+    pub(super) held_left: bool,
+    pub(super) held_middle: bool,
+    pub(super) held_right: bool,
+    /// 1-based column/row of the event's cell.
+    pub(super) column: u32,
+    pub(super) row: u32,
+    pub(super) records: MouseReportRecords,
 }
 
-/// SC-11 record updates for the button path, applied by
-/// [`apply_button_event`] — never at the decision site (AC-1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ButtonRecordOps {
-    None,
-    /// A press was decided: record which side owns the gesture, and (for
-    /// a Report owner) the tab the eventual release must target.
-    RecordPress {
-        identity: MouseButtonId,
-        owner: GestureOwner,
-        tab: usize,
-    },
-    /// A release consumed a recorded owner: clear it (SC-9 "read-and-
-    /// clear"), and read-and-clear the paired press-tab record too.
-    TakeRelease { identity: MouseButtonId },
+/// SC-10 input bundle for the wheel pointer path.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct WheelEventInputs {
+    pub(super) kind: MouseEventKind, // WheelUp | WheelDown
+    pub(super) grid: GridOwnershipInputs,
+    pub(super) mods: Modifiers,
+    pub(super) mode_1000: bool,
+    pub(super) mode_1002: bool,
+    pub(super) mode_1003: bool,
+    pub(super) encoding: MouseReportEncoding,
+    pub(super) active_tab: TabId,
+    /// 1-based column/row of the event's cell.
+    pub(super) column: u32,
+    pub(super) row: u32,
+    pub(super) on_alt_screen: bool,
+    pub(super) alt_scroll_mode_bit: bool,
+    pub(super) alt_scroll_setting: bool,
+    pub(super) records: MouseReportRecords,
 }
 
-/// SC-10: decide the outcome of one button press/release, given the plain
-/// [`ButtonEventInputs`] and a read-only view of the current records.
-/// Mutates nothing — [`apply_button_event`] performs the actual record
-/// updates this returns.
-pub(super) fn decide_button_event(
-    inputs: ButtonEventInputs,
-    records: &PointerRecords,
-) -> (ButtonDecision, bool, ButtonRecordOps) {
-    let reset = pointer_records_need_reset(
-        inputs.tracking_any_active,
-        inputs.active_tab,
-        inputs.last_active_tab,
-    );
-    let Some(identity) = inputs.identity else {
-        return (ButtonDecision::Local, reset, ButtonRecordOps::None);
-    };
+/// SC-10: press-time choice among the local arms a press (not routed to
+/// report) can take. `grid` has already been checked by the caller.
+fn press_local_disposition(
+    button: MouseButtonId,
+    mods: Modifiers,
+    hovered_link: bool,
+    middle_click_paste_enabled: bool,
+) -> Disposition {
+    match button {
+        MouseButtonId::Left if mods.ctrl && hovered_link => {
+            Disposition::Local(LocalArm::OpenHoveredLink)
+        }
+        MouseButtonId::Left => Disposition::Local(LocalArm::BeginSelectionDrag),
+        MouseButtonId::Middle if middle_click_paste_enabled => {
+            Disposition::Local(LocalArm::PastePrimary)
+        }
+        // Right press, or middle press with the setting off: SC-9
+        // ownership is still recorded as Local by the caller (so the
+        // matching release routes here, not into a stray report path),
+        // but there is no local arm to name.
+        MouseButtonId::Middle | MouseButtonId::Right | MouseButtonId::None => Disposition::Nothing,
+    }
+}
+
+/// SC-10: the button pointer path — one sequence unit covering both a
+/// press and its matching release (AC-1).
+pub(super) fn decide_button_event(inputs: ButtonEventInputs) -> SequenceOutcome {
     match inputs.kind {
-        MouseEventKind::Release => {
-            let owner = if reset {
-                None
-            } else {
-                records.gesture_owner.peek(identity)
+        MouseEventKind::Press => decide_press(&inputs),
+        MouseEventKind::Release => decide_release(&inputs),
+        MouseEventKind::Motion | MouseEventKind::WheelUp | MouseEventKind::WheelDown => {
+            debug_assert!(
+                false,
+                "decide_button_event only handles Press/Release, got {:?}",
+                inputs.kind
+            );
+            SequenceOutcome::nothing()
+        }
+    }
+}
+
+/// SC-10 (AC-1, AC-4): the press half. SC-8's answer is consulted first
+/// (D11) — a rejected position records no owner (SC-9) and implies no
+/// other update. An accepted position always carries the two reset
+/// observations (D12 correction #3) alongside whichever disposition it
+/// decides.
+fn decide_press(inputs: &ButtonEventInputs) -> SequenceOutcome {
+    if !point_belongs_to_grid(inputs.grid) {
+        return SequenceOutcome::nothing();
+    }
+    let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
+    let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
+    let reset = !tracking_active || tab_changed;
+
+    if tracking_active && !inputs.mods.shift {
+        let code = compose_button_code(
+            MouseEventKind::Press,
+            inputs.button,
+            inputs.encoding,
+            inputs.mods,
+        );
+        let disposition =
+            match encode_report(code, inputs.column, inputs.row, inputs.encoding, false) {
+                Some(bytes) => Disposition::Report {
+                    bytes,
+                    tab: inputs.active_tab,
+                },
+                None => Disposition::Nothing,
             };
-            match owner {
-                Some(GestureOwner::Report) => {
-                    let tab = if reset {
-                        None
-                    } else {
-                        records.press_tab.peek(identity)
-                    }
-                    .unwrap_or(inputs.active_tab);
+        return SequenceOutcome {
+            disposition,
+            updates: RecordUpdates {
+                reset,
+                built_for_tab: Some(inputs.active_tab),
+                gesture: Some(GestureUpdate::Record(inputs.button, GestureOwner::Report)),
+                ..Default::default()
+            },
+        };
+    }
+
+    let disposition = press_local_disposition(
+        inputs.button,
+        inputs.mods,
+        inputs.hovered_link,
+        inputs.middle_click_paste_enabled,
+    );
+    SequenceOutcome {
+        disposition,
+        updates: RecordUpdates {
+            reset,
+            built_for_tab: Some(inputs.active_tab),
+            gesture: Some(GestureUpdate::Record(inputs.button, GestureOwner::Local)),
+            ..Default::default()
+        },
+    }
+}
+
+/// SC-10 (AC-1, AC-4, AC-6): the release half. Gesture ownership (SC-9)
+/// decides here, NOT the release position (Test Notes: a press inside the
+/// grid whose release arrives over a guarded region still gets its
+/// release) — SC-8 is deliberately not consulted at all for a release.
+/// Correction #1: a Report-owned release checks "at least one tracking
+/// mode active", not merely which encoding is selected. Correction #2: a
+/// reported release targets [`MouseReportRecords::built_for_tab`] (the tab
+/// its press recorded), never `inputs.active_tab`.
+fn decide_release(inputs: &ButtonEventInputs) -> SequenceOutcome {
+    if let Some(owner) = inputs.records.gesture_owner.peek(inputs.button) {
+        let disposition = match owner {
+            GestureOwner::Report => {
+                let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
+                if tracking_active {
+                    let target_tab = inputs.records.built_for_tab.unwrap_or(inputs.active_tab);
                     let code = compose_button_code(
                         MouseEventKind::Release,
-                        identity,
+                        inputs.button,
                         inputs.encoding,
                         inputs.mods,
                     );
-                    let bytes =
-                        encode_report(code, inputs.col1, inputs.row1, inputs.encoding, true);
-                    let report = bytes.map(|bytes| PointerReport { tab, bytes });
-                    (
-                        ButtonDecision::Report(report),
-                        reset,
-                        ButtonRecordOps::TakeRelease { identity },
-                    )
+                    match encode_report(code, inputs.column, inputs.row, inputs.encoding, true) {
+                        Some(bytes) => Disposition::Report {
+                            bytes,
+                            tab: target_tab,
+                        },
+                        None => Disposition::Nothing,
+                    }
+                } else {
+                    Disposition::Nothing
                 }
-                Some(GestureOwner::Local) => (
-                    ButtonDecision::Local,
-                    reset,
-                    ButtonRecordOps::TakeRelease { identity },
-                ),
-                None => (ButtonDecision::Local, reset, ButtonRecordOps::None),
             }
-        }
-        MouseEventKind::Press => {
-            let belongs = point_belongs_to_grid(inputs.grid_ownership);
-            if belongs && inputs.tracking_any_active && !inputs.mods.shift {
-                let code = compose_button_code(
-                    MouseEventKind::Press,
-                    identity,
-                    inputs.encoding,
-                    inputs.mods,
-                );
-                let bytes = encode_report(code, inputs.col1, inputs.row1, inputs.encoding, false);
-                let report = bytes.map(|bytes| PointerReport {
-                    tab: inputs.active_tab,
-                    bytes,
-                });
-                (
-                    ButtonDecision::Report(report),
-                    reset,
-                    ButtonRecordOps::RecordPress {
-                        identity,
-                        owner: GestureOwner::Report,
-                        tab: inputs.active_tab,
-                    },
-                )
-            } else if belongs {
-                (
-                    ButtonDecision::Local,
-                    reset,
-                    ButtonRecordOps::RecordPress {
-                        identity,
-                        owner: GestureOwner::Local,
-                        tab: inputs.active_tab,
-                    },
-                )
-            } else {
-                (ButtonDecision::Local, reset, ButtonRecordOps::None)
+            GestureOwner::Local => {
+                if inputs.button == MouseButtonId::Left {
+                    Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary)
+                } else {
+                    // Middle/right local presses (paste, or no-op) are
+                    // one-shot at press time; their release has no arm.
+                    Disposition::Nothing
+                }
             }
-        }
-        MouseEventKind::Motion | MouseEventKind::WheelUp | MouseEventKind::WheelDown => {
-            (ButtonDecision::Local, reset, ButtonRecordOps::None)
-        }
-    }
-}
-
-/// SC-11: apply a button-path decision's record updates exactly once. The
-/// reset (if any) is applied FIRST, matching what [`decide_button_event`]
-/// assumed when it read the records.
-pub(super) fn apply_button_event(records: &mut PointerRecords, reset: bool, ops: ButtonRecordOps) {
-    apply_pointer_reset(records, reset);
-    match ops {
-        ButtonRecordOps::None => {}
-        ButtonRecordOps::RecordPress {
-            identity,
-            owner,
-            tab,
-        } => {
-            records.gesture_owner.record_press(identity, owner);
-            if owner == GestureOwner::Report {
-                records.press_tab.record(identity, tab);
-            }
-        }
-        ButtonRecordOps::TakeRelease { identity } => {
-            records.gesture_owner.take(identity);
-            records.press_tab.take(identity);
-        }
-    }
-}
-
-// ── SC-10/SC-11: motion path ───────────────────────────────────────────
-
-/// SC-11 record updates for the motion path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum MotionRecordOps {
-    None,
-    UpdateCache { column: u32, row: u32 },
-}
-
-/// SC-10: decide the outcome of one motion event. `Some` reports; `None`
-/// covers "no tracking mode active", "off the grid" and "gesture owned
-/// locally" alike — the caller performs no local arm for motion either
-/// way, since the existing drag-selection extension already runs
-/// unconditionally, independent of this decision (task0006 Design: motion
-/// has no named local arm of its own). Consults no shift flag at all
-/// (task0006 Design: "it has no branch at all") — while a button's
-/// gesture is owned by the local side, that persisted ownership decides,
-/// not the instantaneous shift state (D10).
-#[allow(clippy::too_many_arguments)]
-pub(super) fn decide_motion(
-    grid_ownership: GridOwnershipInputs,
-    tracking_any_active: bool,
-    mode_1000: bool,
-    mode_1002: bool,
-    mode_1003: bool,
-    encoding: MouseReportEncoding,
-    mods: Modifiers,
-    held: HeldButtons,
-    active_tab: usize,
-    last_active_tab: Option<usize>,
-    col1: u32,
-    row1: u32,
-    records: &PointerRecords,
-) -> (Option<PointerReport>, bool, MotionRecordOps) {
-    let reset = pointer_records_need_reset(tracking_any_active, active_tab, last_active_tab);
-    if !tracking_any_active {
-        return (None, reset, MotionRecordOps::None);
-    }
-    if !point_belongs_to_grid(grid_ownership) {
-        return (None, reset, MotionRecordOps::None);
-    }
-    if let Some(id) = held.lowest_held() {
-        let owner = if reset {
-            None
-        } else {
-            records.gesture_owner.peek(id)
         };
-        if owner == Some(GestureOwner::Local) {
-            return (None, reset, MotionRecordOps::None);
-        }
+        return SequenceOutcome {
+            disposition,
+            updates: RecordUpdates {
+                gesture: Some(GestureUpdate::Clear(inputs.button)),
+                ..Default::default()
+            },
+        };
     }
-    let Some(identity) =
-        motion_gate(mode_1000, mode_1002, mode_1003, held.left, held.middle, held.right)
-    else {
-        return (None, reset, MotionRecordOps::None);
-    };
-    let mut cache = if reset {
-        CellChangeFilter::default()
-    } else {
-        records.cell_cache
-    };
-    if !cache.should_report(col1, row1) {
-        return (None, reset, MotionRecordOps::None);
-    }
-    let code = compose_button_code(MouseEventKind::Motion, identity, encoding, mods);
-    let bytes = encode_report(code, col1, row1, encoding, false);
-    let report = bytes.map(|bytes| PointerReport {
-        tab: active_tab,
-        bytes,
-    });
-    (
-        report,
-        reset,
-        MotionRecordOps::UpdateCache {
-            column: col1,
-            row: row1,
+    // No owner recorded (SC-8 rejected the press, or no press preceded
+    // this release at all): still carries the two reset observations
+    // (D12 correction #3), so a click with no intervening motion is not
+    // decided from stale records.
+    let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
+    let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
+    let reset = !tracking_active || tab_changed;
+    SequenceOutcome {
+        disposition: Disposition::Nothing,
+        updates: RecordUpdates {
+            reset,
+            ..Default::default()
         },
-    )
-}
-
-/// SC-11: apply a motion decision's record updates exactly once.
-pub(super) fn apply_motion(records: &mut PointerRecords, reset: bool, ops: MotionRecordOps) {
-    apply_pointer_reset(records, reset);
-    if let MotionRecordOps::UpdateCache { column, row } = ops {
-        records.cell_cache.should_report(column, row);
     }
 }
 
-// ── SC-10/SC-11: wheel path ─────────────────────────────────────────────
-
-/// SC-10 outcome for the wheel path.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum WheelDecision {
-    /// Tracking active but SC-8 rejected the position: no report, no
-    /// other side effect (AC-4, SPEC.md FR10).
-    SuppressedByGrid,
-    /// Tracking active, Shift held: scroll eMterm's scrollback (D5) — the
-    /// caller runs the existing scrollback-scroll local arm.
-    ScrollScrollback,
-    /// Tracking active, Shift not held: report. `None` means the delta
-    /// rounded to zero whole notches (no bytes to write, not an error).
-    Report(Option<PointerReport>),
-    /// Tracking inactive: run today's existing matrix unchanged (the
-    /// alternate-scroll arrow translation / plain scrollback scroll, with
-    /// its stateful sub-notch accumulator) — task0006 Design "Boundary".
-    TrackingInactive,
+/// SC-10: lowest-numbered currently-held button (D6's tie-break, reused
+/// here to pick which button's gesture ownership governs a motion event).
+fn lowest_held_button(left: bool, middle: bool, right: bool) -> Option<MouseButtonId> {
+    if left {
+        Some(MouseButtonId::Left)
+    } else if middle {
+        Some(MouseButtonId::Middle)
+    } else if right {
+        Some(MouseButtonId::Right)
+    } else {
+        None
+    }
 }
 
-/// SC-10: decide the outcome of one wheel notch.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn decide_wheel(
-    grid_ownership: GridOwnershipInputs,
-    tracking_any_active: bool,
-    shift: bool,
-    alt_screen: bool,
-    alt_scroll_mode_bit: bool,
-    alt_scroll_setting: bool,
-    encoding: MouseReportEncoding,
-    mods: Modifiers,
-    lines: f32,
-    active_tab: usize,
-    last_active_tab: Option<usize>,
-    col1: u32,
-    row1: u32,
-) -> (WheelDecision, bool) {
-    let reset = pointer_records_need_reset(tracking_any_active, active_tab, last_active_tab);
-    if !tracking_any_active {
-        return (WheelDecision::TrackingInactive, reset);
+/// SC-10: SC-5's gate, then SC-4's filter (non-mutating — [`apply_outcome`]
+/// commits the cache), then SC-2/SC-3's encoding. Shared by the
+/// owner-established (D10) and no-owner motion branches.
+fn report_motion(inputs: &MotionEventInputs, cache: CellChangeFilter) -> SequenceOutcome {
+    let Some(identity) = motion_gate(
+        inputs.mode_1000,
+        inputs.mode_1002,
+        inputs.mode_1003,
+        inputs.held_left,
+        inputs.held_middle,
+        inputs.held_right,
+    ) else {
+        return SequenceOutcome::nothing();
+    };
+    if !cache.would_report(inputs.column, inputs.row) {
+        return SequenceOutcome::nothing();
     }
-    if !point_belongs_to_grid(grid_ownership) {
-        return (WheelDecision::SuppressedByGrid, reset);
+    let code = compose_button_code(
+        MouseEventKind::Motion,
+        identity,
+        inputs.encoding,
+        inputs.mods,
+    );
+    let disposition = match encode_report(code, inputs.column, inputs.row, inputs.encoding, false)
+    {
+        Some(bytes) => Disposition::Report {
+            bytes,
+            tab: inputs.active_tab,
+        },
+        None => Disposition::Nothing,
+    };
+    SequenceOutcome {
+        disposition,
+        updates: RecordUpdates {
+            cache_cell: Some((inputs.column, inputs.row)),
+            ..Default::default()
+        },
     }
-    match super::input_translate::wheel_consumer(
-        true,
-        shift,
-        alt_screen,
-        alt_scroll_mode_bit,
-        alt_scroll_setting,
-    ) {
-        super::input_translate::WheelConsumer::ScrollScrollback => {
-            (WheelDecision::ScrollScrollback, reset)
-        }
-        super::input_translate::WheelConsumer::ReportToApplication => {
-            let notches = super::input_translate::wheel_report_notches(lines);
-            if notches == 0 {
-                return (WheelDecision::Report(None), reset);
+}
+
+/// SC-10 (AC-1, AC-4, AC-5): the motion pointer path. SC-8's answer is
+/// consulted first (D11), ahead of SC-5's gate and SC-4's filter — a
+/// rejected position can neither emit nor advance the cached cell. When
+/// the currently-held button (D6's lowest-numbered tie-break) already owns
+/// a gesture, that recorded owner decides motion outright (D10) — Shift's
+/// instantaneous state is not consulted at all, and neither is a reset,
+/// so the drag's records survive intact through the gesture. With no
+/// owning gesture, today's rules apply in full: Shift is a local override
+/// (FR7) and the two reset observations (D12 correction #3) are carried.
+pub(super) fn decide_motion_event(inputs: MotionEventInputs) -> SequenceOutcome {
+    if !point_belongs_to_grid(inputs.grid) {
+        return SequenceOutcome::nothing();
+    }
+
+    let held_button = lowest_held_button(inputs.held_left, inputs.held_middle, inputs.held_right);
+    let owner = held_button.and_then(|b| inputs.records.gesture_owner.peek(b));
+
+    match owner {
+        Some(GestureOwner::Local) => SequenceOutcome::nothing(),
+        Some(GestureOwner::Report) => report_motion(&inputs, inputs.records.cell_cache),
+        None => {
+            let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
+            let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
+            let reset = !tracking_active || tab_changed;
+            if !tracking_active || inputs.mods.shift {
+                return SequenceOutcome {
+                    disposition: Disposition::Nothing,
+                    updates: RecordUpdates {
+                        reset,
+                        built_for_tab: Some(inputs.active_tab),
+                        ..Default::default()
+                    },
+                };
             }
-            let event_kind = if notches > 0 {
-                MouseEventKind::WheelUp
+            let effective_cache = if reset {
+                CellChangeFilter::default()
             } else {
-                MouseEventKind::WheelDown
+                inputs.records.cell_cache
             };
-            let code = compose_button_code(event_kind, MouseButtonId::None, encoding, mods);
-            let mut buf = Vec::new();
-            for _ in 0..notches.unsigned_abs() {
-                if let Some(bytes) = encode_report(code, col1, row1, encoding, false) {
-                    buf.extend_from_slice(&bytes);
-                }
-            }
-            let report = if buf.is_empty() {
-                None
-            } else {
-                Some(PointerReport {
-                    tab: active_tab,
-                    bytes: buf,
-                })
-            };
-            (WheelDecision::Report(report), reset)
-        }
-        super::input_translate::WheelConsumer::TranslateToArrows => {
-            unreachable!(
-                "SC-6 (D5): the tracking-active branch never selects arrow translation"
-            )
+            let mut outcome = report_motion(&inputs, effective_cache);
+            outcome.updates.reset = reset;
+            outcome.updates.built_for_tab = Some(inputs.active_tab);
+            outcome
         }
     }
 }
 
-/// SC-11: apply a wheel decision's reset — the wheel path never touches
-/// the cell cache or gesture ownership beyond the shared reset observation
-/// (D12).
-pub(super) fn apply_wheel_reset(records: &mut PointerRecords, reset: bool) {
-    apply_pointer_reset(records, reset);
+/// SC-10 (AC-1, AC-3, AC-6): the wheel pointer path. SC-8's answer is
+/// consulted first (D11), ahead of the tracking-active read — a rejected
+/// position emits nothing and updates no record. An accepted notch always
+/// carries the two reset observations (D12 correction #3) and chooses
+/// exactly one wheel consumer via SC-6 (`wheel_consumer`), unchanged.
+pub(super) fn decide_wheel_event(inputs: &WheelEventInputs) -> SequenceOutcome {
+    if !point_belongs_to_grid(inputs.grid) {
+        return SequenceOutcome::nothing();
+    }
+    let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
+    let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
+    let reset = !tracking_active || tab_changed;
+
+    let consumer = wheel_consumer(
+        tracking_active,
+        inputs.mods.shift,
+        inputs.on_alt_screen,
+        inputs.alt_scroll_mode_bit,
+        inputs.alt_scroll_setting,
+    );
+    let disposition = match consumer {
+        WheelConsumer::ReportToApplication => {
+            let code =
+                compose_button_code(inputs.kind, MouseButtonId::None, inputs.encoding, inputs.mods);
+            match encode_report(code, inputs.column, inputs.row, inputs.encoding, false) {
+                Some(bytes) => Disposition::Report {
+                    bytes,
+                    tab: inputs.active_tab,
+                },
+                None => Disposition::Nothing,
+            }
+        }
+        WheelConsumer::TranslateToArrows => Disposition::Local(LocalArm::TranslateToArrowBytes),
+        WheelConsumer::ScrollScrollback => Disposition::Local(LocalArm::ScrollScrollback),
+    };
+    SequenceOutcome {
+        disposition,
+        updates: RecordUpdates {
+            reset,
+            built_for_tab: Some(inputs.active_tab),
+            ..Default::default()
+        },
+    }
+}
+
+/// SC-11 (AC-2): applies an outcome to the record pair as a plain value —
+/// appends report bytes to `dest` paired with their target tab, applies
+/// the outcome's record updates exactly once, appends nothing for a
+/// do-nothing or local disposition, and never performs the named local
+/// arm itself (that stays the caller's job — see [`LocalArm`]).
+pub(super) fn apply_outcome(
+    outcome: SequenceOutcome,
+    records: &mut MouseReportRecords,
+    dest: &mut Vec<(TabId, Vec<u8>)>,
+) {
+    if outcome.updates.reset {
+        records.cell_cache.reset();
+        records.gesture_owner.clear_all();
+    }
+    if let Some(tab) = outcome.updates.built_for_tab {
+        records.built_for_tab = Some(tab);
+    }
+    if let Some((column, row)) = outcome.updates.cache_cell {
+        records.cell_cache.commit(column, row);
+    }
+    match outcome.updates.gesture {
+        Some(GestureUpdate::Record(button, owner)) => {
+            records.gesture_owner.record_press(button, owner);
+        }
+        Some(GestureUpdate::Clear(button)) => {
+            records.gesture_owner.take(button);
+        }
+        None => {}
+    }
+    if let Disposition::Report { bytes, tab } = outcome.disposition {
+        dest.push((tab, bytes));
+    }
+}
+
+/// SC-11 (AC-2, D12): empties the gesture-ownership record and the
+/// held-button record together, for the host to invoke on focus loss —
+/// matching the already-correct reset of the existing pointer button-down
+/// counter. Deliberately does not touch the cell-change cache, which has
+/// its own reset points (D7) unrelated to focus.
+pub(super) fn clear_all(gesture_owner: &mut GestureOwnership, held: &mut HeldButtons) {
+    gesture_owner.clear_all();
+    held.clear();
 }
 
 #[cfg(test)]
@@ -1435,750 +1531,650 @@ mod tests {
         assert_eq!(owner.take(MouseButtonId::None), None);
     }
 
-    // ── task0006 AC-1/AC-5: SC-10/SC-11 seam behaviour ──────────────────
+    // ── task0005: SC-10/SC-11 test helpers ──────────────────────────────
     //
-    // Replaces the retired precedence-order source scans in
-    // `window_host::tests` (TS-19/TS-20/TS-21) with behavioural assertions
-    // against the seam those scans could only pin structurally.
+    // Every sequence unit and the applier is constructed and called here
+    // with no winit window, no GPU surface and no live PTY (AC-1, AC-2) —
+    // these helpers just cut down on field repetition across cases.
 
-    fn belongs_inputs() -> GridOwnershipInputs {
-        GridOwnershipInputs::default()
+    /// A button-path input with tracking (1002/sgr) active, over the open
+    /// grid, no modifiers — the neutral case each test customizes from.
+    fn base_button_inputs(kind: MouseEventKind, button: MouseButtonId) -> ButtonEventInputs {
+        ButtonEventInputs {
+            kind,
+            button,
+            grid: GridOwnershipInputs::default(),
+            mods: Modifiers::NONE,
+            mode_1000: false,
+            mode_1002: true,
+            mode_1003: false,
+            encoding: MouseReportEncoding::Sgr,
+            active_tab: 0,
+            column: 5,
+            row: 5,
+            hovered_link: false,
+            middle_click_paste_enabled: true,
+            records: MouseReportRecords::default(),
+        }
     }
 
-    fn rejected_inputs() -> GridOwnershipInputs {
-        GridOwnershipInputs {
-            in_bottom_strip: true,
+    /// A motion-path input with tracking (1002/sgr) active, the left
+    /// button held, over the open grid, no modifiers.
+    fn base_motion_inputs() -> MotionEventInputs {
+        MotionEventInputs {
+            grid: GridOwnershipInputs::default(),
+            mods: Modifiers::NONE,
+            mode_1000: false,
+            mode_1002: true,
+            mode_1003: false,
+            encoding: MouseReportEncoding::Sgr,
+            active_tab: 0,
+            held_left: true,
+            held_middle: false,
+            held_right: false,
+            column: 5,
+            row: 5,
+            records: MouseReportRecords::default(),
+        }
+    }
+
+    /// A wheel-path input with tracking (1002/sgr) active, over the open
+    /// grid, no modifiers.
+    fn base_wheel_inputs(kind: MouseEventKind) -> WheelEventInputs {
+        WheelEventInputs {
+            kind,
+            grid: GridOwnershipInputs::default(),
+            mods: Modifiers::NONE,
+            mode_1000: false,
+            mode_1002: true,
+            mode_1003: false,
+            encoding: MouseReportEncoding::Sgr,
+            active_tab: 0,
+            column: 5,
+            row: 5,
+            on_alt_screen: false,
+            alt_scroll_mode_bit: false,
+            alt_scroll_setting: false,
+            records: MouseReportRecords::default(),
+        }
+    }
+
+    // ── AC-1: named, disjoint dispositions ──────────────────────────────
+
+    #[test]
+    fn ac1_report_disposition_carries_bytes_and_target_tab() {
+        let mut inputs = base_button_inputs(MouseEventKind::Press, MouseButtonId::Left);
+        inputs.active_tab = 42;
+        let outcome = decide_button_event(inputs);
+        match outcome.disposition {
+            Disposition::Report { bytes, tab } => {
+                assert_eq!(tab, 42);
+                assert!(!bytes.is_empty());
+            }
+            other => panic!("expected Report, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ac1_local_and_nothing_dispositions_are_distinct_named_values() {
+        // No tracking mode active: a left press over the grid is a named
+        // local arm, not bare "nothing".
+        let mut inputs = base_button_inputs(MouseEventKind::Press, MouseButtonId::Left);
+        inputs.mode_1002 = false;
+        let outcome = decide_button_event(inputs);
+        assert_eq!(
+            outcome.disposition,
+            Disposition::Local(LocalArm::BeginSelectionDrag)
+        );
+        assert_ne!(outcome.disposition, Disposition::Nothing);
+
+        // A rejected position is bare "nothing" — no local arm.
+        let mut inputs = base_button_inputs(MouseEventKind::Press, MouseButtonId::Left);
+        inputs.grid = GridOwnershipInputs {
+            in_top_strip: true,
             ..GridOwnershipInputs::default()
-        }
-    }
-
-    // -- button path: press --
-
-    #[test]
-    fn decide_button_press_reports_and_records_report_ownership_when_tracking_active_and_shift_not_held()
-     {
-        let inputs = ButtonEventInputs {
-            kind: MouseEventKind::Press,
-            identity: Some(MouseButtonId::Left),
-            grid_ownership: belongs_inputs(),
-            mods: Modifiers::NONE,
-            tracking_any_active: true,
-            encoding: MouseReportEncoding::Sgr,
-            active_tab: 2,
-            last_active_tab: Some(2),
-            col1: 5,
-            row1: 7,
         };
-        let records = PointerRecords::default();
-        let (decision, reset, ops) = decide_button_event(inputs, &records);
-        assert!(!reset);
-        match decision {
-            ButtonDecision::Report(Some(report)) => {
-                assert_eq!(report.tab, 2);
-                assert_eq!(report.bytes, b"\x1b[<0;5;7M".to_vec());
-            }
-            other => panic!("expected a report, got {other:?}"),
-        }
-        assert_eq!(
-            ops,
-            ButtonRecordOps::RecordPress {
-                identity: MouseButtonId::Left,
-                owner: GestureOwner::Report,
-                tab: 2,
-            }
-        );
+        let outcome = decide_button_event(inputs);
+        assert_eq!(outcome.disposition, Disposition::Nothing);
     }
 
     #[test]
-    fn decide_button_press_is_local_when_shift_held_even_with_tracking_active() {
+    fn ac1_units_mutate_nothing_themselves_updates_travel_in_the_outcome() {
+        // Calling decide_* on a plain records value never changes it —
+        // only `apply_outcome` (SC-11) does.
+        let records = MouseReportRecords::default();
         let inputs = ButtonEventInputs {
-            kind: MouseEventKind::Press,
-            identity: Some(MouseButtonId::Left),
-            grid_ownership: belongs_inputs(),
-            mods: Modifiers {
-                shift: true,
-                ..Modifiers::NONE
+            records,
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Left)
+        };
+        let _ = decide_button_event(inputs);
+        assert_eq!(records.built_for_tab, None);
+        assert_eq!(records.gesture_owner.peek(MouseButtonId::Left), None);
+    }
+
+    // ── AC-2: the applier ────────────────────────────────────────────────
+
+    #[test]
+    fn ac2_applier_appends_report_bytes_with_tab_and_applies_updates_once() {
+        let mut records = MouseReportRecords::default();
+        let outcome = SequenceOutcome {
+            disposition: Disposition::Report {
+                bytes: vec![1, 2, 3],
+                tab: 7,
             },
-            tracking_any_active: true,
-            encoding: MouseReportEncoding::Sgr,
-            active_tab: 0,
-            last_active_tab: Some(0),
-            col1: 1,
-            row1: 1,
-        };
-        let records = PointerRecords::default();
-        let (decision, _reset, ops) = decide_button_event(inputs, &records);
-        assert_eq!(decision, ButtonDecision::Local);
-        assert_eq!(
-            ops,
-            ButtonRecordOps::RecordPress {
-                identity: MouseButtonId::Left,
-                owner: GestureOwner::Local,
-                tab: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn decide_button_press_is_local_when_no_tracking_mode_active() {
-        let inputs = ButtonEventInputs {
-            kind: MouseEventKind::Press,
-            identity: Some(MouseButtonId::Left),
-            grid_ownership: belongs_inputs(),
-            mods: Modifiers::NONE,
-            tracking_any_active: false,
-            encoding: MouseReportEncoding::X10,
-            active_tab: 0,
-            last_active_tab: None,
-            col1: 1,
-            row1: 1,
-        };
-        let records = PointerRecords::default();
-        let (decision, reset, ops) = decide_button_event(inputs, &records);
-        assert_eq!(decision, ButtonDecision::Local);
-        assert!(
-            reset,
-            "no tracking mode active must be observed as a reset (D7/D12)"
-        );
-        assert_eq!(
-            ops,
-            ButtonRecordOps::RecordPress {
-                identity: MouseButtonId::Left,
-                owner: GestureOwner::Local,
-                tab: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn decide_button_press_records_no_ownership_when_grid_ownership_rejects_the_position() {
-        // task0004 AC-1/AC-2 (SC-8): a middle/right press over a guarded
-        // region has no dedicated early-return guard in
-        // `handle_pointer_button` — SC-8 is what rejects it here,
-        // identity-independently.
-        let inputs = ButtonEventInputs {
-            kind: MouseEventKind::Press,
-            identity: Some(MouseButtonId::Middle),
-            grid_ownership: rejected_inputs(),
-            mods: Modifiers::NONE,
-            tracking_any_active: true,
-            encoding: MouseReportEncoding::Sgr,
-            active_tab: 0,
-            last_active_tab: Some(0),
-            col1: 1,
-            row1: 1,
-        };
-        let records = PointerRecords::default();
-        let (decision, _reset, ops) = decide_button_event(inputs, &records);
-        assert_eq!(decision, ButtonDecision::Local);
-        assert_eq!(ops, ButtonRecordOps::None);
-    }
-
-    #[test]
-    fn decide_button_press_is_local_with_no_ownership_when_profile_selector_visible() {
-        let inputs = ButtonEventInputs {
-            kind: MouseEventKind::Press,
-            identity: Some(MouseButtonId::Left),
-            grid_ownership: GridOwnershipInputs {
-                profile_selector_visible: true,
-                ..GridOwnershipInputs::default()
+            updates: RecordUpdates {
+                reset: false,
+                built_for_tab: Some(7),
+                cache_cell: Some((4, 5)),
+                gesture: Some(GestureUpdate::Record(
+                    MouseButtonId::Left,
+                    GestureOwner::Report,
+                )),
             },
-            mods: Modifiers::NONE,
-            tracking_any_active: true,
-            encoding: MouseReportEncoding::Sgr,
-            active_tab: 0,
-            last_active_tab: Some(0),
-            col1: 1,
-            row1: 1,
         };
-        let records = PointerRecords::default();
-        let (decision, _reset, ops) = decide_button_event(inputs, &records);
-        assert_eq!(decision, ButtonDecision::Local);
-        assert_eq!(ops, ButtonRecordOps::None);
+        let mut dest = Vec::new();
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert_eq!(dest, vec![(7, vec![1, 2, 3])]);
+        assert!(!records.cell_cache.would_report(4, 5));
+        assert_eq!(
+            records.gesture_owner.peek(MouseButtonId::Left),
+            Some(GestureOwner::Report)
+        );
+        assert_eq!(records.built_for_tab, Some(7));
     }
 
-    // -- button path: release --
-
     #[test]
-    fn decide_button_release_reports_to_the_owners_recorded_tab_regardless_of_current_position_or_active_tab()
-     {
-        let mut records = PointerRecords::default();
-        // Press was on tab 1, reported.
-        apply_button_event(
+    fn ac2_applier_appends_nothing_for_nothing_or_local_dispositions() {
+        let mut records = MouseReportRecords::default();
+        let mut dest = Vec::new();
+        apply_outcome(SequenceOutcome::nothing(), &mut records, &mut dest);
+        apply_outcome(
+            SequenceOutcome {
+                disposition: Disposition::Local(LocalArm::ScrollScrollback),
+                updates: RecordUpdates::default(),
+            },
             &mut records,
-            false,
-            ButtonRecordOps::RecordPress {
-                identity: MouseButtonId::Left,
-                owner: GestureOwner::Report,
-                tab: 1,
-            },
+            &mut dest,
         );
-        let inputs = ButtonEventInputs {
-            kind: MouseEventKind::Release,
-            identity: Some(MouseButtonId::Left),
-            // A rejected region and a different active tab: neither may
-            // change the outcome (task0004 D10 / task0006 D12).
-            grid_ownership: rejected_inputs(),
-            mods: Modifiers::NONE,
-            tracking_any_active: true,
-            encoding: MouseReportEncoding::Sgr,
-            active_tab: 9,
-            last_active_tab: Some(9),
-            col1: 3,
-            row1: 4,
-        };
-        let (decision, reset, ops) = decide_button_event(inputs, &records);
-        assert!(!reset);
-        match decision {
-            ButtonDecision::Report(Some(report)) => {
-                assert_eq!(
-                    report.tab, 1,
-                    "D12: a reported release must target the tab its PRESS was \
-                     recorded on, not whichever tab is active at release time"
-                );
-            }
-            other => panic!("expected a report, got {other:?}"),
-        }
-        assert_eq!(
-            ops,
-            ButtonRecordOps::TakeRelease {
-                identity: MouseButtonId::Left
-            }
-        );
+        assert!(dest.is_empty());
     }
 
     #[test]
-    fn decide_button_release_is_local_when_owner_was_local() {
-        let mut records = PointerRecords::default();
-        apply_button_event(
-            &mut records,
-            false,
-            ButtonRecordOps::RecordPress {
-                identity: MouseButtonId::Left,
-                owner: GestureOwner::Local,
-                tab: 0,
-            },
-        );
-        let inputs = ButtonEventInputs {
-            kind: MouseEventKind::Release,
-            identity: Some(MouseButtonId::Left),
-            grid_ownership: belongs_inputs(),
-            mods: Modifiers::NONE,
-            tracking_any_active: true,
-            encoding: MouseReportEncoding::Sgr,
-            active_tab: 0,
-            last_active_tab: Some(0),
-            col1: 1,
-            row1: 1,
-        };
-        let (decision, _reset, ops) = decide_button_event(inputs, &records);
-        assert_eq!(decision, ButtonDecision::Local);
-        assert_eq!(
-            ops,
-            ButtonRecordOps::TakeRelease {
-                identity: MouseButtonId::Left
-            }
-        );
-    }
-
-    #[test]
-    fn decide_button_release_is_local_with_no_ops_when_no_owner_was_recorded() {
-        let records = PointerRecords::default();
-        let inputs = ButtonEventInputs {
-            kind: MouseEventKind::Release,
-            identity: Some(MouseButtonId::Right),
-            grid_ownership: belongs_inputs(),
-            mods: Modifiers::NONE,
-            tracking_any_active: true,
-            encoding: MouseReportEncoding::Sgr,
-            active_tab: 0,
-            last_active_tab: Some(0),
-            col1: 1,
-            row1: 1,
-        };
-        let (decision, _reset, ops) = decide_button_event(inputs, &records);
-        assert_eq!(decision, ButtonDecision::Local);
-        assert_eq!(ops, ButtonRecordOps::None);
-    }
-
-    #[test]
-    fn decide_button_release_finds_no_owner_when_a_reset_is_observed_mid_gesture() {
-        // task0006 D12 correction: the two reset observations now apply
-        // on the button path too — a mode cleared mid-gesture must
-        // strand no gesture-ownership record, even for a release.
-        let mut records = PointerRecords::default();
-        apply_button_event(
-            &mut records,
-            false,
-            ButtonRecordOps::RecordPress {
-                identity: MouseButtonId::Left,
-                owner: GestureOwner::Report,
-                tab: 0,
-            },
-        );
-        let inputs = ButtonEventInputs {
-            kind: MouseEventKind::Release,
-            identity: Some(MouseButtonId::Left),
-            grid_ownership: belongs_inputs(),
-            mods: Modifiers::NONE,
-            tracking_any_active: false, // tracking went away mid-gesture
-            encoding: MouseReportEncoding::X10,
-            active_tab: 0,
-            last_active_tab: Some(0),
-            col1: 1,
-            row1: 1,
-        };
-        let (decision, reset, ops) = decide_button_event(inputs, &records);
-        assert!(reset);
-        assert_eq!(decision, ButtonDecision::Local);
-        assert_eq!(ops, ButtonRecordOps::None);
-    }
-
-    // -- motion path --
-
-    #[test]
-    fn decide_motion_does_not_touch_cell_cache_when_motion_gate_rejects() {
-        // AC-2: the motion gate (SC-5) must be consulted before the
-        // cell-change filter (SC-4) — proven behaviourally: a motion_gate
-        // rejection (1002 with no button held) never advances the cache,
-        // even though the cell genuinely differs from the cache.
-        let records = PointerRecords::default();
-        let (report, reset, ops) = decide_motion(
-            belongs_inputs(),
-            true,
-            false, // 1000
-            true,  // 1002
-            false, // 1003
-            MouseReportEncoding::Sgr,
-            Modifiers::NONE,
-            HeldButtons::default(), // no button held
-            0,
-            Some(0),
-            5,
-            5,
-            &records,
-        );
-        assert!(!reset);
-        assert_eq!(report, None);
-        assert_eq!(ops, MotionRecordOps::None);
-    }
-
-    #[test]
-    fn decide_motion_is_none_and_untouched_when_grid_ownership_rejects_even_with_a_held_button_under_1003()
-     {
-        // task0004 AC-3 (SC-8, D11): SC-8 must be consulted before the
-        // motion gate and the cell-change filter — a suppressed motion
-        // cannot advance the cached cell.
-        let records = PointerRecords::default();
-        let held = HeldButtons {
-            left: true,
-            ..HeldButtons::default()
-        };
-        let (report, _reset, ops) = decide_motion(
-            rejected_inputs(),
-            true,
-            false,
-            false,
-            true, // 1003: would always report if not for SC-8
-            MouseReportEncoding::Sgr,
-            Modifiers::NONE,
-            held,
-            0,
-            Some(0),
-            5,
-            5,
-            &records,
-        );
-        assert_eq!(report, None);
-        assert_eq!(ops, MotionRecordOps::None);
-    }
-
-    #[test]
-    fn decide_motion_reports_and_updates_cache_under_1003_with_no_button_held() {
-        let records = PointerRecords::default();
-        let (report, reset, ops) = decide_motion(
-            belongs_inputs(),
-            true,
-            false,
-            false,
-            true,
-            MouseReportEncoding::X10,
-            Modifiers::NONE,
-            HeldButtons::default(),
-            0,
-            Some(0),
-            10,
-            20,
-            &records,
-        );
-        assert!(!reset);
-        assert!(report.is_some());
-        assert_eq!(
-            ops,
-            MotionRecordOps::UpdateCache {
-                column: 10,
-                row: 20
-            }
-        );
-    }
-
-    #[test]
-    fn decide_motion_reset_true_when_no_tracking_mode_active() {
-        let records = PointerRecords::default();
-        let (report, reset, ops) = decide_motion(
-            belongs_inputs(),
-            false,
-            false,
-            false,
-            false,
-            MouseReportEncoding::X10,
-            Modifiers::NONE,
-            HeldButtons::default(),
-            0,
-            Some(0),
-            1,
-            1,
-            &records,
-        );
-        assert!(reset);
-        assert_eq!(report, None);
-        assert_eq!(ops, MotionRecordOps::None);
-    }
-
-    #[test]
-    fn decide_motion_reset_true_when_active_tab_differs_from_last() {
-        let records = PointerRecords::default();
-        let (_, reset, _) = decide_motion(
-            belongs_inputs(),
-            true,
-            false,
-            false,
-            true,
-            MouseReportEncoding::X10,
-            Modifiers::NONE,
-            HeldButtons::default(),
-            1,
-            Some(0),
-            1,
-            1,
-            &records,
-        );
-        assert!(reset, "an active-tab change must be observed as a reset (D7)");
-    }
-
-    #[test]
-    fn decide_motion_is_local_when_the_held_buttons_gesture_is_owned_locally_regardless_of_shift() {
-        // task0006 Design: motion consults no shift flag at all — while a
-        // held button's gesture is owned by the local side, that
-        // persisted ownership decides (D10), not the instantaneous shift
-        // state.
-        let mut records = PointerRecords::default();
-        apply_button_event(
-            &mut records,
-            false,
-            ButtonRecordOps::RecordPress {
-                identity: MouseButtonId::Left,
-                owner: GestureOwner::Local,
-                tab: 0,
-            },
-        );
-        let held = HeldButtons {
-            left: true,
-            ..HeldButtons::default()
-        };
-        for shift in [false, true] {
-            let (report, _reset, ops) = decide_motion(
-                belongs_inputs(),
-                true,
-                false,
-                false,
-                true,
-                MouseReportEncoding::Sgr,
-                Modifiers {
-                    shift,
-                    ..Modifiers::NONE
-                },
-                held,
-                0,
-                Some(0),
-                1,
-                1,
-                &records,
-            );
-            assert_eq!(report, None, "shift={shift}");
-            assert_eq!(ops, MotionRecordOps::None, "shift={shift}");
-        }
-    }
-
-    #[test]
-    fn decide_motion_still_reports_when_the_held_buttons_gesture_is_owned_by_report_and_shift_becomes_held()
-     {
-        let mut records = PointerRecords::default();
-        apply_button_event(
-            &mut records,
-            false,
-            ButtonRecordOps::RecordPress {
-                identity: MouseButtonId::Left,
-                owner: GestureOwner::Report,
-                tab: 0,
-            },
-        );
-        let held = HeldButtons {
-            left: true,
-            ..HeldButtons::default()
-        };
-        let (report, _reset, _ops) = decide_motion(
-            belongs_inputs(),
-            true,
-            false,
-            true, // 1002
-            false,
-            MouseReportEncoding::Sgr,
-            Modifiers {
-                shift: true,
-                ..Modifiers::NONE
-            },
-            held,
-            0,
-            Some(0),
-            1,
-            1,
-            &records,
-        );
-        assert!(
-            report.is_some(),
-            "a Report-owned gesture must keep reporting even once Shift is held \
-             mid-drag (D10's mirror ordering — the corresponding motion-side bug to \
-             the release fix)"
-        );
-    }
-
-    #[test]
-    fn apply_motion_advances_the_real_cache_matching_the_decision() {
-        let mut records = PointerRecords::default();
-        let (report1, reset1, ops1) = decide_motion(
-            belongs_inputs(),
-            true,
-            false,
-            false,
-            true,
-            MouseReportEncoding::X10,
-            Modifiers::NONE,
-            HeldButtons::default(),
-            0,
-            Some(0),
-            1,
-            1,
-            &records,
-        );
-        assert!(report1.is_some());
-        apply_motion(&mut records, reset1, ops1);
-        // The same cell again must now be suppressed by the (now-updated)
-        // real cache.
-        let (report2, reset2, ops2) = decide_motion(
-            belongs_inputs(),
-            true,
-            false,
-            false,
-            true,
-            MouseReportEncoding::X10,
-            Modifiers::NONE,
-            HeldButtons::default(),
-            0,
-            Some(0),
-            1,
-            1,
-            &records,
-        );
-        assert_eq!(report2, None);
-        assert_eq!(ops2, MotionRecordOps::None);
-        apply_motion(&mut records, reset2, ops2);
-    }
-
-    // -- wheel path --
-
-    #[test]
-    fn decide_wheel_suppressed_by_grid_when_tracking_active_and_position_rejected() {
-        let (decision, _reset) = decide_wheel(
-            rejected_inputs(),
-            true,
-            false,
-            false,
-            false,
-            false,
-            MouseReportEncoding::Sgr,
-            Modifiers::NONE,
-            1.0,
-            0,
-            Some(0),
-            1,
-            1,
-        );
-        assert_eq!(decision, WheelDecision::SuppressedByGrid);
-    }
-
-    #[test]
-    fn decide_wheel_scrolls_scrollback_when_tracking_active_and_shift_held() {
-        let (decision, _reset) = decide_wheel(
-            belongs_inputs(),
-            true,
-            true,
-            true,
-            true,
-            true,
-            MouseReportEncoding::Sgr,
-            Modifiers::NONE,
-            1.0,
-            0,
-            Some(0),
-            1,
-            1,
-        );
-        assert_eq!(
-            decision,
-            WheelDecision::ScrollScrollback,
-            "D5: Shift+wheel while tracking is active must never select the arrow-\
-             translate path, even on the alternate screen with the alt-scroll mode \
-             bit and setting both on"
-        );
-    }
-
-    #[test]
-    fn decide_wheel_reports_when_tracking_active_and_shift_not_held() {
-        let (decision, _reset) = decide_wheel(
-            belongs_inputs(),
-            true,
-            false,
-            false,
-            false,
-            false,
-            MouseReportEncoding::X10,
-            Modifiers::NONE,
-            1.0,
-            0,
-            Some(0),
-            1,
-            1,
-        );
-        match decision {
-            WheelDecision::Report(Some(report)) => {
-                assert_eq!(report.tab, 0);
-                assert!(!report.bytes.is_empty());
-            }
-            other => panic!("expected a report, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn decide_wheel_is_never_tracking_inactive_while_tracking_is_active() {
-        // AC-3/AC-4 (replaces the retired ordering scan): every
-        // combination of shift / alt-screen / mode-bit / setting while
-        // tracking is active must resolve to a tracking-active outcome,
-        // never fall through to the tracking-inactive matrix.
-        for shift in [false, true] {
-            for alt_screen in [false, true] {
-                for mode_bit in [false, true] {
-                    for setting in [false, true] {
-                        let (decision, _reset) = decide_wheel(
-                            belongs_inputs(),
-                            true,
-                            shift,
-                            alt_screen,
-                            mode_bit,
-                            setting,
-                            MouseReportEncoding::Sgr,
-                            Modifiers::NONE,
-                            1.0,
-                            0,
-                            Some(0),
-                            1,
-                            1,
-                        );
-                        assert_ne!(decision, WheelDecision::TrackingInactive);
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn decide_wheel_is_tracking_inactive_when_no_tracking_mode_is_active() {
-        let (decision, reset) = decide_wheel(
-            belongs_inputs(),
-            false,
-            false,
-            false,
-            false,
-            false,
-            MouseReportEncoding::X10,
-            Modifiers::NONE,
-            1.0,
-            0,
-            Some(0),
-            1,
-            1,
-        );
-        assert_eq!(decision, WheelDecision::TrackingInactive);
-        assert!(reset);
-    }
-
-    // -- AC-3: focus-loss clear-all ──────────────────────────────────────
-
-    #[test]
-    fn clear_gesture_and_held_state_empties_both_records() {
-        let mut records = PointerRecords::default();
-        apply_button_event(
-            &mut records,
-            false,
-            ButtonRecordOps::RecordPress {
-                identity: MouseButtonId::Left,
-                owner: GestureOwner::Report,
-                tab: 3,
-            },
-        );
+    fn ac2_clear_all_empties_gesture_and_held_button_records() {
+        let mut gesture = GestureOwnership::new();
+        gesture.record_press(MouseButtonId::Left, GestureOwner::Report);
+        gesture.record_press(MouseButtonId::Right, GestureOwner::Local);
         let mut held = HeldButtons {
             left: true,
             middle: true,
             right: false,
         };
-        clear_gesture_and_held_state(&mut records, &mut held);
+        clear_all(&mut gesture, &mut held);
+        assert_eq!(gesture.peek(MouseButtonId::Left), None);
+        assert_eq!(gesture.peek(MouseButtonId::Right), None);
         assert_eq!(held, HeldButtons::default());
+    }
+
+    // ── AC-3 (TS-19): chrome-guarded regions × event kind × button ──────
+
+    #[test]
+    fn ac3_ts19_guarded_regions_reject_every_event_kind_and_button() {
+        let regions: [(&str, GridOwnershipInputs); 6] = [
+            (
+                "top strip",
+                GridOwnershipInputs {
+                    in_top_strip: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+            (
+                "status-bar bottom strip",
+                GridOwnershipInputs {
+                    in_bottom_strip: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+            (
+                "right-edge scrollbar overlay",
+                GridOwnershipInputs {
+                    in_scrollbar_overlay: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+            (
+                "mux sidebar (persistent or overlay collapse to one bool)",
+                GridOwnershipInputs {
+                    in_mux_sidebar: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+            (
+                "CSD edge-resize hot zone",
+                GridOwnershipInputs {
+                    in_resize_hot_zone: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+            (
+                "profile selector visible",
+                GridOwnershipInputs {
+                    profile_selector_visible: true,
+                    ..GridOwnershipInputs::default()
+                },
+            ),
+        ];
+
+        for (name, grid) in regions {
+            for button in [
+                MouseButtonId::Left,
+                MouseButtonId::Middle,
+                MouseButtonId::Right,
+            ] {
+                for kind in [MouseEventKind::Press, MouseEventKind::Release] {
+                    let mut records = MouseReportRecords::default();
+                    let inputs = ButtonEventInputs {
+                        grid,
+                        ..base_button_inputs(kind, button)
+                    };
+                    let outcome = decide_button_event(inputs);
+                    let mut dest = Vec::new();
+                    apply_outcome(outcome, &mut records, &mut dest);
+                    assert!(
+                        dest.is_empty(),
+                        "{name}: {kind:?} {button:?} must not report"
+                    );
+                }
+            }
+
+            let mut records = MouseReportRecords::default();
+            let motion_inputs = MotionEventInputs {
+                grid,
+                ..base_motion_inputs()
+            };
+            let outcome = decide_motion_event(motion_inputs);
+            let mut dest = Vec::new();
+            apply_outcome(outcome, &mut records, &mut dest);
+            assert!(dest.is_empty(), "{name}: motion must not report");
+
+            for kind in [MouseEventKind::WheelUp, MouseEventKind::WheelDown] {
+                let mut records = MouseReportRecords::default();
+                let wheel_inputs = WheelEventInputs {
+                    grid,
+                    ..base_wheel_inputs(kind)
+                };
+                let outcome = decide_wheel_event(&wheel_inputs);
+                let mut dest = Vec::new();
+                apply_outcome(outcome, &mut records, &mut dest);
+                assert!(dest.is_empty(), "{name}: {kind:?} must not report");
+            }
+        }
+    }
+
+    #[test]
+    fn ac3_ts19_a_position_over_the_grid_with_no_region_claiming_it_produces_bytes() {
+        // Press.
+        let mut records = MouseReportRecords::default();
+        let outcome = decide_button_event(base_button_inputs(
+            MouseEventKind::Press,
+            MouseButtonId::Left,
+        ));
+        let mut dest = Vec::new();
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(!dest.is_empty(), "press over the open grid must report");
+
+        // Its matching release (gesture-owned, so position is irrelevant).
+        dest.clear();
+        let outcome = decide_button_event(ButtonEventInputs {
+            records,
+            ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
+        });
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(!dest.is_empty(), "matching release must report");
+
+        // Motion (different cell so the cache does not suppress it).
+        dest.clear();
+        let mut records = MouseReportRecords::default();
+        let outcome = decide_motion_event(MotionEventInputs {
+            column: 9,
+            row: 9,
+            ..base_motion_inputs()
+        });
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(!dest.is_empty(), "motion over the open grid must report");
+
+        // Wheel.
+        dest.clear();
+        let mut records = MouseReportRecords::default();
+        let outcome = decide_wheel_event(&base_wheel_inputs(MouseEventKind::WheelUp));
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(!dest.is_empty(), "wheel notch over the open grid must report");
+    }
+
+    // ── AC-4 (TS-20, TS-24): sequence-driven, one persistent record pair ─
+
+    #[test]
+    fn ac4_ts20_shift_press_then_lift_then_release_completes_selection_locally() {
+        let mut records = MouseReportRecords::default();
+        let mut dest = Vec::new();
+
+        let press = ButtonEventInputs {
+            mods: Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+            records,
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Left)
+        };
+        let outcome = decide_button_event(press);
+        assert_eq!(
+            outcome.disposition,
+            Disposition::Local(LocalArm::BeginSelectionDrag)
+        );
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(dest.is_empty());
+
+        // Shift lifted mid-drag: motion must stay local regardless.
+        let motion = MotionEventInputs {
+            mods: Modifiers::NONE,
+            column: 6,
+            row: 6,
+            records,
+            ..base_motion_inputs()
+        };
+        let outcome = decide_motion_event(motion);
+        assert_eq!(outcome.disposition, Disposition::Nothing);
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(dest.is_empty());
+
+        // Release with Shift now lifted: still routed by the recorded
+        // (Local) owner, not the instantaneous Shift flag.
+        let release = ButtonEventInputs {
+            mods: Modifiers::NONE,
+            records,
+            ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
+        };
+        let outcome = decide_button_event(release);
+        assert_eq!(
+            outcome.disposition,
+            Disposition::Local(LocalArm::CompleteSelectionAndPublishToPrimary)
+        );
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(dest.is_empty(), "a completed local selection emits no bytes");
+        assert_eq!(
+            records.gesture_owner.peek(MouseButtonId::Left),
+            None,
+            "a delivered release clears its record"
+        );
+    }
+
+    #[test]
+    fn ac4_ts20_no_shift_press_then_shift_arrives_release_still_reports_without_shift_bit() {
+        let mut records = MouseReportRecords::default();
+        let mut dest = Vec::new();
+
+        let press = ButtonEventInputs {
+            mods: Modifiers::NONE,
+            records,
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Left)
+        };
+        let outcome = decide_button_event(press);
+        assert!(matches!(outcome.disposition, Disposition::Report { .. }));
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert_eq!(dest.len(), 1);
+
+        // Motion with Shift now held: the recorded (Report) owner keeps
+        // reporting motion regardless of the instantaneous Shift flag.
+        dest.clear();
+        let motion = MotionEventInputs {
+            mods: Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+            column: 6,
+            row: 6,
+            records,
+            ..base_motion_inputs()
+        };
+        let outcome = decide_motion_event(motion);
+        assert!(
+            matches!(outcome.disposition, Disposition::Report { .. }),
+            "an owned Report gesture keeps reporting motion despite Shift"
+        );
+        apply_outcome(outcome, &mut records, &mut dest);
+
+        // Release, Shift held: still reports, and the button code never
+        // carries the shift bit (AC-10 / D4).
+        dest.clear();
+        let release = ButtonEventInputs {
+            mods: Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+            records,
+            ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
+        };
+        let outcome = decide_button_event(release);
+        match outcome.disposition {
+            Disposition::Report { bytes, tab } => {
+                assert_eq!(tab, 0);
+                assert_eq!(bytes, b"\x1b[<0;5;5m".to_vec());
+            }
+            other => panic!("expected a release report, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ac4_press_rejected_by_grid_ownership_records_no_owner() {
+        let mut records = MouseReportRecords::default();
+        let press = ButtonEventInputs {
+            grid: GridOwnershipInputs {
+                in_top_strip: true,
+                ..GridOwnershipInputs::default()
+            },
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Left)
+        };
+        let outcome = decide_button_event(press);
+        let mut dest = Vec::new();
+        apply_outcome(outcome, &mut records, &mut dest);
         assert_eq!(records.gesture_owner.peek(MouseButtonId::Left), None);
     }
 
     #[test]
-    fn decide_button_release_after_focus_loss_clear_finds_no_owner() {
-        let mut records = PointerRecords::default();
-        apply_button_event(
-            &mut records,
-            false,
-            ButtonRecordOps::RecordPress {
-                identity: MouseButtonId::Left,
-                owner: GestureOwner::Report,
-                tab: 3,
-            },
-        );
-        let mut held = HeldButtons::default();
-        clear_gesture_and_held_state(&mut records, &mut held);
-        let inputs = ButtonEventInputs {
-            kind: MouseEventKind::Release,
-            identity: Some(MouseButtonId::Left),
-            grid_ownership: belongs_inputs(),
-            mods: Modifiers::NONE,
-            tracking_any_active: true,
-            encoding: MouseReportEncoding::Sgr,
-            active_tab: 3,
-            last_active_tab: Some(3),
-            col1: 1,
-            row1: 1,
+    fn ac4_two_buttons_pressed_mid_gesture_are_owned_independently() {
+        let mut records = MouseReportRecords::default();
+        let mut dest = Vec::new();
+
+        let left_press = ButtonEventInputs {
+            records,
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Left)
         };
-        let (decision, _reset, ops) = decide_button_event(inputs, &records);
+        apply_outcome(decide_button_event(left_press), &mut records, &mut dest);
+
+        let middle_press = ButtonEventInputs {
+            mods: Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+            records,
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Middle)
+        };
+        apply_outcome(decide_button_event(middle_press), &mut records, &mut dest);
+
         assert_eq!(
-            decision,
-            ButtonDecision::Local,
-            "AC-3: the first pointer event after focus returns is decided from \
-             empty records"
+            records.gesture_owner.peek(MouseButtonId::Left),
+            Some(GestureOwner::Report)
         );
-        assert_eq!(ops, ButtonRecordOps::None);
+        assert_eq!(
+            records.gesture_owner.peek(MouseButtonId::Middle),
+            Some(GestureOwner::Local)
+        );
+    }
+
+    // ── AC-5 (TS-21): rejected motion leaves the cached cell untouched ──
+
+    #[test]
+    fn ac5_ts21_rejected_motion_leaves_cached_cell_unchanged_then_next_motion_still_reports() {
+        let mut records = MouseReportRecords::default();
+        records.cell_cache.commit(1, 1);
+        let mut dest = Vec::new();
+
+        let rejected = MotionEventInputs {
+            grid: GridOwnershipInputs {
+                in_bottom_strip: true,
+                ..GridOwnershipInputs::default()
+            },
+            column: 9,
+            row: 9,
+            records,
+            ..base_motion_inputs()
+        };
+        let outcome = decide_motion_event(rejected);
+        assert_eq!(outcome.disposition, Disposition::Nothing);
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(dest.is_empty());
+        assert!(
+            !records.cell_cache.would_report(1, 1),
+            "the cached cell must be exactly what it was before the rejected motion"
+        );
+
+        let accepted = MotionEventInputs {
+            column: 2,
+            row: 2,
+            records,
+            ..base_motion_inputs()
+        };
+        let outcome = decide_motion_event(accepted);
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(
+            !dest.is_empty(),
+            "a following motion over the grid at a different cell must still report"
+        );
+    }
+
+    // ── AC-6 (TS-22, TS-23): release tracking/tab-identity corrections ──
+
+    #[test]
+    fn ac6_ts22_release_with_tracking_cleared_mid_gesture_produces_no_bytes() {
+        let mut records = MouseReportRecords::default();
+        let mut dest = Vec::new();
+        apply_outcome(
+            decide_button_event(ButtonEventInputs {
+                records,
+                ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Left)
+            }),
+            &mut records,
+            &mut dest,
+        );
+        assert!(!dest.is_empty(), "sanity: the press reported");
+        dest.clear();
+
+        let release = ButtonEventInputs {
+            mode_1000: false,
+            mode_1002: false,
+            mode_1003: false,
+            records,
+            ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Left)
+        };
+        let outcome = decide_button_event(release);
+        assert_eq!(outcome.disposition, Disposition::Nothing);
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(dest.is_empty());
+    }
+
+    #[test]
+    fn ac6_ts23_release_after_active_tab_change_targets_the_tab_the_press_recorded() {
+        let mut records = MouseReportRecords::default();
+        let mut dest = Vec::new();
+        apply_outcome(
+            decide_button_event(ButtonEventInputs {
+                active_tab: 1,
+                records,
+                ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Right)
+            }),
+            &mut records,
+            &mut dest,
+        );
+        dest.clear();
+
+        let release = ButtonEventInputs {
+            active_tab: 2,
+            records,
+            ..base_button_inputs(MouseEventKind::Release, MouseButtonId::Right)
+        };
+        let outcome = decide_button_event(release);
+        match &outcome.disposition {
+            Disposition::Report { tab, .. } => assert_eq!(*tab, 1),
+            other => panic!("expected a release report targeting tab 1, got {other:?}"),
+        }
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert_eq!(dest, vec![(1, dest[0].1.clone())]);
+    }
+
+    #[test]
+    fn ac6_release_with_no_recorded_press_produces_no_bytes() {
+        let mut records = MouseReportRecords::default();
+        let outcome = decide_button_event(base_button_inputs(
+            MouseEventKind::Release,
+            MouseButtonId::Left,
+        ));
+        assert_eq!(outcome.disposition, Disposition::Nothing);
+        let mut dest = Vec::new();
+        apply_outcome(outcome, &mut records, &mut dest);
+        assert!(dest.is_empty());
+    }
+
+    #[test]
+    fn ac6_button_and_wheel_paths_both_carry_the_two_reset_observations() {
+        // Button path: no tracking mode active -> reset, even for a click
+        // with no intervening motion.
+        let mut records = MouseReportRecords::default();
+        records.cell_cache.commit(9, 9);
+        records
+            .gesture_owner
+            .record_press(MouseButtonId::Left, GestureOwner::Report);
+        records.built_for_tab = Some(5);
+        let mut dest = Vec::new();
+        let press = ButtonEventInputs {
+            mode_1000: false,
+            mode_1002: false,
+            mode_1003: false,
+            active_tab: 5,
+            records,
+            ..base_button_inputs(MouseEventKind::Press, MouseButtonId::Right)
+        };
+        apply_outcome(decide_button_event(press), &mut records, &mut dest);
+        assert!(
+            records.cell_cache.would_report(9, 9),
+            "button path resets the stale cache when no tracking mode is active"
+        );
+        assert_eq!(
+            records.gesture_owner.peek(MouseButtonId::Left),
+            None,
+            "button path clears stale ownership when no tracking mode is active"
+        );
+
+        // Wheel path: active tab differs from the one the records were
+        // built against -> reset, even with no intervening motion.
+        let mut records = MouseReportRecords::default();
+        records.cell_cache.commit(3, 3);
+        records
+            .gesture_owner
+            .record_press(MouseButtonId::Middle, GestureOwner::Local);
+        records.built_for_tab = Some(1);
+        let wheel = WheelEventInputs {
+            active_tab: 2,
+            records,
+            ..base_wheel_inputs(MouseEventKind::WheelUp)
+        };
+        apply_outcome(decide_wheel_event(&wheel), &mut records, &mut dest);
+        assert!(
+            records.cell_cache.would_report(3, 3),
+            "wheel path resets the stale cache on an active-tab change"
+        );
+        assert_eq!(
+            records.gesture_owner.peek(MouseButtonId::Middle),
+            None,
+            "wheel path clears stale ownership on an active-tab change"
+        );
     }
 }

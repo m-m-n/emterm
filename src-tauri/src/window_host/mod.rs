@@ -244,25 +244,39 @@ pub struct WindowHost {
     /// Rows-rebuilt counter (task0003 FR6-half), active only while
     /// `render_perf_enabled`. Same env gate as `frame_counter`.
     rows_rebuilt_counter: RowsRebuiltCounter,
-    /// Mouse-reporting (SC-4, SC-9, D7; task0005/task0006 SC-10/SC-11,
-    /// D12): the record pair the decision/apply seam operates on — the
-    /// cell-change cache and the gesture-ownership record (plus the
-    /// per-button press-tab record), bundled into one plain value per
-    /// SC-11's contract ("the pair of records ... as a plain value").
-    /// Reset whenever the host observes that no tracking mode is active,
-    /// or on active-tab change (D7), and cleared (gesture-ownership only)
-    /// on focus loss alongside [`mouse_report_held`](Self::mouse_report_held).
-    mouse_report_records: mouse_report::PointerRecords,
-    /// Mouse-reporting (SC-5 input; task0006 Design "the held-button
-    /// record"): which of left/middle/right is currently physically
-    /// held, updated on every `PointerButton` press/release. Tracked
-    /// independently of `pointer_buttons_down` above, which counts only
-    /// egui-mapped buttons and discards which one.
-    mouse_report_held: mouse_report::HeldButtons,
+    /// Mouse-reporting (SC-4, D7): the cell-change filter's cache, owned
+    /// by the host for the lifetime of a tracking session. Reset whenever
+    /// the host observes that no tracking mode is active, and on
+    /// active-tab change, so the first motion of a new tracking session
+    /// always reports.
+    mouse_report_cell_cache: mouse_report::CellChangeFilter,
+    /// Mouse-reporting (SC-5 input): which of left/middle/right is
+    /// currently held, updated on every `PointerButton` press/release.
+    /// Tracked independently of `pointer_buttons_down` above, which
+    /// counts only egui-mapped buttons and discards which one. Plain
+    /// bools (not a `mouse_report`-owned struct) because `motion_gate`'s
+    /// contract takes three separate held-button parameters, not a type.
+    mouse_report_held_left: bool,
+    mouse_report_held_middle: bool,
+    mouse_report_held_right: bool,
     /// Mouse-reporting (D7): last active-tab index observed by the
-    /// decision/apply seam's reset check. `None` means no observation has
-    /// happened yet, so the first check always counts as a change.
+    /// cache-reset check. `None` means no observation has happened yet,
+    /// so the first check always counts as a change.
     mouse_report_last_active_tab: Option<usize>,
+    /// Mouse-reporting (task0004 SC-9, D10): which side owns each
+    /// in-flight button gesture, recorded at press and consulted at the
+    /// matching release regardless of the Shift state in between. Reset
+    /// on the same two observations that reset
+    /// [`mouse_report_cell_cache`](Self::mouse_report_cell_cache) (D7).
+    ///
+    /// task0005 (SC-10/SC-11, D12) groups this field, the cell-change
+    /// cache above and the last-active-tab bookkeeping below into the
+    /// plain [`mouse_report::MouseReportRecords`] value SC-11 operates on
+    /// — see [`Self::mouse_report_records`] /
+    /// [`Self::set_mouse_report_records`]. `task0006` reduces the pointer
+    /// handlers onto that seam; these three fields stay as they are here
+    /// until then.
+    mouse_report_gesture_owner: mouse_report::GestureOwnership,
 }
 
 /// Terminal font family used to skin the egui `Monospace` chain
@@ -461,10 +475,38 @@ impl WindowHost {
                 .unwrap_or(false),
             frame_counter: FrameCounter::default(),
             rows_rebuilt_counter: RowsRebuiltCounter::default(),
-            mouse_report_records: mouse_report::PointerRecords::default(),
-            mouse_report_held: mouse_report::HeldButtons::default(),
+            mouse_report_cell_cache: mouse_report::CellChangeFilter::default(),
+            mouse_report_held_left: false,
+            mouse_report_held_middle: false,
+            mouse_report_held_right: false,
             mouse_report_last_active_tab: None,
+            mouse_report_gesture_owner: mouse_report::GestureOwnership::default(),
         }
+    }
+
+    /// task0005 (SC-10/SC-11, D12): packages the two existing mouse-report
+    /// records — [`mouse_report::CellChangeFilter`] (SC-4) and
+    /// [`mouse_report::GestureOwnership`] (SC-9) — together with the tab
+    /// they were last built against into the plain
+    /// [`mouse_report::MouseReportRecords`] value SC-11 operates on.
+    /// `task0006` reads this pair, calls [`mouse_report::apply_outcome`],
+    /// then writes the result back with [`Self::set_mouse_report_records`]
+    /// when it reduces the pointer handlers onto this seam.
+    #[allow(dead_code)] // no caller yet in this worktree; task0006 wires the pointer handlers onto this seam.
+    fn mouse_report_records(&self) -> mouse_report::MouseReportRecords {
+        mouse_report::MouseReportRecords {
+            cell_cache: self.mouse_report_cell_cache,
+            gesture_owner: self.mouse_report_gesture_owner,
+            built_for_tab: self.mouse_report_last_active_tab,
+        }
+    }
+
+    /// The write-back counterpart of [`Self::mouse_report_records`].
+    #[allow(dead_code)] // no caller yet in this worktree; task0006 wires the pointer handlers onto this seam.
+    fn set_mouse_report_records(&mut self, records: mouse_report::MouseReportRecords) {
+        self.mouse_report_cell_cache = records.cell_cache;
+        self.mouse_report_gesture_owner = records.gesture_owner;
+        self.mouse_report_last_active_tab = records.built_for_tab;
     }
 
     /// Phase 4-H: lazily construct the `TerminalGridPass` once the App
