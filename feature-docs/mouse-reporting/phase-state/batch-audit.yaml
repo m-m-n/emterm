@@ -177,3 +177,34 @@ records:
     (ii)。auto_fix.termination = no-progress とし、4 件の high を resolution: deferred（batch mode: rework cap
     reached）で round2.yaml に記録し、残る medium 4 件も unresolved として記録したうえで、後続タスクとして Notion に起票した。ソースおよび結果: scratchpad/codex-q2.txt,
     scratchpad/codex-a2.txt'
+- gate_id: null
+  phase: verify
+  resolved_at: '2026-09-19T22:42:00+09:00'
+  question: 'verify: TS-19 / TS-20 / TS-21 を pass と記録するか、fail と記録するか'
+  options:
+  - (A) pass と記録する（窓なしで到達できる最大深度は満たしており、配線の穴は deferred レビュー指摘として別途追跡済み。verify がレビュー指摘を二重計上すべきでない）
+  - (B) fail と記録する（ソース文字列の出現順は振る舞い検証ではなく、VERIFICATION.md が明示する「no bytes」「PRIMARY 到達」「キャッシュ状態」のアサーションがどこにも無い）
+  choice: (B) fail と記録する
+  codex_consulted: true
+  resolution_note: >-
+    gate_id を持たない orchestrator 判断。ユーザーの明示指示『不明点は Codex に相談し、比較して良いほうを採用する』に従って相談した。
+    状況: ビルド 4 件（main / term_core / cli_only / web）とテスト 3 スイート（term_core lib 858 pass、main lib
+    --test-threads=1 で 3406 pass、bun test 349 pass）はすべて exit 0。インスペクション項目 TS-15（設定面が diff に含まれないこと）・
+    TS-16（#[cfg(unix)] / #[cfg(windows)] / #[cfg(target_os] の追加が無いこと、追加されたのは #[cfg(test)] のみ）・
+    TS-18（X10 押下/解放・SGR 押下/解放・モーション・ホイール上下・Ctrl・Alt・223 超え無出力の 10 項目すべてがバイト単位でアサートされていること）も
+    確認済み。争点は TS-19 / TS-20 / TS-21 の扱い。VERIFICATION.md はこの 3 件を実ハンドラ（handle_pointer_button /
+    handle_pointer_moved / handle_mouse_wheel）に対する表駆動の振る舞いテストとして定義しているが、実装は (a) mouse_report.rs の
+    純粋関数テスト（point_belongs_to_grid_* 4 件、gesture_ownership_* 8 件）と (b) window_host/tests.rs で
+    include_str!("pointer_routing.rs") によりソース文字列を読み部分文字列の出現位置を比較する構造テスト、の 2 本立て。
+    ハンドラは &mut WindowHost / &mut App を取り単体テストで生成できないため、配線はソースの文字列順でしか担保されていない。
+    Codex 呼び出し: 既定プロバイダは usage limit で exit 1（2026-09-20 01:13 まで）。同じハーネス経由で LiteLLM proxy の
+    muse-spark にフォールバックし exit 0。判定: B。根拠 5 点 — 指定は実処理での無出力と選択到達の確認なのに実装は文字並びの確認だけでずれている /
+    純粋関数の表試験は判断材料になるが配線の正しさは保証していない / 残った重度指摘 4 件がまさに未検証の配線に集中していて危険が裏付けられている /
+    pass と書くと人によるレビューが甘くなるので落として注意を残した方が得 / 検証と指摘の重複より見逃しの方が怖いので二重計上は気にしなくてよい。
+    採用しなかった選択肢: (A) pass。Opus エスカレーション: 未実施（相談が決定的な判定を返したため）。
+    採用結果: verify.status = failed / result = fail、failed_items に TS-19 / TS-20 / TS-21 を
+    category: comprehensive で記録。batch.verify_rework は rounds 1、failed_id_counts は各 ID 1 回目で、
+    系譜 cap（2）にも hard cap（3）にも未到達のため自動 rework を 1 巡回する。
+    実行不能だった項目: TS-10 / TS-11 / TS-12 / TS-13 は窓・ポインタデバイス・実アプリを要する手動シナリオで、
+    無人実行では実行できない。fail ではなく未実行として扱い、この記録と Notion コメントに残した。
+    ソースおよび結果: scratchpad/verify-q.md, scratchpad/verify-a.md
