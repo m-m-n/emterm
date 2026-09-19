@@ -101,7 +101,7 @@ tasks:
   task0001:
     title: "Per-region SC-8 rejection dispatch and disposition-pinning tests"
     plan: tasks/task0001.md
-    status: in_progress
+    status: merged
     files:
       - src-tauri/src/window_host/mouse_report.rs
       - src-tauri/src/window_host/pointer_routing.rs
