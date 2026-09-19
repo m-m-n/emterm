@@ -120,8 +120,8 @@ tasks:
     - FR1
     - NFR3
     - NFR5
-    status: in_progress
-    notes: null
+    status: failed
+    notes: launching session died before any work landed (journal reason: orphaned); batch retry 1/1 consumed
     branch: em-workflow/mouse-reporting/task0001
   task0002:
     title: Mouse report encoding and routing-decision helpers
@@ -149,8 +149,8 @@ tasks:
     - NFR5
     - NFR6
     - NFR7
-    status: in_progress
-    notes: null
+    status: failed
+    notes: launching session died before any work landed (journal reason: orphaned); batch retry 1/1 consumed
     branch: em-workflow/mouse-reporting/task0002
   task0003:
     title: Pointer routing integration and report emission
@@ -181,8 +181,8 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: in_progress
-    notes: null
+    status: failed
+    notes: launching session died before any work landed (journal reason: orphaned); batch retry 1/1 consumed
     branch: em-workflow/mouse-reporting/task0003
 review:
   status: pending
