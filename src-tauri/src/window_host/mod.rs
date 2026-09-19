@@ -268,6 +268,14 @@ pub struct WindowHost {
     /// matching release regardless of the Shift state in between. Reset
     /// on the same two observations that reset
     /// [`mouse_report_cell_cache`](Self::mouse_report_cell_cache) (D7).
+    ///
+    /// task0005 (SC-10/SC-11, D12) groups this field, the cell-change
+    /// cache above and the last-active-tab bookkeeping below into the
+    /// plain [`mouse_report::MouseReportRecords`] value SC-11 operates on
+    /// — see [`Self::mouse_report_records`] /
+    /// [`Self::set_mouse_report_records`]. `task0006` reduces the pointer
+    /// handlers onto that seam; these three fields stay as they are here
+    /// until then.
     mouse_report_gesture_owner: mouse_report::GestureOwnership,
 }
 
@@ -474,6 +482,31 @@ impl WindowHost {
             mouse_report_last_active_tab: None,
             mouse_report_gesture_owner: mouse_report::GestureOwnership::default(),
         }
+    }
+
+    /// task0005 (SC-10/SC-11, D12): packages the two existing mouse-report
+    /// records — [`mouse_report::CellChangeFilter`] (SC-4) and
+    /// [`mouse_report::GestureOwnership`] (SC-9) — together with the tab
+    /// they were last built against into the plain
+    /// [`mouse_report::MouseReportRecords`] value SC-11 operates on.
+    /// `task0006` reads this pair, calls [`mouse_report::apply_outcome`],
+    /// then writes the result back with [`Self::set_mouse_report_records`]
+    /// when it reduces the pointer handlers onto this seam.
+    #[allow(dead_code)] // no caller yet in this worktree; task0006 wires the pointer handlers onto this seam.
+    fn mouse_report_records(&self) -> mouse_report::MouseReportRecords {
+        mouse_report::MouseReportRecords {
+            cell_cache: self.mouse_report_cell_cache,
+            gesture_owner: self.mouse_report_gesture_owner,
+            built_for_tab: self.mouse_report_last_active_tab,
+        }
+    }
+
+    /// The write-back counterpart of [`Self::mouse_report_records`].
+    #[allow(dead_code)] // no caller yet in this worktree; task0006 wires the pointer handlers onto this seam.
+    fn set_mouse_report_records(&mut self, records: mouse_report::MouseReportRecords) {
+        self.mouse_report_cell_cache = records.cell_cache;
+        self.mouse_report_gesture_owner = records.gesture_owner;
+        self.mouse_report_last_active_tab = records.built_for_tab;
     }
 
     /// Phase 4-H: lazily construct the `TerminalGridPass` once the App
