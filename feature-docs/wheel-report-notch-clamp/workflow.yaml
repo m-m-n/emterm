@@ -113,7 +113,7 @@ workflow:
       forward; below-cap behaviour is provably unchanged (the clamp only engages
       at |lines| >= 100). No excluded requirements.
   - id: retrospect
-    status: pending
+    status: in_progress
 
 tasks:
   task0001:
