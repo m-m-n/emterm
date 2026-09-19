@@ -14,7 +14,7 @@ use super::input_translate::{
     wheel_consumer, wheel_report_notches, winit_button_to_report_identity, winit_key_to_egui,
 };
 use super::link_hover::{detect_osc8_link_at, hover_link_cells_changed};
-use super::mouse_report::ButtonIdentity;
+use super::mouse_report::MouseButtonId;
 use super::resize_layout::resolve_grid_bot_inset;
 use super::*;
 use crate::selection::SelectionMode;
@@ -1473,15 +1473,15 @@ fn fr1_wheel_sub_notch_pixel_delta_is_noop() {
 fn winit_button_to_report_identity_maps_the_three_modeled_buttons() {
     assert_eq!(
         winit_button_to_report_identity(MouseButton::Left),
-        Some(ButtonIdentity::Left)
+        Some(MouseButtonId::Left)
     );
     assert_eq!(
         winit_button_to_report_identity(MouseButton::Middle),
-        Some(ButtonIdentity::Middle)
+        Some(MouseButtonId::Middle)
     );
     assert_eq!(
         winit_button_to_report_identity(MouseButton::Right),
-        Some(ButtonIdentity::Right)
+        Some(MouseButtonId::Right)
     );
 }
 

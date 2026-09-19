@@ -18,7 +18,7 @@ use super::input_translate::{
     wheel_report_notches, winit_button_to_report_identity, winit_to_egui_button,
 };
 use super::input_translate::WheelConsumer;
-use super::mouse_report::{self, ButtonIdentity, Encoding, EventKind};
+use super::mouse_report::{self, MouseButtonId, MouseEventKind, MouseReportEncoding};
 
 /// Snapshot of the SC-1 mouse-mode bits (IMPLEMENTATION.md; owned by
 /// task0001), read from the active tab's core on every event rather than
@@ -35,10 +35,10 @@ struct TrackingState {
 impl TrackingState {
     fn read(core: &term_core::terminal_core::TerminalCore) -> Self {
         Self {
-            mode_1000: core.get_mode(term_core::csi_modes::MODE_MOUSE_NORMAL_TRACKING),
-            mode_1002: core.get_mode(term_core::csi_modes::MODE_MOUSE_BUTTON_EVENT_TRACKING),
-            mode_1003: core.get_mode(term_core::csi_modes::MODE_MOUSE_ANY_EVENT_TRACKING),
-            sgr: core.get_mode(term_core::csi_modes::MODE_MOUSE_SGR_ENCODING),
+            mode_1000: core.get_mode(term_core::terminal_core::MODE_MOUSE_NORMAL_TRACKING),
+            mode_1002: core.get_mode(term_core::terminal_core::MODE_MOUSE_BUTTON_EVENT_TRACKING),
+            mode_1003: core.get_mode(term_core::terminal_core::MODE_MOUSE_ANY_EVENT_TRACKING),
+            sgr: core.get_mode(term_core::terminal_core::MODE_MOUSE_SGR_ENCODING),
         }
     }
 
@@ -47,8 +47,12 @@ impl TrackingState {
         self.mode_1000 || self.mode_1002 || self.mode_1003
     }
 
-    fn encoding(&self) -> Encoding {
-        if self.sgr { Encoding::Sgr } else { Encoding::X10 }
+    fn encoding(&self) -> MouseReportEncoding {
+        if self.sgr {
+            MouseReportEncoding::Sgr
+        } else {
+            MouseReportEncoding::X10
+        }
     }
 }
 
@@ -197,19 +201,20 @@ pub(super) fn handle_pointer_moved(
                 tracking.mode_1000,
                 tracking.mode_1002,
                 tracking.mode_1003,
-                host.mouse_report_held,
+                host.mouse_report_held_left,
+                host.mouse_report_held_middle,
+                host.mouse_report_held_right,
             ) {
                 let (screen_row, col) = host.pixel_to_cell(position, app);
                 let col1 = col as u32 + 1;
                 let row1 = screen_row as u32 + 1;
                 if host.mouse_report_cell_cache.should_report(col1, row1) {
                     let encoding = tracking.encoding();
-                    let code = mouse_report::button_code(
-                        EventKind::Motion,
+                    let code = mouse_report::compose_button_code(
+                        MouseEventKind::Motion,
                         identity,
                         encoding,
-                        host.current_mods.ctrl,
-                        host.current_mods.alt,
+                        host.current_mods,
                     );
                     if let Some(bytes) = mouse_report::encode_report(code, col1, row1, encoding, false)
                     {
@@ -294,10 +299,10 @@ pub(super) fn handle_pointer_button(
     if let Some(identity) = winit_button_to_report_identity(button) {
         let held = state == ElementState::Pressed;
         match identity {
-            ButtonIdentity::Left => host.mouse_report_held.left = held,
-            ButtonIdentity::Middle => host.mouse_report_held.middle = held,
-            ButtonIdentity::Right => host.mouse_report_held.right = held,
-            ButtonIdentity::None => {}
+            MouseButtonId::Left => host.mouse_report_held_left = held,
+            MouseButtonId::Middle => host.mouse_report_held_middle = held,
+            MouseButtonId::Right => host.mouse_report_held_right = held,
+            MouseButtonId::None => {}
         }
     }
     host.window().request_redraw();
@@ -400,19 +405,18 @@ pub(super) fn handle_pointer_button(
                 let tracking = TrackingState::read(&tab.core.lock());
                 if tracking.any_active() {
                     let event_kind = match state {
-                        ElementState::Pressed => EventKind::Press,
-                        ElementState::Released => EventKind::Release,
+                        ElementState::Pressed => MouseEventKind::Press,
+                        ElementState::Released => MouseEventKind::Release,
                     };
                     let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
                     let col1 = col as u32 + 1;
                     let row1 = screen_row as u32 + 1;
                     let encoding = tracking.encoding();
-                    let code = mouse_report::button_code(
+                    let code = mouse_report::compose_button_code(
                         event_kind,
                         identity,
                         encoding,
-                        host.current_mods.ctrl,
-                        host.current_mods.alt,
+                        host.current_mods,
                     );
                     let release = state == ElementState::Released;
                     if let Some(bytes) =
@@ -690,20 +694,19 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
                 if notches != 0 {
                     if let Some(tab) = app.active_tab() {
                         let event_kind = if notches > 0 {
-                            EventKind::WheelUp
+                            MouseEventKind::WheelUp
                         } else {
-                            EventKind::WheelDown
+                            MouseEventKind::WheelDown
                         };
                         let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
                         let col1 = col as u32 + 1;
                         let row1 = screen_row as u32 + 1;
                         let encoding = tracking.encoding();
-                        let code = mouse_report::button_code(
+                        let code = mouse_report::compose_button_code(
                             event_kind,
-                            ButtonIdentity::None,
+                            MouseButtonId::None,
                             encoding,
-                            host.current_mods.ctrl,
-                            host.current_mods.alt,
+                            host.current_mods,
                         );
                         let mut buf = Vec::new();
                         for _ in 0..notches.unsigned_abs() {

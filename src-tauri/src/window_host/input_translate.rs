@@ -8,6 +8,8 @@ use winit::keyboard::{Key as WinitKey, NamedKey};
 use crate::pty::input::{Key, Modifiers, Target as EncodeTarget, encode};
 use crate::settings::ShiftEnterBehavior;
 
+use super::mouse_report::MouseButtonId;
+
 /// Translate a winit `MouseButton` to its `egui::PointerButton`
 /// equivalent. Returns `None` for buttons egui does not model (e.g.
 /// extra side buttons).
@@ -429,6 +431,30 @@ pub(super) fn wheel_consumer(
     } else {
         WheelConsumer::ScrollScrollback
     }
+}
+
+/// task0003 (L3): map a winit mouse button to the identity `mouse_report`
+/// (L2) reports in. Side buttons (`Back`/`Forward`/`Button6..10`) have no
+/// DEC mouse-reporting encoding and are never routed to the report path.
+pub(super) fn winit_button_to_report_identity(button: MouseButton) -> Option<MouseButtonId> {
+    match button {
+        MouseButton::Left => Some(MouseButtonId::Left),
+        MouseButton::Middle => Some(MouseButtonId::Middle),
+        MouseButton::Right => Some(MouseButtonId::Right),
+        _ => None,
+    }
+}
+
+/// task0003 (L3): convert a wheel delta (already normalized to "lines") into
+/// a signed whole-notch count. Fractional deltas smaller than one full line
+/// (high-precision trackpads) round toward zero and produce no report,
+/// rather than reporting a partial notch.
+pub(super) fn wheel_report_notches(lines: f32) -> i32 {
+    if !lines.is_finite() {
+        return 0;
+    }
+    let magnitude = lines.abs().floor() as i32;
+    if lines >= 0.0 { magnitude } else { -magnitude }
 }
 
 /// Convert the PTY-side [`Modifiers`] (`input::Modifiers`) into the

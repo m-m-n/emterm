@@ -253,8 +253,12 @@ pub struct WindowHost {
     /// Mouse-reporting (SC-5 input): which of left/middle/right is
     /// currently held, updated on every `PointerButton` press/release.
     /// Tracked independently of `pointer_buttons_down` above, which
-    /// counts only egui-mapped buttons and discards which one.
-    mouse_report_held: mouse_report::HeldButtons,
+    /// counts only egui-mapped buttons and discards which one. Plain
+    /// bools (not a `mouse_report`-owned struct) because `motion_gate`'s
+    /// contract takes three separate held-button parameters, not a type.
+    mouse_report_held_left: bool,
+    mouse_report_held_middle: bool,
+    mouse_report_held_right: bool,
     /// Mouse-reporting (D7): last active-tab index observed by the
     /// cache-reset check. `None` means no observation has happened yet,
     /// so the first check always counts as a change.
@@ -458,7 +462,9 @@ impl WindowHost {
             frame_counter: FrameCounter::default(),
             rows_rebuilt_counter: RowsRebuiltCounter::default(),
             mouse_report_cell_cache: mouse_report::CellChangeFilter::default(),
-            mouse_report_held: mouse_report::HeldButtons::default(),
+            mouse_report_held_left: false,
+            mouse_report_held_middle: false,
+            mouse_report_held_right: false,
             mouse_report_last_active_tab: None,
         }
     }
