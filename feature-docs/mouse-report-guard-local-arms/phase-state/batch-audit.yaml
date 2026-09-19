@@ -1,0 +1,58 @@
+schema_version: 1
+feature: mouse-report-guard-local-arms
+records:
+  - gate_id: create-spec.requirement-clarification
+    question_id: requirement.top-strip-decomposition
+    phase: create-spec
+    resolved_at: "2026-09-20T01:40:00+09:00"
+    policy_action: codex_consultation
+    codex_consulted: true
+    opus_escalation: false
+    options_offered: [preserve_pre_regression, title_bar_band_only, whole_top_strip_scrolls]
+    option_chosen: preserve_pre_regression
+    options_not_chosen: [title_bar_band_only, whole_top_strip_scrolls]
+    recorded_as_assumption: true
+    resolution_note: >-
+      Codex CLI (readonly) に 2 度相談し、実コード (pointer_routing.rs handle_mouse_wheel /
+      handle_pointer_button, base 1d5af0d との差分) の読み取りで到達関係を確定した。
+      要点: (1) タブバー帯・mux サイドバー・プロファイルセレクタのホイールは SC-8 より前の
+      早期 return で egui に渡るため、拒否アームに到達しない。ホイールの被害領域は
+      CSD タイトルバー帯 / 下端ストリップ / スクロールバーオーバーレイ / リサイズ帯 の 4 つ。
+      (2) 押下側の早期 return は構造が異なり、退行前に中押下が PRIMARY ペーストへ到達して
+      いたのは 下端ストリップ / スクロールバーオーバーレイ / mux サイドバー /
+      上部帯と重ならないリサイズ帯 の 4 つ。CSD タイトルバー帯とタブバー帯は退行前も
+      到達していないので修復対象外（入れると退行修正でなく新機能追加になる）。
+      (3) 実装は Codex 推奨の領域別分岐 (ii) を採り、GridOwnershipInputs の in_top_strip を
+      タイトルバー帯 / タブバー帯に分解する。早期 return の到達不能性に依存する案 (i) は
+      ガード順序変更時にタブバー横スクロール等が端末スクロールへ誤分類されるため不採用。
+  - gate_id: create-spec.requirement-clarification
+    question_id: fix-approach.a-vs-b
+    phase: create-spec
+    resolved_at: "2026-09-20T01:30:00+09:00"
+    policy_action: codex_consultation
+    codex_consulted: true
+    opus_escalation: false
+    options_offered: [local_arm_from_rejecting_branch, add_not_grid_owned_disposition]
+    option_chosen: local_arm_from_rejecting_branch
+    options_not_chosen: [add_not_grid_owned_disposition]
+    recorded_as_assumption: true
+    resolution_note: >-
+      レビュー round 3 が挙げた相互排他の 2 案について Codex CLI (readonly) に相談。
+      (a)「拒否アームが具体的な LocalArm を返す」を採用。(b)「Disposition::NotGridOwned を
+      追加してハンドラ側へ判断を戻す」は、decide/perform の境界を曖昧にし SC-10 の
+      「一つの値が具体的な処理を名前付けする」契約を弱めるため不採用。
+      ただし SC-8 拒否時に常に ScrollScrollback を返すのは不正確で、
+      wheel_consumer(tracking_active=false, ...) を通して DECSET 1007 成立時は
+      TranslateToArrowBytes を返す必要がある、という補正が付いた。
+  - gate_id: create-spec.design-step
+    question_id: design-step.recommendation
+    phase: create-spec
+    resolved_at: "2026-09-20T01:40:00+09:00"
+    policy_action: select
+    codex_consulted: false
+    opus_escalation: false
+    options_offered: [decide_autonomously, ask_user]
+    option_chosen: decide_autonomously
+    options_not_chosen: [ask_user]
+    recorded_as_assumption: false
+    resolution_note: "batch-policies.yaml の create-spec.design-step は decide_autonomously 固定。analyst の推奨 skip をそのまま採用。"
