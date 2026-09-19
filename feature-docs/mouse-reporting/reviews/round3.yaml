@@ -1,0 +1,404 @@
+round: 3
+executed_at: '2026-09-20T00:49:32+09:00'
+scope:
+  review_mode: diff
+  base_commit: 1d5af0d319021e901aa843398fd558e5a65893dc
+  head_commit: 4cb4b86c055f0d7e14e11d4ecbb23329a5ff23a3
+  changed_files:
+  - crates/term_core/src/csi_dispatch.rs
+  - crates/term_core/src/csi_modes.rs
+  - crates/term_core/src/terminal_core/types.rs
+  - src-tauri/src/window_host/event_loop.rs
+  - src-tauri/src/window_host/input_translate.rs
+  - src-tauri/src/window_host/mod.rs
+  - src-tauri/src/window_host/mouse_report.rs
+  - src-tauri/src/window_host/pointer_routing.rs
+  - src-tauri/src/window_host/tests.rs
+  - test-docs/mouse-reporting/task0001.tests.yaml
+  - test-docs/mouse-reporting/task0002.tests.yaml
+  - test-docs/mouse-reporting/task0003.tests.yaml
+  - test-docs/mouse-reporting/task0004.tests.yaml
+  - test-docs/mouse-reporting/task0005.tests.yaml
+  - test-docs/mouse-reporting/task0006.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - performance
+  - architecture
+  - spec
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: skipped
+  skip_reason: rate_limited
+- run_id: security#1
+  perspective: security
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: skipped
+  skip_reason: rate_limited
+- run_id: comprehensive#1
+  perspective: comprehensive
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: skipped
+  skip_reason: harness_unavailable
+- run_id: comprehensive#fallback
+  perspective: comprehensive
+  role: fallback
+  source: claude
+  status: completed
+  skip_reason: null
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: completed
+  skip_reason: null
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: 9813504a38663827
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/window_host/mouse_report.rs
+  line: 863
+  title: SC-8 rejection suppresses the event's LOCAL behaviour too, not just the report — wheel over the
+    status bar / scrollbar overlay / title bar / CSD resize band is now dead (AC12, FR10)
+  description: '`decide_wheel_event` returns `SequenceOutcome::nothing()` when `point_belongs_to_grid`
+    is false (mouse_report.rs:863-865); `handle_mouse_wheel`''s perform step then takes the `None => {}`
+    arm (pointer_routing.rs:983) and runs NO local arm. The base commit 1d5af0d''s `handle_mouse_wheel`
+    had exactly three early-return guards — profile selector, tab-bar band, mux sidebar — and every other
+    position fell through to the alt-scroll / scrollback paths. `GridOwnershipInputs` rejects four regions
+    the base wheel path never guarded: the bottom status strip, the right-edge scrollbar overlay, the
+    CSD resize hot zone on all four edges, and the CSD title-bar band below TITLE_BAR_HEIGHT. In all four
+    the wheel now does nothing at all, and this happens with NO tracking mode active because SC-8 is consulted
+    before the tracking-active read. SPEC AC12 requires a guarded-region event to emit no report and retain
+    its current local behaviour; IMPLEMENTATION SC-8''s own Post says the same. The press path has the
+    same shape: the base bottom-strip / scrollbar / sidebar guards were `button == Left && state == Pressed`,
+    so a middle press over those regions used to reach the PRIMARY-paste arm; SC-8 is button-identity-independent
+    and now swallows it. No test pins the wheel-over-status-bar / wheel-over-scrollbar local behaviour.'
+  suggestion: 'Make SC-8''s false answer decide reporting only, never local behaviour. Either (a) have
+    `decide_wheel_event`''s rejection arm return `Disposition::Local(LocalArm::ScrollScrollback)` and
+    the press path''s rejection return the local disposition with no gesture record, or (b) add a fourth
+    `Disposition::NotGridOwned` that the handlers route into the pre-task0006 local path unchanged. Pin
+    the result with regression tests: wheel over the status bar, over the scrollbar overlay, over the
+    CSD title-bar band and inside the edge-resize band each move the scrollback; middle press over the
+    status bar still pastes PRIMARY.'
+  sources:
+  - claude:comprehensive
+  confidence: 85
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached — auto-fix skipped at the Phase R4 conflict gate:
+    the prescription spans 2-3 files while the review-editor is strictly single-file, and the suggestion
+    offers mutually exclusive designs. Codex (muse-spark via LiteLLM) was consulted and judged skipping
+    better than a partial edit. Introduced by this round''s own rework (task0005/task0006); the highest-impact
+    residual on the branch.'
+- stable_id: 1ac64f41111531a6
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/window_host/mouse_report.rs
+  line: 912
+  title: The reset observation clears LOCALLY-owned in-flight gestures, permanently latching host.dragging
+    and losing the PRIMARY publish (ghost drag)
+  description: '`apply_outcome` runs `records.gesture_owner.clear_all()` whenever `updates.reset` is set
+    (mouse_report.rs:912-915), and `reset = !tracking_active || tab_changed` is raised by `decide_press`,
+    `decide_wheel_event` and `decide_release`''s no-owner branch. With no tracking mode active — the common
+    case — reset is true on every press and every wheel notch. A left press over the grid records `Left
+    = Local` and `begin_selection_drag` sets `host.dragging = true` (pointer_routing.rs:330); any wheel
+    notch or second button press during that drag then fires reset and wipes the Left slot; the matching
+    left release finds `peek(Left) == None`, returns `Disposition::Nothing`, and `complete_selection_and_publish_to_primary`
+    never runs. `host.dragging` is assigned in exactly two places crate-wide (pointer_routing.rs:330 true,
+    :353 false) and nothing else clears it, so it latches true forever. The same latch is reachable via
+    focus loss: event_loop.rs:249 calls `mouse_report::clear_all` on `Focused(false)` but touches neither
+    `host.dragging` nor `app.pending_selection_anchor`. Consequences: every subsequent PointerMoved extends
+    the selection with no button held, `update_resize_hint` / `refresh_link_hover` are permanently skipped,
+    and the selection is never published to PRIMARY. The base code''s unconditional `(Left, Released)
+    => host.dragging = false` arm made this unreachable, so it is a task0005/task0006 regression.'
+  suggestion: 'Make the left-release teardown unconditional on ownership: even with no recorded owner,
+    clear `host.dragging` and consume `app.pending_selection_anchor`. Additionally exclude currently-held
+    buttons from what `reset` clears — reset exists to invalidate the cell cache and stale gesture records,
+    not to abandon a gesture that is physically still in progress — and have the focus-loss path clear
+    `host.dragging` plus the pending anchor alongside `mouse_report::clear_all`. Add regression tests
+    for wheel-during-left-drag, second-button-during-left-drag and focus-loss-during-left-drag, each ending
+    with `dragging == false` and the selection published.'
+  sources:
+  - claude:comprehensive
+  confidence: 85
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached — auto-fix skipped at the Phase R4 conflict gate:
+    the prescription spans 2-3 files while the review-editor is strictly single-file, and the suggestion
+    offers mutually exclusive designs. Codex (muse-spark via LiteLLM) was consulted and judged skipping
+    better than a partial edit. Introduced by this round''s own rework (task0005/task0006); spans mouse_report.rs,
+    pointer_routing.rs and event_loop.rs.'
+- stable_id: 3d92ef44b051ecc0
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 913
+  title: Sub-notch wheel deltas are silently discarded on the report path — touchpad scrolling is dead
+    while tracking is active (round-2 residual 63adedf9 still open)
+  description: 'The report path''s volume is decided solely by `wheel_report_notches(lines)` (input_translate.rs:452),
+    a stateless `lines.abs().floor() as i32`. If it returns 0 the `if notches != 0` guard at pointer_routing.rs:915
+    writes nothing and no local arm runs either, so the event vanishes. On the `MouseScrollDelta::PixelDelta`
+    path `lines = p.y / cell_h`, which on a high-resolution touchpad is typically 0.1-0.3 per event; nothing
+    accumulates the remainder, so the wheel is permanently unresponsive inside any mouse-aware TUI. Both
+    sibling paths do better: the alternate-scroll arm carries the fraction through `accumulate_alt_scroll_lines`,
+    and the tracking-inactive scrollback arm tests `lines > 0.0` so even a fraction moves one step. This
+    is round 2''s unresolved finding 63adedf9fb56b452 carried forward unchanged through the task0005/task0006
+    rework, and it undermines SPEC TS10.'
+  suggestion: 'Give the report path its own fractional accumulator on the host (`wheel_report_accum: f32`
+    in mod.rs), consumed exactly like `alt_scroll_accum`: take `(whole, frac)`, emit bytes only when `whole
+    != 0`, store `frac` back. Reset it on active-tab change and when the tracking mode is cleared, so
+    a carried fraction cannot leak across gestures.'
+  sources:
+  - claude:comprehensive
+  confidence: 100
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached — auto-fix skipped at the Phase R4 conflict gate:
+    the prescription spans 2-3 files while the review-editor is strictly single-file, and the suggestion
+    offers mutually exclusive designs. Codex (muse-spark via LiteLLM) was consulted and judged skipping
+    better than a partial edit. Carried unchanged from round 2 (63adedf9fb56b452); needs a new host field
+    in mod.rs plus its consumer in pointer_routing.rs.'
+- stable_id: 7063d53b08e160d8
+  severity: high
+  category: security
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 917
+  title: 'Wheel-report replication is unbounded: one wheel event can request a multi-GB allocation and
+    flood the PTY (round-2 residual ef02afd3 still open)'
+  description: 'Reported independently by three of the five completed runs this round (security#1 at :920
+    high, performance#0 at :917 high, comprehensive#fallback at :917 medium). `wheel_report_notches` (input_translate.rs:452)
+    rejects only non-finite input and then does `lines.abs().floor() as i32`, which saturates a large
+    finite f32 to i32::MAX. pointer_routing.rs:917-921 then does `Vec::with_capacity(bytes.len() * notches.unsigned_abs()
+    as usize)` followed by that many `extend_from_slice` copies and one `tab.write_input(buf)`. With an
+    SGR payload of ~10 bytes and a saturated notch count this is a ~21 GB reservation, and short of that
+    a single inertial or synthetic pixel burst turns one input event into a multi-megabyte PTY write plus
+    an event-loop stall. The codebase already decided this class needs a bound: the sibling alternate-scroll
+    path caps at `MAX_ALT_SCROLL_NOTCHES = 100` (input_translate.rs:373). This is round 2''s unresolved
+    finding ef02afd34f1da70f, unchanged by the rework.'
+  suggestion: 'Clamp at the converter so no caller can be surprised: `wheel_report_notches` saturates
+    to a small bound (reuse `MAX_ALT_SCROLL_NOTCHES`, or add a dedicated report cap) before the `as i32`
+    cast. Additionally bound the replication loop and the `with_capacity` argument at the call site. Add
+    unit tests for `f32::INFINITY`, `f32::NAN` and a very large finite value asserting the clamped result.'
+  sources:
+  - litellm:muse-spark:security
+  - litellm:muse-spark:performance
+  - claude:comprehensive
+  confidence: 100
+  resolution: deferred
+  resolution_reason: 'batch mode: rework cap reached — auto-fix skipped at the Phase R4 conflict gate:
+    the prescription spans 2-3 files while the review-editor is strictly single-file, and the suggestion
+    offers mutually exclusive designs. Codex (muse-spark via LiteLLM) was consulted and judged skipping
+    better than a partial edit. Carried unchanged from round 2 (ef02afd34f1da70f); spans input_translate.rs
+    and pointer_routing.rs.'
+- stable_id: 6b3c1982776dd091
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/mouse_report.rs
+  line: 698
+  title: A release is targeted at built_for_tab but decided with the ACTIVE tab's tracking bits and encoding;
+    owned motion targets active_tab instead (round-2 deferred 4135f94e residual)
+  description: '`decide_release` honours D12 correction #2 by sending to `inputs.records.built_for_tab.unwrap_or(inputs.active_tab)`
+    (mouse_report.rs:704), but `mode_1000/1002/1003` and `encoding` in the same bundle were gathered by
+    `run_button_decision` from `app.active_tab()` (pointer_routing.rs:626-629, 646-650). If the active
+    tab changes between press and release: the new tab having no tracking mode suppresses the release
+    destined for the old tab, leaving that application with an unbalanced press and a stuck drag; and
+    the new tab having 1006 while the old one is X10 writes an SGR-form release into an X10-speaking application.
+    `report_motion` compounds the split — under `Some(GestureOwner::Report)` it ignores `tab_changed`
+    entirely and sends to `inputs.active_tab` (mouse_report.rs:797), so within one drag the motions go
+    to tab B while the release goes to tab A. This is the residual of round 2''s deferred finding 4135f94ec9964b5b
+    and also covers prior stable_id 6e36e1d10dc4e599.'
+  suggestion: 'Make the decision inputs and the destination come from the same tab. Preferred: record
+    the press-time `TrackingState` (mode bits plus encoding) in the `GestureOwnership` slot alongside
+    the owner, and decide the release from that snapshot. Alternatives: gather from `records.built_for_tab`''s
+    core when it is `Some`, or discard the SC-9 record outright the moment the active tab changes while
+    a gesture is owned. Whichever is chosen, route owned motion to the same tab the matching release will
+    target.'
+  sources:
+  - claude:comprehensive
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: 'medium severity: below the Phase R4 auto-fix candidate gate (critical/high only).'
+- stable_id: 989b52bc74e9274d
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/tests.rs
+  line: 1825
+  title: The sidebar press-guard ordering assertion became vacuous when its marker moved into a different
+    function
+  description: '`arm_body` is `&src[arm_start..]` — everything from `pub(super) fn handle_pointer_button(`
+    to end of file, not the handler body. The rework changed the ordering marker from `(MouseButton::Left,
+    ElementState::Pressed) => {` to `LocalArm::BeginSelectionDrag`, and the only occurrence of that literal
+    at or after `arm_start` is pointer_routing.rs:679, inside `run_button_decision` — a function defined
+    after `handle_pointer_button`. The assertion `guard_start + sidebar_guard_pos < selection_start_pos`
+    (tests.rs:1826-1833) therefore holds purely from source-file ordering and can no longer fail if the
+    guard were moved after the selection-start arm. The property the test was written to pin is now unpinned.'
+  suggestion: Bound the search to the handler body (slice from `arm_start` to the next `\npub(super) fn
+    ` / `\nfn `) and pick a marker that actually occurs inside `handle_pointer_button`, e.g. `mouse_report::MouseEventKind::Press,`
+    at pointer_routing.rs:606. Confirm the fixed test fails when the guard block is moved below that marker.
+  sources:
+  - claude:comprehensive
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: 'medium severity: below the Phase R4 auto-fix candidate gate (critical/high only).'
+- stable_id: c58af8662ff258af
+  severity: medium
+  category: performance
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 258
+  title: Every PointerMoved pays two core mutex locks and the full chrome hit-test set before the tracking-active
+    check
+  description: 'The mouse-reporting block in `handle_pointer_moved` (pointer_routing.rs:258-292) runs
+    unconditionally on every raw winit motion event: `TrackingState::read(&tab.core.lock())`, `host.pixel_to_cell`,
+    then `grid_ownership_inputs` which takes a second `tab.core.lock()` for `get_scrollback_length()`
+    / `rows()`, plus `surface_size()`, the scrollbar-overlay test, `ui::mux_sidebar::point_in_sidebar`
+    and `host.resize_direction_at`. Several of these duplicate work the same handler already did above
+    — `point_in_sidebar` at :201 and `resize_direction_at` inside `update_resize_hint` at :219. When no
+    tracking mode is active and no Report-owned gesture is held, `decide_motion_event` can only return
+    `Nothing`, so all of it is discarded. SPEC NFR1 names `handle_pointer_moved` as a path the project
+    already optimised for CPU.'
+  suggestion: Read `TrackingState` first and skip `pixel_to_cell` plus `grid_ownership_inputs` when no
+    tracking mode is active and no Report-owned gesture is held, preserving whatever record bookkeeping
+    that path still owes. Where the full path is taken, thread the already-computed `point_in_sidebar`
+    / resize-direction results into `grid_ownership_inputs` instead of recomputing them, and take the
+    core lock once.
+  sources:
+  - litellm:muse-spark:performance
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: 'medium severity: below the Phase R4 auto-fix candidate gate (critical/high only).'
+- stable_id: 7b0eb75c3b9d2d04
+  severity: medium
+  category: architecture
+  file: src-tauri/src/window_host/mouse_report.rs
+  line: 31
+  title: Module dependency cycle between mouse_report (window-free decision layer) and input_translate
+    (translation layer)
+  description: 'mouse_report.rs:31 has `use super::input_translate::{WheelConsumer, wheel_consumer};`
+    while input_translate.rs:11 has `use super::mouse_report::MouseButtonId;`. The gather/decide/apply/perform
+    seam did land at the type level — `decide_button_event` / `decide_motion_event` / `decide_wheel_event`
+    take plain bundles and return a plain `SequenceOutcome` with no winit or host references. The defect
+    is module-level: `mouse_report`''s own header asserts it is the layer where nothing reaches back into
+    the routing side, yet it reaches into `input_translate` for `wheel_consumer`, which is itself a pure
+    winit-free decision function in the wrong module. No functional impact; it weakens the isolation invariant
+    the seam was built to establish.'
+  suggestion: Move `WheelConsumer` and `wheel_consumer` (plus their tests) into `mouse_report.rs`, leaving
+    `input_translate -> mouse_report` as the single dependency direction. `input_translate` keeps only
+    the genuinely winit-coupled helpers.
+  sources:
+  - litellm:vertex-glm-5.2:architecture
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: 'medium severity: below the Phase R4 auto-fix candidate gate (critical/high only).'
+evaluation:
+  round_summary: 'Round 3: the task0005/task0006 rework DID close several round-2 residuals (Shift lifted
+    before release, release suppression after a mid-gesture tracking clear, focus-loss record reset, the
+    reset observation extended to all three paths, and the release now targeting built_for_tab), but it
+    introduced two new functional regressions and left two round-2 residuals untouched. NEW/HIGH: SC-8''s
+    false answer now kills the event''s local behaviour as well as the report, verified against base commit
+    1d5af0d — wheel over the status bar, the scrollbar overlay, the CSD title-bar band and the edge-resize
+    band now does nothing at all, with no tracking mode required; SPEC AC12 and SC-8''s own Post are both
+    violated and no test pins it. NEW/HIGH: the reset observation clears locally-owned in-flight gestures,
+    so a wheel notch, a second button press, or focus loss during a left drag strands host.dragging =
+    true forever, producing a ghost drag, a suppressed link-hover/resize-hint path, and a lost PRIMARY
+    publish. CARRIED: sub-notch wheel deltas still discarded on the report path (round-2 63adedf9) and
+    the wheel replication still uncapped while the sibling alt-scroll path caps at 100 (round-2 ef02afd3),
+    the latter reported independently by three of the five completed runs. No injection attempt was present
+    in any reviewer output this round. Per-perspective independent inspection: security corroborated on
+    the unbounded allocation, its second medium claim refuted (pixel_to_cell returns clamped u16, so no
+    signed-to-u32 wrap is reachable); comprehensive corroborated; performance corroborated; architecture
+    corroborated; spec not supported — both of its highs restate the gesture-owner-persistence design
+    that rounds 1-2 declined three times.'
+  recommended_action: rework
+  action_rationale: 'Four high findings survive, two of them behavioural regressions introduced by this
+    round''s own rework and two of them round-2 residuals the rework was meant to close. None is a bounded
+    auto-fix: the SC-8 repair needs a disposition/arm design change plus new regression tests, and the
+    reset repair needs the semantics of reset itself reconsidered. Another review round would find the
+    same four. Advisory only — the batch rework cap was already consumed in round 2, so the orchestrator
+    deferred the residuals per references/batch-mode.md gate review.residual-critical-high.'
+dismissed_sites:
+- file: src-tauri/src/window_host/pointer_routing.rs
+  line: 498
+  run_id: spec#0
+  reason: 'Re-litigation of a settled design decision: restates the gesture-owner-persistence choice recorded
+    declined in prior rounds under b6f106806d26b55e and 0969524d7d95011b, resurfacing at a new line after
+    the task0005/task0006 move. Judged fresh against SPEC.md: FR10''s operative clause is that an event
+    a guard CONSUMES is never reported, and the base bottom-strip / scrollbar / sidebar guards were explicitly
+    `button == Left && state == Pressed`, so they never consumed a release. AC12 names a press only. Deciding
+    a release from the recorded owner is also protocol-correct — suppressing it by position would leave
+    the application with an unbalanced press.'
+- file: src-tauri/src/window_host/mouse_report.rs
+  line: 620
+  run_id: spec#0
+  reason: Same gesture-owner-persistence decision, recorded declined under e0496e15056cd2a9 (the very
+    test this finding cites as its proof). FR6 is satisfied — compose_button_code never sets bit 4, pinned
+    by shift_alone_never_changes_the_button_code_even_when_set. AC9, FR7's testable criterion, covers
+    Shift held at press time (Shift+drag selects, Shift+Ctrl+click opens, Shift+middle pastes, Shift+wheel
+    scrolls) and every one still works. Applying instantaneous Shift mid-gesture would strand the application
+    with an unbalanced press.
+- file: src-tauri/src/window_host/mouse_report.rs
+  line: 125
+  run_id: security#1
+  reason: 'False positive, refuted by independent inspection of the gather sites. WindowHost::pixel_to_cell
+    (resize_layout.rs:314-323) returns (u16, u16): it applies .max(0.0) to both pixel offsets before the
+    division and clamps with .min((cols-1) as u32) / .min((rows-1) as u32). `col as u32 + 1` and `screen_row
+    as u32 + 1` therefore always yield at least 1 and at most 65535 — no negative input, no u32 wraparound.
+    The claimed wrapped SGR output is unreachable.'
+- file: src-tauri/src/window_host/pointer_routing.rs
+  line: 917
+  run_id: performance#0
+  reason: Duplicate of the high-severity uncapped wheel-notch replication finding attributed to security#1
+    at the same site. performance#0's independent report and its root-cause pointer to the missing clamp
+    in wheel_report_notches are folded into that finding.
+- file: src-tauri/src/window_host/pointer_routing.rs
+  line: 917
+  run_id: comprehensive#fallback
+  reason: Duplicate of the high-severity uncapped wheel-notch replication finding attributed to security#1
+    at the same site. Carried at high rather than comprehensive#fallback's medium because two other runs
+    rated it high and the sibling alternate-scroll path already caps at MAX_ALT_SCROLL_NOTCHES = 100.
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 1
+  applied_total: 0
+  termination: no-progress
+residual_critical_high: 4
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-mouse-reporting-20260919T154857Z.md
