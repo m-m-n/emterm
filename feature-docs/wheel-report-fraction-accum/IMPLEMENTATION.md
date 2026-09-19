@@ -48,6 +48,24 @@ later re-plan must not silently redefine them.
 | Report-path accumulate-and-consume unit, in the conversion layer beside the existing alternate-scroll fraction helper | Fold one event's line delta into the carried fraction and hand back the whole notches to report plus the fraction to carry forward | **Inputs**: the carried fraction, and the event's line delta. **Precondition**: the carried fraction is finite and its magnitude is below one notch; the delta may be any value, including non-finite. **Postconditions**: (a) a non-finite delta yields zero notches and returns the carried fraction bit-identical — the store is never touched; (b) otherwise the returned notch count is the signed whole part of the sum of the carried fraction and the delta, taken toward zero in the same sign-preserving way the alternate-scroll fraction helper already uses (round down when the total is non-negative, round up when it is negative); (c) the notch magnitude is saturated at the report cap **while still a floating-point value**, before any conversion to an integer count; (d) saturated-away magnitude is discarded, never carried (see D4); (e) the returned fraction is finite and its magnitude is strictly below one notch | task0001 |
 | Report accumulator store | Holds the carried fraction between wheel events, scoped to the tab and tracking session that produced it | **Invariant**: exactly one store for the report path, distinct from the alternate-scroll accumulator (FR7). **Reads/writes**: read once per wheel event before the conversion call, written once after it. **Reset**: zeroed only through the reset signal below. **Rejected events**: an event the grid-ownership gate rejects neither writes a changed value nor resets it — the whole record value is unchanged across such an event (FR6) | task0001 |
 | Reset signal | Tells the host when the carried fraction must be discarded | **Producer**: the decision layer, as part of the outcome's record updates; already computed today from the tracking-active observation and the tab comparison. **Consumer**: the outcome-application step, which zeroes the accumulator in the same branch that already resets the sibling per-gesture state. **Precondition on ordering**: the outcome is applied before the new delta is folded in. **Postcondition**: after a reset the accumulator is exactly zero, and the rejected-event branch emits no reset — its updates stay the default value | task0001 |
+| Per-event report step (added by task0002) | Performs one wheel event's whole report-path bookkeeping as a plain-value unit: applies the outcome's record updates, then conditionally folds the delta | **Inputs**: the decided outcome, the current per-gesture record value, and the event's line delta. **Postconditions**: (a) the outcome's record updates are applied exactly once, before anything else; (b) the accumulate-and-consume unit is invoked, and the returned fraction stored, **only** when the applied outcome's disposition is a report — on every other disposition the record value returned is exactly the value the record updates alone produce, and the notch count is zero; (c) the report-ness of the outcome is read off the outcome, never re-derived from the modifiers, the tracking mode bits or the delta; (d) the unit needs no window, event loop or GPU surface, so the conditions above are assertable directly over values (NFR4) | task0002 |
+
+**Amendments to the two rows above, introduced by task0002.** The rows stay as
+written for everything they say about the pure units; these two clauses
+replace the corresponding clauses in them, and the rows are read together with
+them:
+
+- *Report accumulator store*, "Reads/writes": read once per wheel event before
+  the conversion call and written once after it **only on an event whose
+  applied outcome is a report**. A local-arm event and a grid-rejected event
+  both leave the store — and the record value as a whole — bit-identical
+  (D9).
+- *Reset signal*, "Producer": the shared reset observation carries the two
+  original observations only (no tracking mode active, or the active tab
+  differs from the record's tab marker). The tracking-session discard of the
+  report accumulator is a separate action taken by the outcome-application
+  step when it records an observed tracking state of *inactive*, and it
+  touches nothing but the accumulator (D10).
 
 ## Conventions
 
@@ -135,6 +153,62 @@ the security property under review, and would put the same clamp logic in two
 implementers' hands. This is a deliberate choice against the usual bias toward
 smaller tasks, taken because the coupling here is intrinsic rather than
 incidental.
+
+### D9 — Only a reporting event writes the report accumulator (refines D1)
+
+D1 put the accumulator on the per-gesture record so it would ride the existing
+reset seam. That decided *when it is discarded*; it left *when it is advanced*
+implicit, and the host wiring advanced it on every event that reached the
+wheel path. The write-side rule is now explicit and is part of the seam: the
+accumulate-and-consume unit is invoked, and its fraction stored, only when the
+applied outcome's disposition is a report. A grid-rejected event and a
+local-arm event each leave the whole record value bit-identical (FR6, FR7).
+Rationale: the two properties FR6 and FR7 state are properties of the
+production path, and a contract that constrains only the decide/apply pair
+cannot hold them — the defect this decision closes was invisible to every test
+written against that pair. Affected: task0002.
+
+### D10 — Discard at the observation of inactive, not at the detection of reactivation (refines D2)
+
+The tracking-session discard happens when the outcome-application step records
+an observed tracking state of *inactive*. Nothing is carried forward to a
+later event, so no reactivation latch exists and the shared reset observation
+keeps exactly its two original terms. Rationale: a latch stored on the record
+is consumed by whichever accepted pointer event happens to arrive next, so an
+intervening motion or press swallows it and the stale remainder survives; and
+folding the latch into the shared reset observation makes it drive the
+cell-change cache reset and the gesture-ownership clear too, changing records
+this feature declared out of scope. Discarding at the moment of observation
+has neither problem and needs no stored state. D2 is unaffected in substance —
+the host still never re-derives anything the decision layer computed.
+Affected: task0002.
+
+### D11 — The notch-conversion rule has exactly one implementation (refines D6)
+
+D6 put the non-finite guard inside the accumulate-and-consume unit so it could
+not be omitted at a call site. The stateless whole-notch conversion kept a
+second, independent copy of that guard together with the float-domain
+saturation, the toward-zero truncation and the sign application. The rule now
+exists once: the stateless conversion is expressed in terms of the
+accumulating unit invoked from a zero carried fraction. Rationale: two copies
+of a rule that is a security property can be corrected on one side only with
+nothing failing; and the regression evidence AC-9 rests on was exercising the
+copy that no production path runs. Delegation keeps every observable result
+identical, so that evidence holds unedited and starts covering the production
+rule. This deduplicates one clamp layer's *rule*, not the layer itself — the
+duplication step remains the independent second layer of D3. Affected:
+task0002.
+
+### D12 — Structural guards scan bounded regions
+
+A source-text guard that proves two paths reference only their own constant
+bounds every region it scans at a located following-item marker and fails
+loudly when that marker is absent. An open-ended region reaches the file's own
+test module, so the guard starts reporting on text that is not the path it
+guards. Rationale: such a guard is worth having only while a failure means the
+guarded property broke; a guard that also fails on unrelated additions
+teaches the next reader to edit the guard rather than believe it. Affected:
+task0002.
 
 ## Risk Assessment
 

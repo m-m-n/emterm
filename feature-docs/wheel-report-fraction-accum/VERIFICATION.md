@@ -8,7 +8,8 @@
 
 This document covers the integrated verification of the whole feature. Per-task
 completion is governed by the acceptance criteria in
-`feature-docs/wheel-report-fraction-accum/tasks/task0001.md`.
+`feature-docs/wheel-report-fraction-accum/tasks/task0001.md` and
+`feature-docs/wheel-report-fraction-accum/tasks/task0002.md`.
 
 ## Build Verification
 
@@ -43,6 +44,9 @@ completion is governed by the acceptance criteria in
 | TS-8 | Rejected-notch invariance — a wheel event the grid-ownership gate rejects, carrying a delta that would otherwise have crossed a notch boundary | The decision returns record updates equal to the default value; applying the outcome leaves the accumulator and the rest of the per-gesture record bit-identical | Integration |
 | TS-9 | Whole-notch regression guard — the pre-existing notch-conversion expectations | All still pass, unmodified | Unit |
 | TS-10 | Alternate-scroll path unchanged — the alternate-scroll fraction helper's whole-and-fraction contract, and the tracking-active modifier branch | The helper's contract is unchanged and the alternate-scroll accumulator is still left untouched on that branch | Unit |
+| TS-11 | Report-path write gate on the production wiring (round 1 rework) — the per-event report step run over a grid-rejected outcome, over the scrollback local arm reached with tracking active and a modifier held, and over the arrow-translation local arm, each with a delta large enough to cross a notch boundary | Zero notches in every case, and the whole per-gesture record value — the accumulator included — returned bit-identical; only a report disposition folds the delta and stores a fraction back | Integration |
+| TS-12 | Tracking-release discard survives intervening events (round 1 rework) — accumulate a remainder with tracking active, have an owner-recorded release observe tracking inactive, re-enable tracking, deliver at least one accepted non-wheel pointer event, then deliver a wheel event | The remainder is discarded at the release that observed the inactive state, and the wheel event accumulates from zero regardless of how many accepted events intervened | Integration |
+| TS-13 | Tracking-session discard is confined to the accumulator (round 1 rework) — a press that records a report owner for a gesture, tracking toggled off and back on with both transitions observed by intervening accepted events, then the gesture's release | The recorded gesture owner and the cell-change cache survive the toggle; the release still produces its report | Integration |
 
 ## Code Quality Verification
 
@@ -64,10 +68,10 @@ completion is governed by the acceptance criteria in
 | AC-4 | The notch magnitude is bounded by the report cap, saturated before the integer conversion | TS-4 |
 | AC-5 | The duplication step caps independently | TS-5 |
 | AC-6 | No remainder crosses a tab change | TS-6 |
-| AC-7 | No remainder crosses a tracking-session boundary | TS-7 (with the bounded residual case below) |
-| AC-8 | A rejected event advances nothing and resets nothing | TS-8 |
+| AC-7 | No remainder crosses a tracking-session boundary, and the discard reaches nothing else | TS-7, TS-12, TS-13 (with the bounded residual case below) |
+| AC-8 | A rejected event advances nothing and resets nothing | TS-8, TS-11 |
 | AC-9 | Whole-notch behaviour is unchanged | TS-9 |
-| AC-10 | The alternate-scroll path is unchanged | TS-10 |
+| AC-10 | The alternate-scroll path is unchanged | TS-10, TS-11 |
 
 #### AC-7 residual case (accepted, out of scope)
 
@@ -89,6 +93,18 @@ mouse-aware application. It does not cascade, does not corrupt state, and
 self-corrects on the next event. Verification accepts this; no test asserts
 against it.
 
+**Round 1 rework note (task0002).** Review round 1 found that the merged
+implementation does not in fact reach this residual boundary: the
+reactivation latch it used is consumed by any intervening accepted pointer
+event, so a stale remainder also survived the far more ordinary sequence
+"release observes inactive → tracking re-enabled → a motion or press →
+wheel". task0002 replaces the latch with a discard taken at the moment an
+accepted event observes tracking inactive (IMPLEMENTATION.md D10), which
+removes that wider gap. The residual case stated above — a release and a
+re-enable with zero intervening accepted pointer events — is unchanged in
+scope and remains accepted; TS-12 pins the wider sequence and TS-13 pins that
+the discard reaches nothing but the accumulator.
+
 Basis: Codex consultation (LiteLLM proxy, `muse-spark`), which compared
 accepting the gap against mirroring the mode bits host-side (breaking A-4)
 and against resetting at the terminal parser's mode-write site, and judged
@@ -104,17 +120,17 @@ non-rejected pointer events, not wheel events alone.
 
 | Requirement | Tasks | Verification |
 |-------------|-------|--------------|
-| FR1 | task0001 | TS-1, TS-9 |
+| FR1 | task0001, task0002 | TS-1, TS-9 |
 | FR2 | task0001 | TS-1, TS-2 |
 | FR3 | task0001 | TS-3 |
-| FR4 | task0001 | TS-4, TS-5, TS-9 |
-| FR5 | task0001 | TS-6, TS-7 |
-| FR6 | task0001 | TS-8 |
-| FR7 | task0001 | TS-10 |
+| FR4 | task0001, task0002 | TS-4, TS-5, TS-9 |
+| FR5 | task0001, task0002 | TS-6, TS-7, TS-12, TS-13 |
+| FR6 | task0001, task0002 | TS-8, TS-11 |
+| FR7 | task0001, task0002 | TS-10, TS-11 |
 | NFR1 | task0001 | TS-6, TS-7, TS-8 |
 | NFR2 | task0001 | TS-4, TS-5 |
-| NFR3 | task0001 | TS-4, TS-5 |
-| NFR4 | task0001 | TS-1, TS-6, TS-8 |
+| NFR3 | task0001, task0002 | TS-4, TS-5 |
+| NFR4 | task0001, task0002 | TS-1, TS-6, TS-8, TS-11 |
 
 ## E2E Testing
 
@@ -162,7 +178,7 @@ visual surface.
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build | 2 | 2 | 0 | 0 |
-| Test scenarios | 10 | 10 | 0 | 0 |
+| Test scenarios | 13 | 13 | 0 | 0 |
 | Success criteria | 10 | 10 | 0 | 0 |
 | Requirements | 11 | 11 | 0 | 0 |
 | Performance / security | 3 | 1 | 0 | 2 (inspection during review) |
