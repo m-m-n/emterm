@@ -18,3 +18,36 @@ records:
       returned a mapped choice). opus_escalation: not run. rationale: the unguarded shape
       admits a permanent NaN accumulator that silences the report path forever, and the
       downstream duplicate cap cannot repair it.
+  - question_id: create-plan.ac7-residual-observability
+    packet_id: null
+    answered_at: "2026-09-20T02:58:00+09:00"
+    source: batch-codex-consultation
+    answer_mode: select_or_freeform
+    selected_option_ids: [accept_and_document]
+    freeform: null
+    normalized_answer: "Accept the residual AC-7 case and document it in VERIFICATION.md as bounded and out of scope; do not mirror the tracking mode bits host-side and do not reset at the parser's mode-write site."
+    resolution_note: >-
+      unlisted-gate fallback (no gate_id at the originating site; raised as an open question in
+      the implementation-planner's report). options: accept_and_document /
+      mirror_mode_bits_host_side (breaks SPEC assumption A-4) /
+      reset_at_parser_mode_write_site. choice: accept_and_document.
+      codex_consulted: true (run_codex_exec.sh against the default Codex provider returned a
+      ChatGPT usage-limit error, exit 1; the same codex exec binary was re-run through the local
+      LiteLLM proxy profile, model muse-spark, read-only sandbox, and returned a reasoned choice).
+      opus_escalation: not run. discussion: Codex chose accept_and_document because
+      decide_wheel_event stays pure and apply_outcome stays the single mutation seam, whereas
+      mirroring the per-tab term_core mode bits adds lifetime, lock-ordering and per-tab fan-out
+      complexity, and resetting from the DECSET/DECRST writer splits record mutation across the
+      parser hook and the pointer seam and introduces cross-thread writes to MouseReportRecords.
+      Harm assessment: the accumulator holds only a sub-notch remainder (< 1 notch, single f32,
+      saturated by the report cap), so the worst case is one extra reported notch at the start of
+      a re-enabled tracking session; it does not cascade and self-corrects on the next event.
+      verification_applied: VERIFICATION.md gained an "AC-7 residual case (accepted, out of
+      scope)" subsection and the AC-7 row now points at it. codex_claim_rejected: Codex also
+      asserted that only applied wheel outcomes carry the reset observation, which would narrow
+      the residual case to non-rejected *wheel* events; that claim was checked against
+      src-tauri/src/window_host/mouse_report.rs and is wrong, because decide_press (lines 773,
+      790) and decide_release (line 858) set RecordUpdates.reset as well. The recorded scope is
+      therefore non-rejected *pointer* events. The verified half of Codex's claim was kept: the
+      grid-rejection branch returns RecordUpdates::default() (lines 977-979), so a rejected event
+      carries no reset observation.

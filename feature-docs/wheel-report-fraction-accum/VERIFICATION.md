@@ -64,10 +64,41 @@ completion is governed by the acceptance criteria in
 | AC-4 | The notch magnitude is bounded by the report cap, saturated before the integer conversion | TS-4 |
 | AC-5 | The duplication step caps independently | TS-5 |
 | AC-6 | No remainder crosses a tab change | TS-6 |
-| AC-7 | No remainder crosses a tracking-session boundary | TS-7 |
+| AC-7 | No remainder crosses a tracking-session boundary | TS-7 (with the bounded residual case below) |
 | AC-8 | A rejected event advances nothing and resets nothing | TS-8 |
 | AC-9 | Whole-notch behaviour is unchanged | TS-9 |
 | AC-10 | The alternate-scroll path is unchanged | TS-10 |
+
+#### AC-7 residual case (accepted, out of scope)
+
+SPEC assumption A-4 reads the tracking mode bits from the active tab on each
+pointer event rather than mirroring them on the host, so the accumulator's
+tracking-release reset is carried by a pointer event's reset observation
+(`RecordUpdates.reset`), which button-press, button-release and wheel
+decisions all set. A grid-rejected event carries `RecordUpdates::default()`
+and therefore no reset observation (FR6 / AC-8), so it does not clear the
+accumulator either.
+
+The residual case is a tracking release followed by a re-enable with zero
+intervening non-rejected pointer events. That case is out of scope for this
+feature. It is not unobservable, but it is bounded: the accumulator holds
+only a sub-notch remainder (`< 1` notch, a single `f32`, saturated by the
+report cap), so the worst outcome is that the first wheel event of the
+re-enabled session emits one notch instead of zero — one extra line in a
+mouse-aware application. It does not cascade, does not corrupt state, and
+self-corrects on the next event. Verification accepts this; no test asserts
+against it.
+
+Basis: Codex consultation (LiteLLM proxy, `muse-spark`), which compared
+accepting the gap against mirroring the mode bits host-side (breaking A-4)
+and against resetting at the terminal parser's mode-write site, and judged
+accepting it comparatively better — both alternatives add lifetime,
+lock-ordering or cross-thread-write complexity to `MouseReportRecords`
+without buying a real fix. Codex additionally claimed only applied wheel
+outcomes carry the reset; that claim was checked against
+`src-tauri/src/window_host/mouse_report.rs` and is wrong — `decide_press`
+and `decide_release` set `reset` as well — so the scope above is stated as
+non-rejected pointer events, not wheel events alone.
 
 ### Functional Requirements Coverage
 
