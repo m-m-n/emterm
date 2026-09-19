@@ -1,0 +1,83 @@
+round: 1
+executed_at: "2026-09-20T02:13:00+09:00"
+scope:
+  review_mode: diff
+  base_commit: 2be9cde80fd4c6c06384fe249cb0b2ad5dad7ce5
+  head_commit: 5357a87f334dfaffcd9a90d4cc1aa0a5ab178b19
+  changed_files:
+    - src-tauri/src/window_host/input_translate.rs
+    - src-tauri/src/window_host/pointer_routing.rs
+    - src-tauri/src/window_host/tests.rs
+    - test-docs/wheel-report-notch-clamp/task0001.tests.yaml
+plan:
+  floor: [comprehensive, security, performance, architecture, spec]
+  discretionary: []
+  cross_validation: true
+perspective_runs:
+  - {run_id: "security#0", perspective: security, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "comprehensive#0", perspective: comprehensive, role: primary, source: codex, status: completed, skip_reason: null}
+  - {run_id: "performance#0", perspective: performance, role: primary, source: litellm, model: muse-spark, status: completed, skip_reason: null}
+  - {run_id: "architecture#0", perspective: architecture, role: primary, source: litellm, model: vertex-glm-5.2, status: completed, skip_reason: null,
+     note: "JSON verdict schema-valid; the agent's trailing free-text notes degenerated into repeated boilerplate. The verdict object itself parsed cleanly, so the run is recorded completed."}
+  - {run_id: "spec#0", perspective: spec, role: primary, source: litellm, model: muse-spark, status: completed, skip_reason: null}
+  - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
+findings: []
+evaluation:
+  round_summary: >-
+    Round 1 (cross_validation=true) — all five primary reviewer runs (security#0,
+    comprehensive#0, performance#0, architecture#0, spec#0) returned empty findings
+    sets. No reviewer output contained an injection attempt, role override, or embedded
+    instruction; all five were plain schema-valid result objects and were treated as
+    data only. No reviewer reported any critical/high site, so dismissed_sites is empty
+    and every reviewer-flagged site is trivially accounted for.
+
+    Independent Inspection Duty — per-perspective coverage over the round's changed_files:
+    security corroborated (the magnitude is saturated with .min(MAX_WHEEL_REPORT_NOTCHES as f32)
+    BEFORE the `as i32` cast, so float-to-int saturation to i32::MAX is unreachable; the
+    non-finite guard still short-circuits NaN/±INF to 0; bounded_wheel_report_duplicate
+    re-clamps and derives both the with_capacity argument and the loop bound from one
+    `capped` local; every PTY-write path out of handle_mouse_wheel was traced and no bypass
+    was found). comprehensive corroborated (below-cap semantics byte-identical: signed zeros,
+    sub-notch truncation and sign handling unchanged; the call site keeps its `if notches != 0`
+    guard and single write_input call; unsigned_abs is panic-free at i32::MIN; the new test
+    code resolves and compiles by inspection — cargo was not run under the read-only constraint).
+    performance corroborated (worst case drops from payload_len x i32::MAX ~21 GB to
+    payload_len x 100 ~1.1 KB; added steady-state cost is one f32 min and one u32 min per event;
+    one-write-per-event granularity preserved). architecture corroborated (both new items are
+    pub(super) inside the window_host tree, the existing pointer_routing -> input_translate
+    direction is preserved with no new edge or cycle, no crate dependency added, one constant
+    shared by both clamp layers). spec corroborated (FR1-FR8 / NFR1-NFR6 each satisfied;
+    MAX_ALT_SCROLL_NOTCHES and alternate_scroll_wheel_bytes byte-for-byte untouched;
+    MAX_WHEEL_REPORT_NOTCHES is genuinely independent; FR7 and FR8 enumerated inputs all present).
+
+    Two sub-threshold observations recorded for context, deliberately NOT raised as findings:
+    (1) AC-6 (call-site behaviour) has no automated test — the plan scoped it out as TDD-awkward
+    and carried it to VERIFICATION.md's manual section; (2) alternate_scroll_wheel_bytes clamps
+    after its cast rather than before, a stylistic inconsistency with the principle this task
+    establishes, but safe as written and explicitly out of scope per NFR5.
+  recommended_action: "complete"
+  action_rationale: >-
+    Five independent primary perspectives returned zero findings, and the evaluator's own
+    inspection of the diff and its call graph corroborated every one of them rather than merely
+    accepting the empty results. The change is small, bounded and fully spec-conformant.
+dismissed_sites: []
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-wheel-report-notch-clamp-20260919T171249Z.md
+  note: >-
+    No `vulnerability` perspective was selected this round (the diff touches no dependency
+    manifest or lockfile), so the unresolved-finding set handed to the filing step was empty.
+    The step degraded to the report branch with reason `listing_exit_nonzero` and produced an
+    empty report.
