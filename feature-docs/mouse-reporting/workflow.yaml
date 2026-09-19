@@ -150,8 +150,8 @@ tasks:
     - NFR5
     - NFR6
     - NFR7
-    status: in_progress
-    notes: launching session died before any work landed (journal reason: orphaned); batch retry 1/1 consumed
+    status: merged
+    notes: 'retry 1/1 (prior launch orphaned) merged at 6242c124d5d314d600110a369bb9e3c8869a5e11; conflict_retries 0; tests pass; no deviations'
     branch: em-workflow/mouse-reporting/task0002
   task0003:
     title: Pointer routing integration and report emission
