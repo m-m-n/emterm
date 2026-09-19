@@ -1,11 +1,11 @@
 schema_version: 1
 feature: wheel-report-notch-clamp
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 1de1e95dc54a74a8c539e3104cfdf004f4067c64
 last_input_digest: "sha256:3769048eeabe5e48a0b2b777de7486c0dfeb359baf61b89d9ed400ce3fab2b76"
-active_request_id: create-spec-run-0001
+active_request_id: null
 packets: {}
 answers: []
 confirmed_facts:
@@ -45,3 +45,18 @@ worker_runs:
     note: >-
       The worker's agent definition had no Write/Bash tool available in this session,
       so it returned its result envelope inline and the orchestrator persisted it.
+    digest_note: >-
+      envelope persisted by the orchestrator at scratchpad/analyst-result.json
+  - request_id: create-spec-run-0002
+    worker: spec-writer
+    status: completed
+    written_artifacts:
+      - path: feature-docs/wheel-report-notch-clamp/REQUIREMENTS.md
+        sha256: "sha256:8e55fde87df69fe4a4f106c2626a348a73e5504d0612c0bd775311d02f78c0fd"
+      - path: feature-docs/wheel-report-notch-clamp/SPEC.md
+        sha256: "sha256:b85dff80d0abb4d94fad5f470d08027c081e559052a8f5bb5aa6d1a8584cf1ed"
+    note: >-
+      The worker had no Bash tool, so sha256 digests were computed by the
+      orchestrator during artifact validation (layer 5). Scope verification
+      confirmed the change set equalled the two declared targets and HEAD did
+      not move during the dispatch.
