@@ -94,14 +94,14 @@ workflow:
   status: completed
   completed_at_commit: 23906ac661365375fb2b32df87528d5f0bea530f
 - id: implement
-  status: completed
+  status: pending
   base_commit: 1d5af0d319021e901aa843398fd558e5a65893dc
   completed_at_commit: c4d862dc6b1b98f3fc1336efc511bd8d3a4c8731
 - id: review
-  status: completed
+  status: pending
   completed_at_commit: e8ae8d68b1caf91cd200f26e434ff20906a3062d
 - id: verify
-  status: failed
+  status: pending
   result: fail
   failed_items:
   - id: TS-19
@@ -248,6 +248,72 @@ tasks:
       - a4377ac1f3430e7c
       - 5175da13ae0becec
       - c99335940bf23416
+  task0005:
+    title: A window-free decision seam for the three pointer paths
+    plan: tasks/task0005.md
+    files:
+    - src-tauri/src/window_host/mouse_report.rs
+    - src-tauri/src/window_host/mod.rs
+    skills:
+    - backend-impl
+    domains:
+    - input-handling
+    - api-contract
+    complexity: high
+    requirements:
+    - FR2
+    - FR3
+    - FR4
+    - FR7
+    - FR10
+    - FR11
+    - NFR1
+    - NFR5
+    - NFR6
+    status: pending
+    notes: null
+    provenance:
+      source: verify
+      source_ids:
+      - TS-19
+      - TS-20
+      - TS-21
+      review_round: null
+  task0006:
+    title: The pointer handlers reduced to gather and execute
+    plan: tasks/task0006.md
+    files:
+    - src-tauri/src/window_host/pointer_routing.rs
+    - src-tauri/src/window_host/event_loop.rs
+    - src-tauri/src/window_host/tests.rs
+    - src-tauri/src/window_host/mouse_report.rs
+    - src-tauri/src/window_host/mod.rs
+    skills:
+    - frontend-impl
+    domains:
+    - input-handling
+    - ui
+    - external-io
+    complexity: high
+    requirements:
+    - FR2
+    - FR3
+    - FR4
+    - FR7
+    - FR10
+    - FR11
+    - NFR1
+    - NFR4
+    - NFR5
+    status: pending
+    notes: null
+    provenance:
+      source: verify
+      source_ids:
+      - TS-19
+      - TS-20
+      - TS-21
+      review_round: null
 review:
   status: completed
   rounds_completed: 2
@@ -288,11 +354,15 @@ requirements:
     - task0002
     - task0003
     - task0004
+    - task0005
+    - task0006
     tests:
     - TS-3
     - TS-4
     - TS-10
     - TS-20
+    - TS-22
+    - TS-23
   FR3:
     title: Motion reporting for 1002 and 1003
     status: ok
@@ -302,11 +372,15 @@ requirements:
     - task0002
     - task0003
     - task0004
+    - task0005
+    - task0006
     tests:
     - TS-3
     - TS-9
     - TS-10
     - TS-21
+    - TS-23
+    - TS-24
   FR4:
     title: Wheel reporting takes precedence over both local wheel consumers
     status: ok
@@ -316,6 +390,8 @@ requirements:
     - task0002
     - task0003
     - task0004
+    - task0005
+    - task0006
     tests:
     - TS-3
     - TS-8
@@ -328,6 +404,8 @@ requirements:
     excluded_reason: null
     tasks:
     - task0002
+    - task0005
+    - task0006
     tests:
     - TS-3
     - TS-4
@@ -339,6 +417,8 @@ requirements:
     excluded_reason: null
     tasks:
     - task0002
+    - task0005
+    - task0006
     tests:
     - TS-5
   FR7:
@@ -350,11 +430,15 @@ requirements:
     - task0002
     - task0003
     - task0004
+    - task0005
+    - task0006
     tests:
     - TS-5
     - TS-8
     - TS-11
     - TS-20
+    - TS-22
+    - TS-24
   FR8:
     title: Ctrl+click and middle-click are reported while tracking is active
     status: ok
@@ -362,9 +446,13 @@ requirements:
     excluded_reason: null
     tasks:
     - task0003
+    - task0005
+    - task0006
     tests:
     - TS-10
     - TS-11
+    - TS-22
+    - TS-24
   FR9:
     title: X10 coordinate overflow suppresses the report
     status: ok
@@ -372,8 +460,12 @@ requirements:
     excluded_reason: null
     tasks:
     - task0002
+    - task0005
+    - task0006
     tests:
     - TS-6
+    - TS-22
+    - TS-24
   FR10:
     title: Existing egui chrome guards run before reporting
     status: ok
@@ -382,6 +474,8 @@ requirements:
     tasks:
     - task0003
     - task0004
+    - task0005
+    - task0006
     tests:
     - TS-12
     - TS-19
@@ -392,9 +486,12 @@ requirements:
     excluded_reason: null
     tasks:
     - task0003
+    - task0005
+    - task0006
     tests:
     - TS-10
     - TS-13
+    - TS-22
   NFR1:
     title: Motion reports are emitted only on cell change
     status: ok
@@ -404,10 +501,13 @@ requirements:
     - task0002
     - task0003
     - task0004
+    - task0005
+    - task0006
     tests:
     - TS-7
     - TS-10
     - TS-21
+    - TS-23
   NFR2:
     title: No new user setting
     status: ok
@@ -415,8 +515,11 @@ requirements:
     excluded_reason: null
     tasks:
     - task0003
+    - task0005
+    - task0006
     tests:
     - TS-15
+    - TS-23
   NFR3:
     title: CLI-only build keeps compiling
     status: ok
@@ -426,8 +529,11 @@ requirements:
     - task0001
     - task0002
     - task0003
+    - task0005
+    - task0006
     tests:
     - TS-14
+    - TS-23
   NFR4:
     title: Linux and Windows parity, no platform-specific branches
     status: ok
@@ -436,6 +542,7 @@ requirements:
     tasks:
     - task0002
     - task0003
+    - task0006
     tests:
     - TS-16
   NFR5:
@@ -448,6 +555,8 @@ requirements:
     - task0002
     - task0003
     - task0004
+    - task0005
+    - task0006
     tests:
     - TS-17
   NFR6:
@@ -458,6 +567,7 @@ requirements:
     tasks:
     - task0002
     - task0004
+    - task0005
     tests:
     - TS-3
     - TS-4
@@ -472,6 +582,7 @@ requirements:
     excluded_reason: null
     tasks:
     - task0002
+    - task0005
     tests:
     - TS-3
     - TS-4
