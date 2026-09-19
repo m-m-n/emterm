@@ -83,7 +83,8 @@ workflow:
       いずれも変更されない。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: bcfd70cdb4f7ae5f1cf2f130b1193f52b5ffe0c2
   - id: implement
     status: pending
     base_commit: 1de1e95d
@@ -96,7 +97,21 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Per-region SC-8 rejection dispatch and disposition-pinning tests"
+    plan: tasks/task0001.md
+    status: pending
+    files:
+      - src-tauri/src/window_host/mouse_report.rs
+      - src-tauri/src/window_host/pointer_routing.rs
+      - src-tauri/src/window_host/input_translate.rs
+    skills: []
+    domains: [input-handling, ui]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6]
+    branch: null
+    notes: null
 
 review:
   status: pending
@@ -120,110 +135,110 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS2, TS3, TS10, TS11, MS1]
   FR2:
     title: "Guard regions consumed by an upstream early branch keep `Nothing` on the wheel path"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS10, MS3]
   FR3:
     title: "Middle press over a guard region pastes PRIMARY in the four regions it previously reached"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS4, TS5, TS9, MS2]
   FR4:
     title: "Left and right presses over a guard region name no local arm"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS6, TS9, MS4]
   FR5:
     title: "A rejected press still records no gesture owner"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS6]
   FR6:
     title: "Motion over a guard region stays `Nothing`"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS7, TS9]
   FR7:
     title: "No rejected position ever reports"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS2, TS9]
   FR8:
     title: "A rejected event's record updates stay as they are"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS7]
   FR9:
     title: "`GridOwnershipInputs.in_top_strip` decomposes into two region bools"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS8, TS11]
   FR10:
     title: "Region-specific dispatch, with a stated precedence for overlapping regions"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS4, TS10]
   NFR1:
     title: "The decide units stay pure functions"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS4, TS7]
   NFR2:
     title: "No new `Disposition` variant"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS1, TS4, TS9]
   NFR3:
     title: "Guard order and SC-8 semantics unchanged"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [MS1, MS3, MS4]
   NFR4:
     title: "No new cost or logging on the pointer hot path"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks: [task0001]
     tests: []
   NFR5:
     title: "The repair is independent of mouse-reporting being enabled"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS2, MS1]
   NFR6:
     title: "Existing mouse-reporting behaviour is not regressed"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS9]

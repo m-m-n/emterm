@@ -1,7 +1,7 @@
 schema_version: 1
 feature: mouse-report-guard-local-arms
 phase: create-plan
-status: applying_patch
+status: completed
 generation: 1
 base_revision: 24b6fe1fa31c5e1121dcf28eab56e2c785799fc7
 last_input_digest: sha256:1a7f05fb9e03371487ac5382803e44e0312014058cc72761e61146eda572d075
@@ -25,7 +25,7 @@ artifacts:
     produced_by: create-plan-run-0001
 patches:
   - patch_id: mouse-report-guard-local-arms-p0001
-    status: validated
+    status: applied
     base_input_digest: sha256:1a7f05fb9e03371487ac5382803e44e0312014058cc72761e61146eda572d075
     base_workflow_blob: f4cbda1f509beac6a34a9ee5427f8fdceec33892
 progress_fingerprint: null
