@@ -1,0 +1,125 @@
+schema_version: 1
+feature: mouse-report-guard-local-arms
+records:
+  - gate_id: create-spec.requirement-clarification
+    question_id: requirement.top-strip-decomposition
+    phase: create-spec
+    resolved_at: "2026-09-20T01:40:00+09:00"
+    policy_action: codex_consultation
+    codex_consulted: true
+    opus_escalation: false
+    options_offered: [preserve_pre_regression, title_bar_band_only, whole_top_strip_scrolls]
+    option_chosen: preserve_pre_regression
+    options_not_chosen: [title_bar_band_only, whole_top_strip_scrolls]
+    recorded_as_assumption: true
+    resolution_note: >-
+      Codex CLI (readonly) に 2 度相談し、実コード (pointer_routing.rs handle_mouse_wheel /
+      handle_pointer_button, base 1d5af0d との差分) の読み取りで到達関係を確定した。
+      要点: (1) タブバー帯・mux サイドバー・プロファイルセレクタのホイールは SC-8 より前の
+      早期 return で egui に渡るため、拒否アームに到達しない。ホイールの被害領域は
+      CSD タイトルバー帯 / 下端ストリップ / スクロールバーオーバーレイ / リサイズ帯 の 4 つ。
+      (2) 押下側の早期 return は構造が異なり、退行前に中押下が PRIMARY ペーストへ到達して
+      いたのは 下端ストリップ / スクロールバーオーバーレイ / mux サイドバー /
+      上部帯と重ならないリサイズ帯 の 4 つ。CSD タイトルバー帯とタブバー帯は退行前も
+      到達していないので修復対象外（入れると退行修正でなく新機能追加になる）。
+      (3) 実装は Codex 推奨の領域別分岐 (ii) を採り、GridOwnershipInputs の in_top_strip を
+      タイトルバー帯 / タブバー帯に分解する。早期 return の到達不能性に依存する案 (i) は
+      ガード順序変更時にタブバー横スクロール等が端末スクロールへ誤分類されるため不採用。
+  - gate_id: create-spec.requirement-clarification
+    question_id: fix-approach.a-vs-b
+    phase: create-spec
+    resolved_at: "2026-09-20T01:30:00+09:00"
+    policy_action: codex_consultation
+    codex_consulted: true
+    opus_escalation: false
+    options_offered: [local_arm_from_rejecting_branch, add_not_grid_owned_disposition]
+    option_chosen: local_arm_from_rejecting_branch
+    options_not_chosen: [add_not_grid_owned_disposition]
+    recorded_as_assumption: true
+    resolution_note: >-
+      レビュー round 3 が挙げた相互排他の 2 案について Codex CLI (readonly) に相談。
+      (a)「拒否アームが具体的な LocalArm を返す」を採用。(b)「Disposition::NotGridOwned を
+      追加してハンドラ側へ判断を戻す」は、decide/perform の境界を曖昧にし SC-10 の
+      「一つの値が具体的な処理を名前付けする」契約を弱めるため不採用。
+      ただし SC-8 拒否時に常に ScrollScrollback を返すのは不正確で、
+      wheel_consumer(tracking_active=false, ...) を通して DECSET 1007 成立時は
+      TranslateToArrowBytes を返す必要がある、という補正が付いた。
+  - gate_id: create-spec.design-step
+    question_id: design-step.recommendation
+    phase: create-spec
+    resolved_at: "2026-09-20T01:40:00+09:00"
+    policy_action: select
+    codex_consulted: false
+    opus_escalation: false
+    options_offered: [decide_autonomously, ask_user]
+    option_chosen: decide_autonomously
+    options_not_chosen: [ask_user]
+    recorded_as_assumption: false
+    resolution_note: "batch-policies.yaml の create-spec.design-step は decide_autonomously 固定。analyst の推奨 skip をそのまま採用。"
+  - gate_id: create-spec.command-approval
+    phase: create-spec
+    resolved_at: "2026-09-20T01:42:00+09:00"
+    policy_action: auto_record
+    codex_consulted: false
+    opus_escalation: false
+    auto_approved_commands: []
+    resolution_note: >-
+      workflow.yaml project.components の 4 コマンドはすべて bash_guard.py の既存
+      承認リストに含まれており、新規に自動承認したコマンドは 1 件も無い。
+      承認済みを確認した文字列:
+      (1) CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      (2) CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      (3) cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      (4) CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      format_command は当初 `rustfmt --edition 2024` を候補にしたが未承認だったため、
+      プロジェクトルール (crate 全体 fmt 禁止・PostToolUse hook で整形を強制) と
+      整合し、かつ承認済みかつ書き換えを伴わない (3) に差し替えた。
+  - gate_id: null
+    question_id: verify.code-quality-verdict
+    phase: verify
+    resolved_at: "2026-09-20T02:40:00+09:00"
+    policy_action: unlisted_gate_fallback
+    codex_consulted: true
+    opus_escalation: false
+    options_offered: [pass_with_preexisting_drift_note, fail_and_auto_rework]
+    option_chosen: pass_with_preexisting_drift_note
+    options_not_chosen: [fail_and_auto_rework]
+    recorded_as_assumption: false
+    resolution_note: >-
+      cargo fmt --check が crate 全体で 17 ファイルの差分を報告し、その中に本 feature が
+      変更した 2 ファイル (mouse_report.rs, pointer_routing.rs) も含まれた。
+      判定のため main 版の同 2 ファイルを取り出し、pin されたツールチェイン
+      (1.96.0, style_edition 2024) の rustfmt を baseline と現行の双方に掛けて、
+      rustfmt が提案する +/- 行の集合を比較した。結果は両ファイルとも baseline と
+      byte 単位で一致 — 本 feature が新規に持ち込んだ整形違反はゼロで、報告された
+      差分は 100% main 由来の既存ドリフト。VERIFICATION.md の基準は
+      「changed files について差分が出ないこと」だが、その意図は「この変更が新たな
+      違反を入れないこと」であり、上記の baseline 比較がそれを直接証明している。
+      Codex CLI (readonly) に相談し、同じく (a) を推奨。理由は「(b) を採ると本来
+      触っていない行の整形 churn を、狙いを絞ったバグ修正の diff に混ぜることになり、
+      新しい情報を何も生まない」。プロジェクト側も rustfmt を強制しておらず、
+      crate 全体 fmt を禁じるルールがあるため整合する。
+      よって Code Quality = PASS (既存ドリフトの注記付き)。
+  - gate_id: null
+    question_id: verify.manual-scenarios-unattended
+    phase: verify
+    resolved_at: "2026-09-20T02:40:00+09:00"
+    policy_action: unlisted_gate_fallback
+    codex_consulted: true
+    opus_escalation: false
+    options_offered: [pass_automated_carry_forward_manual, fail_on_unmet_sc_c]
+    option_chosen: pass_automated_carry_forward_manual
+    options_not_chosen: [fail_on_unmet_sc_c]
+    recorded_as_assumption: true
+    resolution_note: >-
+      VERIFICATION.md の MS1-MS4 は release ビルドの実機で人間がホイール・中クリックを
+      操作する必要があり、SC-C はその実行を要求する。本 run は無人 (--batch) のため
+      実行できない。Codex CLI (readonly) に相談し (a) を推奨。理由は「rework を回しても
+      人間は現れないので、(b) は証跡を1つも増やさないまま rework 予算を消費し、
+      cap 到達時に同じ未実行シナリオのまま停止するだけ」。
+      ただし Codex から補正が付いた: 「automated PASS」と「manual pending」を
+      1つの PASS に混ぜず、別々のラベルとして記録すること — SC-C を満たしたかのように
+      badge しない。この補正を採用し、verify の result は自動化層に対する pass とし、
+      MS1-MS4 は NOT RUN として明示、SC-C は human evaluator へ carry forward する。
+      先行 feature (mouse-reporting) も "pass, manual scenarios carried forward" で
+      同じ扱いをしており前例と整合する。

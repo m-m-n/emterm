@@ -1,0 +1,40 @@
+feature: mouse-report-guard-local-arms
+collected_at: "2026-09-20T02:30:24+09:00"
+session_ids:
+  - 01a0bab7-5e22-7103-870a-4546d076b2e1
+signals:
+  review_critical_high: []
+  conflict_reworks: []
+  file_prediction_misses:
+    - task: task0001
+      files:
+        - src-tauri/src/window_host/input_translate.rs
+        - test-docs/mouse-report-guard-local-arms/task0001.tests.yaml
+  verification_failures: []
+  discretionary_perspectives:
+    - perspective: performance
+      reason: >-
+        diff はポインタホットパス (pointer_routing / mouse_report) の分岐を
+        書き換えており、NFR4 が「ホットパスに新たなコストやログを載せない」
+        ことを要求しているため。
+  declined_findings: []
+follow_up_drafts: []
+lessons_candidates:
+  - note: >-
+      review round 1 は 5 観点すべて findings 0 で完了した。前段 feature
+      (mouse-reporting) の round 3 deferred high を単一 feature に切り出して
+      入力したことで、修正範囲と受け入れ条件が最初から確定していた。
+  - note: >-
+      verify の Code Quality 判定で cargo fmt --check が crate 全体の既存
+      ドリフト 17 ファイルを報告した。changed files についても差分が出るが、
+      pin されたツールチェインで main の同ファイルに対しても同一の +/- が
+      出ることを比較して既存由来と判定した。crate 全体 fmt を禁じている
+      プロジェクトでは、この baseline 比較を verify の定型手順にできる可能性。
+  - note: >-
+      無人 batch では MS1-MS4 のような実機 GUI シナリオが構造的に実行不能。
+      verify の result を「自動化層 pass」と「manual NOT RUN」の 2 状態で
+      記録する形は前段 feature と揃っており、以降も同じ扱いにできる。
+  - note: >-
+      review の triage_filing が ntd 一覧取得の非ゼロ終了で report ブランチへ
+      降格した (degraded_reason: listing_exit_nonzero)。findings が 0 だった
+      ため実害は無かったが、起票経路の可用性は単独で確認する価値がある。
