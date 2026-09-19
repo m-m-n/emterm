@@ -1,0 +1,220 @@
+schema_version: 1
+feature: wheel-report-notch-clamp
+created: 2026-09-20
+base_branch: main
+goal: |
+  マウスレポート: ホイールレポート複製が無制限で巨大確保と PTY フラッドを起こす (7063d53b)
+
+  （出典: Notion タスク https://www.notion.so/3e03509ec8ee813d802fe2d6c60918a9 種別=セキュリティ 優先度=高）
+
+  ## 脆弱性の概要 (必須)
+  マウスレポート実装（PR #69 / `em-workflow/mouse-reporting/integration`）のホイールレポート複製に上限が無く、1 回のホイールイベントが数 GB のメモリ確保要求と PTY への大量書き込みを引き起こしうる。
+
+  ## 参照 (必須)
+  - CVE / GHSA ID: 該当なし（自前コード）
+  - アドバイザリ URL: 該当なし
+  - severity: high
+  - 該当パッケージ: 該当なし（自前コード）
+  - 現在のバージョン: `em-workflow/mouse-reporting/integration`（PR #69、main にマージ済み）
+  - 修正済みバージョン: 無し
+
+  ## 攻撃シナリオ (必須)
+  `wheel_report_notches`（`input_translate.rs:452`）は非有限値だけを弾き、その後 `lines.abs().floor() as i32` を行う。大きな有限 f32 はこのキャストで `i32::MAX` に飽和する。
+  `pointer_routing.rs:917-921` はその値を使って `Vec::with_capacity(bytes.len() * notches.unsigned_abs() as usize)` を確保し、同じ回数だけ `extend_from_slice` でコピーしたうえで `tab.write_input(buf)` を 1 回呼ぶ。
+  SGR ペイロードが約 10 バイト、ノッチ数が飽和値のとき、おおよそ 21 GB の確保要求になる。そこまで至らなくても、慣性スクロールや合成されたピクセルバーストが 1 イベントで数 MB の PTY 書き込みとイベントループの停止を生む。
+
+  ## 影響範囲 (必須)
+  - eMterm 本体のメモリ確保失敗・イベントループ停止（ローカル DoS）
+  - PTY に接続された子プロセスへの大量入力フラッド
+  - 到達経路はホイール入力そのもの。マウスレポートが有効な TUI を動かしている状態で、慣性スクロールや合成入力イベントから到達する
+
+  ## 完了の定義 (必須)
+  - [ ] 攻撃シナリオが成立しない
+  - [ ] 修正版に追随している（自前コードのため、下記の修正方針を適用して完了とする）
+  - [ ] `f32::INFINITY` / `f32::NAN` / 非常に大きな有限値に対してクランプ結果を検証する単体テストがある
+
+  ## 該当箇所 (任意)
+  - `src-tauri/src/window_host/pointer_routing.rs:917` — `with_capacity` と複製ループ（917-921）
+  - `src-tauri/src/window_host/input_translate.rs:452` — `wheel_report_notches` のキャスト
+  - `src-tauri/src/window_host/input_translate.rs:373` — 既存の上限 `MAX_ALT_SCROLL_NOTCHES = 100`（alternate-scroll 経路はすでに同種の上限を持っている）
+
+  ## 暫定緩和策 (任意)
+  修正方針: 変換側でクランプして呼び出し側が驚かないようにする。`wheel_report_notches` が `as i32` キャストの**前**に小さな上限へ飽和させる（`MAX_ALT_SCROLL_NOTCHES` を再利用するか、レポート専用の上限を新設する）。加えて呼び出し側の複製ループと `with_capacity` の引数にも上限をかける。
+
+  ## 補足
+  レビュー round 3 の deferred、stable_id `7063d53b08e160d8`（confidence 100）。このラウンドで完走した 5 レビュアーのうち 3 つが独立に報告している（`litellm:muse-spark:security`、`litellm:muse-spark:performance`、`claude:comprehensive`）。round 2 の未解決指摘 `ef02afd34f1da70f` が rework を経てもそのまま残ったもの。
+  修正が `input_translate.rs` と `pointer_routing.rs` にまたがるため、レビューの自動修正（単一ファイル限定）ではスキップされた。
+
+  ## 設計方針（Codex 相談済み・採用済み）
+  - レポート専用定数 `MAX_WHEEL_REPORT_NOTCHES = 100` を新設する（既存 `MAX_ALT_SCROLL_NOTCHES` は再利用しない。alternate-scroll 経路とは調整理由が異なり、片方の操作感調整が他方の安全上限を変えてしまうため）。
+  - クランプは defense in depth で 2 層に掛ける。`wheel_report_notches` が `as i32` キャストの前に飽和させ「絶対値 100 以下」を契約として保証し、`pointer_routing.rs` の `with_capacity` と複製ループでも同じ定数で再度クランプする。
+  - `pointer_routing.rs` の複製処理は「ペイロードと要求回数を受け取り、上限付きで複製して返す純粋関数」へ切り出し、app/tabs に依存せず単体テストできるようにする。
+  - 単体テストは境界値（99.999 / 100.0 / 100.999 / 101.0 と対応する負数側）、NaN、±INFINITY、f32::MAX / f32::MIN、±0.0、±0.999、±1.999、および「すべての有限入力で結果の絶対値が定数以下」を検証する。複製側は 0 回で空、1 回で元データ同一、100 回で正確に 100 個連結、101 回や u32::MAX でも 100 回分に制限、出力長が常に bytes.len() * 定数 以下、を検証する。
+
+parent_branch: em-workflow/wheel-report-notch-clamp/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+    cli_only:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: 2be9cde80fd4c6c06384fe249cb0b2ad5dad7ce5
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      Pure backend security defect fix confined to Rust wheel-input translation and
+      PTY-write plumbing (src-tauri/src/window_host/input_translate.rs and
+      pointer_routing.rs). It adds no UI surface, changes no rendered output, and
+      touches no Material Design 3 token, egui widget or child-WebView CSS.
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: pending
+  - id: implement
+    status: pending
+    base_commit: 2be9cde80fd4c6c06384fe249cb0b2ad5dad7ce5
+  - id: review
+    status: pending
+  - id: verify
+    status: pending
+    result: null
+    failed_items: []
+  - id: retrospect
+    status: pending
+
+tasks: {}
+
+review:
+  status: pending
+  rounds_completed: 0
+  residual_critical_high: 0
+  needs_rework: false
+
+requirements:
+  FR1:
+    title: "Dedicated wheel-report notch cap constant"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1]
+  FR2:
+    title: "Saturate the magnitude before the i32 cast"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS2, TS4]
+  FR3:
+    title: "Preserve existing wheel_report_notches semantics below the cap"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS2, TS3, TS8]
+  FR4:
+    title: "Extract the duplication step into a testable pure function"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5]
+  FR5:
+    title: "Second clamp layer at the call site (defense in depth)"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5, TS6, TS7]
+  FR6:
+    title: "Call site rewired through the bounded helper"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5]
+  FR7:
+    title: "Boundary and pathological-input unit tests for the conversion"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS1, TS2, TS3, TS4]
+  FR8:
+    title: "Unit tests for the bounded duplication helper"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS5, TS6, TS7]
+  NFR1:
+    title: "Bounded worst-case allocation"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS7]
+  NFR2:
+    title: "Bounded PTY write volume per event"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS6, TS7]
+  NFR3:
+    title: "No perceptible change to normal scrolling"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS3, TS8]
+  NFR4:
+    title: "No new dependencies and no widened visibility"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS10]
+  NFR5:
+    title: "Alternate-scroll path untouched"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS9]
+  NFR6:
+    title: "Test style matches the existing suite"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: [TS8, TS9]
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2

@@ -1,0 +1,46 @@
+schema_version: 1
+feature: wheel-report-notch-clamp
+records:
+  - gate_id: create-spec.design-step
+    phase: create-spec
+    resolved_at: "2026-09-20T01:35:00+09:00"
+    option_id: decide_autonomously
+    codex_consulted: false
+    resolution_note: >-
+      batch-policies.yaml の create-spec.design-step は decide_autonomously。
+      requirements-analyst の design_step_recommendation（skipped）をそのまま採用した。
+      理由は UI 面が一切無い Rust バックエンドのセキュリティ欠陥修正であること。
+  - gate_id: create-spec.design-system
+    phase: create-spec
+    resolved_at: "2026-09-20T01:35:00+09:00"
+    option_id: top_candidate_or_none
+    codex_consulted: false
+    resolution_note: >-
+      候補が 2 件（doc/UI-DESIGN-GUIDELINES.yaml, src-tauri/web-shared/styles.css）
+      あったため project_native を選択し、両パスを project.design_system.paths に記録した。
+      design step が skipped でも 11a により確定が必要なため実施。
+  - gate_id: create-spec.command-approval
+    phase: create-spec
+    resolved_at: "2026-09-20T01:36:00+09:00"
+    option_id: auto_record
+    codex_consulted: false
+    auto_approved_commands: []
+    resolution_note: >-
+      workflow.yaml project.components の 3 コマンドはいずれも bash_guard.py の
+      承認済み一覧に既に存在したため、新規に自動承認したコマンドは 0 件。
+      対象: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"、
+      "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"、
+      "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"。
+  - gate_id: null
+    phase: pre-create-spec
+    resolved_at: "2026-09-20T01:25:00+09:00"
+    option_id: null
+    codex_consulted: true
+    resolution_note: >-
+      起動時の明示指示「不明点は Codex に相談し、比較的優れると判断した案を採用する」に従い、
+      クランプ設計の 4 論点を Codex CLI (readonly) に相談した。採用結論:
+      (1) 専用定数 MAX_WHEEL_REPORT_NOTCHES = 100 を新設（MAX_ALT_SCROLL_NOTCHES は再利用しない）、
+      (2) 変換側と消費側の 2 層クランプ（defense in depth）、
+      (3) 上限 100 を採用（他端末に明示上限は確認できず、互換性より資源消費の確実な制限を優先）、
+      (4) 複製処理を純粋関数へ切り出して境界値を単体テストする。
+      相談内容は Notion タスクページにコメントとして記録済み。
