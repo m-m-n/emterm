@@ -14,8 +14,43 @@ use crate::selection::{Pos, Selection, SelectionMode};
 
 use super::WindowHost;
 use super::input_translate::{
-    accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes, winit_to_egui_button,
+    accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes, wheel_consumer,
+    wheel_report_notches, winit_button_to_report_identity, winit_to_egui_button,
 };
+use super::input_translate::WheelConsumer;
+use super::mouse_report::{self, ButtonIdentity, Encoding, EventKind};
+
+/// Snapshot of the SC-1 mouse-mode bits (IMPLEMENTATION.md; owned by
+/// task0001), read from the active tab's core on every event rather than
+/// mirrored host-side (decision D2 — the same route the alternate-scroll
+/// path already uses via `get_mode`).
+#[derive(Debug, Clone, Copy, Default)]
+struct TrackingState {
+    mode_1000: bool,
+    mode_1002: bool,
+    mode_1003: bool,
+    sgr: bool,
+}
+
+impl TrackingState {
+    fn read(core: &term_core::terminal_core::TerminalCore) -> Self {
+        Self {
+            mode_1000: core.get_mode(term_core::csi_modes::MODE_MOUSE_NORMAL_TRACKING),
+            mode_1002: core.get_mode(term_core::csi_modes::MODE_MOUSE_BUTTON_EVENT_TRACKING),
+            mode_1003: core.get_mode(term_core::csi_modes::MODE_MOUSE_ANY_EVENT_TRACKING),
+            sgr: core.get_mode(term_core::csi_modes::MODE_MOUSE_SGR_ENCODING),
+        }
+    }
+
+    /// Step 3 of the precedence order: is ANY tracking mode active.
+    fn any_active(&self) -> bool {
+        self.mode_1000 || self.mode_1002 || self.mode_1003
+    }
+
+    fn encoding(&self) -> Encoding {
+        if self.sgr { Encoding::Sgr } else { Encoding::X10 }
+    }
+}
 
 /// `WindowEvent::PointerLeft` arm body: clear the pointer-inside flag,
 /// the cached resize hint / cursor, the link hover, and the mux-sidebar
@@ -139,6 +174,51 @@ pub(super) fn handle_pointer_moved(
             }
         }
     }
+
+    // ── Mouse reporting (task0003 FR3/FR7/FR9/FR11, SC-4/SC-5) ────────
+    // Decided independently of the local selection-drag path above: with
+    // no tracking mode active, or with Shift held, this block is a
+    // no-op and today's drag-to-select behaviour is untouched.
+    if let Some(tab) = app.active_tab() {
+        let tracking = TrackingState::read(&tab.core.lock());
+        // D7: the cell-change cache is reset on an active-tab change —
+        // checked regardless of tracking/Shift state, so a cell cached
+        // against one tab never suppresses a report for another.
+        if host.mouse_report_last_active_tab != Some(app.active) {
+            host.mouse_report_cell_cache.reset();
+            host.mouse_report_last_active_tab = Some(app.active);
+        }
+        if !tracking.any_active() {
+            // D7: also reset whenever no tracking mode is active, so the
+            // first motion of the next tracking session always reports.
+            host.mouse_report_cell_cache.reset();
+        } else if !host.current_mods.shift {
+            if let Some(identity) = mouse_report::motion_gate(
+                tracking.mode_1000,
+                tracking.mode_1002,
+                tracking.mode_1003,
+                host.mouse_report_held,
+            ) {
+                let (screen_row, col) = host.pixel_to_cell(position, app);
+                let col1 = col as u32 + 1;
+                let row1 = screen_row as u32 + 1;
+                if host.mouse_report_cell_cache.should_report(col1, row1) {
+                    let encoding = tracking.encoding();
+                    let code = mouse_report::button_code(
+                        EventKind::Motion,
+                        identity,
+                        encoding,
+                        host.current_mods.ctrl,
+                        host.current_mods.alt,
+                    );
+                    if let Some(bytes) = mouse_report::encode_report(code, col1, row1, encoding, false)
+                    {
+                        tab.write_input(bytes);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// `WindowEvent::PointerButton` arm body: CSD edge-resize handoff, egui
@@ -205,6 +285,19 @@ pub(super) fn handle_pointer_button(
             ElementState::Released => {
                 host.pointer_buttons_down = host.pointer_buttons_down.saturating_sub(1);
             }
+        }
+    }
+    // Mouse reporting (SC-5 input): track which buttons are physically
+    // held, independent of any guard below that may go on to consume
+    // this event locally — a button held while the pointer later drags
+    // into the terminal must still be reportable by the motion gate.
+    if let Some(identity) = winit_button_to_report_identity(button) {
+        let held = state == ElementState::Pressed;
+        match identity {
+            ButtonIdentity::Left => host.mouse_report_held.left = held,
+            ButtonIdentity::Middle => host.mouse_report_held.middle = held,
+            ButtonIdentity::Right => host.mouse_report_held.right = held,
+            ButtonIdentity::None => {}
         }
     }
     host.window().request_redraw();
@@ -290,6 +383,47 @@ pub(super) fn handle_pointer_button(
     // never start a terminal selection underneath it.
     if app.profile_selector.visible {
         return;
+    }
+
+    // ── Mouse reporting (task0003 FR2/FR7/FR8/FR10, SC-2/SC-3) ────────
+    // Every existing chrome guard above has already had its chance to
+    // consume this event and return; this is precedence steps 2 and 3
+    // (IMPLEMENTATION.md "Precedence order"): the Shift override, then
+    // the tracking-active question. With a tracking mode active and
+    // Shift not held, a press/release reports instead of running the
+    // local selection / Ctrl+link-open / middle-paste handling below —
+    // AC-5's Ctrl+left and middle-press cases are covered here because
+    // this returns before the `match` arms that implement those paths.
+    if !host.current_mods.shift {
+        if let Some(identity) = winit_button_to_report_identity(button) {
+            if let Some(tab) = app.active_tab() {
+                let tracking = TrackingState::read(&tab.core.lock());
+                if tracking.any_active() {
+                    let event_kind = match state {
+                        ElementState::Pressed => EventKind::Press,
+                        ElementState::Released => EventKind::Release,
+                    };
+                    let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
+                    let col1 = col as u32 + 1;
+                    let row1 = screen_row as u32 + 1;
+                    let encoding = tracking.encoding();
+                    let code = mouse_report::button_code(
+                        event_kind,
+                        identity,
+                        encoding,
+                        host.current_mods.ctrl,
+                        host.current_mods.alt,
+                    );
+                    let release = state == ElementState::Released;
+                    if let Some(bytes) =
+                        mouse_report::encode_report(code, col1, row1, encoding, release)
+                    {
+                        tab.write_input(bytes);
+                    }
+                    return;
+                }
+            }
+        }
     }
 
     match (button, state) {
@@ -530,8 +664,101 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
                 .get_mode(term_core::terminal_core::MODE_ALTERNATE_SCROLL)
         })
         .unwrap_or(false);
-    // FR1 accumulator: reset fractional state when not in AltScreen
-    // so entering AltScreen always starts clean.
+    // Mouse reporting (task0003 FR4/FR7/FR8, SC-6): the wheel decision is
+    // taken once, ahead of both existing wheel consumers below, and its
+    // result selects exactly one of the three (IMPLEMENTATION.md
+    // "Wheel call site"). Its tracking-active branch already folds in
+    // the Shift override (D5), so `host.current_mods.shift` is passed
+    // straight in rather than short-circuiting here.
+    let tracking = app
+        .active_tab()
+        .map(|t| TrackingState::read(&t.core.lock()))
+        .unwrap_or_default();
+    if tracking.any_active() {
+        match wheel_consumer(
+            true,
+            host.current_mods.shift,
+            app.alt_screen,
+            mode_bit_on,
+            app.settings.alternate_scroll_enabled,
+        ) {
+            WheelConsumer::ReportToApplication => {
+                // AC-3: the scrollback offset is never touched and no
+                // alternate-scroll arrow bytes are written for a
+                // reported notch.
+                let notches = wheel_report_notches(lines);
+                if notches != 0 {
+                    if let Some(tab) = app.active_tab() {
+                        let event_kind = if notches > 0 {
+                            EventKind::WheelUp
+                        } else {
+                            EventKind::WheelDown
+                        };
+                        let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, app);
+                        let col1 = col as u32 + 1;
+                        let row1 = screen_row as u32 + 1;
+                        let encoding = tracking.encoding();
+                        let code = mouse_report::button_code(
+                            event_kind,
+                            ButtonIdentity::None,
+                            encoding,
+                            host.current_mods.ctrl,
+                            host.current_mods.alt,
+                        );
+                        let mut buf = Vec::new();
+                        for _ in 0..notches.unsigned_abs() {
+                            if let Some(bytes) =
+                                mouse_report::encode_report(code, col1, row1, encoding, false)
+                            {
+                                buf.extend_from_slice(&bytes);
+                            }
+                        }
+                        if !buf.is_empty() {
+                            tab.write_input(buf);
+                        }
+                    }
+                }
+            }
+            WheelConsumer::ScrollScrollback => {
+                // AC-4: Shift+wheel while tracking is active moves
+                // eMterm's scrollback and writes nothing at all to the
+                // PTY — no arrow bytes either, even on the alternate
+                // screen with the alternate-scroll mode bit and setting
+                // both on (D5). `host.alt_scroll_accum` is deliberately
+                // left untouched: it feeds only the arrow-translate
+                // path, which this branch can never select.
+                let step = app.settings.scroll_speed.max(1);
+                if lines > 0.0 {
+                    app.scroll_up_by(step);
+                    host.invalidate_link_hover();
+                    host.window().request_redraw();
+                } else if lines < 0.0 {
+                    app.scroll_down_by(step);
+                    host.invalidate_link_hover();
+                    host.window().request_redraw();
+                }
+            }
+            WheelConsumer::TranslateToArrows => {
+                unreachable!(
+                    "SC-6 (D5): the tracking-active branch never selects arrow translation"
+                );
+            }
+        }
+        return;
+    }
+
+    // Tracking-inactive: today's matrix, reproduced byte-for-byte and
+    // without consulting Shift at all (AC7) — this is the pre-existing
+    // mechanism SC-6's inactive branch's contract text points back to
+    // ("today's matrix, reproduced exactly"), including its own stateful
+    // sub-notch accumulation (`host.alt_scroll_accum`), which is why it
+    // stays a single unconditional block rather than being re-expressed
+    // through a fresh `WheelConsumer` match: the arrow-vs-scrollback
+    // choice here depends on carried-over fractional state from earlier
+    // events, not only on this event's inputs.
+    //
+    // FR1 accumulator: reset fractional state when not in AltScreen so
+    // entering AltScreen always starts clean.
     if !app.alt_screen {
         host.alt_scroll_accum = 0.0;
     }

@@ -8,17 +8,20 @@ use super::frame_pacing::{
     toast_redraw_due,
 };
 use super::input_translate::{
-    MAX_ALT_SCROLL_NOTCHES, ShiftEnterRewrite, accumulate_alt_scroll_lines,
+    MAX_ALT_SCROLL_NOTCHES, ShiftEnterRewrite, WheelConsumer, accumulate_alt_scroll_lines,
     alternate_scroll_wheel_bytes, is_skk_swallowed_chord, shift_enter_rewrite,
-    should_clear_selection_on_forward, should_drop_synthetic_key_event, winit_key_to_egui,
+    should_clear_selection_on_forward, should_drop_synthetic_key_event,
+    wheel_consumer, wheel_report_notches, winit_button_to_report_identity, winit_key_to_egui,
 };
 use super::link_hover::{detect_osc8_link_at, hover_link_cells_changed};
+use super::mouse_report::ButtonIdentity;
 use super::resize_layout::resolve_grid_bot_inset;
 use super::*;
 use crate::selection::SelectionMode;
 use crate::settings::ShiftEnterBehavior;
 use crate::ui::chrome::build_egui_fonts;
 use std::time::Duration;
+use winit::event::MouseButton;
 use winit::keyboard::{Key as WinitKey, NamedKey};
 
 // ── task0006 AC-2: grid x-origin carries no sidebar term ───────────
@@ -1462,6 +1465,287 @@ fn fr1_wheel_inert_outside_alt_screen() {
 fn fr1_wheel_sub_notch_pixel_delta_is_noop() {
     assert_eq!(alternate_scroll_wheel_bytes(0.4, true, true, true), None);
     assert_eq!(alternate_scroll_wheel_bytes(-0.4, true, true, true), None);
+}
+
+// ── task0003 FR2/FR3: winit button → decision-layer identity ──────
+
+#[test]
+fn winit_button_to_report_identity_maps_the_three_modeled_buttons() {
+    assert_eq!(
+        winit_button_to_report_identity(MouseButton::Left),
+        Some(ButtonIdentity::Left)
+    );
+    assert_eq!(
+        winit_button_to_report_identity(MouseButton::Middle),
+        Some(ButtonIdentity::Middle)
+    );
+    assert_eq!(
+        winit_button_to_report_identity(MouseButton::Right),
+        Some(ButtonIdentity::Right)
+    );
+}
+
+#[test]
+fn winit_button_to_report_identity_none_for_side_buttons() {
+    assert_eq!(winit_button_to_report_identity(MouseButton::Back), None);
+    assert_eq!(winit_button_to_report_identity(MouseButton::Forward), None);
+    assert_eq!(winit_button_to_report_identity(MouseButton::Button6), None);
+}
+
+// ── task0003 FR4: scroll-delta → wheel-notch conversion ─────────────
+
+#[test]
+fn wheel_report_notches_signed_whole_counts() {
+    assert_eq!(wheel_report_notches(2.5), 2);
+    assert_eq!(wheel_report_notches(-2.5), -2);
+    assert_eq!(wheel_report_notches(0.0), 0);
+}
+
+#[test]
+fn wheel_report_notches_sub_notch_delta_is_zero() {
+    assert_eq!(wheel_report_notches(0.4), 0);
+    assert_eq!(wheel_report_notches(-0.4), 0);
+}
+
+#[test]
+fn wheel_report_notches_non_finite_is_zero() {
+    assert_eq!(wheel_report_notches(f32::NAN), 0);
+    assert_eq!(wheel_report_notches(f32::INFINITY), 0);
+}
+
+// ── task0003 (SC-6, owned by task0002 — see D3): wheel-consumer decision ──
+
+/// TS-8 tracking-active branch: Shift held always yields scroll-scrollback,
+/// and never arrow translation — including the alternate-screen cell with
+/// the alternate-scroll mode bit and setting both on (the cell the D5
+/// collision was resolved against).
+#[test]
+fn wheel_consumer_tracking_active_shift_held_scrolls_scrollback_never_arrows() {
+    for on_alt_screen in [false, true] {
+        for mode_bit in [false, true] {
+            for setting in [false, true] {
+                assert_eq!(
+                    wheel_consumer(true, true, on_alt_screen, mode_bit, setting),
+                    WheelConsumer::ScrollScrollback
+                );
+            }
+        }
+    }
+}
+
+/// TS-8 tracking-active branch: Shift not held always reports to the
+/// application, regardless of alternate-screen / alternate-scroll state.
+#[test]
+fn wheel_consumer_tracking_active_shift_not_held_reports_to_application() {
+    for on_alt_screen in [false, true] {
+        for mode_bit in [false, true] {
+            for setting in [false, true] {
+                assert_eq!(
+                    wheel_consumer(true, false, on_alt_screen, mode_bit, setting),
+                    WheelConsumer::ReportToApplication
+                );
+            }
+        }
+    }
+}
+
+/// TS-8 tracking-inactive branch: today's matrix, reproduced exactly and
+/// without consulting Shift.
+#[test]
+fn wheel_consumer_tracking_inactive_reproduces_todays_matrix_ignoring_shift() {
+    for shift_held in [false, true] {
+        assert_eq!(
+            wheel_consumer(false, shift_held, true, true, true),
+            WheelConsumer::TranslateToArrows
+        );
+        assert_eq!(
+            wheel_consumer(false, shift_held, true, true, false),
+            WheelConsumer::ScrollScrollback
+        );
+        assert_eq!(
+            wheel_consumer(false, shift_held, true, false, true),
+            WheelConsumer::ScrollScrollback
+        );
+        assert_eq!(
+            wheel_consumer(false, shift_held, false, true, true),
+            WheelConsumer::ScrollScrollback
+        );
+    }
+}
+
+// ── task0003 AC-1/AC-4/AC-5/AC-6: mouse-report precedence order ────
+//
+// The routing function runs inside a winit/egui context that cannot be
+// constructed in a unit test (see the task plan's Test Notes), so the
+// precedence order itself — chrome guards, then Shift, then the
+// tracking-active question — is pinned structurally by source-scanning
+// `pointer_routing.rs`, mirroring the existing sidebar-guard-ordering
+// tests above.
+
+/// AC-6: the mouse-reporting block in `handle_pointer_button` must run
+/// AFTER every existing chrome guard (CSD edge-resize is handled by an
+/// early return before this function's body even reaches the shared
+/// block scanned here; the top-strip, bottom-strip/scrollbar/sidebar and
+/// profile-selector guards are the ones sharing this function body) —
+/// otherwise an event a guard should have consumed could still reach the
+/// application.
+#[test]
+fn mouse_report_press_guard_runs_after_the_profile_selector_guard_and_before_selection_start() {
+    let src = include_str!("pointer_routing.rs");
+    let arm_start = src
+        .find("pub(super) fn handle_pointer_button(")
+        .expect("PointerButton handler not found in pointer_routing.rs");
+    let arm_body = &src[arm_start..];
+    let profile_guard_pos = arm_body
+        .find("if app.profile_selector.visible {")
+        .expect("profile-selector guard not found in handle_pointer_button");
+    let report_pos = arm_body
+        .find("Mouse reporting (task0003 FR2/FR7/FR8/FR10")
+        .expect("mouse-reporting block marker not found in handle_pointer_button");
+    let match_pos = arm_body
+        .find("match (button, state) {")
+        .expect("local selection/paste match block not found in handle_pointer_button");
+    assert!(
+        profile_guard_pos < report_pos,
+        "the mouse-reporting block must run AFTER the profile-selector guard (AC-6)"
+    );
+    assert!(
+        report_pos < match_pos,
+        "the mouse-reporting block must run BEFORE the local selection / link-open / \
+         middle-paste match (AC-1/AC-5)"
+    );
+}
+
+/// AC-1/AC-4/AC-5: the mouse-reporting block must be gated by the Shift
+/// override and must `return` once it decides to report — the local
+/// selection / Ctrl+link-open / middle-paste handling below is otherwise
+/// still reachable, double-driving the event.
+#[test]
+fn mouse_report_press_guard_is_gated_by_shift_and_returns_on_report() {
+    let src = include_str!("pointer_routing.rs");
+    let start = src
+        .find("Mouse reporting (task0003 FR2/FR7/FR8/FR10")
+        .expect("mouse-reporting block marker not found in pointer_routing.rs");
+    let end = src[start..]
+        .find("match (button, state) {")
+        .expect("match block not found after the mouse-reporting block");
+    let block = &src[start..start + end];
+    assert!(
+        block.contains("if !host.current_mods.shift {"),
+        "the mouse-reporting block must be gated by the Shift override (AC-4)"
+    );
+    assert!(
+        block.contains("tracking.any_active()"),
+        "the mouse-reporting block must gate on the tracking-active question (AC-1)"
+    );
+    assert!(
+        block.contains("return;"),
+        "the mouse-reporting block must return once it reports, skipping the local \
+         selection / link-open / middle-paste handling (AC-1/AC-5)"
+    );
+}
+
+/// AC-2: motion reporting must consult the motion gate (SC-5) before the
+/// cell-change filter (SC-4) — "For motion only: the motion gate (SC-5)
+/// and then the cell-change filter (SC-4)" (IMPLEMENTATION.md
+/// "Precedence order").
+#[test]
+fn mouse_report_motion_consults_the_motion_gate_before_the_cell_change_filter() {
+    let src = include_str!("pointer_routing.rs");
+    let arm_start = src
+        .find("pub(super) fn handle_pointer_moved(")
+        .expect("PointerMoved handler not found in pointer_routing.rs");
+    let arm_body = &src[arm_start..];
+    let gate_pos = arm_body
+        .find("mouse_report::motion_gate(")
+        .expect("motion_gate call not found in handle_pointer_moved");
+    let filter_pos = arm_body
+        .find("mouse_report_cell_cache.should_report(")
+        .expect("cell-change filter call not found in handle_pointer_moved");
+    assert!(
+        gate_pos < filter_pos,
+        "the motion gate (SC-5) must be consulted before the cell-change filter (SC-4)"
+    );
+}
+
+/// AC-2/D7: the cache must be reset both when no tracking mode is
+/// active and on an active-tab change — both conditions checked in
+/// `handle_pointer_moved`, independent of the reporting branch itself.
+#[test]
+fn mouse_report_motion_resets_the_cache_on_no_tracking_and_on_tab_change() {
+    let src = include_str!("pointer_routing.rs");
+    let arm_start = src
+        .find("pub(super) fn handle_pointer_moved(")
+        .expect("PointerMoved handler not found in pointer_routing.rs");
+    let arm_body = &src[arm_start..];
+    let end = arm_body
+        .find("\npub(super) fn handle_pointer_button(")
+        .expect("PointerButton handler not found after handle_pointer_moved");
+    let moved_body = &arm_body[..end];
+    let reset_count = moved_body.matches("mouse_report_cell_cache.reset()").count();
+    assert_eq!(
+        reset_count, 2,
+        "expected exactly two reset call sites (no-tracking observation and \
+         active-tab-change observation, D7); found {reset_count}"
+    );
+    assert!(
+        moved_body.contains("host.mouse_report_last_active_tab != Some(app.active)"),
+        "the active-tab-change observation must compare against the current active tab"
+    );
+}
+
+/// AC-3/AC-4: the wheel decision (SC-6) must be taken once, ahead of
+/// both existing wheel consumers (the alternate-scroll arrow translation
+/// and the plain scrollback scroll) — "IMPLEMENTATION.md Wheel call
+/// site".
+#[test]
+fn mouse_report_wheel_decision_precedes_both_existing_wheel_consumers() {
+    let src = include_str!("pointer_routing.rs");
+    let arm_start = src
+        .find("pub(super) fn handle_mouse_wheel(")
+        .expect("MouseWheel handler not found in pointer_routing.rs");
+    let arm_body = &src[arm_start..];
+    let decision_pos = arm_body
+        .find("wheel_consumer(")
+        .expect("wheel_consumer call not found in handle_mouse_wheel");
+    let arrow_translate_pos = arm_body
+        .find("accumulate_alt_scroll_lines(host.alt_scroll_accum, lines)")
+        .expect("alternate-scroll accumulator call not found in handle_mouse_wheel");
+    let scrollback_pos = arm_body
+        .rfind("app.scroll_up_by(step)")
+        .expect("plain scrollback scroll call not found in handle_mouse_wheel");
+    assert!(
+        decision_pos < arrow_translate_pos,
+        "the wheel decision must be taken before the alternate-scroll arrow-translate path"
+    );
+    assert!(
+        decision_pos < scrollback_pos,
+        "the wheel decision must be taken before the plain scrollback-scroll path"
+    );
+}
+
+/// AC-4/D5: the tracking-active branch must never select arrow
+/// translation — pinned as a compile-time-checked `unreachable!()` arm
+/// rather than merely a comment.
+#[test]
+fn mouse_report_wheel_tracking_active_branch_treats_arrow_translation_as_unreachable() {
+    let src = include_str!("pointer_routing.rs");
+    let arm_start = src
+        .find("pub(super) fn handle_mouse_wheel(")
+        .expect("MouseWheel handler not found in pointer_routing.rs");
+    let arm_body = &src[arm_start..];
+    let tracking_if_pos = arm_body
+        .find("if tracking.any_active() {")
+        .expect("tracking-active branch not found in handle_mouse_wheel");
+    let unreachable_pos = arm_body
+        .find("WheelConsumer::TranslateToArrows => {")
+        .expect("TranslateToArrows arm not found in handle_mouse_wheel");
+    assert!(tracking_if_pos < unreachable_pos);
+    let arm_section = &arm_body[unreachable_pos..unreachable_pos + 200];
+    assert!(
+        arm_section.contains("unreachable!("),
+        "the tracking-active branch's TranslateToArrows arm must be unreachable!() (D5)"
+    );
 }
 
 // ── task0010 AC-2/AC-3: mux sidebar wheel-routing guard wiring ─────
