@@ -1,33 +1,40 @@
-//! Mouse-report decision / encoding layer: button-code composition, byte
-//! encoding, the motion gate and the cell-change filter (IMPLEMENTATION.md
-//! shared components SC-2 through SC-5).
+//! task0002 (mouse-reporting): SC-2 through SC-5, IMPLEMENTATION.md's
+//! window-free mouse-report decision layer — button-code composition, byte
+//! encoding, the motion gate, and the cell-change filter.
 //!
-//! Owned by task0002, which is the only task that may change this
-//! contract. Created here per cross-task decision D3: task0003 (this
-//! worktree) is a parallel consumer of SC-2 through SC-5 and does not have
-//! task0002's own edit, so this module is the minimum needed to satisfy the
-//! pinned contract and let the routing integration (`pointer_routing.rs`)
-//! compile and be tested. The integration (task0002) side of this file is
-//! adopted verbatim on merge — see D3, IMPLEMENTATION.md.
+//! Every function/type here takes and returns plain values: no window
+//! handle, no GPU surface, no PTY, no `term_core` mode type, no winit type
+//! in any signature. That is what makes every unit exercisable from a bare
+//! `#[test]` with no window, GPU surface or PTY constructed (AC-8). The L3
+//! routing layer (task0003) is responsible for collecting winit/egui/core
+//! state into these plain values and performing the side effect with the
+//! result.
 //!
-//! Every unit here is a pure function over plain values: no winit type, no
-//! `term_core` type, no window/PTY handle. The caller (`pointer_routing.rs`)
-//! collects those values from host state and calls in.
+//! `#![allow(dead_code)]`: this module is a decision layer consumed by the
+//! routing task (task0003), which lands in a separate parallel worktree
+//! (IMPLEMENTATION.md D3) and is not present here — so most items have no
+//! caller yet outside this file's own tests. Mirrors the same allowance
+//! already used by `crate::pty::input` for the same reason.
+#![allow(dead_code)]
 
-/// Button identity carried through the decision layer (SC-2, SC-5).
-/// `None` denotes "no button" — the release/motion base under X10, or a
-/// 1003 motion report with nothing held.
+use crate::pty::input::Modifiers;
+
+/// Which mouse button (or none) an event/report concerns (SC-2, SC-5).
+/// Deliberately distinct from `winit::event::MouseButton` and
+/// `egui::PointerButton` — L2 must not reference either in a signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ButtonIdentity {
+pub(super) enum MouseButtonId {
     Left,
     Middle,
     Right,
+    /// SC-5's "none" identity: under mode 1003 a motion report is always
+    /// present, even when no button is held.
     None,
 }
 
-/// Event kind for SC-2 button-code composition.
+/// The kind of pointer/wheel event a report describes (SC-2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EventKind {
+pub(super) enum MouseEventKind {
     Press,
     Release,
     Motion,
@@ -35,261 +42,426 @@ pub(super) enum EventKind {
     WheelDown,
 }
 
-/// Report encoding (SC-2 base selection, SC-3 byte layout).
+/// Which report form to compose bytes for (SC-2, SC-3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Encoding {
+pub(super) enum MouseReportEncoding {
     X10,
     Sgr,
 }
 
+const BASE_LEFT: u8 = 0;
+const BASE_MIDDLE: u8 = 1;
+const BASE_RIGHT: u8 = 2;
+const BASE_NONE: u8 = 3;
+const BASE_WHEEL_UP: u8 = 64;
+const BASE_WHEEL_DOWN: u8 = 65;
+const MOTION_BIT: u8 = 32;
+const CTRL_BIT: u8 = 16;
+const ALT_BIT: u8 = 8;
+
+/// X10's per-axis coordinate ceiling: `column + 32` / `row + 32` must fit in
+/// one byte (FR9). Above this, [`encode_report`] returns `None` rather than
+/// clamping or emitting a partial sequence.
+const X10_MAX_COORD: u32 = 223;
+
 /// SC-2: compose the numeric button code both encodings carry.
 ///
-/// Post: base is left 0, middle 1, right 2, none 3; a wheel-up event is
-/// base 64 and a wheel-down event is base 65 regardless of button identity;
-/// a release under X10 replaces the base with 3 while a release under SGR
-/// retains the press base; a motion event adds 32; ctrl adds 16; alt adds
-/// 8. Shift is never added — the caller consumes it locally before an
-/// event can reach this stage (D4), so no input combination ever
-/// contributes the value 4.
-pub(super) fn button_code(
-    kind: EventKind,
-    button: ButtonIdentity,
-    encoding: Encoding,
-    ctrl: bool,
-    alt: bool,
+/// `mods.shift` is intentionally never read: FR7/D4 route Shift through the
+/// local override before any event reaches emission, so the conventional
+/// shift bit (4) is never contributed by any input combination (AC-3).
+pub(super) fn compose_button_code(
+    kind: MouseEventKind,
+    button: MouseButtonId,
+    encoding: MouseReportEncoding,
+    mods: Modifiers,
 ) -> u8 {
-    let base: u8 = match kind {
-        EventKind::WheelUp => 64,
-        EventKind::WheelDown => 65,
-        EventKind::Release if encoding == Encoding::X10 => 3,
+    let mut code = match kind {
+        MouseEventKind::WheelUp => BASE_WHEEL_UP,
+        MouseEventKind::WheelDown => BASE_WHEEL_DOWN,
+        // x10 replaces the base with 3 on release; sgr retains the press
+        // base, so a plain Release falls through to the button lookup below.
+        MouseEventKind::Release if encoding == MouseReportEncoding::X10 => BASE_NONE,
         _ => match button {
-            ButtonIdentity::Left => 0,
-            ButtonIdentity::Middle => 1,
-            ButtonIdentity::Right => 2,
-            ButtonIdentity::None => 3,
+            MouseButtonId::Left => BASE_LEFT,
+            MouseButtonId::Middle => BASE_MIDDLE,
+            MouseButtonId::Right => BASE_RIGHT,
+            MouseButtonId::None => BASE_NONE,
         },
     };
-    let motion_bit = if kind == EventKind::Motion { 32 } else { 0 };
-    let ctrl_bit = if ctrl { 16 } else { 0 };
-    let alt_bit = if alt { 8 } else { 0 };
-    base + motion_bit + ctrl_bit + alt_bit
+    if matches!(kind, MouseEventKind::Motion) {
+        code += MOTION_BIT;
+    }
+    if mods.ctrl {
+        code += CTRL_BIT;
+    }
+    if mods.alt {
+        code += ALT_BIT;
+    }
+    code
 }
 
-/// SC-3: turn a button code plus a 1-based cell coordinate into the
-/// emitted byte sequence.
+/// SC-3: turn a button code plus a 1-based cell coordinate into the emitted
+/// byte sequence.
 ///
-/// Pre: `col` and `row` are 1-based and at least 1 (the caller's
-/// responsibility). Post (X10): CSI, `M`, then three bytes — the button
-/// code, the column and the row, each biased by 32 — absent (no bytes at
-/// all, no clamping) when either coordinate exceeds 223. Post (SGR): CSI
-/// `<`, the unbiased decimal button code, `;`, the decimal column, `;`,
-/// the decimal row, then `M` for a press/motion or `m` for a release; no
-/// coordinate limit.
+/// **Pre**: `column` and `row` are 1-based (at least 1).
+/// **Post (x10)**: `ESC [ M` then exactly three bytes — the button code, the
+/// column and the row, each biased by 32 — or `None` when the column or the
+/// row exceeds 223 (FR9): never a clamped value, never a partial sequence.
+/// **Post (sgr)**: `ESC [ <` then the unbiased decimal button code, `;`, the
+/// decimal column, `;`, the decimal row, then `M` for a press/motion or `m`
+/// for a release; no coordinate limit.
 pub(super) fn encode_report(
-    code: u8,
-    col: u32,
+    button_code: u8,
+    column: u32,
     row: u32,
-    encoding: Encoding,
-    release: bool,
+    encoding: MouseReportEncoding,
+    is_release: bool,
 ) -> Option<Vec<u8>> {
     match encoding {
-        Encoding::X10 => {
-            if col > 223 || row > 223 {
+        MouseReportEncoding::X10 => {
+            if column > X10_MAX_COORD || row > X10_MAX_COORD {
                 return None;
             }
-            let mut buf = Vec::with_capacity(6);
-            buf.extend_from_slice(b"\x1b[M");
-            buf.push(code.wrapping_add(32));
-            buf.push((col as u8).wrapping_add(32));
-            buf.push((row as u8).wrapping_add(32));
-            Some(buf)
+            let mut bytes = Vec::with_capacity(6);
+            bytes.extend_from_slice(b"\x1b[M");
+            bytes.push(button_code + 32);
+            bytes.push(column as u8 + 32);
+            bytes.push(row as u8 + 32);
+            Some(bytes)
         }
-        Encoding::Sgr => {
-            let letter = if release { 'm' } else { 'M' };
-            Some(format!("\x1b[<{code};{col};{row}{letter}").into_bytes())
+        MouseReportEncoding::Sgr => {
+            let final_char = if is_release { 'm' } else { 'M' };
+            Some(format!("\x1b[<{button_code};{column};{row}{final_char}").into_bytes())
         }
     }
 }
 
-/// SC-4: cap motion report volume at grid resolution by suppressing a
-/// repeat of the same cell.
+/// SC-4: caps motion-report volume at grid resolution by remembering the
+/// last reported cell. Owns its cache; deciding *when* to call [`reset`]
+/// (D7: no active tracking mode, and active-tab change) is the caller's
+/// job, not this filter's.
 ///
-/// Holds the last-reported cell. `should_report` answers true (and caches
-/// the new cell) when no cell is cached or the cached cell differs; false
-/// (cache unchanged) otherwise. `reset` empties the cache so the next cell
-/// always reports — the host calls it whenever it observes that no
-/// tracking mode is active, and on active-tab change (D7).
-#[derive(Debug, Default)]
+/// [`reset`]: CellChangeFilter::reset
+#[derive(Debug, Default, Clone, Copy)]
 pub(super) struct CellChangeFilter {
     last: Option<(u32, u32)>,
 }
 
 impl CellChangeFilter {
-    pub(super) fn should_report(&mut self, col: u32, row: u32) -> bool {
-        if self.last == Some((col, row)) {
-            false
-        } else {
-            self.last = Some((col, row));
-            true
-        }
+    pub(super) fn new() -> Self {
+        Self::default()
     }
 
+    /// `true` (and caches `(column, row)`) when nothing is cached yet or the
+    /// cached cell differs; `false` (cache left unchanged) on an exact
+    /// repeat of the cached cell.
+    pub(super) fn should_report(&mut self, column: u32, row: u32) -> bool {
+        if self.last == Some((column, row)) {
+            return false;
+        }
+        self.last = Some((column, row));
+        true
+    }
+
+    /// Empties the cache so the next [`should_report`] call always reports,
+    /// regardless of what cell it names.
+    ///
+    /// [`should_report`]: CellChangeFilter::should_report
     pub(super) fn reset(&mut self) {
         self.last = None;
     }
 }
 
-/// Which buttons are currently held, for the SC-5 motion gate. When more
-/// than one is held, [`HeldButtons::lowest`] resolves the tie per decision
-/// D6 (left before middle before right).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct HeldButtons {
-    pub(super) left: bool,
-    pub(super) middle: bool,
-    pub(super) right: bool,
-}
-
-impl HeldButtons {
-    pub(super) fn any(&self) -> bool {
-        self.left || self.middle || self.right
-    }
-
-    /// D6: the lowest-numbered held button, or `None` if nothing is held.
-    pub(super) fn lowest(&self) -> ButtonIdentity {
-        if self.left {
-            ButtonIdentity::Left
-        } else if self.middle {
-            ButtonIdentity::Middle
-        } else if self.right {
-            ButtonIdentity::Right
-        } else {
-            ButtonIdentity::None
-        }
-    }
-}
-
 /// SC-5: decide whether a pointer motion is reportable at all, and with
-/// which button identity.
+/// which button, given the three tracking-mode flags and which buttons are
+/// currently held.
 ///
-/// Post: absent when no tracking mode is active or when only 1000 is
-/// active; absent when 1002 is the highest active tracking mode and no
-/// button is held; present with the held button when 1002 is active and at
-/// least one button is held; present always when 1003 is active, carrying
-/// the held button or the "none" identity when nothing is held. 1003 takes
-/// precedence over 1002, which takes precedence over 1000.
+/// **Post**: `None` when no tracking mode is active, or when only 1000 is
+/// active; `None` when 1002 is the highest active mode and no button is
+/// held; `Some(button)` when 1002 is active and at least one button is
+/// held; always `Some(_)` when 1003 is active — the held button, or the
+/// "none" identity when none is held. 1003 takes precedence over 1002,
+/// which takes precedence over 1000. When several buttons are held, the
+/// lowest-numbered one (left, then middle, then right) is reported (D6).
 pub(super) fn motion_gate(
     mode_1000: bool,
     mode_1002: bool,
     mode_1003: bool,
-    held: HeldButtons,
-) -> Option<ButtonIdentity> {
-    if mode_1003 {
-        Some(held.lowest())
-    } else if mode_1002 {
-        held.any().then(|| held.lowest())
+    held_left: bool,
+    held_middle: bool,
+    held_right: bool,
+) -> Option<MouseButtonId> {
+    let lowest_held = if held_left {
+        Some(MouseButtonId::Left)
+    } else if held_middle {
+        Some(MouseButtonId::Middle)
+    } else if held_right {
+        Some(MouseButtonId::Right)
     } else {
-        // Only 1000 active, or no tracking mode at all: never reports.
-        let _ = mode_1000;
         None
+    };
+    if mode_1003 {
+        return Some(lowest_held.unwrap_or(MouseButtonId::None));
     }
+    if mode_1002 {
+        return lowest_held;
+    }
+    // mode_1000 alone (or no tracking mode active at all) never reports.
+    let _ = mode_1000;
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── SC-2: button-code composition ───────────────────────────
+    // ── AC-1: X10 byte-exact encoding (TS-3) ───────────────────────
 
     #[test]
-    fn button_code_press_bases_by_identity() {
+    fn x10_left_press_at_1_1_emits_introducer_then_32_33_33() {
+        let code = compose_button_code(
+            MouseEventKind::Press,
+            MouseButtonId::Left,
+            MouseReportEncoding::X10,
+            Modifiers::NONE,
+        );
+        let bytes = encode_report(code, 1, 1, MouseReportEncoding::X10, false).unwrap();
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 32, 33, 33]);
+    }
+
+    #[test]
+    fn x10_left_release_at_1_1_emits_35_33_33_with_base_replaced_by_3() {
+        let code = compose_button_code(
+            MouseEventKind::Release,
+            MouseButtonId::Left,
+            MouseReportEncoding::X10,
+            Modifiers::NONE,
+        );
+        assert_eq!(code, 3, "x10 release replaces the base with 3");
+        let bytes = encode_report(code, 1, 1, MouseReportEncoding::X10, true).unwrap();
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 35, 33, 33]);
+    }
+
+    #[test]
+    fn x10_motion_adds_32_to_the_base() {
+        let code = compose_button_code(
+            MouseEventKind::Motion,
+            MouseButtonId::Left,
+            MouseReportEncoding::X10,
+            Modifiers::NONE,
+        );
+        assert_eq!(code, 32);
+        let bytes = encode_report(code, 1, 1, MouseReportEncoding::X10, false).unwrap();
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 64, 33, 33]);
+    }
+
+    #[test]
+    fn x10_wheel_up_and_wheel_down_carry_64_and_65() {
+        let up = compose_button_code(
+            MouseEventKind::WheelUp,
+            MouseButtonId::None,
+            MouseReportEncoding::X10,
+            Modifiers::NONE,
+        );
+        let down = compose_button_code(
+            MouseEventKind::WheelDown,
+            MouseButtonId::None,
+            MouseReportEncoding::X10,
+            Modifiers::NONE,
+        );
+        assert_eq!(up, 64);
+        assert_eq!(down, 65);
         assert_eq!(
-            button_code(EventKind::Press, ButtonIdentity::Left, Encoding::X10, false, false),
-            0
+            encode_report(up, 1, 1, MouseReportEncoding::X10, false).unwrap(),
+            vec![0x1b, b'[', b'M', 96, 33, 33]
         );
         assert_eq!(
-            button_code(EventKind::Press, ButtonIdentity::Middle, Encoding::X10, false, false),
-            1
+            encode_report(down, 1, 1, MouseReportEncoding::X10, false).unwrap(),
+            vec![0x1b, b'[', b'M', 97, 33, 33]
+        );
+    }
+
+    // ── AC-2: SGR byte-exact encoding (TS-4) ───────────────────────
+
+    #[test]
+    fn sgr_left_press_at_1_1_is_lt_0_1_1_upper_m() {
+        let code = compose_button_code(
+            MouseEventKind::Press,
+            MouseButtonId::Left,
+            MouseReportEncoding::Sgr,
+            Modifiers::NONE,
+        );
+        let bytes = encode_report(code, 1, 1, MouseReportEncoding::Sgr, false).unwrap();
+        assert_eq!(bytes, b"\x1b[<0;1;1M".to_vec());
+    }
+
+    #[test]
+    fn sgr_left_release_retains_press_base_and_ends_in_lowercase_m() {
+        let code = compose_button_code(
+            MouseEventKind::Release,
+            MouseButtonId::Left,
+            MouseReportEncoding::Sgr,
+            Modifiers::NONE,
+        );
+        assert_eq!(code, 0, "sgr release keeps the press base, unlike x10");
+        let bytes = encode_report(code, 1, 1, MouseReportEncoding::Sgr, true).unwrap();
+        assert_eq!(bytes, b"\x1b[<0;1;1m".to_vec());
+    }
+
+    #[test]
+    fn sgr_motion_and_wheel_directions_are_byte_exact() {
+        let motion = compose_button_code(
+            MouseEventKind::Motion,
+            MouseButtonId::Right,
+            MouseReportEncoding::Sgr,
+            Modifiers::NONE,
         );
         assert_eq!(
-            button_code(EventKind::Press, ButtonIdentity::Right, Encoding::X10, false, false),
-            2
+            encode_report(motion, 5, 7, MouseReportEncoding::Sgr, false).unwrap(),
+            b"\x1b[<34;5;7M".to_vec(), // right (2) + motion (32)
+        );
+
+        let up = compose_button_code(
+            MouseEventKind::WheelUp,
+            MouseButtonId::None,
+            MouseReportEncoding::Sgr,
+            Modifiers::NONE,
         );
         assert_eq!(
-            button_code(EventKind::Press, ButtonIdentity::None, Encoding::X10, false, false),
-            3
+            encode_report(up, 1, 1, MouseReportEncoding::Sgr, false).unwrap(),
+            b"\x1b[<64;1;1M".to_vec()
+        );
+
+        let down = compose_button_code(
+            MouseEventKind::WheelDown,
+            MouseButtonId::None,
+            MouseReportEncoding::Sgr,
+            Modifiers::NONE,
+        );
+        assert_eq!(
+            encode_report(down, 1, 1, MouseReportEncoding::Sgr, false).unwrap(),
+            b"\x1b[<65;1;1M".to_vec()
+        );
+    }
+
+    // ── AC-3: modifier contribution; shift never reaches the code (TS-5) ──
+
+    #[test]
+    fn ctrl_and_alt_contribute_16_and_8_and_24_together() {
+        let base = compose_button_code(
+            MouseEventKind::Press,
+            MouseButtonId::Left,
+            MouseReportEncoding::Sgr,
+            Modifiers::NONE,
+        );
+        let ctrl = compose_button_code(
+            MouseEventKind::Press,
+            MouseButtonId::Left,
+            MouseReportEncoding::Sgr,
+            Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+        );
+        let alt = compose_button_code(
+            MouseEventKind::Press,
+            MouseButtonId::Left,
+            MouseReportEncoding::Sgr,
+            Modifiers {
+                alt: true,
+                ..Modifiers::NONE
+            },
+        );
+        let both = compose_button_code(
+            MouseEventKind::Press,
+            MouseButtonId::Left,
+            MouseReportEncoding::Sgr,
+            Modifiers {
+                ctrl: true,
+                alt: true,
+                ..Modifiers::NONE
+            },
+        );
+        assert_eq!(ctrl - base, 16);
+        assert_eq!(alt - base, 8);
+        assert_eq!(both - base, 24);
+    }
+
+    #[test]
+    fn shift_alone_never_changes_the_button_code_even_when_set() {
+        let without_shift = compose_button_code(
+            MouseEventKind::WheelUp,
+            MouseButtonId::None,
+            MouseReportEncoding::X10,
+            Modifiers::NONE,
+        );
+        let with_shift = compose_button_code(
+            MouseEventKind::WheelUp,
+            MouseButtonId::None,
+            MouseReportEncoding::X10,
+            Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+        );
+        assert_eq!(without_shift, with_shift);
+
+        let ctrl_only = compose_button_code(
+            MouseEventKind::Press,
+            MouseButtonId::Right,
+            MouseReportEncoding::Sgr,
+            Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+        );
+        let ctrl_and_shift = compose_button_code(
+            MouseEventKind::Press,
+            MouseButtonId::Right,
+            MouseReportEncoding::Sgr,
+            Modifiers {
+                ctrl: true,
+                shift: true,
+                ..Modifiers::NONE
+            },
+        );
+        assert_eq!(
+            ctrl_only, ctrl_and_shift,
+            "shift set alongside another modifier must still contribute nothing"
         );
     }
 
     #[test]
-    fn button_code_release_under_x10_is_always_base_3() {
-        assert_eq!(
-            button_code(EventKind::Release, ButtonIdentity::Left, Encoding::X10, false, false),
-            3
-        );
-        assert_eq!(
-            button_code(EventKind::Release, ButtonIdentity::Right, Encoding::X10, false, false),
-            3
-        );
-    }
-
-    #[test]
-    fn button_code_release_under_sgr_retains_press_base() {
-        assert_eq!(
-            button_code(EventKind::Release, ButtonIdentity::Left, Encoding::Sgr, false, false),
-            0
-        );
-        assert_eq!(
-            button_code(EventKind::Release, ButtonIdentity::Right, Encoding::Sgr, false, false),
-            2
-        );
-    }
-
-    #[test]
-    fn button_code_wheel_bases_ignore_button_identity() {
-        assert_eq!(
-            button_code(EventKind::WheelUp, ButtonIdentity::Right, Encoding::Sgr, false, false),
-            64
-        );
-        assert_eq!(
-            button_code(EventKind::WheelDown, ButtonIdentity::None, Encoding::X10, false, false),
-            65
-        );
-    }
-
-    #[test]
-    fn button_code_motion_adds_32() {
-        assert_eq!(
-            button_code(EventKind::Motion, ButtonIdentity::Left, Encoding::Sgr, false, false),
-            32
-        );
-    }
-
-    #[test]
-    fn button_code_ctrl_and_alt_bits_stack_and_never_produce_shift() {
-        let ctrl = button_code(EventKind::Press, ButtonIdentity::Left, Encoding::Sgr, true, false);
-        let alt = button_code(EventKind::Press, ButtonIdentity::Left, Encoding::Sgr, false, true);
-        let both = button_code(EventKind::Press, ButtonIdentity::Left, Encoding::Sgr, true, true);
-        assert_eq!(ctrl, 16);
-        assert_eq!(alt, 8);
-        assert_eq!(both, 24);
-        // No parameter carries shift (D4): every combination avoids 4.
-        for kind in [
-            EventKind::Press,
-            EventKind::Release,
-            EventKind::Motion,
-            EventKind::WheelUp,
-            EventKind::WheelDown,
-        ] {
-            for button in [
-                ButtonIdentity::Left,
-                ButtonIdentity::Middle,
-                ButtonIdentity::Right,
-                ButtonIdentity::None,
-            ] {
-                for encoding in [Encoding::X10, Encoding::Sgr] {
-                    for ctrl in [false, true] {
-                        for alt in [false, true] {
-                            assert_ne!(button_code(kind, button, encoding, ctrl, alt), 4);
+    fn no_input_combination_ever_produces_the_value_4() {
+        let kinds = [
+            MouseEventKind::Press,
+            MouseEventKind::Release,
+            MouseEventKind::Motion,
+            MouseEventKind::WheelUp,
+            MouseEventKind::WheelDown,
+        ];
+        let buttons = [
+            MouseButtonId::Left,
+            MouseButtonId::Middle,
+            MouseButtonId::Right,
+            MouseButtonId::None,
+        ];
+        let encodings = [MouseReportEncoding::X10, MouseReportEncoding::Sgr];
+        let bools = [false, true];
+        for &kind in &kinds {
+            for &button in &buttons {
+                for &encoding in &encodings {
+                    for &ctrl in &bools {
+                        for &alt in &bools {
+                            for &shift in &bools {
+                                let code = compose_button_code(
+                                    kind,
+                                    button,
+                                    encoding,
+                                    Modifiers { ctrl, shift, alt },
+                                );
+                                assert_ne!(code, 4);
+                            }
                         }
                     }
                 }
@@ -297,113 +469,144 @@ mod tests {
         }
     }
 
-    // ── SC-3: report encoding ───────────────────────────────────
+    // ── AC-4: X10 overflow at 224, independently on each axis (TS-6) ──
 
     #[test]
-    fn encode_report_x10_left_press_at_origin() {
-        let code = button_code(EventKind::Press, ButtonIdentity::Left, Encoding::X10, false, false);
-        let bytes = encode_report(code, 1, 1, Encoding::X10, false).unwrap();
-        assert_eq!(bytes, vec![0x1b, b'[', b'M', 32, 33, 33]);
+    fn x10_column_223_encodes_but_224_yields_nothing() {
+        let code = compose_button_code(
+            MouseEventKind::Press,
+            MouseButtonId::Left,
+            MouseReportEncoding::X10,
+            Modifiers::NONE,
+        );
+        assert!(encode_report(code, 223, 1, MouseReportEncoding::X10, false).is_some());
+        assert_eq!(
+            encode_report(code, 224, 1, MouseReportEncoding::X10, false),
+            None
+        );
     }
 
     #[test]
-    fn encode_report_x10_release_at_origin() {
-        let code = button_code(EventKind::Release, ButtonIdentity::Left, Encoding::X10, false, false);
-        let bytes = encode_report(code, 1, 1, Encoding::X10, true).unwrap();
-        assert_eq!(bytes, vec![0x1b, b'[', b'M', 35, 33, 33]);
+    fn x10_row_223_encodes_but_224_yields_nothing() {
+        let code = compose_button_code(
+            MouseEventKind::Press,
+            MouseButtonId::Left,
+            MouseReportEncoding::X10,
+            Modifiers::NONE,
+        );
+        assert!(encode_report(code, 1, 223, MouseReportEncoding::X10, false).is_some());
+        assert_eq!(
+            encode_report(code, 1, 224, MouseReportEncoding::X10, false),
+            None
+        );
     }
 
     #[test]
-    fn encode_report_x10_boundary_223_encodes_224_does_not() {
-        assert!(encode_report(0, 223, 223, Encoding::X10, false).is_some());
-        assert!(encode_report(0, 224, 1, Encoding::X10, false).is_none());
-        assert!(encode_report(0, 1, 224, Encoding::X10, false).is_none());
+    fn sgr_carries_the_true_coordinate_at_224_where_x10_would_suppress() {
+        let code = compose_button_code(
+            MouseEventKind::Press,
+            MouseButtonId::Left,
+            MouseReportEncoding::Sgr,
+            Modifiers::NONE,
+        );
+        let bytes = encode_report(code, 224, 224, MouseReportEncoding::Sgr, false).unwrap();
+        assert_eq!(bytes, b"\x1b[<0;224;224M".to_vec());
+    }
+
+    // ── AC-5: cell-change filter (TS-7) ─────────────────────────────
+
+    #[test]
+    fn cell_change_filter_reports_first_suppresses_repeat_reports_on_change() {
+        let mut filter = CellChangeFilter::new();
+        let mut reported = Vec::new();
+        for cell in [(1, 1), (1, 1), (2, 1), (2, 1), (3, 3)] {
+            if filter.should_report(cell.0, cell.1) {
+                reported.push(cell);
+            }
+        }
+        assert_eq!(reported, vec![(1, 1), (2, 1), (3, 3)]);
     }
 
     #[test]
-    fn encode_report_sgr_press_and_release_letters() {
-        let press = encode_report(0, 1, 1, Encoding::Sgr, false).unwrap();
-        assert_eq!(press, b"\x1b[<0;1;1M".to_vec());
-        let release = encode_report(0, 1, 1, Encoding::Sgr, true).unwrap();
-        assert_eq!(release, b"\x1b[<0;1;1m".to_vec());
+    fn cell_change_filter_carries_its_cached_cell_across_calls() {
+        let mut filter = CellChangeFilter::new();
+        assert!(filter.should_report(10, 20));
+        assert!(!filter.should_report(10, 20));
+        assert!(!filter.should_report(10, 20));
+        assert!(filter.should_report(11, 20));
     }
 
     #[test]
-    fn encode_report_sgr_has_no_coordinate_limit() {
-        let bytes = encode_report(0, 224, 500, Encoding::Sgr, false).unwrap();
-        assert_eq!(bytes, b"\x1b[<0;224;500M".to_vec());
-    }
-
-    // ── SC-4: cell-change filter ─────────────────────────────────
-
-    #[test]
-    fn cell_change_filter_reports_first_cell_then_suppresses_repeat() {
-        let mut filter = CellChangeFilter::default();
+    fn cell_change_filter_reports_unconditionally_after_reset() {
+        let mut filter = CellChangeFilter::new();
         assert!(filter.should_report(5, 5));
         assert!(!filter.should_report(5, 5));
-    }
-
-    #[test]
-    fn cell_change_filter_reports_on_crossing_and_resets() {
-        let mut filter = CellChangeFilter::default();
-        assert!(filter.should_report(5, 5));
-        assert!(filter.should_report(6, 5));
-        assert!(!filter.should_report(6, 5));
         filter.reset();
-        assert!(filter.should_report(6, 5));
-    }
-
-    // ── SC-5: motion gate ─────────────────────────────────────────
-
-    #[test]
-    fn motion_gate_no_tracking_or_1000_only_never_reports() {
-        assert_eq!(motion_gate(false, false, false, HeldButtons::default()), None);
-        assert_eq!(motion_gate(true, false, false, HeldButtons::default()), None);
-    }
-
-    #[test]
-    fn motion_gate_1002_requires_a_held_button() {
-        assert_eq!(motion_gate(false, true, false, HeldButtons::default()), None);
-        let held = HeldButtons {
-            left: true,
-            ..Default::default()
-        };
-        assert_eq!(motion_gate(false, true, false, held), Some(ButtonIdentity::Left));
-    }
-
-    #[test]
-    fn motion_gate_1003_always_reports() {
-        assert_eq!(
-            motion_gate(false, false, true, HeldButtons::default()),
-            Some(ButtonIdentity::None)
+        assert!(
+            filter.should_report(5, 5),
+            "reset must clear the cache even for a repeat of the same cell"
         );
-        let held = HeldButtons {
-            right: true,
-            ..Default::default()
-        };
-        assert_eq!(motion_gate(false, false, true, held), Some(ButtonIdentity::Right));
+    }
+
+    // ── AC-6: motion gate (TS-9) ─────────────────────────────────────
+
+    #[test]
+    fn motion_gate_yields_nothing_when_only_1000_is_active() {
+        assert_eq!(motion_gate(true, false, false, true, false, false), None);
+        assert_eq!(motion_gate(true, false, false, false, false, false), None);
     }
 
     #[test]
-    fn motion_gate_multi_button_carries_the_lowest_numbered() {
-        let held = HeldButtons {
-            left: true,
-            right: true,
-            ..Default::default()
-        };
-        assert_eq!(motion_gate(false, false, true, held), Some(ButtonIdentity::Left));
-        let held = HeldButtons {
-            middle: true,
-            right: true,
-            ..Default::default()
-        };
-        assert_eq!(motion_gate(false, true, false, held), Some(ButtonIdentity::Middle));
+    fn motion_gate_yields_nothing_under_1002_with_no_button_held() {
+        assert_eq!(motion_gate(false, true, false, false, false, false), None);
+        assert_eq!(motion_gate(true, true, false, false, false, false), None);
     }
 
     #[test]
-    fn motion_gate_precedence_1003_over_1002_over_1000() {
-        let held = HeldButtons::default();
-        // 1003 wins even with 1000/1002 also on, and reports "none" here.
-        assert_eq!(motion_gate(true, true, true, held), Some(ButtonIdentity::None));
+    fn motion_gate_yields_held_button_under_1002() {
+        assert_eq!(
+            motion_gate(false, true, false, false, true, false),
+            Some(MouseButtonId::Middle)
+        );
+    }
+
+    #[test]
+    fn motion_gate_always_yields_under_1003() {
+        assert_eq!(
+            motion_gate(false, false, true, false, false, false),
+            Some(MouseButtonId::None)
+        );
+        assert_eq!(
+            motion_gate(false, false, true, false, false, true),
+            Some(MouseButtonId::Right)
+        );
+    }
+
+    #[test]
+    fn motion_gate_reports_lowest_numbered_button_when_several_are_held() {
+        // D6: left and right both held under 1002 reports left.
+        assert_eq!(
+            motion_gate(false, true, false, true, false, true),
+            Some(MouseButtonId::Left)
+        );
+        // All three held under 1003 still reports left.
+        assert_eq!(
+            motion_gate(false, false, true, true, true, true),
+            Some(MouseButtonId::Left)
+        );
+    }
+
+    #[test]
+    fn motion_gate_precedence_is_1003_then_1002_then_1000() {
+        // 1003 present alongside 1000/1002 still takes the always-present path.
+        assert_eq!(
+            motion_gate(true, true, true, false, false, false),
+            Some(MouseButtonId::None)
+        );
+    }
+
+    #[test]
+    fn motion_gate_yields_nothing_when_no_tracking_mode_is_active() {
+        assert_eq!(motion_gate(false, false, false, true, true, true), None);
     }
 }
