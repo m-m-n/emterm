@@ -96,7 +96,7 @@ workflow:
     completed_at_commit: 8bbe1a9e620c9e121187899e09e85f3018b1daa5
     base_commit: 2be9cde80fd4c6c06384fe249cb0b2ad5dad7ce5
   - id: review
-    status: pending
+    status: in_progress
   - id: verify
     status: pending
     result: null
@@ -121,10 +121,14 @@ tasks:
     branch: em-workflow/wheel-report-notch-clamp/task0001
 
 review:
-  status: pending
+  status: in_progress
   rounds_completed: 0
   residual_critical_high: 0
   needs_rework: false
+  plan:
+    floor: [comprehensive, security, performance, architecture, spec]
+    discretionary: []
+    cross_validation: true
 
 requirements:
   FR1:
