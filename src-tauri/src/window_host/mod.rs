@@ -278,6 +278,20 @@ pub struct WindowHost {
     /// [`Self::set_mouse_report_records`]. task0006 reduces the pointer
     /// handlers onto that seam.
     mouse_report_gesture_owner: mouse_report::GestureOwnership,
+    /// task0001 (wheel-report-fraction-accum, D1): the report-path wheel
+    /// fraction accumulator — round-tripped through
+    /// [`mouse_report::MouseReportRecords::report_accum`] by
+    /// [`Self::mouse_report_records`] / [`Self::set_mouse_report_records`]
+    /// exactly like the three fields above it. Distinct from
+    /// [`Self::alt_scroll_accum`] (FR7) — never read or written by the
+    /// alternate-scroll path, and vice versa.
+    mouse_report_accum: f32,
+    /// task0001: the last tracking-active state observed by an accepted
+    /// mouse-report decision, round-tripped through
+    /// [`mouse_report::MouseReportRecords::last_tracking_active`]. Never
+    /// written anywhere in this struct except via
+    /// [`Self::set_mouse_report_records`] (IMPLEMENTATION.md D2).
+    mouse_report_last_tracking_active: Option<bool>,
 }
 
 /// Terminal font family used to skin the egui `Monospace` chain
@@ -480,6 +494,8 @@ impl WindowHost {
             mouse_report_held: mouse_report::HeldButtons::default(),
             mouse_report_last_active_tab: None,
             mouse_report_gesture_owner: mouse_report::GestureOwnership::default(),
+            mouse_report_accum: 0.0,
+            mouse_report_last_tracking_active: None,
         }
     }
 
@@ -496,6 +512,8 @@ impl WindowHost {
             cell_cache: self.mouse_report_cell_cache,
             gesture_owner: self.mouse_report_gesture_owner,
             built_for_tab: self.mouse_report_last_active_tab,
+            report_accum: self.mouse_report_accum,
+            last_tracking_active: self.mouse_report_last_tracking_active,
         }
     }
 
@@ -504,6 +522,8 @@ impl WindowHost {
         self.mouse_report_cell_cache = records.cell_cache;
         self.mouse_report_gesture_owner = records.gesture_owner;
         self.mouse_report_last_active_tab = records.built_for_tab;
+        self.mouse_report_accum = records.report_accum;
+        self.mouse_report_last_tracking_active = records.last_tracking_active;
     }
 
     /// Phase 4-H: lazily construct the `TerminalGridPass` once the App
