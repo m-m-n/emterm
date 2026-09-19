@@ -50,6 +50,8 @@ D3).
 | **SC-5 Motion gate** | Decide whether a pointer motion is reportable at all | Inputs: the three tracking-mode flags (1000, 1002, 1003) and the set of currently held buttons. Output: an optional button identity to report with. **Post**: absent when no tracking mode is active; absent when only 1000 is active; absent when 1002 is the highest active tracking mode and no button is held; present with the held button when 1002 is active and at least one button is held; present always when 1003 is active, carrying the held button or the "none" identity when no button is held. When several buttons are held the lowest-numbered one is reported (D6). 1003 takes precedence over 1002, which takes precedence over 1000 | task0002 / task0003 |
 | **SC-6 Wheel-consumer decision** | Choose exactly one of the three mutually exclusive wheel consumers | Inputs: tracking-active, shift-held, on-alternate-screen, the alternate-scroll mode bit and the alternate-scroll setting flag. Output: exactly one of report-to-application, translate-to-arrows, scroll-scrollback. **Post**: the decision branches on tracking-active FIRST, and the two branches share no rows. *Tracking-active branch*: scroll-scrollback when shift is held, report-to-application otherwise — translate-to-arrows is unreachable in this branch, so while an application is tracking the mouse no wheel notch ever produces arrow bytes. *Tracking-inactive branch*: today's matrix, reproduced unchanged and without consulting shift at all — translate-to-arrows when the pointer is on the alternate screen and both the alternate-scroll mode bit and the alternate-scroll setting are on, scroll-scrollback otherwise. A scroll-scrollback outcome on a screen with no scrollback to move is a no-op, which is the existing behaviour of that path and is not special-cased here (D5) | task0002 / task0003 |
 | **SC-7 Report emission** | Get the encoded bytes onto the wire | Every emitted report is written through the active tab's existing PTY input write path — the same one the alternate-scroll arrow translation already uses — so a local PTY and a mux-attached remote pane receive reports identically. **Post**: no new channel, no new transport state; the scrollback offset is never touched for a reported wheel notch | task0003 / — |
+| **SC-8 Grid ownership decision** | Answer once, for every pointer handler, whether an event belongs to the terminal grid | Inputs: the pointer position plus the plain geometry of each chrome region the host already hit-tests — the top strip, the bottom strip, the right-edge scrollbar overlay, the mux sidebar in whichever placement is active, the CSD edge-resize hot zone — and whether the profile selector is visible. Output: a boolean. **Post**: false for a position inside any of those regions and false unconditionally while the profile selector is visible; true only for a position over the grid with no region claiming it. The answer depends on POSITION ONLY — it is identical for a press and a release, for every button identity, for motion and for a wheel notch. **Pre**: evaluated before any reporting work on every emitting path, which on the motion path means before the SC-5 gate and the SC-4 filter, and on the wheel path means before the tracking-active read, so a suppressed event can neither emit nor mutate SC-4's cache. A false answer leaves the event's current local behaviour exactly as it is; it never changes the left-press-only gating of the existing local side effects | task0004 / task0003 |
+| **SC-9 Gesture ownership record** | Keep a button gesture on the side that took its press | Holds, per button identity, which side took the press: the report path, the local path, or nothing. Operations: record an owner at press, read-and-clear the owner at release, and clear all owners. **Post**: a release is routed to the owner its press recorded, whatever the shift state at release time; a press SC-8 rejected records no owner, so its release routes nowhere new; recording is idempotent per button identity, and a second button pressed mid-gesture is owned independently. **Pre for clear-all**: called on the same two observations that reset SC-4 — the host observing that no tracking mode is active, and an active-tab change — so a mode cleared mid-gesture strands no record | task0004 / task0003 |
 
 ## Conventions
 
@@ -187,6 +189,66 @@ check to perform. **Affects**: all tasks.
 Mode 1005 keeps its existing TS-fallback arm and mode 1015 is deliberately given
 no arm, so it continues to fall through the unknown-mode arm as a silent no-op.
 Neither is given a bit, a test, or a host-side consumer. **Affects**: task0001.
+
+### D10 — Shift is applied once per gesture, at the press (supersedes the per-raw-event reading)
+
+A button press and its matching release are one gesture. The Shift override
+(FR7) is consulted when the gesture starts, the side that takes the press owns
+the gesture (SC-9), and the matching release goes to that same side whatever
+the shift state has become by then.
+
+**Rationale**: AC9 requires that, with a tracking mode active, Shift+drag
+"produces a text selection". A selection is only produced when the release
+completes it and updates PRIMARY, so a reading that re-asks the Shift question
+at release time fails AC9 the moment Shift is lifted mid-drag — and, in the
+mirror ordering, strands the application's button state down when Shift arrives
+mid-drag. Per-gesture ownership is the reading under which AC9, FR2's
+press-and-*matching*-release pairing and FR7 hold simultaneously. FR7's
+sole-override rule is untouched: Shift remains the only thing that diverts a
+gesture from reporting, and no second suppression condition is introduced on
+the release path. AC10 is untouched: the shift bit is still never set in any
+emitted report, including a release emitted while Shift happens to be held.
+
+**Supersedes**: task0003's plan recorded the opposite reading ("each event is
+decided on its own … no state carries the drag's initial Shift decision
+forward"). That reading is what review round 1 finding 97676659aa15db37
+reports as a defect; this decision replaces it. task0003's plan is left as the
+record of the work at the time and is not rewritten.
+
+**History**: a bounded auto-fix during review (b1244629, reverted at ae47aa35)
+expressed this as an extra suppression condition on a non-Shift release. That
+form covered one ordering only and reads as a second local override alongside
+Shift, which is why ownership is recorded at press time instead.
+
+**Affects**: task0004 (owns SC-9), task0003 (the routing call sites this
+supersedes).
+
+### D11 — One grid ownership test, ahead of every emitting path
+
+The question "does this pointer event belong to the terminal grid?" is answered
+once, by SC-8, from position alone, and is consulted by the button, motion and
+wheel handlers alike before any reporting work.
+
+**Rationale**: FR10 and AC12 state the guard precedence unconditionally, but
+the guards were implemented per handler and, within the button handler, partly
+per button identity — while the reporting path accepts every identity the
+feature can encode and the pixel-to-cell mapping clamps an out-of-grid position
+to an edge cell rather than rejecting it. Three separate answers to one
+question is what produced review round 1 findings a4377ac1f3430e7c,
+5175da13ae0becec and c99335940bf23416; one answer is what makes FR10 hold on
+every path at once, including the paths that never had a region test at all.
+
+**Consequence for NFR1**: SC-8 is evaluated before SC-5 and SC-4 on the motion
+path, so a suppressed motion advances no cached cell and cannot silently
+swallow the next reportable motion.
+
+**Boundary**: the existing chrome guards are not rewritten, reordered relative
+to each other, or folded into the reporting path — their hit tests become
+SC-8's inputs. The left-press-only gating of the existing LOCAL side effects
+stays exactly as it is; only the reporting question becomes
+identity-independent.
+
+**Affects**: task0004 (owns SC-8), task0003 (the three handlers it supersedes).
 
 ## Risk Assessment
 
