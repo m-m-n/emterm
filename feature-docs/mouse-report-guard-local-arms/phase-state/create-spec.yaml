@@ -1,0 +1,15 @@
+schema_version: 1
+feature: mouse-report-guard-local-arms
+phase: create-spec
+status: initialized
+generation: 1
+base_revision: 1de1e95d
+last_input_digest: null
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs: []
+artifacts: []
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0
