@@ -74,3 +74,52 @@ records:
       format_command は当初 `rustfmt --edition 2024` を候補にしたが未承認だったため、
       プロジェクトルール (crate 全体 fmt 禁止・PostToolUse hook で整形を強制) と
       整合し、かつ承認済みかつ書き換えを伴わない (3) に差し替えた。
+  - gate_id: null
+    question_id: verify.code-quality-verdict
+    phase: verify
+    resolved_at: "2026-09-20T02:40:00+09:00"
+    policy_action: unlisted_gate_fallback
+    codex_consulted: true
+    opus_escalation: false
+    options_offered: [pass_with_preexisting_drift_note, fail_and_auto_rework]
+    option_chosen: pass_with_preexisting_drift_note
+    options_not_chosen: [fail_and_auto_rework]
+    recorded_as_assumption: false
+    resolution_note: >-
+      cargo fmt --check が crate 全体で 17 ファイルの差分を報告し、その中に本 feature が
+      変更した 2 ファイル (mouse_report.rs, pointer_routing.rs) も含まれた。
+      判定のため main 版の同 2 ファイルを取り出し、pin されたツールチェイン
+      (1.96.0, style_edition 2024) の rustfmt を baseline と現行の双方に掛けて、
+      rustfmt が提案する +/- 行の集合を比較した。結果は両ファイルとも baseline と
+      byte 単位で一致 — 本 feature が新規に持ち込んだ整形違反はゼロで、報告された
+      差分は 100% main 由来の既存ドリフト。VERIFICATION.md の基準は
+      「changed files について差分が出ないこと」だが、その意図は「この変更が新たな
+      違反を入れないこと」であり、上記の baseline 比較がそれを直接証明している。
+      Codex CLI (readonly) に相談し、同じく (a) を推奨。理由は「(b) を採ると本来
+      触っていない行の整形 churn を、狙いを絞ったバグ修正の diff に混ぜることになり、
+      新しい情報を何も生まない」。プロジェクト側も rustfmt を強制しておらず、
+      crate 全体 fmt を禁じるルールがあるため整合する。
+      よって Code Quality = PASS (既存ドリフトの注記付き)。
+  - gate_id: null
+    question_id: verify.manual-scenarios-unattended
+    phase: verify
+    resolved_at: "2026-09-20T02:40:00+09:00"
+    policy_action: unlisted_gate_fallback
+    codex_consulted: true
+    opus_escalation: false
+    options_offered: [pass_automated_carry_forward_manual, fail_on_unmet_sc_c]
+    option_chosen: pass_automated_carry_forward_manual
+    options_not_chosen: [fail_on_unmet_sc_c]
+    recorded_as_assumption: true
+    resolution_note: >-
+      VERIFICATION.md の MS1-MS4 は release ビルドの実機で人間がホイール・中クリックを
+      操作する必要があり、SC-C はその実行を要求する。本 run は無人 (--batch) のため
+      実行できない。Codex CLI (readonly) に相談し (a) を推奨。理由は「rework を回しても
+      人間は現れないので、(b) は証跡を1つも増やさないまま rework 予算を消費し、
+      cap 到達時に同じ未実行シナリオのまま停止するだけ」。
+      ただし Codex から補正が付いた: 「automated PASS」と「manual pending」を
+      1つの PASS に混ぜず、別々のラベルとして記録すること — SC-C を満たしたかのように
+      badge しない。この補正を採用し、verify の result は自動化層に対する pass とし、
+      MS1-MS4 は NOT RUN として明示、SC-C は human evaluator へ carry forward する。
+      先行 feature (mouse-reporting) も "pass, manual scenarios carried forward" で
+      同じ扱いをしており前例と整合する。
