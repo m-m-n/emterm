@@ -478,13 +478,19 @@ pub(super) const MAX_WHEEL_REPORT_NOTCHES: u32 = 100;
 /// expectations... still hold without editing them") so its existing
 /// tests keep proving the stateless conversion behaves identically to
 /// before this feature.
-#[allow(dead_code)] // AC-9 regression coverage; no production caller after this task.
+///
+/// task0002 (D11): the rule now has exactly one implementation. Rather
+/// than restating the non-finite rejection, the float-domain saturation,
+/// the toward-zero truncation and the sign application a second time,
+/// this delegates to [`accumulate_wheel_report_lines`] invoked from a
+/// zero carried fraction — observably identical for every input (so the
+/// AC-9 regression expectations below hold unedited), and for the first
+/// time exercising the SAME rule implementation the production wheel
+/// handler runs. No dead-code allowance remains here: this function has
+/// no production caller (only its own tests), and that absence is itself
+/// AC-9's regression evidence, not something to suppress the lint for.
 pub(super) fn wheel_report_notches(lines: f32) -> i32 {
-    if !lines.is_finite() {
-        return 0;
-    }
-    let magnitude = lines.abs().floor().min(MAX_WHEEL_REPORT_NOTCHES as f32) as i32;
-    if lines >= 0.0 { magnitude } else { -magnitude }
+    accumulate_wheel_report_lines(0.0, lines).0
 }
 
 /// task0001 (wheel-report-fraction-accum) IMPLEMENTATION.md Shared
