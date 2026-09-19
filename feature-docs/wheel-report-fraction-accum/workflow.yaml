@@ -1,0 +1,186 @@
+schema_version: 1
+feature: wheel-report-fraction-accum
+created: '2026-09-20'
+base_branch: main
+goal: |
+  マウスレポート: ホイールの端数デルタが捨てられタッチパッドスクロールが効かない (3d92ef44)
+
+  ## やりたいこと (必須)
+  マウスレポート経路にホイールデルタの端数アキュムレータを入れて、タッチパッドの細かいスクロールがレポートされるようにする。
+
+  ## 背景・なぜ (必須)
+  マウスレポート実装（PR #69 / `em-workflow/mouse-reporting/integration`）のレポート経路は、送るノッチ数を `wheel_report_notches(lines)`（`input_translate.rs:452`）だけで決めている。この関数はステートレスな `lines.abs().floor() as i32` なので、0 を返すとイベントが完全に消える（`pointer_routing.rs:915` の `if notches != 0` に弾かれ、ローカルアームも走らない）。
+  `MouseScrollDelta::PixelDelta` 経路では `lines = p.y / cell_h` であり、高解像度タッチパッドでは 1 イベントあたり 0.1〜0.3 程度になるのが普通。端数を持ち越す仕組みが無いため、**マウス対応 TUI の中ではタッチパッドスクロールが恒久的に無反応**になる。
+  兄弟経路はどちらもこれを回避している。alternate-scroll アームは `accumulate_alt_scroll_lines` で端数を持ち越し、トラッキング無効時のスクロールバックアームは `lines > 0.0` で判定するので端数でも 1 ステップ動く。レポート経路だけが取りこぼす。
+  SPEC の TS10 を損なう。
+
+  ## 受け入れ条件 / 完了の定義 (必須)
+  - [ ] ホスト側にレポート経路専用の端数アキュムレータ（`mod.rs` の `wheel_report_accum: f32`）を持つ
+  - [ ] `alt_scroll_accum` と同じ形で消費する — `(whole, frac)` を取り、`whole != 0` のときだけバイト列を送り、`frac` を書き戻す
+  - [ ] アクティブタブ変更時とトラッキングモード解除時にリセットし、持ち越した端数がジェスチャをまたいで漏れないようにする
+  - [ ] タッチパッドの細かいスクロールがマウス対応 TUI に届くことを検証するテストがある
+
+  ## スコープ外 (任意)
+  alternate-scroll 経路とトラッキング無効時のスクロールバック経路の挙動変更。
+
+  ## 制約・前提 (任意)
+  - レビュー round 3 の deferred、stable_id `3d92ef44b051ecc0`（severity high / confidence 100）。round 2 の未解決指摘 `63adedf9fb56b452` が task0005 / task0006 の rework を経てもそのまま残ったもの
+  - Codex の相談では優先度「中」と判定されたが、レビュー側の severity は high。判断が割れている点を明記しておく
+  - 修正は `mod.rs`（新規フィールド）と `pointer_routing.rs`（消費側）にまたがるため、レビューの自動修正（単一ファイル限定）ではスキップされた
+  - 該当箇所: `src-tauri/src/window_host/pointer_routing.rs:913`、`src-tauri/src/window_host/input_translate.rs:452`
+parent_branch: em-workflow/wheel-report-fraction-accum/integration
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+    - doc/UI-DESIGN-GUIDELINES.yaml
+    - src-tauri/web-shared/styles.css
+  components:
+    main:
+      language: rust
+      build_command: CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      test_command: CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
+        --lib -- --test-threads=1
+      format_command: ''
+      e2e_test_command: ''
+workflow:
+- id: create-spec
+  artifacts:
+  - REQUIREMENTS.md
+  - SPEC.md
+  status: completed
+  completed_at_commit: 7e6e6030c17b3ef75b8128b98cc92c6192a3e9a5
+- id: design
+  artifacts:
+  - DESIGN.md
+  - design/
+  status: skipped
+  skipped_reason: 'No user-visible surface, no new UI element and no design-token change: the feature
+    adds one f32 accumulator to the wheel report path in src-tauri/src/window_host/ and changes the arithmetic
+    on an existing input-routing path. Nothing in doc/UI-DESIGN-GUIDELINES.yaml or src-tauri/web-shared/styles.css
+    is touched. Resolved in batch via gate create-spec.design-step, option decide_autonomously.'
+- id: create-plan
+  artifacts:
+  - IMPLEMENTATION.md
+  - VERIFICATION.md
+  - tasks/
+  status: pending
+- id: implement
+  status: pending
+  base_commit: null
+- id: review
+  status: pending
+- id: verify
+  status: pending
+  result: null
+  failed_items: []
+- id: retrospect
+  status: pending
+tasks: {}
+review:
+  status: pending
+  rounds_completed: 0
+  plan: null
+  perspectives: {}
+  residual_critical_high: 0
+  needs_rework: false
+requirements:
+  FR1:
+    title: Accumulate sub-notch wheel deltas on the report path
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+    - TS-9
+  FR2:
+    title: Consume whole notches, retain the signed remainder
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-1
+    - TS-2
+  FR3:
+    title: Reject a non-finite delta before mutating the accumulator
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-3
+  FR4:
+    title: Saturate the accumulated notch magnitude while still a float
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-4
+    - TS-5
+    - TS-9
+  FR5:
+    title: Reset the accumulator on tab change and on tracking release
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-6
+    - TS-7
+  FR6:
+    title: A rejected notch neither advances nor resets the accumulator
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-8
+  FR7:
+    title: Keep the alternate-scroll accumulator separate and untouched
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-10
+  NFR1:
+    title: Decision units stay pure
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR2:
+    title: Bounded work and allocation per wheel event
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+  NFR3:
+    title: Two clamp layers, one constant
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests:
+    - TS-5
+  NFR4:
+    title: Testable without a window or event loop
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: []
+    tests: []
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2

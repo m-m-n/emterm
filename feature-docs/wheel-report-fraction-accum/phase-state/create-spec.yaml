@@ -1,10 +1,10 @@
 schema_version: 1
 feature: wheel-report-fraction-accum
 phase: create-spec
-status: dispatching
+status: completed
 generation: 1
 base_revision: 1ed49a80319d7a3d26834a933c0adf31c86a3795
-last_input_digest: sha256:512a781ebd0b74194c64e6c0c18d7d9d55110bdfd9d3a8f5c188d21ffb982e80
+last_input_digest: sha256:a11d9dce288179339b75463d1777451e56aada5454a66b9676ad15a443e55e8f
 active_request_id: null
 packets:
   create-spec-q0001:
@@ -50,6 +50,20 @@ answers:
     resolution_note: >-
       gate: create-spec.design-step resolved from references/batch-policies.yaml
       (action: select, option_id: decide_autonomously).
+  create-spec.design-system:
+    packet_id: null
+    answered_at: "2026-09-20T02:48:50+09:00"
+    source: batch-decision-table
+    answer_mode: single_select
+    selected_option_ids: [top_candidate_or_none]
+    freeform: null
+    normalized_answer: "project_native; paths: doc/UI-DESIGN-GUIDELINES.yaml, src-tauri/web-shared/styles.css"
+    resolution_note: >-
+      gate: create-spec.design-system (orchestrator-opened, no worker packet; question_id is the
+      gate_id per the batch resolution sequence). Resolved from references/batch-policies.yaml
+      (action: select, option_id: top_candidate_or_none). Candidates were present, so kind is
+      project_native. Confirmed even though the design step is skipped, per create-spec-phase.md
+      section 11a.
 worker_runs:
   - request_id: create-spec-run-0001
     status: needs_user_input
@@ -63,7 +77,17 @@ worker_runs:
     status: completed
     input_digest: sha256:24e6603657a88f85f8fe45f7c284b2c13ff68e22e01b66a17c1e2dea7710e63b
     output_digest: null
-artifacts: []
+  - request_id: create-spec-run-0004
+    status: completed
+    input_digest: sha256:a11d9dce288179339b75463d1777451e56aada5454a66b9676ad15a443e55e8f
+    output_digest: null
+artifacts:
+  - path: feature-docs/wheel-report-fraction-accum/REQUIREMENTS.md
+    sha256: sha256:1f08c95136edb92860f08c2849812a69c96be35ed85b483b4496fdcb2551ae33
+    produced_by: create-spec-run-0004
+  - path: feature-docs/wheel-report-fraction-accum/SPEC.md
+    sha256: sha256:9a848954f58fdc6834a7f079761dbf13b4a156edd8b4b7d9904abb72638ce1bc
+    produced_by: create-spec-run-0004
 patches: []
 progress_fingerprint: sha256:c2d8eef0348b0796b4fc879a786ce72868ee1923182ebb7c503d661dfac556c8
 stale_redispatch_count: 0
