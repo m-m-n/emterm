@@ -97,7 +97,8 @@ workflow:
       input and are not executable in this unattended run; they remain unchecked.'
     excluded_requirements: 'none — no requirement carries status: excluded.'
 - id: retrospect
-  status: in_progress
+  status: completed
+  completed_at_commit: d68044a589fdcb3e5f81c89e940bf0455648c6fe
 tasks:
   task0001:
     title: Report-path wheel fraction accumulator
