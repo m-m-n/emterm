@@ -14,8 +14,8 @@ use crate::selection::{Pos, Selection, SelectionMode};
 
 use super::WindowHost;
 use super::input_translate::{
-    MAX_WHEEL_REPORT_NOTCHES, accumulate_alt_scroll_lines, alternate_scroll_wheel_bytes,
-    wheel_report_notches, winit_button_to_report_identity, winit_to_egui_button,
+    MAX_WHEEL_REPORT_NOTCHES, accumulate_alt_scroll_lines, accumulate_wheel_report_lines,
+    alternate_scroll_wheel_bytes, winit_button_to_report_identity, winit_to_egui_button,
 };
 use super::mouse_report;
 
@@ -932,16 +932,27 @@ pub(super) fn handle_mouse_wheel(delta: MouseScrollDelta, host: &mut WindowHost,
     // Execute (SC-11): apply the record updates. A single `decide_wheel_event`
     // call names the direction of exactly one notch; AC-2's "report bytes
     // reach the tab the outcome names" reproduces the pre-task0006
-    // multi-notch loop by repeating that one notch's bytes
-    // `wheel_report_notches(lines)` times — the same magnitude gate
-    // (silently dropping a sub-notch delta) the loop already applied.
+    // multi-notch loop by repeating that one notch's bytes.
+    //
+    // task0001 (wheel-report-fraction-accum): the repetition count no
+    // longer comes from the stateless `wheel_report_notches(lines)` — it
+    // comes from the report-path accumulator. Applying the outcome first
+    // is load-bearing (task plan "Per-event flow" step 3 before step 4):
+    // a resetting event's own delta must fold into the freshly-zeroed
+    // accumulator, not the stale one. `notches`' sign, when non-zero,
+    // always agrees with the `kind` used to build `bytes` above (proof:
+    // the accumulator's magnitude is always below one notch, so it can
+    // never flip which whole notch `lines` crosses into) — duplicating
+    // `bytes` verbatim by `notches.unsigned_abs()` therefore already
+    // reports the direction matching the consumed notch's sign (D5).
     let mut records = host.mouse_report_records();
     let mut dest = Vec::new();
     mouse_report::apply_outcome(outcome, &mut records, &mut dest);
+    let (notches, new_accum) = accumulate_wheel_report_lines(records.report_accum, lines);
+    records.report_accum = new_accum;
     host.set_mouse_report_records(records);
-    if let Some((tab_id, bytes)) = dest.into_iter().next() {
-        let notches = wheel_report_notches(lines);
-        if notches != 0 {
+    if notches != 0 {
+        if let Some((tab_id, bytes)) = dest.into_iter().next() {
             if let Some(tab) = app.tabs.get(tab_id) {
                 let buf = bounded_wheel_report_duplicate(&bytes, notches.unsigned_abs());
                 tab.write_input(buf);

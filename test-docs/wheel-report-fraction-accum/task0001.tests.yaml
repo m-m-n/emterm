@@ -1,0 +1,129 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::tests::accumulate_wheel_report_lines_collects_sub_notch_deltas_same_direction
+    red_confirmed: true
+    red_reason: >-
+      Pre-implementation, the whole window_host::tests module failed to
+      compile with `error[E0432]: unresolved import
+      \`super::input_translate::accumulate_wheel_report_lines\`` (the
+      accumulate-and-consume unit did not exist yet), among 19 total
+      compile errors observed when the four production files were
+      reverted (via `git stash`) while this test file was kept.
+  AC-2:
+    tests:
+      - window_host::tests::accumulate_wheel_report_lines_nets_opposite_direction_delta_against_the_remainder
+    red_confirmed: true
+    red_reason: >-
+      Same E0432 unresolved-import failure as AC-1 — accumulate_wheel_report_lines
+      did not exist pre-implementation.
+  AC-3:
+    tests:
+      - window_host::tests::accumulate_wheel_report_lines_non_finite_deltas_are_rejected_without_mutation
+    red_confirmed: true
+    red_reason: >-
+      Same E0432 unresolved-import failure as AC-1.
+  AC-4:
+    tests:
+      - window_host::tests::accumulate_wheel_report_lines_never_exceeds_the_cap_across_a_sweep_of_extremes
+      - window_host::tests::accumulate_wheel_report_lines_saturation_discards_excess_instead_of_banking_it
+    red_confirmed: true
+    red_reason: >-
+      Same E0432 unresolved-import failure as AC-1.
+  AC-5:
+    tests:
+      - window_host::tests::bounded_wheel_report_duplicate_above_cap_still_caps_at_exactly_cap
+      - window_host::tests::bounded_wheel_report_duplicate_length_never_exceeds_payload_len_times_cap
+    red_confirmed: false
+    red_reason: >-
+      AC-5 (the duplication step's own independent cap) was already
+      implemented and test-covered by the prior task
+      wheel-report-notch-clamp; bounded_wheel_report_duplicate and its
+      cap constant MAX_WHEEL_REPORT_NOTCHES are unmodified by task0001.
+      These pre-existing tests were already green before this task
+      started (that is the criterion this task inherits, not
+      re-proves) and remain green, unedited, after this task's changes
+      — see final_failures.
+  AC-6:
+    tests:
+      - window_host::tests::decide_wheel_event_active_tab_change_discards_the_carried_remainder
+    red_confirmed: true
+    red_reason: >-
+      Pre-implementation, `error[E0560]: struct
+      \`window_host::mouse_report::MouseReportRecords\` has no field
+      named \`report_accum\`` / \`last_tracking_active\` (the fields
+      this test constructs did not exist).
+  AC-7:
+    tests:
+      - window_host::tests::decide_wheel_event_observing_tracking_inactive_discards_the_carried_remainder
+      - window_host::tests::decide_wheel_event_detects_reactivation_observed_only_by_an_owner_recorded_release
+      - window_host::tests::decide_motion_event_owner_established_local_branch_surfaces_tracking_observation_only
+    red_confirmed: true
+    red_reason: >-
+      Pre-implementation, the same E0560/E0609 "no field
+      \`report_accum\`/\`last_tracking_active\`/\`tracking_active\`"
+      errors as AC-6 (6 occurrences of the report_accum error alone
+      across these three tests). The second test in this group is the
+      exact gap the coordinator's second-opinion clarification named
+      (an owner-recorded release observing tracking-inactive without
+      itself resetting gesture/cache state, D10) — before this task's
+      RecordUpdates.tracking_active field and
+      MouseReportRecords.last_tracking_active field existed, this
+      scenario could not even be expressed, let alone pass.
+  AC-8:
+    tests:
+      - window_host::tests::decide_wheel_event_rejected_by_grid_leaves_the_whole_record_value_unchanged
+    red_confirmed: true
+    red_reason: >-
+      Pre-implementation, `error[E0369]: binary operation \`==\` cannot
+      be applied to type \`window_host::mouse_report::MouseReportRecords\``
+      (MouseReportRecords did not derive PartialEq yet) in addition to
+      the missing-field errors shared with AC-6/AC-7.
+  AC-9:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      AC-9 requires the PRE-EXISTING wheel_report_notches tests
+      (window_host::tests::wheel_report_notches_*) to keep passing
+      UNEDITED — by the criterion's own definition these were already
+      green before this task started, so there is no red state to
+      confirm. Verified: none of those tests were touched (diff-clean)
+      and all still pass after this task's changes (see
+      final_failures). wheel_report_notches itself is kept, unedited,
+      with a new #[allow(dead_code)] since its one production call
+      site was superseded by accumulate_wheel_report_lines.
+  AC-10:
+    tests:
+      - window_host::tests::wheel_report_and_alt_scroll_accumulators_reference_only_their_own_cap_constant
+    red_confirmed: true
+    red_reason: >-
+      This test scans input_translate.rs's own source text (include_str!)
+      for the marker string "pub(super) fn accumulate_wheel_report_lines"
+      and .expect()s it to be present. That function did not exist
+      pre-implementation (confirmed by the same E0432 unresolved-import
+      error named under AC-1-4, which names this exact function), so the
+      marker search would have panicked had the module compiled far
+      enough to run it. The surrounding module failed to compile
+      pre-implementation for unrelated reasons (see AC-6/7/8), so this
+      specific test's own execution was not directly observed in
+      isolation — the red state is inferred from the function's
+      confirmed absence rather than a standalone compile+run of only
+      this test.
+notes: >-
+  Implementation was written together with its tests rather than in strict
+  per-criterion red-green order, because the task plan (D8) deliberately
+  scopes this as a single, tightly-coupled unit (accumulator store +
+  conversion unit + wheel-handler wiring, one value flowing through one
+  call site with a load-bearing ordering). To obtain genuine red evidence
+  rather than fabricate it, the four production files were reverted via
+  `git stash push -- <4 files>` (tests.rs kept), the new test module was
+  run to capture real compiler errors, then `git stash pop` restored the
+  implementation — full suite re-verified green afterward (3447 passed,
+  0 failed, 3 ignored, matching post-implementation state exactly). Care
+  was taken to stash/pop only this task's own stash entry by explicit
+  index after discovering other concurrent tasks' stash entries already
+  present in this shared repository (stash is repo-global, not
+  per-worktree) — those were left untouched.
