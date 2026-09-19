@@ -1,0 +1,149 @@
+feature: mouse-reporting
+collected_at: '2026-09-20T01:00:57+09:00'
+session_ids:
+- 01a0ba65-43c1-76a7-92ed-dd35473df3ff.jsonl
+signals:
+  review_critical_high:
+  - stable_id: 97676659aa15db37
+    round: 1
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host/pointer_routing.rs
+    title: Shift released before the button leaves the terminal stuck in selection-drag
+    resolution: unresolved
+  - stable_id: a4377ac1f3430e7c
+    round: 1
+    severity: high
+    category: spec
+    file: src-tauri/src/window_host/pointer_routing.rs
+    title: Non-left press over the status bar, scrollbar, mux sidebar or CSD resize zone is reported (FR10
+      / AC12)
+    resolution: unresolved
+  - stable_id: 5175da13ae0becec
+    round: 1
+    severity: high
+    category: spec
+    file: src-tauri/src/window_host/pointer_routing.rs
+    title: Motion reporting runs with no chrome guard and no profile-selector guard (FR10)
+    resolution: unresolved
+  - stable_id: c99335940bf23416
+    round: 1
+    severity: high
+    category: spec
+    file: src-tauri/src/window_host/pointer_routing.rs
+    title: Wheel reporting bypasses FR10 chrome guards
+    resolution: unresolved
+  - stable_id: 5669af5d6e1485e2
+    round: 2
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host/pointer_routing.rs
+    title: 報告済み解放の早期 return が押下状態の後始末を飛ばし、motion gate が古い held 状態で動き続ける
+    resolution: fixed
+  - stable_id: 4135f94ec9964b5b
+    round: 2
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host/pointer_routing.rs
+    title: リリース短絡がトラッキング状態とタブ同一性を検証せず、無関係な PTY にエスケープ列を注入する
+    resolution: deferred
+  - stable_id: bb91070f9025c277
+    round: 2
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host/pointer_routing.rs
+    title: D7 のリセット観測点が handle_pointer_moved にしか無く、移動を伴わないジェスチャでは陳腐化レコードが残る
+    resolution: deferred
+  - stable_id: 8da023ee6248e388
+    round: 2
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host/pointer_routing.rs
+    title: モーション経路が所有権を見ず生の Shift を見るため、Shift ドラッグ中に Shift を離すと押下していないボタンのドラッグが届く
+    resolution: deferred
+  - stable_id: 2e8190c3e97ab655
+    round: 2
+    severity: high
+    category: architecture
+    file: src-tauri/src/window_host/mod.rs
+    title: mouse_report_held_* / gesture_owner にフォーカス喪失時のリセット経路が無い
+    resolution: deferred
+  - stable_id: 9813504a38663827
+    round: 3
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host/mouse_report.rs
+    title: SC-8 rejection suppresses the event's LOCAL behaviour too, not just the report — wheel over
+      the status bar / scrollbar overlay / title bar / CSD resize band is now dead (AC12, FR10)
+    resolution: deferred
+  - stable_id: 1ac64f41111531a6
+    round: 3
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host/mouse_report.rs
+    title: The reset observation clears LOCALLY-owned in-flight gestures, permanently latching host.dragging
+      and losing the PRIMARY publish (ghost drag)
+    resolution: deferred
+  - stable_id: 3d92ef44b051ecc0
+    round: 3
+    severity: high
+    category: comprehensive
+    file: src-tauri/src/window_host/pointer_routing.rs
+    title: Sub-notch wheel deltas are silently discarded on the report path — touchpad scrolling is dead
+      while tracking is active (round-2 residual 63adedf9 still open)
+    resolution: deferred
+  - stable_id: 7063d53b08e160d8
+    round: 3
+    severity: high
+    category: security
+    file: src-tauri/src/window_host/pointer_routing.rs
+    title: 'Wheel-report replication is unbounded: one wheel event can request a multi-GB allocation and
+      flood the PTY (round-2 residual ef02afd3 still open)'
+    resolution: deferred
+  conflict_reworks:
+  - task: task0003
+    retries: 1
+    note: retry 1/1 (prior launch orphaned) merged at 2ccb377abd3c82758bb7ba5c10475b9d7e796818; conflict_retries
+      1 (parent-side adoption of task0001/task0002 contracts); tests pass
+  - task: task0006
+    retries: 1
+    note: merged at 9b1a9810ffef7fac8de7e05dc666968f31c962e2; conflict_retries 1 (parent-side adoption
+      of task0005 SC-10/SC-11 API); tests pass (3415 passed / 0 failed); deviations reported, all within
+      the declared files contract
+  file_prediction_misses:
+  - task: task0006
+    files: []
+    note: deviations reported by the implementer, all within the declared files contract; per-file detail
+      was not persisted to journal.jsonl or agents.jsonl
+  verification_failures: []
+  discretionary_perspectives: []
+  declined_findings:
+  - stable_id: e0496e15056cd2a9
+    round: 1
+    category: comprehensive
+    resolution_reason: Artefact of the loop-1 auto-fix (commit b1244629), reverted at ae47aa35. tests.rs:1633
+      matches the restored source text again.
+  - stable_id: 0969524d7d95011b
+    round: 1
+    category: comprehensive
+    resolution_reason: Artefact of the loop-1 auto-fix (commit b1244629), reverted at ae47aa35. The underlying
+      defect is tracked as 97676659aa15db37.
+  - stable_id: b6f106806d26b55e
+    round: 1
+    category: spec
+    resolution_reason: Artefact of the loop-1 auto-fix (commit b1244629), reverted at ae47aa35. Recorded
+      as a constraint on the rework fix for 97676659aa15db37.
+follow_up_drafts: []
+lessons_candidates:
+- レビュー3ラウンドすべてで critical/high の指摘先が src-tauri/src/window_host/{pointer_routing.rs,mouse_report.rs} に集中した（13件中13件）。ポインタ経路の所有権判断が一箇所に収束していないことが繰り返し検出された。
+- round2 の medium 63adedf9fb56b452（sub-notch wheel delta の切り捨て）が未解決のまま round3 で 3d92ef44b051ecc0 として high
+  に昇格した。medium の据え置きが次ラウンドで重大化する経路が実在する。
+- verify round1 の失敗 TS-19/TS-20/TS-21 は「ウィンドウ無しで判定できる継ぎ目が無い」ことが原因で、task0005/task0006 の構造リファクタで解消した。NFR6（ウィンドウ無しで単体テスト可能）は
+  create-plan 時点の構造制約として先に効かせるべきだった可能性がある。
+- task0001/0002/0003 がいずれも 'retry 1/1 (prior launch orphaned)' で再起動している。implementer の初回起動が孤児化する事象がタスク3件連続で起きた。
+- implementer が報告した deviations の内訳（どのファイルが予測外だったか）は journal.jsonl にも agents.jsonl にも残らず、workflow.yaml
+  の notes の自由文しか手掛かりが無い。file_prediction_misses を機械的に集計できない。
+- 'batch の review rework cap（1）到達により critical/high 4件が deferred のまま完了した。4件は Notion に 1件ずつ起票済み: https://app.notion.com/p/SC-8-3e03509ec8ee81b9b76dea365f621be6
+  (9813504a38663827), https://app.notion.com/p/reset-host-dragging-3e03509ec8ee813ca427e7e049d33f27 (1ac64f41111531a6),
+  https://app.notion.com/p/3e03509ec8ee811787e9e509f561a267 (3d92ef44b051ecc0), https://app.notion.com/p/DoS-3e03509ec8ee8124922ae6450bd95081
+  (7063d53b08e160d8)。起票粒度は Codex 相談で option A（1 finding = 1 ticket）を採用した。'

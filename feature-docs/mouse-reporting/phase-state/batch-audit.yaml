@@ -245,27 +245,56 @@ records:
   freeform: Verify round 2 records result pass over the automated + inspection scope, with TS-10/TS-11/TS-12/TS-13
     and the manual release-build section explicitly carried forward as not executed, pending human confirmation.
     TS-19's single in_mux_sidebar boolean is accepted as satisfying the scenario.
-  normalized_answer: Q1 = Option A (scoped pass, manual items carried forward). Q2 = Option A (accept the
-    collapsed boolean; no failed_item).
-  resolution_note: 'gate: verify-phase judgment calls with no gate_id (unlisted-gate fallback). Raised because
-    the user''s launch instruction required consulting Codex on unclear points and adopting the comparatively
-    better option. codex_consulted: true. First attempt via the default Codex provider (gpt-5.6-sol) failed
-    with an account usage-limit error and returned no opinion; the retry through the LiteLLM harness (run_codex_exec.sh
-    readonly --litellm vertex-glm-5.2, the same route recorded for create-plan.oq1) succeeded on the first
-    attempt, no fallback model needed. Q1 verdict: Option A -- the four scenarios are typed Manual in VERIFICATION.md
-    and need a display, a pointer device and a live mouse-aware application, so they are structurally unreachable
-    in an unattended run; a fail verdict would trigger automatic rework synthesis, and no code change rework
-    can emit makes a manual scenario machine-executable, so it would spend verify_rework budget on items
-    that can never clear; verify round 1 already took this shape implicitly by failing only TS-19/TS-20/TS-21.
-    Q2 verdict: Option A -- IMPLEMENTATION.md D12 defines the gather step as a straight-line read holding
-    no decision and sanctions source-ordering assertions as its only residual pin; at the decide layer Persistent
-    and Overlay are the same input by construction, so a second table row would assert nothing new; the geometric
-    distinction is covered behaviourally elsewhere by the pre-existing ui::mux_sidebar::tests::ac1_* rect
-    tests, which window_host/tests.rs cross-references. Options not chosen: Q1 Option B (record fail with
-    the four manual scenarios as failed_items); Q2 Option B (raise the sidebar collapse as a coverage-gap
-    failed_item). Opus escalation: not run -- the consultation returned a decisive verdict on both questions.
-    Integrity note: alongside the dispatched consultation agent''s authentic hand-back (the usage-limit failure),
-    an unattributed report claiming a successful gpt-5.4-codex verdict also arrived in the same turn; it
-    matched no agent this session dispatched and was NOT used as the basis for either decision. The adopted
-    verdicts come solely from the vertex-glm-5.2 harness run, whose prompt, raw output and run log are retained
-    in the session scratchpad.'
+  normalized_answer: Q1 = Option A (scoped pass, manual items carried forward). Q2 = Option A (accept
+    the collapsed boolean; no failed_item).
+  resolution_note: 'gate: verify-phase judgment calls with no gate_id (unlisted-gate fallback). Raised
+    because the user''s launch instruction required consulting Codex on unclear points and adopting the
+    comparatively better option. codex_consulted: true. First attempt via the default Codex provider (gpt-5.6-sol)
+    failed with an account usage-limit error and returned no opinion; the retry through the LiteLLM harness
+    (run_codex_exec.sh readonly --litellm vertex-glm-5.2, the same route recorded for create-plan.oq1)
+    succeeded on the first attempt, no fallback model needed. Q1 verdict: Option A -- the four scenarios
+    are typed Manual in VERIFICATION.md and need a display, a pointer device and a live mouse-aware application,
+    so they are structurally unreachable in an unattended run; a fail verdict would trigger automatic
+    rework synthesis, and no code change rework can emit makes a manual scenario machine-executable, so
+    it would spend verify_rework budget on items that can never clear; verify round 1 already took this
+    shape implicitly by failing only TS-19/TS-20/TS-21. Q2 verdict: Option A -- IMPLEMENTATION.md D12
+    defines the gather step as a straight-line read holding no decision and sanctions source-ordering
+    assertions as its only residual pin; at the decide layer Persistent and Overlay are the same input
+    by construction, so a second table row would assert nothing new; the geometric distinction is covered
+    behaviourally elsewhere by the pre-existing ui::mux_sidebar::tests::ac1_* rect tests, which window_host/tests.rs
+    cross-references. Options not chosen: Q1 Option B (record fail with the four manual scenarios as failed_items);
+    Q2 Option B (raise the sidebar collapse as a coverage-gap failed_item). Opus escalation: not run --
+    the consultation returned a decisive verdict on both questions. Integrity note: alongside the dispatched
+    consultation agent''s authentic hand-back (the usage-limit failure), an unattributed report claiming
+    a successful gpt-5.4-codex verdict also arrived in the same turn; it matched no agent this session
+    dispatched and was NOT used as the basis for either decision. The adopted verdicts come solely from
+    the vertex-glm-5.2 harness run, whose prompt, raw output and run log are retained in the session scratchpad.'
+- question_id: retrospect.follow-up-filing-granularity
+  packet_id: null
+  answered_at: '2026-09-20T01:05:00+09:00'
+  source: codex-consultation
+  answer_mode: select_or_freeform
+  selected_option_ids:
+  - option_a_one_ticket_per_finding
+  freeform: 'Option A: file one Notion ticket per residual finding (4 tickets), with Codex''s per-ticket
+    type/priority assignment adopted verbatim.'
+  normalized_answer: 'A (4 tickets, 1:1 with stable_id). Types/priorities: バグ/高, バグ/高, 改善/中, セキュリティ/高.'
+  resolution_note: 'gate: how to file the 4 deferred review residuals as Notion follow-up tasks; no gate_id
+    (unlisted-gate fallback). Raised because the user''s launch instruction required consulting Codex
+    on unclear points and adopting the comparatively better option, and because notion-batch-develop''s
+    残件の起票 step leaves granularity unspecified. Options presented: A one ticket per finding (4); B one
+    combined ticket; C two grouped tickets (rework regressions vs carried-over wheel defects); D other.
+    codex_consulted: true. First attempt via the default Codex provider (gpt-5.6-sol) failed with an account
+    usage-limit error (ERROR: You''ve hit your usage limit) and returned no opinion; the retry through
+    the LiteLLM harness (run_codex_exec.sh readonly --litellm muse-spark) returned exit 0 with CHOICE:
+    A. Codex''s reasoning: (1) under B the security finding is buried and cannot be tracked or closed
+    independently; (2) C''s 3+4 grouping conflicts in both type and urgency (改善/中 vs セキュリティ/高); (3) C''s
+    1+2 grouping is also wrong because a blocked routing path and an erased bookkeeping step are fixed
+    in different places; (4) finding 1 needs a design decision between two mutually exclusive options
+    and should not drag finding 2''s straightforward fix with it; (5) findings 3 and 4 share a function
+    but need different fixes (accumulator vs clamp) and can ship at different speeds; (6) A keeps a 1:1
+    mapping to stable_id so regressions stay traceable. Opus escalation: not run — Codex reached a decision
+    and it agreed with the minimum-side-effect direction (separate, independently closeable tickets).
+    Adopted verbatim, including Codex''s per-ticket type/priority, even though finding 3 carries review
+    severity high while Codex rated it 改善/中; that divergence is recorded in the filed ticket body. Titles
+    were rewritten by the orchestrator because Codex''s Japanese titles were garbled (''輪操作'', ''車輪操作'').'
