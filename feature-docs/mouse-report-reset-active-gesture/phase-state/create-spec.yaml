@@ -1,17 +1,39 @@
 schema_version: 1
 feature: mouse-report-reset-active-gesture
 phase: create-spec
-status: initialized
+status: dispatching
 generation: 1
-base_revision: 08c7e7d5
-last_input_digest: null
-active_request_id: null
+base_revision: d41eafc4c91985b6bce1d5f9e3571106b9ffce1c
+last_input_digest: "sha256:37fc5bb985e402d5438ab60de57dab8515d33ccbb91b5a8e8f4d4de92d8e989d"
+active_request_id: create-spec-run-0001
 packets: {}
 answers: {}
-worker_runs: []
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: completed
+    input_digest: "sha256:37fc5bb985e402d5438ab60de57dab8515d33ccbb91b5a8e8f4d4de92d8e989d"
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: null
 stale_redispatch_count: 0
-resolved_input_cache: {}
+resolved_input_cache:
+  design_system_candidates:
+    resolved_at_generation: 1
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/src/ui/md3.rs
+      - src-tauri/web-shared/styles.css
+    truncated: false
+  e2e:
+    resolved_at_generation: 1
+    paths: []
+    truncated: false
+  reference_scan_targets:
+    resolved_at_generation: 1
+    paths:
+      - src-tauri/src/window_host/mouse_report.rs
+      - src-tauri/src/window_host/pointer_routing.rs
+      - src-tauri/src/window_host/event_loop.rs
+    truncated: false
 last_error: null
