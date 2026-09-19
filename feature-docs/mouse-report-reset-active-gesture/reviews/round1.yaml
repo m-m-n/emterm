@@ -32,55 +32,6 @@ perspective_runs:
   - {run_id: "spec#fallback", perspective: spec, role: fallback, source: claude, status: completed, skip_reason: null}
   - {run_id: "evaluator", role: evaluator, source: claude, status: completed}
 findings:
-  - stable_id: 90789b40eb78ad7f
-    severity: medium
-    category: comprehensive
-    file: src-tauri/src/window_host/pointer_routing.rs
-    line: 121
-    title: "Focus-loss path clears local_drag but leaves held_buttons populated"
-    description: >-
-      on_focus_lost() calls state.clear_local_drag() but does not clear held_buttons.
-      If focus is lost while a button is physically down and the release happens while
-      unfocused, that button stays in held_buttons indefinitely: note_press for the same
-      button is a no-op on an already-present entry, and reset_for_mode_change retains
-      active records whose button is in held_buttons. After focus loss with a swallowed
-      release, a subsequent mode change would preserve an active gesture record whose
-      button is no longer held - exactly what FR1/FR6 aim to prevent. Outside the SPEC's
-      explicit scope (FR3 mandates only clearing the local drag on focus loss) and no test
-      covers it (TS-4/TS-9 assert only the local_drag side), so it is a gap, not a contradiction.
-    suggestion: >-
-      Prune held_buttons in the same focus-loss path that clears local_drag - the window
-      cannot observe releases while unfocused, so the physical-hold set should not outlive
-      focus. Add a clear_held_buttons() invoked from on_focus_lost, plus a test asserting
-      that a mode change after focus loss drops an active record for a button whose release
-      was swallowed.
-    sources: [claude:comprehensive]
-    confidence: 55
-    resolution: unresolved
-    resolution_reason: "medium severity; below the auto-fix candidate gate (critical/high only)"
-  - stable_id: 96b080dbe73a42f1
-    severity: medium
-    category: architecture
-    file: src-tauri/src/window_host/mouse_report.rs
-    line: 198
-    title: "PointerGestureState bundles physical hold set, report-mode records, and local drag in one struct"
-    description: >-
-      PointerGestureState owns held_buttons (physical truth, outlives any report mode),
-      active (report-mode gesture records), and local_drag (only meaningful when no report
-      mode owns the button). The three have different lifetimes and different writers:
-      note_press/note_release mutate held_buttons and local_drag while decide_* reads active.
-      The invariant that held_buttons is authoritative over active is enforced only by
-      convention inside reset_for_mode_change's retain filter. A cohesion observation on a
-      3-field struct in a single module with no cross-module coupling; it does not produce
-      incorrect behaviour on any constructed path, and NFR1 (window-free decision layer) holds.
-    suggestion: >-
-      If this area grows further, consider extracting the physical hold set into its own small
-      type that PointerGestureState composes, so the reset rule ("keep records whose button is
-      still physically held") becomes a method on that type rather than an inline retain filter.
-    sources: [claude:architecture]
-    confidence: 60
-    resolution: unresolved
-    resolution_reason: "medium severity; below the auto-fix candidate gate (critical/high only)"
   - stable_id: 592613773b46218d
     severity: medium
     category: architecture
@@ -88,19 +39,20 @@ findings:
     line: 1078
     title: "SC-11 apply seam split into two entry points; the legacy one is production-dead, unguarded, and encodes the pre-fix behaviour"
     description: >-
-      The SC-11 apply seam now has two entry points, apply_outcome and
+      The SC-11 apply seam now has two entry points, apply_outcome (mouse_report.rs:1078) and
       apply_outcome_with_held. apply_outcome has zero production callers - the three sites in
-      pointer_routing.rs (294 / 721 / 983) all moved to apply_outcome_with_held, leaving only
-      the ~30 call sites inside mouse_report.rs's own test module. That apply_outcome passes a
-      fixed HeldButtons::default() (no button held), which reduces the new exclusion logic to
-      clear_all - the pre-fix ghost-drag behaviour this task repaired. The ~30 existing reset
-      tests therefore assert the semantics of a path production no longer takes, and a future
-      production caller reaching for the shorter name would silently reintroduce the bug. The
-      structural guard pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam
-      (tests.rs:1782-1798) only swapped its needle to the new name and does not forbid the old
-      one. Contract drift also noted: apply_outcome_with_held's doc describes held as the value
-      at event arrival, but for a release pointer_routing.rs:524-532 clears the button before
-      run_button_decision; and mod.rs:491's doc still names apply_outcome.
+      pointer_routing.rs (294 / 721 / 983) all moved to apply_outcome_with_held (verified by
+      the orchestrator via grep), leaving only the ~30 call sites inside mouse_report.rs's own
+      test module. That apply_outcome passes a fixed HeldButtons::default() (no button held),
+      which reduces the new exclusion logic to clear_all - the pre-fix ghost-drag behaviour this
+      task repaired. The ~30 existing reset tests therefore assert the semantics of a path
+      production no longer takes, and a future production caller reaching for the shorter name
+      would silently reintroduce the bug. The structural guard
+      pointer_routing_handlers_hold_no_decision_only_delegate_to_the_seam (tests.rs:1782-1798)
+      only swapped its needle to the new name and does not forbid the old one. Contract drift
+      also noted - apply_outcome_with_held's doc describes held as the value at event arrival,
+      but for a release pointer_routing.rs:524-532 clears the button before run_button_decision;
+      and mod.rs:491's doc still names apply_outcome.
     suggestion: >-
       Either (a) fix structurally - add held to ButtonEventInputs / WheelEventInputs and replace
       RecordUpdates' two bools with a decided scope (e.g. reset: Option<GestureResetScope> with
@@ -121,18 +73,17 @@ findings:
     line: 392
     title: "TS-4 の焦点喪失クリーンアップ検証が未実装（状態変更が window-free に切り出されていない）"
     description: >-
-      SPEC の Test Scenarios TS-4 は、焦点喪失クリーンアップの入口を live な左ドラッグ付きで
-      駆動し、dragging がクリアされること・pending anchor が消費されること・選択が publish される
-      ことを assert するよう要求し、winit ウィンドウ無しで到達可能な形（NFR1）に切り出すことまで
-      指定している。実装が切り出した window-free な部品は述語 drag_in_flight
-      (pointer_routing.rs:365) だけで、状態変更側の publish_local_drag (pointer_routing.rs:392)
-      は &mut WindowHost を取り host.set_primary / host.set_clipboard を呼ぶため、ウィンドウ無し
-      では駆動できない。結果として TS-4 が名指しする 3 つのアサーションを検証するテストはツリー上に
-      存在しない。FR3 / AC-3 に対して唯一存在する tests.rs:1912 の
-      focus_loss_arm_never_calls_the_fold_click_toggle は include_str! に対する文字列検査であり、
-      振る舞いを実行しない。そのため SPEC AC-9 の AC-3 分と Success Criteria の TS-4 分が実質未充足で、
-      publish_local_drag 本体（アンカー消費順序・copy_on_select ミラー・selection 無しで何も書かない
-      こと）がリグレッションに無防備。
+      SPEC の Test Scenarios TS-4 は、焦点喪失クリーンアップの入口を live な左ドラッグ付きで駆動し、
+      dragging がクリアされること・pending anchor が消費されること・選択が publish されることを assert
+      するよう要求し、winit ウィンドウ無しで到達可能な形（NFR1）に切り出すことまで指定している。実装が
+      切り出した window-free な部品は述語 drag_in_flight (pointer_routing.rs:365) だけで、状態変更側の
+      publish_local_drag (pointer_routing.rs:392) は &mut WindowHost を取り host.set_primary /
+      host.set_clipboard を呼ぶため、ウィンドウ無しでは駆動できない。結果として TS-4 が名指しする 3 つの
+      アサーションを検証するテストはツリー上に存在しない。FR3 / AC-3 に対して唯一存在する tests.rs:1912 の
+      focus_loss_arm_never_calls_the_fold_click_toggle は include_str! に対する文字列検査であり、振る舞いを
+      実行しない。そのため SPEC AC-9 の AC-3 分と Success Criteria の TS-4 分が実質未充足で、
+      publish_local_drag 本体（アンカー消費順序・copy_on_select ミラー・selection 無しで何も書かないこと）が
+      リグレッションに無防備。
     suggestion: >-
       TS-4 の条件どおり、状態変更の core を window-free なヘルパーに分離してテストする。例:
       take_local_drag_state(dragging: &mut bool, pending: &mut Option<Pos>) -> Option<Pos> を
@@ -147,42 +98,107 @@ findings:
     resolution_reason: "medium severity; the auto-fix candidate gate excludes category spec unconditionally"
 evaluation:
   round_summary: >-
-    Round 1 ran with every harness reviewer rate-limited: all three chain entries for
-    comprehensive, both for security, all three for architecture, and all three for spec
-    returned skip_reason rate_limited, so every one of the four perspectives was reviewed by
-    its Claude fallback alone. That is a real coverage reduction for a cross_validation: true
-    round - no independent model corroborated any finding, and the usual "two perspectives
-    flagged the same site" confidence signal is unavailable by construction. The evaluator read
-    the four changed source files and the SPEC directly rather than relying on the reviewer text.
-    Of the three reviewer findings it received, it kept two and dropped one. The dropped finding
-    (comprehensive#fallback, mouse_report.rs:253, "reset_for_mode_change drops held_buttons for
-    non-active buttons") is factually wrong about the code: decide_release looks up the active
-    record first and returns no report when there is none, so held_buttons membership alone never
-    produces a report. It was dismissed as a misreading rather than listed in dismissed_sites,
-    since dismissed_sites is for critical/high sites and this was medium. The two kept findings
-    are both medium and both genuine but narrow. spec#fallback and security#fallback both
-    returned clean at the time of evaluation. No injection attempts, no suspicious content in any
-    reviewer output.
+    Round 1, diff mode, cross_validation=true. 11 of 15 dispatched runs were rate-limited skips;
+    the four Claude fallbacks (comprehensive / security / architecture / spec) all completed. No
+    critical or high findings were reported by any run. The three medium findings the reviewers'
+    PRELIMINARY hand-backs reported all describe a code structure that does not exist anywhere in
+    the changed files: grep across src-tauri/src/window_host/ returns zero occurrences of
+    PointerGestureState, note_press, note_release, is_stale, reset_for_mode_change,
+    clear_local_drag and on_focus_lost, and the cited sites hold unrelated code (mouse_report.rs:198
+    is a doc comment about apply_outcome / would_report, mouse_report.rs:253 is a chrome hit-test
+    doc comment, pointer_routing.rs:121 is chrome geometry / resize-hot-zone code). The real design
+    uses HeldButtons / GestureOwnership::clear_unheld / RecordUpdates::{reset_tracking_inactive,
+    reset_tab_changed} / apply_outcome_with_held. The second comprehensive finding's semantic
+    concern is additionally refuted by the code itself: the Focused(false) arm already zeroes
+    host.mouse_report_held via mouse_report::clear_all (event_loop.rs:263-265). All three are
+    dismissed as false positives. The orchestrator independently re-verified these grep results
+    before persisting this record.
+    Independent inspection coverage per dispatched perspective: comprehensive = findings (both
+    reviewer mediums dismissed; one LOW evaluator-origin item surfaced, see evaluator_low_items
+    below); security = corroborated (MAX_WHEEL_REPORT_NOTCHES / bounded_wheel_report_duplicate at
+    pointer_routing.rs:774-781 and the notch call site at :989 are byte-identical to main, NFR5
+    intact; no new PTY bytes, no new external surface, no persisted data, no WebView content);
+    architecture = corroborated (NFR1 holds - the two new host-reading helpers local_drag_in_flight
+    / publish_local_drag live in pointer_routing.rs while mouse_report.rs's new surface is the
+    plain-bool drag_in_flight field, the plain HeldButtons parameter and clear_unheld; NFR2 holds -
+    decide_release stays a pure function and every mutation still travels in RecordUpdates);
+    spec = corroborated (FR1 at apply_outcome_with_held:1098-1112 with the tab-change trigger still
+    clearing every slot per A3; FR2 at decide_release:839+; FR3 at event_loop.rs:241-255; FR4 - the
+    Report branch, built_for_tab targeting and the wheel matrix untouched; FR5 - pending_selection_anchor
+    only set at pointer_routing.rs:330 inside begin_selection_drag, unreachable for a chrome press;
+    FR6 at clear_unheld / clear_all; A4 - all three production call sites moved to
+    apply_outcome_with_held and every remaining apply_outcome( call site is inside mod tests;
+    A7 - the structural delegate list at tests.rs:1786 was replaced rather than extended;
+    NFR3 / NFR4 verified). The refactor of complete_selection_and_publish_to_primary is
+    behaviour-preserving: publish_local_drag now runs before the fold-click branch, but that branch
+    is only reachable when app.selection.is_none(), in which case the publish half writes to neither
+    PRIMARY nor CLIPBOARD, and publish_local_drag does not mutate app.selection.
+    No injection attempts were observed in any reviewer output.
   recommended_action: "complete"
   action_rationale: >-
-    Zero critical/high findings from any perspective, and the kept medium findings are a narrow
-    uncovered edge case and a design-preference note - neither blocks the completion gate
-    (residual_critical_high == 0). The honest caveat is coverage: every harness reviewer was
-    rate-limited, so this round rests entirely on Claude fallbacks with no cross-model
-    corroboration. If the rate limits clear, a second round would be worth running before merge.
+    No critical or high findings exist this round. Every medium a reviewer's preliminary hand-back
+    reported is a false positive describing identifiers and call graphs absent from the changed
+    files, verified by grep and by reading the cited line ranges. Independent inspection corroborates
+    all six functional and all five non-functional requirements against the code. The two findings
+    kept in this record came from the reviewers' FINAL hand-backs and were verified against real code
+    by the orchestrator. The single evaluator-origin item is low severity and warrants a
+    SPEC / VERIFICATION note rather than a fix; it does not justify another reviewer round or rework.
 dismissed_sites: []
-dismissed_sites_dropped: []
+dismissed_sites_dropped:
+  - run_id: "comprehensive#fallback"
+    reason: "failed R3b step 1 file check (absolute path) - mouse_report.rs:253, dismissed by the evaluator as a false positive"
+  - run_id: "comprehensive#fallback"
+    reason: "failed R3b step 1 file check (absolute path) - pointer_routing.rs:121, dismissed by the evaluator as a false positive"
+  - run_id: "architecture#fallback"
+    reason: "failed R3b step 1 file check (absolute path) - mouse_report.rs:198, dismissed by the evaluator as a false positive"
+evaluator_low_items:
+  note: >-
+    Recorded for disclosure only. R3b step 2 drops any finding whose severity is not
+    critical / high / medium, so this evaluator-origin item is not in `findings` and is not an
+    auto-fix candidate. It is kept here so the human evaluator can see it.
+  items:
+    - file: src-tauri/src/window_host/mouse_report.rs
+      line: 1109
+      severity: low
+      sources: [claude:evaluator]
+      confidence: 62
+      title: "A Report-owned slot preserved across a tracking-inactive reset can emit a release report if the application re-enables tracking mid-hold"
+      description: >-
+        clear_unheld() (mouse_report.rs:1109) preserves the gesture slot of any physically-held
+        button on a !tracking_active reset, including a slot whose owner is GestureOwner::Report.
+        Sequence: press Left while a tracking mode is on (slot = Report, press reported) -> the
+        application turns tracking off -> any motion/wheel/press raises reset_tracking_inactive,
+        which previously ran clear_all() and dropped the Report slot but now preserves it because
+        Left is held -> the application turns tracking back on -> release Left. decide_release
+        (mouse_report.rs:839) finds peek(Left) == Some(Report), re-checks tracking_active (now true)
+        and emits release bytes. At the pre-task0001 revision the slot was gone by then, so the
+        release decided Disposition::Nothing and no bytes were emitted. SPEC's edge-case list covers
+        only the tracking-disabled-at-release variant, which still holds; the disable-then-re-enable
+        variant is a behaviour delta against FR4's byte-for-byte invariance claim and is not covered
+        by any test in task0001.tests.yaml. Impact is low - the emitted release matches a press the
+        application genuinely saw, so the new behaviour is arguably the more correct one, and it
+        requires the application to toggle DECSET 1000/1002/1003 off and on while a button is
+        physically down.
+      suggestion: >-
+        Either accept this as an intentional (and arguably more correct) consequence of FR1 and
+        record it as an edge case in the SPEC / VERIFICATION notes, or, if strict FR4 byte-for-byte
+        invariance is required, restrict the held-button exclusion in clear_unheld() to
+        GestureOwner::Local slots. No change is needed for correctness of the ghost-drag repair.
 late_reviewer_results:
   note: >-
-    The architecture and spec Claude fallback runs each emitted a preliminary hand-back and then
-    a second, final hand-back. The evaluator had already been dispatched with the preliminary
-    text (Phase R3a caps the round at one evaluator dispatch), so the two findings that appeared
-    only in the final hand-backs - 592613773b46218d (architecture, mouse_report.rs:1078) and
-    79f4847088dad493 (spec, pointer_routing.rs:392) - were taken through the Phase R3b mechanical
-    gates directly, the same path R3b's evaluator-failure degradation and R4's in-loop re-review
-    use: self-reported category checked against the dispatching perspective, sources set to that
-    run's own identity, confidence 60. Both are medium, so neither changes the completion gate and
-    neither is an auto-fix candidate. This is disclosure, not a gate.
+    The architecture and spec Claude fallback runs, and the evaluator itself, each emitted a
+    preliminary hand-back and then a second, final hand-back. The evaluator had already been
+    dispatched with the reviewers' preliminary text (Phase R3a caps the round at one evaluator
+    dispatch). The two findings that appeared only in the reviewers' FINAL hand-backs -
+    592613773b46218d (architecture, mouse_report.rs:1078) and 79f4847088dad493 (spec,
+    pointer_routing.rs:392) - were therefore taken through the Phase R3b mechanical gates directly,
+    the same path R3b's evaluator-failure degradation and R4's in-loop re-review use: self-reported
+    category checked against the dispatching perspective, sources set to that run's own identity,
+    confidence 60. The orchestrator additionally verified both against the real source (apply_outcome
+    at mouse_report.rs:1078 with its three production call sites moved to apply_outcome_with_held;
+    publish_local_drag at pointer_routing.rs:392 taking &mut WindowHost) before persisting them.
+    Both are medium, so neither changes the completion gate and neither is an auto-fix candidate.
+    This is disclosure, not a gate.
   entries: [592613773b46218d, 79f4847088dad493]
 auto_fix:
   loops_run: 0
