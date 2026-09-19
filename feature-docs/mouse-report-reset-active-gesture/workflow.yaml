@@ -53,9 +53,58 @@ workflow:
     status: completed
     completed_at_commit: d6caae053ce6e5556030ef5591a82c162426fb31
   - id: verify
-    status: pending
-    result: null
+    status: completed
+    completed_at_commit: 7bf085ebb770dddaad84461caf6a4a8fb99d5cfd
+    result: pass
     failed_items: []
+    evidence:
+      build:
+        - command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+          result: pass
+          note: >-
+            The worktree had no bundled fonts, so build.rs aborted on the bare
+            command. Re-run through the pre-approved composite
+            "bash scripts/fetch-fonts.sh && bun install && bun run build:viewer &&
+            bun run build:settings && <build_command>", which satisfies the
+            documented GUI-build prerequisites. Exit 0.
+        - command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+          result: pass
+          note: "TS-12 / NFR4 / SC-E. Exit 0."
+      test:
+        - command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+          result: pass
+          note: "3446 passed; 0 failed; 3 ignored."
+      format:
+        result: skipped
+        note: >-
+          workflow.yaml declares format_command: "" — no format gate is
+          configured for this workflow. Measured separately: the crate-wide
+          cargo fmt --check reports 57 hunks, most in files byte-identical to
+          main, so main itself does not pass that gate. Running it would
+          attribute pre-existing repo-wide drift to this feature. Recorded as
+          batch-audit-0005.
+      e2e:
+        result: not_applicable
+        note: "e2e_test_command is empty; no E2E automation exists in this project."
+    scenarios:
+      automated_pass: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6, TS-7, TS-8, TS-10, TS-11, TS-12, TS-13, TS-14]
+      manual_outstanding: [TS-9]
+    manual_residuals:
+      - id: TS-9
+        sub_items: [TS-9a, TS-9b, TS-9c, TS-9d, TS-9e, TS-9f]
+        reason: >-
+          Typed "Manual" in VERIFICATION.md; SC-B itself designates TS-9 as
+          user-executed. Requires a human at a real terminal window (PRIMARY
+          selection, middle-click paste, link hover, resize cursor). Carried to
+          the human reviewer in the PR body rather than recorded as a failure —
+          recorded as batch-audit-0004.
+    excluded_requirements: []
+    advisory:
+      - >-
+        Three rustfmt hunks (src-tauri/src/window_host/mouse_report.rs lines
+        2928, 3019, 3027) fall inside this feature's newly added block. A
+        touched-files-only rustfmt pass would clear them. Not a verify failure;
+        surfaced for the human reviewer.
   - id: retrospect
     status: pending
 
