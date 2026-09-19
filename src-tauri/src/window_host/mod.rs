@@ -43,6 +43,7 @@ mod frame_pacing;
 mod input_translate;
 mod key_routing;
 mod link_hover;
+mod mouse_report;
 mod pointer_routing;
 mod render_surface;
 mod resize_layout;
@@ -243,6 +244,21 @@ pub struct WindowHost {
     /// Rows-rebuilt counter (task0003 FR6-half), active only while
     /// `render_perf_enabled`. Same env gate as `frame_counter`.
     rows_rebuilt_counter: RowsRebuiltCounter,
+    /// Mouse-reporting (SC-4, D7): the cell-change filter's cache, owned
+    /// by the host for the lifetime of a tracking session. Reset whenever
+    /// the host observes that no tracking mode is active, and on
+    /// active-tab change, so the first motion of a new tracking session
+    /// always reports.
+    mouse_report_cell_cache: mouse_report::CellChangeFilter,
+    /// Mouse-reporting (SC-5 input): which of left/middle/right is
+    /// currently held, updated on every `PointerButton` press/release.
+    /// Tracked independently of `pointer_buttons_down` above, which
+    /// counts only egui-mapped buttons and discards which one.
+    mouse_report_held: mouse_report::HeldButtons,
+    /// Mouse-reporting (D7): last active-tab index observed by the
+    /// cache-reset check. `None` means no observation has happened yet,
+    /// so the first check always counts as a change.
+    mouse_report_last_active_tab: Option<usize>,
 }
 
 /// Terminal font family used to skin the egui `Monospace` chain
@@ -441,6 +457,9 @@ impl WindowHost {
                 .unwrap_or(false),
             frame_counter: FrameCounter::default(),
             rows_rebuilt_counter: RowsRebuiltCounter::default(),
+            mouse_report_cell_cache: mouse_report::CellChangeFilter::default(),
+            mouse_report_held: mouse_report::HeldButtons::default(),
+            mouse_report_last_active_tab: None,
         }
     }
 
