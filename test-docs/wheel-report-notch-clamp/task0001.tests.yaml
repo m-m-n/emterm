@@ -1,0 +1,128 @@
+task_id: task0001
+baseline_failures: []
+final_failures: []
+acceptance_tests:
+  AC-1:
+    tests:
+      - wheel_report_notches_boundary_values_saturate_at_the_cap
+      - bounded_wheel_report_duplicate_at_cap_yields_exactly_cap_concatenations
+    red_confirmed: true
+    red_reason: >-
+      MAX_WHEEL_REPORT_NOTCHES did not exist before this task: importing it
+      from input_translate (tests.rs) and calling bounded_wheel_report_duplicate
+      from pointer_routing both failed to compile with E0432 unresolved import.
+      After implementation, wheel_report_notches_boundary_values_saturate_at_the_cap
+      pins the literal value 100 in both directions, and
+      bounded_wheel_report_duplicate_at_cap_yields_exactly_cap_concatenations
+      exercises the same constant from the routing layer. TS9
+      (alternate_scroll_wheel_bytes_clamps_huge_delta) remains untouched and
+      passing, confirming MAX_ALT_SCROLL_NOTCHES was not unified or aliased.
+  AC-2:
+    tests:
+      - wheel_report_notches_pathological_inputs_stay_within_the_cap
+      - wheel_report_notches_invariant_sweep_never_exceeds_the_cap
+      - wheel_report_notches_boundary_values_saturate_at_the_cap
+    red_confirmed: true
+    red_reason: >-
+      Isolated red-check (pre-implementation wheel_report_notches, with the
+      new AC-1..AC-8 test block temporarily disabled to isolate this symbol):
+      wheel_report_notches(f32::MAX) returned i32::MAX (2147483647) instead
+      of the capped 100 — assertion `left == right` failed, left: 2147483647,
+      right: 100. This is exactly the saturated-integer-extreme intermediate
+      value D4 forbids: the pre-implementation code cast the unclamped f32
+      magnitude to i32 before any clamp, so Rust's float-to-int saturation
+      produced i32::MAX for any input whose magnitude exceeded i32::MAX.
+  AC-3:
+    tests:
+      - wheel_report_notches_signed_whole_counts
+      - wheel_report_notches_sub_notch_delta_is_zero
+      - wheel_report_notches_non_finite_is_zero
+      - wheel_report_notches_near_zero_and_sub_notch_deltas_are_zero
+    red_confirmed: false
+    red_reason: >-
+      This criterion is a below-cap behaviour-preservation guard (task plan
+      TS8: "if one needs editing to pass, the below-cap semantics were
+      changed and the implementation is wrong"). The three pre-existing
+      tests were never touched and were already green both before and after
+      this task, by design. The new test
+      wheel_report_notches_near_zero_and_sub_notch_deltas_are_zero adds
+      coverage for signed zeros / 0.999 / 1.999 boundaries not in the
+      original three, but since this task's change only adds an upper-bound
+      clamp (magnitudes here are all well under the 100-notch cap), that new
+      test was already true pre-implementation too — there is no
+      below-cap-behaviour-change for it to catch. Both facts are expected
+      and intentional per the task plan, not a defect.
+  AC-4:
+    tests:
+      - bounded_wheel_report_duplicate_zero_count_yields_empty_buffer
+      - bounded_wheel_report_duplicate_one_count_yields_payload_verbatim
+      - bounded_wheel_report_duplicate_length_never_exceeds_payload_len_times_cap
+    red_confirmed: true
+    red_reason: >-
+      bounded_wheel_report_duplicate did not exist in pointer_routing before
+      this task: `use super::pointer_routing::bounded_wheel_report_duplicate;`
+      failed to compile with E0432 (no `bounded_wheel_report_duplicate` in
+      `window_host::pointer_routing`). All three tests call it directly with
+      only a byte slice and a count, no host state constructed.
+  AC-5:
+    tests:
+      - bounded_wheel_report_duplicate_at_cap_yields_exactly_cap_concatenations
+      - bounded_wheel_report_duplicate_above_cap_still_caps_at_exactly_cap
+      - bounded_wheel_report_duplicate_length_never_exceeds_payload_len_times_cap
+    red_confirmed: true
+    red_reason: >-
+      Same missing-symbol red as AC-4 (the helper and MAX_WHEEL_REPORT_NOTCHES
+      did not exist before this task). After implementation these tests pin:
+      exactly-100-at-the-cap, still-exactly-100 for 101 and u32::MAX, and the
+      length invariant across empty/realistic payloads at counts {0, 1,
+      cap-1, cap, cap+1, u32::MAX} — the capacity and loop bound are derived
+      from one shared `capped` local, so they cannot diverge (D5).
+  AC-6:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      No automated test exists for this criterion, matching the task plan's
+      TDD-awkward item: the wheel-report branch needs application and tab
+      state the unit-test suite does not construct, and building a
+      host-state harness for it is explicitly out of scope. Verified by code
+      inspection instead: the change to `handle_mouse_wheel`'s wheel-report
+      branch is strictly a substitution — the `if notches != 0` guard and
+      the single `tab.write_input(buf)` call are byte-for-byte unchanged;
+      only the inline `Vec::with_capacity` + repeat loop was replaced by
+      `bounded_wheel_report_duplicate(&bytes, notches.unsigned_abs())`. A
+      zero notch count still takes no branch (no write); a non-zero count
+      still performs exactly one `write_input` call with the whole returned
+      buffer. This inspection result is carried forward to VERIFICATION.md's
+      manual section per the task plan.
+  AC-7:
+    tests:
+      - wheel_report_notches_boundary_values_saturate_at_the_cap
+      - wheel_report_notches_pathological_inputs_stay_within_the_cap
+      - wheel_report_notches_near_zero_and_sub_notch_deltas_are_zero
+      - wheel_report_notches_invariant_sweep_never_exceeds_the_cap
+      - bounded_wheel_report_duplicate_zero_count_yields_empty_buffer
+      - bounded_wheel_report_duplicate_one_count_yields_payload_verbatim
+      - bounded_wheel_report_duplicate_at_cap_yields_exactly_cap_concatenations
+      - bounded_wheel_report_duplicate_above_cap_still_caps_at_exactly_cap
+      - bounded_wheel_report_duplicate_length_never_exceeds_payload_len_times_cap
+    red_confirmed: true
+    red_reason: >-
+      All nine tests are new, added inline in window_host/tests.rs (the
+      module's existing test file) with `<subject>_<scenario>_<expected>`
+      names and standard-library `assert_eq!`/`assert!` only. Compile-error
+      red for the six referencing the new symbols (see AC-1/AC-4/AC-5), and
+      the isolated assertion-level red for the cap-behaviour tests (see
+      AC-2). No new test framework or crate dependency was added
+      (Cargo.toml untouched).
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build-outcome check, not a red/green unit test — there is no prior
+      "red" build state to confirm since the crate already built before this
+      task; the criterion is that it STILL builds after. Verified after
+      implementation: `cargo check --manifest-path src-tauri/Cargo.toml`
+      (default features) and `cargo check --manifest-path src-tauri/Cargo.toml
+      --no-default-features` both succeeded. No crate dependency was added
+      (Cargo.toml untouched); nothing introduced is visible beyond the
+      window_host module tree (both new items are `pub(super)`).
