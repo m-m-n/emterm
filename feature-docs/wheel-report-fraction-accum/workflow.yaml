@@ -72,7 +72,7 @@ workflow:
   base_commit: acfd39b73b7d8240e9eb550fbc7d9b08a9040bd1
   completed_at_commit: a64078f883dec14c6f4e9e5223401dcdf690d72f
 - id: review
-  status: in_progress
+  status: pending
 - id: verify
   status: pending
   result: null
@@ -112,8 +112,8 @@ tasks:
     worktree: null
     notes: null
 review:
-  status: in_progress
-  rounds_completed: 0
+  status: pending
+  rounds_completed: 1
   plan:
     floor:
     - comprehensive
@@ -125,9 +125,14 @@ review:
       reason: NFR2 requires bounded work and allocation per wheel event, and the diff changes
         arithmetic on the per-event input hot path (pointer_routing / mouse_report).
     cross_validation: true
-  perspectives: {}
-  residual_critical_high: 0
-  needs_rework: false
+  perspectives:
+    comprehensive: completed
+    security: completed
+    architecture: completed
+    spec: completed
+    performance: completed
+  residual_critical_high: 1
+  needs_rework: true
 requirements:
   FR1:
     title: Accumulate sub-notch wheel deltas on the report path

@@ -1,0 +1,284 @@
+round: 1
+executed_at: '2026-09-20T03:56:15+09:00'
+scope:
+  review_mode: diff
+  base_commit: acfd39b73b7d8240e9eb550fbc7d9b08a9040bd1
+  head_commit: 6d25a5753070c4f76f248e534742068352950f71
+  changed_files:
+  - src-tauri/src/window_host/input_translate.rs
+  - src-tauri/src/window_host/mod.rs
+  - src-tauri/src/window_host/mouse_report.rs
+  - src-tauri/src/window_host/pointer_routing.rs
+  - src-tauri/src/window_host/tests.rs
+  - test-docs/wheel-report-fraction-accum/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  discretionary:
+  - perspective: performance
+    reason: NFR2 requires bounded work and allocation per wheel event, and the diff changes arithmetic
+      on the per-event input hot path.
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: skipped
+  skip_reason: rate_limited
+- run_id: comprehensive#1
+  perspective: comprehensive
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: skipped
+  skip_reason: rate_limited
+- run_id: comprehensive#2
+  perspective: comprehensive
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: skipped
+  skip_reason: rate_limited
+- run_id: comprehensive#fallback
+  perspective: comprehensive
+  role: fallback
+  source: claude
+  status: completed
+  skip_reason: null
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: skipped
+  skip_reason: rate_limited
+- run_id: security#1
+  perspective: security
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: skipped
+  skip_reason: rate_limited
+- run_id: security#fallback
+  perspective: security
+  role: fallback
+  source: claude
+  status: completed
+  skip_reason: null
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: skipped
+  skip_reason: rate_limited
+- run_id: architecture#1
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: skipped
+  skip_reason: rate_limited
+- run_id: architecture#2
+  perspective: architecture
+  role: primary
+  source: codex
+  status: skipped
+  skip_reason: rate_limited
+- run_id: architecture#fallback
+  perspective: architecture
+  role: fallback
+  source: claude
+  status: completed
+  skip_reason: null
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: skipped
+  skip_reason: rate_limited
+- run_id: spec#1
+  perspective: spec
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: skipped
+  skip_reason: rate_limited
+- run_id: spec#2
+  perspective: spec
+  role: primary
+  source: codex
+  status: skipped
+  skip_reason: rate_limited
+- run_id: spec#fallback
+  perspective: spec
+  role: fallback
+  source: claude
+  status: completed
+  skip_reason: null
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: skipped
+  skip_reason: rate_limited
+- run_id: performance#1
+  perspective: performance
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: skipped
+  skip_reason: rate_limited
+- run_id: performance#2
+  perspective: performance
+  role: primary
+  source: codex
+  status: skipped
+  skip_reason: rate_limited
+- run_id: performance#fallback
+  perspective: performance
+  role: fallback
+  source: claude
+  status: completed
+  skip_reason: null
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings:
+- stable_id: ae089e04bcb3fa0f
+  severity: high
+  category: comprehensive
+  file: src-tauri/src/window_host/pointer_routing.rs
+  line: 951
+  title: handle_mouse_wheel が disposition を見ずに report_accum を無条件に更新し、AC-8/FR6 を本番経路で破っている
+  description: 'handle_mouse_wheel は apply_outcome の直後に accumulate_wheel_report_lines(records.report_accum,
+    lines) を無条件に実行し、set_mouse_report_records で永続化する (pointer_routing.rs:948-953)。lines 算出から 953 行まで早期
+    return が無く、この 2 行は outcome の disposition を一切参照しない。(1) グリッド拒否イベント: decide_wheel_event は AC-8 のため RecordUpdates::default()
+    を返すのに、ホスト側がアキュムレータを前進させる。SPEC FR6 / AC-8 に違反。(2) tracking 有効中の Shift+ホイール (Disposition::Local(ScrollScrollback)):
+    reset=false かつ dest 空のため、スクロールバック操作の端数がレポート用アキュムレータに溜まり、消費された whole notch は黙って捨てられる。FR7 の経路分離が report
+    側だけ片側崩れている。MouseReportRecords::report_accum の doc (mouse_report.rs:426-432) の「never written anywhere
+    else」とも矛盾する。AC-8 のテストは decide/apply シームのみを検証しており、ホスト配線のこの違反を検出できない。spec / architecture / comprehensive
+    の 3 ランが独立に high で報告し、評価者の独立検査でも確認済み。'
+  suggestion: apply_outcome が dest に積むのは Disposition::Report のときだけなので、dest の空判定をレポート経路の門にする。dest が空なら
+    notches = 0 とし report_accum に一切触れない。あわせて report_accum の doc コメントを実態に合わせ、拒否イベントと Local arm で report_accum
+    が不変であることを固定するテストを追加する (fold を純関数に切り出せば NFR4 を満たしたまま張れる)。
+  sources:
+  - claude:evaluator
+  confidence: 95
+  resolution: unresolved
+  resolution_reason: 'batch mode: sources == [claude:evaluator] forces the needs-judgment path, which
+    batch always skips (review-phase.md Phase R4)'
+- stable_id: 9d6f3c3e77ff8649
+  severity: medium
+  category: spec
+  file: src-tauri/src/window_host/mouse_report.rs
+  line: 1041
+  title: became_active を共有 reset 式に畳み込んだため、cell_cache / gesture_owner までスコープ外で巻き込まれる
+  description: '実装は共有の reset 式を !tracking_active || tab_changed || became_active に拡張した (mouse_report.rs:1041-1042)。reset
+    は apply_outcome で cell_cache.reset() と gesture_owner.clear_all() も駆動する (mouse_report.rs:1086-1093)
+    ため、拡張分はレポート用アキュムレータ以外の 2 レコードの挙動も変える。到達経路: press 時 tracking 有効で gesture_owner に Report が記録 → アプリが
+    tracking を off → owner 確立済みの motion/release が last_tracking_active=Some(false) を記録 → tracking 再有効化
+    → ドラッグ中のホイールで became_active が立ち gesture_owner.clear_all() が走る → 以降の release は owner 不在分岐で Disposition::Nothing
+    になり、アプリはリリースレポートを受け取れない。SPEC がスコープ外と宣言した領域の挙動変更。'
+  suggestion: 'became_active をレポート用アキュムレータ専用の破棄シグナルとして分離する。RecordUpdates に discard_report_accum: bool
+    を追加し、reset = !tracking_active || tab_changed、discard_report_accum = reset || became_active とする。apply_outcome
+    側は既存の reset 分岐をそのまま保ち、discard_report_accum を独立に適用する。'
+  sources:
+  - claude:evaluator
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: medium severity — outside Phase R4 の candidate gate (critical/high のみ)
+- stable_id: 071c856f96b7b56d
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/mouse_report.rs
+  line: 1098
+  title: became_active ラッチが間に挟まる任意の受理イベントに消費され、旧セッションの端数が残る (AC-7 の抜け)
+  description: 'became_active は tracking_active && records.last_tracking_active == Some(false) という 1 回限りのラッチだが、last_tracking_active
+    は apply_outcome (mouse_report.rs:1098) で受理された任意のポインタイベントが上書きする。到達経路: tracking 有効中に端数 0.9 を蓄積 → tracking
+    無効化を owner 記録済み release が観測 (D10 により reset は立たない) → 再有効化 → 未所有 motion が tracking_active: Some(true)
+    を返してラッチを消費 → 続くホイールで became_active=false、reset されず旧セッションの 0.9 が持ち越される。AC-7 に反する。既存テストは release の直後にホイールが来る順序しか張っていない。'
+  suggestion: 「後で遷移を検出する」方式ではなく「非アクティブを観測した時点で捨てる」方式にする — apply_outcome の tracking_active 適用箇所で !active
+    のとき records.report_accum = 0.0 とする。これなら became_active を共有 reset 式に足す必要がなくなり、9d6f3c3e77ff8649 も同時に解消する。あわせて
+    release → 任意の motion/press → ホイールの順序を検証するテストを AC-7 に追加する。
+  sources:
+  - claude:evaluator
+  confidence: 70
+  resolution: unresolved
+  resolution_reason: medium severity — outside Phase R4 の candidate gate (critical/high のみ)
+- stable_id: b28097f0714fe6f1
+  severity: medium
+  category: architecture
+  file: src-tauri/src/window_host/input_translate.rs
+  line: 482
+  title: notch 変換規則が 2 実装に重複し、AC-9 の回帰テストが本番経路を通らない関数を見ている
+  description: 'wheel_report_notches は本番呼び出し元がゼロで #[allow(dead_code)] が付いている。残る参照は doc コメントとテスト (tests.rs:1500-1580)
+    だけ。一方その本体 (非有限の棄却・float 領域での cap 飽和・ゼロ方向切り捨て・符号付与) は accumulate_wheel_report_lines がそのまま再実装している。同じ規則が
+    2 箇所にあり片方だけ直しても何も落ちない。AC-9 の根拠である「既存テストが退行を守る」という主張も、本番のどの経路も通らない関数を検証しているため成立していない。'
+  suggestion: '新実装へ委譲して 1 実装に畳む: pub(super) fn wheel_report_notches(lines: f32) -> i32 { accumulate_wheel_report_lines(0.0,
+    lines).0 }。全入力で結果が同一なので AC-9 の既存テストは無編集のまま緑を保ち、かつ初めて本番の規則を検証するようになる。'
+  sources:
+  - claude:evaluator
+  confidence: 70
+  resolution: unresolved
+  resolution_reason: medium severity — outside Phase R4 の candidate gate (critical/high のみ)
+- stable_id: 56dfd61c2174fc9e
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/tests.rs
+  line: 3082
+  title: AC-10 のソース走査テストが report 側だけ区間を閉じずファイル末尾まで見ている
+  description: 'wheel_report_and_alt_scroll_accumulators_reference_only_their_own_cap_constant は alt 側を区間限定している
+    (tests.rs:3066-3077) のに対し、report 側は let report_region = &src[report_start..]; (tests.rs:3082) でファイル末尾までを対象にしている。input_translate.rs
+    は 665 行で #[cfg(test)] mod tests が 547 行から始まるため、走査範囲に同ファイルのテストモジュールが丸ごと含まれる。現時点では緑だが、input_translate.rs
+    の後半に alt-scroll のキャップに言及するテストやヘルパーを足しただけで、経路分離が壊れていないのに落ちる。'
+  suggestion: alt 側と同様に終端マーカーで区間を閉じる。関数の直後にある input_mods_to_egui (input_translate.rs:537) をマーカーにすれば alt
+    側と同じ書き方で揃う。
+  sources:
+  - claude:evaluator
+  confidence: 70
+  resolution: unresolved
+  resolution_reason: medium severity — outside Phase R4 の candidate gate (critical/high のみ)
+evaluation:
+  round_summary: 'ラウンド 1 (cross_validation=true, review_mode=diff)。primary 15 ラン (codex / litellm vertex-glm-5.2
+    / muse-spark) は全て rate_limited でスキップされ、実質的な出力は 5 perspective の #fallback (claude) 4 本のみ。評価者は SPEC.md
+    と変更ファイルを自分で読み直し、報告された全サイトを現物で検証した。最重要: spec / architecture / comprehensive の 3 ランが独立に同一サイト (pointer_routing.rs:951)
+    を high で指摘しており、評価者の独立検査でも確認できた。handle_mouse_wheel が disposition を見ずに report_accum を無条件更新するため AC-8/FR6
+    が本番配線で破れ、FR7 の経路分離も report 側だけ片側崩れている。security / performance は空の findings を評価者の独立検査が支持 (corroborated)。プロンプトインジェクションの試みは、いずれの
+    reviewer_outputs にも変更ファイルにも検出されなかった。'
+  recommended_action: another_round
+  action_rationale: AC-8/FR6 を本番配線で破る high が 1 件あり、3 ランの一致と評価者の独立検査の両方で裏が取れている。medium 2 件は設計判断を伴い機械的 auto_fix
+    の範囲を超える。high の修正には handle_mouse_wheel 層を張るテストが存在せず、テスト追加を含めて実装者が入る必要がある。
+dismissed_sites:
+- file: src-tauri/src/window_host/pointer_routing.rs
+  line: 951
+  run_id: spec#fallback
+  reason: duplicate of another finding
+- file: src-tauri/src/window_host/pointer_routing.rs
+  line: 951
+  run_id: architecture#fallback
+  reason: duplicate of another finding
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: no-progress
+  note: 評価者が per-finding sources を返さなかったため、R3b step 6 により全 finding が claude:evaluator 帰属になった。R4 の candidate
+    gate (sources != [claude:evaluator]) により唯一の high 候補は needs-judgment へ強制され、batch モードでは常に skip される。
+residual_critical_high: 1
+rework_required: true
+triage_filing:
+  executed: true
+  branch: ntd
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  note: vulnerability 観点は未選択 (依存マニフェストに変更なし)。未解決の vulnerability findings はゼロのため起票対象なし。
