@@ -1,0 +1,41 @@
+schema_version: 1
+feature: wheel-report-notch-clamp
+phase: create-plan
+status: applying_patch
+generation: 1
+base_revision: 8fdac215f92c4d314c40f3999e1472370ae70d10
+last_input_digest: "sha256:5ee97c498786dfc52267440fa3528cd0310ccfa2b29cb2cc57953a6836bb7a4c"
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-70580b4a0734
+    status: completed
+    input_digest: "sha256:5ee97c498786dfc52267440fa3528cd0310ccfa2b29cb2cc57953a6836bb7a4c"
+    output_digest: null
+artifacts:
+  - path: feature-docs/wheel-report-notch-clamp/IMPLEMENTATION.md
+    sha256: "sha256:8fb2a0243aa0383834bc82e15224fb0d2e2838d26c50337cda4e7da90bf7a8a2"
+    produced_by: create-plan-70580b4a0734
+  - path: feature-docs/wheel-report-notch-clamp/VERIFICATION.md
+    sha256: "sha256:5e463270996fb3335ecd5b2c6e4355390a7915cf0134070c0a18e643f9e05523"
+    produced_by: create-plan-70580b4a0734
+  - path: feature-docs/wheel-report-notch-clamp/tasks/task0001.md
+    sha256: "sha256:1f0c68e9ed4d78e5fb6578d75659869d8c561a583767abe48f38ce7ed6d3a7f4"
+    produced_by: create-plan-70580b4a0734
+patches:
+  - patch_id: wheel-report-notch-clamp-p0001
+    status: validated
+    base_input_digest: "sha256:5ee97c498786dfc52267440fa3528cd0310ccfa2b29cb2cc57953a6836bb7a4c"
+    base_workflow_blob: 07c50d463166d46272a1428a64fd341928613722
+notes:
+  - >-
+    実装プランナーは written_artifacts の sha256 を null で返した（当該サブエージェント
+    セッションで Bash が使えずハッシュを算出できなかったため）。オーケストレーターが
+    3 件とも算出して補填し、上記 artifacts に記録した。scope 検証で、dispatch 中に
+    worktree へ加わった変更がこの 3 件の宣言済み成果物のみであることを確認済み。
+  - >-
+    R1 の帰着時 digest 再計算は、この dispatch 自身の宣言済み成果物を除外して行った。
+    プランナーの出力 3 件は digest_inputs に含まれるため（再プラン時のドリフト検出用）、
+    初回プランニングでは除外しないと必ず不一致になる。除外後の再計算値は dispatch 時の
+    input_digest と完全一致し、外部要因による input 変化は無いことを確認した。
