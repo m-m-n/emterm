@@ -1,11 +1,11 @@
 schema_version: 1
 feature: mouse-report-reset-active-gesture
 phase: create-plan
-status: completed
-generation: 1
+status: dispatching
+generation: 2
 base_revision: 9fae5628376557d70bde32d544a04e3f5df6b83e
 last_input_digest: "sha256:a50f978206b1ab1accdd129c30aa32c7ba5f3fa94d0cd24cc564f7ef6817ea70"
-active_request_id: null
+active_request_id: create-plan-run-0003
 packets: {}
 answers: {}
 worker_runs:
@@ -32,7 +32,7 @@ artifacts:
     produced_by: create-plan-run-0001
 patches:
   - patch_id: mouse-report-reset-active-gesture-p0001
-    status: applied
+    status: rejected
     base_input_digest: "sha256:a50f978206b1ab1accdd129c30aa32c7ba5f3fa94d0cd24cc564f7ef6817ea70"
     base_workflow_blob: 25314608e8e98c2e4a493cc7448e4d0dde2d3d0e
 progress_fingerprint: null
@@ -45,4 +45,10 @@ resolved_input_cache:
       - src-tauri/src/ui/md3.rs
       - src-tauri/web-shared/styles.css
     truncated: false
-last_error: null
+last_error: >-
+  Patch p0001 was applied then reverted by the orchestrator. A user-requested
+  second-opinion consultation (Codex unavailable -> Opus escalation) found the
+  two-task parallel split contradicts SPEC.md "Implementation Phases" ("Not
+  applicable ... splitting it into phases would leave host.dragging unterminated
+  in an intermediate state"), plus four concrete plan defects. Re-planning as a
+  single task. See phase-state/batch-audit.yaml record batch-audit-0003.
