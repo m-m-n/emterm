@@ -55,6 +55,14 @@ worker_runs:
     status: needs_user_input
     input_digest: sha256:512a781ebd0b74194c64e6c0c18d7d9d55110bdfd9d3a8f5c188d21ffb982e80
     output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: sha256:24e6603657a88f85f8fe45f7c284b2c13ff68e22e01b66a17c1e2dea7710e63b
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: sha256:24e6603657a88f85f8fe45f7c284b2c13ff68e22e01b66a17c1e2dea7710e63b
+    output_digest: null
 artifacts: []
 patches: []
 progress_fingerprint: sha256:c2d8eef0348b0796b4fc879a786ce72868ee1923182ebb7c503d661dfac556c8
@@ -68,4 +76,9 @@ resolved_input_cache:
       - src-tauri/web-shared/styles.css
     digests: {}
     truncated: false
-last_error: null
+last_error: >-
+  create-spec-run-0002 returned status completed but its payload silently dropped the
+  task description's third acceptance criterion (reset the report accumulator on active-tab
+  change and on tracking-mode release). It was re-dispatched as create-spec-run-0003, which
+  restored the requirement as FR-5 with AC-6/AC-7/AC-8 and TS-6/TS-7/TS-8. Recorded for the
+  retrospect; not an open failure.
