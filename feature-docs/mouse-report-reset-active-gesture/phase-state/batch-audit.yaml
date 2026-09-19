@@ -94,3 +94,70 @@ records:
       検査している事実が判明した。companion へ移行するとこのニードルに一致しなくなるため、
       委譲先リストへ companion 名を足す 1 行のテスト修正が必要 (assumption A7)。
     outcome: adopted
+  - record_id: batch-audit-0003
+    recorded_at: "2026-09-20T03:00:00+09:00"
+    gate_id: null
+    gate_kind: user-requested-consultation
+    phase: create-plan
+    question: >-
+      Q6: task0001 / task0002 の 2 タスク並列分割は妥当か、単一逐次タスクの方が
+      良いか。Q7: 前提 A6（リワーク前の無条件 (Left, Released) => dragging = false
+      が FR2 の目標セマンティクス）で進めてよいか。
+    options:
+      - "Q6-A: 2 タスク並列分割のまま進める"
+      - "Q6-B: 単一タスクに統合する"
+      - "Q7-A: A6 を未検証の前提として抱えたまま進める"
+      - "Q7-B: A6 を検証済みとして確定する"
+    choice:
+      - "Q6-B（単一タスクに統合）"
+      - "Q7-B（A6 を検証済みとして確定）"
+    codex_consulted: true
+    opus_escalation: true
+    source: batch-opus-escalation
+    resolution_note: >-
+      Codex (run_codex_exec.sh readonly) は usage limit で exit 1。
+      references/question-resolution.md の Codex consultation procedure step 1 に
+      従い Opus エスカレーションを 1 回実施した。
+
+      Q6 は B を採用。決め手は SPEC.md 自身が分割を否定していること
+      （"Implementation Phases": "Not applicable. The repair is a single coherent
+      change ... splitting it into phases would leave host.dragging unterminated in
+      an intermediate state."）。2 タスク並列分割は名前を変えたフェーズ分割であり、
+      実装する当の SPEC と矛盾する。加えて tests.rs の衝突確率が計画の見積もりより
+      高い: ButtonEventInputs は Default を derive しておらず
+      （mouse_report.rs:550）、local_drag_in_flight の追加で完全な構造体リテラル
+      （tests.rs:1844-1863）が壊れる。そのリテラルは task0002 が拡張する当の
+      フォーカス喪失テスト本体（tests.rs:1809-1872）の中にある。親側採用の
+      コンフリクト解決はテキストは直せるが、「テスト本体に新フィールドが要る」ことは
+      復元できない。並列で得られる利得も小さい（task0002 は約 45 行の抽出 +
+      event_loop.rs の 1 アームのみ）。
+
+      Q6 に付随して計画の実バグを 4 件検出し、再計画で是正する:
+      (1) IMPLEMENTATION.md の識別子固定の根拠が事実誤認 — 構造テスト
+      （tests.rs:1782-1792）が照合するのは mouse_report:: 接頭辞の名前だけで、
+      terminate_local_drag_and_publish / local_drag_in_flight は対象外。
+      (2) 確実に赤くなるテストの持ち主が居ない — tests.rs:1786 は
+      "mouse_report::apply_outcome(" を検査するので、呼び出しを
+      apply_outcome_with_held( に移すと末尾 "(" のせいで部分一致せず失敗する。
+      task0001.md は「delegate リストを extend」と書いているが、置換が必要。
+      (3) drag-in-flight シグナルの定義が 2 タスクに重複し、ドリフト検出が無い。
+      (4) 両タスクが宣言する src-tauri/src/app.rs は存在しない。実体は
+      src-tauri/src/app/mod.rs（当該フィールドは :91）。
+
+      Q7 は B を採用。A6 は前提ではなく事実として確定できる — リワーク前リビジョンは
+      本リポジトリ内に存在する。34774fab "task0006: reduce pointer handlers to
+      gather/decide/apply/perform" の親 34774fab^ の
+      src-tauri/src/window_host/pointer_routing.rs:621-622 が
+      "(MouseButton::Left, ElementState::Released) => { host.dragging = false;" を
+      無条件アームとして持つことを確認済み。同ファイル :406-438 の解放
+      ショートサーキットは GestureOwner::Report のみ return し、Local と
+      所有者なしは下の match アームに落ちる旨がソース内コメントで明記されている。
+      現在の木にも独立証拠がある: mod.rs:172-174 が dragging を
+      "Whether the left button is currently held" と定義しており、左が押されていない
+      間は false でなければならない。dragging の代入は crate 全体で
+      pointer_routing.rs:339 (true) と :362 (false) の 2 箇所のみで、
+      :227 / event_loop.rs:649 / link_hover.rs:178-179 の 3 消費者はいずれも
+      自己回復経路を持たない。D3 が所有者なし左解放を drag-in-flight で門番するのは
+      A6 の無条件アームからの意図的な狭め（FR5 由来）であり、A6 が担保する
+      「進行中ドラッグを伴う左解放は必ずフラグを落とす」は保たれる。
+    outcome: adopted
