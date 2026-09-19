@@ -8,6 +8,8 @@ use winit::keyboard::{Key as WinitKey, NamedKey};
 use crate::pty::input::{Key, Modifiers, Target as EncodeTarget, encode};
 use crate::settings::ShiftEnterBehavior;
 
+use super::mouse_report::ButtonIdentity;
+
 /// Translate a winit `MouseButton` to its `egui::PointerButton`
 /// equivalent. Returns `None` for buttons egui does not model (e.g.
 /// extra side buttons).
@@ -379,6 +381,73 @@ pub(super) fn alternate_scroll_wheel_bytes(
         buf.extend_from_slice(arrow);
     }
     Some(buf)
+}
+
+/// Mouse-reporting (task0003) FR2/FR3: translate a winit `MouseButton`
+/// into the [`ButtonIdentity`] the decision layer (SC-2/SC-5) takes.
+/// `None` for buttons the DEC mouse-reporting protocol has no code point
+/// for (side buttons) — mirrors [`winit_to_egui_button`]'s shape.
+pub(super) fn winit_button_to_report_identity(b: MouseButton) -> Option<ButtonIdentity> {
+    match b {
+        MouseButton::Left => Some(ButtonIdentity::Left),
+        MouseButton::Middle => Some(ButtonIdentity::Middle),
+        MouseButton::Right => Some(ButtonIdentity::Right),
+        _ => None,
+    }
+}
+
+/// Mouse-reporting (task0003) FR4: convert a wheel event's already-computed
+/// y-axis line delta into a signed whole-notch count — positive is
+/// wheel-up, negative is wheel-down. Sub-notch fractional deltas
+/// (`|lines| < 1.0`) round to zero, matching the discrete-wheel-click
+/// convention [`alternate_scroll_wheel_bytes`] already uses; non-finite
+/// input yields zero.
+pub(super) fn wheel_report_notches(lines: f32) -> i32 {
+    if !lines.is_finite() {
+        return 0;
+    }
+    let magnitude = lines.abs().floor() as i32;
+    if lines >= 0.0 { magnitude } else { -magnitude }
+}
+
+/// SC-6 (IMPLEMENTATION.md, owned by task0002 — see the module-level D3
+/// note on [`super::mouse_report`] for why this lives here in task0003's
+/// worktree): the exactly-one consumer a wheel notch is routed to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WheelConsumer {
+    ReportToApplication,
+    TranslateToArrows,
+    ScrollScrollback,
+}
+
+/// SC-6: choose exactly one of the three mutually exclusive wheel
+/// consumers. Branches on `tracking_active` FIRST so the two branches
+/// share no rows (decision D5): while tracking is active, Shift held
+/// yields scroll-scrollback and Shift not held yields
+/// report-to-application — arrow translation is unreachable in this
+/// branch. While tracking is inactive, today's matrix is reproduced
+/// exactly and Shift is not consulted at all: arrow translation when the
+/// pointer is on the alternate screen and both the alternate-scroll mode
+/// bit and the alternate-scroll setting are on, scroll-scrollback
+/// otherwise.
+pub(super) fn wheel_consumer(
+    tracking_active: bool,
+    shift_held: bool,
+    on_alt_screen: bool,
+    alt_scroll_mode_bit: bool,
+    alt_scroll_setting: bool,
+) -> WheelConsumer {
+    if tracking_active {
+        if shift_held {
+            WheelConsumer::ScrollScrollback
+        } else {
+            WheelConsumer::ReportToApplication
+        }
+    } else if on_alt_screen && alt_scroll_mode_bit && alt_scroll_setting {
+        WheelConsumer::TranslateToArrows
+    } else {
+        WheelConsumer::ScrollScrollback
+    }
 }
 
 /// Convert the PTY-side [`Modifiers`] (`input::Modifiers`) into the
