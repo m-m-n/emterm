@@ -72,7 +72,8 @@ workflow:
   base_commit: acfd39b73b7d8240e9eb550fbc7d9b08a9040bd1
   completed_at_commit: a69229644a4c47fe949e0dacb4cff9e6b97ba4c7
 - id: review
-  status: pending
+  status: completed
+  completed_at_commit: 621c0f85e7cc873bb361b35d4d4216c55a30007c
 - id: verify
   status: pending
   result: null
@@ -147,8 +148,8 @@ tasks:
       - b28097f0714fe6f1
       - 56dfd61c2174fc9e
 review:
-  status: pending
-  rounds_completed: 1
+  status: completed
+  rounds_completed: 2
   plan:
     floor:
     - comprehensive
@@ -166,8 +167,8 @@ review:
     architecture: completed
     spec: completed
     performance: completed
-  residual_critical_high: 1
-  needs_rework: true
+  residual_critical_high: 0
+  needs_rework: false
 requirements:
   FR1:
     title: Accumulate sub-notch wheel deltas on the report path

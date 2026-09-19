@@ -1,0 +1,251 @@
+round: 2
+executed_at: '2026-09-20T05:02:50.252783+09:00'
+scope:
+  review_mode: diff
+  base_commit: acfd39b73b7d8240e9eb550fbc7d9b08a9040bd1
+  head_commit: 621c0f85e7cc873bb361b35d4d4216c55a30007c
+  changed_files:
+  - src-tauri/src/window_host/input_translate.rs
+  - src-tauri/src/window_host/mod.rs
+  - src-tauri/src/window_host/mouse_report.rs
+  - src-tauri/src/window_host/pointer_routing.rs
+  - src-tauri/src/window_host/tests.rs
+  - test-docs/wheel-report-fraction-accum/task0001.tests.yaml
+  - test-docs/wheel-report-fraction-accum/task0002.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  discretionary:
+  - perspective: performance
+    reason: NFR2 requires bounded work and allocation per wheel event, and the diff changes arithmetic
+      on the per-event input hot path (pointer_routing / mouse_report).
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: skipped
+  skip_reason: rate_limited
+- run_id: comprehensive#fallback
+  perspective: comprehensive
+  role: fallback
+  source: claude
+  status: completed
+  skip_reason: null
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: skipped
+  skip_reason: rate_limited
+- run_id: security#fallback
+  perspective: security
+  role: fallback
+  source: claude
+  status: completed
+  skip_reason: null
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: skipped
+  skip_reason: rate_limited
+- run_id: architecture#fallback
+  perspective: architecture
+  role: fallback
+  source: claude
+  status: completed
+  skip_reason: null
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: skipped
+  skip_reason: rate_limited
+- run_id: spec#fallback
+  perspective: spec
+  role: fallback
+  source: claude
+  status: completed
+  skip_reason: null
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: skipped
+  skip_reason: rate_limited
+- run_id: performance#fallback
+  perspective: performance
+  role: fallback
+  source: claude
+  status: completed
+  skip_reason: null
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+chain_walk_note: 'R2 の primary 5 本はすべて rate_limited。R2b の chain walk は、残る全エントリのハーネスが 現時点で到達不能であることを直接プローブで確認したうえで
+  unavailable として除外した (codex: ''You''ve hit your usage limit ... try again at 6:23 AM'' / litellm vertex-glm-5.2・muse-spark:
+  ''exceeded retry limit, last status: 429 Too Many Requests'')。チェーン消尽として各観点に Claude fallback を 1 本ずつ、1
+  メッセージでディスパッチした。'
+findings:
+- stable_id: bfb7c163abf1137d
+  severity: medium
+  category: comprehensive
+  file: src-tauri/src/window_host/input_translate.rs
+  line: 492
+  title: 'wheel_report_notches has zero production callers but no longer carries #[allow(dead_code)],
+    so non-test builds gain a permanent `never used` warning'
+  description: 'Independently verified at HEAD. `mod input_translate;` is private inside `window_host`
+    (src-tauri/src/window_host/mod.rs:43) and `window_host` is `pub mod` only at lib.rs:239, so a `pub(super)`
+    item in `input_translate` is unreachable from outside the crate and is subject to the dead_code lint.
+    The only non-doc references to `wheel_report_notches` are in `src-tauri/src/window_host/tests.rs`,
+    which is behind `#[cfg(test)] mod tests;` (mod.rs:852); task0002 removed the last production call
+    site when `pointer_routing::handle_mouse_wheel` switched to `mouse_report::apply_wheel_report_step`
+    (pointer_routing.rs:957). There is no module- or crate-level `#[allow(dead_code)]` (the only two allows
+    in the file, at lines 389 and 415, are on unrelated functions and carry reason comments). The function''s
+    own doc block now explicitly states no dead-code allowance remains, and tests.rs:3932 `wheel_report_notches_delegates_to_the_accumulating_unit_and_carries_no_dead_code_allowance`
+    asserts (by scanning the source text from the doc anchor to the next item) that `#[allow(dead_code)]`
+    is absent, so the warning is pinned in place. No `-D warnings` was found in CI, so this does not break
+    the build; it adds one new warning to every `cargo check` / `cargo build` of the GUI feature. Cross-validation:
+    comprehensive#fallback and architecture#fallback reported this identical site independently, at the
+    same line, with the same diagnosis.'
+  suggestion: Add `#[cfg(test)]` to the function rather than restoring an allow attribute. The AC-6 source-scanning
+    test at tests.rs:3949-3958 asserts only on the literal string `#[allow(dead_code)]` inside the doc-anchor..next-item
+    region and on the presence of `accumulate_wheel_report_lines(`, so `#[cfg(test)]` satisfies both assertions
+    while removing the warning; tests.rs compiles under the same `cfg(test)` so the import at tests.rs:14
+    keeps resolving. Deleting the function instead would require re-pointing the nine AC-9 `wheel_report_notches_*`
+    expectations (tests.rs:1500-1580) at `accumulate_wheel_report_lines(0.0, x).0`, which weakens AC-9's
+    stated no-edit regression evidence. Either way, the MAX_WHEEL_REPORT_NOTCHES doc at input_translate.rs:448-457
+    still names `wheel_report_notches` as the conversion-side half of the cap and should be re-pointed
+    at `accumulate_wheel_report_lines`, which is the actual production binding now.
+  sources:
+  - claude:comprehensive
+  - claude:architecture
+  confidence: 100
+  resolution: unresolved
+  resolution_reason: R4 の candidate gate は severity ∈ {critical, high} のみを対象とするため、medium の本件は auto-fix
+    の 候補にならなかった。review の完了ゲート (residual_critical_high == 0) は満たしている。
+- stable_id: 12606d425b38d819
+  severity: medium
+  category: comprehensive
+  file: test-docs/wheel-report-fraction-accum/task0001.tests.yaml
+  line: 62
+  title: AC-7's acceptance evidence names a test that does not exist at HEAD, so that criterion cannot
+    be mechanically re-run
+  description: 'Independently verified. Every `window_host::tests::` name referenced by task0001.tests.yaml
+    was grepped for a matching `fn` definition under src-tauri/src: 12 of 13 resolve to exactly one definition;
+    `decide_wheel_event_detects_reactivation_observed_only_by_an_owner_recorded_release` (line 62) resolves
+    to zero. task0002.tests.yaml AC-4 states the reason in its own red_reason text — the test was ''re-pointed
+    from the task0001 reactivation test'' and now exists as `decide_wheel_event_reactivation_after_an_owner_recorded_release_accumulates_from_zero`
+    (tests.rs:3223). Both yaml files are added by this same change set, so the drift is self-contained
+    in the diff under review. The practical effect: re-running AC-7''s evidence by name yields `0 tests
+    run`, and that acceptance criterion silently loses its proof. Secondary: the same file''s red_reason
+    prose at lines 57, 67 and 74 describes `MouseReportRecords::last_tracking_active` as a field of the
+    record type; that field no longer exists anywhere in src-tauri/src (task0002''s D10 replaced the latch
+    with an at-observation discard in `apply_outcome`), so a reader reconciling the record against current
+    code finds no such field.'
+  suggestion: Update the AC-7 entry at task0001.tests.yaml:62 to the current name `decide_wheel_event_reactivation_after_an_owner_recorded_release_accumulates_from_zero`,
+    or drop the line with a one-line note that the coverage moved to task0002 AC-4. Add a one-line marker
+    to the `last_tracking_active` red_reason passages saying the field was a task0001-era shape superseded
+    by task0002's D10 discard, so the record stays reconcilable against HEAD.
+  sources:
+  - claude:comprehensive
+  confidence: 85
+  resolution: unresolved
+  resolution_reason: R4 の candidate gate は severity ∈ {critical, high} のみを対象とするため、medium の本件は auto-fix
+    の 候補にならなかった。
+- stable_id: 75e29a3b528d453b
+  severity: medium
+  category: architecture
+  file: src-tauri/src/window_host/mouse_report.rs
+  line: 558
+  title: The tracking-active observation duty is spread over 9 optional write sites, and `..Default::default()`'s
+    None makes 'not observed' indistinguishable from 'forgot to set it'
+  description: 'Verified as accurate debt, not a live defect. `apply_outcome`''s FR5/D10 discard (mouse_report.rs:1128-1130,
+    `if outcome.updates.tracking_active == Some(false)`) depends on every accepted decision branch populating
+    `RecordUpdates.tracking_active` itself. All four decision paths were walked at HEAD: decide_press
+    sets it on both accepted branches; decide_release sets it on the gesture-owned and the non-owned branch;
+    decide_motion_event sets it on all four branches, two of them (lines 1006, 1015) as a post-hoc patch
+    onto the value `report_motion` returns; decide_wheel_event has exactly one accepted return (line 1077)
+    and sets it there, with the grid-rejection early return at 1032-1035 deliberately leaving `RecordUpdates::default()`.
+    So today no branch is missing it. The structural risk is real, though: `RecordUpdates` is `Copy +
+    Default` and every construction goes through `..Default::default()`, so a new accepted branch (or
+    a third caller of `report_motion`, which returns an outcome with `tracking_active` still unset) that
+    omits the field produces `None`, which is value- and type-identical to the grid-rejection path''s
+    deliberate ''no observation''. That omission compiles, passes the existing suite, and silently disables
+    the tracking-session fraction discard on that path — re-opening exactly the stale-session remainder
+    D10 closed.'
+  suggestion: 'Make the observation an input that cannot be forgotten rather than an optional output field:
+    pass it into `report_motion` as an argument and delete the post-hoc assignments at mouse_report.rs:1006
+    and 1015, or lift it out of `RecordUpdates` into an explicit parameter of `apply_outcome` / `apply_wheel_report_step`
+    so a rejection path must name ''no observation'' rather than defaulting into it. If the shape is kept
+    as is, the minimum is one test per decision path asserting every accepted branch returns `tracking_active:
+    Some(_)`, so a future branch that omits it fails loudly.'
+  sources:
+  - claude:architecture
+  confidence: 65
+  resolution: unresolved
+  resolution_reason: R4 の candidate gate は severity ∈ {critical, high} のみを対象とするため、medium の本件は auto-fix
+    の 候補にならなかった。評価者も「現時点の欠陥ではなく設計上の負債」と判定している。
+evaluation:
+  round_summary: 'Round 2, cross_validation=true. All five primary runs were rate-limited; all five fallbacks
+    completed, so every perspective has a completed reviewer run and unreviewed_perspectives is empty.
+    No critical and no high findings were reported by any run this round. Four medium reviewer findings
+    arrived; comprehensive#fallback and architecture#fallback reported the SAME site (input_translate.rs:492,
+    the dead_code remnant) independently — genuine cross-run agreement, which is why that finding carries
+    high confidence. It is carried once under category `comprehensive`. That leaves three carried findings,
+    all medium. INJECTION: no injection attempt, role override, or embedded instruction was found in any
+    reviewer_outputs entry. ROUND-1 CONTINUITY: round_context lists five findings all recorded `unresolved`;
+    each was verified against HEAD independently. ae089e04 (high, unconditional fold) is resolved — the
+    fold now lives behind `apply_wheel_report_step`''s `matches!(outcome.disposition, Disposition::Report
+    { .. })` gate (mouse_report.rs:1149-1161) and handle_mouse_wheel holds no fold logic (pointer_routing.rs:957).
+    9d6f3c3e resolved — `reset = !tracking_active || tab_changed` is restored verbatim at mouse_report.rs:1048
+    and the discard is a separate branch at 1128. 071c856f resolved — the latch is gone, replaced by at-observation
+    discard. b28097f0 resolved in substance — `wheel_report_notches` now delegates to `accumulate_wheel_report_lines(0.0,
+    lines).0`; the dead_code remnant is a NEW, narrower issue carried as finding 1, not a re-report. 56dfd61c
+    resolved. INDEPENDENT INSPECTION COVERAGE: 7 of the 7 changed files were read. comprehensive — corroborated,
+    both findings reproduced from source. security — corroborated (empty result supported): the amplification
+    bound is intact, `bounded_wheel_report_duplicate` (pointer_routing.rs:737-744) derives both the preallocation
+    and the repeat count from one `min(MAX_WHEEL_REPORT_NOTCHES)` value, and the accumulator saturates
+    at 100 in the f32 domain before the i32 cast. architecture — corroborated; its second finding is debt,
+    not a live defect. spec — corroborated (empty result supported): non-finite rejection precedes accumulation,
+    saturation precedes the i32 cast, `apply_outcome` runs before the fold, grid-rejected and local-arm
+    dispositions neither fold nor mutate the record, and the report cap constant is never aliased to MAX_ALT_SCROLL_NOTCHES.
+    performance — corroborated (empty result supported): both new units are O(1) with no allocation.'
+  recommended_action: auto_fix
+  action_rationale: No critical or high findings this round, and every round-1 finding including the lone
+    high (ae089e04) is verified resolved at HEAD, so neither another full round nor rework is warranted.
+    The two carried comprehensive findings are mechanical and self-contained. The architecture finding
+    is design debt with no current misbehaviour and should not hold the feature. Note the orchestrator
+    still owns the gate — this is advice.
+dismissed_sites:
+- file: src-tauri/src/window_host/pointer_routing.rs
+  line: 951
+  run_id: round1:ae089e04bcb3fa0f
+  reason: already resolved per round_context
+dismissed_sites_dropped: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+  note: 'R4 の candidate gate は severity ∈ {critical, high} を要求する。本ラウンドの finding は 3 件とも medium の ため候補がゼロで、ループを
+    1 度も回さずに termination: clean (residual critical/high がゼロ) に到達した。'
+residual_critical_high: 0
+rework_required: false
+unreviewed_perspectives: []
+triage_filing:
+  executed: true
+  branch: ntd
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: null
+  note: vulnerability 観点は未選択 (依存マニフェストに変更なし)。未解決の vulnerability findings はゼロのため起票対象なし。

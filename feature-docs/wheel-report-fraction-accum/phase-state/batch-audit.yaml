@@ -137,3 +137,50 @@ records:
       deviation and the containment check handles it unchanged. note: the same path is already
       declared in tasks.task0001.files, so the feature-wide declared change set does cover it; the
       decline is scoped to task0002's own file set.
+  - question_id: review.round2-chain-walk-harness-availability
+    packet_id: null
+    answered_at: "2026-09-20T06:05:00+09:00"
+    source: orchestrator-mechanical-probe
+    answer_mode: select_or_freeform
+    selected_option_ids: [treat_remaining_chain_entries_as_unavailable]
+    freeform: null
+    normalized_answer: "All remaining primary_chain entries were excluded as unavailable on direct probe evidence, so every perspective went straight to its single Claude fallback dispatch (chain exhaustion), costing no R2b hop."
+    resolution_note: >-
+      not a gate (no gate_id; no AskUserQuestion site). review Phase R2 dispatched one primary
+      per selected perspective and all five returned skipped with skip_reason rate_limited:
+      comprehensive#0 (codex), security#0 (codex), architecture#0 (litellm vertex-glm-5.2),
+      spec#0 (litellm muse-spark), performance#0 (litellm muse-spark). Rather than spending
+      R2b hops on entries whose harness was already known-bad, each remaining harness+model was
+      probed directly once: `codex exec --sandbox read-only` returned "You've hit your usage
+      limit ... try again at 6:23 AM"; `codex exec -p litellm -m vertex-glm-5.2` and
+      `codex exec -p litellm -m muse-spark` both returned "exceeded retry limit, last status:
+      429 Too Many Requests". Every entry of every chain is therefore covered by the probe, so
+      each perspective reached R2b's chain-exhaustion state and received exactly ONE
+      em-workflow:reviewer (Claude) fallback dispatch, all five issued in one message, never
+      concurrently with a harness reviewer. codex_consulted: not possible — Codex is the
+      rate-limited harness in question, and the LiteLLM proxy that served as the fallback
+      consultation route in the earlier records of this file is 429 as well. opus_escalation:
+      not run. effect: identical to round 1's outcome (all five perspectives reviewed by the
+      Claude fallback); unreviewed_perspectives is empty because every fallback produced a
+      completed run.
+  - question_id: review.round2-spec-fallback-contradictory-handback
+    packet_id: null
+    answered_at: "2026-09-20T06:20:00+09:00"
+    source: orchestrator-mechanical-verification
+    answer_mode: select_or_freeform
+    selected_option_ids: [adopt_final_handback_after_source_verification]
+    freeform: null
+    normalized_answer: "The spec#fallback run handed back twice with contradictory results; the final (no-findings) handback was adopted after its disputed claim was checked directly against the source."
+    resolution_note: >-
+      not a gate (no gate_id). The spec fallback reviewer's first handback reported a medium
+      finding claiming FR5's tab-change reset never reaches the wheel path, stating that
+      "decide_wheel_event の引数に tab identity / tab_changed 相当が無い". Its later, final handback
+      reported no findings and stated the opposite. The disputed claim was settled mechanically
+      rather than by preferring either report: src-tauri/src/window_host/mouse_report.rs:1038
+      computes `let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);` and
+      line 1048 folds it in as `let reset = !tracking_active || tab_changed;`. The first
+      handback's premise is therefore false and the finding was not carried. The final handback
+      was passed to the evaluator as spec#fallback's verbatim output; the evaluator's own
+      Independent Inspection Duty separately corroborated the empty spec result.
+      codex_consulted: not possible (both harnesses rate-limited, see the preceding record).
+      opus_escalation: not run.
