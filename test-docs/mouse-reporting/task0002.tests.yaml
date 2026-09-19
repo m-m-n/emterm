@@ -1,0 +1,113 @@
+task_id: task0002
+baseline_failures: []          # cargo test --lib -- --test-threads=1: 3347 passed, 0 failed, 3 ignored
+final_failures: []             # same command after implementation: 3375 passed, 0 failed, 3 ignored
+acceptance_tests:
+  AC-1:
+    tests:
+      - window_host::mouse_report::tests::x10_left_press_at_1_1_emits_introducer_then_32_33_33
+      - window_host::mouse_report::tests::x10_left_release_at_1_1_emits_35_33_33_with_base_replaced_by_3
+      - window_host::mouse_report::tests::x10_motion_adds_32_to_the_base
+      - window_host::mouse_report::tests::x10_wheel_up_and_wheel_down_carry_64_and_65
+    red_confirmed: true
+    red_reason: >-
+      Ran against stub bodies (compose_button_code always 0, encode_report
+      always None). x10_left_press failed on Option::unwrap() on a None
+      value; x10_left_release failed "assertion left == right: x10 release
+      replaces the base with 3 — left: 0, right: 3"; x10_motion failed
+      "left: 0, right: 32"; x10_wheel_up_and_wheel_down failed "left: 0,
+      right: 64".
+  AC-2:
+    tests:
+      - window_host::mouse_report::tests::sgr_left_press_at_1_1_is_lt_0_1_1_upper_m
+      - window_host::mouse_report::tests::sgr_left_release_retains_press_base_and_ends_in_lowercase_m
+      - window_host::mouse_report::tests::sgr_motion_and_wheel_directions_are_byte_exact
+    red_confirmed: true
+    red_reason: >-
+      Ran against the same stub encode_report (always None): all three
+      failed on "called Option::unwrap() on a None value" at the
+      encode_report(...).unwrap() call.
+  AC-3:
+    tests:
+      - window_host::mouse_report::tests::ctrl_and_alt_contribute_16_and_8_and_24_together
+      - window_host::mouse_report::tests::shift_alone_never_changes_the_button_code_even_when_set
+      - window_host::mouse_report::tests::no_input_combination_ever_produces_the_value_4
+    red_confirmed: true
+    red_reason: >-
+      ctrl_and_alt_contribute_16_and_8_and_24_together failed against the
+      stub (compose_button_code always 0): "assertion left == right failed
+      — left: 0, right: 16" (on `ctrl - base`). The other two tests in this
+      group assert "no effect" / "never equals 4", which the all-zero stub
+      trivially satisfies (vacuous pass) — the ctrl/alt test is the one
+      that demonstrates real red for this criterion.
+  AC-4:
+    tests:
+      - window_host::mouse_report::tests::x10_column_223_encodes_but_224_yields_nothing
+      - window_host::mouse_report::tests::x10_row_223_encodes_but_224_yields_nothing
+      - window_host::mouse_report::tests::sgr_carries_the_true_coordinate_at_224_where_x10_would_suppress
+    red_confirmed: true
+    red_reason: >-
+      Ran against the stub encode_report (always None): x10_column_223 and
+      x10_row_223 failed "assertion failed: encode_report(...).is_some()"
+      (the 223 case, which should succeed, returned None under the stub);
+      sgr_carries_the_true_coordinate failed on
+      "Option::unwrap() on a None value".
+  AC-5:
+    tests:
+      - window_host::mouse_report::tests::cell_change_filter_reports_first_suppresses_repeat_reports_on_change
+      - window_host::mouse_report::tests::cell_change_filter_carries_its_cached_cell_across_calls
+      - window_host::mouse_report::tests::cell_change_filter_reports_unconditionally_after_reset
+    red_confirmed: true
+    red_reason: >-
+      Ran against a should_report stub that always returns false: all three
+      failed their `assert!(filter.should_report(...))` calls (expected the
+      first/reset-following call to report and it never did).
+  AC-6:
+    tests:
+      - window_host::mouse_report::tests::motion_gate_yields_nothing_when_only_1000_is_active
+      - window_host::mouse_report::tests::motion_gate_yields_nothing_under_1002_with_no_button_held
+      - window_host::mouse_report::tests::motion_gate_yields_held_button_under_1002
+      - window_host::mouse_report::tests::motion_gate_always_yields_under_1003
+      - window_host::mouse_report::tests::motion_gate_reports_lowest_numbered_button_when_several_are_held
+      - window_host::mouse_report::tests::motion_gate_precedence_is_1003_then_1002_then_1000
+      - window_host::mouse_report::tests::motion_gate_yields_nothing_when_no_tracking_mode_is_active
+    red_confirmed: true
+    red_reason: >-
+      Ran against a motion_gate stub that always returns None:
+      motion_gate_yields_held_button_under_1002 failed "left: None, right:
+      Some(Middle)"; motion_gate_always_yields_under_1003 failed "left:
+      None, right: Some(None)"; motion_gate_reports_lowest_numbered_button
+      failed "left: None, right: Some(Left)"; motion_gate_precedence_...
+      failed "left: None, right: Some(None)". The two "-yields-nothing-"
+      tests expect None and so trivially pass under the always-None stub
+      (vacuous), but the four failures above demonstrate real red for this
+      criterion.
+  AC-7:
+    tests:
+      - window_host::input_translate::wheel_consumer_tests::tracking_active_shift_held_on_alt_screen_with_alt_scroll_on_still_scrolls_scrollback
+      - window_host::input_translate::wheel_consumer_tests::tracking_inactive_same_alt_scroll_gates_still_yields_arrow_translation
+      - window_host::input_translate::wheel_consumer_tests::tracking_active_without_shift_reports_to_application
+      - window_host::input_translate::wheel_consumer_tests::tracking_inactive_reproduces_todays_matrix_without_shift
+      - window_host::input_translate::wheel_consumer_tests::wheel_consumer_is_total_and_exhaustively_matches_the_two_matrices
+    red_confirmed: true
+    red_reason: >-
+      Ran against a wheel_consumer stub that always returns
+      ScrollScrollback: tracking_active_without_shift_reports_to_application
+      failed "left: ScrollScrollback, right: ReportToApplication";
+      tracking_inactive_reproduces_todays_matrix_without_shift and
+      tracking_inactive_same_alt_scroll_gates_still_yields_arrow_translation
+      both failed "left: ScrollScrollback, right: TranslateToArrows"; the
+      exhaustive test failed the same way on its first alt-scroll-on
+      tracking-inactive case. Only the collision-cell test (which expects
+      ScrollScrollback) passed against the stub, vacuously.
+  AC-8:
+    tests: []
+    red_confirmed: false
+    red_reason: >-
+      Build/gating criterion, not a behavior: verified by running the
+      project's build command, test command, and the CLI-only check
+      (`cargo check --no-default-features`) after implementation, all
+      exiting 0, plus manual inspection that every added item lives inside
+      the existing gui-feature-gated window_host module tree with no new
+      #[cfg] branch. There is no prior "red" state to observe — before this
+      task's files existed there was nothing to build/check, so this
+      criterion cannot be red/green cycled the way a behavioral AC can.
