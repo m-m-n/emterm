@@ -28,7 +28,7 @@
 
 use crate::pty::input::Modifiers;
 
-use super::input_translate::{WheelConsumer, wheel_consumer};
+use super::input_translate::{WheelConsumer, accumulate_wheel_report_lines, wheel_consumer};
 
 /// Which mouse button (or none) an event/report concerns (SC-2, SC-5).
 /// Deliberately distinct from `winit::event::MouseButton` and
@@ -426,18 +426,18 @@ pub(super) struct MouseReportRecords {
     /// task0001 (wheel-report-fraction-accum, D1): the report-path wheel
     /// fraction accumulator — the sub-notch remainder carried between
     /// wheel events on this tab/tracking session, independent of
-    /// `WindowHost::alt_scroll_accum` (FR7, never aliased to it). Zeroed
-    /// only by [`apply_outcome`]'s existing reset branch; never written
-    /// anywhere else.
+    /// `WindowHost::alt_scroll_accum` (FR7, never aliased to it).
+    ///
+    /// task0002 (D9/D10): corrects this field's stated write-sites to
+    /// match the code's actual ones. Zeroed by [`apply_outcome`]'s reset
+    /// branch (a tab change or "no tracking mode active") AND,
+    /// independently, by that same function's tracking-session discard
+    /// branch (D10) the moment it records an observed tracking state of
+    /// *inactive*. Folded and stored back only by
+    /// [`apply_wheel_report_step`], and only on an event whose applied
+    /// outcome's disposition is a report (D9) — a grid-rejected event or
+    /// one consumed by a local arm leaves this field untouched.
     pub(super) report_accum: f32,
-    /// task0001: the last tracking-active state observed by an accepted
-    /// decision, kept beside `built_for_tab` (task plan Design "Observing
-    /// a tracking-session boundary") so an inactive-to-active transition
-    /// is visible even when the observing event was not a wheel event.
-    /// `None` until the first observation. Written only by
-    /// [`apply_outcome`], never by a decision unit and never directly by
-    /// the host (IMPLEMENTATION.md D2).
-    pub(super) last_tracking_active: Option<bool>,
 }
 
 /// task0005 (SC-11, D12): the "held-button record" alongside the
@@ -541,15 +541,20 @@ pub(super) struct RecordUpdates {
     /// A gesture-ownership change. `None` when this outcome implies no
     /// change to [`MouseReportRecords::gesture_owner`].
     pub(super) gesture: Option<GestureUpdate>,
-    /// task0001: the tracking-active state this event observed, to be
-    /// recorded as [`MouseReportRecords::last_tracking_active`]. Set by
-    /// every accepted decision branch across all four pointer paths —
-    /// including a gesture-owned release and a mid-drag motion event that
-    /// deliberately do NOT reset gesture state (D10) — so an
-    /// inactive-to-active transition stays visible to the wheel path
-    /// however it was observed. `None` means no observation to report,
-    /// which is what every grid-rejected branch's `Default::default()`
-    /// already produces (AC-8's byte-invariance).
+    /// task0001: the tracking-active state this event observed.
+    ///
+    /// task0002 (D10): consumed directly by [`apply_outcome`] — a
+    /// `Some(false)` value discards the report accumulator AT that
+    /// observation. No value is stored forward for a later event to
+    /// re-derive a transition from (no latch: an intervening accepted
+    /// pointer event can no longer swallow the discard). Set by every
+    /// accepted decision branch across all four pointer paths — including
+    /// a gesture-owned release and a mid-drag motion event that
+    /// deliberately do NOT reset gesture state (D10 unchanged in that
+    /// respect) — so the discard fires however the observation was made.
+    /// `None` means no observation to report, which is what every
+    /// grid-rejected branch's `Default::default()` already produces
+    /// (AC-8's byte-invariance).
     pub(super) tracking_active: Option<bool>,
 }
 
@@ -1031,15 +1036,16 @@ pub(super) fn decide_wheel_event(inputs: &WheelEventInputs) -> SequenceOutcome {
     }
     let tracking_active = inputs.mode_1000 || inputs.mode_1002 || inputs.mode_1003;
     let tab_changed = inputs.records.built_for_tab != Some(inputs.active_tab);
-    // task0001 (Design "Observing a tracking-session boundary"): besides
-    // the two existing observations, a transition from a last-observed
-    // inactive state to active-now also resets — this is what lets a
-    // release-and-re-enable observed by some OTHER pointer event (not
-    // this wheel event) still discard the report accumulator, via
-    // `records.last_tracking_active` rather than re-deriving anything
-    // host-side (D2).
-    let became_active = tracking_active && inputs.records.last_tracking_active == Some(false);
-    let reset = !tracking_active || tab_changed || became_active;
+    // task0002 (D10, refines D2): the shared reset expression carries
+    // exactly its two original observations again — no tracking mode
+    // active, or the active tab differs from the record's tab marker.
+    // The tracking-session discard of the report accumulator is a
+    // SEPARATE action, taken by `apply_outcome` the moment it records an
+    // observed tracking state of inactive (see that function) — it does
+    // not fold into this reset expression, which also drives the
+    // cell-change cache reset and the gesture-ownership clear (records
+    // this feature declared out of scope).
+    let reset = !tracking_active || tab_changed;
 
     let consumer = wheel_consumer(
         tracking_active,
@@ -1095,8 +1101,19 @@ pub(super) fn apply_outcome(
     if let Some(tab) = outcome.updates.built_for_tab {
         records.built_for_tab = Some(tab);
     }
-    if let Some(active) = outcome.updates.tracking_active {
-        records.last_tracking_active = Some(active);
+    // task0002 (D10): the report accumulator is ALSO discarded,
+    // independently of `reset`, the moment THIS event's outcome records an
+    // observed tracking state of *inactive* — not via a stored latch a
+    // LATER event reads (which an intervening accepted pointer event could
+    // swallow), but at the point of the observation itself. No state is
+    // carried forward for this: a grid-rejected event carries no
+    // observation at all (`updates.tracking_active` is `None`) and
+    // therefore discards nothing (FR6). When `reset` also fired above
+    // (e.g. a tab change observed by the same event that also observed
+    // tracking inactive) this is a harmless second zero, not a second
+    // subtraction — the field is set, not decremented.
+    if outcome.updates.tracking_active == Some(false) {
+        records.report_accum = 0.0;
     }
     if let Some((column, row)) = outcome.updates.cache_cell {
         records.cell_cache.commit(column, row);
@@ -1113,6 +1130,36 @@ pub(super) fn apply_outcome(
     if let Disposition::Report { bytes, tab } = outcome.disposition {
         dest.push((tab, bytes));
     }
+}
+
+/// task0002 (D9, IMPLEMENTATION.md Shared Components "Per-event report
+/// step"): performs one wheel event's whole report-path bookkeeping as a
+/// plain-value unit. Applies `outcome`'s record updates via
+/// [`apply_outcome`] first — exactly once, before anything else — then
+/// folds `lines` into the report accumulator and stores the returned
+/// fraction back **only** when the applied outcome's disposition is a
+/// report (D9). On every other disposition (a grid-rejected notch, or one
+/// consumed by a local arm) the record value this leaves is exactly what
+/// [`apply_outcome`]'s updates alone produce, and the returned notch count
+/// is zero — the report-ness is read directly off `outcome`, never
+/// re-derived from the modifiers, the tracking-mode bits or `lines`
+/// themselves. Needs no `WindowHost`, winit event loop or GPU surface
+/// (NFR4): `pointer_routing::handle_mouse_wheel` is this unit's only
+/// caller and holds no fold-and-store logic of its own on this path.
+pub(super) fn apply_wheel_report_step(
+    outcome: SequenceOutcome,
+    records: &mut MouseReportRecords,
+    dest: &mut Vec<(TabId, Vec<u8>)>,
+    lines: f32,
+) -> i32 {
+    let is_report = matches!(outcome.disposition, Disposition::Report { .. });
+    apply_outcome(outcome, records, dest);
+    if !is_report {
+        return 0;
+    }
+    let (notches, new_accum) = accumulate_wheel_report_lines(records.report_accum, lines);
+    records.report_accum = new_accum;
+    notches
 }
 
 /// SC-11 (AC-2, D12): empties the gesture-ownership record and the

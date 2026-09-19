@@ -286,12 +286,6 @@ pub struct WindowHost {
     /// [`Self::alt_scroll_accum`] (FR7) — never read or written by the
     /// alternate-scroll path, and vice versa.
     mouse_report_accum: f32,
-    /// task0001: the last tracking-active state observed by an accepted
-    /// mouse-report decision, round-tripped through
-    /// [`mouse_report::MouseReportRecords::last_tracking_active`]. Never
-    /// written anywhere in this struct except via
-    /// [`Self::set_mouse_report_records`] (IMPLEMENTATION.md D2).
-    mouse_report_last_tracking_active: Option<bool>,
 }
 
 /// Terminal font family used to skin the egui `Monospace` chain
@@ -495,7 +489,6 @@ impl WindowHost {
             mouse_report_last_active_tab: None,
             mouse_report_gesture_owner: mouse_report::GestureOwnership::default(),
             mouse_report_accum: 0.0,
-            mouse_report_last_tracking_active: None,
         }
     }
 
@@ -513,7 +506,6 @@ impl WindowHost {
             gesture_owner: self.mouse_report_gesture_owner,
             built_for_tab: self.mouse_report_last_active_tab,
             report_accum: self.mouse_report_accum,
-            last_tracking_active: self.mouse_report_last_tracking_active,
         }
     }
 
@@ -523,7 +515,6 @@ impl WindowHost {
         self.mouse_report_gesture_owner = records.gesture_owner;
         self.mouse_report_last_active_tab = records.built_for_tab;
         self.mouse_report_accum = records.report_accum;
-        self.mouse_report_last_tracking_active = records.last_tracking_active;
     }
 
     /// Phase 4-H: lazily construct the `TerminalGridPass` once the App
