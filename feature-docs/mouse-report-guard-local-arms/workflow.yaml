@@ -149,7 +149,8 @@ workflow:
 
       No requirement carries status: excluded, so no scenario was excluded.
   - id: retrospect
-    status: in_progress
+    status: completed
+    completed_at_commit: e725c3452e4d8b2b8a3e6e9077bd95ace084842a
 
 tasks:
   task0001:
