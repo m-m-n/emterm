@@ -56,3 +56,21 @@ records:
     options_not_chosen: [ask_user]
     recorded_as_assumption: false
     resolution_note: "batch-policies.yaml の create-spec.design-step は decide_autonomously 固定。analyst の推奨 skip をそのまま採用。"
+  - gate_id: create-spec.command-approval
+    phase: create-spec
+    resolved_at: "2026-09-20T01:42:00+09:00"
+    policy_action: auto_record
+    codex_consulted: false
+    opus_escalation: false
+    auto_approved_commands: []
+    resolution_note: >-
+      workflow.yaml project.components の 4 コマンドはすべて bash_guard.py の既存
+      承認リストに含まれており、新規に自動承認したコマンドは 1 件も無い。
+      承認済みを確認した文字列:
+      (1) CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+      (2) CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+      (3) cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      (4) CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+      format_command は当初 `rustfmt --edition 2024` を候補にしたが未承認だったため、
+      プロジェクトルール (crate 全体 fmt 禁止・PostToolUse hook で整形を強制) と
+      整合し、かつ承認済みかつ書き換えを伴わない (3) に差し替えた。
