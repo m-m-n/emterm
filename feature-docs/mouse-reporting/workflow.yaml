@@ -182,8 +182,8 @@ tasks:
     - NFR3
     - NFR4
     - NFR5
-    status: in_progress
-    notes: launching session died before any work landed (journal reason: orphaned); batch retry 1/1 consumed
+    status: merged
+    notes: 'retry 1/1 (prior launch orphaned) merged at 2ccb377abd3c82758bb7ba5c10475b9d7e796818; conflict_retries 1 (parent-side adoption of task0001/task0002 contracts); tests pass'
     branch: em-workflow/mouse-reporting/task0003
 review:
   status: pending
