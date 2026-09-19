@@ -65,7 +65,8 @@ workflow:
   - IMPLEMENTATION.md
   - VERIFICATION.md
   - tasks/
-  status: pending
+  status: completed
+  completed_at_commit: f2845c08a087374f0cfe3d8f6f2d1f20f0ab2546
 - id: implement
   status: pending
   base_commit: null
@@ -77,7 +78,38 @@ workflow:
   failed_items: []
 - id: retrospect
   status: pending
-tasks: {}
+tasks:
+  task0001:
+    title: Report-path wheel fraction accumulator
+    plan: tasks/task0001.md
+    files:
+    - src-tauri/src/window_host/input_translate.rs
+    - src-tauri/src/window_host/mouse_report.rs
+    - src-tauri/src/window_host/mod.rs
+    - src-tauri/src/window_host/pointer_routing.rs
+    - src-tauri/src/window_host/tests.rs
+    skills:
+    - frontend-impl
+    domains:
+    - input-handling
+    - api-contract
+    complexity: high
+    requirements:
+    - FR1
+    - FR2
+    - FR3
+    - FR4
+    - FR5
+    - FR6
+    - FR7
+    - NFR1
+    - NFR2
+    - NFR3
+    - NFR4
+    status: pending
+    branch: null
+    worktree: null
+    notes: null
 review:
   status: pending
   rounds_completed: 0
@@ -91,7 +123,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-1
     - TS-9
@@ -100,7 +133,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-1
     - TS-2
@@ -109,7 +143,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-3
   FR4:
@@ -117,7 +152,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-4
     - TS-5
@@ -127,7 +163,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-6
     - TS-7
@@ -136,7 +173,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-8
   FR7:
@@ -144,7 +182,8 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-10
   NFR1:
@@ -152,30 +191,43 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-6
+    - TS-7
+    - TS-8
   NFR2:
     title: Bounded work and allocation per wheel event
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-4
+    - TS-5
   NFR3:
     title: Two clamp layers, one constant
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
+    tasks:
+    - task0001
     tests:
     - TS-5
+    - TS-4
   NFR4:
     title: Testable without a window or event loop
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks:
+    - task0001
+    tests:
+    - TS-1
+    - TS-6
+    - TS-8
 batch:
   review_rework_count: 0
   verify_rework:
