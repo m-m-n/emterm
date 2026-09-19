@@ -106,7 +106,7 @@ tasks:
     - NFR2
     - NFR3
     - NFR4
-    status: in_progress
+    status: merged
     branch: em-workflow/wheel-report-fraction-accum/task0001
     worktree: null
     notes: null
