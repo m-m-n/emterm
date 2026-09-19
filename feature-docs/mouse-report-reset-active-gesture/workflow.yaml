@@ -43,7 +43,8 @@ workflow:
       ed, so the design-system drift tests in ui::dialog::tests are unaffected.
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
-    status: pending
+    status: completed
+    completed_at_commit: 06aad77427961a20f247f1ecd1eb265178ebba66
   - id: implement
     status: pending
     base_commit: null
@@ -56,7 +57,24 @@ workflow:
   - id: retrospect
     status: pending
 
-tasks: {}
+tasks:
+  task0001:
+    title: "Bound the local drag: reset preserves held gestures, left release and focus loss always terminate"
+    plan: tasks/task0001.md
+    files:
+      - src-tauri/src/window_host/mouse_report.rs
+      - src-tauri/src/window_host/pointer_routing.rs
+      - src-tauri/src/window_host/event_loop.rs
+      - src-tauri/src/window_host/mod.rs
+      - src-tauri/src/window_host/tests.rs
+      - src-tauri/src/app/mod.rs
+    skills: [frontend-impl]
+    domains: [input-handling, ui]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, NFR1, NFR2, NFR3, NFR4, NFR5]
+    status: pending
+    branch: null
+    notes: null
 
 review:
   status: pending
@@ -70,78 +88,78 @@ requirements:
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-5, TS-6]
   FR2:
     title: "A left release always finishes the local drag"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-1, TS-2, TS-3]
   FR3:
     title: "Focus loss terminates a live local drag"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-4, TS-9]
   FR4:
     title: "Report-owned behaviour is untouched"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-7]
   FR5:
     title: "No new side effect for a release with no drag in flight"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-8]
   FR6:
     title: "Stale gesture records are still cleared"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-5, TS-6]
   NFR1:
     title: "The decision layer stays window-free"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-10]
   NFR2:
     title: "Records are never mutated at decision time"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-11]
   NFR3:
     title: "Test style matches the project convention"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-14]
   NFR4:
     title: "Build-surface invariance"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-12]
   NFR5:
     title: "The wheel-report notch clamp is not weakened"
     status: ok
     tbd_reason: null
     excluded_reason: null
-    tasks: []
-    tests: []
+    tasks: [task0001]
+    tests: [TS-13]
 
 batch:
   review_rework_count: 0
