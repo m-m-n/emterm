@@ -113,7 +113,8 @@ workflow:
       forward; below-cap behaviour is provably unchanged (the clamp only engages
       at |lines| >= 100). No excluded requirements.
   - id: retrospect
-    status: in_progress
+    status: completed
+    completed_at_commit: 331abb182eb647bd01ce1db6b2fe442a1fd591cf
 
 tasks:
   task0001:
