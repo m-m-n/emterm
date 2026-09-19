@@ -475,13 +475,26 @@ no work to a hot path beyond a held-button check inside `apply_outcome`.
 None. Every functional requirement is `status: resolved`; no requirement carries
 `status: tbd`.
 
-One assumption could not be independently verified and is recorded rather than
-left open:
+A6 was recorded as unverified when this document was first written, and has
+since been verified during planning:
 
 - A6 (impact low, reversible): the pre-rework behaviour named in the bug report
   — a base-code unconditional `(Left, Released) => host.dragging = false` arm —
-  is the intended target semantics for FR2. The pre-rework revision is outside
-  the supplied inputs, so this was not independently verified.
+  is the intended target semantics for FR2. **Verified.** The pre-rework
+  revision is in this repository: the rework commit is `34774fab` ("task0006:
+  reduce pointer handlers to gather/decide/apply/perform"), and
+  `34774fab^:src-tauri/src/window_host/pointer_routing.rs:621-622` carries that
+  arm unconditionally. In the same pre-rework file the release short-circuit at
+  `:406-438` returns only for `GestureOwner::Report`, with in-source comments at
+  `:430-436` stating that the Local and no-owner cases fall through to that arm.
+  Independent evidence in the current tree: `src-tauri/src/window_host/mod.rs:172-174`
+  documents `dragging` as "whether the left button is currently held", and
+  `dragging` is set only at `pointer_routing.rs:339` and cleared only at `:362`,
+  with three consumers (`pointer_routing.rs:227`, `event_loop.rs:649`,
+  `link_hover.rs:178-179`) that have no self-healing path. FR5's drag-in-flight
+  gate on the no-owner left release is a deliberate narrowing of that
+  unconditional arm; the guarantee A6 underwrites — a left release with a live
+  drag always clears the flag — is preserved.
 
 ## Implementation Phases (if applicable)
 
@@ -502,8 +515,8 @@ full reasoning is recorded in
 | A3 | medium | yes | The held-button exclusion applies ONLY to the `!tracking_active` reset trigger. A genuine tab change (`built_for_tab != Some(active_tab)`) keeps clearing every gesture-ownership slot exactly as it does today, and no per-button press-origin tab is introduced. |
 | A4 | medium | yes | The held-button exclusion is performed inside `apply_outcome`, not by threading held flags into `ButtonEventInputs` / `WheelEventInputs`. `apply_outcome` gains a companion entry point taking `HeldButtons`, with the existing `apply_outcome` kept as a thin delegating wrapper so the roughly 30 inline test call sites need no edit. |
 | A5 | low | yes | `host.dragging` and `app.pending_selection_anchor` are fields on `WindowHost` and `App` respectively, declared outside the three files named in the bug report. |
-| A6 | low | yes | The pre-rework behaviour named in the bug report — a base-code unconditional `(Left, Released) => host.dragging = false` arm — is the intended target semantics for FR2. |
-| A7 | low | yes | `src-tauri/src/window_host/tests.rs:1782-1791` asserts that pointer_routing.rs's source literally contains the needle `"mouse_report::apply_outcome("`. Adding a companion entry point (A4) and moving the three production call sites to it requires that structural test's delegate list to be extended with the companion's name. |
+| A6 | low | yes | The pre-rework behaviour named in the bug report — a base-code unconditional `(Left, Released) => host.dragging = false` arm — is the intended target semantics for FR2. Verified during planning against `34774fab^:src-tauri/src/window_host/pointer_routing.rs:621-622`; see the note above this table. |
+| A7 | low | yes | `src-tauri/src/window_host/tests.rs:1782-1791` asserts that pointer_routing.rs's source literally contains the needle `"mouse_report::apply_outcome("`. Adding a companion entry point (A4) and moving the three production call sites to it requires that structural test's delegate list entry to be **replaced** with the companion's name, not merely extended: the needle's trailing `(` blocks a prefix match, so once no call site spells `apply_outcome(` the original entry fails. Only `mouse_report::`-prefixed delegate names are checked by that test — no other identifier introduced by this feature is structurally pinned. |
 
 ## Design Step
 
