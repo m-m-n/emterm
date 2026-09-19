@@ -1,0 +1,38 @@
+schema_version: 1
+feature: mouse-report-guard-local-arms
+phase: create-plan
+status: completed
+generation: 1
+base_revision: 24b6fe1fa31c5e1121dcf28eab56e2c785799fc7
+last_input_digest: sha256:1a7f05fb9e03371487ac5382803e44e0312014058cc72761e61146eda572d075
+active_request_id: null
+packets: {}
+answers: {}
+worker_runs:
+  - request_id: create-plan-run-0001
+    status: completed
+    input_digest: sha256:1a7f05fb9e03371487ac5382803e44e0312014058cc72761e61146eda572d075
+    output_digest: sha256:b61b4455516539084bab4e7f391fbb9a1f87b6248b1b489e9d34d770a2fd5a9a
+artifacts:
+  - path: feature-docs/mouse-report-guard-local-arms/IMPLEMENTATION.md
+    sha256: sha256:dfe3d563c4c03a4137d4171f3d8e59262c3632947c7dd8cbc6be1537e1a40a24
+    produced_by: create-plan-run-0001
+  - path: feature-docs/mouse-report-guard-local-arms/VERIFICATION.md
+    sha256: sha256:a0c4d9801d376295a038dbb3148c121eba04542106e8a5d7d6e142f4ce59767b
+    produced_by: create-plan-run-0001
+  - path: feature-docs/mouse-report-guard-local-arms/tasks/task0001.md
+    sha256: sha256:90c9d7ede0b683845f123f9f70eb4213e9f133eba20048d04dd8bd54ac78b13e
+    produced_by: create-plan-run-0001
+patches:
+  - patch_id: mouse-report-guard-local-arms-p0001
+    status: applied
+    base_input_digest: sha256:1a7f05fb9e03371487ac5382803e44e0312014058cc72761e61146eda572d075
+    base_workflow_blob: f4cbda1f509beac6a34a9ee5427f8fdceec33892
+progress_fingerprint: null
+stale_redispatch_count: 0
+resolved_input_cache: {}
+last_error: null
+notes: >-
+  Orchestrator normalized the task0001 plan's empty "Files to Create" section
+  from a bullet ("- None.") to a plain line so the files-union validator check
+  passes. No path set changed.

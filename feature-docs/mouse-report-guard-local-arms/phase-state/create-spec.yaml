@@ -1,0 +1,75 @@
+schema_version: 1
+feature: mouse-report-guard-local-arms
+phase: create-spec
+status: completed
+generation: 1
+base_revision: 7d9151e1
+last_input_digest: "sha256:11f22dc831ffbf227a96ef3e54ffe557963accb045b0ff037cbf3b96b4e77cd1"
+active_request_id: null
+packets:
+  create-spec-q0001:
+    status: answered
+    issued_at: "2026-09-20T01:32:00+09:00"
+    questions:
+      - question_id: requirement.top-strip-decomposition
+        status: answered
+      - question_id: design-step.recommendation
+        status: answered
+answers:
+  requirement.top-strip-decomposition:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T01:40:00+09:00"
+    source: batch_policy_codex
+    answer_mode: select_or_freeform
+    selected_option_ids: [preserve_pre_regression]
+    freeform: null
+    normalized_answer: >-
+      ガード領域ごとに、退行前 (base 1d5af0d) の挙動をそのまま再現する。Codex 相談
+      (readonly) と実コード読み取りで到達関係を確定した結果、次が事実として確認された。
+      handle_mouse_wheel の早期 return は SC-8 より前に (1) profile_selector.visible、
+      (2) タブバー帯 (TITLE_BAR_HEIGHT <= y < top_strip_h)、(3) mux サイドバー の
+      3 つを egui へ流している。したがってホイールで SC-8 拒否アームに実際に到達して
+      被害が出ているのは CSD タイトルバー帯 (y < TITLE_BAR_HEIGHT) / 下端ストリップ /
+      スクロールバーオーバーレイ / リサイズ帯 の 4 つだけである。
+      押下側の早期 return は構造が異なり、上部帯 (タイトルバー + タブバー) と
+      profile_selector はボタン非依存で return、下端 / スクロールバー / サイドバー /
+      リサイズは左押下のみ return する。よって退行前に中押下が PRIMARY ペーストへ
+      到達していたガード領域は 下端ストリップ / スクロールバーオーバーレイ /
+      mux サイドバー / 上部帯と重ならないリサイズ帯 の 4 つであり、CSD タイトルバー帯と
+      タブバー帯は退行前も到達していない。
+      実装方式は Codex 推奨の (ii) 領域別分岐を採る。すなわち GridOwnershipInputs の
+      in_top_strip を「CSD タイトルバー帯」と「タブバー帯」に分解し、decide_* が
+      領域ごとに返すアームを変える。早期 return の到達不能性に依存する (i) 案は、
+      将来ガード順序が変わった時にタブバーの横スクロールやサイドバー一覧スクロールが
+      端末スクロールへ誤分類されるため採らない。
+  design-step.recommendation:
+    packet_id: create-spec-q0001
+    answered_at: "2026-09-20T01:40:00+09:00"
+    source: batch_policy
+    answer_mode: single_select
+    selected_option_ids: [decide_autonomously]
+    freeform: null
+    normalized_answer: "design step は skip。純粋なイベントルーティング修復で UI 要素・レイアウト・デザイントークンを一切触らない。"
+worker_runs:
+  - request_id: create-spec-run-0001
+    status: needs_user_input
+    input_digest: "sha256:11f22dc831ffbf227a96ef3e54ffe557963accb045b0ff037cbf3b96b4e77cd1"
+    output_digest: null
+  - request_id: create-spec-run-0002
+    status: completed
+    input_digest: "sha256:11f22dc831ffbf227a96ef3e54ffe557963accb045b0ff037cbf3b96b4e77cd1"
+    output_digest: null
+  - request_id: create-spec-run-0003
+    status: completed
+    input_digest: "sha256:11f22dc831ffbf227a96ef3e54ffe557963accb045b0ff037cbf3b96b4e77cd1"
+    output_digest: null
+artifacts:
+  - path: feature-docs/mouse-report-guard-local-arms/REQUIREMENTS.md
+    sha256: "sha256:7929c08dae31c473c908fb804f1d857e39aac8bc5403077682bcb5b6cff897a6"
+    produced_by: create-spec-run-0003
+  - path: feature-docs/mouse-report-guard-local-arms/SPEC.md
+    sha256: "sha256:9bcd89332bd3555c210d3cc10c371db74d1fed53ce8304afdb80b0792f0ab645"
+    produced_by: create-spec-run-0003
+patches: []
+progress_fingerprint: null
+stale_redispatch_count: 0

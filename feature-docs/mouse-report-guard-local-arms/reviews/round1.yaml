@@ -1,0 +1,129 @@
+round: 1
+executed_at: '2026-09-20T02:21:01.614786+09:00'
+scope:
+  review_mode: diff
+  base_commit: 1de1e95d
+  head_commit: 11dc40ebc07be73c614dd9422b24608d2560c240
+  changed_files:
+  - src-tauri/src/window_host/mouse_report.rs
+  - src-tauri/src/window_host/pointer_routing.rs
+  - test-docs/mouse-report-guard-local-arms/task0001.tests.yaml
+plan:
+  floor:
+  - comprehensive
+  - security
+  - architecture
+  - spec
+  discretionary:
+  - perspective: performance
+    reason: diff はポインタホットパス (pointer_routing / mouse_report) の分岐を書き換えており、NFR4 が「ホットパスに新たなコストやログを載せない」ことを要求しているため。
+  cross_validation: true
+perspective_runs:
+- run_id: comprehensive#0
+  perspective: comprehensive
+  role: primary
+  source: codex
+  status: completed
+  skip_reason: null
+- run_id: security#0
+  perspective: security
+  role: primary
+  source: codex
+  status: completed
+  skip_reason: null
+- run_id: architecture#0
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: vertex-glm-5.2
+  status: skipped
+  skip_reason: rate_limited
+- run_id: architecture#1
+  perspective: architecture
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: spec#0
+  perspective: spec
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: performance#0
+  perspective: performance
+  role: primary
+  source: litellm
+  model: muse-spark
+  status: completed
+  skip_reason: null
+- run_id: evaluator
+  role: evaluator
+  source: claude
+  status: completed
+findings: []
+evaluation:
+  round_summary: 'Round 1 (diff mode, cross_validation=true) over 3 changed files: src-tauri/src/window_host/mouse_report.rs,
+    src-tauri/src/window_host/pointer_routing.rs, test-docs/mouse-report-guard-local-arms/task0001.tests.yaml.
+    All five completed reviewer runs returned empty findings sets; architecture#0 was skipped (rate_limited)
+    and its perspective is covered by architecture#1. No reviewer-reported critical/high sites existed
+    this round, so dismissed_sites is empty. No prompt-injection attempt, role override, or embedded instruction
+    was present in any reviewer_outputs entry or in the inspected diff/files. PER-PERSPECTIVE INDEPENDENT
+    INSPECTION (evaluator''s own reads of the round''s changed_files; files read: pointer_routing.rs,
+    mouse_report.rs, task0001.tests.yaml, SPEC.md, input_translate.rs, window_host/tests.rs, ui/title_bar.rs,
+    ui/tab_bar/mod.rs): comprehensive#0 = corroborated - traced the new rejected_press_disposition / rejected_wheel_disposition
+    against every caller: decide_press and decide_wheel_event keep RecordUpdates::default() (byte-identical
+    to the old SequenceOutcome::nothing(), mouse_report.rs:540-545), apply_outcome only emits bytes for
+    Disposition::Report so FR7/AC13 byte-absence is structurally intact, Disposition/LocalArm gained no
+    variant, and the routing-layer early returns in handle_pointer_button (pointer_routing.rs:530-535,
+    :544-596, :601) and handle_mouse_wheel (:737, :765-787, :800-844) are consistent with the new per-region
+    dispositions, so no double-handling path exists. No stale in_top_strip reference remains in src-tauri/src,
+    and the only other GridOwnershipInputs construction site (window_host/tests.rs:1696) uses ::default(),
+    so the FR9 field split is complete. security#0 = corroborated - the change adds no input channel,
+    no parsing, no new external data path; the only externally-observable action newly reachable is the
+    pre-existing PastePrimary arm and the pre-existing alternate-scroll arrow bytes, both through the
+    unmodified perform step. architecture#1 = corroborated - geometry stays in the routing layer (both
+    bands derive from the same TITLE_BAR_HEIGHT / effective_tab_bar_height boundary; effective_tab_bar_height
+    returns 0.0 when hidden, making the bands provably disjoint), the decide units stay pure, and both
+    new helpers are total over their inputs. spec#0 = corroborated - checked cell-by-cell against SPEC''s
+    rejected-position disposition table (SPEC.md:183-196) and FR1-FR10; folding wheel_consumer''s ReportToApplication
+    onto ScrollScrollback is provably safe because wheel_consumer (input_translate.rs:416-434) cannot
+    return it with tracking_active=false. performance#0 = corroborated - boolean branches over fields
+    already in GridOwnershipInputs plus two float comparisons; no allocation, lock or log added per pointer
+    event. TWO NON-BLOCKING OBSERVATIONS, deliberately not raised as findings: (1) with a tracking application
+    on the alternate screen and mode 1007 plus alternate_scroll_enabled both on, a wheel notch over an
+    arm-bearing chrome region now writes arrow bytes to the PTY; this is the explicitly specified pre-regression
+    behaviour (SPEC FR1/AC5/NFR5), so it is intended. (2) SPEC TS11 (tab-bar-hidden boundary geometry)
+    has no automated test; the geometry needs a constructed WindowHost and task0001.tests.yaml (AC-8 red_reason)
+    documents the deferral to the manual VERIFICATION scenarios - a recorded coverage limit, not an unreported
+    gap. Test evidence in the record is credible: baseline 3415 passed / 0 failed / 3 ignored, final 3424
+    passed / 0 failed / 3 ignored, with red_confirmed mutants documented per acceptance criterion.'
+  recommended_action: complete
+  action_rationale: 'Five completed reviewer runs across comprehensive, security, architecture, spec and
+    performance all returned empty findings sets, and the evaluator''s own independent inspection of both
+    changed Rust files corroborated each perspective rather than surfacing issues of its own: the per-region
+    dispatch matches SPEC''s disposition table exactly, record-update invariance and the reporting prohibition
+    are structurally preserved, the FR9 field split has no missed construction site, and the routing-layer
+    guard order is unchanged. No critical/high site was reported by any run and none was found, so there
+    is nothing to carry into findings or to dismiss; the two observations are intended behaviour and a
+    recorded manual-verification deferral, neither warranting another round or rework.'
+dismissed_sites: []
+dismissed_sites_dropped: []
+unreviewed_perspectives: []
+auto_fix:
+  loops_run: 0
+  applied_total: 0
+  termination: clean
+residual_critical_high: 0
+rework_required: false
+triage_filing:
+  executed: true
+  branch: report
+  filed: []
+  appended: []
+  duplicates_suppressed: []
+  report_path: /home/sakura/src/my_projects/tauri/emterm/tmp/sca-triage-mouse-report-guard-local-arms-20260919T172047Z.md
+  note: 'vulnerability 観点は今回選ばれていないため未解決 findings はゼロ。file-tasks は空入力で実行し、ntd 一覧取得が非ゼロ終了だったため report ブランチに降格
+    (degraded_reason: listing_exit_nonzero)。起票・追記・重複抑止はいずれも無し。'

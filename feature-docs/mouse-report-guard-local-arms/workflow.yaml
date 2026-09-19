@@ -1,0 +1,313 @@
+schema_version: 1
+feature: mouse-report-guard-local-arms
+created: 2026-09-20
+base_branch: main
+goal: |
+  マウスレポート: ガード領域のホイール・中クリックがローカル挙動ごと無効化される (9813504a)
+
+  出典: Notion タスク https://www.notion.so/3e03509ec8ee8134a304d6016bdbc798
+  種別: バグ / 優先度: 高
+
+  ## 現象 (必須)
+  マウスレポート実装（PR #69 / `em-workflow/mouse-reporting/integration`）の導入により、SC-8（グリッド所有判定）が false を返す領域でホイール操作が**レポートを抑止するだけでなくローカル挙動ごと消える**。
+  対象領域は 4 つ。
+  - 下端のステータスバー
+  - 右端のスクロールバーオーバーレイ
+  - CSD タイトルバー帯（`TITLE_BAR_HEIGHT` 以下）
+  - CSD リサイズホットゾーン（四辺）
+  これらの上でホイールを回してもスクロールバックが一切動かない。SC-8 はトラッキングモードの読み取りより前に参照されるため、**マウスレポートが無効でも発生する**。
+  押下側も同じ形をしている。base commit `1d5af0d` の下端ストリップ / スクロールバー / サイドバーのガードは `button == Left && state == Pressed` 条件付きだったが、SC-8 はボタン非依存なので、これらの領域での中クリックが PRIMARY ペーストに到達しなくなっている。
+
+  ## 再現手順 (必須)
+  1. `em-workflow/mouse-reporting/integration` をビルドして eMterm を起動する
+  2. スクロールバックが十分たまった状態にする（マウスレポート有効・無効どちらでもよい）
+  3. 下端のステータスバー上にポインタを置いてホイールを回す
+  4. 右端のスクロールバーオーバーレイ上、CSD タイトルバー帯、四辺のリサイズ帯でも同様に回す
+  いずれもスクロールバックが動かない。
+
+  ## 期待する挙動 (必須)
+  SPEC AC12 および IMPLEMENTATION SC-8 の Post が定めるとおり、ガード領域のイベントは**レポートを出さないが、それまでのローカル挙動は保持する**。つまりホイールはスクロールバックを動かし、ステータスバー上の中クリックは PRIMARY をペーストする。
+
+  ## 完了の定義 (必須)
+  - [ ] 再現手順で現象が起きない
+  - [ ] 再発を検出するテストがある（ステータスバー上 / スクロールバーオーバーレイ上 / CSD タイトルバー帯 / リサイズ帯の各ホイールがスクロールバックを動かすこと、ステータスバー上の中押下が PRIMARY をペーストすること）
+
+  ## 該当箇所 (任意)
+  - `src-tauri/src/window_host/mouse_report.rs:863` — `decide_wheel_event` が `point_belongs_to_grid` false で `SequenceOutcome::nothing()` を返す（863-865）
+  - `src-tauri/src/window_host/pointer_routing.rs:983` — perform ステップが `None => {}` に落ち、ローカルアームを一切実行しない
+
+  ## 実害・発生条件 (任意)
+  マウスレポートの有効・無効を問わず常時発生する。ステータスバー / スクロールバー上でのホイールは日常操作なので影響が大きい。レビュー round 3 の deferred high、stable_id `9813504a38663827`（confidence 85）。task0005 / task0006 の rework で新規に入った退行で、ブランチ上の残存指摘のうち影響が最大と判定されている。
+  レビュアーの提案は 2 案あり相互排他。(a) 拒否アームが `Disposition::Local(LocalArm::ScrollScrollback)` を返す、(b) 4 つ目の `Disposition::NotGridOwned` を追加してハンドラが task0006 以前のローカル経路へそのまま流す。修正は `mouse_report.rs` と `pointer_routing.rs` の 2-3 ファイルにまたがるため、レビューの自動修正（単一ファイル限定）ではスキップされた。
+
+  ## 起動時の追加指示
+  Once the implementation is finished, push the integration branch to the remote and create a Pull Request against base_branch with gh pr create. Keep the integration branch both locally and on the remote (do not auto-merge it into base_branch).
+  Consult Codex on any unclear points and adopt the option judged to be comparatively better.
+  Record the content of that discussion in Notion.
+parent_branch: em-workflow/mouse-report-guard-local-arms/integration
+
+project:
+  license: MIT
+  design_system:
+    kind: project_native
+    paths:
+      - doc/UI-DESIGN-GUIDELINES.yaml
+      - src-tauri/web-shared/styles.css
+      - src-tauri/src/ui/md3.rs
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+    cli_only:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+      test_command: ""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: c2a0c617fb96ff520b37fc761132229035ef05b7
+  - id: design
+    artifacts: [DESIGN.md, design/]
+    status: skipped
+    skipped_reason: >-
+      window_host 内の純粋なイベントルーティング修復。UI 要素・レイアウト・
+      デザイントークン・視覚面のいずれにも触れない。doc/UI-DESIGN-GUIDELINES.yaml と
+      その 2 つのミラー (src-tauri/web-shared/styles.css, src-tauri/src/ui/md3.rs) は
+      いずれも変更されない。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks/]
+    status: completed
+    completed_at_commit: bcfd70cdb4f7ae5f1cf2f130b1193f52b5ffe0c2
+  - id: implement
+    status: completed
+    base_commit: 1de1e95d
+    completed_at_commit: d86f9cc03f19d5e11e74b135b7363fdb25026f01
+  - id: review
+    status: completed
+    completed_at_commit: 11dc40ebc07be73c614dd9422b24608d2560c240
+  - id: verify
+    status: completed
+    completed_at_commit: 4181d80020f263fcd4fad4e3e5708e0874b3f633
+    result: pass
+    failed_items: []
+    notes: |-
+      AUTOMATED LAYERS: PASS. MANUAL LAYER (SC-C): NOT RUN - carried forward.
+      These are recorded as two separate states, not one blended verdict.
+
+      Build: both component commands exit 0.
+        main:     cargo check --manifest-path src-tauri/Cargo.toml -> 0
+        cli_only: cargo check ... --no-default-features -> 0 (feature gates intact)
+        Prerequisite: this worktree had no bundled fonts, so the approved
+        composite `bash scripts/fetch-fonts.sh && bun install && bun run
+        build:viewer && bun run build:settings && <cargo check>` was used to
+        satisfy build.rs before the check could run.
+
+      Test: cargo test --lib -> 0. 3424 passed, 0 failed, 3 ignored
+        (same 3 pre-existing ignores as baseline's 3415/0/3). 11 new test fns
+        added, 0 removed. TS1-TS11 all present and passing.
+
+      Code quality (format): PASS with note. `cargo fmt --check` reports drift
+        in 17 crate files including the 2 changed ones, but the drift in the
+        changed files is PRE-EXISTING on main. Proof: the pinned rustfmt
+        (1.96.0, style_edition 2024) was run against the `main` baseline copy
+        and the current copy of both files; the set of proposed +/- lines is
+        byte-identical. This feature introduces zero new format violations.
+        Resolved via Codex consultation - see phase-state/batch-audit.yaml
+        question_id verify.code-quality-verdict.
+
+      Success criteria: SC-A ok (FR1-FR10 + NFR1-NFR6 each map to >=1 passing
+        scenario). SC-B ok (TS1-TS11 pass). SC-C NOT RUN (manual, see below).
+        SC-D ok (decision units pure; every new test runs bare, no window/GPU/
+        PTY constructed). SC-E ok (no Disposition and no LocalArm variant added
+        - diff contains no enum change). SC-F ok (pointer_routing.rs diff is
+        only the region-flag population splitting in_top_strip into
+        in_title_bar_band + in_tab_bar_band, plus a doc comment; no guard added
+        or removed, early-return order unchanged). SC-G ok (0 test fns removed;
+        the guarded-region sweep went from 6 regions to 7 and gained expected-
+        disposition columns - TS9's intended strengthening - with the existing
+        byte-absence assertion retained; no pre-existing assertion weakened).
+        SC-H ok (all five documents present and consistent). SC-I ok (review
+        round 1 recorded 0 findings, residual_critical_high 0).
+
+      E2E: none. Project has no E2E harness; both components declare an empty
+        e2e_test_command. Not applicable, not a failure.
+
+      MANUAL SCENARIOS MS1-MS4: NOT RUN. They need a human at a release build
+        of a GPU/windowed terminal, which an unattended batch run cannot
+        provide. SC-C therefore remains unsatisfied and is carried forward to
+        the human evaluator, who must click through MS1-MS4 (listed verbatim in
+        VERIFICATION.md) before this branch is considered fully verified.
+        Resolved via Codex consultation - see phase-state/batch-audit.yaml
+        question_id verify.manual-scenarios-unattended.
+
+      No requirement carries status: excluded, so no scenario was excluded.
+  - id: retrospect
+    status: completed
+    completed_at_commit: e725c3452e4d8b2b8a3e6e9077bd95ace084842a
+
+tasks:
+  task0001:
+    title: "Per-region SC-8 rejection dispatch and disposition-pinning tests"
+    plan: tasks/task0001.md
+    status: merged
+    files:
+      - src-tauri/src/window_host/mouse_report.rs
+      - src-tauri/src/window_host/pointer_routing.rs
+      - src-tauri/src/window_host/input_translate.rs
+    skills: []
+    domains: [input-handling, ui]
+    complexity: high
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, NFR1, NFR2, NFR3, NFR4, NFR5, NFR6]
+    branch: em-workflow/mouse-report-guard-local-arms/task0001
+    notes: null
+
+review:
+  status: completed
+  rounds_completed: 1
+  perspectives:
+    comprehensive: completed
+    security: completed
+    architecture: completed
+    spec: completed
+    performance: completed
+  residual_critical_high: 0
+  needs_rework: false
+  plan:
+    floor: [comprehensive, security, architecture, spec]
+    discretionary:
+      - perspective: performance
+        reason: >-
+          diff はポインタホットパス (pointer_routing / mouse_report) の分岐を
+          書き換えており、NFR4 が「ホットパスに新たなコストやログを載せない」
+          ことを要求しているため。
+    cross_validation: true
+
+batch:
+  review_rework_count: 0
+  verify_rework:
+    rounds: 0
+    failed_id_counts: {}
+  infra_resume:
+    rounds: 0
+    cap: 2
+
+requirements:
+  FR1:
+    title: "Wheel over a damaged guard region names the pre-regression wheel consumer"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS2, TS3, TS10, TS11, MS1]
+  FR2:
+    title: "Guard regions consumed by an upstream early branch keep `Nothing` on the wheel path"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS10, MS3]
+  FR3:
+    title: "Middle press over a guard region pastes PRIMARY in the four regions it previously reached"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS4, TS5, TS9, MS2]
+  FR4:
+    title: "Left and right presses over a guard region name no local arm"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS6, TS9, MS4]
+  FR5:
+    title: "A rejected press still records no gesture owner"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS6]
+  FR6:
+    title: "Motion over a guard region stays `Nothing`"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS7, TS9]
+  FR7:
+    title: "No rejected position ever reports"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS2, TS9]
+  FR8:
+    title: "A rejected event's record updates stay as they are"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS7]
+  FR9:
+    title: "`GridOwnershipInputs.in_top_strip` decomposes into two region bools"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS8, TS11]
+  FR10:
+    title: "Region-specific dispatch, with a stated precedence for overlapping regions"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS4, TS10]
+  NFR1:
+    title: "The decide units stay pure functions"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS4, TS7]
+  NFR2:
+    title: "No new `Disposition` variant"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS1, TS4, TS9]
+  NFR3:
+    title: "Guard order and SC-8 semantics unchanged"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [MS1, MS3, MS4]
+  NFR4:
+    title: "No new cost or logging on the pointer hot path"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: []
+  NFR5:
+    title: "The repair is independent of mouse-reporting being enabled"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS2, MS1]
+  NFR6:
+    title: "Existing mouse-reporting behaviour is not regressed"
+    status: ok
+    tbd_reason: null
+    excluded_reason: null
+    tasks: [task0001]
+    tests: [TS9]

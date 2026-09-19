@@ -58,18 +58,26 @@ impl TrackingState {
 /// task0004 SC-8 (D11): collects the plain-value inputs to
 /// [`mouse_report::point_belongs_to_grid`] (consulted inside SC-10, task0005)
 /// from the current pointer position — the SAME hit tests the chrome guards
-/// this file used to run individually (top strip, bottom strip, scrollbar
-/// overlay, mux sidebar, CSD edge-resize hot zone), gathered once so all
-/// three pointer paths consult the identical decision (IMPLEMENTATION.md
-/// cross-task decision 3.5's sharing principle, extended to SC-8).
+/// this file used to run individually (CSD title-bar band, tab-bar band,
+/// bottom strip, scrollbar overlay, mux sidebar, CSD edge-resize hot zone),
+/// gathered once so all three pointer paths consult the identical decision
+/// (IMPLEMENTATION.md cross-task decision 3.5's sharing principle, extended
+/// to SC-8).
 /// `position` is the pointer's egui logical, window-relative coordinate.
 fn grid_ownership_inputs(
     position: egui::Pos2,
     host: &WindowHost,
     app: &App,
 ) -> mouse_report::GridOwnershipInputs {
-    let top_strip_h = crate::ui::title_bar::TITLE_BAR_HEIGHT
-        + crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
+    // task0001 (FR9): the combined top-area flag is split into two
+    // independent region flags at the same boundary the tab-bar wheel
+    // guard in `handle_mouse_wheel` already uses — `effective_tab_bar_height`
+    // is zero when the tab bar is hidden, so the tab-bar band collapses to
+    // empty and the two flags can never both be true for one position.
+    let title_bar_h = crate::ui::title_bar::TITLE_BAR_HEIGHT;
+    let top_strip_h = title_bar_h + crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
+    let in_title_bar_band = position.y < title_bar_h;
+    let in_tab_bar_band = position.y >= title_bar_h && position.y < top_strip_h;
     let window_size_logical = host
         .window
         .surface_size()
@@ -114,7 +122,8 @@ fn grid_ownership_inputs(
     );
     let in_resize_hot_zone = host.resize_direction_at(position.x, position.y).is_some();
     mouse_report::GridOwnershipInputs {
-        in_top_strip: position.y < top_strip_h,
+        in_title_bar_band,
+        in_tab_bar_band,
         in_bottom_strip,
         in_scrollbar_overlay,
         in_mux_sidebar,
