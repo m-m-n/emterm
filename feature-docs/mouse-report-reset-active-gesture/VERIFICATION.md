@@ -6,8 +6,8 @@
 **SPEC.md**: `feature-docs/mouse-report-reset-active-gesture/SPEC.md` /
 **IMPLEMENTATION.md**: `feature-docs/mouse-report-reset-active-gesture/IMPLEMENTATION.md`
 
-This document covers the INTEGRATED verification of the feature. Per-task
-acceptance criteria live in `tasks/task0001.md` and `tasks/task0002.md`.
+This document covers the INTEGRATED verification of the feature. The feature
+is a single task; its acceptance criteria live in `tasks/task0001.md`.
 
 ## Build Verification
 
@@ -24,7 +24,7 @@ acceptance criteria live in `tasks/task0001.md` and `tasks/task0002.md`.
   weakened
 - Coverage target: no coverage tool is configured for this project, so no
   percentage gate applies. The substitute gate is traceability: every
-  acceptance criterion in both task plans maps to at least one test listed
+  acceptance criterion in the task plan maps to at least one test listed
   below.
 - Single-threaded execution is required by the project's test conventions
   (parallel runs are non-deterministic for parts of this crate).
@@ -40,13 +40,13 @@ verification item.
 | TS-1 | Left press over the grid with tracking inactive, then a wheel notch over the grid, then the left release — one records value threaded through the application step | The release names the local selection-completion arm; the left slot survived the notch | Unit |
 | TS-2 | Same as TS-1 with a middle press, and again with a right press, in place of the wheel notch | The left release still names the completion arm; the middle / right slot is recorded and cleared independently | Unit |
 | TS-3 | Left release with an empty left slot and the drag-in-flight input true | The completion arm, not "nothing" | Unit |
-| TS-4 | The focus-loss applicability predicate over all four boolean combinations, plus the focus-loss path with a live drag and a materialized selection | The predicate is true exactly when the drag flag is set or a pending anchor exists; the path clears the drag flag, consumes the pending anchor and publishes the selection | Unit |
+| TS-4 | The focus-loss guard over all four boolean combinations, plus the focus-loss path with a live drag and a materialized selection | The guard is true exactly when the drag flag is set or a pending anchor exists; the path clears the drag flag, consumes the pending anchor and publishes the selection, and never runs the fold toggle | Unit |
 | TS-5 | An outcome carrying a tracking-inactive reset applied with left held and its slot recorded | The cell-change cache is reset; the left slot is still recorded as locally owned | Unit |
 | TS-6 | An outcome carrying a tracking-inactive reset with a middle slot recorded but middle not held; and an outcome carrying a tab-change reset with left held | The not-held middle slot is cleared; the tab-change reset clears every slot including the held one | Unit |
 | TS-7 | The whole pre-existing decision-layer test module, including the byte-exact encoding cases, the release tab-targeting cases and the guard-rejected dispositions | Passes unchanged in meaning; no report byte sequence altered | Unit (existing) |
 | TS-8 | A left press at a chrome position (records no owner, starts no drag) followed by its release | No PRIMARY write, no CLIPBOARD write, no fold toggle | Unit |
 | TS-9 | Manual reproduction: left press-drag on the grid, wheel one notch without releasing, release left; repeat with a middle press and a right press in place of the notch; repeat with a focus loss in place of the release | The selection stops extending after the release / focus loss and the dragged text pastes back via middle-click; the resize hint and link hover respond again on the next motion | Manual |
-| TS-10 | Decision-layer window-freedom and the structural delegate list: no winit / egui / GPU / PTY / `term_core` type in any decision-layer signature; the routing source names every delegate the handlers are required to use, including the new companion entry point | The structural assertion passes; every new decision-layer test is a bare test constructing no window | Unit / Structural |
+| TS-10 | Decision-layer window-freedom and the structural routing test: no winit / egui / GPU / PTY / `term_core` type in any decision-layer signature; the delegate list names the companion application entry point INSTEAD OF the old one, and the existing focus-loss test's full input-bundle literal compiles with the new field | The structural assertion passes with the replaced entry; every new decision-layer test is a bare test constructing no window | Unit / Structural |
 | TS-11 | Decision purity: the records value handed to each decision function is compared before and after the call | Unmodified in every case; all record mutation travels in the returned updates | Unit |
 | TS-12 | Feature-gate surface: the crate compiles with default features off | Exit code 0 | Build |
 | TS-13 | The bounded wheel-report duplication cap and its constant | Unchanged; the existing cap tests pass | Unit (existing) |
@@ -68,13 +68,13 @@ verification item.
 
 | ID | Criterion | How to Verify |
 |----|-----------|---------------|
-| SC-A | All functional requirements FR1–FR6 implemented and tested | The coverage table below, with every row naming at least one task and one test |
+| SC-A | All functional requirements FR1–FR6 implemented and tested | The coverage table below, with every row naming the task and at least one test |
 | SC-B | All test scenarios TS-1..TS-14 pass | Test Verification section; TS-9 is user-executed |
 | SC-C | All SPEC acceptance criteria AC-1..AC-9 satisfied | AC-1/AC-2 → TS-1/TS-2; AC-3 → TS-4; AC-4 → TS-4 plus TS-9's motion check; AC-5/AC-6 → TS-5/TS-6; AC-7 → TS-7; AC-8 → TS-8; AC-9 → the TS-1/TS-2/TS-4 tests demonstrably failing before the change |
 | SC-D | Security requirements satisfied: the wheel notch cap intact, no new PTY bytes | TS-13 and TS-7 |
 | SC-E | The default-features-off build still compiles | TS-12 |
 | SC-F | The decision layer remains window-free and the decision functions remain pure | TS-10 and TS-11 |
-| SC-G | Documentation complete | IMPLEMENTATION.md, both task plans and this document present and consistent with the delivered change |
+| SC-G | Documentation complete | IMPLEMENTATION.md, the task plan and this document present and consistent with the delivered change |
 | SC-H | Code review completed | The review phase's own record |
 
 ### Functional Requirements Coverage
@@ -83,14 +83,14 @@ verification item.
 |-------------|-------|--------------|
 | FR1 | task0001 | TS-1, TS-2, TS-5, TS-6 |
 | FR2 | task0001 | TS-1, TS-2, TS-3 |
-| FR3 | task0002 | TS-4, TS-9 |
+| FR3 | task0001 | TS-4, TS-9 |
 | FR4 | task0001 | TS-7 |
 | FR5 | task0001 | TS-8 |
 | FR6 | task0001 | TS-5, TS-6 |
-| NFR1 | task0001, task0002 | TS-10 |
+| NFR1 | task0001 | TS-10 |
 | NFR2 | task0001 | TS-11 |
-| NFR3 | task0001, task0002 | TS-14 |
-| NFR4 | task0001, task0002 | TS-12 |
+| NFR3 | task0001 | TS-14 |
+| NFR4 | task0001 | TS-12 |
 | NFR5 | task0001 | TS-13 |
 
 ## E2E Testing
